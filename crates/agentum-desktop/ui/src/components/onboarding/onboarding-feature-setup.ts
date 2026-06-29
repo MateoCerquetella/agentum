@@ -4,11 +4,7 @@ import type {
   ComputerUsePermissionSetupResult,
   ComputerUsePermissionStatusResult
 } from '../../../../shared/computer-use-permissions-types'
-import {
-  COMPUTER_USE_SKILL_NAME,
-  AGENTUM_CLI_SKILL_NAME,
-  buildAgentFeatureSkillInstallCommand
-} from '@/lib/agent-feature-install-commands'
+import { buildAgentFeatureSkillInstallCommand } from '@/lib/agent-feature-install-commands'
 import { setOrchestrationSettings } from '@/runtime/agentum-server-client'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import { e2eConfig } from '@/lib/e2e-config'
@@ -36,14 +32,17 @@ export const ONBOARDING_FEATURE_SETUP_IDS: readonly OnboardingFeatureSetupId[] =
   'orchestration'
 ]
 
-// Browser Use and Computer Use still install agent skills; Orchestration does
-// NOT — it's an agentum MCP capability toggled server-side (see the orchestration
-// handling in `runOnboardingFeatureSetup`), so it contributes no skill to the
-// install command.
-const FEATURE_SKILL_NAMES: Partial<Record<OnboardingFeatureSetupId, string>> = {
-  browserUse: AGENTUM_CLI_SKILL_NAME,
-  computerUse: COMPUTER_USE_SKILL_NAME
-}
+// All three capabilities are now served by agentum's own MCP server, which is
+// auto-wired into every local agent agentum launches (see
+// `agentum-server/src/mcp_provision.rs`): Browser Use → the `agentum_browser`
+// tool, Computer Use → `agentum_computer`, Orchestration → the messaging/task
+// tools behind the server-side orchestration gate. None of them install a
+// `npx skills add` skill anymore, so no feature contributes to a skill-install
+// command — this map is intentionally empty. Computer Use still needs macOS
+// privacy permissions; that runs in `runOnboardingFeatureSetup` independently
+// of any skill. The skill-command plumbing below is retained inert so the
+// onboarding telemetry/result contract stays stable.
+const FEATURE_SKILL_NAMES: Partial<Record<OnboardingFeatureSetupId, string>> = {}
 
 const FEATURE_TELEMETRY_IDS: Record<
   OnboardingFeatureSetupId,

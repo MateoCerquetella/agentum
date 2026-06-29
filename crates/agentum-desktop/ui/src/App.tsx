@@ -37,6 +37,7 @@ import {
 import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
+import { useServerWorktreeActivity } from './hooks/useServerWorktreeActivity'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
 import Sidebar from './components/Sidebar'
 import { shutdownBufferCaptures } from './components/terminal-pane/shutdown-buffer-captures'
@@ -213,12 +214,11 @@ function WindowControls(): React.JSX.Element {
 // at the render site keeps the (CSS-hidden) workbench area blank for the one
 // frame it takes the chunk to resolve.
 const Terminal = lazy(() => import('./components/Terminal'))
-const Landing = lazy(() => import('./components/Landing'))
 // The "Board" sidebar entry IS the Tasks view (the GitHub/Linear issue list) —
 // Tasks was renamed to Board (#48 redo). The standalone Kanban (BoardPage) was
 // removed; Chat creates GitHub issues that show up here.
 const TaskPage = lazy(() => import('./components/TaskPage'))
-const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
+const MissionControlPage = lazy(() => import('./components/mission-control/MissionControlPage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
@@ -392,6 +392,10 @@ function App(): React.JSX.Element {
 
   // Subscribe to IPC push events
   useIpcEvents()
+  // Keep the sidebar's per-worktree running/working state in sync with the
+  // server (alive sessions + watchdog activity), so agents don't read as idle
+  // after an app relaunch before their pane is opened.
+  useServerWorktreeActivity()
   // Why: retention must run at App level so the inline per-card agents list
   // always sees retained entries. If retention ran inside the sidebar-card
   // subtree, "done" agents would vanish any time the user collapsed a card's
@@ -1020,13 +1024,18 @@ function App(): React.JSX.Element {
     activeWorktreeId !== null &&
     !hasTabBar &&
     effectiveActiveTabExpanded
-  // Why (Phase 1 nav shell, #48): the left rail must render on EVERY view so the
-  // app can never trap the user in a full-page takeover. This previously hid the
+  // Why (Phase 1 nav shell, #48): the left rail renders on most views so the
+  // app can never trap the user in a full-page takeover — it previously hid the
   // rail for settings/activity/skills/harness/goals, stranding the user with no
-  // visible navigation (the only escape was a secret Cmd+B). The rail (nav +
-  // worktree list) now stays put on every view — the same way the `tasks` view
-  // already rendered alongside the sidebar.
-  const showSidebar = true
+  // visible navigation (the only escape was a secret Cmd+B).
+  //
+  // Settings is the deliberate exception: it's a self-contained full-page view
+  // with its OWN navigation (SettingsSidebar) plus a Back button and Esc-to-close,
+  // so it can never strand the user. Keeping the worktree rail beside it made
+  // Settings render cramped *inside* the workspace next to the session list
+  // instead of taking the whole page — so hide the worktree rail for Settings
+  // and let it own the full content area.
+  const showSidebar = activeView !== 'settings'
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
   // titlebar so their page-level controls can live in that window strip.
@@ -1742,9 +1751,12 @@ function App(): React.JSX.Element {
                               issues) — Tasks renamed to Board (#48 redo). The standalone
                               Kanban 'board' view was removed. */}
                           {activeView === 'tasks' ? <TaskPage /> : null}
-                          {activeView === 'activity' ? <ActivityPrototypePage /> : null}
+                          {activeView === 'activity' ? <MissionControlPage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
-                          {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
+                          {/* No workspace selected on the terminal view → fall back to
+                              Mission Control (Landing.tsx removed; the dashboard needs no
+                              workspace) so the user is never stranded on a blank pane. */}
+                          {activeView === 'terminal' && !activeWorktreeId ? <MissionControlPage /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
                     </div>

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
-import { openHttpLink, registerHttpLinkStoreAccessor } from './http-link-routing'
+import {
+  openHttpLink,
+  registerHttpLinkStoreAccessor,
+  resetRecentHttpLinkOpensForTests
+} from './http-link-routing'
 
 const openUrlMock = vi.fn()
 const setActiveWorktreeMock = vi.fn()
@@ -16,6 +20,7 @@ const storeState = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetRecentHttpLinkOpensForTests()
   storeState.settings = undefined
   registerHttpLinkStoreAccessor(() => storeState)
   vi.stubGlobal('window', {
@@ -103,5 +108,25 @@ describe('openHttpLink', () => {
     expect(openUrlMock).toHaveBeenCalledWith('https://example.com/')
     expect(createBrowserTabMock).not.toHaveBeenCalled()
     expect(setActiveWorktreeMock).not.toHaveBeenCalled()
+  })
+
+  it('coalesces the same URL opened twice in quick succession (one ⌘+click, two paths)', () => {
+    storeState.settings = { openLinksInApp: false }
+
+    // The WebLinksAddon click handler and the mouseup fallback both call
+    // openHttpLink for a single ⌘+click; the user should get exactly one tab.
+    openHttpLink('https://example.com/', { worktreeId: 'wt-1' })
+    openHttpLink('https://example.com/', { worktreeId: 'wt-1' })
+
+    expect(openUrlMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('still opens a different URL right after another', () => {
+    storeState.settings = { openLinksInApp: false }
+
+    openHttpLink('https://example.com/', { worktreeId: 'wt-1' })
+    openHttpLink('https://other.test/', { worktreeId: 'wt-1' })
+
+    expect(openUrlMock).toHaveBeenCalledTimes(2)
   })
 })

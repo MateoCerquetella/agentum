@@ -141,6 +141,10 @@ export async function createGoal(input: {
   model?: string
   /** SSH host the `workdir` lives on (S3 / AC-6). Omitted = local repo. */
   host_id?: string | null
+  /** Optional `owner/repo` hint for the GitHub issue target (spec 019). When
+   *  present the server skips its host-aware `origin` read; when absent the
+   *  server resolves the slug authoritatively from the project's remote. */
+  repo_slug?: string
 }): Promise<CreateGoalResult> {
   const url = await apiUrl('/api/board/goals')
   const res = await fetch(url, {

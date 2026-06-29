@@ -1,15 +1,30 @@
 import { api } from '@/tauri'
 import { useEffect, useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
-import { Globe, X, ExternalLink, Columns2, Rows2, Copy, Pin, PinOff } from 'lucide-react'
+import {
+  Globe,
+  X,
+  ExternalLink,
+  Columns2,
+  Rows2,
+  Copy,
+  Pin,
+  PinOff,
+  FolderInput
+} from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useAppStore } from '@/store'
+import { useAllWorktrees } from '@/store/selectors'
 import { AGENTUM_BROWSER_BLANK_URL } from '../../../../shared/constants'
 import { redactKagiSessionToken } from '../../../../shared/browser-url'
 import type { BrowserTab as BrowserTabState } from '../../../../shared/types'
@@ -131,6 +146,11 @@ export default function BrowserTab({
   })
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPoint, setMenuPoint] = useState({ x: 0, y: 0 })
+  // Worktrees this tab can move TO (every one but its current home). Selecting
+  // its own worktree would be a no-op anyway, but filtering keeps the menu clean.
+  const otherWorktrees = useAllWorktrees().filter(
+    (worktree) => worktree.id !== dragData.worktreeId
+  )
 
   // Why: about:blank and other non-http URLs should not be sent to the
   // system browser. Disable the context menu item instead of silently
@@ -292,6 +312,26 @@ export default function BrowserTab({
             <Copy className="mr-1.5 size-3.5" />
             Duplicate Tab
           </DropdownMenuItem>
+          {otherWorktrees.length > 0 && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <FolderInput className="mr-1.5 size-3.5" />
+                Move to Worktree
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
+                {otherWorktrees.map((worktree) => (
+                  <DropdownMenuItem
+                    key={worktree.id}
+                    onSelect={() => {
+                      useAppStore.getState().moveBrowserTabToWorktree(tab.id, worktree.id)
+                    }}
+                  >
+                    {worktree.displayName}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onTogglePin}>
             {isPinned ? (

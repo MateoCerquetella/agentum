@@ -88,6 +88,7 @@ function makeState(
     migrationUnsupportedByPtyId: {},
     retainedAgentsByPaneKey: {},
     awaitingInputByPaneKey: {},
+    serverWorktreeActivityByWorktreeId: {},
     ...overrides
   }
 }

@@ -1,3 +1,4 @@
+import { isRecord } from './type-guards'
 import { inspectCodexEnvironmentConfig } from './setup-script-import-codex-environment'
 import { inspectPackageManagerSetupCandidate } from './setup-script-package-manager-suggestion'
 import type { SetupScriptImportProvider } from './setup-script-import-providers'
@@ -144,9 +145,7 @@ function parseJsonObject(content: string | null): Record<string, unknown> | null
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
+  return isRecord(value) ? value : null
 }
 
 function normalizeCommandValue(value: unknown): string {

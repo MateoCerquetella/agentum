@@ -23,7 +23,7 @@ export type ClaudeUsageSlice = {
   setClaudeUsageEnabled: (enabled: boolean) => Promise<void>
   setClaudeUsageScope: (scope: ClaudeUsageScope) => Promise<void>
   setClaudeUsageRange: (range: ClaudeUsageRange) => Promise<void>
-  fetchClaudeUsage: (opts?: { forceRefresh?: boolean }) => Promise<void>
+  fetchClaudeUsage: (opts?: { forceRefresh?: boolean; skipRefresh?: boolean }) => Promise<void>
   enableClaudeUsage: () => Promise<void>
   refreshClaudeUsage: () => Promise<void>
 }
@@ -79,7 +79,7 @@ export const createClaudeUsageSlice: StateCreator<AppState, [], [], ClaudeUsageS
 
   setClaudeUsageRange: async (range) => {
     set({ claudeUsageRange: range })
-    await get().fetchClaudeUsage()
+    await get().fetchClaudeUsage({ skipRefresh: true })
   },
 
   fetchClaudeUsage: async (opts) => {
@@ -104,9 +104,14 @@ export const createClaudeUsageSlice: StateCreator<AppState, [], [], ClaudeUsageS
         return
       }
 
-      const nextScanState = (await api.claudeUsage.refresh({
-        force: opts?.forceRefresh ?? false
-      })) as ClaudeUsageScanState
+      // Why: range changes use the cache (skipRefresh); mount fetch and explicit Refresh
+      // still invalidate via force so fresh data flows in. Skip the round-trip when
+      // the caller opts out to keep range switching instant.
+      const nextScanState = opts?.skipRefresh
+        ? scanState
+        : ((await api.claudeUsage.refresh({
+            force: opts?.forceRefresh ?? false
+          })) as ClaudeUsageScanState)
       const { claudeUsageScope, claudeUsageRange } = get()
 
       const [summary, daily, modelBreakdown, projectBreakdown, recentSessions] = await Promise.all([

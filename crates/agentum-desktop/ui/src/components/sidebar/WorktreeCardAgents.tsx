@@ -1,11 +1,18 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '@/store'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
+import { activateTerminalTab } from '@/components/terminal/terminal-tab-actions'
 import DashboardAgentRow from '@/components/dashboard/DashboardAgentRow'
 import { useNow } from '@/components/dashboard/useNow'
 import { deriveRunningAgentSendTargets } from '@/lib/running-agent-targets'
 import { useWorktreeAgentRows } from './useWorktreeAgentRows'
+import { selectLivePtyIdsForWorktree } from './worktree-card-status-inputs'
+import { buildWorktreeTerminalRows, type WorktreeTerminalRow } from './worktree-terminal-rows'
+import WorktreeCardTerminalRow from './WorktreeCardTerminalRow'
+import WorktreeCardBrowserRow from './WorktreeCardBrowserRow'
+import type { BrowserWorkspace } from '../../../../shared/types'
 import { cn } from '@/lib/utils'
 import type { DashboardAgentRow as DashboardAgentRowData } from '@/components/dashboard/useDashboardData'
 import { parsePaneKey } from '../../../../shared/stable-pane-id'
@@ -51,23 +58,56 @@ type Props = {
  * Reuses useWorktreeAgentRows + DashboardAgentRow so row layout and the
  * derivation stay consistent with the inline agent activity on each card.
  */
+// Stable empty array so a worktree with no browser tabs doesn't churn the body memo.
+const EMPTY_BROWSER_TABS: BrowserWorkspace[] = []
+
 const WorktreeCardAgents = React.memo(function WorktreeCardAgents({
   worktreeId,
   className
 }: Props) {
   const agents = useWorktreeAgentRows(worktreeId)
-  if (agents.length === 0) {
+  // Why: plain terminals (a shell with no agent) never produced an agent row,
+  // so a newly-created terminal was invisible in the sidebar. List them here
+  // beside the agents. NOT gated on a live PTY — a brand-new terminal carries
+  // ptyId null until its pane spawns and must still show.
+  const tabs = useAppStore((s) => s.tabsByWorktree[worktreeId])
+  const ptyIdsByTabId = useAppStore(
+    useShallow((s) => selectLivePtyIdsForWorktree(s, worktreeId))
+  )
+  const terminalRows = useMemo(() => {
+    const agentTabIds = new Set(agents.map((a) => a.tab.id))
+    return buildWorktreeTerminalRows({ tabs: tabs ?? [], agentTabIds, ptyIdsByTabId })
+  }, [agents, tabs, ptyIdsByTabId])
+  // Browser tabs in this worktree, listed beside agents/terminals; drag a row
+  // onto another worktree card to MOVE the browser there.
+  const browserTabs = useAppStore((s) => s.browserTabsByWorktree[worktreeId])
+
+  if (
+    agents.length === 0 &&
+    terminalRows.length === 0 &&
+    (browserTabs?.length ?? 0) === 0
+  ) {
     return null
   }
   // Why: gate the 30s tick behind non-empty rows by mounting the inner body
   // only when there's something to show. The setInterval lives in the inner
   // component's useNow, so idle worktrees don't pay per-card timer cost.
-  return <WorktreeCardAgentsBody worktreeId={worktreeId} agents={agents} className={className} />
+  return (
+    <WorktreeCardAgentsBody
+      worktreeId={worktreeId}
+      agents={agents}
+      terminalRows={terminalRows}
+      browserTabs={browserTabs ?? EMPTY_BROWSER_TABS}
+      className={className}
+    />
+  )
 })
 
 type BodyProps = {
   worktreeId: string
   agents: DashboardAgentRowData[]
+  terminalRows: WorktreeTerminalRow[]
+  browserTabs: BrowserWorkspace[]
   className?: string
 }
 
@@ -138,8 +178,34 @@ function buildAgentLineageModel(agents: DashboardAgentRowData[]): AgentLineageMo
 const WorktreeCardAgentsBody = React.memo(function WorktreeCardAgentsBody({
   worktreeId,
   agents,
+  terminalRows,
+  browserTabs,
   className
 }: BodyProps) {
+  // Why: highlight the terminal row whose tab is the active one (tab ids are
+  // unique UUIDs, so the worktree is implied). Mirrors the focused-pane wash
+  // the agent rows use, keeping the inline list's selection legible.
+  const activeTabId = useAppStore((s) => s.activeTabId)
+  const handleActivateTerminal = useCallback(
+    (tabId: string) => {
+      // Route through activateAndRevealWorktree so cross-repo clicks also set
+      // activeRepoId, clear filters, and record nav history — same rule the
+      // agent rows follow — then focus the terminal tab.
+      activateAndRevealWorktree(worktreeId)
+      activateTerminalTab(tabId)
+    },
+    [worktreeId]
+  )
+  const activeBrowserTabId = useAppStore((s) => s.activeBrowserTabIdByWorktree[worktreeId])
+  const handleActivateBrowser = useCallback(
+    (workspaceId: string) => {
+      // Same reveal rule as the terminal/agent rows, then show that browser tab
+      // (setActiveBrowserTab flips the worktree's active surface to 'browser').
+      activateAndRevealWorktree(worktreeId)
+      useAppStore.getState().setActiveBrowserTab(workspaceId)
+    },
+    [worktreeId]
+  )
   const agentActivityDisplayMode =
     useAppStore((s) => s.agentActivityDisplayMode) ?? DEFAULT_AGENT_ACTIVITY_DISPLAY_MODE
   const dropAgentStatus = useAppStore((s) => s.dropAgentStatus)
@@ -309,6 +375,34 @@ const WorktreeCardAgentsBody = React.memo(function WorktreeCardAgentsBody({
     (agent) => (childrenByParentPaneKey.get(agent.paneKey) ?? []).length > 0
   )
 
+  // Plain-terminal rows, listed after the agents in both display modes so the
+  // card shows every open terminal — not just the ones running an agent.
+  const terminalRowList =
+    terminalRows.length > 0
+      ? terminalRows.map((row) => (
+          <WorktreeCardTerminalRow
+            key={row.tabId}
+            row={row}
+            isActive={row.tabId === activeTabId}
+            onActivate={handleActivateTerminal}
+          />
+        ))
+      : null
+
+  // Browser-tab rows, after the terminals in both display modes. Each row is
+  // draggable onto another worktree card to MOVE the browser there.
+  const browserRowList =
+    browserTabs.length > 0
+      ? browserTabs.map((workspace) => (
+          <WorktreeCardBrowserRow
+            key={workspace.id}
+            workspace={workspace}
+            isActive={workspace.id === activeBrowserTabId}
+            onActivate={handleActivateBrowser}
+          />
+        ))
+      : null
+
   const renderAgentBranch = (
     agent: DashboardAgentRowData,
     ancestorPaneKeys: ReadonlySet<string> = new Set()
@@ -455,6 +549,8 @@ const WorktreeCardAgentsBody = React.memo(function WorktreeCardAgentsBody({
             {rootAgents.map((rootAgent) => renderCompactAgentBranch(rootAgent))}
           </CompactAgentExpansion>
         ) : null}
+        {terminalRowList}
+        {browserRowList}
       </div>
     )
   }
@@ -472,6 +568,8 @@ const WorktreeCardAgentsBody = React.memo(function WorktreeCardAgentsBody({
       aria-label="Agents"
     >
       {rootAgents.map((rootAgent) => renderAgentBranch(rootAgent))}
+      {terminalRowList}
+      {browserRowList}
     </div>
   )
 })

@@ -28,12 +28,13 @@ import {
 
 const RECENT_DAY_COUNT = 42
 
+// GitHub contribution-graph palette — exact light + dark hex per intensity 0-4.
 const INTENSITY_CLASS: Record<UsageOverviewDailyPoint['intensity'], string> = {
-  0: 'border-border/60 bg-muted/40',
-  1: 'border-border/60 bg-muted-foreground/20',
-  2: 'border-border/60 bg-muted-foreground/35',
-  3: 'border-border/60 bg-muted-foreground/55',
-  4: 'border-border/60 bg-foreground/75'
+  0: 'border-black/[0.06] bg-[#ebedf0] dark:border-white/[0.06] dark:bg-[#161b22]',
+  1: 'border-black/[0.06] bg-[#9be9a8] dark:border-white/[0.06] dark:bg-[#0e4429]',
+  2: 'border-black/[0.06] bg-[#40c463] dark:border-white/[0.06] dark:bg-[#006d32]',
+  3: 'border-black/[0.06] bg-[#30a14e] dark:border-white/[0.06] dark:bg-[#26a641]',
+  4: 'border-black/[0.06] bg-[#216e39] dark:border-white/[0.06] dark:bg-[#39d353]'
 }
 
 function formatPercent(value: number | null): string {
@@ -190,7 +191,15 @@ function ProviderRow({
   onEnable: () => void
 }): React.JSX.Element {
   const share = totalTokens > 0 ? provider.totalTokens / totalTokens : 0
-  const status = provider.enabled ? (provider.isScanning ? 'Scanning' : 'Enabled') : 'Off'
+  // Why: comingSoon providers get a "Soon" badge and no enable action — consistent
+  // with their dedicated tab which also shows a static "Soon" card.
+  const status = provider.comingSoon
+    ? 'Soon'
+    : provider.enabled
+      ? provider.isScanning
+        ? 'Scanning'
+        : 'Enabled'
+      : 'Off'
   const statusVariant = provider.enabled ? 'secondary' : 'outline'
 
   return (
@@ -206,7 +215,7 @@ function ProviderRow({
             {provider.topProject ? ` - ${provider.topProject}` : ''}
           </p>
         </div>
-        {!provider.enabled ? (
+        {!provider.enabled && !provider.comingSoon ? (
           <Button variant="outline" size="xs" onClick={onEnable}>
             Enable
           </Button>
@@ -247,6 +256,9 @@ export function UsageOverviewPane(): React.JSX.Element {
   const openCodeScanState = useAppStore((state) => state.openCodeUsageScanState)
   const openCodeSummary = useAppStore((state) => state.openCodeUsageSummary)
   const openCodeDaily = useAppStore((state) => state.openCodeUsageDaily)
+  const claudeUsageRange = useAppStore((state) => state.claudeUsageRange)
+  const setClaudeUsageRange = useAppStore((state) => state.setClaudeUsageRange)
+  const setCodexUsageRange = useAppStore((state) => state.setCodexUsageRange)
   const fetchClaudeUsage = useAppStore((state) => state.fetchClaudeUsage)
   const fetchCodexUsage = useAppStore((state) => state.fetchCodexUsage)
   const fetchOpenCodeUsage = useAppStore((state) => state.fetchOpenCodeUsage)
@@ -257,6 +269,21 @@ export function UsageOverviewPane(): React.JSX.Element {
   const enableCodexUsage = useAppStore((state) => state.enableCodexUsage)
   const enableOpenCodeUsage = useAppStore((state) => state.enableOpenCodeUsage)
   const recordFeatureInteraction = useAppStore((state) => state.recordFeatureInteraction)
+
+  const RANGE_OPTIONS = [
+    { label: '7D', value: '7d' },
+    { label: '30D', value: '30d' },
+    { label: '90D', value: '90d' },
+    { label: 'All', value: 'all' }
+  ] as const
+
+  const handleRangeChange = (range: (typeof RANGE_OPTIONS)[number]['value']): void => {
+    void setClaudeUsageRange(range)
+    // Why: the Overview range control drives both providers at once so the
+    // combined stats (daily grid, token mix) stay coherent with one click.
+    // OpenCode is excluded — it has no range API yet ("Soon").
+    void setCodexUsageRange(range)
+  }
 
   useEffect(() => {
     void fetchClaudeUsage()
@@ -320,22 +347,45 @@ export function UsageOverviewPane(): React.JSX.Element {
               {overview.hasPartialCost ? ' - some model prices are unavailable' : ''}
             </p>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={handleRefresh}
-                disabled={!overview.hasAnyEnabledProvider || isScanning}
-                aria-label="Refresh usage overview"
-              >
-                <RefreshCw className={`size-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>
-              Refresh
-            </TooltipContent>
-          </Tooltip>
+          <div className="flex shrink-0 items-center gap-2">
+            <div
+              className="flex items-center rounded-md border border-border/60 bg-muted/30 p-0.5 text-xs"
+              role="group"
+              aria-label="Usage date range"
+            >
+              {RANGE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  aria-pressed={claudeUsageRange === opt.value}
+                  className={`rounded px-2 py-0.5 font-medium transition-colors ${
+                    claudeUsageRange === opt.value
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  onClick={() => handleRangeChange(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={handleRefresh}
+                  disabled={!overview.hasAnyEnabledProvider || isScanning}
+                  aria-label="Refresh usage overview"
+                >
+                  <RefreshCw className={`size-3.5 ${isScanning ? 'animate-spin' : ''}`} />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>
+                Refresh
+              </TooltipContent>
+            </Tooltip>
+          </div>
         </div>
 
         {!overview.hasAnyEnabledProvider ? (
@@ -366,16 +416,6 @@ export function UsageOverviewPane(): React.JSX.Element {
                   }}
                 >
                   Enable Codex
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    recordFeatureInteraction('usage-tracking')
-                    void enableOpenCodeUsage()
-                  }}
-                >
-                  Enable OpenCode
                 </Button>
               </div>
             </div>

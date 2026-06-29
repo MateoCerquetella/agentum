@@ -156,6 +156,48 @@ fn grab_extractor_script(selector: &str, request_id: &str) -> String {
     )
 }
 
+/// Build the JS injected (fire-and-forget) into a guest page to walk its
+/// **interactive** elements and POST a compact snapshot back via the same
+/// `agentumgrab://` channel `grab` uses. Each entry carries a stable CSS `selector`
+/// the agent then drives with `click`/`fill` (the bridge acts by selector), plus
+/// tag/role/text/rect for the model to choose. `request_id` is embedded as a JSON
+/// string literal so it can't break out of the script.
+fn snapshot_extractor_script(request_id: &str) -> String {
+    let rid = serde_json::Value::String(request_id.to_string());
+    format!(
+        r#"(function(){{
+  var RID={rid};
+  function send(o){{o.requestId=RID;try{{var img=new Image();img.src='agentumgrab://grab/result?p='+encodeURIComponent(JSON.stringify(o));}}catch(e){{}}}}
+  function css(el){{
+    if(el.id) return '#'+CSS.escape(el.id);
+    var p=[],n=el,d=0;
+    while(n&&n.nodeType===1&&d<4){{
+      var s=n.tagName.toLowerCase();
+      if(n.classList&&n.classList.length){{s+='.'+Array.from(n.classList).slice(0,2).map(function(c){{return CSS.escape(c);}}).join('.');}}
+      var par=n.parentNode;
+      if(par){{var sib=Array.from(par.children).filter(function(c){{return c.tagName===n.tagName;}});if(sib.length>1){{s+=':nth-of-type('+(sib.indexOf(n)+1)+')';}}}}
+      p.unshift(s); n=n.parentNode; d++;
+      if(n&&n.id){{p.unshift('#'+CSS.escape(n.id));break;}}
+    }}
+    return p.join(' > ');
+  }}
+  try{{
+    var SEL='a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],[role=checkbox],[role=tab],[role=menuitem],[contenteditable=true],[onclick],[tabindex]';
+    var nodes=Array.prototype.slice.call(document.querySelectorAll(SEL)).slice(0,250);
+    var refs=[];
+    nodes.forEach(function(el,i){{
+      var r=el.getBoundingClientRect();
+      if(r.width<=0||r.height<=0) return;
+      var label=(el.getAttribute('aria-label')||el.value||el.innerText||el.textContent||el.getAttribute('placeholder')||el.title||'').replace(/\s+/g,' ').trim().slice(0,120);
+      refs.push({{ref:'e'+i,tag:el.tagName.toLowerCase(),type:el.getAttribute('type')||'',role:el.getAttribute('role')||'',text:label,selector:css(el),rect:{{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)}}}});
+    }});
+    send({{payload:{{url:location.href,title:document.title,viewport:{{width:innerWidth,height:innerHeight}},refs:refs}}}});
+  }}catch(e){{send({{error:String(e)}});}}
+}})();"#,
+        rid = rid
+    )
+}
+
 pub struct TauriBridge {
     app: AppHandle,
 }
@@ -318,6 +360,38 @@ impl TauriBridge {
         }
     }
 
+    /// Snapshot the active tab's INTERACTIVE elements: eval the extractor into the
+    /// guest (fire-and-forget) that POSTs the refs back via `agentumgrab://`, and
+    /// await that callback — the headed analogue of CDP `snapshot`, reusing the same
+    /// verified channel as `grab`. Returns `{url,title,viewport,refs:[{ref,tag,role,
+    /// text,selector,rect}]}`; the agent then `click`/`fill`s by the `selector`.
+    async fn snapshot_page(&self, args: &Value) -> anyhow::Result<Value> {
+        let registry = self
+            .app
+            .try_state::<std::sync::Arc<GrabRegistry>>()
+            .ok_or_else(|| anyhow::anyhow!("grab registry unavailable"))?;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = registry.register(request_id.clone());
+
+        let wv = self
+            .pick_webview(args)
+            .ok_or_else(|| anyhow::anyhow!("no browser tab open"))?;
+        wv.eval(snapshot_extractor_script(&request_id))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        match tokio::time::timeout(OPEN_TAB_TIMEOUT, rx).await {
+            Ok(Ok(Ok(payload))) => Ok(payload),
+            Ok(Ok(Err(msg))) => Err(anyhow::anyhow!(msg)),
+            Ok(Err(_dropped)) => Err(anyhow::anyhow!("snapshot reply channel dropped")),
+            Err(_elapsed) => {
+                registry.cancel(&request_id);
+                Err(anyhow::anyhow!(
+                    "timed out waiting for the snapshot (page may block the agentumgrab scheme)"
+                ))
+            }
+        }
+    }
+
     /// Add an annotation programmatically: grab the element by selector (reusing
     /// the verified extraction channel) and hand the payload + comment + intent
     /// to the renderer, which owns the annotation store, so it shows in the tray
@@ -406,21 +480,11 @@ impl TauriBridge {
                 wv.eval(&js).map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 Ok(json!({ "ok": true }))
             }
-            "snapshot" => {
-                // A DOM snapshot needs a value back from page JS; Tauri's eval is
-                // fire-and-forget, so a full DOM read needs an injected page
-                // bridge (future work). Return what we can read natively so the
-                // op is honest rather than silently empty.
-                let wv = self
-                    .pick_webview(args)
-                    .ok_or_else(|| anyhow::anyhow!("no browser tab open"))?;
-                Ok(json!({
-                    "url": wv.url().map(|u| u.to_string()).unwrap_or_default(),
-                    "note": "DOM snapshot not available in this build; navigate/click/fill by selector work",
-                }))
-            }
+            // `snapshot` is async (round-trips the guest via `agentumgrab://`) so it's
+            // handled in `browser()` before reaching here — see `snapshot_page`.
             "screenshot" => Ok(json!({
-                "error": "browser screenshot not implemented in this build",
+                "error": "A screenshot of the VISIBLE in-app browser isn't available yet — pass \
+                          headless:true to screenshot a hidden CDP browser instead.",
             })),
             other => Ok(json!({ "error": format!("unsupported browser op: {other}") })),
         }
@@ -520,6 +584,7 @@ impl DesktopBridge for TauriBridge {
                 }
                 "grab" => return self.grab_element(&op).await,
                 "annotate" => return self.annotate_element(&op).await,
+                "snapshot" => return self.snapshot_page(&op).await,
                 _ => {}
             }
             self.browser_sync(&name, &op)
@@ -540,7 +605,20 @@ impl DesktopBridge for TauriBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::TabCreateRegistry;
+    use super::{TabCreateRegistry, snapshot_extractor_script};
+
+    #[test]
+    fn snapshot_extractor_beacons_interactive_refs_with_the_request_id() {
+        let js = snapshot_extractor_script("req-xyz");
+        // Rides the same agentumgrab:// channel as grab, keyed by the request id.
+        assert!(js.contains("agentumgrab://grab/result"));
+        assert!(js.contains("\"req-xyz\""), "request id must be embedded: {js}");
+        // Collects interactive elements + a stable selector the agent drives by.
+        assert!(js.contains("querySelectorAll"));
+        assert!(js.contains("button"));
+        assert!(js.contains("selector:css(el)"));
+        assert!(js.contains("refs:refs"));
+    }
 
     // The end-to-end `open` op needs a live webview (covered manually); here we
     // pin the registry plumbing the renderer reply rides on.

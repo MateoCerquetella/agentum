@@ -1,42 +1,47 @@
 import type { JSX } from 'react'
-import {
-  AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureAgentumCliAvailableForAgentSkillTerminal
-} from '@/lib/agent-skill-cli-prerequisite'
-import type { InstalledAgentSkillState } from '@/hooks/useInstalledAgentSkills'
-import { AgentSkillSetupPanel } from './AgentSkillSetupPanel'
+import { isOrchestrationSetupEnabled } from '@/lib/orchestration-setup-state'
 
-export function OrchestrationSetupCard(props: {
-  compact?: boolean
-  terminalHeightPx?: number
-  skill: InstalledAgentSkillState
-}): JSX.Element {
-  const { compact, terminalHeightPx, skill } = props
+// Agent Orchestration ships with agentum's MCP server — there is no skill to
+// install. This card just explains the capability and reflects whether it's
+// enabled; the real on/off switch is the server-side gate in
+// Settings → Agent Orchestration.
+export function OrchestrationSetupCard(props: { compact?: boolean }): JSX.Element {
+  const enabled = isOrchestrationSetupEnabled()
 
-  const setupPanel = (
-    <AgentSkillSetupPanel
-      className={compact ? 'w-full max-w-[520px]' : undefined}
-      title="Agent Orchestration"
-      description="A built-in agentum MCP — agents hand off context and coordinate work through Agentum. No skill to install."
-      command=""
-      terminalTitle="Orchestration"
-      terminalAriaLabel="Orchestration setup"
-      terminalWorktreeId="feature-wall-orchestration-skill-terminal"
-      installed={skill.installed}
-      loading={skill.loading}
-      error={skill.error}
-      terminalHeightPx={terminalHeightPx}
-      preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
-      onBeforeOpenTerminal={async () => {
-        await ensureAgentumCliAvailableForAgentSkillTerminal()
-      }}
-      showRecheckWhenInstalled={false}
-      onRecheck={skill.refresh}
-    />
+  const card = (
+    <div
+      className={`flex flex-col gap-2 rounded-xl border border-border/60 bg-card/50 p-4 ${
+        props.compact ? 'w-full max-w-[520px]' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold">Agent Orchestration</p>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+            enabled
+              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+              : 'bg-muted text-muted-foreground'
+          }`}
+        >
+          {enabled ? 'Enabled' : 'Off'}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Built into the agentum MCP — agents hand off context, message each other, and share tasks
+        via <code className="text-foreground">agentum_send_message</code>,{' '}
+        <code className="text-foreground">agentum_check_messages</code>, and the task tools. No skill
+        to install.
+      </p>
+      {!enabled ? (
+        <p className="text-[11px] text-muted-foreground">
+          Turn it on in Settings → Agent Orchestration.
+        </p>
+      ) : null}
+    </div>
   )
 
-  if (compact) {
-    return <div className="flex min-h-24 flex-1 items-center justify-center">{setupPanel}</div>
+  if (props.compact) {
+    return <div className="flex min-h-24 flex-1 items-center justify-center">{card}</div>
   }
-  return <div className="flex">{setupPanel}</div>
+  return <div className="flex">{card}</div>
 }

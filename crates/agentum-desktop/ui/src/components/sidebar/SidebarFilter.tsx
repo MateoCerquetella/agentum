@@ -21,9 +21,10 @@ import { searchRepos } from '@/lib/repo-search'
 import { cn } from '@/lib/utils'
 import { FilterToggleRow } from './FilterToggleRow'
 import {
-  DEFAULT_SHOW_SLEEPING_WORKSPACES,
-  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
+  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
+  DEFAULT_SHOW_SLEEPING_WORKSPACES
 } from '../../../../shared/constants'
+import { deriveWorkspaceFilterSummary } from './workspace-filter-summary'
 
 type SidebarFilterProps = {
   preserveWorkspaceBoardOpen?: boolean
@@ -86,16 +87,11 @@ const SidebarFilter = React.memo(function SidebarFilter({
     return set
   }, [repos, filterRepoIds])
   const selectedCount = selectedRepoIdSet.size
-  const hasRepoFilter = selectedCount > 0
-  const hasSleepingFilter = showSleepingWorkspaces !== DEFAULT_SHOW_SLEEPING_WORKSPACES
-  // Why: count the default-branch toggle against its baseline, not against
-  // `true`. Hiding the primary is now the default, so it should not light up the
-  // badge — only an explicit deviation (showing it again) counts as a filter.
-  const hasDefaultBranchFilter =
-    hideDefaultBranchWorkspace !== DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
-  const hasAnyFilter = hasSleepingFilter || hasDefaultBranchFilter || hasRepoFilter
-  const activeFilterCount =
-    (hasSleepingFilter ? 1 : 0) + (hasDefaultBranchFilter ? 1 : 0) + selectedCount
+  const { hasRepoFilter, hasAnyFilter, activeFilterCount } = deriveWorkspaceFilterSummary({
+    showSleepingWorkspaces,
+    hideDefaultBranchWorkspace,
+    selectedRepoCount: selectedCount
+  })
 
   const filteredRepos = useMemo(() => searchRepos(repos, query), [repos, query])
   const commandValue =
@@ -106,8 +102,8 @@ const SidebarFilter = React.memo(function SidebarFilter({
 
   const clearAll = useCallback(() => {
     setShowSleepingWorkspaces(DEFAULT_SHOW_SLEEPING_WORKSPACES)
-    // Why: "Reset filters" returns to defaults, and hidden is now the default —
-    // so this re-hides the primary rather than forcing it back on.
+    // Why: "Reset filters" returns to defaults, and hiding the primary is now the
+    // default — so this re-hides it rather than forcing the default branch back on.
     setHideDefaultBranchWorkspace(DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE)
     setFilterRepoIds([])
   }, [setShowSleepingWorkspaces, setHideDefaultBranchWorkspace, setFilterRepoIds])

@@ -3,6 +3,7 @@ import type {
   SetupScriptImportFileExists,
   SetupScriptImportFileRead
 } from './setup-script-imports'
+import { isRecord } from './type-guards'
 
 const PACKAGE_JSON_PATH = 'package.json'
 type PackageManagerName = 'pnpm' | 'bun' | 'yarn' | 'npm'
@@ -72,9 +73,7 @@ function parsePackageJson(content: string | null): Record<string, unknown> | nul
   }
   try {
     const parsed = JSON.parse(content)
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
+    return isRecord(parsed) ? parsed : null
   } catch {
     return null
   }

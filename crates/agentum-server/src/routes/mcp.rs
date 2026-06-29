@@ -19,18 +19,70 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::AppState;
+use crate::error::ApiError;
 
 /// MCP protocol version we default to when a client doesn't pin one. We echo
 /// the client's requested version when present (below) for max compatibility.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// Master switch (default ON) for whether agentum's own MCP server is wired into
+/// the agents agentum launches. Read at provision time in `mcp_provision::provision`;
+/// written by the desktop Settings → Agent MCP toggle via `/api/mcp/settings`.
+/// When off, NO agentum tools (sessions, worktrees, browser, computer,
+/// orchestration, harness) reach any agent. Absent = on, so existing setups are
+/// unchanged. (The orchestration gate still nests under this.)
+pub const MCP_ENABLED_SETTING: &str = "mcp.enabled";
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/mcp", post(handle).get(handle_get))
+    Router::new()
+        .route("/mcp", post(handle).get(handle_get))
+        .route(
+            "/api/mcp/settings",
+            get(get_mcp_settings).put(put_mcp_settings),
+        )
+}
+
+/// The agentum-MCP master-switch state — what the desktop toggle reflects and
+/// what `mcp_provision::provision` reads to decide whether to wire the server.
+#[derive(Serialize)]
+struct McpSettings {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct McpSettingsReq {
+    enabled: bool,
+}
+
+/// `GET /api/mcp/settings` — is agentum's MCP wired into agents? (default on)
+async fn get_mcp_settings(State(state): State<AppState>) -> Result<Json<McpSettings>, ApiError> {
+    let enabled = state
+        .store
+        .setting_get_bool(MCP_ENABLED_SETTING, true)
+        .await?;
+    Ok(Json(McpSettings { enabled }))
+}
+
+/// `PUT /api/mcp/settings` — flip the master switch. Takes effect on the next
+/// agent launch (provisioning is launch-time, unlike the per-call orchestration
+/// gate), so already-running agents keep the tools they were launched with.
+async fn put_mcp_settings(
+    State(state): State<AppState>,
+    Json(req): Json<McpSettingsReq>,
+) -> Result<Json<McpSettings>, ApiError> {
+    state
+        .store
+        .setting_set_bool(MCP_ENABLED_SETTING, req.enabled)
+        .await?;
+    Ok(Json(McpSettings {
+        enabled: req.enabled,
+    }))
 }
 
 /// We don't push server-initiated messages, so there's no SSE channel to open.
@@ -331,9 +383,12 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 annotate (selector, comment, intent?) — attach a design-feedback \
                 annotation to an element (intent: change|fix|question|approve), which \
                 shows in the browser tray and is returned by `annotations`. \
-                Start with `open` when no tab is listed by `tabs`. Requires the agentum \
-                desktop app. (For headless browser automation an agent should use the \
-                Playwright MCP instead.)",
+                Start with `open` when no tab is listed by `tabs`. By DEFAULT these ops \
+                drive the VISIBLE in-app browser the user sees (same tabs as the CLI) — \
+                set `headless:true` (or AGENTUM_BROWSER_HEADLESS=1) to drive a hidden \
+                server-side Chromium instead (QA / no-GUI). Requires the agentum desktop \
+                app for the visible browser. (For pure headless automation an agent may \
+                use the Playwright MCP instead.)",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -365,7 +420,8 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "target": { "type": "string", "description": "Route the op to a specific per-task context page (the `target` from `new_context`); omit for the shared active page" },
                     "browser_context_id": { "type": "string", "description": "`close_context`: the context id from `new_context` to dispose" },
                     "host": { "type": "string", "description": "`connect_host`: SSH host name/id to launch a headless Chromium on (over `ssh -L`); returns a `cdpPort`" },
-                    "cdpPort": { "type": "integer", "description": "Drive a browser already reachable at 127.0.0.1:<port> (e.g. the `cdpPort` from `connect_host`) instead of the local one" }
+                    "cdpPort": { "type": "integer", "description": "Drive a browser already reachable at 127.0.0.1:<port> (e.g. the `cdpPort` from `connect_host`) instead of the local one" },
+                    "headless": { "type": "boolean", "description": "Drive a hidden server-side Chromium instead of the visible in-app browser (default false). Use for QA / no-GUI; the user won't see it" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
@@ -724,17 +780,30 @@ async fn tool_list_tasks(state: &AppState, args: &Value) -> anyhow::Result<Strin
     Ok(serde_json::to_string_pretty(&json!({ "tasks": tasks }))?)
 }
 
-/// `agentum_browser`: the page-driving ops (navigate/snapshot/screenshot/click/
-/// fill) go SERVER-SIDE over CDP to the persistent Chromium — so they return REAL
-/// page state and work headless (no desktop app / GUI webview needed), which is
-/// the QA-agent case. The rest (open/tabs/grab/annotate/annotations) stay on the
-/// desktop bridge, which owns the tab lifecycle + annotation store.
+/// `agentum_browser`: by DEFAULT drive the **visible in-app webview** (the desktop
+/// bridge) — the SAME browser the user sees and that the CLI `agentum tab`/`goto`
+/// populate — so MCP `open`/`navigate`/`click`/`fill`/`tabs` are visible live in the
+/// app (matching the tool's docs). The **headless** CDP Chromium (server-side, no
+/// GUI) is the QA-agent / no-desktop case and is now OPT-IN — via `headless:true` in
+/// the op args or `AGENTUM_BROWSER_HEADLESS=1` — and the automatic fallback when no
+/// desktop app is attached (no bridge). A few CDP-only ops (`eval`/`get_console`/
+/// `node_at_point`/`wait`/`*_context`) have no webview equivalent and always use CDP.
 async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     let op = args.get("op").and_then(Value::as_str).unwrap_or_default();
     // F11: launch + tunnel a headless Chromium on an SSH host, returning the local
     // `cdpPort` the agent then passes to the normal ops (contract identical to local).
     if op == "connect_host" {
         return tool_browser_connect_host(state, args).await;
+    }
+    // Default to the visible in-app webview; headless CDP is opt-in. This is the fix
+    // for "MCP drives a separate headless Chrome the user never sees" — the driving
+    // ops now land in the SAME tab the app shows (and `agentum tab list` reports).
+    let want_headless = args.get("headless").and_then(Value::as_bool).unwrap_or(false)
+        || std::env::var("AGENTUM_BROWSER_HEADLESS")
+            .map(|v| matches!(v.trim(), "1" | "true"))
+            .unwrap_or(false);
+    if !want_headless && state.desktop_bridge.is_some() && bridge_browser_op(op) {
+        return Ok(text_result(tool_bridge(state, "browser", args).await?));
     }
     if crate::cdp_driver::handles_op(op) {
         // Per-worktree isolation: when the agent's MCP carried a `worktreeId` (set
@@ -752,7 +821,13 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
             {
-                if let Ok((_, port)) = crate::cdp_browser::ensure_local_cdp_browser_for(&wt).await {
+                // Resolve the worktree's own browser to a `cdpPort` so the agent
+                // drives the SAME instance the user's pane watches.
+                let port = crate::cdp_browser::ensure_local_cdp_browser_for(&wt)
+                    .await
+                    .ok()
+                    .map(|(_, p)| p);
+                if let Some(port) = port {
                     if let Some(obj) = call_args.as_object_mut() {
                         obj.insert("cdpPort".to_string(), Value::from(port));
                     }
@@ -785,6 +860,27 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
         return Ok(text_result(serde_json::to_string_pretty(&result)?));
     }
     Ok(text_result(tool_bridge(state, "browser", args).await?))
+}
+
+/// Browser ops the desktop bridge (the visible in-app webview) can serve, so the MCP
+/// drives the SAME browser the user sees by default. The CDP-only perception/control
+/// ops (`eval`/`get_console`/`node_at_point`/`wait`/`new_context`/`close_context`/
+/// `reap_contexts`) are intentionally NOT here — they have no webview equivalent and
+/// always use the headless CDP driver.
+fn bridge_browser_op(op: &str) -> bool {
+    matches!(
+        op,
+        "open"
+            | "tabs"
+            | "navigate"
+            | "click"
+            | "fill"
+            | "snapshot"
+            | "screenshot"
+            | "grab"
+            | "annotate"
+            | "annotations"
+    )
 }
 
 /// Wrap a string as a plain MCP text result.
@@ -932,6 +1028,67 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_serves_the_visible_driving_ops_cdp_only_ops_do_not() {
+        // The ops that drive/perceive a tab route to the visible in-app webview by
+        // default (the fix for "MCP drove a hidden headless Chrome").
+        for op in [
+            "open",
+            "tabs",
+            "navigate",
+            "click",
+            "fill",
+            "snapshot",
+            "screenshot",
+            "grab",
+            "annotate",
+            "annotations",
+        ] {
+            assert!(bridge_browser_op(op), "{op} should drive the in-app webview");
+        }
+        // CDP-only ops have no webview equivalent → always headless CDP, never bridged.
+        for op in [
+            "eval",
+            "get_console",
+            "node_at_point",
+            "wait",
+            "new_context",
+            "close_context",
+            "reap_contexts",
+            "connect_host",
+            "bogus",
+        ] {
+            assert!(!bridge_browser_op(op), "{op} must NOT route to the bridge");
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_master_switch_defaults_on_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&dir.path().join("t.db"))
+            .await
+            .unwrap();
+        // Default ON: a fresh install must wire agentum's MCP. Turning it off has
+        // to be an explicit opt-out, never the mere absence of the setting —
+        // otherwise every agent would silently lose agentum's tools.
+        assert!(
+            store
+                .setting_get_bool(MCP_ENABLED_SETTING, true)
+                .await
+                .unwrap()
+        );
+        store
+            .setting_set_bool(MCP_ENABLED_SETTING, false)
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .setting_get_bool(MCP_ENABLED_SETTING, true)
+                .await
+                .unwrap()
+        );
+    }
 
     fn tool_names(orchestration_enabled: bool) -> Vec<String> {
         tool_specs(orchestration_enabled)

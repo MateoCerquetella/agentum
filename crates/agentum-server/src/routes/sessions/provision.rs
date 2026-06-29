@@ -38,6 +38,47 @@ pub(super) fn pane_env(
     ]
 }
 
+/// Percent-encode a worktree path for use as a `?worktree=` query value, without
+/// pulling in a URL-encoding dependency. Keeps the URL-unreserved set (plus `/`,
+/// which is query-safe and keeps the path readable); everything else becomes
+/// `%XX`. axum decodes it back via `serde_urlencoded` on the `/mcp` handler.
+fn encode_worktree_query(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            _ => {
+                out.push('%');
+                out.push(
+                    char::from_digit((b >> 4) as u32, 16)
+                        .unwrap()
+                        .to_ascii_uppercase(),
+                );
+                out.push(
+                    char::from_digit((b & 0x0f) as u32, 16)
+                        .unwrap()
+                        .to_ascii_uppercase(),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Build the agentum MCP URL for an agent, tagging it with this session's
+/// worktree so the agent's `agentum_browser` ops route to ITS per-worktree
+/// browser — the same Chromium the user's pane watches (see
+/// [`crate::cdp_browser::ensure_local_cdp_browser_for`]). No worktree → the bare
+/// URL, so contextless callers keep the shared browser.
+fn mcp_url_with_worktree(base: &str, worktree_path: Option<&str>) -> String {
+    match worktree_path.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => format!("{base}/mcp?worktree={}", encode_worktree_query(p)),
+        None => format!("{base}/mcp"),
+    }
+}
+
 /// Spawn the agent process for a freshly-(re)started session into a tmux pane
 /// on `host`, arm the output pipe, and mark it `Running`. Shared by the `start`
 /// HTTP handler and the harness-engine driver ([`crate::harness`]) so both go
@@ -111,7 +152,11 @@ pub(crate) async fn spawn_agent_into_pane(
             .api_base_url
             .as_deref()
             .unwrap_or("http://127.0.0.1:8822");
-        let agentum_mcp_url = format!("{base}/mcp");
+        // Tag the MCP URL with this LOCAL session's worktree so the agent's
+        // browser ops drive ITS per-worktree browser — the same Chromium the
+        // user's pane attaches to. SSH sessions (below) keep the bare URL: their
+        // browser is the host-resident one reached via an explicit cdpPort tunnel.
+        let agentum_mcp_url = mcp_url_with_worktree(base, session.worktree_path.as_deref());
         if let Some(p) =
             crate::mcp_provision::provision(state, &session.tool, &agentum_mcp_url).await
         {
@@ -518,6 +563,35 @@ mod tests {
         let env = pane_env(None, uuid::Uuid::nil(), "sh", "tok");
         let url = env.iter().find(|(k, _)| k == "AGENTUM_API_URL").unwrap();
         assert_eq!(url.1, "http://127.0.0.1:8822");
+    }
+
+    #[test]
+    fn mcp_url_tags_worktree_so_agent_and_pane_share_a_browser() {
+        let base = "http://127.0.0.1:8822";
+        // A worktree session: the URL carries `?worktree=<path>` so the `/mcp`
+        // handler routes this agent's browser ops to its own Chromium. The id the
+        // pane sends (`<repoId>::<path>`) canonicalizes to this SAME path
+        // server-side, so agent and pane attach to one browser.
+        assert_eq!(
+            mcp_url_with_worktree(base, Some("/Users/x/.agentum/worktrees/feat")),
+            "http://127.0.0.1:8822/mcp?worktree=/Users/x/.agentum/worktrees/feat",
+        );
+        // A space (or any non-unreserved byte) is percent-encoded so axum's
+        // serde_urlencoded decodes the value back intact.
+        assert_eq!(
+            mcp_url_with_worktree(base, Some("/Users/My Name/wt")),
+            "http://127.0.0.1:8822/mcp?worktree=/Users/My%20Name/wt",
+        );
+        // No worktree (or blank) → the bare URL: contextless agents keep the
+        // shared browser, byte-identical to the pre-change behavior.
+        assert_eq!(
+            mcp_url_with_worktree(base, None),
+            "http://127.0.0.1:8822/mcp"
+        );
+        assert_eq!(
+            mcp_url_with_worktree(base, Some("  ")),
+            "http://127.0.0.1:8822/mcp"
+        );
     }
 
     #[test]

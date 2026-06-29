@@ -15,11 +15,8 @@ import type { FeatureWallOpenSourceTelemetry } from '../../../../shared/telemetr
 import type { FeatureWallTourDepthSummary } from '../../../../shared/feature-wall-tour-depth'
 import { track } from '@/lib/telemetry'
 import { useAppStore } from '@/store'
-import { AGENTUM_CLI_SKILL_NAME, ORCHESTRATION_SKILL_NAME } from '@/lib/agent-feature-install-commands'
-import {
-  GLOBAL_AGENT_SKILL_SOURCE_KINDS,
-  useInstalledAgentSkill
-} from '@/hooks/useInstalledAgentSkills'
+import { isOrchestrationSetupEnabled } from '@/lib/orchestration-setup-state'
+import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import { usePrefersReducedMotion } from './feature-wall-modal-helpers'
 import {
   getFeatureWallRailNavigationTarget,
@@ -109,23 +106,18 @@ export function FeatureWallTourSurface({
       setReviewStepId(reviewSteps[0]?.id ?? 'notes')
     }
   }
-  // Why: the feature-wall completion model owns skill-completion state, so read
-  // installed skills here instead of asking child setup cards to notify upward
-  // from passive Effects.
-  const orchestrationSkill = useInstalledAgentSkill(ORCHESTRATION_SKILL_NAME, {
-    enabled: isOpen,
-    sourceKinds: GLOBAL_AGENT_SKILL_SOURCE_KINDS
-  })
-  const browserUseSkill = useInstalledAgentSkill(AGENTUM_CLI_SKILL_NAME, {
-    enabled: isOpen,
-    sourceKinds: GLOBAL_AGENT_SKILL_SOURCE_KINDS
-  })
+  // Why: Orchestration and Browser Use are agentum MCP capabilities now (no skill
+  // to install), so the tour's completion model reads whether each is enabled —
+  // the orchestration server gate and the Browser Use toggle — instead of probing
+  // for installed skills.
+  const orchestrationEnabled = isOrchestrationSetupEnabled()
+  const browserUseEnabled = localStorage.getItem(BROWSER_USE_ENABLED_STORAGE_KEY) === '1'
   const completion = useFeatureWallCompletion(
     isOpen,
     taskSourcePresentation.hasConnectedTaskSource,
     taskSourcePresentation.isCheckingTaskSources,
-    orchestrationSkill.installed,
-    browserUseSkill.installed,
+    orchestrationEnabled,
+    browserUseEnabled,
     { onTourDepthSummaryChange }
   )
   const { markExitAction } = useFeatureWallTourTelemetry({
@@ -426,8 +418,6 @@ export function FeatureWallTourSurface({
       showGif={showGif}
       prefersReducedMotion={prefersReducedMotion}
       source={source}
-      orchestrationSkill={orchestrationSkill}
-      browserUseSkill={browserUseSkill}
       settings={settings}
       updateSettings={updateSettings}
       footerText={footerText}

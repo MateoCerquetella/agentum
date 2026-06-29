@@ -413,6 +413,11 @@ async fn remove(
     let mut worktrees = read_worktrees()?;
     worktrees.retain(|wt| wt.id != body.worktree_id);
     write_worktrees(&worktrees)?;
+    // Tear down this worktree's per-worktree CDP browser (kill its tmux + drop
+    // its profile) so a deleted worktree doesn't leak an idle headless Chromium.
+    // Best-effort + idempotent: a no-op when isolation is off, the worktree never
+    // opened a browser, or it lived on an SSH host (no local browser to kill).
+    let _ = crate::cdp_browser::stop_local_cdp_browser_for(worktree_path).await;
     Ok(Json(serde_json::json!({})))
 }
 
@@ -590,6 +595,9 @@ async fn prune(
                     )
                     .await;
                     let _ = git_in_dir(&host, &repo_path, &["worktree", "prune"]).await;
+                    // Drop the worktree's per-worktree browser too (best-effort,
+                    // idempotent; no-op for remote/never-launched worktrees).
+                    let _ = crate::cdp_browser::stop_local_cdp_browser_for(&wt.path).await;
                 }
                 pruned.push(entry);
             } else {

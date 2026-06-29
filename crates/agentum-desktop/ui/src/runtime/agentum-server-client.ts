@@ -152,6 +152,26 @@ export function setOrchestrationSettings(enabled: boolean): Promise<Orchestratio
   })
 }
 
+/** Wire shape of `/api/mcp/settings`. */
+export type McpSettings = { enabled: boolean }
+
+/**
+ * `GET /api/mcp/settings` — is agentum's MCP wired into the agents agentum
+ * launches? The master switch (default on), read at provision time by
+ * `mcp_provision::provision`. Source of truth for the Settings → Agent MCP toggle.
+ */
+export function getMcpSettings(): Promise<McpSettings> {
+  return request<McpSettings>('/api/mcp/settings')
+}
+
+/** `PUT /api/mcp/settings` — flip the agentum-MCP master switch. */
+export function setMcpSettings(enabled: boolean): Promise<McpSettings> {
+  return request<McpSettings>('/api/mcp/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled })
+  })
+}
+
 /**
  * Boot-time smoke check: confirm the embedded server answers a real
  * session-model round-trip (not just /api/health) and log what it sees.

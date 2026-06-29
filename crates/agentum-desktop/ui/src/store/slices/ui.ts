@@ -231,29 +231,6 @@ function migrateGroupByToHostOnce(
   return resolved
 }
 
-// One-time migration so existing users land on the new "primary hidden by
-// default" sidebar. Older profiles carry an explicit persisted `false` (the OLD
-// default), which would otherwise keep showing the main-branch row. On the first
-// rehydrate after this ships we force the new default once and set a localStorage
-// flag; afterwards the user's explicit choice (incl. turning the primary back on
-// via "Show default branches") is respected.
-const HIDE_DEFAULT_BRANCH_MIGRATION_KEY = 'agentum-hide-default-branch-migrated'
-function migrateHideDefaultBranchOnce(persisted: boolean | undefined): boolean {
-  const resolved = persisted ?? DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
-  try {
-    if (
-      typeof localStorage !== 'undefined' &&
-      !localStorage.getItem(HIDE_DEFAULT_BRANCH_MIGRATION_KEY)
-    ) {
-      localStorage.setItem(HIDE_DEFAULT_BRANCH_MIGRATION_KEY, '1')
-      return DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
-    }
-  } catch {
-    // localStorage unavailable (SSR/headless) — fall through to the resolved value.
-  }
-  return resolved
-}
-
 const VALID_TASK_PRESETS = new Set<TaskViewPresetId>([
   'all',
   'issues',
@@ -750,7 +727,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     }
 
     const target = resolveRunningAgentSendTarget(get(), mode.worktreeId, paneKey)
-    if (!target || target.status !== 'eligible' || !target.ptyId) {
+    if (!target || target.status !== 'eligible') {
       // Why: live revalidation can lose eligibility after the user opened the
       // menu. Treat that like an ineligible row click: keep the picker open and
       // let the row title explain the current reason without adding toast noise.
@@ -772,11 +749,28 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     )
 
     const label = formatAgentTypeLabel(target.entry.agentType)
-    const { sendBracketedPasteToRunningAgent } = await import('@/lib/agent-paste-draft')
-    const delivered = await sendBracketedPasteToRunningAgent({
-      ptyId: target.ptyId,
-      content: mode.prompt
-    }).catch(() => false)
+    // Why: an eligible target may have no live pty yet — the agent is running but
+    // its terminal tab isn't open. Activate the tab first (which spawns the pty),
+    // then submit once it's up; otherwise paste straight into the already-live pty.
+    // Both reuse the same proven bracketed-paste delivery.
+    let delivered: boolean
+    if (target.ptyId) {
+      const { sendBracketedPasteToRunningAgent } = await import('@/lib/agent-paste-draft')
+      delivered = await sendBracketedPasteToRunningAgent({
+        ptyId: target.ptyId,
+        content: mode.prompt
+      }).catch(() => false)
+    } else {
+      const [{ activateTabAndFocusPane }, { submitPromptToAgentTab }] = await Promise.all([
+        import('@/lib/activate-tab-and-focus-pane'),
+        import('@/lib/agent-paste-draft')
+      ])
+      activateTabAndFocusPane(target.tabId, target.leafId)
+      delivered = await submitPromptToAgentTab({
+        tabId: target.tabId,
+        content: mode.prompt
+      }).catch(() => false)
+    }
 
     if (!delivered) {
       const message = 'Terminal is no longer available'
@@ -853,7 +847,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       return next ? { acknowledgedAgentsByPaneKey: next } : s
     }),
 
-  activeView: 'terminal',
+  // Why: Mission Control (the stats dashboard) is the home surface and opens on
+  // every cold start. activeView is NOT persisted, so this initializer governs.
+  activeView: 'activity',
   previousViewBeforeTasks: 'terminal',
   previousViewBeforeSettings: 'terminal',
   previousViewBeforeActivity: 'terminal',
@@ -1480,7 +1476,8 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         // Older positive-form keys are intentionally ignored so old profiles
         // start from the new default: sleeping workspaces visible.
         showSleepingWorkspaces: !(ui.hideSleepingWorkspaces ?? DEFAULT_HIDE_SLEEPING_WORKSPACES),
-        hideDefaultBranchWorkspace: migrateHideDefaultBranchOnce(ui.hideDefaultBranchWorkspace),
+        hideDefaultBranchWorkspace:
+          ui.hideDefaultBranchWorkspace ?? DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
         showDotfilesByWorktree: sanitizeShowDotfilesByWorktree(ui.showDotfilesByWorktree),
         filterRepoIds: (ui.filterRepoIds ?? []).filter((repoId) => validRepoIds.has(repoId)),
         collapsedGroups: new Set(ui.collapsedGroups ?? []),

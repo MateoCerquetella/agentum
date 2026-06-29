@@ -14,22 +14,9 @@ import type {
   ComputerUsePermissionState,
   ComputerUsePermissionStatus
 } from '../../../../shared/computer-use-permissions-types'
-import {
-  COMPUTER_USE_SKILL_INSTALL_COMMAND,
-  COMPUTER_USE_SKILL_NAME
-} from '@/lib/agent-feature-install-commands'
-import {
-  AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureAgentumCliAvailableForAgentSkillTerminal
-} from '@/lib/agent-skill-cli-prerequisite'
-import {
-  GLOBAL_AGENT_SKILL_SOURCE_KINDS,
-  useInstalledAgentSkill
-} from '@/hooks/useInstalledAgentSkills'
 import { useAppStore } from '@/store'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
-import { AgentSkillSetupPanel } from './AgentSkillSetupPanel'
 export { COMPUTER_USE_PANE_SEARCH_ENTRIES } from './computer-use-search'
 
 type PermissionDefinition = {
@@ -84,14 +71,6 @@ export function ComputerUsePane(): React.JSX.Element {
   const permissionOperationSequence = useRef(0)
   const mountedRef = useRef(true)
   const [helperUnavailableReason, setHelperUnavailableReason] = useState<string | null>(null)
-  const {
-    installed: computerUseSkillDetected,
-    loading: computerUseSkillLoading,
-    error: computerUseSkillError,
-    refresh: refreshComputerUseSkill
-  } = useInstalledAgentSkill(COMPUTER_USE_SKILL_NAME, {
-    sourceKinds: GLOBAL_AGENT_SKILL_SOURCE_KINDS
-  })
 
   const stateById = useMemo(
     () => new Map(states.map((state) => [state.id, state.status] as const)),
@@ -246,6 +225,21 @@ export function ComputerUsePane(): React.JSX.Element {
 
   return (
     <div className="space-y-5">
+      <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/25 px-4 py-3">
+        <div className="mt-0.5 text-muted-foreground">
+          <MonitorCog className="size-4" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Built into the agentum MCP</p>
+          <p className="text-xs text-muted-foreground">
+            Computer Use ships with agentum&apos;s MCP server — every agent agentum launches can
+            call the <code className="text-foreground">agentum_computer</code> tool to inspect app
+            windows and operate local apps. There&apos;s no skill to install.
+            {isMac ? ' macOS needs the privacy permissions below.' : null}
+          </p>
+        </div>
+      </div>
+
       {isMac ? (
         <>
           <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-border/60 bg-muted/25 px-4 py-3">
@@ -335,25 +329,6 @@ export function ComputerUsePane(): React.JSX.Element {
           </div>
         </>
       ) : null}
-
-      <AgentSkillSetupPanel
-        title="Computer Use skill"
-        description="Enables agents to inspect and operate local desktop apps."
-        command={COMPUTER_USE_SKILL_INSTALL_COMMAND}
-        terminalTitle="Computer Use setup"
-        terminalAriaLabel="Computer Use skill install terminal"
-        terminalWorktreeId="settings-computer-use-skill-terminal"
-        installed={computerUseSkillDetected}
-        loading={computerUseSkillLoading}
-        error={computerUseSkillError}
-        icon={<MonitorCog className="size-5" />}
-        preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
-        onBeforeOpenTerminal={async () => {
-          useAppStore.getState().recordFeatureInteraction('computer-use-setup')
-          await ensureAgentumCliAvailableForAgentSkillTerminal()
-        }}
-        onRecheck={refreshComputerUseSkill}
-      />
     </div>
   )
 }

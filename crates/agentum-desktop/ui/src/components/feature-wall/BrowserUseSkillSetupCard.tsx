@@ -1,47 +1,42 @@
 import type { JSX } from 'react'
-import { AGENTUM_CLI_SKILL_INSTALL_COMMAND } from '@/lib/agent-feature-install-commands'
-import {
-  AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureAgentumCliAvailableForAgentSkillTerminal
-} from '@/lib/agent-skill-cli-prerequisite'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
-import type { InstalledAgentSkillState } from '@/hooks/useInstalledAgentSkills'
-import { AgentSkillSetupPanel } from '@/components/settings/AgentSkillSetupPanel'
 
-export function BrowserUseSkillSetupCard(props: {
-  compact?: boolean
-  terminalHeightPx?: number
-  skill: InstalledAgentSkillState
-}): JSX.Element {
-  const { compact, terminalHeightPx, skill } = props
+// Browser control ships with agentum's MCP server (`agentum_browser`) — there is
+// no skill to install. This card explains the capability and reflects whether the
+// user has turned it on; logins are imported in Settings → Browser Use.
+export function BrowserUseSkillSetupCard(props: { compact?: boolean }): JSX.Element {
+  const enabled = localStorage.getItem(BROWSER_USE_ENABLED_STORAGE_KEY) === '1'
 
-  const handleBeforeOpenTerminal = async (): Promise<void> => {
-    await ensureAgentumCliAvailableForAgentSkillTerminal()
-    localStorage.setItem(BROWSER_USE_ENABLED_STORAGE_KEY, '1')
-  }
-
-  const setupPanel = (
-    <AgentSkillSetupPanel
-      className={compact ? 'w-full max-w-[520px]' : undefined}
-      title="Browser Use skill"
-      description="Enables agents to navigate and verify pages in Agentum's browser."
-      command={AGENTUM_CLI_SKILL_INSTALL_COMMAND}
-      terminalTitle="Browser Use setup"
-      terminalAriaLabel="Browser Use skill install terminal"
-      terminalWorktreeId="feature-wall-browser-use-skill-terminal"
-      installed={skill.installed}
-      loading={skill.loading}
-      error={skill.error}
-      terminalHeightPx={terminalHeightPx}
-      preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
-      onBeforeOpenTerminal={handleBeforeOpenTerminal}
-      showRecheckWhenInstalled={false}
-      onRecheck={skill.refresh}
-    />
+  const card = (
+    <div
+      className={`flex flex-col gap-2 rounded-xl border border-border/60 bg-card/50 p-4 ${
+        props.compact ? 'w-full max-w-[520px]' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold">Agent Browser Use</p>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+            enabled
+              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+              : 'bg-muted text-muted-foreground'
+          }`}
+        >
+          {enabled ? 'Enabled' : 'Off'}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Built into the agentum MCP — agents drive the browser with the{' '}
+        <code className="text-foreground">agentum_browser</code> tool. No skill to install.
+      </p>
+      <p className="text-[11px] text-muted-foreground">
+        Import your logins in Settings → Browser Use so agents can reach authenticated pages.
+      </p>
+    </div>
   )
 
-  if (compact) {
-    return <div className="flex min-h-24 flex-1 items-center justify-center pt-3">{setupPanel}</div>
+  if (props.compact) {
+    return <div className="flex min-h-24 flex-1 items-center justify-center pt-3">{card}</div>
   }
-  return <div className="flex">{setupPanel}</div>
+  return <div className="flex">{card}</div>
 }

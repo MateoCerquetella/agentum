@@ -26,6 +26,7 @@ tower-http     = { workspace = true }
 uuid           = { workspace = true }
 time           = { workspace = true }
 bytes          = "1"
+rayon          = "1"
 axum-server    = { version = "0.7", features = ["tls-rustls"] }
 rcgen          = "0.13"
 rand           = "0.9"
@@ -48,7 +49,12 @@ futures-util   = "0.3"
 # Anthropic (spec 001). rustls (no native-tls) so release binaries
 # don't need system OpenSSL — mirrors the feature set agentum-tui
 # already pins, so the lockfile carries no new transitive deps.
-reqwest        = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# `stream` enables `Response::bytes_stream()` — the chat route proxies Anthropic's
+# token-by-token SSE through to the desktop (live streaming + extended thinking).
+reqwest        = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# `async_stream::stream!` builds the axum SSE body that re-emits Anthropic's
+# token deltas as our own `{type,text}` events (chat streaming). Tiny, no proc-macro deps.
+async-stream   = "0.3"
 # Used by planner.rs to deserialise $XDG_CONFIG_HOME/agentum/planner.toml.
 # Already a workspace dep (profiles.toml, credentials.toml read by agentum-tui).
 toml           = { workspace = true }

@@ -9,6 +9,7 @@ import {
   resolveCommitMessageAgentChoice
 } from './commit-message-agent-spec'
 import { LOCAL_COMMIT_MESSAGE_HOST_KEY } from './commit-message-host-key'
+import { isRecord } from './type-guards'
 import type {
   CommitMessageAiModelCapability,
   CommitMessageAiSettings,
@@ -85,10 +86,6 @@ const PR_CREATION_DEFAULT_KEYS = [
 
 function copyRecord<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : structuredClone(value)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function hasEntries(value: Record<string, unknown> | null | undefined): boolean {

@@ -112,6 +112,10 @@ export type BrowserSlice = {
   ) => BrowserWorkspace
   openNewBrowserTabInActiveWorkspace: (groupId: string) => Promise<void>
   closeBrowserTab: (tabId: string) => void
+  /** Move a browser tab (its workspace + pages + unified-tab entry) from its
+   *  current worktree to `targetWorktreeId`. Returns false if the tab is unknown
+   *  or already there. Powers the "Move to worktree" menu + drag-to-sidebar. */
+  moveBrowserTabToWorktree: (workspaceId: string, targetWorktreeId: string) => boolean
   shutdownWorktreeBrowsers: (worktreeId: string) => Promise<void>
   reopenClosedBrowserTab: (worktreeId: string) => BrowserWorkspace | null
   setActiveBrowserTab: (tabId: string) => void
@@ -548,6 +552,102 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       focusAddressBar: true,
       targetGroupId: groupId
     })
+  },
+
+  moveBrowserTabToWorktree: (workspaceId, targetWorktreeId) => {
+    // Locate the workspace (a "browser tab") and the worktree it currently lives in.
+    let sourceWorktreeId: string | null = null
+    let workspace: BrowserWorkspace | null = null
+    for (const [worktreeId, tabs] of Object.entries(get().browserTabsByWorktree)) {
+      const found = tabs.find((tab) => tab.id === workspaceId)
+      if (found) {
+        sourceWorktreeId = worktreeId
+        workspace = found
+        break
+      }
+    }
+    // Unknown tab, or already in the target → nothing to move.
+    if (!sourceWorktreeId || !workspace || sourceWorktreeId === targetWorktreeId) {
+      return false
+    }
+    const source = sourceWorktreeId
+    const movedWorkspace: BrowserWorkspace = { ...workspace, worktreeId: targetWorktreeId }
+
+    // 1. Relocate the browser-slice data: the workspace, its pages' worktreeId,
+    //    the flat tab-bar order, and the active-tab selection. The unified-tab
+    //    model is moved in steps 2–3 via the existing tab methods, so split-group
+    //    bookkeeping (orders, MRU, layout) stays correct instead of hand-rolled.
+    set((s) => {
+      const sourceTabs = (s.browserTabsByWorktree[source] ?? []).filter(
+        (tab) => tab.id !== workspaceId
+      )
+      const targetTabs = [
+        ...(s.browserTabsByWorktree[targetWorktreeId] ?? []).filter((tab) => tab.id !== workspaceId),
+        movedWorkspace
+      ]
+      const nextBrowserTabsByWorktree = { ...s.browserTabsByWorktree }
+      if (sourceTabs.length > 0) {
+        nextBrowserTabsByWorktree[source] = sourceTabs
+      } else {
+        delete nextBrowserTabsByWorktree[source]
+      }
+      nextBrowserTabsByWorktree[targetWorktreeId] = targetTabs
+
+      // Pages carry their own worktreeId (used for rendering + remote routing).
+      const movedPages = (s.browserPagesByWorkspace[workspaceId] ?? []).map((page) => ({
+        ...page,
+        worktreeId: targetWorktreeId
+      }))
+
+      // Flat per-worktree tab-bar order: drop from source, append to target.
+      const nextActiveBrowserTabIdByWorktree = { ...s.activeBrowserTabIdByWorktree }
+      if (nextActiveBrowserTabIdByWorktree[source] === workspaceId) {
+        // Source was showing the moved tab — fall back to a sibling (or nothing).
+        nextActiveBrowserTabIdByWorktree[source] = sourceTabs[0]?.id ?? null
+      }
+      nextActiveBrowserTabIdByWorktree[targetWorktreeId] = workspaceId
+
+      return {
+        browserTabsByWorktree: nextBrowserTabsByWorktree,
+        browserPagesByWorkspace: {
+          ...s.browserPagesByWorkspace,
+          [workspaceId]: movedPages
+        },
+        tabBarOrderByWorktree: {
+          ...s.tabBarOrderByWorktree,
+          [source]: (s.tabBarOrderByWorktree[source] ?? []).filter((id) => id !== workspaceId),
+          [targetWorktreeId]: [
+            ...(s.tabBarOrderByWorktree[targetWorktreeId] ?? []).filter((id) => id !== workspaceId),
+            workspaceId
+          ]
+        },
+        activeBrowserTabIdByWorktree: nextActiveBrowserTabIdByWorktree,
+        // The target worktree should surface the browser when the user switches to it.
+        activeTabTypeByWorktree: {
+          ...s.activeTabTypeByWorktree,
+          [targetWorktreeId]: 'browser'
+        }
+      }
+    })
+
+    // 2. Detach the unified tab from the source group. closeUnifiedTab is
+    //    unified-model only (no cascade), so the workspace we just relocated lives.
+    const unifiedTab = Object.values(get().unifiedTabsByWorktree)
+      .flat()
+      .find((tab) => tab.contentType === 'browser' && tab.entityId === workspaceId)
+    if (unifiedTab) {
+      get().closeUnifiedTab(unifiedTab.id)
+    }
+
+    // 3. Re-register a unified tab for the workspace in the target worktree's
+    //    active group (activate it there; this does NOT switch the user's focus).
+    get().createUnifiedTab(targetWorktreeId, 'browser', {
+      entityId: workspaceId,
+      label: movedWorkspace.title,
+      activate: true
+    })
+
+    return true
   },
 
   closeBrowserTab: (tabId) => {

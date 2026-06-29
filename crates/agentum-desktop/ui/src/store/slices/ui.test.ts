@@ -17,6 +17,8 @@ import { makePaneKey } from '../../../../shared/stable-pane-id'
 
 const mocks = vi.hoisted(() => ({
   sendBracketedPasteToRunningAgent: vi.fn(),
+  submitPromptToAgentTab: vi.fn(),
+  activateTabAndFocusPane: vi.fn(),
   track: vi.fn(),
   toastMessage: vi.fn(),
   toastSuccess: vi.fn(),
@@ -24,7 +26,12 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/agent-paste-draft', () => ({
-  sendBracketedPasteToRunningAgent: mocks.sendBracketedPasteToRunningAgent
+  sendBracketedPasteToRunningAgent: mocks.sendBracketedPasteToRunningAgent,
+  submitPromptToAgentTab: mocks.submitPromptToAgentTab
+}))
+
+vi.mock('@/lib/activate-tab-and-focus-pane', () => ({
+  activateTabAndFocusPane: mocks.activateTabAndFocusPane
 }))
 
 vi.mock('@/lib/telemetry', () => ({
@@ -46,6 +53,8 @@ afterEach(() => {
 
 beforeEach(() => {
   mocks.sendBracketedPasteToRunningAgent.mockReset()
+  mocks.submitPromptToAgentTab.mockReset()
+  mocks.activateTabAndFocusPane.mockReset()
   mocks.track.mockReset()
   mocks.toastMessage.mockReset()
   mocks.toastSuccess.mockReset()
@@ -198,21 +207,32 @@ describe('createUISlice agent send target mode', () => {
   it('does not reveal the sidebar when the current workspace has no eligible targets', () => {
     const store = createUIStore()
     seedAgentSendState(store)
+    // Make every agent ineligible (mid-turn) so there is genuinely nothing to
+    // send to. A tabless-but-idle agent is now eligible (the send path activates
+    // its tab), so "no eligible targets" needs an actually-unsendable state.
+    const now = Date.now()
     store.setState({
-      terminalLayoutsByTabId: {
-        [tabId]: {
-          root: {
-            type: 'split',
-            direction: 'vertical',
-            first: { type: 'leaf', leafId: readyLeafId },
-            second: { type: 'leaf', leafId: workingLeafId }
-          },
-          activeLeafId: readyLeafId,
-          expandedLeafId: null,
-          ptyIdsByLeafId: {}
+      agentStatusByPaneKey: {
+        [readyPaneKey]: {
+          state: 'working',
+          prompt: 'busy',
+          updatedAt: now,
+          stateStartedAt: now,
+          agentType: 'codex',
+          paneKey: readyPaneKey,
+          stateHistory: []
+        },
+        [workingPaneKey]: {
+          state: 'working',
+          prompt: 'busy',
+          updatedAt: now,
+          stateStartedAt: now,
+          agentType: 'codex',
+          paneKey: workingPaneKey,
+          stateHistory: []
         }
       }
-    })
+    } as Partial<AppState>)
 
     store.getState().openAgentSendPopoverTargetMode({
       id: 'send-1',
@@ -227,8 +247,8 @@ describe('createUISlice agent send target mode', () => {
       id: 'send-1',
       eligiblePaneKeys: [],
       disabledPaneKeys: {
-        [readyPaneKey]: 'Terminal is no longer available',
-        [workingPaneKey]: 'Terminal is no longer available'
+        [readyPaneKey]: 'Agent is working',
+        [workingPaneKey]: 'Agent is working'
       }
     })
     expect(store.getState().pendingRevealWorktree).toBeNull()
@@ -261,6 +281,49 @@ describe('createUISlice agent send target mode', () => {
       launch_source: 'notes_send',
       request_kind: 'followup'
     })
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Sent to Codex')
+    expect(store.getState().agentSendPopoverTargetMode).toBeNull()
+  })
+
+  it('activates the tab and submits when the eligible target has no live PTY', async () => {
+    const store = createUIStore()
+    seedAgentSendState(store)
+    // Drop the live ptys so the ready agent is eligible-but-tabless: the send
+    // path must activate its tab, then submit once the pty spawns.
+    store.setState({
+      terminalLayoutsByTabId: {
+        [tabId]: {
+          root: {
+            type: 'split',
+            direction: 'vertical',
+            first: { type: 'leaf', leafId: readyLeafId },
+            second: { type: 'leaf', leafId: workingLeafId }
+          },
+          activeLeafId: readyLeafId,
+          expandedLeafId: null,
+          ptyIdsByLeafId: {}
+        }
+      }
+    } as Partial<AppState>)
+    mocks.submitPromptToAgentTab.mockResolvedValue(true)
+
+    store.getState().openAgentSendPopoverTargetMode({
+      id: 'send-1',
+      worktreeId,
+      source: 'browser-annotations',
+      prompt: 'Review this',
+      label: 'Browser annotations',
+      launchSource: 'notes_send'
+    })
+
+    await expect(store.getState().sendPromptToSidebarAgentTarget(readyPaneKey)).resolves.toBe(true)
+
+    expect(mocks.activateTabAndFocusPane).toHaveBeenCalledWith(tabId, readyLeafId)
+    expect(mocks.submitPromptToAgentTab).toHaveBeenCalledWith({
+      tabId,
+      content: 'Review this'
+    })
+    expect(mocks.sendBracketedPasteToRunningAgent).not.toHaveBeenCalled()
     expect(mocks.toastSuccess).toHaveBeenCalledWith('Sent to Codex')
     expect(store.getState().agentSendPopoverTargetMode).toBeNull()
   })
@@ -615,40 +678,20 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(store.getState().hideDefaultBranchWorkspace).toBe(true)
   })
 
-  it('hides the default-branch workspace by default and migrates legacy profiles once', () => {
+  it('hides the default-branch workspace by default and respects an explicit persisted choice', () => {
     // New baseline: brand-new profiles (no persisted value) start hidden.
     expect(getDefaultUIState().hideDefaultBranchWorkspace).toBe(true)
 
-    // The one-time migration only fires in the browser; the default vitest env
-    // is node, so stub a minimal localStorage to exercise the force path.
-    const backing = new Map<string, string>()
-    vi.stubGlobal('localStorage', {
-      getItem: (k: string) => backing.get(k) ?? null,
-      setItem: (k: string, v: string) => {
-        backing.set(k, v)
-      },
-      removeItem: (k: string) => {
-        backing.delete(k)
-      },
-      clear: () => backing.clear(),
-      key: () => null,
-      get length() {
-        return backing.size
-      }
-    } as Storage)
+    // An explicit persisted choice is respected verbatim — no forced migration.
+    // A profile that opted to show the primary keeps it shown.
+    const shown = createUIStore()
+    shown.getState().hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: false }))
+    expect(shown.getState().hideDefaultBranchWorkspace).toBe(false)
 
-    // Legacy profile carries the OLD default (false); the one-shot flips it to
-    // the new hidden baseline on first rehydrate.
-    const legacy = createUIStore()
-    legacy.getState().hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: false }))
-    expect(legacy.getState().hideDefaultBranchWorkspace).toBe(true)
-
-    // Once the one-shot has fired, an explicit "show the primary" choice sticks.
-    const afterChoice = createUIStore()
-    afterChoice
-      .getState()
-      .hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: false }))
-    expect(afterChoice.getState().hideDefaultBranchWorkspace).toBe(false)
+    // A profile that opted to hide it keeps it hidden.
+    const hidden = createUIStore()
+    hidden.getState().hydratePersistedUI(makePersistedUI({ hideDefaultBranchWorkspace: true }))
+    expect(hidden.getState().hideDefaultBranchWorkspace).toBe(true)
   })
 
   it('restores fixed card properties during hydration', () => {

@@ -175,7 +175,7 @@ describe('running agent send targets', () => {
     })
   })
 
-  it('requires the clicked pane leaf PTY and ignores tab-level fallback PTYs', () => {
+  it('keeps a fresh agent eligible (null pty) when its clicked leaf has no live PTY', () => {
     const paneKey = makePaneKey(TAB_ID, RIGHT_LEAF_ID)
     const target = resolveRunningAgentSendTarget(
       state({
@@ -199,12 +199,16 @@ describe('running agent send targets', () => {
       NOW
     )
 
+    // The clicked leaf (RIGHT) has no live pty and the tab-level fallback pty on
+    // the LEFT leaf is correctly ignored — but the agent is fresh and idle, so it
+    // stays eligible: the send path activates its tab and waits for the pty to
+    // spawn. (Previously this was a misleading "Terminal is no longer available".)
     expect(target).toMatchObject({
       paneKey,
       ptyId: null,
-      status: 'disabled',
-      disabledReason: 'Terminal is no longer available'
+      status: 'eligible'
     })
+    expect(target).not.toHaveProperty('disabledReason')
   })
 
   it('keeps other-workspace and remote PTY targets scoped correctly', () => {

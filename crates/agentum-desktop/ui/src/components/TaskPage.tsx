@@ -998,7 +998,7 @@ export default function TaskPage(): React.JSX.Element {
       const { synced } = await syncExternalIssues(inputs)
       toast.success(
         `Synced ${synced.length} ${taskSource} issue${synced.length === 1 ? '' : 's'} to the Board.`,
-        { action: { label: 'Open Board', onClick: () => setActiveBoardView('board') } }
+        { action: { label: 'Open Board', onClick: () => setActiveBoardView('tasks') } }
       )
     } catch (e) {
       toast.error(`Sync to Board failed: ${e instanceof Error ? e.message : String(e)}`)

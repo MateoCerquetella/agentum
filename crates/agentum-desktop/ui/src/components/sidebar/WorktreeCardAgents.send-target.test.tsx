@@ -77,7 +77,9 @@ vi.mock('@/store', () => ({
       agentStatusByPaneKey: {},
       agentStatusEpoch: 0,
       tabsByWorktree: {},
+      ptyIdsByTabId: {},
       terminalLayoutsByTabId: {},
+      activeTabId: null,
       sendPromptToSidebarAgentTarget: mockSendPromptToSidebarAgentTarget,
       ...mockStoreState
     })

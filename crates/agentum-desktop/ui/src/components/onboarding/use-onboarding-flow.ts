@@ -723,6 +723,12 @@ export function useOnboardingFlow(
       if (nextCommand) {
         setFeatureSetupTerminalSelection(featureSetupSelection)
         setFeatureSetupTerminalCommand(nextCommand)
+      } else if (result.ok) {
+        // Why: the agentum MCP capabilities apply instantly (server-side
+        // orchestration flag + macOS permission prompts) with no skill command
+        // to run, so "Enable capabilities" advances straight to the next step
+        // instead of stranding the user on an inert button.
+        setStepIndex(getNextStepIndex)
       }
     } finally {
       setBusyLabel(null)
@@ -733,6 +739,7 @@ export function useOnboardingFlow(
     currentStep.id,
     featureSetupSelection,
     featureSetupTerminalCommand,
+    getNextStepIndex,
     hasSelectedFeatureSetup,
     persistCurrentStep,
     trackCurrentStepCompleted

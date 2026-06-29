@@ -16,6 +16,7 @@ import {
   selectRuntimePaneTitlesForWorktree
 } from './worktree-card-status-inputs'
 import { selectWorktreeAgentActivitySummary } from './worktree-agent-activity-summary'
+import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 
 export type WorktreeSectionActivityState = Pick<
   AppState,
@@ -28,6 +29,7 @@ export type WorktreeSectionActivityState = Pick<
   | 'migrationUnsupportedByPtyId'
   | 'retainedAgentsByPaneKey'
   | 'awaitingInputByPaneKey'
+  | 'serverWorktreeActivityByWorktreeId'
 >
 
 export type WorktreeSectionActivitySummary = {
@@ -102,6 +104,7 @@ function getSectionWorktreeStatus(
   worktreeId: string
 ): ReturnType<typeof resolveWorktreeStatus> {
   const agentSummary = selectWorktreeAgentActivitySummary(state, worktreeId)
+  const serverActivity = selectServerWorktreeActivity(state, worktreeId)
 
   // Why: collapsed headers must mirror the card dot semantics exactly; otherwise
   // a hidden section can advertise different activity than its visible cards.
@@ -113,6 +116,8 @@ function getSectionWorktreeStatus(
     hasPermission: agentSummary.hasPermission,
     hasLiveWorking: agentSummary.hasLiveWorking,
     hasLiveDone: agentSummary.hasLiveDone,
-    hasRetainedDone: agentSummary.hasRetainedDone
+    hasRetainedDone: agentSummary.hasRetainedDone,
+    isAlive: serverActivity.isAlive,
+    liveActivity: serverActivity.liveActivity
   })
 }
