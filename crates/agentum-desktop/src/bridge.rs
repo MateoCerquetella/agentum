@@ -605,14 +605,17 @@ impl DesktopBridge for TauriBridge {
 
 #[cfg(test)]
 mod tests {
-    use super::{TabCreateRegistry, snapshot_extractor_script};
+    use super::{snapshot_extractor_script, TabCreateRegistry};
 
     #[test]
     fn snapshot_extractor_beacons_interactive_refs_with_the_request_id() {
         let js = snapshot_extractor_script("req-xyz");
         // Rides the same agentumgrab:// channel as grab, keyed by the request id.
         assert!(js.contains("agentumgrab://grab/result"));
-        assert!(js.contains("\"req-xyz\""), "request id must be embedded: {js}");
+        assert!(
+            js.contains("\"req-xyz\""),
+            "request id must be embedded: {js}"
+        );
         // Collects interactive elements + a stable selector the agent drives by.
         assert!(js.contains("querySelectorAll"));
         assert!(js.contains("button"));

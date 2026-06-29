@@ -497,15 +497,25 @@ pub async fn ensure_remote_cdp_browser(host: &agentum_core::Host) -> Result<u16>
 /// `chromium_headless_shell`); `--force-device-scale-factor` (see [`cdp_device_scale`])
 /// MUST be a launch flag because `Page.startScreencast` fixes its surface scale at launch
 /// and ignores the per-frame `setDeviceMetricsOverride.deviceScaleFactor` the pane sends.
-fn build_chrome_argv(exe: &std::path::Path, port: u16, user_data_dir: &std::path::Path) -> Vec<String> {
+fn build_chrome_argv(
+    exe: &std::path::Path,
+    port: u16,
+    user_data_dir: &std::path::Path,
+) -> Vec<String> {
     let mut argv = vec![exe.to_string_lossy().into_owned()];
     argv.push("--headless=new".to_string());
     argv.push("--window-size=1280,800".to_string());
-    argv.push(format!("--force-device-scale-factor={}", cdp_device_scale()));
+    argv.push(format!(
+        "--force-device-scale-factor={}",
+        cdp_device_scale()
+    ));
     argv.push("--hide-scrollbars".to_string());
     argv.push("--remote-debugging-address=127.0.0.1".to_string());
     argv.push(format!("--remote-debugging-port={port}"));
-    argv.push(format!("--user-data-dir={}", user_data_dir.to_string_lossy()));
+    argv.push(format!(
+        "--user-data-dir={}",
+        user_data_dir.to_string_lossy()
+    ));
     argv.push("--no-first-run".to_string());
     argv.push("--no-default-browser-check".to_string());
     argv.push("about:blank".to_string());
