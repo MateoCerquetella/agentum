@@ -540,6 +540,131 @@ pub(super) async fn stream_session(
 /// pane bytes to a per-session log on the host, and a single persistent
 /// `ssh tail -f` streams those bytes as they appear — the same incremental
 /// model as the local file tail, just sourced over one long-lived SSH channel.
+/// Spawn the remote pane `tail -f` from `offset` and wire it up: stdout is pumped
+/// into a fresh bounded mpsc the select loop reads, and stderr is drained to the
+/// tracing log so a refused channel ("Session open refused by peer") is recorded
+/// rather than vanishing behind a bare "stream closed". Returns the child (kill it
+/// on teardown; `kill_on_drop` also guards) and the receiver, or `None` if the
+/// tail couldn't be spawned. Shared by the initial connect and the mid-stream
+/// respawn ([`reestablish_tail`]) so both drain stderr and resume from a
+/// snapshot-anchored offset identically.
+fn spawn_tail_pump(
+    host: &Host,
+    log: &std::path::Path,
+    offset: Option<u64>,
+) -> Option<(tokio::process::Child, tokio::sync::mpsc::Receiver<Bytes>)> {
+    let mut child = crate::host_runtime::spawn_remote_pane_tail(host, log, offset).ok()?;
+    let stdout = child.stdout.take()?;
+    if let Some(mut stderr) = child.stderr.take() {
+        let label = log
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string();
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if stderr.read_to_end(&mut buf).await.is_ok() && !buf.is_empty() {
+                tracing::warn!(
+                    session = %label,
+                    "remote pane tail ended: {}",
+                    String::from_utf8_lossy(&buf).trim()
+                );
+            }
+        });
+    }
+    let (tail_tx, tail_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+    let mut stdout = stdout;
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; READ_CHUNK];
+        loop {
+            match stdout.read(&mut buf).await {
+                // 0 = ssh/tail exited (channel/host dropped). Unlike a local file
+                // tail this never means "caught up"; end the task so the select
+                // loop sees `None` and re-establishes (or tears down).
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tail_tx
+                        .send(Bytes::copy_from_slice(&buf[..n]))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    Some((child, tail_rx))
+}
+
+/// Cap on how many times the server re-establishes a dropped remote tail before
+/// giving up and letting the client's own auto-reconnect take over. Bounded so a
+/// truly-gone host can't pin the task respawning forever.
+const TAIL_RESPAWN_ATTEMPTS: u32 = 6;
+
+/// Backoff before the `attempt`-th (0-based) tail respawn: 250 ms, 500 ms, 1 s,
+/// 2 s, then capped at 3 s. Exponential so a momentary blip heals fast while a
+/// longer outage doesn't hammer the host; total budget ≈ 10 s across all attempts
+/// (generous enough to ride out a ControlPersist master reap or another session's
+/// tail freeing a streaming-master channel, short enough not to feel hung).
+fn tail_respawn_backoff(attempt: u32) -> Duration {
+    let ms = 250u64.saturating_mul(1u64 << attempt.min(4));
+    Duration::from_millis(ms.min(3000))
+}
+
+/// Re-establish a remote pane tail that died mid-stream WITHOUT tearing the
+/// WebSocket down. Each attempt re-snapshots the pane (repainting the client over
+/// an RIS reset so bytes lost while the tail was down are healed) and respawns the
+/// tail resumed from that snapshot's log offset — the same gap-free
+/// snapshot-then-tail handoff as the initial connect, so no byte is replayed or
+/// dropped. Returns the new tail on the first success; `None` if the client socket
+/// is gone or the budget is exhausted (the client then reconnects from a clean
+/// slate). Tearing down on every transient drop instead would flicker a full
+/// repaint and, under streaming-master `MaxSessions` pressure, just reconnect into
+/// the same refusal — a reconnect storm that reads to the user as a frozen pane.
+async fn reestablish_tail(
+    host: &Host,
+    target: &str,
+    log: &std::path::Path,
+    socket: &mut WebSocket,
+) -> Option<(tokio::process::Child, tokio::sync::mpsc::Receiver<Bytes>)> {
+    for attempt in 0..TAIL_RESPAWN_ATTEMPTS {
+        sleep(tail_respawn_backoff(attempt)).await;
+        // Re-sample the snapshot + log offset together so the resumed tail starts
+        // exactly past what we repaint. A capture error means the host is still
+        // unreachable — back off and retry rather than give up.
+        let Ok((offset, snap)) =
+            crate::host_runtime::capture_pane_with_log_offset(host, target, log).await
+        else {
+            continue;
+        };
+        if let Some((child, tail_rx)) = spawn_tail_pump(host, log, Some(offset)) {
+            // Repaint only once the tail is live, and the snapshot+offset were
+            // sampled together, so the snapshot frame precedes the resumed tail
+            // bytes (which buffer in the mpsc until the select loop reads them).
+            if !snap.is_empty() {
+                let mut payload = Vec::with_capacity(snap.len() + 2);
+                payload.extend_from_slice(b"\x1bc");
+                payload.extend_from_slice(&snap);
+                if socket
+                    .send(Message::Binary(Bytes::from(payload)))
+                    .await
+                    .is_err()
+                {
+                    return None; // client gone — the just-spawned tail reaps on drop
+                }
+            }
+            return Some((child, tail_rx));
+        }
+    }
+    let _ = socket
+        .send(Message::Text(
+            "[remote stream interrupted — reconnecting]".into(),
+        ))
+        .await;
+    None
+}
+
 pub(super) async fn stream_remote_session(
     mut socket: WebSocket,
     host: Host,
@@ -643,64 +768,19 @@ pub(super) async fn stream_remote_session(
         }
     }
 
-    // Persistent `ssh tail -f` of the remote pane log. Its stdout is pumped
-    // through an mpsc so the select loop below multiplexes output against
-    // keystrokes — a chatty pane never starves input, and vice versa.
-    let mut child = match crate::host_runtime::spawn_remote_pane_tail(&host, &log, log_offset) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = socket
-                .send(Message::Text(format!("[remote tail error: {e}]").into()))
-                .await;
-            return;
-        }
+    // Persistent `ssh tail -f` of the remote pane log, pumped through an mpsc so
+    // the select loop below multiplexes output against keystrokes. The very first
+    // tail can be refused too (streaming-master MaxSessions pressure when many
+    // sessions open at once), so on failure fall through to the same bounded
+    // re-establish the mid-stream drop path uses, rather than bailing to a blank
+    // pane.
+    let (mut child, mut tail_rx) = match spawn_tail_pump(&host, &log, log_offset) {
+        Some(p) => p,
+        None => match reestablish_tail(&host, &target, &log, &mut socket).await {
+            Some(p) => p,
+            None => return,
+        },
     };
-    let Some(mut stdout) = child.stdout.take() else {
-        let _ = child.kill().await;
-        return;
-    };
-    // Drain + log the tail's stderr so a transport failure that ends the stream
-    // (e.g. the remote sshd refusing the channel under MaxSessions pressure:
-    // "Session open refused by peer") is recorded instead of silently surfacing
-    // as a bare "[session stream closed]". Also keeps the pipe from filling.
-    if let Some(mut stderr) = child.stderr.take() {
-        let label = log
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("?")
-            .to_string();
-        tokio::spawn(async move {
-            let mut buf = Vec::new();
-            if stderr.read_to_end(&mut buf).await.is_ok() && !buf.is_empty() {
-                tracing::warn!(
-                    session = %label,
-                    "remote pane tail ended: {}",
-                    String::from_utf8_lossy(&buf).trim()
-                );
-            }
-        });
-    }
-    let (tail_tx, mut tail_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
-    let tail_handle = tokio::spawn(async move {
-        let mut buf = vec![0u8; READ_CHUNK];
-        loop {
-            match stdout.read(&mut buf).await {
-                // 0 = ssh/tail exited (channel/host dropped). Unlike a local file
-                // tail this never means "caught up"; end the task so the loop
-                // tears the connection down.
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tail_tx
-                        .send(Bytes::copy_from_slice(&buf[..n]))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-    });
 
     // Input writer: keystrokes leave the select loop through an mpsc and a
     // dedicated task delivers them. The fast path is a PERSISTENT SSH channel
@@ -731,6 +811,17 @@ pub(super) async fn stream_remote_session(
                         Ok(more) => buf.extend_from_slice(&more),
                         Err(_) => break,
                     }
+                }
+                // Re-establish a dead persistent writer so input returns to the
+                // fast ~1-RTT path after a transient master blip (ControlPersist
+                // reap, ServerAlive kill) instead of degrading to the slow
+                // per-exec fallback for the rest of the session.
+                if stdin.is_none()
+                    && let Ok(mut w) =
+                        crate::host_runtime::spawn_remote_input_writer(&host, &target)
+                {
+                    stdin = w.stdin.take();
+                    writer = Some(w);
                 }
                 let mut delivered = false;
                 if let Some(si) = stdin.as_mut() {
@@ -792,14 +883,30 @@ pub(super) async fn stream_remote_session(
                         break;
                     }
                 }
-                None => break, // tail task ended (ssh died / host unreachable)
+                None => {
+                    // Tail died (ssh channel dropped/refused, host blip, master
+                    // reap). Heal in place instead of tearing the WS down: a
+                    // teardown would flicker a full repaint and, under MaxSessions
+                    // pressure, reconnect straight into the same refusal.
+                    match reestablish_tail(&host, &target, &log, &mut socket).await {
+                        // Old child drops here → kill_on_drop reaps the dead ssh.
+                        Some((c, rx)) => {
+                            child = c;
+                            tail_rx = rx;
+                        }
+                        None => break,
+                    }
+                }
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) if !b.is_empty() => {
-                    // Channel-full (writer wedged on a dead host for 256
-                    // frames) drops the key; the 12 s ssh timeout unwedges
-                    // the writer long before that backlog accrues.
-                    let _ = input_tx.try_send(b.to_vec());
+                    // Channel-full means the writer is wedged on a dead host (up to
+                    // the 12 s ssh timeout, after which it self-heals). Log the drop
+                    // so a vanished keystroke is never fully silent — the dominant
+                    // "I typed but nothing happened" symptom.
+                    if input_tx.try_send(b.to_vec()).is_err() {
+                        tracing::warn!(target = %target, "remote keystroke dropped: input queue full");
+                    }
                 }
                 Some(Ok(Message::Text(t))) => {
                     if let Some((cols, rows)) = parse_resize(&t) {
@@ -821,8 +928,8 @@ pub(super) async fn stream_remote_session(
                                 break;
                             }
                         }
-                    } else {
-                        let _ = input_tx.try_send(t.as_bytes().to_vec());
+                    } else if input_tx.try_send(t.as_bytes().to_vec()).is_err() {
+                        tracing::warn!(target = %target, "remote keystroke dropped: input queue full");
                     }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -830,7 +937,9 @@ pub(super) async fn stream_remote_session(
             },
         }
     }
-    tail_handle.abort();
+    // The tail reader task lives inside `spawn_tail_pump` (and is replaced on each
+    // re-establish), so there's no handle to abort here: killing the child closes
+    // its stdout and dropping `tail_rx` ends the reader.
     input_handle.abort();
     let _ = child.kill().await;
 }
@@ -858,5 +967,19 @@ mod tests {
         assert_eq!(&out[..], b"onetwothree");
         // Drained everything that was waiting.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn tail_respawn_backoff_is_exponential_then_capped() {
+        // 250ms → 3s: a brief blip heals fast; a longer outage backs off without
+        // hammering the host. Capped (and shift-clamped) so no attempt overflows
+        // or grows unbounded — the respawn loop is provably bounded in wall time.
+        assert_eq!(tail_respawn_backoff(0), Duration::from_millis(250));
+        assert_eq!(tail_respawn_backoff(1), Duration::from_millis(500));
+        assert_eq!(tail_respawn_backoff(2), Duration::from_millis(1000));
+        assert_eq!(tail_respawn_backoff(3), Duration::from_millis(2000));
+        assert_eq!(tail_respawn_backoff(4), Duration::from_millis(3000));
+        assert_eq!(tail_respawn_backoff(10), Duration::from_millis(3000));
+        assert_eq!(tail_respawn_backoff(u32::MAX), Duration::from_millis(3000));
     }
 }
