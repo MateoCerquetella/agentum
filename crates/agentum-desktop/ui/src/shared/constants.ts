@@ -298,11 +298,17 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     // Why: off by default — opt-in cosmetic joke feature. Leaving the default
     // false keeps the overlay unmounted for users who never enable it.
     experimentalPet: false,
-    // Why: ON by default — the CDP-Chromium screencast is now the primary browser
-    // engine (one engine on macOS/Windows/Linux, DOM-painted), replacing the
-    // native WKWebView/WebView2 pane that renders black on macOS. Launched on
-    // demand from system Chrome (no download) or the Playwright build.
-    agentBrowserScreencast: true,
+    // Why: OFF by default — the in-app browser renders in the NATIVE webview
+    // (NativeBrowserPagePane), which is GPU-composited and fast/sharp, and is the
+    // exact surface `agentum_browser` MCP drives (via the desktop bridge, by tab
+    // label `browser-page-*`). The CDP-Chromium screencast this flag enables runs a
+    // separate HEADLESS Chromium streamed as 2x JPEG frames over a WebSocket —
+    // heavy/laggy AND a DIFFERENT browser than the MCP controls, so watching it
+    // means watching a browser the agent isn't driving. The native pane's old
+    // black-paint bug on macOS (the original reason this defaulted ON) is fixed by
+    // the relayout nudge in browser_webview_open. Screencast stays available as an
+    // opt-in for QA / SSH-host browsers where a hidden Chromium is wanted.
+    agentBrowserScreencast: false,
     experimentalActivity: false,
     experimentalActivityDefaultedOffForAllUsers: true,
     experimentalTerminalAttention: false,

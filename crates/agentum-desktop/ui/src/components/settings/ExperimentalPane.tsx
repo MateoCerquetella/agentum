@@ -92,11 +92,12 @@ export function ExperimentalPane({
             <div className="min-w-0 shrink space-y-1.5">
               <Label>Agent browser in pane</Label>
               <p className="text-xs text-muted-foreground">
-                When an agent drives a browser (via the Playwright MCP), render that exact browser
-                live inside agentum's pane over a CDP screencast — you watch and can click, type, and
-                scroll in the same instance the agent controls. Works for local and SSH-host browsers.
-                Off renders the legacy hidden/separate-window browser. Takes effect on the next page
-                open.
+                Render a hidden, agent-driven Chromium live inside agentum's pane over a CDP
+                screencast (the Playwright/headless browser) — you watch and can click, type, and
+                scroll in the same instance the agent controls. Mainly for SSH-host browsers or
+                no-GUI QA. It is heavier (2× JPEG frames streamed over a socket) and can lag. Off
+                (recommended) uses the fast native in-app browser, which the agentum browser MCP
+                also drives directly. Takes effect on the next page open.
               </p>
             </div>
             <button

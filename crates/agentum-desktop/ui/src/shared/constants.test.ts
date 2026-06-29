@@ -21,6 +21,15 @@ describe('getDefaultSettings', () => {
     expect(getDefaultSettings('/tmp').autoRenameBranchFromWork).toBe(false)
   })
 
+  it('defaults the in-app browser to the fast native webview (screencast off)', () => {
+    // The native WKWebView pane is GPU-composited, sharp, AND the exact surface the
+    // `agentum_browser` MCP drives via the desktop bridge. Defaulting screencast ON
+    // showed a slow headless Chromium (2x JPEG stream) the MCP did not control — the
+    // "browser is super slow / the MCP can't use it" bug. Keep this off by default;
+    // screencast stays an explicit opt-in for QA / SSH-host browsers.
+    expect(getDefaultSettings('/tmp').agentBrowserScreencast).toBe(false)
+  })
+
   it('enables separate light terminal theme by default', () => {
     expect(getDefaultSettings('/tmp').terminalUseSeparateLightTheme).toBe(true)
   })
