@@ -33,9 +33,9 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use super::util::parse_uuid;
 use crate::AppState;
 use crate::error::ApiError;
-use super::util::parse_uuid;
 
 /// Maximum upload body size. Matches what Claude Code accepts on its
 /// own attachment surface; larger images would push the daemon's

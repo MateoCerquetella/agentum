@@ -11,10 +11,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use uuid::Uuid;
 
+use super::util::parse_uuid;
 use crate::AppState;
 use crate::error::ApiError;
 use crate::host_runtime::{DiscoveredTmuxSession, HostProbe};
-use super::util::parse_uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()

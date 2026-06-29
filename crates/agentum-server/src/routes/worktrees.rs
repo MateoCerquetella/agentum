@@ -8,8 +8,8 @@
 //! Worktree ids are `repoId::/abs/path` (they contain `/`), so id-bearing ops
 //! are POST-with-body rather than `{id}` path params, which can't capture slashes.
 
-use std::path::PathBuf;
 use super::util::now_millis;
+use std::path::PathBuf;
 
 use agentum_core::{Host, HostKind};
 use axum::Json;

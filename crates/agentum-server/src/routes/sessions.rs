@@ -37,8 +37,8 @@ use streaming::{stream_remote_session, stream_session};
 // preserve `routes::sessions::…` references from harness::drive, board_goals, and
 // lib.rs; the rest are used internally by the create/start handlers.
 mod provision;
-use provision::{Reprovision, reprovision_session};
 use super::util::parse_uuid;
+use provision::{Reprovision, reprovision_session};
 pub(crate) use provision::{boot_drift_rescan, spawn_agent_into_pane};
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);

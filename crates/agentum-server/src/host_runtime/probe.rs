@@ -243,4 +243,3 @@ pub(crate) fn parse_probe_output(stdout: &str) -> ProbeOutput {
     }
     out
 }
-

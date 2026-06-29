@@ -59,7 +59,10 @@ pub(crate) async fn wait_for_load(conn: &mut CdpConn, wait_until: &str, timeout_
 /// Resolve a `backendDOMNodeId` to a JS RemoteObject `objectId` so we can call
 /// element methods on it. Enables the DOM domain first (idempotent). `None` means
 /// the node is gone (the page navigated) — the caller treats that as a stale ref.
-pub(crate) async fn resolve_node_object(conn: &mut CdpConn, backend_node_id: i64) -> Result<Option<String>> {
+pub(crate) async fn resolve_node_object(
+    conn: &mut CdpConn,
+    backend_node_id: i64,
+) -> Result<Option<String>> {
     let _ = conn.call("DOM.enable", json!({})).await;
     let Ok(resolved) = conn
         .call(
@@ -180,7 +183,12 @@ pub(crate) async fn click_ref(conn: &mut CdpConn, ref_id: &str) -> Result<Value>
 /// Type into an element by snapshot ref using TRUSTED key input: focus, then
 /// `Input.insertText` (fires the input/change events frameworks listen for — unlike
 /// a raw `el.value=`). `submit` presses Enter after. Stale ref → `stale_ref`.
-pub(crate) async fn type_ref(conn: &mut CdpConn, ref_id: &str, text: &str, submit: bool) -> Result<Value> {
+pub(crate) async fn type_ref(
+    conn: &mut CdpConn,
+    ref_id: &str,
+    text: &str,
+    submit: bool,
+) -> Result<Value> {
     let Some(backend) = resolve_ref(ref_id) else {
         return Ok(stale_ref(ref_id));
     };

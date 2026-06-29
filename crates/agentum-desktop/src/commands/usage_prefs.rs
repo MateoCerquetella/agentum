@@ -45,6 +45,14 @@ mod tests {
     use super::*;
     #[test]
     fn defaults_when_absent_then_roundtrips() {
+        // Serialize against the other AGENTUM_HOME-mutating test (accounts):
+        // both set this process-global var, and parallel test threads would
+        // otherwise race (our TempDir can be dropped+deleted out from under the
+        // other test). Hold the guard for the whole body so no other such test
+        // runs while our TempDir is the active AGENTUM_HOME.
+        let _home_guard = crate::commands::ENV_HOME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Isolate via AGENTUM_HOME (project-wide test-isolation var) so the real
         // prefs file is never touched and we don't mutate process-global $HOME.
         let tmp = tempfile::tempdir().unwrap();

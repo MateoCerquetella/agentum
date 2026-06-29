@@ -1,7 +1,7 @@
+use super::timestamps::now_millis;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use super::timestamps::now_millis;
 
 use serde::Deserialize;
 use serde_json::{json, Value};

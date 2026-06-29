@@ -41,8 +41,8 @@ use crate::error::ApiError;
 use crate::host_runtime::{self, git_in_dir};
 
 mod history_routes;
-use history_routes::*;
 pub(crate) use super::util::parse_uuid;
+use history_routes::*;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -191,10 +191,8 @@ async fn run_git_bytes(host: &Host, cwd: &str, args: &[&str]) -> Result<Vec<u8>,
 mod compare_routes;
 use compare_routes::*;
 
-
 mod conflict_routes;
 use conflict_routes::*;
-
 
 /// Run `git <args...>` with `cwd` as the working dir on `host`; return
 /// stdout (lossy UTF-8) on success. Host-aware: `git -C` locally,
@@ -215,7 +213,6 @@ async fn run_git(host: &Host, cwd: &str, args: &[&str]) -> Result<String, ApiErr
 
 mod sync_routes;
 use sync_routes::*;
-
 
 /// One side of a side-by-side diff. The CodeMirror merge view in the
 /// dashboard fetches two of these (e.g. index + worktree) and computes the
@@ -349,7 +346,6 @@ use write_routes::*;
 mod file_links_routes;
 use file_links_routes::*;
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +424,4 @@ mod tests {
         assert_eq!(e[0].path, "new.rs");
         assert_eq!(e[0].old_path.as_deref(), Some("old.rs"));
     }
-
 }

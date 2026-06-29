@@ -124,11 +124,11 @@ pub(crate) fn nav_timeout_ms() -> u64 {
 mod tests {
     use super::*;
 
-        #[test]
-        fn browser_config_parses_browser_section_and_ignores_extra_keys() {
-            // A full §10 file: the typed knobs parse; the rest (render_mode, viewport,
-            // screencast, driver) are ignored without error (forward-compat).
-            let src = r#"
+    #[test]
+    fn browser_config_parses_browser_section_and_ignores_extra_keys() {
+        // A full §10 file: the typed knobs parse; the rest (render_mode, viewport,
+        // screencast, driver) are ignored without error (forward-compat).
+        let src = r#"
 [browser]
 driver = "chromiumoxide"
 render_mode = "auto"
@@ -138,15 +138,15 @@ nav_timeout_ms = 8000
 viewport = { width = 1280, height = 800 }
 screencast = { enabled = true, fps_cap = 10, quality = 60 }
 "#;
-            let f: BrowserConfigFile = toml::from_str(src).expect("parse browser.toml");
-            assert!(f.browser.allow_eval);
-            assert_eq!(
-                f.browser.allowed_origins,
-                vec![
-                    "https://a.com".to_string(),
-                    "http://localhost:3000".to_string()
-                ]
-            );
-            assert_eq!(f.browser.nav_timeout_ms, Some(8000));
-        }
+        let f: BrowserConfigFile = toml::from_str(src).expect("parse browser.toml");
+        assert!(f.browser.allow_eval);
+        assert_eq!(
+            f.browser.allowed_origins,
+            vec![
+                "https://a.com".to_string(),
+                "http://localhost:3000".to_string()
+            ]
+        );
+        assert_eq!(f.browser.nav_timeout_ms, Some(8000));
+    }
 }

@@ -1,5 +1,5 @@
-use serde::Serialize;
 use super::platform::platform_label;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 // Mirrors CliInstallStatus in agentum/src/shared/cli-install-types.ts. camelCase so

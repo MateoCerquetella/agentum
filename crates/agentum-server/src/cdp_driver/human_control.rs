@@ -48,20 +48,20 @@ pub(crate) fn clear_human_control() {
 mod tests {
     use super::*;
 
-        #[test]
-        fn human_control_lock_grabs_and_releases() {
-            clear_human_control();
-            assert!(!human_has_control(), "no control by default");
-            note_human_input();
-            assert!(human_has_control(), "human holds the wheel after input");
-            clear_human_control();
-            assert!(!human_has_control(), "released after clear");
-        }
+    #[test]
+    fn human_control_lock_grabs_and_releases() {
+        clear_human_control();
+        assert!(!human_has_control(), "no control by default");
+        note_human_input();
+        assert!(human_has_control(), "human holds the wheel after input");
+        clear_human_control();
+        assert!(!human_has_control(), "released after clear");
+    }
 
-        #[test]
-        fn human_has_control_response_shape() {
-            let v = human_has_control_response();
-            assert_eq!(v["ok"], false);
-            assert_eq!(v["error"], "human_has_control");
-        }
+    #[test]
+    fn human_has_control_response_shape() {
+        let v = human_has_control_response();
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"], "human_has_control");
+    }
 }
