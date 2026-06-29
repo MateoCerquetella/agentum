@@ -155,161 +155,23 @@ import {
 } from './task-page/linear-helpers'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { formatPRDelta, sameOptionalGitHubOwnerRepo } from './task-page/work-item-helpers'
-
-type TaskSource = TaskProvider
-
-type SourceOption = {
-  id: TaskSource
-  label: string
-  Icon: (props: { className?: string }) => React.JSX.Element
-  disabled?: boolean
-}
-
-const SOURCE_OPTIONS: SourceOption[] = [
-  {
-    id: 'github',
-    label: 'GitHub',
-    Icon: ({ className }) => <Github className={className} />
-  },
-  {
-    id: 'gitlab',
-    label: 'GitLab',
-    Icon: ({ className }) => <Gitlab className={className} />
-  },
-  {
-    id: 'linear',
-    label: 'Linear',
-    Icon: ({ className }) => <LinearIcon className={className} />
-  }
-]
-
-type LinearPresetId = 'assigned' | 'created' | 'all' | 'completed'
-type LinearPreset = { id: LinearPresetId; label: string }
-
-const LINEAR_PRESETS: LinearPreset[] = [
-  { id: 'all', label: 'All' },
-  { id: 'assigned', label: 'My Issues' },
-  { id: 'created', label: 'Created' },
-  { id: 'completed', label: 'Completed' }
-]
+import {
+  GITHUB_TASK_GRID_CLASS,
+  GITHUB_PR_TASK_GRID_CLASS,
+  GITHUB_TASK_ROW_SURFACE_CLASS,
+  GITHUB_TASK_ROW_HOVER_SURFACE_CLASS,
+  GITHUB_TASK_STICKY_ID_HEADER_CLASS,
+  GITHUB_TASK_STICKY_TITLE_HEADER_CLASS,
+  GITHUB_TASK_STICKY_ID_CELL_CLASS,
+  GITHUB_TASK_STICKY_TITLE_CELL_CLASS
+} from './task-page/github-grid-styles'
+import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_BOARD_DRAG_ISSUE_MIME, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
+import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
+import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
-
-const GITHUB_TASK_GRID_CLASS =
-  'min-w-[790px] grid-cols-[72px_minmax(320px,1fr)_84px_100px_92px_122px]'
-const GITHUB_PR_TASK_GRID_CLASS =
-  'min-w-[1020px] grid-cols-[72px_minmax(360px,2fr)_132px_128px_132px_92px_158px]'
-const GITHUB_TASK_ROW_SURFACE_CLASS =
-  '[background:color-mix(in_srgb,var(--muted)_50%,var(--background))]'
-const GITHUB_TASK_ROW_HOVER_SURFACE_CLASS =
-  'group-hover/github-task-row:[background:color-mix(in_srgb,var(--muted)_70%,var(--background))]'
-// Why: the row's px-3 left padding leaves a 12px gap between the scroll-viewport
-// edge and the sticky ID column; without a covering ::before, scrolled cell text
-// bleeds through that strip. Same trick as the title column for its 8px gap.
-const GITHUB_TASK_STICKY_ID_HEADER_CLASS = cn(
-  'sticky left-3 z-30 before:absolute before:-left-3 before:top-0 before:bottom-0 before:w-3 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS
-)
-const GITHUB_TASK_STICKY_TITLE_HEADER_CLASS = cn(
-  'sticky left-[92px] z-30 border-r border-border/50 before:absolute before:-left-2 before:top-0 before:bottom-0 before:w-2 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS
-)
-const GITHUB_TASK_STICKY_ID_CELL_CLASS = cn(
-  'sticky left-3 z-20 flex items-center before:absolute before:-left-3 before:top-0 before:bottom-0 before:w-3 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS,
-  GITHUB_TASK_ROW_HOVER_SURFACE_CLASS
-)
-const GITHUB_TASK_STICKY_TITLE_CELL_CLASS = cn(
-  'sticky left-[92px] z-20 min-w-0 border-r border-border/50 pr-2 before:absolute before:-left-2 before:top-0 before:bottom-0 before:w-2 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS,
-  GITHUB_TASK_ROW_HOVER_SURFACE_CLASS
-)
-
-type LinearViewMode = 'list' | 'board'
-type LinearMode = 'issues' | 'projects' | 'views'
-type LinearProjectTab = 'overview' | 'issues'
-type LinearIssueListRow =
-  | { type: 'section'; key: string; label: string; count: number }
-  | { type: 'issue'; issue: LinearIssue }
-
-const LINEAR_BOARD_DRAG_ISSUE_MIME = 'application/x-agentum-linear-issue-id'
-
-const LINEAR_MODE_OPTIONS: { id: LinearMode; label: string }[] = [
-  { id: 'issues', label: 'Issues' },
-  { id: 'projects', label: 'Projects' },
-  { id: 'views', label: 'Views' }
-]
-
-const LINEAR_CUSTOM_VIEW_MODEL_OPTIONS: { id: LinearCustomViewModel; label: string }[] = [
-  { id: 'issue', label: 'Issues' },
-  { id: 'project', label: 'Projects' }
-]
-
-const LINEAR_VIEW_OPTIONS: {
-  id: LinearViewMode
-  label: string
-  Icon: typeof List
-}[] = [
-  { id: 'list', label: 'List', Icon: List },
-  { id: 'board', label: 'Board', Icon: LayoutGrid }
-]
-
-const LINEAR_GROUP_OPTIONS: { id: LinearGroupBy; label: string }[] = [
-  { id: 'none', label: 'No grouping' },
-  { id: 'status', label: 'Status' },
-  { id: 'assignee', label: 'Assignee' },
-  { id: 'priority', label: 'Priority' },
-  { id: 'team', label: 'Team' }
-]
-
-const LINEAR_ORDER_OPTIONS: { id: LinearOrderBy; label: string }[] = [
-  { id: 'priority', label: 'Priority' },
-  { id: 'updated', label: 'Updated' },
-  { id: 'identifier', label: 'Identifier' }
-]
-
-const LINEAR_DISPLAY_PROPERTIES: { id: LinearDisplayProperty; label: string }[] = [
-  { id: 'state', label: 'Status' },
-  { id: 'priority', label: 'Priority' },
-  { id: 'assignee', label: 'Assignee' },
-  { id: 'team', label: 'Team' },
-  { id: 'labels', label: 'Labels' },
-  { id: 'updated', label: 'Updated' }
-]
-
-const DEFAULT_LINEAR_DISPLAY_PROPERTIES: LinearDisplayProperty[] = [
-  'state',
-  'priority',
-  'assignee',
-  'team',
-  'labels',
-  'updated'
-]
-
-// Why: type-guard predicate used to filter `perRepoSourceState` down to rows
-// whose issue-source and PR-source slugs differ. Hoisted to module scope so
-// the predicate isn't re-allocated on every TaskPage render.
-const hasDivergentSources = (
-  s: TaskPageRepoSourceState
-): s is TaskPageRepoSourceState & {
-  sources: { issues: GitHubOwnerRepo; prs: GitHubOwnerRepo }
-} => !!s.sources?.issues && !!s.sources.prs && !sameGitHubOwnerRepo(s.sources.issues, s.sources.prs)
-
-// Why: the selector keeps rendering even after the user picks 'origin' (which
-// collapses `sources.issues` onto origin). Upstream-candidate divergence is
-// the right render gate — a repo that has an `upstream` remote pointing
-// somewhere different from origin is always a candidate for the toggle,
-// regardless of the current effective preference.
-const hasUpstreamCandidateDivergence = (
-  s: TaskPageRepoSourceState
-): s is TaskPageRepoSourceState & {
-  sources: { prs: GitHubOwnerRepo; upstreamCandidate: GitHubOwnerRepo }
-} =>
-  !!s.sources?.prs &&
-  !!s.sources.upstreamCandidate &&
-  !sameGitHubOwnerRepo(s.sources.prs, s.sources.upstreamCandidate)
 
 export default function TaskPage(): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
