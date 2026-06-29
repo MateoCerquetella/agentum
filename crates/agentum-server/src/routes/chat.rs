@@ -125,9 +125,161 @@ struct ChatResponse {
     content: String,
 }
 
+/// Total budget (chars) for the repo+harness snapshot inlined into the system
+/// prompt. Generous on purpose — the spec must fit the ACTUAL repo, so we want
+/// (near-)full context: the whole guide + the whole file tree for normal repos.
+/// The cap (~22k tokens) only clips a pathological monorepo so it can't blow the
+/// 200k window. ~90k chars.
+const CONTEXT_BUDGET: usize = 90_000;
+/// Per-section caps inside [`CONTEXT_BUDGET`] — sized to hold a full CLAUDE.md /
+/// AGENTS.md guide, the full harness contract, and the root manifests.
+const GUIDE_BUDGET: usize = 40_000;
+const HARNESS_AGENTS_BUDGET: usize = 20_000;
+const FEATURE_LIST_BUDGET: usize = 12_000;
+const MANIFEST_BUDGET: usize = 8_000;
+/// Cap on the git-tracked file tree (lines). High enough to be the full tree for
+/// a normal repo; bounds a huge monorepo.
+const TREE_MAX_FILES: usize = 1_500;
+
+/// Char-safe truncation with a marker (byte slicing would split a multi-byte
+/// char). Returns `s` untouched when already within `max`.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push_str("\n…[truncated]");
+    out
+}
+
+/// Read the first existing, non-empty file among `candidates` (relative to
+/// `root`), truncated to `budget`. Returns `(name, content)`.
+fn read_first_file(
+    root: &std::path::Path,
+    candidates: &[&str],
+    budget: usize,
+) -> Option<(String, String)> {
+    for name in candidates {
+        if let Ok(content) = std::fs::read_to_string(root.join(name)) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return Some(((*name).to_string(), truncate_chars(trimmed, budget)));
+            }
+        }
+    }
+    None
+}
+
+/// The git-tracked file tree (so the interviewer knows what already exists),
+/// capped at [`TREE_MAX_FILES`]. `None` when `root` isn't a git repo.
+fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("ls-files")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let total = text.lines().count();
+    if total == 0 {
+        return None;
+    }
+    let mut joined = text
+        .lines()
+        .take(TREE_MAX_FILES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if total > TREE_MAX_FILES {
+        joined.push_str(&format!("\n…(+{} more files)", total - TREE_MAX_FILES));
+    }
+    Some(joined)
+}
+
+/// Read a real snapshot of the selected workspace so the interviewer grounds its
+/// questions and the task breakdown in the ACTUAL repo + harness — not blind
+/// Q&A. This is agentum's whole point: agents work with repo context. Reads
+/// (best-effort, all LOCAL — Chat never SSHes): the repo guide
+/// (CLAUDE.md/AGENTS.md), the `.harness/` contract (AGENTS.md + the feature
+/// backlog), and a git-tracked file tree. A missing/remote/empty workdir → None.
+fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
+    let wd = workdir.map(str::trim).filter(|s| !s.is_empty())?;
+    let root = std::path::Path::new(wd);
+    if !root.is_dir() {
+        return None;
+    }
+
+    let mut out = String::new();
+
+    // The curated repo guide — CLAUDE.md is the codebase guide; AGENTS.md the
+    // agent-instructions equivalent; README a fallback.
+    if let Some((name, body)) =
+        read_first_file(root, &["CLAUDE.md", "AGENTS.md", "README.md"], GUIDE_BUDGET)
+    {
+        out.push_str(&format!("## Repo guide ({name})\n{body}\n\n"));
+    }
+
+    // The harness contract — so the breakdown fits the verification-gated
+    // pipeline: the harness AGENTS.md + the current feature backlog.
+    if root.join(".harness").is_dir() {
+        if let Some((_, body)) =
+            read_first_file(root, &[".harness/AGENTS.md"], HARNESS_AGENTS_BUDGET)
+        {
+            out.push_str(&format!("## .harness/AGENTS.md\n{body}\n\n"));
+        }
+        if let Some((_, body)) =
+            read_first_file(root, &[".harness/feature_list.json"], FEATURE_LIST_BUDGET)
+        {
+            out.push_str(&format!(
+                "## .harness/feature_list.json (current backlog)\n{body}\n\n"
+            ));
+        }
+    }
+
+    // Root build manifests — so the spec imitates the real stack + deps.
+    let mut manifests = String::new();
+    for name in [
+        "Cargo.toml",
+        "package.json",
+        "pyproject.toml",
+        "go.mod",
+        "Gemfile",
+        "pom.xml",
+        "build.gradle",
+        "composer.json",
+        "requirements.txt",
+        "tsconfig.json",
+    ] {
+        if let Some((n, body)) = read_first_file(root, &[name], MANIFEST_BUDGET) {
+            manifests.push_str(&format!("### {n}\n{body}\n\n"));
+        }
+    }
+    if !manifests.is_empty() {
+        out.push_str("## Root manifests\n");
+        out.push_str(&manifests);
+    }
+
+    // The file tree so it can reference real files/areas.
+    if let Some(tree) = git_tracked_tree(root) {
+        out.push_str(&format!("## Repo file tree (git-tracked)\n{tree}\n"));
+    }
+
+    let out = truncate_chars(out.trim(), CONTEXT_BUDGET);
+    if out.is_empty() { None } else { Some(out) }
+}
+
 /// The interviewer instructions (the second `system` block). Kept separate from
-/// the Claude Code identity block so the identity stays byte-exact.
-fn interviewer_instructions(workdir: Option<&str>, repo_slug: Option<&str>) -> String {
+/// the Claude Code identity block so the identity stays byte-exact. When a
+/// `repo_context` snapshot is present the interviewer is told to GROUND
+/// everything in it (agentum's philosophy: agents work with repo context); when
+/// absent (no local workspace) it falls back to honest blind Q&A.
+fn interviewer_instructions(
+    workdir: Option<&str>,
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+) -> String {
     let mut ctx = String::new();
     if let Some(slug) = repo_slug {
         ctx.push_str(&format!("\nThe user's GitHub repo is `{slug}`."));
@@ -135,24 +287,46 @@ fn interviewer_instructions(workdir: Option<&str>, repo_slug: Option<&str>) -> S
     if let Some(wd) = workdir {
         ctx.push_str(&format!("\nThe project lives at `{wd}`."));
     }
+
+    // The repo + harness snapshot (when a local workspace is selected) plus the
+    // matching access rule — grounded when present, honest-blind when not.
+    let (repo_block, access_rule) = match repo_context {
+        Some(c) => (
+            format!(
+                "\n\n=== REPO & HARNESS CONTEXT (a real snapshot of the user's project — USE IT) ===\n\
+{c}\n=== END CONTEXT ===\n"
+            ),
+            "- You HAVE the repo + harness snapshot above (the guide, the .harness/ contract, and the \
+file tree). GROUND every question and the final breakdown in it: reference real files, modules, and \
+existing patterns; fit the project's architecture and (if present) its harness pipeline. Don't ask \
+about anything the snapshot already answers. It is a STATIC snapshot — you can't run commands or read \
+files beyond it, so never claim to have executed anything.",
+        ),
+        None => (
+            String::new(),
+            "- You have no repo snapshot for this chat (no local workspace selected). Work from what \
+the user tells you and don't claim to have inspected the project.",
+        ),
+    };
+
     format!(
         "You are running inside agentum (a control plane for AI coding agents) as the \
-feature-intake interviewer on the Chat screen.{ctx}\n\n\
+feature-intake interviewer on the Chat screen.{ctx}{repo_block}\n\n\
 Your job: through a short Socratic conversation, help the user turn a rough idea into a \
-clear, buildable feature, then propose a concrete task breakdown for their issue tracker.\n\n\
+clear, buildable feature THAT FITS THIS REPO, then propose a concrete task breakdown for \
+their issue tracker.\n\n\
 Rules:\n\
 - Ask ONE focused clarifying question at a time (two only if tightly related). Keep each \
-turn short and concrete, like a sharp staff engineer — no filler, no \"great question!\".\n\
+turn short and concrete, like a sharp staff engineer who knows this codebase — no filler, \
+no \"great question!\".\n\
 - Cover only what's genuinely unclear: the problem and who it's for, the desired outcome, \
 scope boundaries (in/out), hard constraints, and acceptance criteria. Never re-ask what \
-the user already answered.\n\
+the user — or the repo context — already answers.\n\
 - When the feature is defined well enough to build, STOP asking questions and propose a \
-breakdown: a one-line feature title, then 3–7 concrete tasks (each an issue-style \
-title plus one sentence of detail). Then tell the user to click the \"Create issues\" \
-button below the chat to file them into their tracker (GitHub or Linear).\n\
-- You have NO tools and NO repo access: you cannot read files, run commands, or inspect \
-the project. Never emit tool calls or claim to have looked at anything — you only \
-converse.\n\
+breakdown: a one-line feature title, then 3–7 concrete tasks (each an issue-style title \
+plus one sentence of detail), each pointing at the real files/areas it touches. Then tell \
+the user to click the \"Create issues\" button below the chat to file them.\n\
+{access_rule}\n\
 - You do not create the issues yourself, and no other agent will: the \"Create issues\" \
 button files them directly. When the user confirms, point them at that button — never \
 tell them to \"confirm with the system\" or that someone else will take it from there."
@@ -192,7 +366,12 @@ async fn chat(
         .map(|m| json!({ "role": m.role, "content": m.content }))
         .collect();
 
-    let instructions = interviewer_instructions(body.workdir.as_deref(), body.repo_slug.as_deref());
+    let repo_context = gather_repo_context(body.workdir.as_deref());
+    let instructions = interviewer_instructions(
+        body.workdir.as_deref(),
+        body.repo_slug.as_deref(),
+        repo_context.as_deref(),
+    );
     let system = build_system(&auth, &instructions);
 
     let text = call_anthropic(&auth, model, system, &messages, MAX_TOKENS_REPLY).await?;
@@ -289,7 +468,12 @@ async fn chat_stream(
         ));
     }
 
-    let instructions = interviewer_instructions(body.workdir.as_deref(), body.repo_slug.as_deref());
+    let repo_context = gather_repo_context(body.workdir.as_deref());
+    let instructions = interviewer_instructions(
+        body.workdir.as_deref(),
+        body.repo_slug.as_deref(),
+        repo_context.as_deref(),
+    );
     let system = build_system(&auth, &instructions);
     let payload = build_stream_payload(&model, system, &messages, thinking);
 
@@ -800,8 +984,18 @@ async fn chat_issues(
     messages.push(json!({ "role": "user", "content": EXTRACT_USER_PROMPT }));
 
     // Extraction call: lead the system with the Claude Code identity for OAuth
-    // (mirrors the interviewer), then the strict-JSON instruction.
-    let system = build_system(&auth, EXTRACT_INSTRUCTIONS);
+    // (mirrors the interviewer), the strict-JSON instruction, then the SAME repo +
+    // harness snapshot the interview used — so each task's title/detail names the
+    // real files/areas it touches (the spec imitates the actual repo).
+    let extract_system = match gather_repo_context(body.workdir.as_deref()) {
+        Some(c) => format!(
+            "{EXTRACT_INSTRUCTIONS}\n\nGround every task in this real project snapshot — \
+name the actual files/modules each task touches:\n\
+=== REPO & HARNESS CONTEXT ===\n{c}\n=== END CONTEXT ==="
+        ),
+        None => EXTRACT_INSTRUCTIONS.to_string(),
+    };
+    let system = build_system(&auth, &extract_system);
     let text = call_anthropic(&auth, DEFAULT_MODEL, system, &messages, 2048).await?;
 
     // Parse leniently (fences/prose tolerated). No object / no tasks → 422.
@@ -1271,6 +1465,79 @@ mod tests {
         assert!(!slug_matches("owner /repo"));
         assert!(!slug_matches("/repo"));
         assert!(!slug_matches("owner/"));
+    }
+
+    // --- repo + harness grounding (the interviewer's context) ---
+
+    #[test]
+    fn interviewer_grounds_when_context_present() {
+        let with = interviewer_instructions(
+            Some("/tmp/proj"),
+            Some("o/r"),
+            Some("## Repo guide (CLAUDE.md)\nThis project uses axum."),
+        );
+        assert!(
+            with.contains("REPO & HARNESS CONTEXT"),
+            "context block present"
+        );
+        assert!(
+            with.contains("This project uses axum."),
+            "context body inlined"
+        );
+        assert!(
+            with.contains("You HAVE the repo + harness snapshot"),
+            "grounded access rule"
+        );
+    }
+
+    #[test]
+    fn interviewer_is_honest_blind_when_no_context() {
+        let without = interviewer_instructions(Some("/tmp/proj"), None, None);
+        assert!(
+            !without.contains("REPO & HARNESS CONTEXT"),
+            "no context block when absent"
+        );
+        assert!(
+            without.contains("no repo snapshot for this chat"),
+            "blind access rule"
+        );
+    }
+
+    #[test]
+    fn gather_repo_context_reads_guide_and_manifests() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            "# Guide\nThis project uses axum + sqlx.",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        let ctx = gather_repo_context(Some(dir.path().to_str().unwrap())).expect("context");
+        assert!(ctx.contains("Repo guide (CLAUDE.md)"));
+        assert!(ctx.contains("This project uses axum + sqlx."));
+        // The stack manifest is included so the spec can imitate the real deps.
+        assert!(ctx.contains("Root manifests") && ctx.contains("Cargo.toml"));
+        assert!(ctx.contains("name = \"demo\""));
+    }
+
+    #[test]
+    fn gather_repo_context_none_for_missing_or_empty_workdir() {
+        assert!(gather_repo_context(None).is_none());
+        assert!(gather_repo_context(Some("")).is_none());
+        assert!(gather_repo_context(Some("/nonexistent/xyzzy-agentum-chat-test")).is_none());
+    }
+
+    #[test]
+    fn truncate_chars_is_char_safe_and_marks() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+        let t = truncate_chars("hello world", 5);
+        assert!(t.starts_with("hello") && t.contains("[truncated]"));
+        // Multi-byte: truncating mid-emoji must not panic.
+        let _ = truncate_chars("👍👍👍👍", 2);
     }
 
     // --- streaming + extended thinking (the /api/chat/stream path) ---
