@@ -245,7 +245,6 @@ pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<Stri
     }
 }
 
-
 mod discovery;
 pub use discovery::*;
 

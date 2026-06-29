@@ -23,9 +23,9 @@
 //! than guessing a system Chrome. Fails **loud** (descriptive error) when the
 //! browser isn't installed or never opens its CDP port — never a silent hang.
 
+use crate::port_wait::{port_listening, wait_until_listening};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use crate::port_wait::{port_listening, wait_until_listening};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;

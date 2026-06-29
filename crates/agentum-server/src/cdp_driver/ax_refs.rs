@@ -123,7 +123,11 @@ fn ax_property(node: &Value, key: &str) -> Option<Value> {
 /// Parse a CDP `Accessibility.getFullAXTree` result into ref entries for
 /// `generation`. `interactive_only` keeps only actionable roles (the default).
 /// Capped at [`MAX_REFS`]; the returned `bool` is `true` when truncated.
-pub(crate) fn parse_ax_refs(tree: &Value, generation: u64, interactive_only: bool) -> (Vec<AxRef>, bool) {
+pub(crate) fn parse_ax_refs(
+    tree: &Value,
+    generation: u64,
+    interactive_only: bool,
+) -> (Vec<AxRef>, bool) {
     let mut out = Vec::new();
     let Some(nodes) = tree.get("nodes").and_then(Value::as_array) else {
         return (out, false);

@@ -19,8 +19,8 @@
 //! `<app-data>/Agentum/managed-accounts/<provider>/<id>.json` (0600).
 //! Desktop is host-only — WSL runtime fields are emitted as `host`/null.
 
-use std::path::{Path, PathBuf};
 use super::timestamps::now_ms;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -539,8 +539,13 @@ mod tests {
 
     #[test]
     fn capture_upserts_by_email_and_sets_active() {
-        // Isolate the secret store; this is the only test in the crate that
-        // sets AGENTUM_HOME, so there is no cross-test race.
+        // Serialize against the other AGENTUM_HOME-mutating test (usage_prefs):
+        // both set this process-global var, and parallel test threads would
+        // otherwise race. Hold the guard for the whole body.
+        let _home_guard = crate::commands::ENV_HOME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Isolate the secret store.
         let tmp =
             std::env::temp_dir().join(format!("agentum-accounts-test-{}", std::process::id()));
         std::env::set_var("AGENTUM_HOME", &tmp);

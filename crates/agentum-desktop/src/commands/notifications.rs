@@ -1,5 +1,5 @@
-use serde::Serialize;
 use super::platform::platform_label;
+use serde::Serialize;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
 // Result shapes mirror the renderer contract in agentum/src/shared/types.ts so the

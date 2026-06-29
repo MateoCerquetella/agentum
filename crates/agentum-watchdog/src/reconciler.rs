@@ -182,10 +182,7 @@ async fn handle_board_event(
 /// `board.updated` events whose payload lacks the field (defensive, shouldn't
 /// happen with plan 01-03 in place). For `board.deleted` without the field,
 /// there is no fallback — the row is gone — so returns `None`.
-async fn extract_parent_goal_id(
-    store: &Store,
-    ev: &Event,
-) -> Result<Option<i64>, WatchdogError> {
+async fn extract_parent_goal_id(store: &Store, ev: &Event) -> Result<Option<i64>, WatchdogError> {
     // Fast path: payload carries parent_goal_id directly.
     if let Some(v) = ev.payload.get("parent_goal_id") {
         return Ok(v.as_i64());

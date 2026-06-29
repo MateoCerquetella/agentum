@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use super::platform::platform_label;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
