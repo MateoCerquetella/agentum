@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 002-start-loads-spec
-- **phase:** architect   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (done; ⛔ R1 gates developer)
+- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (002 Option B impl + gated; browser QA + release = human)
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -21,7 +21,10 @@
   (`architecture.md`). ⛔ **R1 needs Mateo:** the spec's Path A (board-card Start) is
   DEAD (no UI caller); the live "start a ticket" flow is Path B (Tasks "Use" → local
   PTY; gets Linear body, not GitHub). Option A (new server "Start", spec-faithful) vs
-  Option B (fix "Use", local-PTY). Developer phase gated on R1.
+  Option B (fix "Use", local-PTY). Developer phase gated on R1. ✅ **R1 → Option B; Developer DONE** (`e0faf420`):
+  `routes/github.rs` `GET /api/github/issue` + UI fetch → linkedContext → prompt;
+  npm build + cargo test (453/0) green; AC-3 verified. NOT runtime/browser-verified.
+  Release = human-gated.
 
 ## Decision log
 
@@ -75,3 +78,9 @@
   ticket" flow is Path B (Tasks "Use" → local PTY; snapshots Linear body, not
   GitHub). ⛔ R1 (human gate): Option A (new server "Start", spec-faithful) vs
   Option B (fix "Use", lighter, local-PTY). /loop paused for R1.
+- 2026-06-30 — R1 → **Option B** (Mateo). Developer DONE + pushed (`e0faf420`):
+  server `GET /api/github/issue` (`gh issue view --json title,body`, numeric-id
+  guard, authed, outside `/api/board`) + UI client + GitHub linked-context snapshot
+  + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
+  npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
+  human-gated release** (browser QA + merge/promote/tag = Mateo).
