@@ -65,6 +65,7 @@ pub fn handles_op(op: &str) -> bool {
             | "node_at_point"
             | "click"
             | "fill"
+            | "scroll"
             | "get_console"
             | "wait"
             | "eval"
@@ -107,6 +108,7 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
         "node_at_point" => cdp_node_at_point(&base, args).await,
         "click" => cdp_click(&base, args).await,
         "fill" => cdp_fill(&base, args).await,
+        "scroll" => cdp_scroll(&base, args).await,
         "get_console" => cdp_get_console(args).await,
         "wait" => cdp_wait(&base, args).await,
         "eval" => cdp_eval(&base, args).await,
@@ -566,6 +568,58 @@ pub(crate) async fn cdp_fill(base: &str, args: &Value) -> Result<Value> {
     Ok(json!({ "ok": true, "selector": sel, "found": found }))
 }
 
+/// Map a `scroll` op's `direction` (up|down|left|right) + optional `amount` (CSS px,
+/// default 600 ≈ a screenful) to wheel deltas. Unknown/absent direction → scroll down.
+fn scroll_deltas(args: &Value) -> (f64, f64, &'static str) {
+    let amount = args
+        .get("amount")
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(600.0);
+    match args.get("direction").and_then(Value::as_str).unwrap_or("down") {
+        "up" => (0.0, -amount, "up"),
+        "left" => (-amount, 0.0, "left"),
+        "right" => (amount, 0.0, "right"),
+        _ => (0.0, amount, "down"),
+    }
+}
+
+/// Scroll the page by dispatching a real wheel event at the viewport center — the
+/// same `Input.dispatchMouseEvent { type: "mouseWheel" }` the human-driven pane uses,
+/// so it scrolls the main document OR whatever scroller is under the center (nested
+/// overflow), exactly like a user's wheel. Direction/amount come from `scroll_deltas`.
+pub(crate) async fn cdp_scroll(base: &str, args: &Value) -> Result<Value> {
+    // Yield to a human who's actively driving the same page (F12).
+    if human_has_control() {
+        return Ok(human_has_control_response());
+    }
+    let (dx, dy, dir) = scroll_deltas(args);
+    let mut conn = connect_page(base, args).await?;
+    // Center the wheel in the layout viewport so it lands on the page, not chrome.
+    // Fall back to a sane mid-viewport point if metrics aren't available.
+    let (cx, cy) = match conn.call("Page.getLayoutMetrics", json!({})).await {
+        Ok(m) => (
+            m.pointer("/cssLayoutViewport/clientWidth")
+                .and_then(Value::as_f64)
+                .filter(|w| *w > 0.0)
+                .unwrap_or(800.0)
+                / 2.0,
+            m.pointer("/cssLayoutViewport/clientHeight")
+                .and_then(Value::as_f64)
+                .filter(|h| *h > 0.0)
+                .unwrap_or(600.0)
+                / 2.0,
+        ),
+        Err(_) => (400.0, 300.0),
+    };
+    conn.call(
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseWheel", "x": cx, "y": cy, "deltaX": dx, "deltaY": dy }),
+    )
+    .await?;
+    Ok(json!({ "ok": true, "direction": dir, "deltaX": dx, "deltaY": dy }))
+}
+
 // --- CDP connection ----------------------------------------------------------
 
 type Ws =
@@ -905,6 +959,7 @@ mod tests {
             "screenshot",
             "click",
             "fill",
+            "scroll",
         ] {
             assert!(handles_op(op), "{op} should be CDP-driven");
         }
@@ -913,6 +968,23 @@ mod tests {
         for op in ["grab", "annotate", "annotations", "bogus"] {
             assert!(!handles_op(op), "{op} should NOT be CDP-driven");
         }
+    }
+
+    #[test]
+    fn scroll_deltas_maps_direction_to_wheel() {
+        // down/up move Y; right/left move X; the third field echoes the direction.
+        assert_eq!(scroll_deltas(&json!({ "direction": "down" })), (0.0, 600.0, "down"));
+        assert_eq!(scroll_deltas(&json!({ "direction": "up" })), (0.0, -600.0, "up"));
+        assert_eq!(scroll_deltas(&json!({ "direction": "right" })), (600.0, 0.0, "right"));
+        assert_eq!(scroll_deltas(&json!({ "direction": "left" })), (-600.0, 0.0, "left"));
+        // explicit amount overrides the default; absent/garbage direction → down.
+        assert_eq!(scroll_deltas(&json!({ "amount": 120 })), (0.0, 120.0, "down"));
+        assert_eq!(scroll_deltas(&json!({ "direction": "sideways" })), (0.0, 600.0, "down"));
+        // non-positive / non-finite amount falls back to the default.
+        assert_eq!(
+            scroll_deltas(&json!({ "direction": "up", "amount": -5 })),
+            (0.0, -600.0, "up")
+        );
     }
 
     #[test]
