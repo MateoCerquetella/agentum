@@ -8,7 +8,12 @@ const RIGHT_SIDEBAR_SUPPRESSED_VIEWS = new Set<ActiveView>([
   'tasks',
   'activity',
   'skills',
-  'mobile'
+  'mobile',
+  // Chat (the 'harness' view) is a focused, full-page conversation surface —
+  // the Explorer/Search/Source-Control strip is noise here, so suppress it the
+  // same way the other full-page views do (the strip never mounts and the
+  // toggle/shortcuts are guarded off).
+  'harness'
 ])
 
 export function canShowRightSidebarForView(activeView: ActiveView): boolean {
