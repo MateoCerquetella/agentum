@@ -48,7 +48,7 @@ use helpers::*;
 // at crate visibility.
 mod drive;
 pub use drive::drive;
-pub(crate) use drive::inject_prompt;
+pub(crate) use drive::{inject_prompt, teardown_session, wait_for_settle};
 
 /// Manages every concurrent harness run + the event bus they publish on.
 pub struct HarnessEngine {

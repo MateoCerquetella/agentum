@@ -204,7 +204,7 @@ fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
 /// (best-effort, all LOCAL — Chat never SSHes): the repo guide
 /// (CLAUDE.md/AGENTS.md), the `.harness/` contract (AGENTS.md + the feature
 /// backlog), and a git-tracked file tree. A missing/remote/empty workdir → None.
-fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
+pub(crate) fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
     let wd = workdir.map(str::trim).filter(|s| !s.is_empty())?;
     let root = std::path::Path::new(wd);
     if !root.is_dir() {

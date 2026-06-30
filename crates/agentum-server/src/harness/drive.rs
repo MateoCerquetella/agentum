@@ -928,7 +928,7 @@ pub(crate) async fn inject_prompt(
 }
 
 /// Gracefully stop an agent's pane + mark the session stopped. Best-effort.
-async fn teardown_session(state: &AppState, session: &agentum_core::Session) {
+pub(crate) async fn teardown_session(state: &AppState, session: &agentum_core::Session) {
     let host = match state
         .store
         .get_host(session.host_id.unwrap_or(LOCAL_HOST_ID))
@@ -953,7 +953,7 @@ async fn teardown_session(state: &AppState, session: &agentum_core::Session) {
 /// Wait until the agent in `session_id` looks done with its turn — the first
 /// `agent.awaiting_input` / `agent.finished` event after `grace` — or until
 /// `timeout` elapses (then we run the gate anyway). A crash/stop also returns.
-pub(super) async fn wait_for_settle(
+pub(crate) async fn wait_for_settle(
     bus: &broadcast::Sender<Event>,
     session_id: Uuid,
     grace: Duration,
