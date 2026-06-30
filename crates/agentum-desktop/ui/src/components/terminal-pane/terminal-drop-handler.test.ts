@@ -57,9 +57,10 @@ describe('handleTerminalFileDrop', () => {
     })
     const sendInput = vi.fn()
     const focus = vi.fn()
+    const pane = { id: 1, leafId: 'leaf-1', terminal: { focus } }
     const manager = {
-      getActivePane: () => ({ id: 1, terminal: { focus } }),
-      getPanes: () => []
+      getActivePane: () => pane,
+      getPanes: () => [pane]
     }
     const paneTransports = new Map([[1, { sendInput }]])
 
@@ -68,6 +69,7 @@ describe('handleTerminalFileDrop', () => {
       paneTransports: paneTransports as never,
       worktreeId: 'wt-1',
       cwd: undefined,
+      tabId: 'tab-1',
       data: { paths: ['/Users/me/logo.png'], target: 'terminal' }
     })
 
@@ -103,9 +105,10 @@ describe('handleTerminalFileDrop', () => {
     })
     const sendInput = vi.fn()
     const focus = vi.fn()
+    const pane = { id: 1, leafId: 'leaf-1', terminal: { focus } }
     const manager = {
-      getActivePane: () => ({ id: 1, terminal: { focus } }),
-      getPanes: () => []
+      getActivePane: () => pane,
+      getPanes: () => [pane]
     }
     const paneTransports = new Map([[1, { sendInput }]])
 
@@ -114,6 +117,7 @@ describe('handleTerminalFileDrop', () => {
       paneTransports: paneTransports as never,
       worktreeId: 'wt-1',
       cwd: undefined,
+      tabId: 'tab-1',
       data: { paths: ['/Users/me/logo.png'], target: 'terminal' }
     })
 

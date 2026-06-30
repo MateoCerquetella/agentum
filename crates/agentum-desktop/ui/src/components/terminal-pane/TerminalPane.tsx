@@ -73,6 +73,7 @@ import {
 } from '@/components/terminal-quick-commands/TerminalQuickCommandDialog'
 import { keybindingMatchesAction } from '../../../../shared/keybindings'
 import { pasteTerminalClipboard } from './terminal-clipboard-paste'
+import { resolveServerSessionId, uploadLocalImageToSession } from './screenshot-remote-upload'
 
 // Why: registry lives in a leaf module so the store slice can import it
 // without re-entering the `slice → TerminalPane → store → slice` cycle
@@ -1029,7 +1030,20 @@ export default function TerminalPane({
         saveClipboardImageAsTempFile: api.ui.saveClipboardImageAsTempFile,
         connectionId,
         pasteText: (text, options) => pasteTerminalText(pane.terminal, text, options),
-        onImagePasteError: (error) => setTerminalError(formatClipboardImagePasteError(error))
+        onImagePasteError: (error) => setTerminalError(formatClipboardImagePasteError(error)),
+        // SSH worktrees: the agent runs on a remote host, so a local temp path is
+        // unreachable. Upload the image bytes to the host-aware uploads route,
+        // which writes them on the remote and types the path into the remote pane.
+        uploadImageForRemote:
+          connectionId !== null
+            ? async (localPath) => {
+                const sessionId = resolveServerSessionId(tabId, pane.leafId)
+                if (!sessionId) {
+                  throw new Error('No agent session for this worktree.')
+                }
+                await uploadLocalImageToSession(sessionId, localPath)
+              }
+            : undefined
       }).catch(() => {
         /* ignore clipboard failures */
       })

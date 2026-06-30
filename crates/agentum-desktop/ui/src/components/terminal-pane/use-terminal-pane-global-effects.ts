@@ -269,6 +269,7 @@ export function useTerminalPaneGlobalEffects({
         paneTransports: paneTransportsRef.current,
         worktreeId: wtId,
         cwd: cwdRef.current,
+        tabId,
         data
       })
     })

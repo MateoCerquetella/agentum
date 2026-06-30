@@ -199,6 +199,29 @@ export function getSession(id: string): Promise<Session> {
   return request<Session>(`/api/sessions/${id}`)
 }
 
+/** Wire shape of `POST /api/sessions/{id}/uploads`. */
+export type UploadResponse = { path: string; relative_path: string; size_bytes: number }
+
+/**
+ * `POST /api/sessions/{id}/uploads` — upload raw image bytes for a session. The
+ * (host-aware) server writes them into the session's workdir — on the REMOTE
+ * host over SSH for a remote session — and types the relative path into the
+ * pane (no Enter) so the agent attaches the screenshot. This is how the desktop
+ * delivers a pasted/dropped image to an SSH agent, where a local temp path is
+ * unreachable. `Content-Type` selects the extension (image/png|jpeg|gif|webp|bmp).
+ */
+export function uploadSessionImage(
+  id: string,
+  bytes: Uint8Array | ArrayBuffer | Blob,
+  contentType = 'image/png'
+): Promise<UploadResponse> {
+  return request<UploadResponse>(`/api/sessions/${id}/uploads`, {
+    method: 'POST',
+    body: bytes as BodyInit,
+    headers: { 'Content-Type': contentType }
+  })
+}
+
 /** `POST /api/sessions` — create a session (optionally in a dedicated worktree). */
 export function createSession(input: CreateSessionInput): Promise<Session> {
   const body: Record<string, unknown> = {
