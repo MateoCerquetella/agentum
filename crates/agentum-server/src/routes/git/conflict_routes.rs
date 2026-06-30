@@ -111,8 +111,48 @@ pub(crate) struct DiscardBody {
     paths: Vec<String>,
 }
 
-/// `POST /api/sessions/{id}/git/discard` — restore the given tracked paths to
-/// HEAD (drops staged + worktree changes). Untracked files are left untouched.
+/// Split `paths` into `(tracked, untracked)`. "Untracked" mirrors exactly what
+/// `git status` reports as `??` — files git neither tracks nor ignores — listed
+/// here with `ls-files --others --exclude-standard`. A requested path counts as
+/// untracked when git lists it (an untracked file) or lists a child under it (an
+/// untracked directory such as `.playwright-mcp/`, whose entries appear as
+/// `.playwright-mcp/<file>`). Everything else — modified, staged, even a staged
+/// deletion — defaults to tracked so `git restore` can undo it.
+async fn partition_discard_paths(
+    host: &Host,
+    cwd: &str,
+    paths: &[String],
+) -> Result<(Vec<String>, Vec<String>), ApiError> {
+    let mut args = vec!["ls-files", "--others", "--exclude-standard", "-z", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let listed = run_git(host, cwd, &args).await?;
+    // `-z` NUL-separates entries so paths with spaces/newlines stay intact.
+    let others: Vec<&str> = listed.split('\0').filter(|s| !s.is_empty()).collect();
+
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+    for p in paths {
+        let trimmed = p.trim_end_matches('/');
+        let dir_prefix = format!("{trimmed}/");
+        let is_untracked = others
+            .iter()
+            .any(|o| *o == trimmed || o.starts_with(dir_prefix.as_str()));
+        if is_untracked {
+            untracked.push(p.clone());
+        } else {
+            tracked.push(p.clone());
+        }
+    }
+    Ok((tracked, untracked))
+}
+
+/// `POST /api/sessions/{id}/git/discard` — drop changes to the given paths.
+/// Tracked paths are restored to HEAD (staged + worktree). Untracked paths are
+/// deleted from the worktree (`git clean -fd`) — the UI's "Discard" on an
+/// untracked row means "remove this new file/dir", and `git restore` errors on
+/// a pathspec git doesn't know (`did not match any file(s) known to git`),
+/// aborting the whole batch. So a single untracked path (e.g. `.playwright-mcp/`)
+/// must be partitioned out, or it blocks discarding the tracked paths too.
 pub(crate) async fn discard(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -123,9 +163,23 @@ pub(crate) async fn discard(
     for p in &body.paths {
         ensure_safe_relative(p)?;
     }
-    if !body.paths.is_empty() {
+    if body.paths.is_empty() {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    let (tracked, untracked) = partition_discard_paths(&host, &cwd, &body.paths).await?;
+
+    if !tracked.is_empty() {
         let mut args = vec!["restore", "--source=HEAD", "--staged", "--worktree", "--"];
-        args.extend(body.paths.iter().map(String::as_str));
+        args.extend(tracked.iter().map(String::as_str));
+        run_git(&host, &cwd, &args).await?;
+    }
+    if !untracked.is_empty() {
+        // `-f` forces the removal (git refuses without it); `-d` recurses into
+        // untracked directories. No `-x`: we only delete what git already
+        // reports as untracked, never gitignored files the user didn't select.
+        let mut args = vec!["clean", "-f", "-d", "--"];
+        args.extend(untracked.iter().map(String::as_str));
         run_git(&host, &cwd, &args).await?;
     }
     Ok(StatusCode::NO_CONTENT)
@@ -180,4 +234,123 @@ pub(crate) async fn upstream(
         ahead,
         behind,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host_runtime::git_in_dir;
+    use agentum_core::{HostKind, LOCAL_HOST_ID};
+
+    fn local_host() -> Host {
+        Host {
+            id: LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: HostKind::Local,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    async fn git(host: &Host, cwd: &str, args: &[&str]) {
+        let out = git_in_dir(host, cwd, args).await.unwrap();
+        assert!(out.success, "git {args:?} failed: {}", out.stderr);
+    }
+
+    /// Repo with one committed-then-modified tracked file, one untracked loose
+    /// file, and one untracked directory holding a file — the shape that
+    /// surfaced the `.playwright-mcp/` discard 500.
+    async fn seed_repo(host: &Host, cwd: &str) {
+        git(host, cwd, &["init", "-q"]).await;
+        git(host, cwd, &["config", "user.email", "t@example.com"]).await;
+        git(host, cwd, &["config", "user.name", "t"]).await;
+        std::fs::write(format!("{cwd}/tracked.txt"), "v1\n").unwrap();
+        git(host, cwd, &["add", "tracked.txt"]).await;
+        git(host, cwd, &["commit", "-q", "-m", "init"]).await;
+        // Dirty the tracked file, then add untracked things.
+        std::fs::write(format!("{cwd}/tracked.txt"), "v2\n").unwrap();
+        std::fs::write(format!("{cwd}/loose.txt"), "new\n").unwrap();
+        std::fs::create_dir(format!("{cwd}/.playwright-mcp")).unwrap();
+        std::fs::write(format!("{cwd}/.playwright-mcp/shot.png"), "x").unwrap();
+    }
+
+    #[tokio::test]
+    async fn partition_splits_tracked_from_untracked_file_and_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let host = local_host();
+        seed_repo(&host, &cwd).await;
+
+        let paths = vec![
+            "tracked.txt".to_string(),
+            "loose.txt".to_string(),
+            ".playwright-mcp/".to_string(),
+        ];
+        let (tracked, untracked) = partition_discard_paths(&host, &cwd, &paths).await.unwrap();
+        assert_eq!(tracked, vec!["tracked.txt".to_string()]);
+        assert_eq!(
+            untracked,
+            vec!["loose.txt".to_string(), ".playwright-mcp/".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn staged_deletion_classifies_as_tracked_not_untracked() {
+        // A staged `git rm` removes the path from the index, so it's neither
+        // tracked-in-index nor "other" — it must still default to tracked so
+        // `git restore` can bring it back, not get swept by `git clean`.
+        let dir = tempfile::TempDir::new().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let host = local_host();
+        seed_repo(&host, &cwd).await;
+        // `-f` because seed_repo leaves a local modification; the result is a
+        // staged deletion either way (index entry removed).
+        git(&host, &cwd, &["rm", "-q", "-f", "tracked.txt"]).await;
+
+        let paths = vec!["tracked.txt".to_string()];
+        let (tracked, untracked) = partition_discard_paths(&host, &cwd, &paths).await.unwrap();
+        assert_eq!(tracked, vec!["tracked.txt".to_string()]);
+        assert!(untracked.is_empty());
+    }
+
+    /// Mirror the route's restore-tracked + clean-untracked body and assert the
+    /// worktree ends in the state the user expects: tracked file reverted,
+    /// untracked file and directory deleted — no 500 on the untracked dir.
+    #[tokio::test]
+    async fn discard_reverts_tracked_and_removes_untracked() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let host = local_host();
+        seed_repo(&host, &cwd).await;
+
+        let paths = vec![
+            "tracked.txt".to_string(),
+            "loose.txt".to_string(),
+            ".playwright-mcp/".to_string(),
+        ];
+        let (tracked, untracked) = partition_discard_paths(&host, &cwd, &paths).await.unwrap();
+
+        let mut restore = vec!["restore", "--source=HEAD", "--staged", "--worktree", "--"];
+        restore.extend(tracked.iter().map(String::as_str));
+        git(&host, &cwd, &restore).await;
+
+        let mut clean = vec!["clean", "-f", "-d", "--"];
+        clean.extend(untracked.iter().map(String::as_str));
+        git(&host, &cwd, &clean).await;
+
+        assert_eq!(
+            std::fs::read_to_string(format!("{cwd}/tracked.txt")).unwrap(),
+            "v1\n",
+            "tracked file should be reverted to HEAD"
+        );
+        assert!(
+            !std::path::Path::new(&format!("{cwd}/loose.txt")).exists(),
+            "untracked loose file should be removed"
+        );
+        assert!(
+            !std::path::Path::new(&format!("{cwd}/.playwright-mcp")).exists(),
+            "untracked directory should be removed"
+        );
+    }
 }
