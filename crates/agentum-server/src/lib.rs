@@ -281,7 +281,6 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::channels::router())
         .merge(routes::chat::router())
         .merge(routes::orchestration::router())
-        .merge(routes::browser::router())
         .merge(routes::cdp_browser::router())
         .merge(routes::cdp_screencast::router())
         .merge(routes::computer::router())
