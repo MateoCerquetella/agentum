@@ -90,6 +90,13 @@ export default function AgentBrowserScreencastPane({
   groupId
 }: AgentBrowserScreencastPaneProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // The pane wrapper — what we measure for the render viewport. NEVER measure the
+  // <canvas>: its intrinsic size IS the frame's pixel size (e.g. 402×9200), and a
+  // replaced element with such an extreme aspect collapses in flex layout, so its
+  // getBoundingClientRect reports a bogus width — which sendViewport then fed back
+  // as the page's render width (the "renders at phone width, smeared across the
+  // pane" bug). The container div has no intrinsic size; it's always the true pane.
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const subRef = useRef<CdpScreencastSubscription | null>(null)
   const metadataRef = useRef<BrowserScreencastFrameMetadata | null>(null)
   // Stable getter so the picker overlay's memoized handlers don't churn each render.
@@ -131,11 +138,14 @@ export default function AgentBrowserScreencastPane({
   // the server's capture scale (`--force-device-scale-factor`); 1× keeps frames small
   // and fast. No-op until a subscription exists.
   const sendViewport = useCallback((): void => {
-    const canvas = canvasRef.current
-    if (!canvas) {
+    // Measure the CONTAINER, never the <canvas> (see containerRef): the canvas box
+    // tracks the frame's intrinsic pixel size and collapses in flex, which fed a
+    // wrong width back as the render viewport.
+    const el = containerRef.current
+    if (!el) {
       return
     }
-    const rect = canvas.getBoundingClientRect()
+    const rect = el.getBoundingClientRect()
     const width = Math.round(rect.width)
     const height = Math.round(rect.height)
     if (width <= 0 || height <= 0) {
@@ -295,8 +305,8 @@ export default function AgentBrowserScreencastPane({
     if (!isActive) {
       return
     }
-    const canvas = canvasRef.current
-    if (!canvas || typeof ResizeObserver === 'undefined') {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') {
       return
     }
     let raf: number | null = null
@@ -309,7 +319,7 @@ export default function AgentBrowserScreencastPane({
         sendViewport()
       })
     })
-    observer.observe(canvas)
+    observer.observe(el)
     return () => {
       observer.disconnect()
       if (raf != null) {
@@ -468,7 +478,10 @@ export default function AgentBrowserScreencastPane({
         />
       </div>
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+      <div
+        ref={containerRef}
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden"
+      >
         {error ? (
           <div className="px-4 text-center text-xs text-muted-foreground">{error}</div>
         ) : (
@@ -477,11 +490,13 @@ export default function AgentBrowserScreencastPane({
             <canvas
               ref={canvasRef}
               tabIndex={0}
-              // object-fill (not contain): the page is laid out to the pane's exact
-              // size via `sendViewport`, so the frame already matches the pane aspect
-              // — fill edge-to-edge like a normal browser (no letterbox bars) and stay
-              // consistent with `toDevicePoint`, which maps against the full canvas rect.
-              className="h-full w-full object-fill outline-none"
+              // Absolutely fill the (relative) container so the canvas box is ALWAYS the
+              // pane size — decoupled from the frame's intrinsic pixel size, which
+              // otherwise collapses the canvas in flex. object-contain preserves the
+              // frame's aspect (never stretch/smear); since the render viewport is now
+              // matched to the pane (sendViewport measures the container), the frame
+              // fills the pane with no letterbox.
+              className="absolute inset-0 h-full w-full object-contain outline-none"
               onMouseMove={onMouseMove}
               onMouseDown={onMouseDown}
               onMouseUp={onMouseUp}
