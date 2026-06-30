@@ -31,6 +31,34 @@ use crate::error::ApiError;
 /// the client's requested version when present (below) for max compatibility.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// Server-level guidance surfaced to every connecting agent via the MCP
+/// `initialize` `instructions` field. Tailored by whether this is the desktop app
+/// (a browser the user can SEE exists) or a headless daemon. The browser steer is
+/// the important part: agents otherwise default to claude-in-chrome / the `agentum`
+/// shell CLI / Playwright and drive a browser the user can't see — or hit "no
+/// browser tab open" because the shell CLI has no tab-create. `agentum_browser`'s
+/// `open` is the only thing that creates a VISIBLE tab.
+fn mcp_instructions(has_desktop_bridge: bool) -> &'static str {
+    if has_desktop_bridge {
+        "agentum exposes this desktop app's control plane as MCP tools.\n\n\
+         BROWSER: for ANY web/browser task, use the `agentum_browser` tool — it drives the \
+         browser the user is watching live in this app. Open a page with op `open` and a `url` \
+         (this creates a VISIBLE tab and returns its id); add `split:\"right\"` (or left/up/down) \
+         to place the browser BESIDE the agent; then drive it with navigate / click / fill / \
+         snapshot / screenshot. Do NOT use claude-in-chrome, Playwright, chrome-devtools, or the \
+         `agentum` shell CLI for browser work in this app — they drive a browser the user cannot \
+         see, or cannot open a tab. `agentum_browser` is the first (and only) browser tool to \
+         reach for here; start with `open`.\n\n\
+         Other tools: agentum_list_sessions / agentum_list_worktrees inspect this app's agents; \
+         agentum_send_message / agentum_check_messages are the agent mailbox."
+    } else {
+        "agentum exposes this server's control plane as MCP tools. For browser automation use the \
+         `agentum_browser` tool (it drives a server-side headless Chromium here — there is no GUI \
+         on this daemon). agentum_list_sessions / agentum_list_worktrees inspect agents; \
+         agentum_send_message / agentum_check_messages are the agent mailbox."
+    }
+}
+
 /// Master switch (default ON) for whether agentum's own MCP server is wired into
 /// the agents agentum launches. Read at provision time in `mcp_provision::provision`;
 /// written by the desktop Settings → Agent MCP toggle via `/api/mcp/settings`.
@@ -189,6 +217,11 @@ async fn dispatch(
                 "protocolVersion": pv,
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "agentum", "version": state.version },
+                // Top-level guidance surfaced to every connecting agent. The browser
+                // steer is the point: without it agents reach for claude-in-chrome /
+                // the `agentum` shell CLI / Playwright and either drive a browser the
+                // user can't see or hit "no browser tab open" (the CLI has no tab-create).
+                "instructions": mcp_instructions(state.desktop_bridge.is_some()),
             }))
         }
         "ping" => Ok(json!({})),
@@ -353,8 +386,11 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         },
         {
             "name": "agentum_browser",
-            "description": "Drive agentum's built-in browser webview — the agentum-cli \
-                browser skill. Pass `op` and its params: open (url) — opens a NEW tab \
+            "description": "FIRST-CHOICE browser tool in the agentum desktop app — drives the \
+                browser the user is watching live in the pane. Use this directly; do NOT shell \
+                out to the `agentum` CLI for browser work (it has no tab-create) and do NOT use \
+                claude-in-chrome / Playwright / chrome-devtools here. Pass `op` and its params: \
+                open (url) — opens a NEW tab \
                 navigated to url and returns its `tab` id; tabs — lists open tabs; \
                 navigate (url, wait_until?) → {http_status, final_url, title} | \
                 snapshot (returns interactive element refs + a generation) | click \
@@ -383,12 +419,12 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 annotate (selector, comment, intent?) — attach a design-feedback \
                 annotation to an element (intent: change|fix|question|approve), which \
                 shows in the browser tray and is returned by `annotations`. \
-                Start with `open` when no tab is listed by `tabs`. By DEFAULT these ops \
-                drive the VISIBLE in-app browser the user sees (same tabs as the CLI) — \
-                set `headless:true` (or AGENTUM_BROWSER_HEADLESS=1) to drive a hidden \
-                server-side Chromium instead (QA / no-GUI). Requires the agentum desktop \
-                app for the visible browser. (For pure headless automation an agent may \
-                use the Playwright MCP instead.)",
+                Start with `open` when no tab is listed by `tabs` — `open` also creates the \
+                visible pane, so it works even when nothing is open yet (and `open` with \
+                `split` places the browser beside the agent). By DEFAULT these ops drive the \
+                VISIBLE in-app browser the user sees — set `headless:true` (or \
+                AGENTUM_BROWSER_HEADLESS=1) ONLY for QA / no-GUI, which drives a hidden \
+                server-side Chromium the user CANNOT see.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -857,6 +893,37 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
                 }
             }
         }
+        // Visible-only guarantee in the desktop app: if we STILL have no target —
+        // contextless AND no screencast pane has ever attached (foreground is None) —
+        // do NOT fall through to the hidden shared Chromium. That silent fallback is
+        // the "MCP drove a browser I can't see" complaint. `headless:true`, a worktree
+        // context, or an SSH `cdpPort` all skip this (they resolved a target above).
+        if !want_headless
+            && state.desktop_bridge.is_some()
+            && call_args.get("cdpPort").is_none()
+            && call_args.get("worktreeId").is_none()
+        {
+            // `navigate` with nothing open is just "open a visible tab at this url":
+            // route it through the renderer so a VISIBLE pane appears (and is driven).
+            if op == "navigate" {
+                let mut open_args = call_args.clone();
+                if let Some(obj) = open_args.as_object_mut() {
+                    obj.insert("op".to_string(), Value::from("open"));
+                }
+                return Ok(text_result(tool_bridge(state, "browser", &open_args).await?));
+            }
+            // Ops that act on an existing page can't meaningfully drive a browser the
+            // user can't see — tell the agent to open a visible one first instead of
+            // silently driving the hidden default. (`tabs` falls through: listing is
+            // a harmless read.)
+            if op != "tabs" {
+                anyhow::bail!(
+                    "No visible browser is open in the agentum desktop app. Open one first \
+                     with `agentum_browser` op `open` (add split:\"right\" to place it beside \
+                     the agent), then retry `{op}`."
+                );
+            }
+        }
         let result = crate::cdp_driver::run_browser_op(op, &call_args).await?;
         // screenshot → an MCP image content block (PNG) the agent can SEE, plus a
         // compact text meta line (NOT the giant base64) for width/height/path.
@@ -1047,6 +1114,27 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_instructions_steer_agents_to_agentum_browser_in_the_desktop_app() {
+        // Desktop-app guidance must push agents to `agentum_browser` (with `open`/`split`)
+        // and AWAY from the shell CLI / other browser tools — the fix for agents fumbling
+        // to claude-in-chrome / the `agentum` shell CLI (which can't open a tab). Lock the
+        // key phrases so the steer can't silently regress.
+        let d = mcp_instructions(true);
+        assert!(d.contains("agentum_browser"), "names the tool");
+        assert!(d.contains("open"), "tells them to open a visible tab");
+        assert!(d.contains("split"), "mentions side-by-side");
+        assert!(
+            d.contains("claude-in-chrome"),
+            "explicitly deprioritizes other browser tools"
+        );
+        assert!(d.contains("shell CLI"), "warns off the shell CLI");
+        // A headless daemon (no desktop bridge) still points at agentum_browser, but
+        // drops the "visible / user is watching" promise.
+        assert!(mcp_instructions(false).contains("agentum_browser"));
+        assert!(!mcp_instructions(false).contains("watching live"));
+    }
 
     #[test]
     fn browser_op_routing_splits_bridge_vs_cdp() {
