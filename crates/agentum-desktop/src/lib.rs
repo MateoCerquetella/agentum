@@ -19,7 +19,7 @@ use commands::{
     workspace_space,
 };
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,6 +60,30 @@ pub fn run() {
         // instead of quitting the window. See `menu.rs`.
         .menu(menu::build)
         .on_menu_event(menu::on_menu_event)
+        // Native OS file drops are intercepted by Tauri at the window level and
+        // never reach the webview DOM, so the renderer's terminal drop pipeline
+        // can't see them on its own. Forward a Drop as the `ui-file-drop` event
+        // the UI already listens for (subscribe → @tauri-apps/api `listen`),
+        // tagged `target: "terminal"` with no tabId so it routes to the focused
+        // terminal pane (see use-terminal-pane-global-effects.ts). That pane
+        // references each path — local pastes the absolute path, SSH uploads to
+        // `.agentum/drops` first — so a dragged-in screenshot reaches the agent.
+        // Other drop regions (editor, sidebar) stay unwired, same as before.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if paths.is_empty() {
+                    return;
+                }
+                let paths: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                let _ = window.emit(
+                    "ui-file-drop",
+                    serde_json::json!({ "paths": paths, "target": "terminal" }),
+                );
+            }
+        })
         .setup(move |app| {
             let state = AppState::new().map_err(|error| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(error.to_string()))
