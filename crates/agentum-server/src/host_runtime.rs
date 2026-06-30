@@ -184,6 +184,15 @@ pub use tunnels::*;
 /// session UUID, so it can't be pre-created by an attacker. Content is
 /// base64-piped so JSON quoting can't break the write.
 pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Result<()> {
+    write_remote_file_bytes(host, abs_path, content.as_bytes()).await
+}
+
+/// Like [`write_remote_file`] but for arbitrary bytes. A `&str` can't carry a
+/// pasted/dropped PNG (not valid UTF-8), so the screenshot-into-terminal upload
+/// path goes through here. Same wire technique: local writes hit the disk
+/// directly; SSH base64-pipes the bytes through `base64 -d`, which is byte-exact
+/// so binary image data survives intact.
+pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]) -> Result<()> {
     match &host.kind {
         HostKind::Local => {
             if let Some(parent) = std::path::Path::new(abs_path).parent() {

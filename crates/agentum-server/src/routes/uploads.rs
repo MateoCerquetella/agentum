@@ -93,7 +93,19 @@ async fn upload(
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("session is not running".into()))?;
 
-    if !agentum_tmux::has_session(target)
+    // Resolve the session's host. Everything below dispatches on it so a
+    // screenshot for an SSH agent lands on the REMOTE workdir (not the daemon's
+    // disk) and is typed into the REMOTE pane. Before this the route was
+    // daemon-local: an SSH session either 400'd on the local `has_session`
+    // probe or wrote the PNG to the wrong machine.
+    let host_id = session.host_id.unwrap_or(agentum_core::LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))?;
+
+    if !agentum_tmux::ssh::has_session(&host, target)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?
     {
@@ -113,26 +125,31 @@ async fn upload(
         .unwrap_or("");
     let ext = sanitize_ext(mime_to_ext(mime));
 
-    let workdir = super::util::expand_workdir(&session.workdir)?;
-    let uploads_dir = workdir.join(".agentum-uploads");
-    tokio::fs::create_dir_all(&uploads_dir)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    // Local hosts expand `~`; an SSH workdir is already an absolute remote path
+    // (and `~` can't be expanded here without the remote $HOME), so use it
+    // verbatim. Either way the agent only ever sees the workdir-RELATIVE path,
+    // which resolves against its CWD on whichever machine it runs.
+    let workdir = match &host.kind {
+        agentum_core::HostKind::Local => super::util::expand_workdir(&session.workdir)?
+            .to_string_lossy()
+            .into_owned(),
+        _ => session.workdir.clone(),
+    };
 
     let now = OffsetDateTime::now_utc();
     let rand_hex = short_rand_hex();
     let relative_path = relative_upload_path(ext, now, &rand_hex);
-    let abs_path = workdir.join(&relative_path);
+    let abs_path = format!("{}/{}", workdir.trim_end_matches('/'), relative_path);
 
-    tokio::fs::write(&abs_path, &body)
+    // Host-aware write (local `std::fs::write`, SSH base64-pipe over ssh). The
+    // helper creates the `.agentum-uploads` parent dir as part of the write.
+    crate::host_runtime::write_remote_file_bytes(&host, &abs_path, &body)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    // Type the relative path into the pane. `false` = no trailing
-    // Enter — the agent's prompt commits when the user hits return
-    // themselves. Trailing space gives breathing room before the
-    // user's typed context.
-    agentum_tmux::send_keys(target, &format!("{relative_path} "), false)
+    // Type the relative path into the pane (host-aware send-keys). `false` = no
+    // trailing Enter — the agent's prompt commits when the user hits return.
+    agentum_tmux::ssh::send_keys(&host, target, &format!("{relative_path} "), false)
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
@@ -150,7 +167,7 @@ async fn upload(
     );
 
     let resp = UploadResponse {
-        path: abs_path.to_string_lossy().into_owned(),
+        path: abs_path,
         relative_path: relative_path.clone(),
         size_bytes: body.len() as u64,
     };

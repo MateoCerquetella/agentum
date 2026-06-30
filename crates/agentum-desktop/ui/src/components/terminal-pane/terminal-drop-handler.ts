@@ -1,8 +1,8 @@
-import { api } from '@/tauri'
 import { toast } from 'sonner'
+import { resolveServerSessionId, uploadLocalImageToSession } from './screenshot-remote-upload'
 import { getConnectionId } from '@/lib/connection-context'
 import { extractIpcErrorMessage } from '@/lib/ipc-error'
-import type { PaneManager } from '@/lib/pane-manager/pane-manager'
+import type { ManagedPane, PaneManager } from '@/lib/pane-manager/pane-manager'
 import { useAppStore } from '@/store'
 import { isWindowsUserAgent, shellEscapePath } from './pane-helpers'
 import type { PtyTransport } from './pty-transport'
@@ -14,6 +14,9 @@ type Args = {
   paneTransports: Map<number, PtyTransport>
   worktreeId: string
   cwd: string | undefined
+  /** The dropped-on tab. Needed to resolve the server session id for an SSH
+   *  worktree, whose agent terminal is a server-session pane (no PtyTransport). */
+  tabId: string
   data: { paths: string[]; target: string; tabId?: string }
 }
 
@@ -44,6 +47,28 @@ export function resolveTerminalDropTargetShell({
 }
 
 /**
+ * Inject a (shell-escaped) path into a terminal pane's input. Local-PTY panes
+ * carry a `PtyTransport`; agentum's AGENT terminals are server-session panes
+ * that are NOT in `paneTransports` and route input through xterm `onData →
+ * stream.send`, reached via `terminal.paste`. The drop handler used to require a
+ * transport and bail without one, so every drop onto an agent terminal was
+ * silently discarded. Falling back to `terminal.paste` (the same inject the
+ * working Cmd+V image-paste uses) is what makes drag-drop reach agent terminals.
+ */
+function deliverPathToPane(
+  pane: ManagedPane,
+  paneTransports: Map<number, PtyTransport>,
+  text: string
+): void {
+  const transport = paneTransports.get(pane.id)
+  if (transport) {
+    transport.sendInput(text)
+  } else {
+    pane.terminal.paste(text)
+  }
+}
+
+/**
  * Handle a native file drop targeted at a terminal pane.
  *
  * Local worktrees: paste the local absolute path (reference-in-place; no copy
@@ -52,7 +77,7 @@ export function resolveTerminalDropTargetShell({
  * docs/terminal-drop-ssh.md.
  */
 export async function handleTerminalFileDrop(args: Args): Promise<void> {
-  const { manager, paneTransports, worktreeId, cwd, data } = args
+  const { manager, paneTransports, worktreeId, cwd, tabId, data } = args
   if (data.paths.length === 0) {
     return
   }
@@ -61,10 +86,6 @@ export async function handleTerminalFileDrop(args: Args): Promise<void> {
     return
   }
   const paneId = pane.id
-  const transport = paneTransports.get(paneId)
-  if (!transport) {
-    return
-  }
   const settings = useAppStore.getState().settings
   const activeRuntimeEnvironmentId = settings?.activeRuntimeEnvironmentId?.trim()
   const worktreePath = resolveWorktreePath(worktreeId, cwd)
@@ -92,15 +113,15 @@ export async function handleTerminalFileDrop(args: Args): Promise<void> {
       const imported = results.filter((result) => result.status === 'imported')
       const skipped = results.filter((result) => result.status === 'skipped')
       const failed = results.filter((result) => result.status === 'failed')
-      const liveTransport = paneTransports.get(paneId)
-      if (liveTransport) {
+      const livePane = manager.getPanes().find((p) => p.id === paneId)
+      if (livePane) {
         for (const result of imported) {
           const shellPath = isWindowsPathLike(worktreePath)
             ? result.destPath.replace(/\//g, '\\')
             : result.destPath
-          liveTransport.sendInput(`${shellEscapePath(shellPath, targetShell)} `)
+          deliverPathToPane(livePane, paneTransports, `${shellEscapePath(shellPath, targetShell)} `)
         }
-        pane.terminal.focus()
+        livePane.terminal.focus()
       }
       reportUploadSkipsAndFailures(skipped, failed)
     } catch (err) {
@@ -132,33 +153,33 @@ export async function handleTerminalFileDrop(args: Args): Promise<void> {
   // the terminal input, matching standard drag-and-drop UX conventions.
   if (!isRemote) {
     for (const p of data.paths) {
-      transport.sendInput(`${shellEscapePath(p, targetShell)} `)
+      deliverPathToPane(pane, paneTransports, `${shellEscapePath(p, targetShell)} `)
     }
     pane.terminal.focus()
     return
   }
 
+  // SSH worktree: the agent runs on a remote host, so a dragged-in LOCAL path is
+  // unreachable to it. (The previous SFTP-style command was an unimplemented stub
+  // that returned no paths — nothing ever landed.) Read each dropped file's bytes
+  // and POST them to the host-aware uploads route, which writes them onto the
+  // remote host and types the path into the remote pane. The server injects, so
+  // we don't client-paste here.
+  const sessionId = resolveServerSessionId(tabId, pane.leafId)
+  if (!sessionId) {
+    toast.error('No agent session for this worktree.')
+    return
+  }
   const pending = toast.loading(
     `Uploading ${data.paths.length} file${data.paths.length === 1 ? '' : 's'} to remote…`
   )
   try {
-    const { resolvedPaths, skipped, failed } = await api.fs.resolveDroppedPathsForAgent({
-      paths: data.paths,
-      worktreePath,
-      connectionId
-    })
-    // Why: pane may have unmounted during the SFTP upload (tab closed,
-    // worktree switched). Re-check the transport map before writing so we
-    // don't call sendInput on a torn-down PTY. Orphaned uploads are an
-    // acknowledged limitation — see docs/terminal-drop-ssh.md.
-    const liveTransport = paneTransports.get(paneId)
-    if (liveTransport) {
-      for (const p of resolvedPaths) {
-        liveTransport.sendInput(`${shellEscapePath(p, targetShell)} `)
-      }
-      pane.terminal.focus()
+    for (const p of data.paths) {
+      await uploadLocalImageToSession(sessionId, p)
     }
-    reportUploadSkipsAndFailures(skipped, failed)
+    // Re-check the pane survived the async upload (tab closed / worktree
+    // switched) before focusing it.
+    manager.getPanes().find((pn) => pn.id === paneId)?.terminal.focus()
   } catch (err) {
     toast.error(extractIpcErrorMessage(err, 'Failed to upload files.'))
   } finally {
