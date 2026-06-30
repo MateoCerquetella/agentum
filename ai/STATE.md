@@ -16,8 +16,8 @@
 - **002-start-loads-spec** — Drafted + PM-gated. Finding: Chat issue-creation
   ALREADY sets title+body+external-only on develop (`chat.rs:914/1050`); the real
   gap is the **Start** side (`build_card_prompt`, `board_goals.rs:861`, uses card
-  columns — never the issue/spec; Start is internal-board-coupled). 4 open
-  questions awaiting the user.
+  columns — never the issue/spec; Start is internal-board-coupled). Scope LOCKED:
+  Start-only, external-ticket-direct (no card), live body fetch. Ready for architect.
 
 ## Decision log
 
@@ -63,3 +63,6 @@
   subagent had to be discarded). Finding: chat creation already does
   title+body+external-only; the gap is **Start** not feeding the issue body to the
   agent. PM-gated; awaiting the user on 4 open questions.
+- 2026-06-30 — 002 scope LOCKED (Mateo): creation is fine (installed app behind, not
+  a bug) → **Start-only**; Start runs **directly off the external ticket** (no card,
+  live body fetch). Ready for architect.

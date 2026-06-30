@@ -112,17 +112,24 @@ Proposed `.harness/feature_list.json` slices:
 - **`qa.sh` asserts:** in-app, file an issue from Chat → click Start → the agent's
   first message reflects the issue's full spec (browser-verification-loop).
 
-## Open questions
+## Resolved (with Mateo, 2026-06-30)
 
-1. **Installed-app gap (surfaced).** You report empty title/description, but
-   develop's `compose_issue_body` populates both — is your installed app simply
-   **behind develop** (this landed ~v0.42), or do you want a **fuller spec** in the
-   body than the summary+checklist?
-2. **Start surface (no card).** Where does "Start an external ticket" live if there
-   is no card — a button on the GitHub/Linear ticket view? Or does the
-   GitHub→card sync stay, and we only fix the prompt to fetch the issue body?
-3. **"Spec" = issue body, or richer?** Is the spec the issue body (summary +
-   checklist), or a richer SDD-style spec we should also persist (the issue body is
-   the natural home)?
-4. **Live fetch vs synced.** Fetch the issue body at Start (always current, +1
-   `gh`/Linear call) vs reuse the synced `card.body` (cheaper, may be stale)?
+1. **Creation is fine — this spec is Start-only.** Chat already writes title + body
+   external-only on develop; the empty issues were the **installed app being behind**
+   (~v0.42), not a bug. Spec 002 does **not** touch issue creation.
+2. **Start runs directly off the external ticket — no internal-board card.** Start
+   takes a GitHub/Linear ticket (provider + id/url), **fetches its body live**, and
+   seeds the agent prompt from it.
+3. **"Spec" = the issue body** (summary + checklist). No separate richer-spec store.
+4. **Live fetch** at Start (there is no card to read from in the direct path).
+
+## Open questions (for the architect)
+
+1. **UI Start surface** — with no board card, where does "Start this ticket" live?
+   A button on the in-app GitHub/Linear ticket view? Confirm the desktop surface.
+2. **Spawn decoupling** — fully decouple `spawn_card_session` from `BoardItem`, or
+   add a parallel `start_external_ticket` that shares the worktree + launch +
+   inject internals? And the worktree name / session FK when there is no card
+   `key` (use the issue number, e.g. `ticket-<provider>-<n>`?).
+3. **Body fetch client** — `gh issue view <n> --json body` (GitHub) + the
+   `linear.rs` GraphQL fetch (Linear), mapped to one `fetch_ticket_body(provider, id)`.
