@@ -3,16 +3,21 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 001-autowiki
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer -->
+- **current_spec:** 002-start-loads-spec
+- **phase:** pm          <!-- idle | spec | pm | architect | developer | tester | reviewer -->
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
-- **001-autowiki** — all 3 slices BUILD-GREEN (wiki-contract ✓, wiki-routes ✓ 14
-  tests, wiki-view ✓ Vite build). `wiki-view` = **ready_to_test**: browser QA
-  (`qa.sh`) pending — needs the running app. Not yet committed / PR'd.
+- **001-autowiki** — COMMITTED (`3a8dbf06`) + **PR #183** (OPEN, into develop),
+  issue #182. Browser QA pending downstream (staging). [Local autowiki worktree was
+  lost to an env reset; work is safe on `origin/feat/autowiki`.]
+- **002-start-loads-spec** — Drafted + PM-gated. Finding: Chat issue-creation
+  ALREADY sets title+body+external-only on develop (`chat.rs:914/1050`); the real
+  gap is the **Start** side (`build_card_prompt`, `board_goals.rs:861`, uses card
+  columns — never the issue/spec; Start is internal-board-coupled). 4 open
+  questions awaiting the user.
 
 ## Decision log
 
@@ -49,3 +54,12 @@
   3s poll for running→ready) + 6 store/nav edits (`BookText` rail). `bun install` +
   `npm run build` ✓ (9m23s). All 3 slices green at the unit/build gate; browser QA
   + commit/PR remain.
+- 2026-06-30 — AutoWiki committed (`3a8dbf06`) + pushed; issue #182, PR #183 into
+  develop (MERGEABLE; the merge was blocked by the safety classifier — user merges).
+  An env reset then wiped the local autowiki worktree (work safe on origin).
+- 2026-06-30 — Scoped spec **002-start-loads-spec** (Start an external ticket → the
+  agent gets the spec, no internal board). Grounded on current develop in a fresh
+  `feat/chat-spec-roundtrip` worktree off `origin/feat/autowiki` (a stale-reading
+  subagent had to be discarded). Finding: chat creation already does
+  title+body+external-only; the gap is **Start** not feeding the issue body to the
+  agent. PM-gated; awaiting the user on 4 open questions.
