@@ -1766,8 +1766,9 @@ function App(): React.JSX.Element {
               {/* Why: keep RightSidebar mounted even when closed so that its
               child components (FileExplorer, SourceControl, etc.) and their
               filesystem watchers + cached directory trees survive across
-              open/close toggles. Unmount on the tasks view since that
-              surface is intentionally distraction-free. */}
+              open/close toggles. Unmount on the full-page views (tasks, Chat,
+              settings, …) since those surfaces are intentionally
+              distraction-free — see canShowRightSidebarForView. */}
               {showRightSidebarControls ? (
                 <RecoverableRenderErrorBoundary
                   boundaryId="right-sidebar"
