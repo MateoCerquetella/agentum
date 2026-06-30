@@ -527,9 +527,143 @@ pub fn gh_pr_check_details() -> Option<Value> {
     None
 }
 
+// Run `gh api <path>` and parse stdout as JSON. None on any failure (gh missing,
+// non-zero exit, unparseable body) so callers degrade gracefully.
+async fn gh_api_json(path: &str) -> Option<Value> {
+    let output = tokio::process::Command::new("gh")
+        .args(["api", path])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+// Resolve a PR's head commit SHA via `gh pr view`. Used only when the caller
+// didn't already pass `head_sha` (the renderer usually has it from PRInfo).
+async fn resolve_pr_head_sha(slug: &str, pr_number: i64) -> Option<String> {
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            &pr_number.to_string(),
+            "--repo",
+            slug,
+            "--json",
+            "headRefOid",
+            "--jq",
+            ".headRefOid",
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!sha.is_empty()).then_some(sha)
+}
+
+// Map a GitHub check-run object to the renderer's PRCheckDetail. GitHub's own
+// `status` (queued|in_progress|completed) and `conclusion` already match the
+// union the panel expects, so they pass through verbatim.
+fn map_check_run(cr: &Value) -> Value {
+    json!({
+        "name": cr.get("name").and_then(Value::as_str).unwrap_or_default(),
+        "status": cr.get("status").and_then(Value::as_str).unwrap_or("completed"),
+        "conclusion": cr.get("conclusion").and_then(Value::as_str),
+        "url": cr.get("html_url").and_then(Value::as_str),
+        "checkRunId": cr.get("id").and_then(Value::as_i64),
+    })
+}
+
+// Map a legacy commit-status context to PRCheckDetail. External CI (Netlify,
+// CircleCI, …) reports through the Statuses API rather than Checks, so the panel
+// would miss those without this. `deriveCheckStatusFromChecks` keys off
+// status/conclusion, so translate the status `state` into that vocabulary.
+fn map_commit_status(s: &Value) -> Value {
+    let state = s.get("state").and_then(Value::as_str).unwrap_or("");
+    let (status, conclusion) = match state {
+        "success" => ("completed", "success"),
+        "failure" | "error" => ("completed", "failure"),
+        "pending" => ("in_progress", "pending"),
+        other => ("completed", other),
+    };
+    json!({
+        "name": s.get("context").and_then(Value::as_str).unwrap_or_default(),
+        "status": status,
+        "conclusion": conclusion,
+        "url": s.get("target_url").and_then(Value::as_str),
+    })
+}
+
+// PR check runs + legacy commit statuses for the head commit, via the
+// authenticated `gh` CLI (the same tool the work-item list uses). The desktop
+// ships no REST/token client, so checks were stubbed to an empty list — which
+// the UI renders as "No checks". This shells out instead. owner/repo come from
+// `pr_repo` for fork PRs, else the origin remote; the head commit comes from
+// `head_sha` when the caller knows it, else `gh pr view`. Any failure (gh
+// missing, non-GitHub repo, parse error) returns an empty list so the panel
+// degrades to "No checks" rather than erroring — the prior stub's contract.
 #[tauri::command]
-pub fn gh_pr_checks() -> Vec<Value> {
-    Vec::new()
+pub async fn gh_pr_checks(
+    repo_path: String,
+    pr_number: i64,
+    head_sha: Option<String>,
+    pr_repo: Option<Value>,
+) -> Vec<Value> {
+    let origin = resolve_owner_repo(&repo_path).await;
+    let from_pr_repo = pr_repo.as_ref().and_then(|pr| {
+        let owner = pr.get("owner").and_then(Value::as_str)?;
+        let repo = pr.get("repo").and_then(Value::as_str)?;
+        Some((owner.to_string(), repo.to_string()))
+    });
+    // Check runs live on the head repo (the fork, for cross-repo PRs).
+    let Some((owner, repo)) = from_pr_repo.or_else(|| origin.clone()) else {
+        return Vec::new();
+    };
+    let slug = format!("{owner}/{repo}");
+
+    let head = match head_sha
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        Some(sha) => sha,
+        None => {
+            // `gh pr view` reads the head SHA from the base repo that hosts the
+            // PR number (origin), falling back to the resolved slug.
+            let base_slug = origin
+                .as_ref()
+                .map(|(o, r)| format!("{o}/{r}"))
+                .unwrap_or_else(|| slug.clone());
+            match resolve_pr_head_sha(&base_slug, pr_number).await {
+                Some(sha) => sha,
+                None => return Vec::new(),
+            }
+        }
+    };
+
+    let mut checks: Vec<Value> = Vec::new();
+    // GitHub Actions and most GitHub Apps: the Checks API. per_page=100 covers
+    // every real PR in one request (avoids --paginate's object-merge ambiguity).
+    if let Some(runs) = gh_api_json(&format!("repos/{slug}/commits/{head}/check-runs?per_page=100"))
+        .await
+    {
+        if let Some(arr) = runs.get("check_runs").and_then(Value::as_array) {
+            checks.extend(arr.iter().map(map_check_run));
+        }
+    }
+    // External CI via the legacy Statuses API.
+    if let Some(status) =
+        gh_api_json(&format!("repos/{slug}/commits/{head}/status?per_page=100")).await
+    {
+        if let Some(arr) = status.get("statuses").and_then(Value::as_array) {
+            checks.extend(arr.iter().map(map_commit_status));
+        }
+    }
+    checks
 }
 
 #[tauri::command]
