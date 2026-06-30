@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 002-start-loads-spec
-- **phase:** pm          <!-- idle | spec | pm | architect | developer | tester | reviewer -->
+- **phase:** architect   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (done; ⛔ R1 gates developer)
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -17,7 +17,11 @@
   ALREADY sets title+body+external-only on develop (`chat.rs:914/1050`); the real
   gap is the **Start** side (`build_card_prompt`, `board_goals.rs:861`, uses card
   columns — never the issue/spec; Start is internal-board-coupled). Scope LOCKED:
-  Start-only, external-ticket-direct (no card), live body fetch. Ready for architect.
+  Start-only, external-ticket-direct (no card), live body fetch. **Architect DONE**
+  (`architecture.md`). ⛔ **R1 needs Mateo:** the spec's Path A (board-card Start) is
+  DEAD (no UI caller); the live "start a ticket" flow is Path B (Tasks "Use" → local
+  PTY; gets Linear body, not GitHub). Option A (new server "Start", spec-faithful) vs
+  Option B (fix "Use", local-PTY). Developer phase gated on R1.
 
 ## Decision log
 
@@ -66,3 +70,8 @@
 - 2026-06-30 — 002 scope LOCKED (Mateo): creation is fine (installed app behind, not
   a bug) → **Start-only**; Start runs **directly off the external ticket** (no card,
   live body fetch). Ready for architect.
+- 2026-06-30 — 002 architect blueprint complete (`architecture.md`). FINDING: the
+  spec's Path A (board-card Start) has NO UI caller (dead code); the live "start a
+  ticket" flow is Path B (Tasks "Use" → local PTY; snapshots Linear body, not
+  GitHub). ⛔ R1 (human gate): Option A (new server "Start", spec-faithful) vs
+  Option B (fix "Use", lighter, local-PTY). /loop paused for R1.
