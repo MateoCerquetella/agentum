@@ -184,6 +184,13 @@ pub struct AppState {
     /// background [`harness::drive`] task operate on the same in-memory runs +
     /// event bus. Cheap to construct; always present.
     pub harness: Arc<harness::HarnessEngine>,
+    /// Live `/api/events` WebSocket client count. The host-metrics ticker
+    /// gates its sysinfo sampling on THIS, not `bus.receiver_count()`: the
+    /// goal reconciler and comment bridge hold permanent bus subscriptions,
+    /// so the receiver count never reaches zero and the "no dashboards →
+    /// don't sample" guard was dead code — the daemon paid an all-cores CPU
+    /// refresh every 2 s forever. Only the events route touches this.
+    pub events_ws_clients: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AppState {
@@ -225,6 +232,7 @@ impl AppState {
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
             harness: Arc::new(harness::HarnessEngine::new()),
+            events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 }
@@ -443,8 +451,8 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     }
 
     // Host-metrics ticker: publishes CPU+RAM onto the bus so one sampler feeds
-    // every connected client over the events WS.
-    routes::host::spawn_ticker(bus.clone());
+    // every connected client over the events WS; idles while no client is on.
+    routes::host::spawn_ticker(bus.clone(), state.events_ws_clients.clone());
 
     // SSH ControlMaster warmer: a no-op exec per known SSH host opens the
     // pooled master at boot (interval's first tick is immediate) and refreshes
