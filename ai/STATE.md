@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 003-chat-issue-preview
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 SERVER+UI slices coded+pushed; vite build confirm + /ship remain. 002 done/human-gated below.)
+- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 CODE COMPLETE + gate-green; PR #199 into develop, issue #198. Browser QA (staging) + release = human. 002 below.)
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -98,6 +98,13 @@
   + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
   npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
   human-gated release** (browser QA + merge/promote/tag = Mateo).
+- 2026-07-01 — 003 CODE COMPLETE + SHIPPED to develop. `vite build` GREEN
+  (`✓ built in 4m24s`; needed `--max-old-space-size=6144` — 4096 OOM'd). Issue
+  **#198** + PR **#199** (feat/chat-board-revamp → develop, `Closes #198`). All 4
+  increments done + gated (cargo check + 25 unit tests + full UI build). Ralph loop
+  cancelled (would tight-spin against the >10-min background build). ⏭ Browser QA
+  runs at STAGING per branch flow; tagged release to main stays Mateo-gated
+  (classifier + presence). Board asks = specs 004–006.
 - 2026-07-01 — 003 UI slice CODED (draft-review modal). `chat-client.ts`:
   `previewIssuesFromChat()` + `DraftPlan`/`DraftTask`/`IssueSplit` types +
   `createIssuesFromChat` carries `plan`/`split`/`labels`. `ChatPage.tsx`: "Create
