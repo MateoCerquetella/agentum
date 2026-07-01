@@ -10,6 +10,11 @@ import {
   markHostReconnectingFromHostKey
 } from './server-host-client'
 import { extractAllOscTitles } from '../../../shared/agent-detection'
+import {
+  writeTerminalOutput,
+  flushTerminalOutput,
+  discardTerminalOutput
+} from '@/lib/pane-manager/pane-terminal-output-scheduler'
 
 export type ServerSessionTerminalBinding = {
   /** Tear down the WS stream and detach the xterm listeners. */
@@ -46,6 +51,15 @@ export type BindServerSessionTerminalOptions = {
   /** Host bucket this session's WS throughput counts toward in the status-bar
    *  I/O meter (`'local'` or `'ssh:<connectionId>'`). Omitted → local host. */
   hostKey?: string
+  /** Whether this pane is currently the visible/focused one, read live at each
+   *  write. Why: server-session output is routed through the shared terminal
+   *  output scheduler (same as the native PTY path) so BACKGROUND panes are
+   *  throttled instead of every agent writing straight to xterm on the main
+   *  thread — the many-agents lag. A visible pane returns true → synchronous
+   *  write (unchanged responsiveness); hidden → false → batched/throttled.
+   *  Defaults to foreground (true) when omitted so callers that don't wire it
+   *  keep the old immediate-write behavior. */
+  isForeground?: () => boolean
 }
 
 /**
@@ -72,6 +86,14 @@ export async function bindServerSessionTerminal(
   const titleDecoder = new TextDecoder()
   let titleScanBuf = ''
   let lastForwardedTitle: string | null = null
+  // Why: the scheduler's writeTerminalOutput takes a string, but pane bytes
+  // arrive as Uint8Array chunks that can split a multi-byte UTF-8 codepoint
+  // across WS frames. A dedicated STREAMING decoder ({stream:true}) reproduces
+  // xterm's own stateful decode so a split codepoint isn't corrupted into
+  // U+FFFD. Must be separate from titleDecoder — sharing state would
+  // double-consume the same bytes across the two decode paths.
+  const outputDecoder = new TextDecoder()
+  const foreground = (): boolean => opts?.isForeground?.() ?? true
   const scanForTitles = (bytes: Uint8Array): void => {
     if (!opts?.onTitle) {
       return
@@ -103,13 +125,34 @@ export async function bindServerSessionTerminal(
     { cols: term.cols, rows: term.rows },
     {
       onData: (bytes) => {
-        term.write(bytes)
+        // Route pane output through the shared scheduler (like the native PTY
+        // path) so background panes are throttled instead of every agent
+        // writing straight to xterm. Title scan + activity stay synchronous on
+        // the raw bytes so sidebar state never lags the throttled render.
+        writeTerminalOutput(term, outputDecoder.decode(bytes, { stream: true }), {
+          foreground: foreground(),
+          // Unlike the native PTY path, a server session has no main-buffer
+          // snapshot to restore from, so if a hidden agent floods past the
+          // scheduler's 8 MB background cap the dropped bytes are gone. Force a
+          // fresh server snapshot to re-sync the pane instead of leaving a hole.
+          onBackgroundBacklogDropped: () => {
+            if (!disposed) {
+              sessionStream?.requestRepaint()
+            }
+          }
+        })
         scanForTitles(bytes)
         opts?.onActivity?.()
       },
       // Permanent close: the session is gone or our token was rejected. A
       // transient drop reconnects silently (onReconnecting) instead of this.
-      onClose: () => term.write('\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n'),
+      // Route through the scheduler so the banner can't paint ahead of pane
+      // output still queued for a background pane (writeTerminalOutput flushes
+      // the queue before a foreground write, and enqueues in order otherwise).
+      onClose: () =>
+        writeTerminalOutput(term, '\r\n\x1b[2m[agentum: session stream closed]\x1b[0m\r\n', {
+          foreground: foreground()
+        }),
       // First drop of a reconnect cycle: show one dim hint. A successful
       // reconnect repaints the pane (the server replays a snapshot) and wipes
       // this line; printing only on attempt 1 keeps a long outage from spamming
@@ -117,7 +160,11 @@ export async function bindServerSessionTerminal(
       // independent drop hints again.
       onReconnecting: (attempt) => {
         if (attempt === 1) {
-          term.write('\r\n\x1b[2m[agentum: connection lost — reconnecting…]\x1b[0m\r\n')
+          writeTerminalOutput(
+            term,
+            '\r\n\x1b[2m[agentum: connection lost — reconnecting…]\x1b[0m\r\n',
+            { foreground: foreground() }
+          )
           // Reflect the outage in the SSH badge for this host (and arm the next
           // recovery's generation bump). Keyed off hostKey; no-op for local.
           void markHostReconnectingFromHostKey(opts?.hostKey)
@@ -184,8 +231,15 @@ export async function bindServerSessionTerminal(
     }
     paintWatchdog = setTimeout(() => {
       paintWatchdog = null
-      if (disposed || !paneLooksBlank()) {
-        return // painted (or torn down) — nothing to heal
+      if (disposed) {
+        return // torn down — nothing to heal
+      }
+      // Why: output is now scheduled, so a background pane's connect snapshot
+      // can be queued but not yet drained to xterm. Flush it first so the blank
+      // check reads the real painted state instead of firing a spurious repaint.
+      flushTerminalOutput(term)
+      if (!paneLooksBlank()) {
+        return // painted — nothing to heal
       }
       repaintAttempts += 1
       stream.requestRepaint()
@@ -216,6 +270,10 @@ export async function bindServerSessionTerminal(
         clearTimeout(paintWatchdog)
         paintWatchdog = null
       }
+      // Purge any queued chunks + cancel the foreground render-settle so a late
+      // background drain can't write into the torn-down xterm (mirrors the
+      // native PTY path's discard on teardown).
+      discardTerminalOutput(term)
       dataSub.dispose()
       resizeSub.dispose()
       stream.close()
