@@ -217,13 +217,6 @@ export function useOnboardingFlow(
   const [theme, setTheme] = useState<GlobalSettings['theme']>(settings?.theme ?? 'dark')
   const [featureSetupSelection, setFeatureSetupSelection] =
     useState<OnboardingFeatureSetupSelection>(DEFAULT_ONBOARDING_FEATURE_SETUP_SELECTION)
-  const [featureSetupTerminalCommand, setFeatureSetupTerminalCommand] = useState<string | null>(
-    null
-  )
-  // Why: terminal telemetry must describe the selection that produced the
-  // command, even if the checklist changes while async setup is finishing.
-  const [featureSetupTerminalSelection, setFeatureSetupTerminalSelection] =
-    useState<OnboardingFeatureSetupSelection | null>(null)
   const [cloneUrl, setCloneUrl] = useState('')
   const [serverPath, setServerPath] = useState('')
   const [cloneDestination, setCloneDestination] = useState('')
@@ -602,8 +595,6 @@ export function useOnboardingFlow(
         }
       }
       setFeatureSetupSelection(value)
-      setFeatureSetupTerminalCommand(null)
-      setFeatureSetupTerminalSelection(null)
     },
     [featureSetupSelection]
   )
@@ -650,20 +641,14 @@ export function useOnboardingFlow(
       if (nextInFlightRef.current || busyLabel || currentStep.id === 'repo') {
         return
       }
-      if (currentStep.id === 'agentSetup' && featureSetupTerminalCommand) {
-        setStepIndex(getNextStepIndex)
-        return
-      }
       nextInFlightRef.current = true
       try {
-        const result = await persistCurrentStep()
-        const nextCommand = result.featureSetupResult?.skillInstallCommand ?? null
-        if (currentStep.id === 'agentSetup' && nextCommand) {
-          trackCurrentStepCompleted(advancedVia)
-          setFeatureSetupTerminalSelection(featureSetupSelection)
-          setFeatureSetupTerminalCommand(nextCommand)
-          return
-        }
+        // Why: the agent-setup step has no separate "enable" button anymore — the
+        // MCP-tool toggles apply when the user continues, so run feature setup as
+        // part of advancing off this step.
+        const result = await persistCurrentStep(
+          currentStep.id === 'agentSetup' ? { runFeatureSetup: true } : {}
+        )
         if (result.ok) {
           trackCurrentStepCompleted(advancedVia)
           setStepIndex(getNextStepIndex)
@@ -672,15 +657,7 @@ export function useOnboardingFlow(
         nextInFlightRef.current = false
       }
     },
-    [
-      busyLabel,
-      currentStep.id,
-      featureSetupSelection,
-      featureSetupTerminalCommand,
-      getNextStepIndex,
-      persistCurrentStep,
-      trackCurrentStepCompleted
-    ]
+    [busyLabel, currentStep.id, getNextStepIndex, persistCurrentStep, trackCurrentStepCompleted]
   )
 
   const showNestedRepoReview = useCallback(
@@ -701,49 +678,6 @@ export function useOnboardingFlow(
 
   const onboardingNestedRepoRuntimeKind: NestedRepoTelemetryRuntimeKind =
     settings?.activeRuntimeEnvironmentId?.trim() ? 'runtime' : 'local'
-
-  const startFeatureSetup = useCallback(async () => {
-    if (
-      nextInFlightRef.current ||
-      busyLabel ||
-      currentStep.id !== 'agentSetup' ||
-      featureSetupTerminalCommand ||
-      !hasSelectedFeatureSetup
-    ) {
-      return
-    }
-    nextInFlightRef.current = true
-    setBusyLabel('Setting up features…')
-    try {
-      const result = await persistCurrentStep({ runFeatureSetup: true })
-      const nextCommand = result.featureSetupResult?.skillInstallCommand ?? null
-      if (result.ok) {
-        trackCurrentStepCompleted('button')
-      }
-      if (nextCommand) {
-        setFeatureSetupTerminalSelection(featureSetupSelection)
-        setFeatureSetupTerminalCommand(nextCommand)
-      } else if (result.ok) {
-        // Why: the agentum MCP capabilities apply instantly (server-side
-        // orchestration flag + macOS permission prompts) with no skill command
-        // to run, so "Enable capabilities" advances straight to the next step
-        // instead of stranding the user on an inert button.
-        setStepIndex(getNextStepIndex)
-      }
-    } finally {
-      setBusyLabel(null)
-      nextInFlightRef.current = false
-    }
-  }, [
-    busyLabel,
-    currentStep.id,
-    featureSetupSelection,
-    featureSetupTerminalCommand,
-    getNextStepIndex,
-    hasSelectedFeatureSetup,
-    persistCurrentStep,
-    trackCurrentStepCompleted
-  ])
 
   const openFolder = useCallback(
     async (kind: 'git' | 'folder' = 'git') => {
@@ -1273,8 +1207,6 @@ export function useOnboardingFlow(
         duration_ms: durationMs,
         advanced_via: 'button'
       })
-      setFeatureSetupTerminalCommand(null)
-      setFeatureSetupTerminalSelection(null)
       setStepIndex(getNextStepIndex)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -1365,8 +1297,6 @@ export function useOnboardingFlow(
     setTheme: setThemeInteractive,
     featureSetupSelection,
     setFeatureSetupSelection: setFeatureSetupSelectionInteractive,
-    featureSetupTerminalCommand,
-    featureSetupTerminalSelection,
     hasSelectedFeatureSetup,
     cloneUrl,
     setCloneUrl,
@@ -1389,7 +1319,6 @@ export function useOnboardingFlow(
     detectedSet,
     isDetectingAgents,
     next,
-    startFeatureSetup,
     skipAgentSetup,
     skipToRepo,
     dismissOnboarding,

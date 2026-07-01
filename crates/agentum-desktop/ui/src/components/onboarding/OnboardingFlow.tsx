@@ -33,7 +33,7 @@ const stepCopy = {
   },
   agentSetup: {
     title: 'Set up Agentum for agents',
-    subtitle: 'Turn on advanced Agentum capabilities for agents.'
+    subtitle: 'Choose the agentum MCP tools every agent can use.'
   },
   integrations: {
     title: 'Set up GitHub tasks',
@@ -316,10 +316,6 @@ export default function OnboardingFlow({
               <AgentFeatureSetupStep
                 featureSetup={flow.featureSetupSelection}
                 onFeatureSetupChange={flow.setFeatureSetupSelection}
-                featureSetupCommand={flow.featureSetupTerminalCommand}
-                featureSetupCommandSelection={flow.featureSetupTerminalSelection}
-                setupBusyLabel={currentStep.id === 'agentSetup' ? busyLabel : null}
-                onStartFeatureSetup={() => void flow.startFeatureSetup()}
               />
             )}
             {currentStep.id === 'integrations' && <IntegrationsStep />}

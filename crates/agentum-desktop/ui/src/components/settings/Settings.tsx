@@ -72,7 +72,9 @@ import {
 } from './settings-load-performance'
 
 const SETTINGS_NAV_GROUPS = [
-  { id: 'capabilities', title: 'AI Capabilities' },
+  // Internal id stays 'capabilities' (persisted deep links, section.group
+  // matching); the label is the agentum-MCP-facing name shown in the sidebar.
+  { id: 'capabilities', title: 'Agent MCP' },
   { id: 'setup', title: 'Set Up' },
   { id: 'workflows', title: 'Workflows' },
   { id: 'interface', title: 'Interface' },
