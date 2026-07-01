@@ -15,7 +15,7 @@
 // `agent.*` event per session on connect (`{"replay": true}`), and we cache the
 // last state per session so a pane that mounts AFTER that replay still gets
 // seeded — without it a running agent reads as idle until its next transition.
-import { getServerEndpoint, wsUrl } from './server-endpoint'
+import { subscribeServerEvents } from './server-events-bus'
 
 /** The pane-facing activity verdicts, normalized from the server's `agent.*`
  *  event kinds. */
@@ -137,82 +137,27 @@ export function createServerSessionActivityHub() {
 
 export type ServerSessionActivityHub = ReturnType<typeof createServerSessionActivityHub>
 
-// ── App-wide singleton + WS wiring ─────────────────────────────────────────
+// ── App-wide singleton + shared-bus wiring ──────────────────────────────────
 const hub = createServerSessionActivityHub()
 
-let ws: WebSocket | null = null
-let starting = false
-let attempt = 0
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-
-const backoffMs = (n: number): number =>
-  Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
-
-const scheduleReconnect = (): void => {
-  if (reconnectTimer || !hub.hasHandlers()) {
-    return
-  }
-  attempt += 1
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null
-    void ensureSubscription()
-  }, backoffMs(attempt))
-}
-
-async function ensureSubscription(): Promise<void> {
-  if (ws || starting || !hub.hasHandlers()) {
-    return
-  }
-  starting = true
-  try {
-    const { token } = await getServerEndpoint()
-    const base = await wsUrl('/api/events')
-    const url = token ? `${base}?token=${encodeURIComponent(token)}` : base
-    // A pane may have unregistered while we awaited the endpoint.
-    if (!hub.hasHandlers()) {
-      return
-    }
-    const sock = new WebSocket(url)
-    ws = sock
-    sock.addEventListener('open', () => {
-      attempt = 0
-    })
-    sock.addEventListener('message', (event) => {
-      if (typeof event.data !== 'string') {
-        return
-      }
-      try {
-        hub.handleEvent(JSON.parse(event.data))
-      } catch {
-        // Ignore malformed frames rather than tearing the stream down.
-      }
-    })
-    sock.addEventListener('close', () => {
-      if (sock !== ws) {
-        return
-      }
-      ws = null
-      scheduleReconnect()
-    })
-    // 'error' is always followed by 'close'; let close drive reconnect.
-  } catch {
-    scheduleReconnect()
-  } finally {
-    starting = false
-  }
-}
+let busSubscribed = false
 
 /**
  * Register a server-backed pane to receive its session's agent-activity
- * verdicts (awaiting-input / resolved / working / finished). Lazily opens the
- * single app-wide `/api/events` subscription. Returns an unregister fn for the
- * pane's dispose.
+ * verdicts (awaiting-input / resolved / working / finished). The first pane
+ * joins the hub onto the SHARED `/api/events` socket (server-events-bus) and
+ * the subscription is kept for the app's lifetime — the hub's per-session
+ * replay cache must not miss frames while panes churn. Returns an unregister
+ * fn for the pane's dispose.
  */
 export function registerServerSessionActivity(
   sessionId: string,
   handlers: ServerSessionActivityHandlers
 ): () => void {
   const unregister = hub.register(sessionId, handlers)
-  void ensureSubscription()
+  if (!busSubscribed) {
+    busSubscribed = true
+    subscribeServerEvents({ onEvent: (ev) => hub.handleEvent(ev) })
+  }
   return unregister
 }

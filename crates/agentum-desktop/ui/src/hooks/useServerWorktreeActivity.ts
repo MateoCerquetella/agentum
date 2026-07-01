@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from '@/store'
 import { listSessions } from '@/runtime/agentum-server-client'
-import { getServerEndpoint, wsUrl } from '@/runtime/server-endpoint'
+import { subscribeServerEvents, type ServerEventFrame } from '@/runtime/server-events-bus'
 import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
 import {
   buildWorktreeActivitySnapshot,
@@ -55,9 +55,6 @@ function collectWorktrees(): WorktreeLike[] {
 export function useServerWorktreeActivity(): void {
   useEffect(() => {
     let disposed = false
-    let ws: WebSocket | null = null
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    let attempt = 0
     // Separate fast-retry track for the very first snapshot after (re)mount —
     // e.g. a cold app relaunch where the embedded server isn't answering yet.
     let bootstrapTimer: ReturnType<typeof setTimeout> | null = null
@@ -140,13 +137,7 @@ export function useServerWorktreeActivity(): void {
       bootstrapTimer = setTimeout(() => void bootstrapRefresh(), backoffMs(bootstrapAttempt))
     }
 
-    const handleEvent = (raw: string): void => {
-      let ev: { kind?: unknown; session_id?: unknown; payload?: unknown }
-      try {
-        ev = JSON.parse(raw)
-      } catch {
-        return
-      }
+    const handleEvent = (ev: ServerEventFrame): void => {
       // A session coming up or dying changes the alive-set; refetch to learn it.
       if (ev.kind === 'session.started' || ev.kind === 'session.crashed') {
         void refresh()
@@ -175,50 +166,17 @@ export function useServerWorktreeActivity(): void {
       remap()
     }
 
-    const connect = async (): Promise<void> => {
-      if (disposed) {
-        return
-      }
-      let url: string
-      try {
-        const { token } = await getServerEndpoint()
-        const base = await wsUrl('/api/events')
-        url = token ? `${base}?token=${encodeURIComponent(token)}` : base
-      } catch {
-        attempt += 1
-        reconnectTimer = setTimeout(() => void connect(), backoffMs(attempt))
-        return
-      }
-      if (disposed) {
-        return
-      }
-      const sock = new WebSocket(url)
-      ws = sock
-      sock.addEventListener('open', () => {
-        attempt = 0
-        // The fresh stream replays each session's current agent state; refetch
-        // the session list now so the session→worktree map is ready to route
-        // that replay — and to self-heal the map after a reconnect.
-        void refresh()
-      })
-      sock.addEventListener('message', (event) => {
-        if (typeof event.data === 'string') {
-          handleEvent(event.data)
-        }
-      })
-      sock.addEventListener('close', () => {
-        if (sock !== ws || disposed) {
-          return
-        }
-        ws = null
-        attempt += 1
-        reconnectTimer = setTimeout(() => void connect(), backoffMs(attempt))
-      })
-      // 'error' is always followed by 'close', which drives reconnect.
-    }
+    // Shared `/api/events` socket (server-events-bus): one connection + one
+    // JSON.parse per frame for the whole renderer instead of a dedicated
+    // socket here. onOpen fires on every (re)connect — the fresh stream
+    // replays each session's current agent state, so refetch the session list
+    // then to route the replay and self-heal the map after a reconnect.
+    const unsubscribeEvents = subscribeServerEvents({
+      onEvent: handleEvent,
+      onOpen: () => void refresh()
+    })
 
     void bootstrapRefresh()
-    void connect()
     // Visibility-gated like the git-status/PR/ports polls: a hidden window
     // can't present the refreshed dots, so don't burn the loopback round trip;
     // the helper refreshes once immediately on re-show to catch up.
@@ -236,15 +194,12 @@ export function useServerWorktreeActivity(): void {
 
     return () => {
       disposed = true
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer)
-      }
       if (bootstrapTimer) {
         clearTimeout(bootstrapTimer)
       }
       stopRefreshHeartbeat()
       unsubscribe()
-      ws?.close()
+      unsubscribeEvents()
       useAppStore.getState().clearServerWorktreeActivity()
     }
   }, [])
