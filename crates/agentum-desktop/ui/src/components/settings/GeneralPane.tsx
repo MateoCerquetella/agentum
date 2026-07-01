@@ -445,6 +445,23 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
         </div>
 
         <SearchableSetting
+          title="Ask Before Closing Running Terminals"
+          description="Show a confirmation before closing a terminal or session tab that still has a command running."
+          keywords={['terminal', 'session', 'close', 'confirm', 'dialog', 'running', 'command', 'skip']}
+        >
+          <SettingsSwitchRow
+            label="Ask Before Closing Running Terminals"
+            description="Double-check before closing a tab whose command is still running, so an in-flight build or agent isn't lost. Remote sessions persist and are never prompted."
+            checked={!settings.skipRunningTerminalCloseConfirm}
+            onChange={() =>
+              updateSettings({
+                skipRunningTerminalCloseConfirm: !settings.skipRunningTerminalCloseConfirm
+              })
+            }
+          />
+        </SearchableSetting>
+
+        <SearchableSetting
           title="Open In Menu"
           description="Add custom launchers to the workspace Open in menu."
           keywords={['open in', 'editor', 'launcher', 'cursor', 'zed', 'command', 'vscode']}

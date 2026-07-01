@@ -269,6 +269,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     defaultTuiAgent: null,
     disabledTuiAgents: [],
     skipDeleteWorktreeConfirm: false,
+    skipRunningTerminalCloseConfirm: false,
     defaultTaskViewPreset: 'all',
     defaultTaskSource: 'github',
     visibleTaskProviders: [...TASK_PROVIDERS],

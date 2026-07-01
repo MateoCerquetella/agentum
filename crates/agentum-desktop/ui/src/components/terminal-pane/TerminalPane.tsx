@@ -200,6 +200,7 @@ export default function TerminalPane({
   searchOpenRef.current = searchOpen
   const searchStateRef = useRef<SearchState>({ query: '', caseSensitive: false, regex: false })
   const [closeConfirmPaneId, setCloseConfirmPaneId] = useState<number | null>(null)
+  const [closeConfirmDontAskAgain, setCloseConfirmDontAskAgain] = useState(false)
   const [quickCommandEditorOpen, setQuickCommandEditorOpen] = useState(false)
   // Why: the terminal menu can be the first quick-command entry point, so each
   // Add action starts with a fresh draft instead of reusing cancelled text.
@@ -576,6 +577,11 @@ export default function TerminalPane({
         return
       }
       const settings = useAppStore.getState().settings
+      // Respect the shared "Don't ask again for running terminals" opt-out.
+      if (settings?.skipRunningTerminalCloseConfirm) {
+        executeClosePane(paneId)
+        return
+      }
       void inspectRuntimeTerminalProcess(settings, ptyId)
         .then((process) => {
           if (process.hasChildProcesses) {
@@ -607,9 +613,13 @@ export default function TerminalPane({
     if (closeConfirmPaneId === null) {
       return
     }
+    if (closeConfirmDontAskAgain) {
+      void useAppStore.getState().updateSettings({ skipRunningTerminalCloseConfirm: true })
+    }
     executeClosePane(closeConfirmPaneId)
     setCloseConfirmPaneId(null)
-  }, [closeConfirmPaneId, executeClosePane])
+    setCloseConfirmDontAskAgain(false)
+  }, [closeConfirmPaneId, closeConfirmDontAskAgain, executeClosePane])
 
   useTerminalPaneLifecycle({
     tabId,
@@ -1781,7 +1791,12 @@ export default function TerminalPane({
       })}
       <CloseTerminalDialog
         open={closeConfirmPaneId !== null}
-        onCancel={() => setCloseConfirmPaneId(null)}
+        dontAskAgain={closeConfirmDontAskAgain}
+        onDontAskAgainChange={setCloseConfirmDontAskAgain}
+        onCancel={() => {
+          setCloseConfirmPaneId(null)
+          setCloseConfirmDontAskAgain(false)
+        }}
         onConfirm={handleConfirmClose}
       />
     </>
