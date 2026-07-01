@@ -11,22 +11,48 @@ import { selectPetAnimationName, type PetAnimationName } from './pet-agent-state
 
 type Sprite = NonNullable<CustomPet['sprite']>
 
+// Module-level cache (same pattern as the sidebar's worktree-agent-row
+// selectors): zustand re-runs subscriber selectors on EVERY store commit to
+// diff, and same-state tool-detail pings replace the agentStatusByPaneKey
+// identity without bumping the epoch — so scanning the map unconditionally
+// here was an O(agents) walk per commit even when the name couldn't change.
+let petAnimationNameCache: {
+  agentStatusEpoch: number
+  retainedAgentsByPaneKey: unknown
+  dragging: boolean
+  name: PetAnimationName
+} | null = null
+
 function usePetAnimationName(dragging: boolean): PetAnimationName {
   // Why: derive the animation NAME inside the selector and return that primitive
   // string. Zustand then re-renders the overlay only when the name changes — not
-  // on every agent status ping. Subscribing to the whole `agentStatusByPaneKey`
-  // map (which churns per ping) re-rendered the pet on every ping from every
-  // agent. The freshness scheduler bumps `agentStatusEpoch`, so re-reading it
-  // here keeps stale live states decaying out of the animation.
+  // on every agent status ping. Structural status transitions and freshness
+  // decay both bump `agentStatusEpoch`, so the epoch (plus the retained-agents
+  // map identity) fully keys the scan — recompute only when one of them moves.
   return useAppStore((s) => {
-    void s.agentStatusEpoch
-    return selectPetAnimationName({
+    const cached = petAnimationNameCache
+    if (
+      cached &&
+      cached.agentStatusEpoch === s.agentStatusEpoch &&
+      cached.retainedAgentsByPaneKey === s.retainedAgentsByPaneKey &&
+      cached.dragging === dragging
+    ) {
+      return cached.name
+    }
+    const name = selectPetAnimationName({
       entries: Object.values(s.agentStatusByPaneKey),
       retainedCount: Object.keys(s.retainedAgentsByPaneKey).length,
       dragging,
       now: Date.now(),
       staleAfterMs: AGENT_STATUS_STALE_AFTER_MS
     })
+    petAnimationNameCache = {
+      agentStatusEpoch: s.agentStatusEpoch,
+      retainedAgentsByPaneKey: s.retainedAgentsByPaneKey,
+      dragging,
+      name
+    }
+    return name
   })
 }
 

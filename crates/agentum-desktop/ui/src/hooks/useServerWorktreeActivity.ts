@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useAppStore } from '@/store'
 import { listSessions } from '@/runtime/agentum-server-client'
 import { getServerEndpoint, wsUrl } from '@/runtime/server-endpoint'
+import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
 import {
   buildWorktreeActivitySnapshot,
   indexSessionsByWorktree,
@@ -56,7 +57,6 @@ export function useServerWorktreeActivity(): void {
     let disposed = false
     let ws: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    let refreshTimer: ReturnType<typeof setInterval> | null = null
     let attempt = 0
     // Separate fast-retry track for the very first snapshot after (re)mount —
     // e.g. a cold app relaunch where the embedded server isn't answering yet.
@@ -156,6 +156,14 @@ export function useServerWorktreeActivity(): void {
       if (!verdict) {
         return
       }
+      // Watchdog verdicts repeat (heartbeat re-affirms 'working' every tick).
+      // An unchanged verdict can't change the folded snapshot, so skip the
+      // remap: with many agents those redundant frames made remap() — an
+      // O(worktrees + sessions) rebuild — the dominant per-event cost, even
+      // though the setState behind it deduped.
+      if (activityBySessionId.get(verdict.sessionId) === verdict.activity) {
+        return
+      }
       activityBySessionId.set(verdict.sessionId, verdict.activity)
       // Recompute so the worktree reflects the MOST-active of its sessions
       // (awaiting > working > idle, folded in buildWorktreeActivitySnapshot). A
@@ -211,7 +219,13 @@ export function useServerWorktreeActivity(): void {
 
     void bootstrapRefresh()
     void connect()
-    refreshTimer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS)
+    // Visibility-gated like the git-status/PR/ports polls: a hidden window
+    // can't present the refreshed dots, so don't burn the loopback round trip;
+    // the helper refreshes once immediately on re-show to catch up.
+    const stopRefreshHeartbeat = installWindowVisibilityInterval({
+      run: () => void refresh(),
+      intervalMs: REFRESH_INTERVAL_MS
+    })
     // Re-map when the worktree set changes (worktrees load async after this hook
     // mounts; a session fetched before its worktree existed must still bind).
     const unsubscribe = useAppStore.subscribe((state, prev) => {
@@ -228,9 +242,7 @@ export function useServerWorktreeActivity(): void {
       if (bootstrapTimer) {
         clearTimeout(bootstrapTimer)
       }
-      if (refreshTimer) {
-        clearInterval(refreshTimer)
-      }
+      stopRefreshHeartbeat()
       unsubscribe()
       ws?.close()
       useAppStore.getState().clearServerWorktreeActivity()
