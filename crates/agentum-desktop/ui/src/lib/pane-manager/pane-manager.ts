@@ -258,12 +258,18 @@ export class PaneManager {
   resumeRendering(): void {
     this.renderingSuspended = false
     resumePaneRendering(this.panes.values())
+    // Defense in depth: the show path already restored via
+    // restoreHiddenScrollback() before draining the backlog, making this a
+    // no-op there — but any OTHER resume path must not leave panes pinned at
+    // the hidden freeze, so the suspend/resume pair enforces the invariant
+    // itself. Idempotent (restore clears the stash).
+    restoreHiddenPaneScrollback(this.panes.values())
   }
 
-  // Separate from resumeRendering(): the show path must restore the full
-  // scrollback BEFORE flushing queued background output into the terminal
-  // (so the drain lands in the full buffer), but resumeRendering() runs
-  // after that flush by design (WebGL attach wants the final content).
+  // Called by the show path BEFORE flushing queued background output into
+  // the terminal, so the drain lands in the full-size buffer —
+  // resumeRendering() runs after that flush by design (WebGL attach wants
+  // the final content) and re-runs the restore as a safety net.
   restoreHiddenScrollback(): void {
     restoreHiddenPaneScrollback(this.panes.values())
   }
