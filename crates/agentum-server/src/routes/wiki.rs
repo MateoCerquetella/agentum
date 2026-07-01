@@ -231,11 +231,22 @@ async fn load_index_response(dir: &Path) -> WikiIndexResponse {
     let index_path = dir.join("index.json");
     if let Ok(raw) = tokio::fs::read_to_string(&index_path).await {
         if let Ok(index) = parse_wiki_index(&raw) {
-            return WikiIndexResponse::Ready {
-                schema_version: index.schema_version,
-                generated_at: file_mtime_millis(&index_path).await,
-                pages: index.pages,
-            };
+            // `Ready` must mean *browseable*: the index parses AND every listed
+            // page's `<slug>.md` is on disk. The generation agent writes
+            // index.json a beat before the page files, so trusting the index
+            // alone flips the view to `ready` mid-run and 404s the first page
+            // fetch (`GET /api/wiki/<slug>`) until the file lands. While a page
+            // is still missing we fall through to the run sidecar (Running),
+            // so the UI keeps polling instead of requesting a not-yet-written
+            // page. All pages present ⇒ Ready even if a stale `running` sidecar
+            // lingers (a mid-generation app restart orphans it).
+            if all_pages_present(dir, &index.pages).await {
+                return WikiIndexResponse::Ready {
+                    schema_version: index.schema_version,
+                    generated_at: file_mtime_millis(&index_path).await,
+                    pages: index.pages,
+                };
+            }
         }
     }
     if let Ok(raw) = tokio::fs::read_to_string(dir.join(".status.json")).await {
@@ -251,6 +262,22 @@ async fn load_index_response(dir: &Path) -> WikiIndexResponse {
         }
     }
     WikiIndexResponse::Empty
+}
+
+/// True iff every listed page's `<slug>.md` exists in `dir`. Gates `Ready` so a
+/// partially-written wiki (index.json present, page files still landing) never
+/// shows as browseable — the source of the transient `GET /api/wiki/<slug>` 404.
+/// Slugs come from `parse_wiki_index`, which already rejects path-traversal.
+async fn all_pages_present(dir: &Path, pages: &[WikiPageMeta]) -> bool {
+    for page in pages {
+        if tokio::fs::metadata(dir.join(format!("{}.md", page.slug)))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 async fn load_page(dir: &Path, slug: &str) -> Result<String, ApiError> {
@@ -326,6 +353,13 @@ mod tests {
         )
         .await
         .unwrap();
+        // Ready requires the page files too — a complete wiki has both on disk.
+        tokio::fs::write(d.join("overview.md"), "# Overview")
+            .await
+            .unwrap();
+        tokio::fs::write(d.join("architecture.md"), "# Architecture")
+            .await
+            .unwrap();
         match load_index_response(&d).await {
             WikiIndexResponse::Ready {
                 schema_version,
@@ -338,6 +372,63 @@ mod tests {
             }
             other => panic!("expected Ready, got {other:?}"),
         }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn index_running_while_pages_still_writing() {
+        // The race: the agent has written index.json + a `running` sidecar, but
+        // the page files haven't all landed yet. Must NOT report Ready (which
+        // would make the UI request a not-yet-written page and 404) — report
+        // Running so the UI keeps polling.
+        let d = temp_dir();
+        tokio::fs::write(
+            d.join("index.json"),
+            r#"{"schemaVersion":1,"pages":[{"slug":"overview","title":"Overview"},{"slug":"architecture","title":"Architecture"}]}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            d.join(".status.json"),
+            r#"{"state":"running","sessionId":"00000000-0000-0000-0000-000000000000"}"#,
+        )
+        .await
+        .unwrap();
+        // Only the first page exists so far.
+        tokio::fs::write(d.join("overview.md"), "# Overview")
+            .await
+            .unwrap();
+        assert!(matches!(
+            load_index_response(&d).await,
+            WikiIndexResponse::Running { .. }
+        ));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn index_ready_ignores_stale_running_sidecar() {
+        // A complete wiki (index + all pages) must resolve to Ready even if a
+        // `running` sidecar was orphaned by a mid-generation app restart.
+        let d = temp_dir();
+        tokio::fs::write(
+            d.join("index.json"),
+            r#"{"schemaVersion":1,"pages":[{"slug":"overview","title":"Overview"}]}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(d.join("overview.md"), "# Overview")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            d.join(".status.json"),
+            r#"{"state":"running","sessionId":"00000000-0000-0000-0000-000000000000"}"#,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            load_index_response(&d).await,
+            WikiIndexResponse::Ready { .. }
+        ));
         std::fs::remove_dir_all(&d).ok();
     }
 
