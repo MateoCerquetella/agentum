@@ -51,6 +51,7 @@ pub mod tls;
 mod transcript_store;
 pub mod usage;
 pub(crate) mod wiki;
+pub(crate) mod wiki_rag;
 
 pub use transcript_store::TranscriptStore;
 
