@@ -78,7 +78,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'blue',
     label: 'Blue',
-    tone: 'text-blue-600 dark:text-blue-300',
+    tone: 'text-blue-600/70 dark:text-blue-300/70',
     swatch: 'bg-blue-500',
     border: 'border-t-blue-500/70',
     laneTint: 'bg-blue-500/[0.04]'
@@ -86,7 +86,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'sky',
     label: 'Sky',
-    tone: 'text-sky-600 dark:text-sky-300',
+    tone: 'text-sky-600/70 dark:text-sky-300/70',
     swatch: 'bg-sky-500',
     border: 'border-t-sky-500/70',
     laneTint: 'bg-sky-500/[0.04]'
@@ -94,7 +94,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'violet',
     label: 'Violet',
-    tone: 'text-violet-600 dark:text-violet-300',
+    tone: 'text-violet-600/70 dark:text-violet-300/70',
     swatch: 'bg-violet-500',
     border: 'border-t-violet-500/70',
     laneTint: 'bg-violet-500/[0.04]'
@@ -102,7 +102,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'amber',
     label: 'Amber',
-    tone: 'text-amber-700 dark:text-amber-200',
+    tone: 'text-amber-700/70 dark:text-amber-200/70',
     swatch: 'bg-amber-500',
     border: 'border-t-amber-500/70',
     laneTint: 'bg-amber-500/[0.04]'
@@ -110,7 +110,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'emerald',
     label: 'Emerald',
-    tone: 'text-emerald-700 dark:text-emerald-200',
+    tone: 'text-emerald-700/70 dark:text-emerald-200/70',
     swatch: 'bg-emerald-500',
     border: 'border-t-emerald-500/70',
     laneTint: 'bg-emerald-500/[0.04]'
@@ -118,7 +118,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'rose',
     label: 'Rose',
-    tone: 'text-rose-600 dark:text-rose-300',
+    tone: 'text-rose-600/70 dark:text-rose-300/70',
     swatch: 'bg-rose-500',
     border: 'border-t-rose-500/70',
     laneTint: 'bg-rose-500/[0.04]'
@@ -126,7 +126,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'zinc',
     label: 'Zinc',
-    tone: 'text-zinc-600 dark:text-zinc-300',
+    tone: 'text-zinc-600/70 dark:text-zinc-300/70',
     swatch: 'bg-zinc-500',
     border: 'border-t-zinc-500/70',
     laneTint: 'bg-zinc-500/[0.04]'
@@ -134,7 +134,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'conductor-done',
     label: 'Conductor Done',
-    tone: 'text-[#c7a594]',
+    tone: 'text-[#c7a594]/80',
     swatch: 'bg-[#c7a594]',
     border: 'border-t-[#c7a594]/70',
     laneTint: 'bg-[#c7a594]/[0.04]'
@@ -142,7 +142,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'conductor-review',
     label: 'Conductor Review',
-    tone: 'text-[#16a34a]',
+    tone: 'text-[#16a34a]/70',
     swatch: 'bg-[#16a34a]',
     border: 'border-t-[#16a34a]/70',
     laneTint: 'bg-[#16a34a]/[0.04]'
@@ -150,7 +150,7 @@ export const WORKSPACE_STATUS_COLOR_OPTIONS: WorkspaceStatusColorOption[] = [
   {
     id: 'conductor-progress',
     label: 'Conductor Progress',
-    tone: 'text-[#d4a300]',
+    tone: 'text-[#d4a300]/70',
     swatch: 'bg-[#d4a300]',
     border: 'border-t-[#d4a300]/70',
     laneTint: 'bg-[#d4a300]/[0.04]'
