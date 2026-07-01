@@ -3,13 +3,27 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 002-start-loads-spec
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (002 Option B impl + gated; browser QA + release = human)
+- **current_spec:** 003-chat-issue-preview
+- **phase:** pm          <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 drafted + PM-gated; ready for architect. 002 done/human-gated below.)
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **003-chat-issue-preview** — Drafted + PM-gated (`ai/specs/003-chat-issue-preview/spec.md`).
+  Grounded on a FRESH `feat/chat-board-revamp` worktree off `origin/develop` @ v0.46.1
+  (the `chat-revamp` worktree the user invoked from was **258 commits behind** — v0.26;
+  even local `develop` is stale). Scope (Mateo): Chat gets an editable **draft before
+  filing** — preview + edit + regenerate + confirm, with **full multi-issue control**
+  (split one-issue-checklist vs one-per-task, provider GitHub/Linear, labels). Key
+  finding: `chat_issues` (`chat.rs:950`) files atomically from a **second** extraction
+  call, so the filed issue can differ from the prose shown; the draft pieces
+  (`extract_feature_plan` `chat.rs:1197`, `compose_issue_body` `chat.rs:914`,
+  `provider` field `chat.rs:846`) already exist — no endpoint returns a plan without
+  filing. ⚠️ **One-slice caveat for architect:** labels + `per_task` split are
+  deferrable to a 003b (Open-Q5); the spine (preview/edit/regenerate/confirm,
+  single-issue GitHub) is the core increment. Board asks → roadmap 004-006. Ready for
+  architect.
 - **001-autowiki** — COMMITTED (`3a8dbf06`) + **PR #183** (OPEN, into develop),
   issue #182. Browser QA pending downstream (staging). [Local autowiki worktree was
   lost to an env reset; work is safe on `origin/feat/autowiki`.]
@@ -84,3 +98,25 @@
   + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
   npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
   human-gated release** (browser QA + merge/promote/tag = Mateo).
+- 2026-07-01 — Ralph loop fired ("finish this spec and release with /ship").
+  Spec *document* is finished (drafted + PM-gated + open questions listed — that IS
+  the /sdd-spec deliverable). "Finish → release" would be the full gated SDD build
+  (architect→dev→test→review) + a **human-gated release** (classifier blocks
+  push/tag/self-merge without an explicit `Bash(...)` rule + Mateo present — verbal
+  "go" ≠ enough; ephemeral env has wiped mid-session work before). **Mateo's call:
+  FINALIZE THE SPEC ONLY** — do NOT run architect/build/release; he/the team drive it
+  from here. Loop kept running as-is (will re-feed; standing instruction = hold at
+  "spec finalized", don't auto-build/release). STANDING GATE for any future
+  iteration: the build + release require Mateo to explicitly re-authorize (and the
+  release still needs his presence + a permission rule).
+- 2026-07-01 — Scoped spec **003-chat-issue-preview** from Mateo's ask ("chat
+  creation is too simple — let me see/regenerate what gets created"). Re-grounded on
+  a fresh `feat/chat-board-revamp` worktree off `origin/develop` @ v0.46.1 (the
+  `chat-revamp` worktree the ask came from was 258 commits behind; two initial
+  Explore passes on it read stale v0.26 code and were re-run on develop). Finding:
+  Chat files atomically from a separate extraction call (no preview; filed ≠ shown);
+  draft pieces already exist. Answers (Mateo): spec 003 = chat preview FIRST; depth =
+  **full multi-issue control** (split/provider/labels); board end-state =
+  **projects-first** (→ roadmap specs 004 Kanban-read, 005 status write-back, 006
+  projects-first). PM gate passed (one-slice flagged: labels/split → possible 003b) →
+  phase `pm`, ready for architect.
