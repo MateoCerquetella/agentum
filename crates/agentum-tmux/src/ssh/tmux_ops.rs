@@ -108,9 +108,21 @@ pub async fn sample_pane(host: &Host, target: &str, lines: usize) -> Result<Opti
             let stdout =
                 match crate::capture_pane_sample_combined(target, lines, SAMPLE_BOUNDARY).await {
                     Ok(stdout) => stdout,
-                    Err(TmuxError::NonZero { stderr, .. })
+                    Err(TmuxError::NonZero { status, stderr })
                         if crate::tmux_stderr_means_target_gone(&stderr) =>
                     {
+                        // The stderr WORDING says gone, but a live session's
+                        // pane can be momentarily untargetable during window
+                        // churn and tmux phrases that identically ("can't find
+                        // pane"). Confirm with the authoritative existence
+                        // probe before declaring the session dead — Ok(None)
+                        // makes the watchdog mark it crashed on THIS tick,
+                        // while an Err is retried next tick. This extra spawn
+                        // runs only on this rare error path; the hot path
+                        // stays one tmux client per tick.
+                        if crate::has_session(target).await.unwrap_or(false) {
+                            return Err(TmuxError::NonZero { status, stderr });
+                        }
                         return Ok(None);
                     }
                     Err(e) => return Err(e),
