@@ -404,6 +404,15 @@ pub async fn unpipe_pane(target: &str) -> Result<()> {
 /// `tmux list-panes -a -F <format>` raw stdout across every session on the
 /// server. Returns `Ok("")` when tmux is not installed or no tmux server is
 /// running — for discovery both simply mean "no sessions", not an error.
+///
+/// Any OTHER non-zero exit (bad/unreachable socket, protocol-version mismatch,
+/// resource limits, …) is surfaced as an error and logged with tmux's own
+/// stderr — NOT swallowed into an empty string. A silent `Ok("")` here is
+/// indistinguishable from "no sessions" in the discovery UI, which hid a real
+/// local-host failure where the panel showed "0" despite live sessions
+/// (issue #203). The benign no-server/no-sessions case is logged at `info` too:
+/// on a host that *does* have sessions, tmux reporting "no server running on
+/// <socket>" is the key signal that it's talking to the wrong socket.
 pub async fn list_panes_all(format: &str) -> Result<String> {
     let out = match Command::new("tmux")
         .args(["list-panes", "-a", "-F", format])
@@ -411,13 +420,44 @@ pub async fn list_panes_all(format: &str) -> Result<String> {
         .await
     {
         Ok(o) => o,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        // tmux not on PATH → "no sessions" for discovery, but log it: an empty
+        // list would otherwise read as "0 sessions" even though the binary is
+        // missing.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!("tmux binary not found on PATH; reporting no sessions");
+            return Ok(String::new());
+        }
         Err(e) => return Err(e.into()),
     };
-    if !out.status.success() {
+    if out.status.success() {
+        return Ok(String::from_utf8(out.stdout)?);
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = stderr.trim();
+    let code = out.status.code().unwrap_or(-1);
+    if tmux_stderr_means_no_sessions(stderr) {
+        tracing::info!(code, stderr, "tmux list-panes -a returned no sessions");
         return Ok(String::new());
     }
-    Ok(String::from_utf8(out.stdout)?)
+    // A real failure — surface it instead of masking it as an empty list.
+    tracing::warn!(code, stderr, "tmux list-panes -a failed");
+    Err(TmuxError::NonZero {
+        status: code,
+        stderr: stderr.to_string(),
+    })
+}
+
+/// True when tmux's stderr means "there simply is no server / no sessions" — a
+/// legitimate empty result for discovery — rather than a real failure. tmux
+/// phrases this as "no server running on <socket>" or "no current session"; an
+/// empty stderr is treated the same (defensive). Kept pure so the benign-vs-
+/// error split is unit-testable without a live tmux server.
+fn tmux_stderr_means_no_sessions(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.is_empty()
+        || s.contains("no server running")
+        || s.contains("no current session")
+        || s.contains("no sessions")
 }
 
 /// Basename of the foreground process inside the pane (tmux's
@@ -523,6 +563,26 @@ mod tests {
     #[test]
     fn target_format() {
         assert_eq!(target_for("alpha"), "agentum-alpha");
+    }
+
+    #[test]
+    fn tmux_stderr_no_sessions_classification() {
+        // Benign — a genuinely empty result, must NOT surface as an error.
+        assert!(tmux_stderr_means_no_sessions(""));
+        assert!(tmux_stderr_means_no_sessions(
+            "no server running on /tmp/tmux-501/default"
+        ));
+        assert!(tmux_stderr_means_no_sessions("no current session"));
+        assert!(tmux_stderr_means_no_sessions("No sessions")); // case-insensitive
+        // Real failures — must be surfaced (not swallowed into an empty list),
+        // else the discovery panel shows a misleading "0" (issue #203).
+        assert!(!tmux_stderr_means_no_sessions(
+            "protocol version mismatch (client 8, server 7)"
+        ));
+        assert!(!tmux_stderr_means_no_sessions(
+            "error connecting to /tmp/tmux-501/default (Permission denied)"
+        ));
+        assert!(!tmux_stderr_means_no_sessions("too many open files"));
     }
 
     #[test]
