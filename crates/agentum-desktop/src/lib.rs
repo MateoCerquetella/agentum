@@ -121,6 +121,15 @@ pub fn run() {
                 token: None,
             });
 
+            // Reap any Chromium left over from a previous run. Our per-worktree
+            // CDP browsers live in detached tmux sessions and can outlive both the
+            // app and their session, so without this they pile up (the user's
+            // "20+ orphaned Chrome processes"). Safe on a fresh launch: no agentum
+            // browser is running yet, so only orphans are killed. Non-blocking.
+            tauri::async_runtime::spawn(async {
+                agentum_server::cdp_browser::reap_orphaned_cdp_browsers().await;
+            });
+
             // On-device speech-to-text state (Voice dictation). Models live under
             // the app data dir; failing to resolve it must not block app boot, so
             // fall back to a temp dir and let downloads surface any error.

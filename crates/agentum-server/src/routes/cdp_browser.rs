@@ -28,6 +28,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/cdp-browser", get(status).post(launch).delete(stop))
         // A bare DELETE alias is handy for clients that prefer it explicit.
         .route("/api/cdp-browser/stop", post(stop))
+        // Tear down ONE worktree's browser — called when the user closes the last
+        // browser tab in a worktree so its per-worktree Chromium doesn't linger.
+        .route("/api/cdp-browser/stop-worktree", post(stop_worktree))
         // The in-pane annotate picker hit-tests the shared CDP page here.
         .route("/api/cdp-browser/node-at-point", post(node_at_point))
 }
@@ -73,6 +76,24 @@ async fn stop() -> Result<Json<CdpBrowserStatus>, ApiError> {
         .await
         .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
     Ok(Json(snapshot(false)))
+}
+
+/// `POST /api/cdp-browser/stop-worktree` — tear down ONE worktree's per-worktree
+/// CDP browser (kill its Chromium + tmux session). Body `{worktreeId}` (the UI's
+/// `<repoId>::<path>` id; the server canonicalizes it). Idempotent; a no-op when
+/// that worktree has no browser. Keeps closed-browser Chromiums from piling up.
+async fn stop_worktree(Json(body): Json<Value>) -> Result<Json<Value>, ApiError> {
+    if let Some(wt) = body
+        .get("worktreeId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        cdp_browser::stop_local_cdp_browser_for(wt)
+            .await
+            .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// `POST /api/cdp-browser/node-at-point` — hit-test the CDP page at a viewport

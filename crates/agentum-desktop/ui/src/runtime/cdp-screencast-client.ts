@@ -276,3 +276,27 @@ export async function cdpNodeAtPoint(
     return { ok: false, code: 'transport' }
   }
 }
+
+/**
+ * Tear down a worktree's per-worktree CDP Chromium (server kills its process +
+ * tmux session). Called when the user closes the last browser tab in a worktree
+ * so the headless Chromium doesn't linger — otherwise per-worktree browsers pile
+ * up as orphaned Chrome processes. Best-effort and fire-and-forget: a failure
+ * just means the reap-on-next-launch will collect it.
+ */
+export async function stopWorktreeCdpBrowser(worktreeId: string): Promise<void> {
+  try {
+    const { token } = await getServerEndpoint()
+    const url = await apiUrl('/api/cdp-browser/stop-worktree')
+    await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ worktreeId })
+    })
+  } catch {
+    // Ignore — the startup reaper is the backstop.
+  }
+}
