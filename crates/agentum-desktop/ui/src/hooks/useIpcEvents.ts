@@ -154,6 +154,35 @@ let remoteWorkspaceSnapshotApplyDepth = 0
 let remoteWorkspaceSnapshotWriteSuppressUntil = 0
 const REMOTE_WORKSPACE_SNAPSHOT_WRITE_SUPPRESS_MS = 1000
 
+// Why: resolvePaneKey runs on every hook status event (many/sec/agent) and used
+// to nested-loop over every worktree's tabs to locate one tab — O(total tabs)
+// per event, i.e. O(N^2)/sec under many agents. This index turns the lookup
+// into O(1), cached on `tabsByWorktree` identity so it rebuilds only when the
+// tabs map is actually replaced (any tab add/remove/move), which is rare next
+// to hook events. First occurrence wins, mirroring the old loop's `break`.
+type ResolveTabEntry = { worktreeId: string; tab: AppState['tabsByWorktree'][string][number] }
+let tabResolveIndexSource: AppState['tabsByWorktree'] | null = null
+let tabResolveIndex: Map<string, ResolveTabEntry> | null = null
+
+function getTabResolveIndex(
+  tabsByWorktree: AppState['tabsByWorktree']
+): Map<string, ResolveTabEntry> {
+  if (tabResolveIndexSource === tabsByWorktree && tabResolveIndex) {
+    return tabResolveIndex
+  }
+  const index = new Map<string, ResolveTabEntry>()
+  for (const [worktreeId, tabs] of Object.entries(tabsByWorktree)) {
+    for (const tab of tabs) {
+      if (!index.has(tab.id)) {
+        index.set(tab.id, { worktreeId, tab })
+      }
+    }
+  }
+  tabResolveIndex = index
+  tabResolveIndexSource = tabsByWorktree
+  return index
+}
+
 function getAuthoritativeDetectedWorktreeIds(state: AppState, repoId: string): Set<string> | null {
   const detected = state.detectedWorktreesByRepo[repoId]
   if (detected?.authoritative !== true) {
@@ -2511,10 +2540,31 @@ export function useIpcEvents(): void {
     // renderer state.
     requestAgentStatusSnapshotIfReady()
     unsubs.push(
-      useAppStore.subscribe(() => {
-        requestAgentStatusSnapshotIfReady()
-        flushPendingAgentStatuses()
-        syncAgentHookCompletionNotificationSettings()
+      // Why: this subscriber previously ran on EVERY store mutation with no
+      // selector, so each agent-status ping (which fires setAgentStatus →
+      // set()) triggered `syncAgentHookCompletionNotificationSettings`, whose
+      // `pruneClosedPaneCoordinators` walks every coordinator with a per-pane
+      // layout tree-walk — O(agents) work per write × O(agents) writes/sec was
+      // an O(N^2) tax under many agents. Gate each function on the inputs it
+      // actually depends on (read from the (state, prev) the vanilla store
+      // subscription already provides) so pings — which only touch the
+      // agent-status maps/epochs — do no work here:
+      //  - snapshot pull + prompt flush only matter the moment workspace tabs
+      //    flip ready (the retry timer drives the flush thereafter).
+      //  - the coordinator sync only cares about notification settings and pane
+      //    liveness (ptyIds/layouts move when a pane opens, closes, or sleeps).
+      useAppStore.subscribe((state, prev) => {
+        if (state.workspaceSessionReady !== prev.workspaceSessionReady) {
+          requestAgentStatusSnapshotIfReady()
+          flushPendingAgentStatuses()
+        }
+        if (
+          state.settings?.notifications !== prev.settings?.notifications ||
+          state.ptyIdsByTabId !== prev.ptyIdsByTabId ||
+          state.terminalLayoutsByTabId !== prev.terminalLayoutsByTabId
+        ) {
+          syncAgentHookCompletionNotificationSettings()
+        }
       })
     )
 
@@ -2568,24 +2618,16 @@ function resolvePaneKey(
   let tabTitle: string | undefined
   let unifiedTabLabel: string | undefined
   let owningWorktreeId: string | undefined
-  for (const [worktreeId, tabs] of Object.entries(store.tabsByWorktree)) {
-    for (const tab of tabs) {
-      if (tab.id === tabId) {
-        exists = true
-        tabTitle = tab.title
-        owningWorktreeId = worktreeId
-        const visibleTab = (store.unifiedTabsByWorktree?.[worktreeId] ?? []).find(
-          (entry) => entry.contentType === 'terminal' && entry.entityId === tabId
-        )
-        const rawVisibleLabel = visibleTab?.label?.trim()
-        unifiedTabLabel =
-          rawVisibleLabel && rawVisibleLabel.length > 0 ? rawVisibleLabel : undefined
-        break
-      }
-    }
-    if (exists) {
-      break
-    }
+  const resolvedTab = getTabResolveIndex(store.tabsByWorktree).get(tabId)
+  if (resolvedTab) {
+    exists = true
+    tabTitle = resolvedTab.tab.title
+    owningWorktreeId = resolvedTab.worktreeId
+    const visibleTab = (store.unifiedTabsByWorktree?.[resolvedTab.worktreeId] ?? []).find(
+      (entry) => entry.contentType === 'terminal' && entry.entityId === tabId
+    )
+    const rawVisibleLabel = visibleTab?.label?.trim()
+    unifiedTabLabel = rawVisibleLabel && rawVisibleLabel.length > 0 ? rawVisibleLabel : undefined
   }
   // Why: ownership lookup is `tab → worktree → repo → repo.connectionId`.
   // Keep "resolved to a local repo" distinct from "not hydrated yet" so the
