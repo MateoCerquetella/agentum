@@ -10,6 +10,7 @@
 // per-consumer sockets used. 'error' is always followed by 'close', which
 // drives the reconnect.
 import { getServerEndpoint, wsUrl } from './server-endpoint'
+import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 
 /** A parsed `/api/events` frame. Shapes vary by `kind`; consumers narrow. */
 export type ServerEventFrame = { kind?: unknown; session_id?: unknown; payload?: unknown }
@@ -20,22 +21,28 @@ export type ServerEventsSubscriber = {
   /**
    * Called when the shared socket (re)opens — and immediately at subscribe
    * time if it is already open. The server replays each session's current
-   * agent state on every fresh connect; a subscriber that joins an
-   * already-open socket has MISSED that replay, so any consumer needing a
-   * coherent snapshot must self-heal here (refetch), not rely on the burst.
+   * agent state only on a fresh connect; the bus re-delivers its cached copy
+   * of that per-session `agent.*` state to late subscribers (see
+   * `lastAgentFrameBySession`), so agent activity needs no self-heal here —
+   * but any OTHER snapshot a consumer depends on (session lists, board
+   * state) must be refetched in this callback, not assumed from the burst.
    */
   onOpen?: () => void
 }
 
 const subscribers = new Set<ServerEventsSubscriber>()
+// Latest `agent.*` frame per session, mirrored off the stream. The server's
+// connect-time replay burst goes only to subscribers present at socket open;
+// consumers that join later (a terminal pane mounting after the sidebar
+// opened the socket) would otherwise never learn a running agent's current
+// state until its next live transition. Delivered to every new subscriber at
+// subscribe time; overwritten by each fresh replay/live frame.
+const lastAgentFrameBySession = new Map<string, ServerEventFrame>()
 let ws: WebSocket | null = null
 let socketOpen = false
 let starting = false
 let attempt = 0
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-
-const backoffMs = (n: number): number =>
-  Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
 
 const scheduleReconnect = (): void => {
   if (reconnectTimer || subscribers.size === 0) {
@@ -85,7 +92,17 @@ async function ensureSocket(): Promise<void> {
         // Ignore malformed frames rather than tearing the stream down.
         return
       }
-      for (const sub of [...subscribers]) {
+      if (
+        typeof ev.kind === 'string' &&
+        ev.kind.startsWith('agent.') &&
+        typeof ev.session_id === 'string'
+      ) {
+        lastAgentFrameBySession.set(ev.session_id, ev)
+      }
+      // Iterate the live Set (no snapshot): onEvent handlers don't mutate the
+      // subscriber set, and this runs per frame on the app's chattiest
+      // stream — a [...spread] here was steady GC pressure for nothing.
+      for (const sub of subscribers) {
         sub.onEvent(ev)
       }
     })
@@ -115,6 +132,14 @@ export function subscribeServerEvents(subscriber: ServerEventsSubscriber): () =>
     subscriber.onOpen?.()
   } else {
     void ensureSocket()
+  }
+  // Re-deliver the latest known agent state (the replay burst this late
+  // subscriber missed). After onOpen, mirroring the real stream's order:
+  // connect, then replay frames.
+  if (lastAgentFrameBySession.size > 0) {
+    for (const frame of lastAgentFrameBySession.values()) {
+      subscriber.onEvent(frame)
+    }
   }
   return () => {
     if (!subscribers.delete(subscriber)) {
