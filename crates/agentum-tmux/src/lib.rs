@@ -402,18 +402,48 @@ pub async fn unpipe_pane(target: &str) -> Result<()> {
 }
 
 /// `tmux list-panes -a -F <format>` raw stdout across every session on the
-/// server. Returns `Ok("")` when tmux is not installed or no tmux server is
-/// running — for discovery both simply mean "no sessions", not an error.
+/// server, with a small retry. Returns `Ok("")` when tmux is not installed or
+/// there is genuinely no server/sessions — for discovery both mean "nothing to
+/// list", not an error.
 ///
-/// Any OTHER non-zero exit (bad/unreachable socket, protocol-version mismatch,
-/// resource limits, …) is surfaced as an error and logged with tmux's own
-/// stderr — NOT swallowed into an empty string. A silent `Ok("")` here is
-/// indistinguishable from "no sessions" in the discovery UI, which hid a real
-/// local-host failure where the panel showed "0" despite live sessions
-/// (issue #203). The benign no-server/no-sessions case is logged at `info` too:
-/// on a host that *does* have sessions, tmux reporting "no server running on
-/// <socket>" is the key signal that it's talking to the wrong socket.
+/// `list-panes -a` scans the whole server in one shot. It has been observed to
+/// fail *transiently* on macOS inside a long-running app process — a fast
+/// non-zero exit with an EMPTY stderr — while targeted commands (`capture-pane
+/// -t <name>`) on the *same* socket keep working. The old code masked that as
+/// "no sessions" (the `stderr.is_empty()` branch), which froze the host tmux
+/// panel into a false "0 sessions" until the app restarted (issue #203). So:
+///   - a stderr that *names* a genuine no-server / no-sessions returns `Ok("")`
+///     immediately (no retry — that state is stable);
+///   - any other non-zero exit (incl. the empty-stderr anomaly) is retried a
+///     few times, and if it still fails is surfaced as an error — the UI then
+///     shows "couldn't list sessions", never a misleading "none".
 pub async fn list_panes_all(format: &str) -> Result<String> {
+    const ATTEMPTS: u32 = 3;
+    let mut last: Option<TmuxError> = None;
+    for attempt in 1..=ATTEMPTS {
+        match list_panes_all_once(format).await {
+            Ok(out) => return Ok(out),
+            Err(e) => {
+                tracing::warn!(attempt, error = %e, "tmux list-panes -a failed; retrying");
+                last = Some(e);
+                if attempt < ATTEMPTS {
+                    // Brief backoff: the failure is transient by hypothesis, so
+                    // give the tmux client a moment before re-scanning.
+                    sleep(Duration::from_millis(75 * attempt as u64)).await;
+                }
+            }
+        }
+    }
+    // Every attempt failed with a real (non "no sessions") error — surface it
+    // rather than masking it as an empty list.
+    Err(last.expect("the retry loop runs at least once"))
+}
+
+/// One `tmux list-panes -a` pass. `Ok("")` for "tmux missing" or a genuine
+/// no-server/no-sessions; `Err` for any other non-zero exit (retried by the
+/// caller). Split out so [`list_panes_all`] can retry without re-implementing
+/// the classification.
+async fn list_panes_all_once(format: &str) -> Result<String> {
     let out = match Command::new("tmux")
         .args(["list-panes", "-a", "-F", format])
         .output()
@@ -439,7 +469,7 @@ pub async fn list_panes_all(format: &str) -> Result<String> {
         tracing::info!(code, stderr, "tmux list-panes -a returned no sessions");
         return Ok(String::new());
     }
-    // A real failure — surface it instead of masking it as an empty list.
+    // A real (or anomalous) failure — surface it; the caller retries first.
     tracing::warn!(code, stderr, "tmux list-panes -a failed");
     Err(TmuxError::NonZero {
         status: code,
@@ -448,16 +478,26 @@ pub async fn list_panes_all(format: &str) -> Result<String> {
 }
 
 /// True when tmux's stderr means "there simply is no server / no sessions" — a
-/// legitimate empty result for discovery — rather than a real failure. tmux
-/// phrases this as "no server running on <socket>" or "no current session"; an
-/// empty stderr is treated the same (defensive). Kept pure so the benign-vs-
-/// error split is unit-testable without a live tmux server.
+/// legitimate empty result for discovery — rather than a real failure.
+///
+/// tmux names this case explicitly: "no server running on <socket>" /
+/// "no current session" / "no sessions" (Linux), or, when the socket file is
+/// absent, "error connecting to <socket> (No such file or directory)" (macOS).
+/// An EMPTY stderr is deliberately NOT here: tmux always names a genuine
+/// no-server, so a non-zero exit with no stderr is an *anomaly* (retried and
+/// surfaced by [`list_panes_all`]), not "no sessions" — masking it as empty was
+/// the root of the frozen "0 sessions" panel (issue #203). A different connect
+/// error (permission denied, connection refused) stays a real, surfaced
+/// failure. Kept pure so the benign-vs-error split is unit-testable without a
+/// live tmux server.
 fn tmux_stderr_means_no_sessions(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
-    s.is_empty()
-        || s.contains("no server running")
+    s.contains("no server running")
         || s.contains("no current session")
         || s.contains("no sessions")
+        // macOS: an absent server socket → the client can't connect because the
+        // socket file doesn't exist → nothing to list.
+        || (s.contains("error connecting") && s.contains("no such file"))
 }
 
 /// Basename of the foreground process inside the pane (tmux's
@@ -568,14 +608,21 @@ mod tests {
     #[test]
     fn tmux_stderr_no_sessions_classification() {
         // Benign — a genuinely empty result, must NOT surface as an error.
-        assert!(tmux_stderr_means_no_sessions(""));
         assert!(tmux_stderr_means_no_sessions(
             "no server running on /tmp/tmux-501/default"
         ));
         assert!(tmux_stderr_means_no_sessions("no current session"));
         assert!(tmux_stderr_means_no_sessions("No sessions")); // case-insensitive
-        // Real failures — must be surfaced (not swallowed into an empty list),
-        // else the discovery panel shows a misleading "0" (issue #203).
+        // macOS phrases an absent server socket as an "error connecting …
+        // (No such file or directory)" — still just "no server", i.e. empty.
+        assert!(tmux_stderr_means_no_sessions(
+            "error connecting to /private/tmp/tmux-501/default (No such file or directory)"
+        ));
+        // Real / anomalous failures — must be surfaced (not swallowed into an
+        // empty list), else the discovery panel shows a misleading "0"
+        // (issue #203). An EMPTY stderr is such an anomaly: tmux always names a
+        // genuine no-server, so no message on a non-zero exit is NOT "none".
+        assert!(!tmux_stderr_means_no_sessions(""));
         assert!(!tmux_stderr_means_no_sessions(
             "protocol version mismatch (client 8, server 7)"
         ));
