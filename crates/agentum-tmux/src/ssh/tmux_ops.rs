@@ -99,11 +99,19 @@ pub async fn sample_pane(host: &Host, target: &str, lines: usize) -> Result<Opti
             if !crate::has_session(target).await? {
                 return Ok(None);
             }
-            Ok(Some(PaneSample {
-                pane: crate::capture_pane(target, lines).await?,
-                viewport: crate::capture_pane_visible(target).await?,
-                current_command: crate::pane_current_command(target).await?,
-            }))
+            // ONE tmux client pulls all three reads in a `;`-separated sequence
+            // instead of three separate fork/exec + server-socket round trips.
+            // At N local sessions on a 1 s tick those per-call spawns were
+            // continuous, N-scaling CPU; batching yields identical data. The
+            // has-session gate above already ruled out "pane gone", so a parse
+            // miss here is a real error (mirrors the SSH arm below).
+            let stdout = crate::capture_pane_sample_combined(target, lines, SAMPLE_BOUNDARY).await?;
+            parse_pane_sample(&stdout)
+                .map(Some)
+                .ok_or_else(|| TmuxError::NonZero {
+                    status: 0,
+                    stderr: "pane sample output did not contain the expected sections".to_string(),
+                })
         }
         HostKind::Ssh { .. } => {
             let exact_target = format!("={target}");
