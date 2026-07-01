@@ -1,5 +1,5 @@
 import type React from 'react'
-import { ChevronDown, Monitor, Server, ShieldCheck, SquareTerminal } from 'lucide-react'
+import { ChevronDown, Monitor, Server, SquareTerminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SidebarHost } from './worktree-list-groups'
@@ -39,8 +39,7 @@ export function HostGroupHeader({
   count,
   collapsed,
   onToggle,
-  onOpenTmuxSessions,
-  onOpenReadiness
+  onOpenTmuxSessions
 }: {
   host: SidebarHost
   count: number
@@ -49,9 +48,6 @@ export function HostGroupHeader({
   /** Open the tmux sessions modal for this host. Always shown for SSH hosts;
    *  shown for the local host when tmux is in use. */
   onOpenTmuxSessions?: () => void
-  /** Open the Host Readiness & Provisioning dialog for this host (required deps
-   *  + optional agentum skills to sync onto it). */
-  onOpenReadiness?: () => void
 }): React.JSX.Element {
   const Icon = host.kind === 'ssh' ? Server : Monitor
   const status = host.status ?? 'unknown'
@@ -147,38 +143,6 @@ export function HostGroupHeader({
           </TooltipTrigger>
           <TooltipContent side="bottom" sideOffset={4}>
             Tmux sessions
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-      {onOpenReadiness ? (
-        // Hover-revealed affordance: open Host Readiness & Provisioning. The
-        // parent's `gap-1.5` spaces it within the trailing cluster; the label's
-        // `flex-1` already right-aligns this group, so no `ml-auto` needed here.
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onOpenReadiness()
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.stopPropagation()
-                }
-              }}
-              className={cn(
-                'inline-flex size-5 shrink-0 items-center justify-center rounded bg-transparent opacity-0 transition-colors transition-opacity',
-                'group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100',
-                'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground focus-visible:bg-sidebar-accent focus-visible:text-foreground focus-visible:outline-none'
-              )}
-              aria-label={`Host readiness & skills for ${host.label}`}
-            >
-              <ShieldCheck className="size-3.5" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={4}>
-            Host readiness &amp; skills
           </TooltipContent>
         </Tooltip>
       ) : null}

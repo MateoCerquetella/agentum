@@ -97,61 +97,6 @@ export async function getServerHostReadinessInfo(hostId: string): Promise<HostRe
   }
 }
 
-/** Optional agentum skill entry from `/api/hosts/{id}/readiness` (`skills[]`). */
-export type HostReadinessSkill = { id: string; label: string; installed: boolean }
-
-/** Full host readiness for the readiness dialog: required deps + agent CLIs +
- *  optional agentum skills. Mirrors `agentum_core::HostReadiness`. */
-export type FullHostReadiness = {
-  ok: boolean
-  message: string
-  uname: string | null
-  required: { id: string; label: string; installed: boolean }[]
-  agents: { id: string; installed: boolean }[]
-  skills: HostReadinessSkill[]
-}
-
-type RawHostReadiness = {
-  ok?: boolean
-  message?: string
-  system?: { uname?: string | null }
-  required?: { id: string; label: string; installed: boolean }[]
-  agents?: { id: string; installed: boolean }[]
-  skills?: HostReadinessSkill[]
-}
-
-function mapHostReadiness(r: RawHostReadiness): FullHostReadiness {
-  return {
-    ok: r.ok ?? false,
-    message: r.message ?? '',
-    uname: r.system?.uname ?? null,
-    required: r.required ?? [],
-    agents: r.agents ?? [],
-    skills: r.skills ?? []
-  }
-}
-
-/** `GET /api/hosts/{id}/readiness` — the full report (incl. optional skills). */
-export async function getFullHostReadiness(hostId: string): Promise<FullHostReadiness> {
-  return mapHostReadiness(
-    await getJson<RawHostReadiness>(`/api/hosts/${encodeURIComponent(hostId)}/readiness`)
-  )
-}
-
-/** `POST /api/hosts/{id}/provision-skills` — copy agentum skills (by id) from
- *  this machine's `~/.claude/skills` onto the host. Returns fresh readiness. */
-export async function provisionHostSkills(
-  hostId: string,
-  skillIds: string[]
-): Promise<FullHostReadiness> {
-  return mapHostReadiness(
-    await postJson<RawHostReadiness>(
-      `/api/hosts/${encodeURIComponent(hostId)}/provision-skills`,
-      { skills: skillIds, confirm: true }
-    )
-  )
-}
-
 /** Resolve a sidebar host key (`local` | `ssh:<connectionId>`) to a server host
  *  id, so the readiness dialog can talk to `/api/hosts/{id}/…`. */
 export async function resolveServerHostIdForHostKey(hostKey: string): Promise<string | null> {
