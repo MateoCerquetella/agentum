@@ -12,20 +12,21 @@ import { selectPetAnimationName, type PetAnimationName } from './pet-agent-state
 type Sprite = NonNullable<CustomPet['sprite']>
 
 function usePetAnimationName(dragging: boolean): PetAnimationName {
-  const agentStatusByPaneKey = useAppStore((s) => s.agentStatusByPaneKey)
-  const agentStatusEpoch = useAppStore((s) => s.agentStatusEpoch)
-  const retainedAgentsByPaneKey = useAppStore((s) => s.retainedAgentsByPaneKey)
-
-  // Re-render when the freshness scheduler ticks so stale live states stop
-  // driving pet animations even if no other store value changes.
-  void agentStatusEpoch
-
-  return selectPetAnimationName({
-    entries: Object.values(agentStatusByPaneKey),
-    retainedCount: Object.keys(retainedAgentsByPaneKey).length,
-    dragging,
-    now: Date.now(),
-    staleAfterMs: AGENT_STATUS_STALE_AFTER_MS
+  // Why: derive the animation NAME inside the selector and return that primitive
+  // string. Zustand then re-renders the overlay only when the name changes — not
+  // on every agent status ping. Subscribing to the whole `agentStatusByPaneKey`
+  // map (which churns per ping) re-rendered the pet on every ping from every
+  // agent. The freshness scheduler bumps `agentStatusEpoch`, so re-reading it
+  // here keeps stale live states decaying out of the animation.
+  return useAppStore((s) => {
+    void s.agentStatusEpoch
+    return selectPetAnimationName({
+      entries: Object.values(s.agentStatusByPaneKey),
+      retainedCount: Object.keys(s.retainedAgentsByPaneKey).length,
+      dragging,
+      now: Date.now(),
+      staleAfterMs: AGENT_STATUS_STALE_AFTER_MS
+    })
   })
 }
 

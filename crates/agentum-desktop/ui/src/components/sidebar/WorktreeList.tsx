@@ -21,6 +21,7 @@ import {
   X
 } from 'lucide-react'
 import { useAppStore } from '@/store'
+import type { AppState } from '@/store'
 import {
   getAllWorktreesFromState,
   useAllWorktrees,
@@ -222,6 +223,11 @@ type ProjectGroupDeleteDialogState = {
 const SORT_SETTLE_MS = 3_000
 const USER_SCROLL_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS = 500
 const EMPTY_PROJECT_GROUPS: readonly ProjectGroup[] = []
+// Why: a stable empty map so the whole-`agentStatusByPaneKey` subscription below
+// only observes the real (per-ping churning) map while the agent-send popover is
+// open. When it's closed — the overwhelmingly common case — this component would
+// otherwise re-render on every agent status ping from every pane (O(agents) jank).
+const EMPTY_AGENT_STATUS_BY_PANE_KEY: AppState['agentStatusByPaneKey'] = {}
 const EXPANDING_CARD_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS = 300
 const WORKTREE_SIDEBAR_SCROLL_STYLE: React.CSSProperties = {
   // Why: TanStack Virtual owns scroll correction. Native browser anchoring can
@@ -3478,7 +3484,14 @@ const WorktreeList = React.memo(function WorktreeList({
   const revealWorktreeInSidebar = useAppStore((s) => s.revealWorktreeInSidebar)
   const clearPendingRevealWorktreeId = useAppStore((s) => s.clearPendingRevealWorktreeId)
   const agentSendPopoverTargetMode = useAppStore((s) => s.agentSendPopoverTargetMode)
-  const agentTargetStatusByPaneKey = useAppStore((s) => s.agentStatusByPaneKey)
+  // Why: only subscribe to the live status map while the send popover is open.
+  // The map reference churns on every status ping (updatedAt moves each ping), so
+  // an unconditional subscription re-rendered the whole sidebar per ping per agent.
+  // The dependent memo below returns null when the popover is closed, so an empty
+  // map here changes nothing but the re-render fan-out.
+  const agentTargetStatusByPaneKey = useAppStore((s) =>
+    s.agentSendPopoverTargetMode ? s.agentStatusByPaneKey : EMPTY_AGENT_STATUS_BY_PANE_KEY
+  )
   const agentTargetStatusEpoch = useAppStore((s) => s.agentStatusEpoch)
   const agentTargetTabsByWorktree = useAppStore((s) => s.tabsByWorktree)
   const agentTargetTerminalLayoutsByTabId = useAppStore((s) => s.terminalLayoutsByTabId)
@@ -3912,6 +3925,16 @@ const WorktreeList = React.memo(function WorktreeList({
   }, [filterRepoIds, groupBy, projectGroups.length, repos, worktreesByRepo])
   const allRepoIds = useMemo(() => repos.map((r) => r.id), [repos])
   const reorderReposAction = useAppStore((s) => s.reorderRepos)
+  // Why: a stable callback so the memoized VirtualizedWorktreeViewport can
+  // short-circuit. An inline arrow prop was a fresh reference every render,
+  // defeating React.memo and re-rendering the entire virtualized list whenever
+  // the parent re-rendered.
+  const handleReorderRepos = useCallback(
+    (orderedIds: string[]) => {
+      void reorderReposAction(orderedIds)
+    },
+    [reorderReposAction]
+  )
   // Why: host mode is a post-processing layer on top of repo grouping; the
   // inner builder always gets 'repo' so host headers can bucket repo groups.
   const effectiveGroupBy: WorktreeGroupBy = groupBy === 'host' ? 'repo' : groupBy
@@ -4821,9 +4844,7 @@ const WorktreeList = React.memo(function WorktreeList({
         worktreeLineageById={worktreeLineageById}
         repoOrder={repoOrder}
         allRepoIds={allRepoIds}
-        reorderRepos={(orderedIds) => {
-          void reorderReposAction(orderedIds)
-        }}
+        reorderRepos={handleReorderRepos}
         prCache={prCache}
         workspaceStatuses={workspaceStatuses}
         projectGroups={projectGroups}
