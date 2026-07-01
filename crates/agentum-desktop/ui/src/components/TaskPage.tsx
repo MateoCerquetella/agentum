@@ -14,6 +14,7 @@ import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { type SyncIssueInput, syncExternalIssues } from '@/runtime/board-client'
+import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Input } from '@/components/ui/input'
@@ -62,7 +63,7 @@ import {
 } from '../../../shared/linear-links'
 import PRFilterDropdowns, { type PRFilterChange } from '@/components/github/PRFilterDropdowns'
 import { GitHubMarkdownComposer } from '@/components/github/GitHubMarkdownComposer'
-import { buildGitHubRepoUrl } from '@/lib/github-links'
+import { buildGitHubRepoUrl, parseGitHubIssueOrPRLink } from '@/lib/github-links'
 import {
   findGithubWorkItemWorkspaceAttachment,
   getGithubWorkItemWorkspaceAttachmentLabel
@@ -88,6 +89,7 @@ import {
 } from '@/lib/new-workspace'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
+import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import {
   buildTaskPageRepoSourceState,
@@ -2345,12 +2347,33 @@ export default function TaskPage(): React.JSX.Element {
   }, [activeModal, dialogWorkItem, githubMode, newIssueOpen, newLinearIssueOpen, taskSource])
 
   const openComposerForItem = useCallback(
-    (item: GitHubWorkItem): void => {
-      const linkedWorkItem: LinkedWorkItemSummary = {
+    async (item: GitHubWorkItem): Promise<void> => {
+      // Why: a GitHub work item carries no body in memory, so without this the
+      // spawned agent would only get the URL — unlike Linear, which already
+      // snapshots its description into linkedContext. Fetch the issue body
+      // (server-side `gh issue view`) and fold it into the prompt the same way.
+      // PRs and any fetch failure fall back to the title+URL linked item so
+      // "Use" is never blocked (spec 002, Option B).
+      let linkedWorkItem: LinkedWorkItemSummary = {
         type: item.type,
         number: item.number,
         title: item.title,
         url: item.url
+      }
+      const workdir = repoMap.get(item.repoId)?.path
+      if (item.type === 'issue' && workdir) {
+        try {
+          const slug = parseGitHubIssueOrPRLink(item.url)?.slug
+          const fetched = await fetchGithubIssueBody({
+            number: item.number,
+            workdir,
+            slug: slug ? `${slug.owner}/${slug.repo}` : undefined
+          })
+          linkedWorkItem = buildGithubIssueLinkedWorkItem(item, fetched)
+        } catch (err) {
+          // Best-effort: keep the title+URL fallback so the composer still opens.
+          console.warn('[tasks] could not load GitHub issue body for Use:', err)
+        }
       }
       openModal('new-workspace-composer', {
         linkedWorkItem,
@@ -2359,7 +2382,7 @@ export default function TaskPage(): React.JSX.Element {
         telemetrySource: 'sidebar'
       })
     },
-    [openModal]
+    [openModal, repoMap]
   )
 
   const handleUseWorkItem = useCallback(
@@ -2371,7 +2394,7 @@ export default function TaskPage(): React.JSX.Element {
       // the worktree appeared in the sidebar before the user had a chance
       // to review it. The composer already owns the prefill flow. Telemetry
       // attribution flows via `openComposerForItem` (sets telemetrySource).
-      openComposerForItem(item)
+      void openComposerForItem(item)
     },
     [openComposerForItem]
   )

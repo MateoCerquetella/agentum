@@ -219,6 +219,7 @@ const Terminal = lazy(() => import('./components/Terminal'))
 // removed; Chat creates GitHub issues that show up here.
 const TaskPage = lazy(() => import('./components/TaskPage'))
 const MissionControlPage = lazy(() => import('./components/mission-control/MissionControlPage'))
+const WikiPage = lazy(() => import('./components/wiki/WikiPage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
@@ -1753,6 +1754,7 @@ function App(): React.JSX.Element {
                           {activeView === 'tasks' ? <TaskPage /> : null}
                           {activeView === 'activity' ? <MissionControlPage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
+                          {activeView === 'wiki' ? <WikiPage /> : null}
                           {/* No workspace selected on the terminal view → fall back to
                               Mission Control (Landing.tsx removed; the dashboard needs no
                               workspace) so the user is never stranded on a blank pane. */}

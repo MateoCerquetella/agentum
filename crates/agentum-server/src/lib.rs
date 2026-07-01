@@ -50,6 +50,7 @@ pub mod task_sink;
 pub mod tls;
 mod transcript_store;
 pub mod usage;
+pub(crate) mod wiki;
 
 pub use transcript_store::TranscriptStore;
 
@@ -275,6 +276,7 @@ pub fn router(state: AppState) -> Router {
         // `board::router()` above, untouched.
         .merge(routes::board_sync::router())
         .merge(routes::notes::router())
+        .merge(routes::wiki::router())
         .merge(routes::preferences::router())
         .merge(routes::preflight::router())
         .merge(routes::profiles::router())
@@ -292,6 +294,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::repos::router())
         .merge(routes::worktrees::router())
         .merge(routes::forge::router())
+        .merge(routes::github::router())
         .merge(routes::usage::router())
         .merge(routes::harness::router())
         .layer(axum_mw::from_fn_with_state(

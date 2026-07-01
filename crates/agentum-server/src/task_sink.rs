@@ -307,7 +307,10 @@ fn gh_create_argv_with_repo<'a>(slug: &'a str, title: &'a str, body: &'a str) ->
 /// falling back to the system temp dir. Avoids using a project `workdir` that
 /// may not exist locally (the spec 019 bug) and keeps a stray `.git`/`GH_REPO`
 /// in some other dir from interfering with the explicit `--repo` target.
-fn neutral_cwd() -> std::path::PathBuf {
+///
+/// `pub(crate)` so the read-only issue-body fetch (`routes::github`) runs `gh`
+/// from the same neutral cwd as issue creation (spec 002).
+pub(crate) fn neutral_cwd() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_else(std::env::temp_dir)
 }
 
