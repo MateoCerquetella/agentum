@@ -32,6 +32,12 @@ const SSH_TIMEOUT: Duration = Duration::from_secs(12);
 /// explicit, user-confirmed action — give it room to finish.
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Remote file writes ([`write_remote_file_bytes`]) stream their payload down
+/// the ssh command's stdin, so a big image (the 25 MiB upload cap) can take a
+/// while over a slow link — well past `SSH_TIMEOUT`. Bounded anyway so a
+/// stalled transfer can't wedge the request forever.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(180);
+
 #[derive(Debug, thiserror::Error)]
 pub enum HostRuntimeError {
     #[error("unsupported operation on host kind")]
@@ -189,9 +195,11 @@ pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Re
 
 /// Like [`write_remote_file`] but for arbitrary bytes. A `&str` can't carry a
 /// pasted/dropped PNG (not valid UTF-8), so the screenshot-into-terminal upload
-/// path goes through here. Same wire technique: local writes hit the disk
-/// directly; SSH base64-pipes the bytes through `base64 -d`, which is byte-exact
-/// so binary image data survives intact.
+/// path goes through here. Local writes hit the disk directly; SSH streams the
+/// bytes as base64 over the command's **stdin** into a remote `base64 -d` (which
+/// is byte-exact, so binary image data survives intact). Stdin — not the
+/// command line — because a multi-MB image base64 in the argv overran the remote
+/// ARG_MAX ("Argument list too long" / SSH channel reset); see the SSH arm.
 pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]) -> Result<()> {
     match &host.kind {
         HostKind::Local => {
@@ -209,28 +217,74 @@ pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]
         }
         HostKind::Ssh { .. } => {
             use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(content);
+            use tokio::io::AsyncWriteExt;
+            let b64 = base64::engine::general_purpose::STANDARD
+                .encode(content)
+                .into_bytes();
             let parent = std::path::Path::new(abs_path)
                 .parent()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "/tmp".to_string());
-            // The host's LOGIN shell may be fish/zsh (not POSIX sh), so a bash-y
-            // script run directly fails. Build a POSIX-sh script and feed it to
-            // `sh` via a base64 pipe: the only chars in the outer command are
-            // base64 (shell-safe everywhere), so fish/zsh/bash all run it the
-            // same. `umask 077` + `chmod 600` keep the token file owner-only; the
-            // random-UUID filename means no attacker can pre-plant a symlink.
-            let inner = format!(
-                "umask 077; mkdir -p {dir}; printf %s {b64} | base64 -d > {path}; chmod 600 {path}",
-                dir = q(&parent)?,
-                b64 = q(&b64)?,
-                path = q(abs_path)?,
-            );
-            let inner_b64 = base64::engine::general_purpose::STANDARD.encode(&inner);
-            let remote = format!("printf %s {} | base64 -d | sh", q(&inner_b64)?);
-            ssh_checked(host, &remote).await
+            // The payload rides the command's STDIN, never its argv. Embedding a
+            // (multi-MB) base64 image in the command string blew past the remote
+            // ARG_MAX: execve failed with E2BIG ("Argument list too long") on a
+            // small image and reset the SSH channel ("Connection reset by peer" /
+            // "Broken pipe") on a larger one. `remote_stdin_write_script` is tiny
+            // and fixed-size, so it's always argv-safe; `base64 -d` decodes the
+            // forwarded stdin byte-exact, so binary image data survives intact.
+            let script = remote_stdin_write_script(&parent, abs_path)?;
+            let mut cmd = ssh_command_opts(host, &script, SshMux::Interactive);
+            cmd.stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                // If the timeout below drops the future, reap the local ssh
+                // (which SIGHUPs the remote write) instead of leaking it.
+                .kill_on_drop(true);
+            // Write+wait share one timeout: the stdin write can block on a slow
+            // link, so timing out only the wait would leave a stalled writer.
+            let drive = async move {
+                let mut child = cmd.spawn().map_err(map_ssh_io)?;
+                // Stream the base64 down stdin, then close it so the remote
+                // `base64 -d` sees EOF and flushes. A write error is swallowed on
+                // purpose: if the remote closed the pipe early (e.g. `base64`
+                // missing) the true cause surfaces via the exit status + stderr
+                // below — a bare "broken pipe" here would mask it.
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(&b64).await;
+                    let _ = stdin.shutdown().await;
+                }
+                child.wait_with_output().await.map_err(map_ssh_io)
+            };
+            let output = timeout(UPLOAD_TIMEOUT, drive)
+                .await
+                .map_err(|_| HostRuntimeError::Timeout)??;
+            if output.status.success() {
+                Ok(())
+            } else {
+                Err(HostRuntimeError::NonZero {
+                    status: output.status.code(),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                })
+            }
         }
     }
+}
+
+/// POSIX-sh script that decodes base64 from STDIN into `abs_path` (owner-only),
+/// creating the parent dir first. Pure and **fixed-size**: the payload never
+/// appears in the script — that's the whole point ([`write_remote_file_bytes`]),
+/// since a multi-MB image in the argv overran the remote ARG_MAX. The host's
+/// LOGIN shell may be fish/zsh (not POSIX sh), so wrap the script in `sh -c`
+/// (the established cross-shell form); `q` shell-quotes every path. `umask 077`
+/// + `chmod 600` keep the file owner-only; the caller's random-UUID filename
+/// means no attacker can pre-plant a symlink to follow.
+fn remote_stdin_write_script(parent: &str, abs_path: &str) -> Result<String> {
+    let inner = format!(
+        "umask 077; mkdir -p {dir}; base64 -d > {path}; chmod 600 {path}",
+        dir = q(parent)?,
+        path = q(abs_path)?,
+    );
+    Ok(format!("sh -c {}", q(&inner)?))
 }
 
 /// Read `abs_path` from `host` (local fs or SSH), or `None` when it doesn't
@@ -293,6 +347,35 @@ fn q(s: &str) -> Result<std::borrow::Cow<'_, str>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_stdin_write_script_is_fixed_size_and_reads_stdin() {
+        // The screenshot upload regressed twice ("Argument list too long", then
+        // an SSH channel reset) because the image base64 was embedded in the
+        // remote command's argv. This guards the fix: the script must decode
+        // base64 from STDIN, stay tiny, and never grow with the payload.
+        let script = remote_stdin_write_script(
+            "/home/me/proj/.agentum-uploads",
+            "/home/me/proj/.agentum-uploads/20260701-120000-abcd012345.png",
+        )
+        .unwrap();
+        assert!(
+            script.contains("base64 -d"),
+            "must decode base64 from stdin: {script}"
+        );
+        assert!(script.contains("umask 077") && script.contains("chmod 600"));
+        // No `printf`/pipe feeding the payload in — that was the argv-embed bug.
+        assert!(
+            !script.contains("printf"),
+            "payload must not be piped from argv: {script}"
+        );
+        // Bounded regardless of image size (the whole point of using stdin).
+        assert!(
+            script.len() < 512,
+            "script unexpectedly large ({} chars): {script}",
+            script.len()
+        );
+    }
 
     #[test]
     fn probe_binaries_dedups_and_orders_required_first() {
