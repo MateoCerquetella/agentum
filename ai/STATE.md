@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 003-chat-issue-preview
-- **phase:** pm          <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 drafted + PM-gated; ready for architect. 002 done/human-gated below.)
+- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 SERVER slice DONE+pushed; UI slice + /ship remain. 002 done/human-gated below.)
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -98,6 +98,16 @@
   + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
   npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
   human-gated release** (browser QA + merge/promote/tag = Mateo).
+- 2026-07-01 — 003 SERVER slice DONE (Ralph loop iter, Mateo re-authorized full
+  build). Commits `5930bf27` (spec docs) + `86c618e1` (server), pushed to
+  `origin/feat/chat-board-revamp`. Implemented: `POST /api/chat/issues/preview`
+  (draft, files nothing) + shared `extract_plan()` + `chat_issues` accepts a
+  client `plan` filed VERBATIM (skip re-extract) + `split` single/per_task via
+  `plan_to_features()` + `labels`→`gh --label` (`NewFeature.labels`, Linear no-op).
+  `cargo check -p agentum-server` + 25 touched unit tests green (fmt-clean; reverted
+  unrelated gh.rs/cdp_driver.rs/mcp.rs fmt churn). REMAINING: (4) desktop UI draft
+  panel in `ChatPage.tsx` + `chat-client.ts` preview/confirm + `npm run build`;
+  then `/ship` (issue + PR into develop). Tagged release still Mateo-gated.
 - 2026-07-01 — Ralph loop fired ("finish this spec and release with /ship").
   Spec *document* is finished (drafted + PM-gated + open questions listed — that IS
   the /sdd-spec deliverable). "Finish → release" would be the full gated SDD build
