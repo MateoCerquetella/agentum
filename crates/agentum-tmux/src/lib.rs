@@ -136,6 +136,50 @@ pub async fn capture_pane_visible(target: &str) -> Result<String> {
     Ok(String::from_utf8(out.stdout)?)
 }
 
+/// The watchdog's three per-tick reads — foreground command, `lines`-deep
+/// scrollback, and the visible viewport — pulled by ONE tmux client as a
+/// `;`-separated command sequence, with `boundary` printed between sections so
+/// the caller can split them apart (see `ssh::parse_pane_sample`).
+///
+/// Why: the watchdog samples every running session on a 1 s tick. Issued as
+/// separate `pane_current_command` + `capture_pane` + `capture_pane_visible`
+/// calls, that is three `tmux` client fork/exec + server-socket round trips per
+/// session per second — continuous, N-scaling CPU for data that fits in one
+/// client invocation. tmux runs the whole sequence against the server in a
+/// single connection, so this cuts the spawn count without changing the data.
+/// Callers gate on [`has_session`] first, so a missing target here (empty /
+/// malformed output) is a genuine error, not "pane gone".
+///
+/// The `;` tokens are passed as standalone argv elements (no shell in the
+/// loop), which is how tmux recognises a command separator when exec'd directly.
+pub async fn capture_pane_sample_combined(
+    target: &str,
+    lines: usize,
+    boundary: &str,
+) -> Result<String> {
+    let start = format!("-{lines}");
+    let out = Command::new("tmux")
+        .args(["display-message", "-p", "-t"])
+        .arg(target)
+        .arg("#{pane_current_command}")
+        .arg(";")
+        .args(["display-message", "-p"])
+        .arg(boundary)
+        .arg(";")
+        .args(["capture-pane", "-p", "-S", &start, "-t"])
+        .arg(target)
+        .arg(";")
+        .args(["display-message", "-p"])
+        .arg(boundary)
+        .arg(";")
+        .args(["capture-pane", "-p", "-S", "0", "-t"])
+        .arg(target)
+        .output()
+        .await?;
+    check(&out)?;
+    Ok(String::from_utf8(out.stdout)?)
+}
+
 /// tmux format string yielding a [`CursorSample`] line — must be sampled in
 /// the same tmux command sequence (or remote shell) as the capture it anchors.
 pub const CURSOR_SAMPLE_FORMAT: &str = "#{cursor_x} #{cursor_y} #{cursor_flag}";
@@ -758,5 +802,51 @@ mod tests {
 
         kill_session(target).await.unwrap();
         assert!(!has_session(target).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn combined_sample_batches_three_sections() {
+        // The batched watchdog read must produce the same three-section,
+        // boundary-delimited output the SSH path does — proving tmux accepts the
+        // `;`-separated command sequence when exec'd directly (the win: one
+        // client round trip, not three) and keeps the sections in order.
+        if Command::new("tmux").arg("-V").status().await.is_err() {
+            return;
+        }
+        let target = "agentum-test-combined-sample";
+        let _ = kill_session(target).await;
+        let workdir = std::env::temp_dir();
+        new_session(target, &workdir, &["sleep".into(), "3600".into()], &[])
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(300)).await;
+
+        let boundary = ":::agentum-test-boundary:::";
+        let stdout = capture_pane_sample_combined(target, 50, boundary)
+            .await
+            .unwrap();
+
+        // Exactly two boundaries → three sections (command / scrollback /
+        // viewport). More/fewer means the sequence didn't run as expected.
+        assert_eq!(
+            stdout.matches(boundary).count(),
+            2,
+            "combined sample must delimit exactly three sections: {stdout:?}"
+        );
+        let sep = format!("\n{boundary}\n");
+        let sections: Vec<&str> = stdout.splitn(3, &sep).collect();
+        assert_eq!(sections.len(), 3, "combined sample sections: {stdout:?}");
+
+        // The batched read must be equivalent to the three separate calls it
+        // replaces. The command section uses the identical `#{pane_current_command}`
+        // format, so it must agree with the standalone helper (whatever the shell
+        // wrapper reports); the viewport is static for a `sleep` pane, so it must
+        // match `capture_pane_visible` byte-for-byte.
+        let individual_command = pane_current_command(target).await.unwrap();
+        assert_eq!(sections[0].trim(), individual_command);
+        let individual_viewport = capture_pane_visible(target).await.unwrap();
+        assert_eq!(sections[2], individual_viewport);
+
+        kill_session(target).await.unwrap();
     }
 }

@@ -1,6 +1,7 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '@/store'
+import type { AppState } from '@/store'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { activateTerminalTab } from '@/components/terminal/terminal-tab-actions'
@@ -25,6 +26,14 @@ import {
 } from './worktree-card-compact-agents'
 import { DEFAULT_AGENT_ACTIVITY_DISPLAY_MODE } from '../../../../shared/constants'
 import { revealElementInScrollContainer } from './worktree-sidebar-reveal'
+
+// Why: stable empty fallbacks so the per-card body only subscribes to the live,
+// per-ping-churning maps while the agent-send popover targets THIS card. When it
+// doesn't (the common case) every mounted agent card would otherwise re-render on
+// every status ping from any pane — O(cards) wasted renders per ping.
+const EMPTY_AGENT_STATUS_BY_PANE_KEY: AppState['agentStatusByPaneKey'] = {}
+const EMPTY_TABS_BY_WORKTREE: AppState['tabsByWorktree'] = {}
+const EMPTY_TERMINAL_LAYOUTS_BY_TAB_ID: AppState['terminalLayoutsByTabId'] = {}
 
 export const SUPPRESS_WORKTREE_LIST_SCROLL_ADJUSTMENT_EVENT =
   'agentum-suppress-worktree-list-scroll-adjustment'
@@ -211,10 +220,27 @@ const WorktreeCardAgentsBody = React.memo(function WorktreeCardAgentsBody({
   const dropAgentStatus = useAppStore((s) => s.dropAgentStatus)
   const dismissRetainedAgent = useAppStore((s) => s.dismissRetainedAgent)
   const agentSendPopoverTargetMode = useAppStore((s) => s.agentSendPopoverTargetMode)
-  const agentStatusByPaneKey = useAppStore((s) => s.agentStatusByPaneKey)
+  // Why: these three maps are consumed ONLY by the send-target memo below, which
+  // returns empty unless the send popover targets this worktree. Subscribing to
+  // them unconditionally re-rendered every agent card on every status ping. Gate
+  // each on the popover targeting THIS card so the common case observes a stable
+  // empty reference and never re-renders on unrelated pings.
+  const agentStatusByPaneKey = useAppStore((s) =>
+    s.agentSendPopoverTargetMode?.worktreeId === worktreeId
+      ? s.agentStatusByPaneKey
+      : EMPTY_AGENT_STATUS_BY_PANE_KEY
+  )
   const agentStatusEpoch = useAppStore((s) => s.agentStatusEpoch)
-  const tabsByWorktree = useAppStore((s) => s.tabsByWorktree)
-  const terminalLayoutsByTabId = useAppStore((s) => s.terminalLayoutsByTabId)
+  const tabsByWorktree = useAppStore((s) =>
+    s.agentSendPopoverTargetMode?.worktreeId === worktreeId
+      ? s.tabsByWorktree
+      : EMPTY_TABS_BY_WORKTREE
+  )
+  const terminalLayoutsByTabId = useAppStore((s) =>
+    s.agentSendPopoverTargetMode?.worktreeId === worktreeId
+      ? s.terminalLayoutsByTabId
+      : EMPTY_TERMINAL_LAYOUTS_BY_TAB_ID
+  )
   const sendPromptToSidebarAgentTarget = useAppStore((s) => s.sendPromptToSidebarAgentTarget)
   const focusedAgentPaneKey = useFocusedAgentPaneKey(worktreeId)
   const compactAgentListRootRef = useRef<HTMLDivElement | null>(null)

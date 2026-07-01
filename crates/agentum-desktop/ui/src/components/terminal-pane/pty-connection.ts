@@ -334,7 +334,10 @@ function isSessionOwnedByWorktree(sessionId: string, worktreeId: string): boolea
   return sessionId.slice(0, separatorIdx) === worktreeId
 }
 
-function shouldWritePtyOutputForeground(isPaneVisible: boolean): boolean {
+// Exported so the server-session path (server-pane-connection.ts) computes the
+// foreground signal identically — including the Electron-backgrounded document
+// guard — when it routes its output through the same scheduler.
+export function shouldWritePtyOutputForeground(isPaneVisible: boolean): boolean {
   if (!isPaneVisible) {
     return false
   }

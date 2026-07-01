@@ -400,9 +400,24 @@ pub(super) async fn stream_session(
     // without hammering tmux.
     let mut title_ticker = tokio::time::interval(Duration::from_millis(400));
     let mut last_pane_title = String::new();
+    // Why: a pane's title only changes when the agent does something, which also
+    // pushes bytes through the tail below. So skip the per-tick `tmux
+    // display-message` spawn unless bytes have flowed since the last poll — with
+    // a periodic safety net (every ~2s) for the rare title-only change. Under
+    // many agents most panes are idle; this stops each idle stream from
+    // fork/exec'ing tmux every 400ms while active panes stay fully responsive.
+    let mut bytes_since_title_poll = true;
+    let mut ticks_since_title_poll: u32 = 0;
+    const TITLE_POLL_IDLE_TICKS: u32 = 5;
     loop {
         tokio::select! {
             _ = title_ticker.tick() => {
+                ticks_since_title_poll += 1;
+                if !bytes_since_title_poll && ticks_since_title_poll < TITLE_POLL_IDLE_TICKS {
+                    continue;
+                }
+                bytes_since_title_poll = false;
+                ticks_since_title_poll = 0;
                 if let Ok(title) = agentum_tmux::pane_title(&target).await
                     && !title.is_empty()
                     && title != last_pane_title
@@ -419,6 +434,7 @@ pub(super) async fn stream_session(
             }
             chunk = tail_rx.recv() => match chunk {
                 Some(bytes) => {
+                    bytes_since_title_poll = true;
                     // Coalesce any backlog into one frame (no added latency).
                     // Byte total is unchanged, so the checkpoint stays accurate.
                     let frame = coalesce_queued(bytes, &mut tail_rx);
@@ -856,9 +872,24 @@ pub(super) async fn stream_remote_session(
     // the master headroom.
     let mut title_ticker = tokio::time::interval(Duration::from_millis(2500));
     let mut last_pane_title = String::new();
+    // Why: the pane title only changes when the agent produces output (which
+    // flows through the tail below), so skip the SSH `pane_title` round-trip
+    // unless bytes have arrived since the last poll — with a ~5 s safety net for
+    // the rare title-only change. This matters more than on local: each poll
+    // rides the shared ControlMaster that also carries keystrokes, so silencing
+    // idle sessions' polls directly relieves input contention under many agents.
+    let mut bytes_since_title_poll = true;
+    let mut ticks_since_title_poll: u32 = 0;
+    const TITLE_POLL_IDLE_TICKS: u32 = 2;
     loop {
         tokio::select! {
             _ = title_ticker.tick() => {
+                ticks_since_title_poll += 1;
+                if !bytes_since_title_poll && ticks_since_title_poll < TITLE_POLL_IDLE_TICKS {
+                    continue;
+                }
+                bytes_since_title_poll = false;
+                ticks_since_title_poll = 0;
                 if let Ok(title) = crate::host_runtime::pane_title(&host, &target).await
                     && !title.is_empty()
                     && title != last_pane_title
@@ -875,6 +906,7 @@ pub(super) async fn stream_remote_session(
             }
             chunk = tail_rx.recv() => match chunk {
                 Some(bytes) => {
+                    bytes_since_title_poll = true;
                     // Coalesce a backlog of small SSH-tail reads into one frame
                     // (no added latency) so a weak client isn't woken once per
                     // tiny chunk of a chatty remote agent.

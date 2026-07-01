@@ -9,7 +9,8 @@ import { makePaneKey } from '../../../../shared/stable-pane-id'
 import {
   selectLiveAgentStatusEntriesForWorktree,
   selectMigrationUnsupportedEntriesForWorktree,
-  selectRetainedAgentEntriesForWorktree
+  selectRetainedAgentEntriesForWorktree,
+  selectServerAgentDoneForWorktree
 } from './worktree-agent-row-selectors'
 
 const PANE_KEY_1 = makePaneKey('tab-1', '22222222-2222-4222-8222-222222222222')
@@ -73,7 +74,8 @@ describe('selectMigrationUnsupportedEntriesForWorktree', () => {
       tabsByWorktree: { 'wt-1': [makeTab('tab-1')] },
       agentStatusByPaneKey: {},
       migrationUnsupportedByPtyId: { 'pty-1': unsupported },
-      retainedAgentsByPaneKey: {}
+      retainedAgentsByPaneKey: {},
+      serverAgentDoneByPaneKey: {}
     }
 
     const first = selectMigrationUnsupportedEntriesForWorktree(state, 'wt-1')
@@ -103,7 +105,8 @@ describe('selectLiveAgentStatusEntriesForWorktree', () => {
         [PANE_KEY_2]: wt2Entry
       },
       migrationUnsupportedByPtyId: {},
-      retainedAgentsByPaneKey: {}
+      retainedAgentsByPaneKey: {},
+      serverAgentDoneByPaneKey: {}
     }
 
     const firstWt1 = selectLiveAgentStatusEntriesForWorktree(state, 'wt-1')
@@ -142,7 +145,8 @@ describe('selectRetainedAgentEntriesForWorktree', () => {
       retainedAgentsByPaneKey: {
         [PANE_KEY_1]: wt1Retained,
         [PANE_KEY_2]: wt2Retained
-      }
+      },
+      serverAgentDoneByPaneKey: {}
     }
 
     const firstWt1 = selectRetainedAgentEntriesForWorktree(state, 'wt-1')
@@ -164,5 +168,38 @@ describe('selectRetainedAgentEntriesForWorktree', () => {
     expect(secondWt1).toBe(firstWt1)
     expect(secondWt2).not.toBe(firstWt2)
     expect(secondWt2[0]?.startedAt).toBe(1100)
+  })
+})
+
+describe('selectServerAgentDoneForWorktree', () => {
+  it('buckets done markers by the pane tab’s worktree and caches per state', () => {
+    const state = {
+      tabsByWorktree: {
+        'wt-1': [makeTab('tab-1')],
+        'wt-2': [makeTab('tab-2')]
+      },
+      agentStatusByPaneKey: {},
+      migrationUnsupportedByPtyId: {},
+      retainedAgentsByPaneKey: {},
+      serverAgentDoneByPaneKey: {
+        [PANE_KEY_1]: 1000,
+        [PANE_KEY_2]: 2000
+      }
+    }
+
+    // Each worktree sees only its own tabs' done markers.
+    expect(selectServerAgentDoneForWorktree(state, 'wt-1')).toEqual({ [PANE_KEY_1]: 1000 })
+    expect(selectServerAgentDoneForWorktree(state, 'wt-2')).toEqual({ [PANE_KEY_2]: 2000 })
+
+    // Cached on (serverAgentDoneByPaneKey, tabsByWorktree) identity, so repeated
+    // per-card reads on the same commit are O(1) and return a stable reference —
+    // the whole point of indexing this instead of scanning per card per commit.
+    const wt1 = selectServerAgentDoneForWorktree(state, 'wt-1')
+    expect(selectServerAgentDoneForWorktree(state, 'wt-1')).toBe(wt1)
+
+    // A worktree with no done markers gets a stable empty record.
+    const empty = selectServerAgentDoneForWorktree(state, 'wt-3')
+    expect(empty).toEqual({})
+    expect(selectServerAgentDoneForWorktree(state, 'wt-3')).toBe(empty)
   })
 })

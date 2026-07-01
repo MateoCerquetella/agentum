@@ -63,6 +63,33 @@ fn sample_tick(kind: &agentum_core::HostKind) -> Duration {
     }
 }
 
+/// How long a pane must stay visually quiet (footer hash unchanged) while settled
+/// out of the Working state before its sample cadence backs off. Under many
+/// agents most panes sit idle, and the dominant per-pane cost is the tmux sample
+/// spawn, so halving it for long-quiet panes cuts idle-fleet OS load. Kept well
+/// above [`IDLE_AFTER_QUIET`] so a pane is confidently idle before we slow down.
+const SAMPLE_BACKOFF_AFTER: Duration = Duration::from_secs(10);
+
+/// The delay before the NEXT pane sample. A Working pane, or one whose footer
+/// changed within the last [`SAMPLE_BACKOFF_AFTER`], samples at the base cadence
+/// ([`sample_tick`]); a pane that has settled non-Working and stayed quiet longer
+/// samples half as often. A resumed agent is still caught within one slow tick,
+/// and the live sidebar signal comes from agent hooks / pane byte-flow (not this
+/// poll), so the extra latency is invisible in practice while crash detection
+/// stays well within a couple of seconds.
+fn next_sample_delay(
+    kind: &agentum_core::HostKind,
+    activity: ActivityState,
+    pane_quiet_for: Duration,
+) -> Duration {
+    let base = sample_tick(kind);
+    if activity == ActivityState::Working || pane_quiet_for < SAMPLE_BACKOFF_AFTER {
+        base
+    } else {
+        base * 2
+    }
+}
+
 /// For agents that don't declare a `busy_signature` (codex, cursor, gemini,
 /// hermes — anything other than Claude), we fall back to change-based
 /// detection: if the visible footer hasn't changed for this long, the
@@ -271,12 +298,15 @@ async fn watch_session(
     let mut last_change_at = Instant::now();
     // Slower sample cadence on SSH hosts: the per-tick `sample_pane` is a remote
     // `ssh` exec, so 1 s × N sessions flooded the host (see REMOTE_TICK).
-    let mut tick = interval(sample_tick(&host.kind));
-    // Drop the immediate first tick so we don't fire before the pane is alive.
-    tick.tick().await;
+    // Adaptive sample cadence: the base rate ([`sample_tick`]) while a pane is
+    // active, backing off once it has settled quiet (see [`next_sample_delay`]).
+    // Replaces the fixed `interval` so an idle fleet stops paying the base-rate
+    // sample spawn on every pane. The initial `base` delay stands in for the old
+    // drop-first-immediate-tick — don't sample before the pane is alive.
+    let mut next_delay = sample_tick(&host.kind);
 
     loop {
-        tick.tick().await;
+        tokio::time::sleep(next_delay).await;
 
         // One sample per tick: existence + both captures + foreground command
         // in a single round trip (on SSH hosts, one exec instead of four —
@@ -522,6 +552,13 @@ async fn watch_session(
             }
             activity = next;
         }
+
+        // Decide how long to wait before the next sample from the state we just
+        // observed. `activity` reflects the current sample (it equals `next`
+        // whether or not the transition block above ran); `pane_quiet_for` is how
+        // long the footer has been unchanged. A settled, long-quiet pane samples
+        // half as often — the idle-fleet OS-load win.
+        next_delay = next_sample_delay(&host.kind, activity, pane_quiet_for);
     }
 }
 
@@ -673,6 +710,39 @@ mod tests {
         assert_eq!(sample_tick(&HostKind::Local), TICK);
         assert_eq!(sample_tick(&ssh), REMOTE_TICK);
         assert!(sample_tick(&ssh) > sample_tick(&HostKind::Local));
+    }
+
+    #[test]
+    fn idle_quiet_panes_sample_less_often() {
+        use agentum_core::HostKind;
+        let recent = Duration::from_secs(1);
+        let long_quiet = SAMPLE_BACKOFF_AFTER + Duration::from_secs(1);
+
+        // Working always samples at the base cadence, however long it's been quiet.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Working, long_quiet),
+            TICK
+        );
+        // A settled idle/awaiting pane that only just went quiet stays at base —
+        // we don't slow down until we're confident it's idle.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Idle, recent),
+            TICK
+        );
+        // Long-quiet idle / awaiting-input panes back off to half the base rate.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Idle, long_quiet),
+            TICK * 2
+        );
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::AwaitingInput, long_quiet),
+            TICK * 2
+        );
+        // Backoff is relative to each host's base cadence.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Unknown, long_quiet),
+            TICK * 2
+        );
     }
 
     #[test]
