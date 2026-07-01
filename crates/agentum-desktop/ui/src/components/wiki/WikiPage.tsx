@@ -1,28 +1,29 @@
-// Wiki — the browse surface for the AutoWiki (spec 001). A 2-pane view: a TOC of
-// the generated pages on the left, the selected page's markdown rendered by the
-// EXISTING editor `MarkdownPreview` (reused as-is — no fork) on the right. The
-// mermaid diagram on the Architecture page and intra-wiki `[[Title]]` links both
-// come for free from MarkdownPreview (its `language-mermaid` interception and the
-// `markdownDocuments` + `onOpenDocument` doc-link resolver).
+// Wiki — the browse surface for AutoWiki (spec 001), now a MULTI-REPO hub.
 //
-// The target workdir is derived from the active workspace (`activeWorktreeId`)
-// via `splitWorktreeIdForFilesystem` — the same id→path plumbing every
-// workdir-taking surface uses. With no active workspace we never call the API
-// with an empty workdir; we show a "pick a workspace" state instead.
+// agentum manages many projects, so the Wiki is a hub over ALL of them, not the
+// single active workspace. Left: a Projects rail listing every repo the store
+// knows (`s.repos`), each with a wiki-status dot. Select a project → its wiki in
+// the main pane (workdir = `repo.path`), reusing the existing 2-pane TOC + the
+// editor `MarkdownPreview` (as-is — mermaid + `[[Title]]` links come for free).
 //
-// States mirror the `GET /api/wiki` discriminator (spec 001 AC-2/AC-9):
-//   empty   → an explained empty state + a single "Generate wiki" button
-//   running → a "generating…" indicator (the run is a real, observable session)
-//   failed  → the recorded error — never a half-empty success
-//   ready   → the TOC + the rendered page
+// The backend is already workdir-keyed (`/api/wiki?workdir=…`), so each repo's
+// wiki lives at `<repo.path>/.agentum/wiki/` — no backend change; this is the UI
+// hub that was missing.
+//
+// Per-selected-repo states mirror the `GET /api/wiki` discriminator:
+//   empty → the explained empty state + a "Generate wiki" button
+//   running → an observable "generating…" indicator (a real session)
+//   failed → the recorded error — never a half-empty success
+//   ready → the TOC + the rendered page
+// Remote/SSH repos (`connectionId != null`) are listed but generation is disabled
+// (the wiki agent runs locally) — never a silent failure.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, BookText, FileText, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, BookText, FileText, FolderGit2, Loader2, RefreshCw } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import MarkdownPreview from '@/components/editor/MarkdownPreview'
-import { splitWorktreeIdForFilesystem } from '@/shared/worktree-id'
 import type { MarkdownDocument } from '@/shared/types'
 import {
   generateWiki,
@@ -32,20 +33,26 @@ import {
   type WikiPageMeta
 } from '@/runtime/wiki-client'
 
-/** Poll cadence while a generation run is in flight; the run flips the on-disk
- *  state, so re-fetching `GET /api/wiki` is how the view learns it finished. */
+/** Poll cadence while a generation run is in flight. */
 const RUNNING_POLL_MS = 3000
 
-/** `<workdir>/.agentum/wiki/<slug>.md` — the real on-disk path, used as the
- *  MarkdownPreview link base + scroll-cache anchor (the page exists on disk, so
- *  any incidental stat resolves rather than erroring). */
+/** The one-word status shown as a dot in the Projects rail. */
+type RepoWikiStatus = WikiIndexResponse['state'] | 'error' | 'loading'
+
+/** Last path segment — the human name for a repo/project. */
+function repoName(path: string): string {
+  return path.split('/').filter(Boolean).pop() ?? path
+}
+
+/** `<workdir>/.agentum/wiki/<slug>.md` — the real on-disk path (MarkdownPreview
+ *  link base + scroll anchor). */
 function pagePath(workdir: string, slug: string): string {
   return `${workdir}/.agentum/wiki/${slug}.md`
 }
 
-/** Map each wiki page to a `MarkdownDocument` so MarkdownPreview's `[[Title]]`
- *  resolver works: it keys on `name`, so `name` = the page title. `basename`
- *  carries the slug (`<slug>.md`) so a resolved click maps straight back. */
+/** Map a wiki page to a `MarkdownDocument` so MarkdownPreview's `[[Title]]`
+ *  resolver works (it keys on `name` = the page title; the slug rides in
+ *  `basename` so a click maps straight back). */
 function pageToDocument(workdir: string, page: WikiPageMeta): MarkdownDocument {
   return {
     filePath: pagePath(workdir, page.slug),
@@ -56,15 +63,50 @@ function pageToDocument(workdir: string, page: WikiPageMeta): MarkdownDocument {
 }
 
 export default function WikiPage(): React.JSX.Element {
-  const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
-  const workdir = useMemo(
-    () =>
-      activeWorktreeId
-        ? (splitWorktreeIdForFilesystem(activeWorktreeId)?.worktreePath ?? null)
-        : null,
-    [activeWorktreeId]
-  )
+  const repos = useAppStore((s) => s.repos)
+  const activeRepoId = useAppStore((s) => s.activeRepoId)
 
+  // Which project's wiki we're viewing. Default to the active repo, else the
+  // first; keep it valid as repos come and go.
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
+  useEffect(() => {
+    setSelectedRepoId((cur) => {
+      if (cur && repos.some((r) => r.id === cur)) return cur
+      if (activeRepoId && repos.some((r) => r.id === activeRepoId)) return activeRepoId
+      return repos[0]?.id ?? null
+    })
+  }, [repos, activeRepoId])
+
+  const selectedRepo = useMemo(
+    () => repos.find((r) => r.id === selectedRepoId) ?? null,
+    [repos, selectedRepoId]
+  )
+  const workdir = selectedRepo?.path ?? null
+  const isRemote = selectedRepo?.connectionId != null
+
+  // Per-repo status for the rail dots — a lightweight sweep so you can see which
+  // projects already have a wiki, across ALL of them at a glance. Local only;
+  // remote workdirs aren't probed (generation is local anyway).
+  const [repoStatuses, setRepoStatuses] = useState<Record<string, RepoWikiStatus>>({})
+  const sweep = useCallback(async (): Promise<void> => {
+    const entries = await Promise.all(
+      repos.map(async (r): Promise<[string, RepoWikiStatus]> => {
+        if (r.connectionId != null) return [r.id, 'error']
+        try {
+          const res = await getWiki(r.path)
+          return [r.id, res.state]
+        } catch {
+          return [r.id, 'error']
+        }
+      })
+    )
+    setRepoStatuses(Object.fromEntries(entries))
+  }, [repos])
+  useEffect(() => {
+    void sweep()
+  }, [sweep])
+
+  // ---- the selected project's wiki (workdir = selectedRepo.path) ----
   const [index, setIndex] = useState<WikiIndexResponse | null>(null)
   const [indexError, setIndexError] = useState<string | null>(null)
   const [loadingIndex, setLoadingIndex] = useState(false)
@@ -75,8 +117,8 @@ export default function WikiPage(): React.JSX.Element {
   const [pageError, setPageError] = useState<string | null>(null)
   const [loadingPage, setLoadingPage] = useState(false)
 
-  // Why: a workdir switch invalidates any in-flight fetch — token guards keep a
-  // late response for the old workdir from clobbering the new one.
+  // A repo switch invalidates any in-flight fetch — token guards keep a late
+  // response for the old repo from clobbering the new one.
   const reqToken = useRef(0)
 
   const refreshIndex = useCallback(
@@ -88,6 +130,9 @@ export default function WikiPage(): React.JSX.Element {
         const next = await getWiki(dir)
         if (token !== reqToken.current) return
         setIndex(next)
+        setRepoStatuses((prev) =>
+          selectedRepoId ? { ...prev, [selectedRepoId]: next.state } : prev
+        )
       } catch (err) {
         if (token !== reqToken.current) return
         setIndex(null)
@@ -96,11 +141,11 @@ export default function WikiPage(): React.JSX.Element {
         if (token === reqToken.current) setLoadingIndex(false)
       }
     },
-    []
+    [selectedRepoId]
   )
 
-  // Initial load + reload whenever the active workspace changes. A new workdir
-  // resets the page selection + cache so nothing leaks across workspaces.
+  // Reload whenever the selected project changes; reset page selection + cache so
+  // nothing leaks across projects.
   useEffect(() => {
     setActiveSlug(null)
     setPageCache({})
@@ -115,7 +160,7 @@ export default function WikiPage(): React.JSX.Element {
     void refreshIndex(workdir)
   }, [workdir, refreshIndex])
 
-  // While a run is in flight, poll until it flips to ready/failed.
+  // Poll while a run is in flight for the selected project.
   useEffect(() => {
     if (!workdir || index?.state !== 'running') return
     const timer = setInterval(() => void refreshIndex(workdir), RUNNING_POLL_MS)
@@ -124,8 +169,6 @@ export default function WikiPage(): React.JSX.Element {
 
   const pages = index?.state === 'ready' ? index.pages : null
 
-  // Default the selection to the first page once a ready index arrives (or when
-  // the current selection is no longer present after a regen).
   useEffect(() => {
     if (!pages || pages.length === 0) return
     setActiveSlug((current) =>
@@ -133,7 +176,6 @@ export default function WikiPage(): React.JSX.Element {
     )
   }, [pages])
 
-  // Fetch (and cache) the active page's markdown.
   useEffect(() => {
     if (!workdir || !activeSlug || index?.state !== 'ready') return
     if (pageCache[activeSlug] !== undefined) {
@@ -162,34 +204,31 @@ export default function WikiPage(): React.JSX.Element {
   }, [workdir, activeSlug, index?.state, pageCache])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
-    if (!workdir || generating) return
+    if (!workdir || generating || isRemote) return
     setGenerating(true)
     setIndexError(null)
     try {
       const { sessionId } = await generateWiki(workdir)
-      // Reflect the run immediately so the view shows "generating…" without
-      // waiting for the next poll; the poller then tracks it to completion.
       setIndex({ state: 'running', sessionId })
+      if (selectedRepoId) {
+        setRepoStatuses((prev) => ({ ...prev, [selectedRepoId]: 'running' }))
+      }
     } catch (err) {
       setIndexError(err instanceof Error ? err.message : String(err))
     } finally {
       setGenerating(false)
     }
-  }, [workdir, generating])
+  }, [workdir, generating, isRemote, selectedRepoId])
 
   const markdownDocuments = useMemo<MarkdownDocument[]>(
     () => (workdir && pages ? pages.map((p) => pageToDocument(workdir, p)) : []),
     [workdir, pages]
   )
 
-  // AC-7: intra-wiki nav. The resolver hands back one of our documents; the slug
-  // rides in `basename` (`<slug>.md`), so map it straight back to the selection.
   const handleOpenDocument = useCallback(
     (document: MarkdownDocument) => {
       const slug = document.basename.replace(/\.md$/i, '')
-      if (pages?.some((p) => p.slug === slug)) {
-        setActiveSlug(slug)
-      }
+      if (pages?.some((p) => p.slug === slug)) setActiveSlug(slug)
     },
     [pages]
   )
@@ -200,8 +239,13 @@ export default function WikiPage(): React.JSX.Element {
         <div className="flex items-center gap-2">
           <BookText className="size-4 text-muted-foreground" />
           <h1 className="text-sm font-semibold tracking-tight">Wiki</h1>
+          {repos.length > 0 ? (
+            <span className="text-xs text-muted-foreground">
+              · {repos.length} project{repos.length === 1 ? '' : 's'}
+            </span>
+          ) : null}
         </div>
-        {index?.state === 'ready' ? (
+        {index?.state === 'ready' && !isRemote ? (
           <Button
             variant="outline"
             size="sm"
@@ -218,30 +262,113 @@ export default function WikiPage(): React.JSX.Element {
         ) : null}
       </header>
 
-      <div className="min-h-0 flex-1">
-        {renderBody({
-          workdir,
-          index,
-          loadingIndex,
-          indexError,
-          generating,
-          pages,
-          activeSlug,
-          setActiveSlug,
-          pageCache,
-          loadingPage,
-          pageError,
-          markdownDocuments,
-          onGenerate: handleGenerate,
-          onOpenDocument: handleOpenDocument
-        })}
-      </div>
+      {repos.length === 0 ? (
+        <CenteredState
+          icon={<FolderGit2 className="size-8 text-muted-foreground/60" />}
+          title="No projects yet"
+          description="Add a project from the sidebar, then generate a navigable wiki for it here."
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <RepoRail
+            repos={repos}
+            statuses={repoStatuses}
+            selectedRepoId={selectedRepoId}
+            onSelect={setSelectedRepoId}
+          />
+          <div className="min-w-0 flex-1">
+            {renderBody({
+              workdir,
+              isRemote,
+              index,
+              loadingIndex,
+              indexError,
+              generating,
+              pages,
+              activeSlug,
+              setActiveSlug,
+              pageCache,
+              loadingPage,
+              pageError,
+              markdownDocuments,
+              onGenerate: handleGenerate,
+              onOpenDocument: handleOpenDocument
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
+// ---- the Projects rail ------------------------------------------------------
+
+type RailRepo = { id: string; path: string; connectionId: string | null }
+
+function statusDot(status: RepoWikiStatus | undefined): React.JSX.Element {
+  const cls =
+    status === 'ready'
+      ? 'bg-emerald-500'
+      : status === 'running'
+        ? 'bg-amber-500 animate-pulse'
+        : status === 'failed'
+          ? 'bg-destructive'
+          : 'bg-muted-foreground/25'
+  return <span className={cn('size-1.5 shrink-0 rounded-full', cls)} aria-hidden />
+}
+
+function RepoRail({
+  repos,
+  statuses,
+  selectedRepoId,
+  onSelect
+}: {
+  repos: RailRepo[]
+  statuses: Record<string, RepoWikiStatus>
+  selectedRepoId: string | null
+  onSelect: (id: string) => void
+}): React.JSX.Element {
+  return (
+    <nav className="w-56 shrink-0 overflow-y-auto border-r border-border bg-sidebar/40 p-2">
+      <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+        Projects
+      </div>
+      <ul className="flex flex-col gap-0.5">
+        {repos.map((r) => {
+          const isActive = r.id === selectedRepoId
+          return (
+            <li key={r.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(r.id)}
+                aria-current={isActive ? 'true' : undefined}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+                  isActive
+                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                    : 'text-sidebar-foreground/70 hover:bg-sidebar-foreground/8'
+                )}
+              >
+                {statusDot(statuses[r.id])}
+                <FolderGit2 className="size-3.5 shrink-0 opacity-70" />
+                <span className="truncate">{repoName(r.path)}</span>
+                {r.connectionId != null ? (
+                  <span className="ml-auto text-[10px] uppercase text-muted-foreground/60">ssh</span>
+                ) : null}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </nav>
+  )
+}
+
+// ---- the selected project's wiki body --------------------------------------
+
 type BodyProps = {
   workdir: string | null
+  isRemote: boolean
   index: WikiIndexResponse | null
   loadingIndex: boolean
   indexError: string | null
@@ -284,20 +411,19 @@ function renderBody(p: BodyProps): React.JSX.Element {
   if (!p.workdir) {
     return (
       <CenteredState
-        icon={<BookText className="size-8 text-muted-foreground/60" />}
-        title="No workspace selected"
-        description="Pick a workspace from the sidebar to view or generate its wiki."
+        icon={<Loader2 className="size-6 animate-spin text-muted-foreground" />}
+        title="Loading…"
+        description="Selecting a project."
       />
     )
   }
 
-  // First load with nothing resolved yet.
   if (!p.index && p.loadingIndex) {
     return (
       <CenteredState
         icon={<Loader2 className="size-6 animate-spin text-muted-foreground" />}
         title="Loading wiki…"
-        description="Reading the wiki for this workspace."
+        description="Reading the wiki for this project."
       />
     )
   }
@@ -321,10 +447,20 @@ function renderBody(p: BodyProps): React.JSX.Element {
         title="No wiki yet"
         description="Generate a navigable wiki for this repo — an overview, an architecture page with a module diagram, and one page per module. An agent reads the repo and writes it; the run is observable like any other session."
         action={
-          <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
-            {p.generating ? <Loader2 className="size-4 animate-spin" /> : <BookText className="size-4" />}
-            Generate wiki
-          </Button>
+          p.isRemote ? (
+            <p className="text-xs text-muted-foreground">
+              Wiki generation runs on a local agent — not yet available for remote/SSH projects.
+            </p>
+          ) : (
+            <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
+              {p.generating ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <BookText className="size-4" />
+              )}
+              Generate wiki
+            </Button>
+          )
         }
       />
     )
@@ -356,10 +492,16 @@ function renderBody(p: BodyProps): React.JSX.Element {
         title="Wiki generation failed"
         description={error}
         action={
-          <Button variant="outline" onClick={() => void p.onGenerate()} disabled={p.generating}>
-            {p.generating ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            Try again
-          </Button>
+          p.isRemote ? undefined : (
+            <Button variant="outline" onClick={() => void p.onGenerate()} disabled={p.generating}>
+              {p.generating ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              Try again
+            </Button>
+          )
         }
       />
     )
@@ -374,10 +516,16 @@ function renderBody(p: BodyProps): React.JSX.Element {
         title="The wiki is empty"
         description="The last run produced no pages. Regenerate to rebuild it."
         action={
-          <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
-            {p.generating ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            Regenerate
-          </Button>
+          p.isRemote ? undefined : (
+            <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
+              {p.generating ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              Regenerate
+            </Button>
+          )
         }
       />
     )
@@ -388,7 +536,6 @@ function renderBody(p: BodyProps): React.JSX.Element {
 
   return (
     <div className="flex h-full min-h-0">
-      {/* Left: table of contents (index.json page order). */}
       <nav className="w-60 shrink-0 overflow-y-auto border-r border-border bg-sidebar/40 p-2">
         <ul className="flex flex-col gap-0.5">
           {pages.map((page) => {
@@ -415,7 +562,6 @@ function renderBody(p: BodyProps): React.JSX.Element {
         </ul>
       </nav>
 
-      {/* Right: the selected page, rendered by the existing MarkdownPreview. */}
       <div className="min-w-0 flex-1">
         {activeSlug && content !== undefined ? (
           <MarkdownPreview
