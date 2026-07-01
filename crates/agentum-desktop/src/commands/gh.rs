@@ -648,8 +648,10 @@ pub async fn gh_pr_checks(
     let mut checks: Vec<Value> = Vec::new();
     // GitHub Actions and most GitHub Apps: the Checks API. per_page=100 covers
     // every real PR in one request (avoids --paginate's object-merge ambiguity).
-    if let Some(runs) = gh_api_json(&format!("repos/{slug}/commits/{head}/check-runs?per_page=100"))
-        .await
+    if let Some(runs) = gh_api_json(&format!(
+        "repos/{slug}/commits/{head}/check-runs?per_page=100"
+    ))
+    .await
     {
         if let Some(arr) = runs.get("check_runs").and_then(Value::as_array) {
             checks.extend(arr.iter().map(map_check_run));

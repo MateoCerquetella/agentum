@@ -143,7 +143,11 @@ pub(crate) fn parse_wiki_index(json: &str) -> anyhow::Result<WikiIndex> {
 /// not the mechanism — the agent reads the repo from its workdir for anything the
 /// seed truncated. Built with `push_str` (not `format!`) so the JSON example's
 /// braces need no escaping.
-pub(crate) fn build_wiki_prompt(workdir: &str, out_dir: &str, repo_context: Option<&str>) -> String {
+pub(crate) fn build_wiki_prompt(
+    workdir: &str,
+    out_dir: &str,
+    repo_context: Option<&str>,
+) -> String {
     let mut p = String::new();
     p.push_str(
         "You are the AutoWiki generator in the Agentum Harness. Produce a structured, \

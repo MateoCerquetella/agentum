@@ -453,8 +453,7 @@ async fn copy_wiki_pages(from: &Path, to: &Path) -> std::io::Result<usize> {
         }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        let versionable =
-            name == "index.json" || (name.ends_with(".md") && !name.starts_with('.'));
+        let versionable = name == "index.json" || (name.ends_with(".md") && !name.starts_with('.'));
         if versionable {
             tokio::fs::copy(entry.path(), to.join(name.as_ref())).await?;
             n += 1;
@@ -727,12 +726,18 @@ mod tests {
         // Save-to-repo must copy the versionable files and leave the regenerable
         // sidecars behind (they shouldn't land in git).
         let src = temp_dir();
-        tokio::fs::write(src.join("index.json"), "{}").await.unwrap();
-        tokio::fs::write(src.join("overview.md"), "# o").await.unwrap();
+        tokio::fs::write(src.join("index.json"), "{}")
+            .await
+            .unwrap();
+        tokio::fs::write(src.join("overview.md"), "# o")
+            .await
+            .unwrap();
         tokio::fs::write(src.join("architecture.md"), "# a")
             .await
             .unwrap();
-        tokio::fs::write(src.join(".status.json"), "{}").await.unwrap();
+        tokio::fs::write(src.join(".status.json"), "{}")
+            .await
+            .unwrap();
         tokio::fs::write(src.join(".embeddings.json"), "{}")
             .await
             .unwrap();
@@ -741,11 +746,7 @@ mod tests {
         assert_eq!(n, 3); // index.json + 2 pages, no sidecars
         assert!(tokio::fs::metadata(dst.join("index.json")).await.is_ok());
         assert!(tokio::fs::metadata(dst.join("overview.md")).await.is_ok());
-        assert!(
-            tokio::fs::metadata(dst.join(".status.json"))
-                .await
-                .is_err()
-        );
+        assert!(tokio::fs::metadata(dst.join(".status.json")).await.is_err());
         assert!(
             tokio::fs::metadata(dst.join(".embeddings.json"))
                 .await

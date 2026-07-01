@@ -362,7 +362,11 @@ async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Optio
         .map(|m| m.content.clone())?;
     let workdir = workdir.map(str::to_string);
     tokio::task::spawn_blocking(move || {
-        crate::wiki_rag::retrieve_context(workdir.as_deref(), &query, crate::wiki_rag::DEFAULT_TOP_K)
+        crate::wiki_rag::retrieve_context(
+            workdir.as_deref(),
+            &query,
+            crate::wiki_rag::DEFAULT_TOP_K,
+        )
     })
     .await
     .ok()
@@ -1687,7 +1691,10 @@ mod tests {
             with.contains("You HAVE the repo + harness snapshot"),
             "grounded access rule"
         );
-        assert!(with.contains("RELEVANT WIKI"), "retrieved wiki block present");
+        assert!(
+            with.contains("RELEVANT WIKI"),
+            "retrieved wiki block present"
+        );
         assert!(
             with.contains("The watchdog tails panes and emits AgentCrashed."),
             "wiki excerpt inlined"

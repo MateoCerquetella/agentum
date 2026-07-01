@@ -631,9 +631,18 @@ mod tests {
     fn protected_media_dirs_are_flagged_but_projects_are_not() {
         let home = Path::new("/Users/tester");
         // The gated media folders + anything inside them are protected…
-        assert!(is_protected_media_dir_in(Path::new("/Users/tester/Pictures"), home));
-        assert!(is_protected_media_dir_in(Path::new("/Users/tester/Music"), home));
-        assert!(is_protected_media_dir_in(Path::new("/Users/tester/Movies"), home));
+        assert!(is_protected_media_dir_in(
+            Path::new("/Users/tester/Pictures"),
+            home
+        ));
+        assert!(is_protected_media_dir_in(
+            Path::new("/Users/tester/Music"),
+            home
+        ));
+        assert!(is_protected_media_dir_in(
+            Path::new("/Users/tester/Movies"),
+            home
+        ));
         assert!(is_protected_media_dir_in(
             Path::new("/Users/tester/Music/band/album"),
             home
@@ -643,7 +652,10 @@ mod tests {
             Path::new("/Users/tester/Developer/proj"),
             home
         ));
-        assert!(!is_protected_media_dir_in(Path::new("/Users/tester/Pictures2"), home));
+        assert!(!is_protected_media_dir_in(
+            Path::new("/Users/tester/Pictures2"),
+            home
+        ));
         assert!(!is_protected_media_dir_in(Path::new("/Users/tester"), home));
     }
 }

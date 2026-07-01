@@ -914,7 +914,9 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
                 if let Some(obj) = open_args.as_object_mut() {
                     obj.insert("op".to_string(), Value::from("open"));
                 }
-                return Ok(text_result(tool_bridge(state, "browser", &open_args).await?));
+                return Ok(text_result(
+                    tool_bridge(state, "browser", &open_args).await?,
+                ));
             }
             // Ops that act on an existing page can't meaningfully drive a browser the
             // user can't see — tell the agent to open a visible one first instead of

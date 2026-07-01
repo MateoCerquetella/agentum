@@ -133,10 +133,43 @@ fn tokenize(text: &str) -> Vec<String> {
 fn is_stopword(t: &str) -> bool {
     matches!(
         t,
-        "the" | "and" | "for" | "are" | "but" | "not" | "you" | "with" | "this" | "that"
-            | "from" | "have" | "has" | "was" | "were" | "its" | "it's" | "into" | "your"
-            | "our" | "their" | "they" | "them" | "then" | "than" | "can" | "will" | "all"
-            | "any" | "how" | "what" | "why" | "when" | "who" | "which" | "does" | "did"
+        "the"
+            | "and"
+            | "for"
+            | "are"
+            | "but"
+            | "not"
+            | "you"
+            | "with"
+            | "this"
+            | "that"
+            | "from"
+            | "have"
+            | "has"
+            | "was"
+            | "were"
+            | "its"
+            | "it's"
+            | "into"
+            | "your"
+            | "our"
+            | "their"
+            | "they"
+            | "them"
+            | "then"
+            | "than"
+            | "can"
+            | "will"
+            | "all"
+            | "any"
+            | "how"
+            | "what"
+            | "why"
+            | "when"
+            | "who"
+            | "which"
+            | "does"
+            | "did"
     )
 }
 
@@ -297,7 +330,10 @@ const SIDECAR: &str = ".embeddings.json";
 /// Build the embedding index from an on-disk wiki (`index.json` + `<slug>.md`).
 /// Synchronous — run under `spawn_blocking`. Errors on a missing/garbled index or
 /// an empty corpus; the caller treats that as "no RAG", never a wiki failure.
-pub(crate) fn build_index(dir: &Path, embedder: &dyn Embedder) -> anyhow::Result<WikiEmbeddingIndex> {
+pub(crate) fn build_index(
+    dir: &Path,
+    embedder: &dyn Embedder,
+) -> anyhow::Result<WikiEmbeddingIndex> {
     let raw = std::fs::read_to_string(dir.join("index.json"))?;
     let index = parse_wiki_index(&raw)?;
 
@@ -485,10 +521,17 @@ mod tests {
     #[test]
     fn cosine_ranks_related_text_higher() {
         let e = HashingEmbedder::new(HASH_DIM);
-        let q = &e.embed(&["how does the watchdog detect a crashed agent".into()]).unwrap()[0];
-        let related =
-            &e.embed(&["The watchdog tails panes and emits AgentCrashed when an agent crashes.".into()]).unwrap()[0];
-        let unrelated = &e.embed(&["Tailwind color tokens for the settings theme picker.".into()]).unwrap()[0];
+        let q = &e
+            .embed(&["how does the watchdog detect a crashed agent".into()])
+            .unwrap()[0];
+        let related = &e
+            .embed(&[
+                "The watchdog tails panes and emits AgentCrashed when an agent crashes.".into(),
+            ])
+            .unwrap()[0];
+        let unrelated = &e
+            .embed(&["Tailwind color tokens for the settings theme picker.".into()])
+            .unwrap()[0];
         assert!(
             cosine(q, related) > cosine(q, unrelated),
             "related {} should beat unrelated {}",
@@ -513,9 +556,16 @@ mod tests {
         let big_para = "word ".repeat(600); // ~3000 chars, one heading
         let md = format!("## Big\n{big_para}");
         let chunks = chunk_page("p", "P", &md);
-        assert!(chunks.len() >= 2, "long section should split into multiple chunks");
+        assert!(
+            chunks.len() >= 2,
+            "long section should split into multiple chunks"
+        );
         for c in &chunks {
-            assert!(c.text.len() <= MAX_CHUNK_CHARS + 16, "chunk over cap: {}", c.text.len());
+            assert!(
+                c.text.len() <= MAX_CHUNK_CHARS + 16,
+                "chunk over cap: {}",
+                c.text.len()
+            );
             assert_eq!(c.heading, "Big");
         }
     }
@@ -532,7 +582,11 @@ mod tests {
             r#"{"schemaVersion":1,"pages":[{"slug":"overview","title":"Overview"},{"slug":"watchdog","title":"Watchdog"}]}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("overview.md"), "# Overview\nagentum is a control plane for coding agents.\n").unwrap();
+        std::fs::write(
+            dir.join("overview.md"),
+            "# Overview\nagentum is a control plane for coding agents.\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.join("watchdog.md"),
             "# Watchdog\nThe watchdog tails tmux panes and emits AgentCrashed when an agent crashes or exits.\n",
@@ -551,7 +605,13 @@ mod tests {
         save_index(&d, &idx).unwrap();
 
         // The watchdog question should surface the watchdog page first.
-        let hits = retrieve(&idx, "how does the watchdog detect a crashed agent", e.as_ref(), 5).unwrap();
+        let hits = retrieve(
+            &idx,
+            "how does the watchdog detect a crashed agent",
+            e.as_ref(),
+            5,
+        )
+        .unwrap();
         assert!(!hits.is_empty());
         assert_eq!(hits[0].1.slug, "watchdog");
         std::fs::remove_dir_all(&d).ok();
@@ -562,7 +622,9 @@ mod tests {
         // The store is git-keyed under data_dir(), so isolate it with AGENTUM_HOME
         // and write the fixture where retrieve_context will actually look (never
         // the real data dir). AGENTUM_HOME is process-global → take the crate lock.
-        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let home = temp_dir();
         // SAFETY: serialised by TEST_ENV_LOCK — no other thread mutates env here.
         unsafe {
