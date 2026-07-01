@@ -44,6 +44,7 @@ export type KeybindingActionId =
   | 'sidebar.checks.toggle'
   | 'sidebar.ports.toggle'
   | 'sidebar.focusWorktreeList'
+  | 'view.toggleSidebarFocus'
   | 'zoom.in'
   | 'zoom.out'
   | 'zoom.reset'
@@ -275,8 +276,10 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     title: 'Dictation',
     group: 'Global',
     scope: 'global',
-    searchKeywords: ['shortcut', 'dictation', 'voice', 'speech', 'microphone'],
-    defaultBindings: platformBindings(['Mod+E'])
+    searchKeywords: ['shortcut', 'dictation', 'voice', 'speech', 'microphone', 'mic'],
+    // Why: Mod+E is reserved for view.toggleSidebarFocus (session ↔ sidebar);
+    // the microphone lives on the otherwise-free Mod+O.
+    defaultBindings: platformBindings(['Mod+O'])
   },
   {
     id: 'view.tasks',
@@ -353,6 +356,26 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     scope: 'global',
     searchKeywords: ['shortcut', 'sidebar', 'worktree', 'focus'],
     defaultBindings: platformBindings(['Mod+0'])
+  },
+  {
+    id: 'view.toggleSidebarFocus',
+    title: 'Toggle Sidebar Focus',
+    group: 'Global',
+    scope: 'global',
+    searchKeywords: [
+      'shortcut',
+      'sidebar',
+      'focus',
+      'toggle',
+      'session',
+      'workspace',
+      'switch focus'
+    ],
+    // Why: mirrors VS Code's "focus the explorer / focus back to the editor"
+    // muscle memory — flip keyboard focus between the active session and the
+    // worktree list. Took over Mod+E when Dictation moved to Mod+O.
+    defaultBindings: platformBindings(['Mod+E']),
+    allowInTerminal: true
   },
   {
     id: 'zoom.in',

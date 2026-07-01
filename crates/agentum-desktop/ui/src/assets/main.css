@@ -2811,3 +2811,19 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 .dark .file-type-badge[data-ft='kt'] { color: #b39bff; }
 .file-type-badge[data-ft='php'] { color: #5f63a6; }
 .dark .file-type-badge[data-ft='php'] { color: #9b9fd6; }
+
+/* ── File-type icon tints ──────────────────────────────────────────────────
+   The Lucide fallback glyphs (images, media, data stores, archives, secrets)
+   used when a file has no dedicated badge. Coloured by broad category so the
+   tree/tabs gain a little colour without a rainbow; prose/code/config keep the
+   caller's calm `text-*`. Light value is the default; `.dark` lifts the hue for
+   the dark background. Unlayered so it wins over Tailwind `text-*` utilities,
+   like the badge rules above. */
+.file-type-icon[data-fcategory='media'] { color: #b5299e; }
+.dark .file-type-icon[data-fcategory='media'] { color: #f19bf0; }
+.file-type-icon[data-fcategory='archive'] { color: #a06722; }
+.dark .file-type-icon[data-fcategory='archive'] { color: #e0b060; }
+.file-type-icon[data-fcategory='data'] { color: #1f7a9e; }
+.dark .file-type-icon[data-fcategory='data'] { color: #5cc9e8; }
+.file-type-icon[data-fcategory='secure'] { color: #b0870e; }
+.dark .file-type-icon[data-fcategory='secure'] { color: #f0c94a; }

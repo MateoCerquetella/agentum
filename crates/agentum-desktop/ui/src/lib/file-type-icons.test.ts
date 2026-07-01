@@ -15,10 +15,12 @@ import {
   FileSpreadsheet,
   FileText,
   FileType,
-  FileVideo
+  FileVideo,
+  type LucideIcon
 } from 'lucide-react'
 import { describe, expect, it } from 'vitest'
 import { fileTypeBadgeGroup, getFileTypeIcon } from './file-type-icons'
+import { getLucideFileIcon, getLucideFileIconCategory } from './lucide-file-icons'
 
 describe('fileTypeBadgeGroup', () => {
   it('badges recognised source/config extensions by their color group', () => {
@@ -71,30 +73,37 @@ describe('getFileTypeIcon', () => {
     expect(a).not.toBe(FileText)
   })
 
-  it('falls back to dedicated Lucide icons for unbadged named files and extensions', () => {
+  it('falls back to calm (untinted) Lucide icons for prose/code/config files', () => {
+    // Categories that stay monochrome are returned as the raw Lucide glyph.
     expect(getFileTypeIcon('/repo/.editorconfig')).toBe(FileSliders)
-    expect(getFileTypeIcon('C:\\repo\\.env.local')).toBe(FileLock)
     expect(getFileTypeIcon('README')).toBe(FileText)
     expect(getFileTypeIcon('Dockerfile.dev')).toBe(FileCog)
-    expect(getFileTypeIcon('config/settings.jsonc')).toBe(FileJson)
-    expect(getFileTypeIcon('assets/logo.png')).toBe(FileImage)
     expect(getFileTypeIcon('notes.patch')).toBe(FileDiff)
   })
 
-  it('uses more specific icons for data, security, and presentation files', () => {
-    expect(getFileTypeIcon('db/schema.sql')).toBe(Database)
-    expect(getFileTypeIcon('reports/summary.xlsx')).toBe(FileSpreadsheet)
-    expect(getFileTypeIcon('certs/server.pem')).toBe(FileKey)
-    expect(getFileTypeIcon('slides/status.pptx')).toBe(FileChartColumn)
-  })
-
-  it('handles compound archive extensions before their trailing extension', () => {
-    expect(getFileTypeIcon('release.tar.gz')).toBe(FileArchive)
-  })
-
-  it('matches audio and video extensions', () => {
-    expect(getFileTypeIcon('sound/theme.mp3')).toBe(FileMusic)
-    expect(getFileTypeIcon('demo.mov')).toBe(FileVideo)
+  it('tints media, data, archive, and secret fallback icons by category', () => {
+    // Resolution (which glyph) is unchanged, but getFileTypeIcon wraps the
+    // tinted categories so main.css can colour them — identity therefore differs
+    // from the raw Lucide icon. Verify both the resolved glyph and the tint.
+    const cases: { path: string; icon: LucideIcon; category: string }[] = [
+      { path: 'assets/logo.png', icon: FileImage, category: 'media' },
+      { path: 'sound/theme.mp3', icon: FileMusic, category: 'media' },
+      { path: 'demo.mov', icon: FileVideo, category: 'media' },
+      { path: 'release.tar.gz', icon: FileArchive, category: 'archive' },
+      { path: 'db/schema.sql', icon: Database, category: 'data' },
+      { path: 'reports/summary.xlsx', icon: FileSpreadsheet, category: 'data' },
+      { path: 'slides/status.pptx', icon: FileChartColumn, category: 'data' },
+      { path: 'config/settings.jsonc', icon: FileJson, category: 'data' },
+      { path: 'certs/server.pem', icon: FileKey, category: 'secure' },
+      { path: 'C:\\repo\\.env.local', icon: FileLock, category: 'secure' }
+    ]
+    for (const { path, icon, category } of cases) {
+      expect(getLucideFileIcon(path)).toBe(icon)
+      expect(getLucideFileIconCategory(icon)).toBe(category)
+      const tinted = getFileTypeIcon(path)
+      expect(tinted).not.toBe(icon)
+      expect((tinted as { displayName?: string }).displayName).toBe(`FileTypeIcon(${category})`)
+    }
   })
 
   it('falls back to the generic file icon for unknown files', () => {

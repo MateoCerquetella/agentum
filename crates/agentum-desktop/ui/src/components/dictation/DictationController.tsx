@@ -236,13 +236,14 @@ export function DictationController() {
     await finishDictationSession(sessionId)
   }, [finishDictationSession, setDictationState, stopCapture])
 
-  // Toggle mode: handle Cmd+E entirely in the renderer. orca's Electron build
-  // intercepted this in the main process via before-input-event and forwarded a
-  // `ui-dictation-key-down` IPC event, but Tauri has no such interceptor and
-  // never emits it — so toggle did nothing (notably in terminals, where xterm
-  // also captures keys). We instead listen on window in the capture phase and
-  // preventDefault, matching the hold-mode path. On macOS Cmd+E produces no
-  // terminal control character, so suppressing it before xterm is harmless.
+  // Toggle mode: handle the dictation shortcut (Cmd+O by default) entirely in
+  // the renderer. orca's Electron build intercepted this in the main process via
+  // before-input-event and forwarded a `ui-dictation-key-down` IPC event, but
+  // Tauri has no such interceptor and never emits it — so toggle did nothing
+  // (notably in terminals, where xterm also captures keys). We instead listen on
+  // window in the capture phase and preventDefault, matching the hold-mode path.
+  // On macOS Cmd+O produces no terminal control character, so suppressing it
+  // before xterm is harmless.
   useEffect(() => {
     const mode = settings?.voice?.dictationMode ?? 'toggle'
     if (mode !== 'toggle') {
@@ -286,9 +287,9 @@ export function DictationController() {
   // (before-input-event). When before-input-event calls preventDefault()
   // on the keyDown, Electron suppresses ALL subsequent DOM events for that
   // key combo — including the keyUp we need to detect release. By handling
-  // Cmd+E entirely in the renderer, both keydown and keyup fire normally.
-  // On macOS, Cmd+E doesn't produce a terminal control character (unlike
-  // Ctrl+E on Linux), so letting it through to xterm is harmless.
+  // the dictation shortcut entirely in the renderer, both keydown and keyup fire
+  // normally. On macOS, Cmd+O doesn't produce a terminal control character
+  // (unlike Ctrl+O on Linux), so letting it through to xterm is harmless.
   useEffect(() => {
     const mode = settings?.voice?.dictationMode ?? 'toggle'
     if (mode !== 'hold') {

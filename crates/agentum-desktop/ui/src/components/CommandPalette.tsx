@@ -3,6 +3,7 @@ import {
   Columns3,
   List,
   MessagesSquare,
+  Palette,
   Radar,
   Settings as SettingsIcon,
   type LucideIcon
@@ -39,6 +40,7 @@ type ViewCommand = {
 export default function CommandPalette(): React.JSX.Element {
   const visible = useAppStore((s) => s.activeModal === 'command-palette')
   const closeModal = useAppStore((s) => s.closeModal)
+  const openModal = useAppStore((s) => s.openModal)
   const setActiveView = useAppStore((s) => s.setActiveView)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
@@ -81,6 +83,13 @@ export default function CommandPalette(): React.JSX.Element {
       hint: 'GitHub / GitLab / Linear issues',
       icon: Columns3,
       run: go(() => openTaskPage())
+    },
+    {
+      id: 'view-color-theme',
+      label: 'Color Theme…',
+      hint: 'Switch app & terminal themes',
+      icon: Palette,
+      run: go(() => openModal('theme-palette'))
     },
     {
       id: 'view-settings',
