@@ -58,6 +58,10 @@ export function useServerWorktreeActivity(): void {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
     let refreshTimer: ReturnType<typeof setInterval> | null = null
     let attempt = 0
+    // Separate fast-retry track for the very first snapshot after (re)mount —
+    // e.g. a cold app relaunch where the embedded server isn't answering yet.
+    let bootstrapTimer: ReturnType<typeof setTimeout> | null = null
+    let bootstrapAttempt = 0
 
     // session id → worktree id, rebuilt from the latest /api/sessions snapshot.
     const sessionToWorktree = new Map<string, string>()
@@ -89,17 +93,17 @@ export function useServerWorktreeActivity(): void {
       useAppStore.getState().setServerWorktreeActivitySnapshot(snapshot)
     }
 
-    const refresh = async (): Promise<void> => {
+    const refresh = async (): Promise<boolean> => {
       let sessions: Awaited<ReturnType<typeof listSessions>>
       try {
         sessions = await listSessions()
       } catch {
         // Server not ready yet (or transient) — keep the last snapshot; the
-        // interval and lifecycle events will retry.
-        return
+        // bootstrap fast-retry and the interval heartbeat will retry.
+        return false
       }
       if (disposed) {
-        return
+        return false
       }
       lastSessions = sessions
       // Drop cached activity for sessions that are gone or no longer running so a
@@ -113,6 +117,27 @@ export function useServerWorktreeActivity(): void {
         }
       }
       remap()
+      return true
+    }
+
+    // Fast bootstrap so the sidebar shows the ACTUAL status right after an app
+    // relaunch. The 30s heartbeat alone is too slow: on a cold start the
+    // embedded server may not answer /api/sessions the instant this hook mounts,
+    // and agents that were ALREADY running emit no `session.started` to trigger
+    // an earlier refetch — so the map (and the /api/events replay routed through
+    // it) would stay empty, leaving every dot idle, until the first heartbeat.
+    // Retry with capped backoff until the FIRST successful snapshot; the
+    // heartbeat + live events take over after that.
+    const bootstrapRefresh = async (): Promise<void> => {
+      if (disposed) {
+        return
+      }
+      const ok = await refresh()
+      if (ok || disposed) {
+        return
+      }
+      bootstrapAttempt += 1
+      bootstrapTimer = setTimeout(() => void bootstrapRefresh(), backoffMs(bootstrapAttempt))
     }
 
     const handleEvent = (raw: string): void => {
@@ -163,6 +188,10 @@ export function useServerWorktreeActivity(): void {
       ws = sock
       sock.addEventListener('open', () => {
         attempt = 0
+        // The fresh stream replays each session's current agent state; refetch
+        // the session list now so the session→worktree map is ready to route
+        // that replay — and to self-heal the map after a reconnect.
+        void refresh()
       })
       sock.addEventListener('message', (event) => {
         if (typeof event.data === 'string') {
@@ -180,7 +209,7 @@ export function useServerWorktreeActivity(): void {
       // 'error' is always followed by 'close', which drives reconnect.
     }
 
-    void refresh()
+    void bootstrapRefresh()
     void connect()
     refreshTimer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS)
     // Re-map when the worktree set changes (worktrees load async after this hook
@@ -195,6 +224,9 @@ export function useServerWorktreeActivity(): void {
       disposed = true
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
+      }
+      if (bootstrapTimer) {
+        clearTimeout(bootstrapTimer)
       }
       if (refreshTimer) {
         clearInterval(refreshTimer)
