@@ -243,6 +243,10 @@ fn launch_lock() -> &'static Mutex<()> {
 struct WorktreeBrowser {
     port: u16,
     tmux: String,
+    // Kept so a registry entry fully describes its Chromium (port + tmux +
+    // profile). Reap currently re-derives the profile path from the key; this
+    // field keeps the entry self-contained for a future direct-path teardown.
+    #[allow(dead_code)]
     profile: PathBuf,
 }
 

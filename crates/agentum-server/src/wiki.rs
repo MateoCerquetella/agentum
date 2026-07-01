@@ -56,7 +56,7 @@ pub(crate) fn wiki_store_dir(key: &str) -> anyhow::Result<PathBuf> {
 /// with no `origin` yet). Reuses `forge::parse_remote_url` so remote normalization
 /// has a single source of truth.
 pub(crate) fn wiki_key(remote_url: Option<&str>, fallback_path: &str) -> String {
-    match remote_url.and_then(|u| crate::routes::forge::parse_remote_url(u)) {
+    match remote_url.and_then(crate::routes::forge::parse_remote_url) {
         Some((host, project)) => format!("git__{}", slugify_key(&format!("{host}/{project}"))),
         None => format!("path__{}", short_hash(fallback_path)),
     }

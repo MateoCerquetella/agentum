@@ -119,8 +119,8 @@ struct WikiStatus {
 }
 
 /// Everything a wiki route needs for a repo: the git-keyed central store dir (so
-/// every checkout of one repo shares it), the checkout path (for legacy migration
-/// + save-to-repo), and whether it's remote (SSH). Browse works for remote repos
+/// every checkout of one repo shares it), the checkout path (for legacy migration +
+/// save-to-repo), and whether it's remote (SSH). Browse works for remote repos
 /// too — host-aware git resolves their identity — but generation stays local.
 struct WikiTarget {
     dir: PathBuf,
