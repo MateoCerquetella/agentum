@@ -40,6 +40,7 @@ pub mod host_runtime;
 pub mod linear;
 mod logging;
 pub mod mcp_provision;
+mod pane_log_reaper;
 pub mod planner;
 pub mod playwright_mcp;
 mod port_wait;
@@ -453,6 +454,27 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     // Host-metrics ticker: publishes CPU+RAM onto the bus so one sampler feeds
     // every connected client over the events WS; idles while no client is on.
     routes::host::spawn_ticker(bus.clone(), state.events_ws_clients.clone());
+
+    // One-shot cache hygiene: drop pane logs whose session no longer exists
+    // (pipe-pane appends every session's raw output forever; deleted sessions
+    // used to leave their logs behind for the life of the install), then
+    // prune aged event history (the connect-time snapshot queries scan this
+    // table; unbounded growth made them slower every month). 30 days keeps
+    // far more than the watchdog feed's ~50-row window ever shows, and each
+    // session's newest agent.* row survives regardless of age.
+    {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            pane_log_reaper::reap_orphan_pane_logs(store.clone()).await;
+            match store.prune_events(30).await {
+                Ok(pruned) if pruned > 0 => {
+                    tracing::info!(pruned, "pruned aged event history")
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = ?e, "event history prune failed"),
+            }
+        });
+    }
 
     // SSH ControlMaster warmer: a no-op exec per known SSH host opens the
     // pooled master at boot (interval's first tick is immediate) and refreshes
