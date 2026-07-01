@@ -1,31 +1,49 @@
-// Wiki — the browse surface for AutoWiki (spec 001), now a MULTI-REPO hub.
+// Wiki — the browse surface for AutoWiki (spec 001), a MULTI-REPO hub.
 //
 // agentum manages many projects, so the Wiki is a hub over ALL of them, not the
 // single active workspace. Left: a Projects rail listing every repo the store
 // knows (`s.repos`), each with a wiki-status dot. Select a project → its wiki in
-// the main pane (workdir = `repo.path`), reusing the existing 2-pane TOC + the
-// editor `MarkdownPreview` (as-is — mermaid + `[[Title]]` links come for free).
+// the main pane, reusing the existing 2-pane TOC + the editor `MarkdownPreview`
+// (mermaid + `[[Title]]` links come for free).
 //
-// The backend is already workdir-keyed (`/api/wiki?workdir=…`), so each repo's
-// wiki lives at `<repo.path>/.agentum/wiki/` — no backend change; this is the UI
-// hub that was missing.
+// The backend is keyed by the repo's GIT IDENTITY (not the checkout path): the
+// same repo cloned locally AND over SSH resolves to ONE shared wiki. So the UI
+// passes `repo.id` (the server resolves host + git remote → central store). A
+// local checkout and an SSH checkout of the same repo therefore show the same
+// wiki — no more duplicates.
+//
+// Generation runs a LOCAL agent that reads the checkout, so it stays disabled for
+// remote/SSH projects — but their wiki still BROWSES (a local sibling of the same
+// git repo can have generated it). The agent + model are user-pickable at
+// generate time (mirrors Chat); a wiki lives in the app data dir, and an opt-in
+// "Save to repo" writes a committable copy back into `<repo>/.agentum/wiki`.
 //
 // Per-selected-repo states mirror the `GET /api/wiki` discriminator:
 //   empty → the explained empty state + a "Generate wiki" button
 //   running → an observable "generating…" indicator (a real session)
 //   failed → the recorded error — never a half-empty success
 //   ready → the TOC + the rendered page
-// Remote/SSH repos (`connectionId != null`) are listed but generation is disabled
-// (the wiki agent runs locally) — never a silent failure.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, BookText, FileText, FolderGit2, Loader2, RefreshCw } from 'lucide-react'
+import {
+  AlertTriangle,
+  BookText,
+  Check,
+  FileText,
+  FolderGit2,
+  Loader2,
+  RefreshCw,
+  Save
+} from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import MarkdownPreview from '@/components/editor/MarkdownPreview'
 import type { MarkdownDocument } from '@/shared/types'
+import { AGENT_CATALOG } from '@/lib/agent-catalog'
+import { CHAT_MODELS } from '@/runtime/chat-client'
 import {
+  exportWikiToRepo,
   generateWiki,
   getWiki,
   getWikiPage,
@@ -36,6 +54,19 @@ import {
 /** Poll cadence while a generation run is in flight. */
 const RUNNING_POLL_MS = 3000
 
+/** Picker defaults persist across restarts (same pattern as the Chat pickers).
+ *  `MODEL_KEY` empty string = "the agent's own default model". */
+const TOOL_KEY = 'agentum.wiki.tool'
+const MODEL_KEY = 'agentum.wiki.model'
+
+function readStored(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
 /** The one-word status shown as a dot in the Projects rail. */
 type RepoWikiStatus = WikiIndexResponse['state'] | 'error' | 'loading'
 
@@ -44,8 +75,9 @@ function repoName(path: string): string {
   return path.split('/').filter(Boolean).pop() ?? path
 }
 
-/** `<workdir>/.agentum/wiki/<slug>.md` — the real on-disk path (MarkdownPreview
- *  link base + scroll anchor). */
+/** `<workdir>/.agentum/wiki/<slug>.md` — a stable synthetic path for
+ *  MarkdownPreview's link base + scroll anchor (content itself comes from the
+ *  API, so this need not be the real on-disk location). */
 function pagePath(workdir: string, slug: string): string {
   return `${workdir}/.agentum/wiki/${slug}.md`
 }
@@ -65,6 +97,14 @@ function pageToDocument(workdir: string, page: WikiPageMeta): MarkdownDocument {
 export default function WikiPage(): React.JSX.Element {
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
+  const detectedAgentIds = useAppStore((s) => s.detectedAgentIds)
+  const ensureDetectedAgents = useAppStore((s) => s.ensureDetectedAgents)
+
+  // Detect installed local agents once, so the tool picker only offers what can
+  // actually run (generation is local).
+  useEffect(() => {
+    void ensureDetectedAgents()
+  }, [ensureDetectedAgents])
 
   // Which project's wiki we're viewing. Default to the active repo, else the
   // first; keep it valid as repos come and go.
@@ -81,19 +121,52 @@ export default function WikiPage(): React.JSX.Element {
     () => repos.find((r) => r.id === selectedRepoId) ?? null,
     [repos, selectedRepoId]
   )
+  const repoId = selectedRepo?.id ?? null
   const workdir = selectedRepo?.path ?? null
   const isRemote = selectedRepo?.connectionId != null
 
+  // ---- agent + model pick (generation) ----
+  const [tool, setTool] = useState<string>(() => readStored(TOOL_KEY, 'claude'))
+  const [model, setModel] = useState<string>(() => readStored(MODEL_KEY, ''))
+  useEffect(() => {
+    try {
+      localStorage.setItem(TOOL_KEY, tool)
+    } catch {
+      /* localStorage may be unavailable; picker still works in-session */
+    }
+  }, [tool])
+  useEffect(() => {
+    try {
+      localStorage.setItem(MODEL_KEY, model)
+    } catch {
+      /* see above */
+    }
+  }, [model])
+  // Model ids are Claude-specific; a non-Claude tool falls back to its own default.
+  useEffect(() => {
+    if (tool !== 'claude') setModel('')
+  }, [tool])
+
+  // Offer installed agents (until detection resolves, offer the full catalog so
+  // the picker is never empty).
+  const toolOptions = useMemo(() => {
+    const installed = detectedAgentIds
+    const list = installed
+      ? AGENT_CATALOG.filter((a) => installed.includes(a.id))
+      : AGENT_CATALOG
+    return list.length > 0 ? list : AGENT_CATALOG.filter((a) => a.id === 'claude')
+  }, [detectedAgentIds])
+  const modelOptions = tool === 'claude' ? CHAT_MODELS : []
+
   // Per-repo status for the rail dots — a lightweight sweep so you can see which
-  // projects already have a wiki, across ALL of them at a glance. Local only;
-  // remote workdirs aren't probed (generation is local anyway).
+  // projects already have a wiki, across ALL of them at a glance. Remote repos are
+  // probed too now (the wiki is git-keyed, so a shared one resolves for them).
   const [repoStatuses, setRepoStatuses] = useState<Record<string, RepoWikiStatus>>({})
   const sweep = useCallback(async (): Promise<void> => {
     const entries = await Promise.all(
       repos.map(async (r): Promise<[string, RepoWikiStatus]> => {
-        if (r.connectionId != null) return [r.id, 'error']
         try {
-          const res = await getWiki(r.path)
+          const res = await getWiki(r.id)
           return [r.id, res.state]
         } catch {
           return [r.id, 'error']
@@ -106,11 +179,13 @@ export default function WikiPage(): React.JSX.Element {
     void sweep()
   }, [sweep])
 
-  // ---- the selected project's wiki (workdir = selectedRepo.path) ----
+  // ---- the selected project's wiki ----
   const [index, setIndex] = useState<WikiIndexResponse | null>(null)
   const [indexError, setIndexError] = useState<string | null>(null)
   const [loadingIndex, setLoadingIndex] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
 
   const [activeSlug, setActiveSlug] = useState<string | null>(null)
   const [pageCache, setPageCache] = useState<Record<string, string>>({})
@@ -122,17 +197,15 @@ export default function WikiPage(): React.JSX.Element {
   const reqToken = useRef(0)
 
   const refreshIndex = useCallback(
-    async (dir: string): Promise<void> => {
+    async (id: string): Promise<void> => {
       const token = ++reqToken.current
       setLoadingIndex(true)
       setIndexError(null)
       try {
-        const next = await getWiki(dir)
+        const next = await getWiki(id)
         if (token !== reqToken.current) return
         setIndex(next)
-        setRepoStatuses((prev) =>
-          selectedRepoId ? { ...prev, [selectedRepoId]: next.state } : prev
-        )
+        setRepoStatuses((prev) => ({ ...prev, [id]: next.state }))
       } catch (err) {
         if (token !== reqToken.current) return
         setIndex(null)
@@ -141,7 +214,7 @@ export default function WikiPage(): React.JSX.Element {
         if (token === reqToken.current) setLoadingIndex(false)
       }
     },
-    [selectedRepoId]
+    []
   )
 
   // Reload whenever the selected project changes; reset page selection + cache so
@@ -150,22 +223,23 @@ export default function WikiPage(): React.JSX.Element {
     setActiveSlug(null)
     setPageCache({})
     setPageError(null)
-    if (!workdir) {
+    setSaveMsg(null)
+    if (!repoId) {
       reqToken.current += 1
       setIndex(null)
       setIndexError(null)
       setLoadingIndex(false)
       return
     }
-    void refreshIndex(workdir)
-  }, [workdir, refreshIndex])
+    void refreshIndex(repoId)
+  }, [repoId, refreshIndex])
 
   // Poll while a run is in flight for the selected project.
   useEffect(() => {
-    if (!workdir || index?.state !== 'running') return
-    const timer = setInterval(() => void refreshIndex(workdir), RUNNING_POLL_MS)
+    if (!repoId || index?.state !== 'running') return
+    const timer = setInterval(() => void refreshIndex(repoId), RUNNING_POLL_MS)
     return () => clearInterval(timer)
-  }, [workdir, index?.state, refreshIndex])
+  }, [repoId, index?.state, refreshIndex])
 
   const pages = index?.state === 'ready' ? index.pages : null
 
@@ -177,7 +251,7 @@ export default function WikiPage(): React.JSX.Element {
   }, [pages])
 
   useEffect(() => {
-    if (!workdir || !activeSlug || index?.state !== 'ready') return
+    if (!repoId || !activeSlug || index?.state !== 'ready') return
     if (pageCache[activeSlug] !== undefined) {
       setPageError(null)
       return
@@ -186,7 +260,7 @@ export default function WikiPage(): React.JSX.Element {
     let cancelled = false
     setLoadingPage(true)
     setPageError(null)
-    void getWikiPage(workdir, activeSlug)
+    void getWikiPage(repoId, activeSlug)
       .then((res) => {
         if (cancelled || token !== reqToken.current) return
         setPageCache((prev) => ({ ...prev, [activeSlug]: res.content }))
@@ -201,24 +275,40 @@ export default function WikiPage(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [workdir, activeSlug, index?.state, pageCache])
+  }, [repoId, activeSlug, index?.state, pageCache])
 
   const handleGenerate = useCallback(async (): Promise<void> => {
-    if (!workdir || generating || isRemote) return
+    if (!repoId || generating || isRemote) return
     setGenerating(true)
     setIndexError(null)
+    setSaveMsg(null)
     try {
-      const { sessionId } = await generateWiki(workdir)
+      const { sessionId } = await generateWiki(repoId, {
+        tool,
+        model: model || undefined
+      })
       setIndex({ state: 'running', sessionId })
-      if (selectedRepoId) {
-        setRepoStatuses((prev) => ({ ...prev, [selectedRepoId]: 'running' }))
-      }
+      setRepoStatuses((prev) => ({ ...prev, [repoId]: 'running' }))
     } catch (err) {
       setIndexError(err instanceof Error ? err.message : String(err))
     } finally {
       setGenerating(false)
     }
-  }, [workdir, generating, isRemote, selectedRepoId])
+  }, [repoId, generating, isRemote, tool, model])
+
+  const handleSaveToRepo = useCallback(async (): Promise<void> => {
+    if (!repoId || saving || isRemote) return
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      const res = await exportWikiToRepo(repoId)
+      setSaveMsg(`Saved ${res.files} file${res.files === 1 ? '' : 's'} to the repo — commit when ready`)
+    } catch (err) {
+      setSaveMsg(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }, [repoId, saving, isRemote])
 
   const markdownDocuments = useMemo<MarkdownDocument[]>(
     () => (workdir && pages ? pages.map((p) => pageToDocument(workdir, p)) : []),
@@ -233,9 +323,21 @@ export default function WikiPage(): React.JSX.Element {
     [pages]
   )
 
+  const controls = !isRemote ? (
+    <GenerationControls
+      tool={tool}
+      onToolChange={setTool}
+      toolOptions={toolOptions}
+      model={model}
+      onModelChange={setModel}
+      modelOptions={modelOptions}
+      disabled={generating || index?.state === 'running'}
+    />
+  ) : null
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <header className="flex items-center justify-between border-b border-border px-4 py-2.5">
+      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
         <div className="flex items-center gap-2">
           <BookText className="size-4 text-muted-foreground" />
           <h1 className="text-sm font-semibold tracking-tight">Wiki</h1>
@@ -246,21 +348,46 @@ export default function WikiPage(): React.JSX.Element {
           ) : null}
         </div>
         {index?.state === 'ready' && !isRemote ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void handleGenerate()}
-            disabled={generating || !workdir}
-          >
-            {generating ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-            Regenerate
-          </Button>
+          <div className="flex items-center gap-2">
+            {controls}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleSaveToRepo()}
+              disabled={saving || !repoId}
+              title="Write a committable copy into the repo (.agentum/wiki) so you can commit it"
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : saveMsg && !saveMsg.toLowerCase().includes('fail') ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Save className="size-3.5" />
+              )}
+              Save to repo
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleGenerate()}
+              disabled={generating || !repoId}
+            >
+              {generating ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Regenerate
+            </Button>
+          </div>
         ) : null}
       </header>
+
+      {saveMsg && index?.state === 'ready' ? (
+        <div className="border-b border-border bg-muted/40 px-4 py-1.5 text-xs text-muted-foreground">
+          {saveMsg}
+        </div>
+      ) : null}
 
       {repos.length === 0 ? (
         <CenteredState
@@ -278,6 +405,7 @@ export default function WikiPage(): React.JSX.Element {
           />
           <div className="min-w-0 flex-1">
             {renderBody({
+              repoId,
               workdir,
               isRemote,
               index,
@@ -291,12 +419,72 @@ export default function WikiPage(): React.JSX.Element {
               loadingPage,
               pageError,
               markdownDocuments,
+              controls,
               onGenerate: handleGenerate,
               onOpenDocument: handleOpenDocument
             })}
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ---- the agent + model picker ----------------------------------------------
+
+type ToolOption = { id: string; label: string }
+type ModelOption = { id: string; label: string }
+
+function GenerationControls({
+  tool,
+  onToolChange,
+  toolOptions,
+  model,
+  onModelChange,
+  modelOptions,
+  disabled
+}: {
+  tool: string
+  onToolChange: (v: string) => void
+  toolOptions: ToolOption[]
+  model: string
+  onModelChange: (v: string) => void
+  modelOptions: readonly ModelOption[]
+  disabled?: boolean
+}): React.JSX.Element {
+  const selectCls =
+    'h-8 rounded-md border border-border bg-card px-2 text-[12.5px] text-foreground outline-none hover:border-foreground/30 focus:border-foreground/40 disabled:opacity-50'
+  return (
+    <div className="flex items-center gap-1.5">
+      <select
+        aria-label="Wiki generation agent"
+        className={selectCls}
+        value={tool}
+        onChange={(e) => onToolChange(e.target.value)}
+        disabled={disabled}
+      >
+        {toolOptions.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.label}
+          </option>
+        ))}
+      </select>
+      {modelOptions.length > 0 ? (
+        <select
+          aria-label="Wiki generation model"
+          className={selectCls}
+          value={model}
+          onChange={(e) => onModelChange(e.target.value)}
+          disabled={disabled}
+        >
+          <option value="">Default model</option>
+          {modelOptions.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
     </div>
   )
 }
@@ -367,6 +555,7 @@ function RepoRail({
 // ---- the selected project's wiki body --------------------------------------
 
 type BodyProps = {
+  repoId: string | null
   workdir: string | null
   isRemote: boolean
   index: WikiIndexResponse | null
@@ -380,6 +569,7 @@ type BodyProps = {
   loadingPage: boolean
   pageError: string | null
   markdownDocuments: MarkdownDocument[]
+  controls: React.JSX.Element | null
   onGenerate: () => void | Promise<void>
   onOpenDocument: (document: MarkdownDocument) => void
 }
@@ -408,7 +598,7 @@ function CenteredState({
 }
 
 function renderBody(p: BodyProps): React.JSX.Element {
-  if (!p.workdir) {
+  if (!p.repoId) {
     return (
       <CenteredState
         icon={<Loader2 className="size-6 animate-spin text-muted-foreground" />}
@@ -449,17 +639,21 @@ function renderBody(p: BodyProps): React.JSX.Element {
         action={
           p.isRemote ? (
             <p className="text-xs text-muted-foreground">
-              Wiki generation runs on a local agent — not yet available for remote/SSH projects.
+              Wiki generation runs on a local agent — not available for remote/SSH projects yet.
+              If you also have this repo cloned locally, generate it there and it appears here too.
             </p>
           ) : (
-            <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
-              {p.generating ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <BookText className="size-4" />
-              )}
-              Generate wiki
-            </Button>
+            <div className="flex flex-col items-center gap-2.5">
+              {p.controls}
+              <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
+                {p.generating ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <BookText className="size-4" />
+                )}
+                Generate wiki
+              </Button>
+            </div>
           )
         }
       />
@@ -493,14 +687,17 @@ function renderBody(p: BodyProps): React.JSX.Element {
         description={error}
         action={
           p.isRemote ? undefined : (
-            <Button variant="outline" onClick={() => void p.onGenerate()} disabled={p.generating}>
-              {p.generating ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <RefreshCw className="size-4" />
-              )}
-              Try again
-            </Button>
+            <div className="flex flex-col items-center gap-2.5">
+              {p.controls}
+              <Button variant="outline" onClick={() => void p.onGenerate()} disabled={p.generating}>
+                {p.generating ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                Try again
+              </Button>
+            </div>
           )
         }
       />
@@ -517,14 +714,17 @@ function renderBody(p: BodyProps): React.JSX.Element {
         description="The last run produced no pages. Regenerate to rebuild it."
         action={
           p.isRemote ? undefined : (
-            <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
-              {p.generating ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <RefreshCw className="size-4" />
-              )}
-              Regenerate
-            </Button>
+            <div className="flex flex-col items-center gap-2.5">
+              {p.controls}
+              <Button onClick={() => void p.onGenerate()} disabled={p.generating}>
+                {p.generating ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                Regenerate
+              </Button>
+            </div>
           )
         }
       />
@@ -567,7 +767,7 @@ function renderBody(p: BodyProps): React.JSX.Element {
           <MarkdownPreview
             key={activeSlug}
             content={content}
-            filePath={pagePath(p.workdir, activeSlug)}
+            filePath={p.workdir ? pagePath(p.workdir, activeSlug) : `wiki/${activeSlug}.md`}
             scrollCacheKey={`wiki:${activeSlug}`}
             markdownDocuments={p.markdownDocuments}
             onOpenDocument={p.onOpenDocument}

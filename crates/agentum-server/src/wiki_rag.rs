@@ -25,11 +25,11 @@
 //! Everything here is synchronous std-fs + CPU math, meant to run under
 //! `tokio::task::spawn_blocking` from the async routes.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::wiki::{parse_wiki_index, wiki_dir};
+use crate::wiki::{parse_wiki_index, wiki_key, wiki_store_dir};
 
 /// Default number of chunks injected into a chat turn. Small: a few focused
 /// excerpts beat a wall of text and stay well within the context budget.
@@ -387,6 +387,24 @@ pub(crate) fn retrieve<'a>(
     Ok(scored)
 }
 
+/// Resolve the central wiki store dir for a LOCAL workdir (Chat retrieval always
+/// runs against a local checkout). Mirrors the routes' git-identity keying so
+/// retrieval finds the SAME dir the generation agent wrote to: local
+/// `git remote get-url origin` → [`wiki_key`] → [`wiki_store_dir`]. A worktree or
+/// a re-clone of the same repo therefore hits the one shared wiki.
+fn central_wiki_dir_for_local(workdir: &str) -> Option<PathBuf> {
+    let remote = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workdir)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+    wiki_store_dir(&wiki_key(remote.as_deref(), workdir)).ok()
+}
+
 /// The Chat entry point: retrieve the top wiki excerpts for `query` under
 /// `workdir` and format them as an injectable prompt block, or `None` when
 /// there's no wiki / no sidecar / no query / a model mismatch / nothing scores.
@@ -397,7 +415,7 @@ pub(crate) fn retrieve_context(workdir: Option<&str>, query: &str, k: usize) -> 
     if query.is_empty() {
         return None;
     }
-    let dir = wiki_dir(Path::new(wd));
+    let dir = central_wiki_dir_for_local(wd)?;
     let index = load_index(&dir)?;
     let embedder = default_embedder();
     let hits = retrieve(&index, query, embedder.as_ref(), k).ok()?;
@@ -541,14 +559,27 @@ mod tests {
 
     #[test]
     fn retrieve_context_formats_a_block_and_is_none_on_miss() {
-        let d = temp_dir();
-        write_wiki(&d);
+        // The store is git-keyed under data_dir(), so isolate it with AGENTUM_HOME
+        // and write the fixture where retrieve_context will actually look (never
+        // the real data dir). AGENTUM_HOME is process-global → take the crate lock.
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = temp_dir();
+        // SAFETY: serialised by TEST_ENV_LOCK — no other thread mutates env here.
+        unsafe {
+            std::env::set_var("AGENTUM_HOME", &home);
+        }
+
+        // A checkout with no git remote ⇒ path-keyed central dir. Write there.
+        let workdir = temp_dir();
+        let dir = wiki_store_dir(&wiki_key(None, workdir.to_str().unwrap())).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        write_wiki(&dir);
         let e = default_embedder();
-        let idx = build_index(&d, e.as_ref()).unwrap();
-        save_index(&d, &idx).unwrap();
+        let idx = build_index(&dir, e.as_ref()).unwrap();
+        save_index(&dir, &idx).unwrap();
 
         let block = retrieve_context(
-            Some(d.to_str().unwrap()),
+            Some(workdir.to_str().unwrap()),
             "watchdog crashed agent detection",
             DEFAULT_TOP_K,
         )
@@ -557,11 +588,17 @@ mod tests {
 
         // No workdir / empty query → None (graceful).
         assert!(retrieve_context(None, "x", 5).is_none());
-        assert!(retrieve_context(Some(d.to_str().unwrap()), "   ", 5).is_none());
-        // A workdir with no wiki → None.
+        assert!(retrieve_context(Some(workdir.to_str().unwrap()), "   ", 5).is_none());
+        // A different checkout with no wiki → None.
         let empty = temp_dir();
         assert!(retrieve_context(Some(empty.to_str().unwrap()), "anything", 5).is_none());
-        std::fs::remove_dir_all(&d).ok();
+
+        // SAFETY: still under the lock; restore env before releasing it.
+        unsafe {
+            std::env::remove_var("AGENTUM_HOME");
+        }
+        std::fs::remove_dir_all(&home).ok();
+        std::fs::remove_dir_all(&workdir).ok();
         std::fs::remove_dir_all(&empty).ok();
     }
 

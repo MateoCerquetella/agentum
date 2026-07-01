@@ -34,10 +34,67 @@ pub(crate) struct WikiIndex {
     pub pages: Vec<WikiPageMeta>,
 }
 
-/// `<workdir>/.agentum/wiki` — where the agent writes pages and the routes read
-/// them back.
+/// `<workdir>/.agentum/wiki` — the LEGACY, in-checkout location. Kept for
+/// migration (an older wiki lives here) and for the opt-in "save to repo" export;
+/// the live store is now the git-keyed central dir below.
 pub(crate) fn wiki_dir(workdir: &Path) -> PathBuf {
     workdir.join(".agentum").join("wiki")
+}
+
+/// The central directory a repo's wiki lives in: `<data_dir>/wiki/<key>`. The
+/// wiki lives HERE — keyed by git identity, NOT inside the checkout — so the same
+/// repo cloned locally and over SSH (or in a worktree) shares ONE wiki instead of
+/// duplicating a copy per checkout path.
+pub(crate) fn wiki_store_dir(key: &str) -> anyhow::Result<PathBuf> {
+    Ok(agentum_store::paths::data_dir()?.join("wiki").join(key))
+}
+
+/// The stable, filesystem-safe key a repo's wiki is stored under. Prefer the
+/// normalized git remote (`git__github.com_owner_repo`) so every checkout of the
+/// same repo collapses to one wiki; fall back to a hash of the checkout path
+/// (`path__<hash>`) when the repo has no remote (a plain folder, or a git repo
+/// with no `origin` yet). Reuses `forge::parse_remote_url` so remote normalization
+/// has a single source of truth.
+pub(crate) fn wiki_key(remote_url: Option<&str>, fallback_path: &str) -> String {
+    match remote_url.and_then(|u| crate::routes::forge::parse_remote_url(u)) {
+        Some((host, project)) => format!("git__{}", slugify_key(&format!("{host}/{project}"))),
+        None => format!("path__{}", short_hash(fallback_path)),
+    }
+}
+
+/// Lower-case and collapse anything outside `[a-z0-9._-]` to `_`, so a
+/// `host/owner/repo` becomes one safe path segment. Not a hash — a readable dir
+/// name aids debugging, and the git-remote branch is always short. Lower-casing
+/// also folds `Owner/Repo` and `owner/repo` (case-insensitive forges) to one key.
+fn slugify_key(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .map(|c| {
+            let c = c.to_ascii_lowercase();
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() {
+        out.push('_');
+    }
+    out
+}
+
+/// FNV-1a 64-bit of `s` as zero-padded hex — a short, stable, dependency-free key
+/// for the path fallback (a full absolute path could blow a 255-byte dir-name
+/// limit, and readability doesn't matter there). Not cryptographic; it only needs
+/// to keep distinct checkout paths in distinct buckets.
+fn short_hash(s: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 /// Slug guard: `^[a-z0-9][a-z0-9-]*$`. Rejects anything that could escape the wiki
@@ -79,11 +136,14 @@ pub(crate) fn parse_wiki_index(json: &str) -> anyhow::Result<WikiIndex> {
     Ok(index)
 }
 
-/// Build the generation prompt. `repo_context` is the `gather_repo_context` seed
-/// (wired in `routes::wiki`); it is a *starter map*, not the mechanism — the agent
-/// reads the repo from its workdir for anything the seed truncated. Built with
-/// `push_str` (not `format!`) so the JSON example's braces need no escaping.
-pub(crate) fn build_wiki_prompt(workdir: &str, repo_context: Option<&str>) -> String {
+/// Build the generation prompt. The agent READS the repo at `workdir` and WRITES
+/// the wiki into `out_dir` (the git-keyed central store — an absolute path OUTSIDE
+/// the checkout, so keep them separate and explicit). `repo_context` is the
+/// `gather_repo_context` seed (wired in `routes::wiki`); it is a *starter map*,
+/// not the mechanism — the agent reads the repo from its workdir for anything the
+/// seed truncated. Built with `push_str` (not `format!`) so the JSON example's
+/// braces need no escaping.
+pub(crate) fn build_wiki_prompt(workdir: &str, out_dir: &str, repo_context: Option<&str>) -> String {
     let mut p = String::new();
     p.push_str(
         "You are the AutoWiki generator in the Agentum Harness. Produce a structured, \
@@ -114,9 +174,12 @@ pub(crate) fn build_wiki_prompt(workdir: &str, repo_context: Option<&str>) -> St
          Architecture page and LIST which modules you omitted (never silently drop them).\n\n",
     );
 
-    p.push_str("=== WRITE THESE FILES (under ");
-    p.push_str(workdir);
-    p.push_str("/.agentum/wiki/) ===\n");
+    p.push_str(
+        "=== WRITE THESE FILES (in this EXACT directory, which already exists) ===\n\
+         Use this absolute path verbatim — it is OUTSIDE the repo, on purpose:\n  ",
+    );
+    p.push_str(out_dir);
+    p.push('\n');
     p.push_str(
         "- overview.md — what the project is, who it's for, and how to get started.\n\
          - architecture.md — the system shape. It MUST contain exactly one ```mermaid \
@@ -214,8 +277,9 @@ mod tests {
 
     #[test]
     fn build_wiki_prompt_states_the_contract_and_seed() {
-        let prompt = build_wiki_prompt("/repo/x", Some("SEED LINES"));
-        assert!(prompt.contains("/repo/x"));
+        let prompt = build_wiki_prompt("/repo/x", "/data/wiki/git__gh_o_r", Some("SEED LINES"));
+        assert!(prompt.contains("/repo/x")); // the repo to READ
+        assert!(prompt.contains("/data/wiki/git__gh_o_r")); // the dir to WRITE
         assert!(prompt.contains("index.json"));
         assert!(prompt.contains("mermaid"));
         assert!(prompt.contains("SEED LINES"));
@@ -224,7 +288,29 @@ mod tests {
 
     #[test]
     fn build_wiki_prompt_without_context_omits_seed() {
-        let prompt = build_wiki_prompt("/repo/x", None);
+        let prompt = build_wiki_prompt("/repo/x", "/data/wiki/x", None);
         assert!(!prompt.contains("STARTER MAP"));
+    }
+
+    #[test]
+    fn wiki_key_collapses_checkouts_of_the_same_remote() {
+        // A local clone and an SSH clone of the same repo have the same origin,
+        // in whatever URL form — they must resolve to ONE key regardless of the
+        // (different) checkout paths. Case folds too (case-insensitive forges).
+        let https = wiki_key(Some("https://github.com/Owner/Repo.git"), "/Users/me/local");
+        let ssh = wiki_key(Some("git@github.com:owner/repo"), "/home/me/remote");
+        assert_eq!(https, ssh);
+        assert_eq!(https, "git__github.com_owner_repo");
+    }
+
+    #[test]
+    fn wiki_key_falls_back_to_path_hash_without_a_remote() {
+        // No remote (plain folder / unpushed repo) → stable, path-derived key.
+        let a = wiki_key(None, "/some/folder");
+        let b = wiki_key(None, "/some/folder");
+        let c = wiki_key(None, "/other/folder");
+        assert!(a.starts_with("path__"));
+        assert_eq!(a, b); // deterministic
+        assert_ne!(a, c); // distinct paths → distinct keys
     }
 }
