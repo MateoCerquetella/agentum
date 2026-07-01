@@ -45,7 +45,7 @@ describe('OnboardingFlow', () => {
     expect(html).not.toContain('Skip the tour')
   })
 
-  it('keeps agent setup actions out of the footer', () => {
+  it('shows the agent MCP tool toggles and advances via the footer', () => {
     const html = renderToStaticMarkup(
       <OnboardingFlow
         onboarding={{
@@ -57,8 +57,11 @@ describe('OnboardingFlow', () => {
     )
 
     expect(html).toContain('Set up Agentum for agents')
-    expect(html).toContain('Turn on advanced Agentum capabilities for agents.')
-    expect(html).toContain('Enable capabilities')
+    expect(html).toContain('Choose the agentum MCP tools every agent can use.')
+    expect(html).toContain('Agent MCP tools')
+    expect(html).toContain('role="switch"')
+    // The MCP tools apply on Continue now — no separate "Enable capabilities" button.
+    expect(html).not.toContain('Enable capabilities')
     expect(html).toContain('Continue')
     expect(html).toContain('Skip to project setup')
     expect(html).not.toContain('>Skip</button>')
