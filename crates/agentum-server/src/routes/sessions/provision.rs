@@ -67,16 +67,32 @@ fn encode_worktree_query(value: &str) -> String {
     out
 }
 
-/// Build the agentum MCP URL for an agent, tagging it with this session's
-/// worktree so the agent's `agentum_browser` ops route to ITS per-worktree
-/// browser — the same Chromium the user's pane watches (see
-/// [`crate::cdp_browser::ensure_local_cdp_browser_for`]). No worktree → the bare
-/// URL, so contextless callers keep the shared browser.
-fn mcp_url_with_worktree(base: &str, worktree_path: Option<&str>) -> String {
-    match worktree_path.map(str::trim).filter(|p| !p.is_empty()) {
+/// Build the agentum MCP URL for an agent, tagging it with the directory the
+/// agent runs in so its `agentum_browser` ops route to the SAME per-worktree
+/// browser the user's pane watches (see
+/// [`crate::cdp_browser::ensure_local_cdp_browser_for`], which reduces both the
+/// pane's `repoId::path` id and this bare path to one canonical key). Callers
+/// pass the effective work path — the worktree when the session has one, else
+/// its workdir — because a session opened in an EXISTING worktree carries no
+/// `worktree_path` yet still runs in it; tagging only `worktree_path` left those
+/// (the desktop's common case) untagged, so the agent silently drove the shared
+/// browser and its opened tabs landed under whatever worktree the UI was focused
+/// on. Empty/absent → the bare URL (contextless callers keep the shared browser).
+fn mcp_url_with_worktree(base: &str, work_path: Option<&str>) -> String {
+    match work_path.map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => format!("{base}/mcp?worktree={}", encode_worktree_query(p)),
         None => format!("{base}/mcp"),
     }
+}
+
+/// The path to tag the MCP URL with: the session's `worktree_path` when it has
+/// one, else the directory it runs in. A session opened in an EXISTING worktree
+/// carries no `worktree_path` (only sessions that ran `git worktree add` do), yet
+/// still runs inside that worktree — so falling back to the workdir is what makes
+/// its browser ops resolve to the right per-worktree browser instead of the
+/// shared one.
+fn worktree_tag_path<'a>(worktree_path: Option<&'a str>, workdir: &'a str) -> &'a str {
+    worktree_path.unwrap_or(workdir)
 }
 
 /// Spawn the agent process for a freshly-(re)started session into a tmux pane
@@ -154,9 +170,20 @@ pub(crate) async fn spawn_agent_into_pane(
             .unwrap_or("http://127.0.0.1:8822");
         // Tag the MCP URL with this LOCAL session's worktree so the agent's
         // browser ops drive ITS per-worktree browser — the same Chromium the
-        // user's pane attaches to. SSH sessions (below) keep the bare URL: their
-        // browser is the host-resident one reached via an explicit cdpPort tunnel.
-        let agentum_mcp_url = mcp_url_with_worktree(base, session.worktree_path.as_deref());
+        // user's pane attaches to. Use the effective work path (the resolved
+        // `workdir` when there's no explicit `worktree_path`): a session opened
+        // in an EXISTING worktree has no `worktree_path` but still runs in it, so
+        // tagging only `worktree_path` left it untagged and its opened tabs fell
+        // back to the UI-focused worktree. SSH sessions (below) keep the bare
+        // URL: their browser is the host-resident one reached via a cdpPort tunnel.
+        let workdir_str = workdir.to_string_lossy();
+        let agentum_mcp_url = mcp_url_with_worktree(
+            base,
+            Some(worktree_tag_path(
+                session.worktree_path.as_deref(),
+                &workdir_str,
+            )),
+        );
         if let Some(p) =
             crate::mcp_provision::provision(state, &session.tool, &agentum_mcp_url).await
         {
@@ -338,7 +365,16 @@ pub(super) async fn reprovision_session(
                 .api_base_url
                 .as_deref()
                 .unwrap_or("http://127.0.0.1:8822");
-            format!("{base}/mcp")
+            // Preserve the `?worktree=` tag across an endpoint-drift rewrite —
+            // dropping it would silently revert this session's agent to the
+            // shared browser (and its opened tabs to the UI-focused worktree).
+            mcp_url_with_worktree(
+                base,
+                Some(worktree_tag_path(
+                    session.worktree_path.as_deref(),
+                    &session.workdir,
+                )),
+            )
         }
         HostKind::Ssh { .. } => match crate::mcp_provision::local_mcp_port(state) {
             Some(mac_port) => {
@@ -591,6 +627,22 @@ mod tests {
         assert_eq!(
             mcp_url_with_worktree(base, Some("  ")),
             "http://127.0.0.1:8822/mcp"
+        );
+    }
+
+    #[test]
+    fn worktree_tag_path_falls_back_to_workdir_for_existing_worktree_sessions() {
+        // An explicit worktree (a `git worktree add` session) wins.
+        assert_eq!(
+            worktree_tag_path(Some("/repo/.claude/worktrees/feat"), "/repo"),
+            "/repo/.claude/worktrees/feat"
+        );
+        // The regression this fix targets: a session OPENED in an existing
+        // worktree has no `worktree_path`, so we must tag its workdir — otherwise
+        // it stays untagged and its browser falls back to the UI-active worktree.
+        assert_eq!(
+            worktree_tag_path(None, "/repo/.claude/worktrees/feat"),
+            "/repo/.claude/worktrees/feat"
         );
     }
 

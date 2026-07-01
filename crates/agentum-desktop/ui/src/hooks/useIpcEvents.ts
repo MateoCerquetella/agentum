@@ -8,6 +8,7 @@ import { formatBrowserAnnotationsAsMarkdown } from '../components/browser-pane/b
 import { getWorktreeMapFromState, getRepoMapFromState } from '@/store/selectors'
 import { applyUIZoom } from '@/lib/ui-zoom'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
+import { resolveOpenTabWorktreeId } from '@/lib/open-tab-worktree'
 import { runWorktreeDelete } from '@/components/sidebar/delete-worktree-flow'
 import { runSleepWorktree } from '@/components/sidebar/sleep-worktree-flow'
 import {
@@ -1452,7 +1453,20 @@ export function useIpcEvents(): void {
             return
           }
           const store = useAppStore.getState()
-          const worktreeId = data.worktreeId ?? store.activeWorktreeId
+          // Land the tab in the CALLING agent's worktree (the server tags its
+          // MCP url with its work path), not whatever the UI is focused on. The
+          // hint is a bare path; match it across registered AND git-detected
+          // worktrees, reconciling a differing repoId by path, and fall back to
+          // the active worktree when there's no usable hint.
+          const knownWorktrees = [
+            ...store.allWorktrees(),
+            ...Object.values(store.detectedWorktreesByRepo).flatMap((result) => result.worktrees)
+          ]
+          const worktreeId = resolveOpenTabWorktreeId(
+            data.worktreeId,
+            knownWorktrees,
+            store.activeWorktreeId
+          )
           if (!worktreeId) {
             api.ui.replyTabCreate({ requestId: data.requestId, error: 'No active worktree' })
             return
