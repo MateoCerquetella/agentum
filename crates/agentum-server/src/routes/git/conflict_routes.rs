@@ -265,6 +265,11 @@ mod tests {
         git(host, cwd, &["init", "-q"]).await;
         git(host, cwd, &["config", "user.email", "t@example.com"]).await;
         git(host, cwd, &["config", "user.name", "t"]).await;
+        // Windows CI defaults to core.autocrlf=true, which checks tracked files
+        // back out with CRLF — but the exact-string assertions below expect the
+        // LF bytes we write here. Pin the temp repo to LF so these git tests are
+        // deterministic across platforms.
+        git(host, cwd, &["config", "core.autocrlf", "false"]).await;
         std::fs::write(format!("{cwd}/tracked.txt"), "v1\n").unwrap();
         git(host, cwd, &["add", "tracked.txt"]).await;
         git(host, cwd, &["commit", "-q", "-m", "init"]).await;
