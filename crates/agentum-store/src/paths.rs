@@ -75,10 +75,16 @@ pub fn tls_dir() -> Result<PathBuf, PathError> {
     Ok(data_dir()?.join("tls"))
 }
 
+/// The directory holding per-session pane logs. The single owner of the
+/// `cache/sessions` layout: [`pane_log`] (the writer path) and the boot-time
+/// orphan reaper both derive from here, so the location can't silently drift
+/// between them.
+pub fn pane_log_dir() -> Result<PathBuf, PathError> {
+    Ok(cache_dir()?.join("sessions"))
+}
+
 pub fn pane_log(session_id: &str) -> Result<PathBuf, PathError> {
-    Ok(cache_dir()?
-        .join("sessions")
-        .join(format!("{session_id}.log")))
+    Ok(pane_log_dir()?.join(format!("{session_id}.log")))
 }
 
 /// Path to the per-server planner config: `$XDG_CONFIG_HOME/agentum/planner.toml`.

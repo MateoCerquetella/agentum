@@ -4,6 +4,7 @@
 // loopback endpoint resolved in server-endpoint.ts. Mirrors the TUI client in
 // crates/agentum-tui/src/commands/terminal/api.rs.
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
+import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 import { record as recordHostIo, LOCAL_HOST_KEY, type HostKey } from './io-meter'
 
 export type SessionStatus = 'idle' | 'running' | 'stopped' | 'crashed'
@@ -384,10 +385,6 @@ export async function openSessionStream(
     const qs = params.toString()
     return qs ? `${base}?${qs}` : base
   }
-
-  // Capped exponential backoff with jitter — same shape as the TUI's loop.
-  const backoffMs = (n: number): number =>
-    Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
 
   const clearTimers = (): void => {
     if (reconnectTimer) {

@@ -465,14 +465,18 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     {
         let store = state.store.clone();
         tokio::spawn(async move {
-            pane_log_reaper::reap_orphan_pane_logs(store.clone()).await;
-            match store.prune_events(30).await {
-                Ok(pruned) if pruned > 0 => {
-                    tracing::info!(pruned, "pruned aged event history")
+            // Disjoint resources (filesystem cache vs sqlite) — run them
+            // concurrently so the DB prune isn't gated on the log sweep.
+            let prune = async {
+                match store.prune_events(30).await {
+                    Ok(pruned) if pruned > 0 => {
+                        tracing::info!(pruned, "pruned aged event history")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = ?e, "event history prune failed"),
                 }
-                Ok(_) => {}
-                Err(e) => tracing::warn!(error = ?e, "event history prune failed"),
-            }
+            };
+            tokio::join!(pane_log_reaper::reap_orphan_pane_logs(store.clone()), prune);
         });
     }
 

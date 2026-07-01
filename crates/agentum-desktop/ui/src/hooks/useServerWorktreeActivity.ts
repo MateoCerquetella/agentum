@@ -3,6 +3,7 @@ import { useAppStore } from '@/store'
 import { listSessions } from '@/runtime/agentum-server-client'
 import { subscribeServerEvents, type ServerEventFrame } from '@/runtime/server-events-bus'
 import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
+import { reconnectBackoffMs as backoffMs } from '@/runtime/reconnect-backoff'
 import {
   buildWorktreeActivitySnapshot,
   indexSessionsByWorktree,
@@ -15,9 +16,6 @@ import {
 // alive-set fresh in real time, but a periodic refetch self-heals any missed
 // event (e.g. a session killed outside agentum). Loopback call — cheap.
 const REFRESH_INTERVAL_MS = 30_000
-
-const backoffMs = (n: number): number =>
-  Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
 
 function collectWorktrees(): WorktreeLike[] {
   const byRepo = useAppStore.getState().worktreesByRepo
@@ -90,7 +88,7 @@ export function useServerWorktreeActivity(): void {
       useAppStore.getState().setServerWorktreeActivitySnapshot(snapshot)
     }
 
-    const refresh = async (): Promise<boolean> => {
+    const doRefresh = async (): Promise<boolean> => {
       let sessions: Awaited<ReturnType<typeof listSessions>>
       try {
         sessions = await listSessions()
@@ -115,6 +113,21 @@ export function useServerWorktreeActivity(): void {
       }
       remap()
       return true
+    }
+
+    // Single-flight: at mount this fires from three tracks nearly at once
+    // (bootstrap fast-retry, the visibility interval's immediate run, the
+    // events-bus onOpen) — share one listSessions round trip instead of
+    // issuing three identical fetches at the moment the embedded server is
+    // slowest to answer.
+    let inFlightRefresh: Promise<boolean> | null = null
+    const refresh = (): Promise<boolean> => {
+      if (!inFlightRefresh) {
+        inFlightRefresh = doRefresh().finally(() => {
+          inFlightRefresh = null
+        })
+      }
+      return inFlightRefresh
     }
 
     // Fast bootstrap so the sidebar shows the ACTUAL status right after an app

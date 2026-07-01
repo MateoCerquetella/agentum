@@ -30,7 +30,7 @@ const MIN_ORPHAN_AGE: Duration = Duration::from_secs(60 * 60);
 /// Resolve the log dir + known session ids, then sweep on a blocking thread.
 /// Call once from `spawn_background_workers`.
 pub(crate) async fn reap_orphan_pane_logs(store: std::sync::Arc<agentum_store::Store>) {
-    let Ok(dir) = agentum_store::paths::cache_dir().map(|d| d.join("sessions")) else {
+    let Ok(dir) = agentum_store::paths::pane_log_dir() else {
         return;
     };
     let sessions = match store.list_sessions(None).await {

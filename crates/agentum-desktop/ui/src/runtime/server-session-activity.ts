@@ -127,10 +127,6 @@ export function createServerSessionActivityHub() {
           handlersBySessionId.delete(sessionId)
         }
       }
-    },
-
-    hasHandlers(): boolean {
-      return handlersBySessionId.size > 0
     }
   }
 }
