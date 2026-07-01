@@ -104,6 +104,37 @@ struct EntriesResp {
     entries: Vec<FileEntry>,
 }
 
+/// macOS gates access to certain personal folders ("Files & Folders" TCC): the
+/// first time an app *reads the contents* of `~/Pictures`, `~/Music`, or
+/// `~/Movies`, macOS shows a "would like to access your Pictures/Music" prompt.
+/// The workspace picker only ever wants code projects — never a user's media —
+/// so we never descend into those folders. They still appear as names in the
+/// parent ($HOME) listing (that costs nothing and triggers no prompt); we just
+/// return an empty listing for the folders themselves instead of reading (and
+/// prompting). macOS-only — other platforms don't gate these dirs.
+#[cfg(target_os = "macos")]
+fn is_protected_media_dir(path: &Path) -> bool {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) => is_protected_media_dir_in(path, &home),
+        None => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_protected_media_dir_in(path: &Path, home: &Path) -> bool {
+    ["Pictures", "Music", "Movies"].iter().any(|name| {
+        let protected = home.join(name);
+        // Component-aware (`starts_with` on `Path`), so `~/Pictures2` is NOT a
+        // match — only the folder itself and things genuinely inside it.
+        path == protected || path.starts_with(&protected)
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_protected_media_dir(_path: &Path) -> bool {
+    false
+}
+
 /// `GET /api/fs/entries?path=…&show_hidden=&host_id=` — list a directory's dirs
 /// AND files (the workdir picker's `/list` is dirs-only). Host-aware: a local
 /// host reads the filesystem directly; an SSH host lists over the connection via
@@ -124,6 +155,16 @@ async fn list_entries(
     }
 
     let resolved = resolve(&q.path.unwrap_or_default())?;
+    // Never read a macOS-protected media folder — reading it is what fires the
+    // privacy prompt. Present it as empty (bail before any metadata/read_dir).
+    if is_protected_media_dir(&resolved) {
+        let parent = resolved.parent().map(|p| p.to_string_lossy().to_string());
+        return Ok(Json(EntriesResp {
+            path: resolved.to_string_lossy().to_string(),
+            parent,
+            entries: Vec::new(),
+        }));
+    }
     let meta = fs::metadata(&resolved)
         .await
         .map_err(|e| ApiError::BadRequest(format!("path error: {e}")))?;
@@ -233,6 +274,17 @@ async fn list_dir(
 
     let raw = q.path.unwrap_or_default();
     let resolved = resolve(&raw)?;
+
+    // Never read a macOS-protected media folder — reading it is what fires the
+    // privacy prompt. Present it as empty (bail before any metadata/read_dir).
+    if is_protected_media_dir(&resolved) {
+        let parent = resolved.parent().map(|p| p.to_string_lossy().to_string());
+        return Ok(Json(ListResp {
+            path: resolved.to_string_lossy().to_string(),
+            parent,
+            dirs: Vec::new(),
+        }));
+    }
 
     let meta = fs::metadata(&resolved)
         .await
@@ -572,5 +624,26 @@ mod tests {
                 ("README.md", "file"),
             ]
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn protected_media_dirs_are_flagged_but_projects_are_not() {
+        let home = Path::new("/Users/tester");
+        // The gated media folders + anything inside them are protected…
+        assert!(is_protected_media_dir_in(Path::new("/Users/tester/Pictures"), home));
+        assert!(is_protected_media_dir_in(Path::new("/Users/tester/Music"), home));
+        assert!(is_protected_media_dir_in(Path::new("/Users/tester/Movies"), home));
+        assert!(is_protected_media_dir_in(
+            Path::new("/Users/tester/Music/band/album"),
+            home
+        ));
+        // …but code locations and lookalike names are not.
+        assert!(!is_protected_media_dir_in(
+            Path::new("/Users/tester/Developer/proj"),
+            home
+        ));
+        assert!(!is_protected_media_dir_in(Path::new("/Users/tester/Pictures2"), home));
+        assert!(!is_protected_media_dir_in(Path::new("/Users/tester"), home));
     }
 }
