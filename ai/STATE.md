@@ -3,13 +3,27 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 002-start-loads-spec
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (002 Option B impl + gated; browser QA + release = human)
+- **current_spec:** 003-chat-issue-preview
+- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 CODE COMPLETE + gate-green; PR #199 into develop, issue #198. Browser QA (staging) + release = human. 002 below.)
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **003-chat-issue-preview** — Drafted + PM-gated (`ai/specs/003-chat-issue-preview/spec.md`).
+  Grounded on a FRESH `feat/chat-board-revamp` worktree off `origin/develop` @ v0.46.1
+  (the `chat-revamp` worktree the user invoked from was **258 commits behind** — v0.26;
+  even local `develop` is stale). Scope (Mateo): Chat gets an editable **draft before
+  filing** — preview + edit + regenerate + confirm, with **full multi-issue control**
+  (split one-issue-checklist vs one-per-task, provider GitHub/Linear, labels). Key
+  finding: `chat_issues` (`chat.rs:950`) files atomically from a **second** extraction
+  call, so the filed issue can differ from the prose shown; the draft pieces
+  (`extract_feature_plan` `chat.rs:1197`, `compose_issue_body` `chat.rs:914`,
+  `provider` field `chat.rs:846`) already exist — no endpoint returns a plan without
+  filing. ⚠️ **One-slice caveat for architect:** labels + `per_task` split are
+  deferrable to a 003b (Open-Q5); the spine (preview/edit/regenerate/confirm,
+  single-issue GitHub) is the core increment. Board asks → roadmap 004-006. Ready for
+  architect.
 - **001-autowiki** — COMMITTED (`3a8dbf06`) + **PR #183** (OPEN, into develop),
   issue #182. Browser QA pending downstream (staging). [Local autowiki worktree was
   lost to an env reset; work is safe on `origin/feat/autowiki`.]
@@ -84,3 +98,52 @@
   + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
   npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
   human-gated release** (browser QA + merge/promote/tag = Mateo).
+- 2026-07-01 — 003 CODE COMPLETE + SHIPPED to develop. `vite build` GREEN
+  (`✓ built in 4m24s`; needed `--max-old-space-size=6144` — 4096 OOM'd). Issue
+  **#198** + PR **#199** (feat/chat-board-revamp → develop, `Closes #198`). All 4
+  increments done + gated (cargo check + 25 unit tests + full UI build). Ralph loop
+  cancelled (would tight-spin against the >10-min background build). ⏭ Browser QA
+  runs at STAGING per branch flow; tagged release to main stays Mateo-gated
+  (classifier + presence). Board asks = specs 004–006.
+- 2026-07-01 — 003 UI slice CODED (draft-review modal). `chat-client.ts`:
+  `previewIssuesFromChat()` + `DraftPlan`/`DraftTask`/`IssueSplit` types +
+  `createIssuesFromChat` carries `plan`/`split`/`labels`. `ChatPage.tsx`: "Create
+  issues" → "Preview issues" → editable `DraftReview` modal (title/summary/tasks +
+  priority, add/remove task, split single/per_task, provider GitHub/Linear, labels,
+  Regenerate/Confirm/Cancel; Confirm files the shown draft verbatim, closes on
+  success). `bun install` ✓; `tsc --noEmit` clean on the two touched files (all
+  reported errors are pre-existing `shared/*` Vite-alias noise in untouched files).
+  Full `vite build` (~9.5m, > foreground cap) runs in BACKGROUND for authoritative
+  confirm. REMAINING: confirm build green, then `/ship` (issue + PR into develop).
+- 2026-07-01 — 003 SERVER slice DONE (Ralph loop iter, Mateo re-authorized full
+  build). Commits `5930bf27` (spec docs) + `86c618e1` (server), pushed to
+  `origin/feat/chat-board-revamp`. Implemented: `POST /api/chat/issues/preview`
+  (draft, files nothing) + shared `extract_plan()` + `chat_issues` accepts a
+  client `plan` filed VERBATIM (skip re-extract) + `split` single/per_task via
+  `plan_to_features()` + `labels`→`gh --label` (`NewFeature.labels`, Linear no-op).
+  `cargo check -p agentum-server` + 25 touched unit tests green (fmt-clean; reverted
+  unrelated gh.rs/cdp_driver.rs/mcp.rs fmt churn). REMAINING: (4) desktop UI draft
+  panel in `ChatPage.tsx` + `chat-client.ts` preview/confirm + `npm run build`;
+  then `/ship` (issue + PR into develop). Tagged release still Mateo-gated.
+- 2026-07-01 — Ralph loop fired ("finish this spec and release with /ship").
+  Spec *document* is finished (drafted + PM-gated + open questions listed — that IS
+  the /sdd-spec deliverable). "Finish → release" would be the full gated SDD build
+  (architect→dev→test→review) + a **human-gated release** (classifier blocks
+  push/tag/self-merge without an explicit `Bash(...)` rule + Mateo present — verbal
+  "go" ≠ enough; ephemeral env has wiped mid-session work before). **Mateo's call:
+  FINALIZE THE SPEC ONLY** — do NOT run architect/build/release; he/the team drive it
+  from here. Loop kept running as-is (will re-feed; standing instruction = hold at
+  "spec finalized", don't auto-build/release). STANDING GATE for any future
+  iteration: the build + release require Mateo to explicitly re-authorize (and the
+  release still needs his presence + a permission rule).
+- 2026-07-01 — Scoped spec **003-chat-issue-preview** from Mateo's ask ("chat
+  creation is too simple — let me see/regenerate what gets created"). Re-grounded on
+  a fresh `feat/chat-board-revamp` worktree off `origin/develop` @ v0.46.1 (the
+  `chat-revamp` worktree the ask came from was 258 commits behind; two initial
+  Explore passes on it read stale v0.26 code and were re-run on develop). Finding:
+  Chat files atomically from a separate extraction call (no preview; filed ≠ shown);
+  draft pieces already exist. Answers (Mateo): spec 003 = chat preview FIRST; depth =
+  **full multi-issue control** (split/provider/labels); board end-state =
+  **projects-first** (→ roadmap specs 004 Kanban-read, 005 status write-back, 006
+  projects-first). PM gate passed (one-slice flagged: labels/split → possible 003b) →
+  phase `pm`, ready for architect.

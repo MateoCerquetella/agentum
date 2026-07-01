@@ -48,6 +48,10 @@ pub fn router() -> Router<AppState> {
         // (answer text + extended-thinking) as our own compact `{type,text}`
         // events so the desktop renders the reply live, reasoning included.
         .route("/api/chat/stream", post(chat_stream))
+        // Spec 003: return the extracted feature plan as an editable DRAFT without
+        // filing anything — the UI shows it, the user edits/regenerates, then
+        // `/api/chat/issues` files the (edited) plan verbatim.
+        .route("/api/chat/issues/preview", post(chat_issues_preview))
         .route("/api/chat/issues", post(chat_issues))
 }
 
@@ -881,6 +885,21 @@ struct ChatIssuesRequest {
     /// unconnected provider is a loud typed 422 — never a silent board fallback.
     #[serde(default)]
     provider: Option<String>,
+    /// Spec 003: a client-supplied, user-edited feature plan. When present,
+    /// extraction is **skipped** and this plan is filed verbatim — the
+    /// what-you-see-is-what-you-file guarantee (Confirm files exactly the draft
+    /// the user reviewed). Absent → extract from `messages` (back-compat).
+    #[serde(default)]
+    plan: Option<FeaturePlan>,
+    /// Spec 003: how to file — `"single"` (one issue, sub-tasks as a priority
+    /// checklist — default, today's behaviour) or `"per_task"` (one issue per
+    /// task). Anything unrecognised falls back to single.
+    #[serde(default)]
+    split: Option<String>,
+    /// Spec 003: labels to apply to the created issue(s). GitHub `--label`;
+    /// Linear is a documented v1 no-op. Empty = none.
+    #[serde(default)]
+    labels: Vec<String>,
 }
 
 /// One sub-task of the feature. `detail`/`priority` are optional so a terse model
@@ -977,6 +996,120 @@ fn compose_issue_body(plan: &FeaturePlan) -> String {
     body
 }
 
+/// How Chat files the plan (spec 003). `Single` = ONE issue with the sub-tasks as
+/// a priority-ordered checklist (default — the pre-003 behaviour). `PerTask` = one
+/// issue per task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SplitMode {
+    Single,
+    PerTask,
+}
+
+impl SplitMode {
+    /// Map the request's optional `split` string; anything unrecognised (or
+    /// absent) is `Single`, so a sloppy value never fans out into N issues.
+    fn parse(raw: Option<&str>) -> SplitMode {
+        match raw.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+            Some("per_task") | Some("per-task") | Some("multiple") | Some("split") => {
+                SplitMode::PerTask
+            }
+            _ => SplitMode::Single,
+        }
+    }
+}
+
+/// Turn a plan into the concrete issue(s) to file — the ONE place a plan becomes
+/// `NewFeature`s, so "what the user confirmed is what gets filed" holds (no
+/// re-extraction). `Single` → one issue whose body is the priority checklist
+/// ([`compose_issue_body`]). `PerTask` → one issue per task, priority-ordered
+/// (High→Low, stable), each body carrying the task detail + priority + parent
+/// feature. `labels` ride on every issue.
+fn plan_to_features(plan: &FeaturePlan, split: SplitMode, labels: &[String]) -> Vec<NewFeature> {
+    match split {
+        SplitMode::Single => vec![NewFeature {
+            title: plan.title.clone(),
+            body: Some(compose_issue_body(plan)),
+            labels: labels.to_vec(),
+        }],
+        SplitMode::PerTask => {
+            let mut tasks: Vec<(usize, &SubTask, Priority)> = plan
+                .tasks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (i, t, parse_priority(t.priority.as_deref())))
+                .collect();
+            // Same stable priority sort the checklist uses.
+            tasks.sort_by_key(|(i, _, p)| (p.rank(), *i));
+            tasks
+                .into_iter()
+                .map(|(_, t, p)| NewFeature {
+                    title: t.title.trim().to_string(),
+                    body: Some(compose_task_body(plan, t, p)),
+                    labels: labels.to_vec(),
+                })
+                .collect()
+        }
+    }
+}
+
+/// One per-task issue body: the task detail, its priority, and a back-reference to
+/// the parent feature so a split-out issue still reads standalone.
+fn compose_task_body(plan: &FeaturePlan, task: &SubTask, priority: Priority) -> String {
+    let mut body = String::new();
+    let detail = task.detail.trim();
+    if !detail.is_empty() {
+        body.push_str(detail);
+        body.push_str("\n\n");
+    }
+    body.push_str(&format!("**Priority:** {}\n", priority.label()));
+    let feature = plan.title.trim();
+    if !feature.is_empty() {
+        body.push_str(&format!("**Feature:** {feature}\n"));
+    }
+    body.push_str("\n_Created from an agentum Chat feature breakdown._");
+    body
+}
+
+/// Run the extraction LLM call over a transcript and parse a [`FeaturePlan`].
+/// Shared by the preview endpoint and the create endpoint (when the client did
+/// NOT supply an already-edited plan). Byte-identical to the call it was extracted
+/// from, so the OAuth identity block + trailing-user-turn invariants hold.
+async fn extract_plan(
+    auth: &Auth,
+    transcript: &[ChatMessage],
+    workdir: Option<&str>,
+) -> Result<FeaturePlan, ApiError> {
+    // Append an explicit final USER turn asking for the JSON (Anthropic rejects a
+    // trailing-assistant array; a direct last-word instruction also extracts more
+    // reliably than the system prompt alone).
+    let mut messages: Vec<serde_json::Value> = transcript
+        .iter()
+        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .collect();
+    messages.push(json!({ "role": "user", "content": EXTRACT_USER_PROMPT }));
+
+    // Lead the system with the strict-JSON instruction, then the SAME repo +
+    // harness snapshot the interview used — so each task names the real files.
+    let extract_system = match gather_repo_context(workdir) {
+        Some(c) => format!(
+            "{EXTRACT_INSTRUCTIONS}\n\nGround every task in this real project snapshot — \
+name the actual files/modules each task touches:\n\
+=== REPO & HARNESS CONTEXT ===\n{c}\n=== END CONTEXT ==="
+        ),
+        None => EXTRACT_INSTRUCTIONS.to_string(),
+    };
+    let system = build_system(auth, &extract_system);
+    let text = call_anthropic(auth, DEFAULT_MODEL, system, &messages, 2048).await?;
+
+    // Parse leniently (fences/prose tolerated). No object / no tasks → 422.
+    extract_feature_plan(&text).ok_or_else(|| {
+        ApiError::Custom(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "error": { "code": "no_tasks", "message": "could not extract a feature plan from the conversation" } }),
+        )
+    })
+}
+
 /// Distil the agreed task breakdown from a chat transcript, then file each task
 /// into the chosen tracker (`provider`: GitHub default, or Linear). Returns
 /// `{ provider, repo?, created[], failed[] }` (200 even on a partial or total
@@ -985,73 +1118,96 @@ fn compose_issue_body(plan: &FeaturePlan) -> String {
 /// unconnected tracker (`no_github_repo`/`no_linear` 422) — all typed envelopes.
 async fn chat_issues(
     State(state): State<AppState>,
-    Json(body): Json<ChatIssuesRequest>,
+    Json(mut body): Json<ChatIssuesRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if body.messages.is_empty() {
+    // A create needs EITHER a client-supplied edited plan (Confirm) or a transcript
+    // to extract one from (the legacy one-shot path).
+    if body.messages.is_empty() && body.plan.is_none() {
         return Err(ApiError::BadRequest(
-            "chat issues: messages cannot be empty".into(),
+            "chat issues: provide a `plan` or a non-empty `messages` array".into(),
         ));
     }
 
     // Same credential resolution + actionable error as the chat handler.
-    let auth = resolve_auth().ok_or_else(|| {
-        ApiError::BadRequest(
-            "No LLM credentials for chat: set ANTHROPIC_API_KEY, or sign in to Claude (run `claude` once) so the chat can use your login."
-                .into(),
-        )
-    })?;
+    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
     // The bearer/API token, kept so it can be scrubbed from any per-task error.
     let secret = match &auth {
         Auth::ApiKey(k) => k.clone(),
         Auth::Oauth(t) => t.clone(),
     };
 
-    // Build the transcript, then append an explicit final USER turn asking for the
-    // JSON. Two reasons: (1) a converged transcript ends on the assistant's
-    // proposal, and Anthropic rejects a trailing-assistant array ("no prefill") —
-    // ending on a user turn fixes it at the source (sanitize_messages is the
-    // backstop); (2) a direct last-word instruction extracts more reliably than
-    // the system prompt alone.
-    let mut messages: Vec<serde_json::Value> = body
-        .messages
-        .iter()
-        .map(|m| json!({ "role": m.role, "content": m.content }))
-        .collect();
-    messages.push(json!({ "role": "user", "content": EXTRACT_USER_PROMPT }));
-
-    // Extraction call: lead the system with the Claude Code identity for OAuth
-    // (mirrors the interviewer), the strict-JSON instruction, then the SAME repo +
-    // harness snapshot the interview used — so each task's title/detail names the
-    // real files/areas it touches (the spec imitates the actual repo).
-    let extract_system = match gather_repo_context(body.workdir.as_deref()) {
-        Some(c) => format!(
-            "{EXTRACT_INSTRUCTIONS}\n\nGround every task in this real project snapshot — \
-name the actual files/modules each task touches:\n\
-=== REPO & HARNESS CONTEXT ===\n{c}\n=== END CONTEXT ==="
-        ),
-        None => EXTRACT_INSTRUCTIONS.to_string(),
+    // Spec 003: Confirm files the CLIENT's edited plan VERBATIM (what-you-see-is-
+    // what-you-file); only when none is supplied do we extract from the transcript
+    // (back-compat one-shot). Re-extracting here would reintroduce the drift this
+    // whole feature removes, so it must NOT happen when a plan is present.
+    let plan = match body.plan.take() {
+        Some(p) => {
+            if p.title.trim().is_empty() || p.tasks.is_empty() {
+                return Err(ApiError::Custom(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    json!({ "error": { "code": "no_tasks", "message": "the supplied plan has no title or no tasks" } }),
+                ));
+            }
+            p
+        }
+        None => extract_plan(&auth, &body.messages, body.workdir.as_deref()).await?,
     };
-    let system = build_system(&auth, &extract_system);
-    let text = call_anthropic(&auth, DEFAULT_MODEL, system, &messages, 2048).await?;
 
-    // Parse leniently (fences/prose tolerated). No object / no tasks → 422.
-    let plan = extract_feature_plan(&text).ok_or_else(|| {
-        ApiError::Custom(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            json!({ "error": { "code": "no_tasks", "message": "could not extract a feature plan from the conversation" } }),
-        )
-    })?;
+    let split = SplitMode::parse(body.split.as_deref());
 
-    // ONE issue per feature — sub-tasks as a priority-ordered checklist in the
-    // body, not N flat issues. Default GitHub; Linear the alt. Anything else is a
-    // hard 400 (the Chat rule is GitHub/Linear only, never the internal board).
+    // Default GitHub; Linear the alt. Anything else is a hard 400 (the Chat rule is
+    // GitHub/Linear only, never the internal board). One issue on `single`, N on
+    // `per_task` — the `created[]`/`failed[]` arrays carry either.
     match resolve_provider(body.provider.as_deref()) {
-        Ok(IssueProvider::Github) => create_github_issue(&state, &body, &plan, &secret).await,
-        Ok(IssueProvider::Linear) => create_linear_issue(&state, &plan, &secret).await,
+        Ok(IssueProvider::Github) => {
+            create_github_issues(&state, &body, &plan, split, &secret).await
+        }
+        Ok(IssueProvider::Linear) => {
+            create_linear_issues(&state, &plan, split, &body.labels, &secret).await
+        }
         Err(other) => Err(ApiError::BadRequest(format!(
             "chat issues: unknown provider {other:?} (expected \"github\" or \"linear\")"
         ))),
     }
+}
+
+/// Spec 003: extract the feature plan and return it as an editable DRAFT — files
+/// NOTHING. The UI renders `{title, summary, tasks[], body}` (body = the
+/// single-issue composed markdown, the default split's preview), lets the user
+/// edit / regenerate, then POSTs the result to `/api/chat/issues` to file it.
+async fn chat_issues_preview(
+    Json(body): Json<ChatIssuesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Preview / Regenerate ALWAYS re-extracts from the transcript; a client `plan`
+    // is irrelevant here (it's what Confirm sends, not Preview).
+    if body.messages.is_empty() {
+        return Err(ApiError::BadRequest(
+            "chat issues preview: messages cannot be empty".into(),
+        ));
+    }
+    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
+    let plan = extract_plan(&auth, &body.messages, body.workdir.as_deref()).await?;
+
+    // Normalise each task's priority to a canonical `high|medium|low` so the UI has
+    // a stable value to bind its per-task selector to.
+    let tasks: Vec<serde_json::Value> = plan
+        .tasks
+        .iter()
+        .map(|t| {
+            json!({
+                "title": t.title,
+                "detail": t.detail,
+                "priority": parse_priority(t.priority.as_deref()).label().to_ascii_lowercase(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "title": plan.title,
+        "summary": plan.summary,
+        "tasks": tasks,
+        "body": compose_issue_body(&plan),
+    })))
 }
 
 /// The tracker a `chat_issues` request targets. Closed set — the Chat rule is
@@ -1078,15 +1234,16 @@ fn resolve_provider(raw: Option<&str>) -> Result<IssueProvider, String> {
     }
 }
 
-/// File the feature plan as ONE GitHub issue (sub-tasks = a priority-ordered
-/// checklist in the body). Resolves the repo slug (a well-formed client hint wins
-/// with no IO; else the LOCAL project's `origin` — Chat never files over SSH) and
-/// creates the single issue via the shared `TaskSink::Github` arm. A create
-/// failure is reported in `failed` (still a 200) so the UI surfaces the reason.
-async fn create_github_issue(
+/// File the feature plan as GitHub issue(s) — one (sub-tasks as a checklist) or
+/// one-per-task, per `split`. Resolves the repo slug once (a well-formed client
+/// hint wins with no IO; else the LOCAL project's `origin` — Chat never files over
+/// SSH), then creates each issue via the shared `TaskSink::Github` arm. Per-issue
+/// failures land in `failed` (still a 200) so the UI surfaces every reason.
+async fn create_github_issues(
     state: &AppState,
     body: &ChatIssuesRequest,
     plan: &FeaturePlan,
+    split: SplitMode,
     secret: &str,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Resolve the GitHub slug: a well-formed client hint wins (no IO); else read
@@ -1135,50 +1292,52 @@ async fn create_github_issue(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
 
-    // ONE issue: the feature, with its sub-tasks as a prioritised checklist.
-    let feature = NewFeature {
-        title: plan.title.clone(),
-        body: Some(compose_issue_body(plan)),
-    };
-    let res = TaskSink::Github
-        .create_feature(
-            &SinkCtx {
-                store: &state.store,
-                workdir: &workdir_path,
-                parent_goal_id: None,
-                slug: Some(&slug),
-            },
-            &feature,
-        )
-        .await;
-    match res {
-        Ok(fref) => Ok(Json(json!({
-            "provider": "github",
-            "repo": slug,
-            "created": [{ "title": plan.title, "url": fref.url.unwrap_or_default() }],
-            "failed": [],
-        }))),
-        Err(e) => {
-            let detail = redact(&e.to_string(), secret);
-            let detail = detail.chars().take(300).collect::<String>();
-            Ok(Json(json!({
-                "provider": "github",
-                "repo": slug,
-                "created": [],
-                "failed": [{ "title": plan.title, "error": detail }],
-            })))
+    let features = plan_to_features(plan, split, &body.labels);
+    let (mut created, mut failed) = (Vec::new(), Vec::new());
+    for feature in &features {
+        let res = TaskSink::Github
+            .create_feature(
+                &SinkCtx {
+                    store: &state.store,
+                    workdir: &workdir_path,
+                    parent_goal_id: None,
+                    slug: Some(&slug),
+                },
+                feature,
+            )
+            .await;
+        match res {
+            Ok(fref) => {
+                created.push(json!({ "title": feature.title, "url": fref.url.unwrap_or_default() }))
+            }
+            Err(e) => {
+                let detail = redact(&e.to_string(), secret)
+                    .chars()
+                    .take(300)
+                    .collect::<String>();
+                failed.push(json!({ "title": feature.title, "error": detail }));
+            }
         }
     }
+    Ok(Json(json!({
+        "provider": "github",
+        "repo": slug,
+        "created": created,
+        "failed": failed,
+    })))
 }
 
-/// File the feature plan as ONE Linear issue (sub-tasks = a priority-ordered
-/// checklist in the body) via the shared `TaskSink::Linear` arm (single-team
-/// resolution lives in `crate::linear`). A missing Linear connection is a loud
-/// typed 422 — never a silent board fallback. A create failure is reported in
+/// File the feature plan as Linear issue(s) — one (checklist) or one-per-task, per
+/// `split` — via the shared `TaskSink::Linear` arm (single-team resolution lives
+/// in `crate::linear`). A missing Linear connection is a loud typed 422 — never a
+/// silent board fallback. `labels` ride on each `NewFeature` but Linear's create
+/// arm ignores them for now (documented v1 no-op); per-issue failures land in
 /// `failed` (still a 200).
-async fn create_linear_issue(
+async fn create_linear_issues(
     state: &AppState,
     plan: &FeaturePlan,
+    split: SplitMode,
+    labels: &[String],
     secret: &str,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Loud, actionable failure when Linear isn't connected — the Chat rule
@@ -1193,37 +1352,40 @@ async fn create_linear_issue(
     // Linear's create arm ignores `workdir`/`slug`/`parent_goal_id`; pass a
     // neutral ctx for shape only.
     let tmp = std::env::temp_dir();
-    let feature = NewFeature {
-        title: plan.title.clone(),
-        body: Some(compose_issue_body(plan)),
-    };
-    let res = TaskSink::Linear
-        .create_feature(
-            &SinkCtx {
-                store: &state.store,
-                workdir: &tmp,
-                parent_goal_id: None,
-                slug: None,
-            },
-            &feature,
-        )
-        .await;
-    match res {
-        Ok(fref) => Ok(Json(json!({
-            "provider": "linear",
-            "created": [{ "title": plan.title, "id": fref.id, "url": fref.url.unwrap_or_default() }],
-            "failed": [],
-        }))),
-        Err(e) => {
-            let detail = redact(&e.to_string(), secret);
-            let detail = detail.chars().take(300).collect::<String>();
-            Ok(Json(json!({
-                "provider": "linear",
-                "created": [],
-                "failed": [{ "title": plan.title, "error": detail }],
-            })))
+    let features = plan_to_features(plan, split, labels);
+    let (mut created, mut failed) = (Vec::new(), Vec::new());
+    for feature in &features {
+        let res = TaskSink::Linear
+            .create_feature(
+                &SinkCtx {
+                    store: &state.store,
+                    workdir: &tmp,
+                    parent_goal_id: None,
+                    slug: None,
+                },
+                feature,
+            )
+            .await;
+        match res {
+            Ok(fref) => created.push(json!({
+                "title": feature.title,
+                "id": fref.id,
+                "url": fref.url.unwrap_or_default(),
+            })),
+            Err(e) => {
+                let detail = redact(&e.to_string(), secret)
+                    .chars()
+                    .take(300)
+                    .collect::<String>();
+                failed.push(json!({ "title": feature.title, "error": detail }));
+            }
         }
     }
+    Ok(Json(json!({
+        "provider": "linear",
+        "created": created,
+        "failed": failed,
+    })))
 }
 
 /// Pull a `FeaturePlan` out of a possibly-noisy model reply: strip markdown
@@ -1666,5 +1828,101 @@ mod tests {
         assert_eq!(p["thinking"]["budget_tokens"], THINKING_BUDGET_TOKENS);
         // Anthropic rejects the call unless max_tokens > budget (it caps reasoning + answer).
         assert!(p["max_tokens"].as_u64().unwrap() > u64::from(THINKING_BUDGET_TOKENS));
+    }
+
+    // --- spec 003: preview / edit / split (the what-you-see-is-what-you-file gate) ---
+
+    #[test]
+    fn split_mode_parse_defaults_to_single() {
+        assert_eq!(SplitMode::parse(None), SplitMode::Single);
+        assert_eq!(SplitMode::parse(Some("single")), SplitMode::Single);
+        assert_eq!(SplitMode::parse(Some("whatever")), SplitMode::Single);
+        assert_eq!(SplitMode::parse(Some(" PER_TASK ")), SplitMode::PerTask);
+        assert_eq!(SplitMode::parse(Some("per-task")), SplitMode::PerTask);
+        assert_eq!(SplitMode::parse(Some("multiple")), SplitMode::PerTask);
+    }
+
+    #[test]
+    fn plan_to_features_single_is_one_issue_with_checklist() {
+        // The confirm/verbatim guarantee: Single produces ONE issue whose title is
+        // the plan's title and whose body is the priority checklist — no re-extract.
+        let plan = FeaturePlan {
+            title: "Feature X".into(),
+            summary: "Sum.".into(),
+            tasks: vec![
+                SubTask {
+                    title: "A".into(),
+                    detail: "aa".into(),
+                    priority: Some("high".into()),
+                },
+                SubTask {
+                    title: "B".into(),
+                    detail: String::new(),
+                    priority: Some("low".into()),
+                },
+            ],
+        };
+        let f = plan_to_features(&plan, SplitMode::Single, &["lbl".into()]);
+        assert_eq!(f.len(), 1, "single = one issue");
+        assert_eq!(f[0].title, "Feature X", "title is the feature verbatim");
+        let body = f[0].body.as_deref().unwrap();
+        assert!(body.contains("## Sub-tasks (priority order)"));
+        assert!(body.contains("- [ ] **[High]** A — aa"));
+        assert_eq!(f[0].labels, vec!["lbl".to_string()]);
+    }
+
+    #[test]
+    fn plan_to_features_per_task_is_one_issue_per_task_priority_ordered() {
+        let plan = FeaturePlan {
+            title: "Feature X".into(),
+            summary: "Sum.".into(),
+            tasks: vec![
+                SubTask {
+                    title: "low one".into(),
+                    detail: String::new(),
+                    priority: Some("low".into()),
+                },
+                SubTask {
+                    title: "high one".into(),
+                    detail: "d".into(),
+                    priority: Some("high".into()),
+                },
+            ],
+        };
+        let f = plan_to_features(&plan, SplitMode::PerTask, &[]);
+        assert_eq!(f.len(), 2, "per_task = one issue per task");
+        // High sorts first (same stable priority sort as the checklist).
+        assert_eq!(f[0].title, "high one");
+        assert_eq!(f[1].title, "low one");
+        let b0 = f[0].body.as_deref().unwrap();
+        assert!(b0.starts_with('d'), "detail leads the body: {b0}");
+        assert!(b0.contains("**Priority:** High"));
+        assert!(b0.contains("**Feature:** Feature X"));
+    }
+
+    #[test]
+    fn plan_to_features_threads_labels_to_every_issue() {
+        let plan = FeaturePlan {
+            title: "F".into(),
+            summary: String::new(),
+            tasks: vec![
+                SubTask {
+                    title: "t1".into(),
+                    detail: String::new(),
+                    priority: None,
+                },
+                SubTask {
+                    title: "t2".into(),
+                    detail: String::new(),
+                    priority: None,
+                },
+            ],
+        };
+        let labels = vec!["a".to_string(), "b".to_string()];
+        let features = plan_to_features(&plan, SplitMode::PerTask, &labels);
+        assert_eq!(features.len(), 2);
+        for f in &features {
+            assert_eq!(f.labels, labels, "labels ride on every split issue");
+        }
     }
 }

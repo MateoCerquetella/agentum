@@ -24,6 +24,11 @@ use agentum_store::Store;
 pub struct NewFeature {
     pub title: String,
     pub body: Option<String>,
+    /// Labels to apply on creation. GitHub passes each as `--label <l>`; the
+    /// board and Linear arms currently ignore them (Linear label application is a
+    /// documented v1 no-op — see `routes::chat`). Empty = no labels, so existing
+    /// callers stay byte-for-byte unchanged.
+    pub labels: Vec<String>,
 }
 
 /// Where a created feature landed. `id` is the provider's stable handle (board
@@ -159,14 +164,19 @@ impl TaskSink {
                     // always-present dir ($HOME) — a missing/remote project
                     // workdir is never used as cwd.
                     Some(slug) => {
-                        cmd.args(gh_create_argv_with_repo(slug, &feature.title, &body))
-                            .current_dir(neutral_cwd());
+                        cmd.args(gh_create_argv_with_repo(
+                            slug,
+                            &feature.title,
+                            &body,
+                            &feature.labels,
+                        ))
+                        .current_dir(neutral_cwd());
                     }
                     // Legacy harness path: resolve the repo from `workdir`'s
                     // origin (cwd-relative). Unchanged behavior for callers
                     // (e.g. `plan_goal_harness`) that pass no slug.
                     None => {
-                        cmd.args(gh_create_argv(&feature.title, &body))
+                        cmd.args(gh_create_argv(&feature.title, &body, &feature.labels))
                             .current_dir(ctx.workdir);
                     }
                 }
@@ -286,21 +296,54 @@ pub async fn apply_tracker_transition(
     }
 }
 
-/// `gh issue create` argv for a non-interactive create. Kept as a pure helper so
-/// the argument shape is unit-tested without spawning a process.
-fn gh_create_argv<'a>(title: &'a str, body: &'a str) -> [&'a str; 6] {
-    ["issue", "create", "--title", title, "--body", body]
+/// `gh issue create` argv for a non-interactive create, plus one `--label <l>`
+/// per non-blank label (spec 003). Returns owned `String`s (not a fixed array)
+/// because the label count is dynamic. Pure helper so the shape is unit-tested
+/// without spawning a process; labels are argv tokens (never shell-interpolated).
+fn gh_create_argv(title: &str, body: &str, labels: &[String]) -> Vec<String> {
+    let mut argv = vec![
+        "issue".into(),
+        "create".into(),
+        "--title".into(),
+        title.into(),
+        "--body".into(),
+        body.into(),
+    ];
+    push_label_args(&mut argv, labels);
+    argv
 }
 
-/// `gh issue create --repo <slug>` argv (spec 019). The explicit `--repo` makes
-/// `gh` file against `owner/repo` regardless of the cwd's git remote, so this is
-/// runnable from any readable dir. Pure helper so the shape is unit-tested
-/// without spawning a process. The slug is an argv token (never interpolated
-/// into a shell), so a malformed slug fails at `gh`, not via injection.
-fn gh_create_argv_with_repo<'a>(slug: &'a str, title: &'a str, body: &'a str) -> [&'a str; 8] {
-    [
-        "issue", "create", "--repo", slug, "--title", title, "--body", body,
-    ]
+/// `gh issue create --repo <slug>` argv (spec 019) + `--label` flags (spec 003).
+/// The explicit `--repo` makes `gh` file against `owner/repo` regardless of the
+/// cwd's git remote, so this is runnable from any readable dir. Pure helper so the
+/// shape is unit-tested without spawning a process. The slug and labels are argv
+/// tokens (never interpolated into a shell), so a malformed value fails at `gh`,
+/// not via injection.
+fn gh_create_argv_with_repo(slug: &str, title: &str, body: &str, labels: &[String]) -> Vec<String> {
+    let mut argv = vec![
+        "issue".into(),
+        "create".into(),
+        "--repo".into(),
+        slug.into(),
+        "--title".into(),
+        title.into(),
+        "--body".into(),
+        body.into(),
+    ];
+    push_label_args(&mut argv, labels);
+    argv
+}
+
+/// Append a `--label <l>` pair for each non-blank, trimmed label. Blank labels
+/// are skipped so a stray empty string from the UI never becomes a `--label ""`.
+fn push_label_args(argv: &mut Vec<String>, labels: &[String]) {
+    for l in labels {
+        let l = l.trim();
+        if !l.is_empty() {
+            argv.push("--label".into());
+            argv.push(l.to_string());
+        }
+    }
 }
 
 /// A neutral, always-present cwd for an explicit-`--repo` `gh` call: `$HOME`,
@@ -398,7 +441,7 @@ mod tests {
 
     #[test]
     fn gh_create_argv_is_noninteractive() {
-        let argv = gh_create_argv("My title", "My body");
+        let argv = gh_create_argv("My title", "My body", &[]);
         assert_eq!(
             argv,
             [
@@ -412,7 +455,7 @@ mod tests {
     /// token (never shell-interpolated).
     #[test]
     fn gh_create_argv_with_repo_targets_the_slug() {
-        let argv = gh_create_argv_with_repo("owner/repo", "My title", "My body");
+        let argv = gh_create_argv_with_repo("owner/repo", "My title", "My body", &[]);
         assert_eq!(
             argv,
             [
@@ -425,6 +468,39 @@ mod tests {
                 "--body",
                 "My body"
             ]
+        );
+    }
+
+    /// Spec 003: each non-blank label becomes a trailing `--label <l>` pair;
+    /// blank labels are dropped (never a `--label ""`).
+    #[test]
+    fn gh_create_argv_appends_labels() {
+        let labels = vec![
+            "enhancement".to_string(),
+            "  ".to_string(),
+            "area/chat".to_string(),
+        ];
+        let argv = gh_create_argv("T", "B", &labels);
+        assert_eq!(
+            argv,
+            [
+                "issue",
+                "create",
+                "--title",
+                "T",
+                "--body",
+                "B",
+                "--label",
+                "enhancement",
+                "--label",
+                "area/chat"
+            ]
+        );
+        // Same tail on the explicit-repo argv.
+        let argv = gh_create_argv_with_repo("o/r", "T", "B", &labels);
+        assert_eq!(
+            &argv[argv.len() - 4..],
+            &["--label", "enhancement", "--label", "area/chat"]
         );
     }
 
@@ -464,6 +540,7 @@ mod tests {
                 &NewFeature {
                     title: "Add OAuth login".into(),
                     body: None,
+                    labels: vec![],
                 },
             )
             .await
@@ -511,6 +588,7 @@ mod tests {
                 &NewFeature {
                     title: "Add OAuth login".into(),
                     body: Some("user can sign in with Google".into()),
+                    labels: vec![],
                 },
             )
             .await
@@ -560,6 +638,7 @@ mod tests {
                 &NewFeature {
                     title: "Login screen".into(),
                     body: None,
+                    labels: vec![],
                 },
             )
             .await
@@ -587,6 +666,7 @@ mod tests {
                 &NewFeature {
                     title: "agentum 011b smoke test".into(),
                     body: Some("created by github_sink_creates_a_real_issue".into()),
+                    labels: vec![],
                 },
             )
             .await
