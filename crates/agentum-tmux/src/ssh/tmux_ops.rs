@@ -91,22 +91,30 @@ const SAMPLE_GONE_EXIT: i32 = 43;
 /// per-call channel open/closes were the dominant load on the shared
 /// ControlMaster — the same master that carries interactive keystrokes — so
 /// batching directly reduces input latency, not just probe overhead.
-/// Local hosts keep the four direct tmux calls (process spawns are cheap and
-/// there is no channel contention to relieve).
+/// Local hosts are ONE tmux client spawn per tick too: existence is folded
+/// into the batched capture (a vanished exact-match target errors with a
+/// classifiable stderr) instead of a separate `has-session` fork/exec, which
+/// at N sessions on a 1 s tick doubled the continuous spawn load for a
+/// boolean the capture itself already proves.
 pub async fn sample_pane(host: &Host, target: &str, lines: usize) -> Result<Option<PaneSample>> {
     match &host.kind {
         HostKind::Local => {
-            if !crate::has_session(target).await? {
-                return Ok(None);
-            }
             // ONE tmux client pulls all three reads in a `;`-separated sequence
             // instead of three separate fork/exec + server-socket round trips.
             // At N local sessions on a 1 s tick those per-call spawns were
-            // continuous, N-scaling CPU; batching yields identical data. The
-            // has-session gate above already ruled out "pane gone", so a parse
-            // miss here is a real error (mirrors the SSH arm below).
+            // continuous, N-scaling CPU; batching yields identical data.
+            // "Session gone" arrives as a failed sequence whose stderr names
+            // the missing target — the local mirror of the SSH arm's exit 43.
             let stdout =
-                crate::capture_pane_sample_combined(target, lines, SAMPLE_BOUNDARY).await?;
+                match crate::capture_pane_sample_combined(target, lines, SAMPLE_BOUNDARY).await {
+                    Ok(stdout) => stdout,
+                    Err(TmuxError::NonZero { stderr, .. })
+                        if crate::tmux_stderr_means_target_gone(&stderr) =>
+                    {
+                        return Ok(None);
+                    }
+                    Err(e) => return Err(e),
+                };
             parse_pane_sample(&stdout)
                 .map(Some)
                 .ok_or_else(|| TmuxError::NonZero {
