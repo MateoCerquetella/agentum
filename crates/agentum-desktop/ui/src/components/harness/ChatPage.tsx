@@ -15,15 +15,18 @@ import {
   ChevronDown,
   Columns3,
   Cpu,
+  Eye,
   FolderGit2,
   Github,
   Loader2,
   MessagesSquare,
   Plus,
+  RefreshCw,
   Send,
   Square,
   Trash2,
-  User
+  User,
+  X
 } from 'lucide-react'
 
 import { useAppStore } from '@/store'
@@ -36,6 +39,11 @@ import {
   CHAT_MODELS,
   createIssuesFromChat,
   DEFAULT_CHAT_MODEL,
+  type DraftPlan,
+  type DraftTask,
+  type IssueProvider,
+  type IssueSplit,
+  previewIssuesFromChat,
   resolveChatModel,
   streamChat
 } from '@/runtime/chat-client'
@@ -70,6 +78,16 @@ function readStoredThinking(): boolean {
   }
 }
 
+/** Human name for a tracker (spec 003 draft-review copy). */
+const providerLabel = (p: IssueProvider): string => (p === 'linear' ? 'Linear' : 'GitHub')
+
+/** Parse the comma/newline-separated label input into a clean list. */
+const parseLabels = (raw: string): string[] =>
+  raw
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+
 export default function ChatPage() {
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
@@ -81,6 +99,17 @@ export default function ChatPage() {
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Spec 003: the editable draft shown BEFORE any issue is filed. Non-null = the
+  // review modal is open. `previewing` covers the extract/regenerate call;
+  // `creating` (above) covers the confirm/file call. split/provider/labels are the
+  // filing choices; `draftDirty` gates the regenerate-discards-edits confirm.
+  const [draftPlan, setDraftPlan] = useState<DraftPlan | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [split, setSplit] = useState<IssueSplit>('single')
+  const [provider, setProvider] = useState<IssueProvider>('github')
+  const [labelsInput, setLabelsInput] = useState('')
+  const [draftDirty, setDraftDirty] = useState(false)
 
   // Model + extended-thinking picker (persisted defaults; also remembered per
   // conversation so reopening one restores what it last ran with).
@@ -321,21 +350,57 @@ export default function ChatPage() {
     [submit]
   )
 
-  // Mine the agreed task breakdown out of the transcript and file each task into
-  // the chosen tracker, then append a summary turn linking the created issues.
-  const createIssues = useCallback(async () => {
-    if (busy || creating || !active || messages.length === 0) return
+  // Spec 003: extract the agreed breakdown into an editable DRAFT and open the
+  // review modal — files NOTHING. Confirm (below) is the only mutation.
+  const openPreview = useCallback(async () => {
+    if (busy || previewing || creating || !active || messages.length === 0) return
+    setPreviewing(true)
+    setError(null)
+    try {
+      const plan = await previewIssuesFromChat(
+        messages.map((m) => ({ role: m.role, content: m.content })),
+        // The server infers the GitHub repo from the workspace's `origin`.
+        { workdir: workspace?.path }
+      )
+      setDraftPlan(plan)
+      setDraftDirty(false)
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2))
+    } finally {
+      setPreviewing(false)
+    }
+  }, [busy, previewing, creating, active, messages, workspace])
+
+  // Re-extract, replacing the draft. Unsaved edits are discarded (confirmed
+  // first) — the regenerated plan is authoritative.
+  const regenerateDraft = useCallback(async () => {
+    if (
+      draftDirty &&
+      !window.confirm('Regenerate will discard your edits and produce a fresh plan. Continue?')
+    ) {
+      return
+    }
+    await openPreview()
+  }, [draftDirty, openPreview])
+
+  // File the (edited) draft VERBATIM into the chosen tracker, then append a
+  // summary turn linking the created issues and close the modal.
+  const confirmDraft = useCallback(async () => {
+    if (!active || !draftPlan || creating) return
     const convoId = active.id
+    const plan = draftPlan
     setCreating(true)
     setError(null)
     try {
       const result = await createIssuesFromChat(
         messages.map((m) => ({ role: m.role, content: m.content })),
-        // GitHub-only: the server infers the repo from the workspace's `origin`
-        // (no manual owner/repo). The workspace path is the sole hint it needs.
-        { workdir: workspace?.path }
+        { workdir: workspace?.path, provider, plan, split, labels: parseLabels(labelsInput) }
       )
-      const where = result.repo ? `\`${result.repo}\`` : workspace ? workspace.displayName : 'GitHub'
+      const where = result.repo
+        ? `\`${result.repo}\``
+        : workspace
+          ? workspace.displayName
+          : providerLabel(provider)
       const lines: string[] = []
       if (result.created.length > 0) {
         const n = result.created.length
@@ -353,12 +418,33 @@ export default function ChatPage() {
         for (const f of result.failed) lines.push(`- ${f.title} — ${f.error}`)
       }
       appendAssistant(convoId, lines.join('\n'))
+      setDraftPlan(null) // close on success — no double-file
     } catch (e2) {
       setError(e2 instanceof Error ? e2.message : String(e2))
     } finally {
       setCreating(false)
     }
-  }, [busy, creating, active, messages, workspace, appendAssistant])
+  }, [active, draftPlan, creating, messages, workspace, provider, split, labelsInput, appendAssistant])
+
+  // Draft edit helpers — every edit marks the draft dirty (Regenerate then warns).
+  const patchPlan = useCallback((patch: Partial<DraftPlan>) => {
+    setDraftPlan((p) => (p ? { ...p, ...patch } : p))
+    setDraftDirty(true)
+  }, [])
+  const patchTask = useCallback((i: number, patch: Partial<DraftTask>) => {
+    setDraftPlan((p) => (p ? { ...p, tasks: p.tasks.map((t, j) => (j === i ? { ...t, ...patch } : t)) } : p))
+    setDraftDirty(true)
+  }, [])
+  const addTask = useCallback(() => {
+    setDraftPlan((p) =>
+      p ? { ...p, tasks: [...p.tasks, { title: '', detail: '', priority: 'medium' }] } : p
+    )
+    setDraftDirty(true)
+  }, [])
+  const removeTask = useCallback((i: number) => {
+    setDraftPlan((p) => (p ? { ...p, tasks: p.tasks.filter((_, j) => j !== i) } : p))
+    setDraftDirty(true)
+  }, [])
 
   const useExample = useCallback((text: string) => {
     setDraft(text)
@@ -488,25 +574,21 @@ export default function ChatPage() {
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => void createIssues()}
-                    disabled={busy || creating || messages.length === 0 || !workspace}
+                    onClick={() => void openPreview()}
+                    disabled={busy || previewing || creating || messages.length === 0 || !workspace}
                     className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
                   >
-                    {creating ? (
+                    {previewing ? (
                       <Loader2 className="size-3.5 animate-spin" />
                     ) : (
-                      <Github className="size-3.5" />
+                      <Eye className="size-3.5" />
                     )}
-                    {creating
-                      ? 'Creating issues…'
-                      : workspace
-                        ? `Create issues in ${workspace.displayName}`
-                        : 'Create issues'}
+                    {previewing ? 'Preparing preview…' : 'Preview issues'}
                   </button>
                 </div>
                 <div className="text-right text-[11px] text-muted-foreground">
                   {workspace
-                    ? `Files GitHub issues into ${workspace.displayName} — inferred from the workspace.`
+                    ? `Review & edit before filing — GitHub repo inferred from ${workspace.displayName}.`
                     : 'Pick a workspace above to file issues into.'}
                 </div>
               </div>
@@ -545,6 +627,275 @@ export default function ChatPage() {
           </form>
         </div>
       </div>
+
+      {draftPlan ? (
+        <DraftReview
+          plan={draftPlan}
+          split={split}
+          provider={provider}
+          labelsInput={labelsInput}
+          previewing={previewing}
+          creating={creating}
+          workspaceName={workspace?.displayName ?? null}
+          onPatchPlan={patchPlan}
+          onPatchTask={patchTask}
+          onAddTask={addTask}
+          onRemoveTask={removeTask}
+          onSplit={setSplit}
+          onProvider={setProvider}
+          onLabels={setLabelsInput}
+          onRegenerate={() => void regenerateDraft()}
+          onConfirm={() => void confirmDraft()}
+          onCancel={() => setDraftPlan(null)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** Spec 003 — the review modal shown BEFORE any issue is filed. Fully editable
+ *  (title / summary / tasks + priority), plus split / provider / labels choices,
+ *  with Regenerate (re-extract) and Confirm (file the shown draft verbatim). */
+function DraftReview(props: {
+  plan: DraftPlan
+  split: IssueSplit
+  provider: IssueProvider
+  labelsInput: string
+  previewing: boolean
+  creating: boolean
+  workspaceName: string | null
+  onPatchPlan: (patch: Partial<DraftPlan>) => void
+  onPatchTask: (i: number, patch: Partial<DraftTask>) => void
+  onAddTask: () => void
+  onRemoveTask: (i: number) => void
+  onSplit: (s: IssueSplit) => void
+  onProvider: (p: IssueProvider) => void
+  onLabels: (v: string) => void
+  onRegenerate: () => void
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const { plan, split, provider, previewing, creating } = props
+  const working = previewing || creating
+  const issueCount = split === 'per_task' ? plan.tasks.length : 1
+  const canConfirm = plan.title.trim().length > 0 && plan.tasks.length > 0 && !working
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex max-h-[88vh] w-full max-w-[720px] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
+        {/* header */}
+        <div className="flex flex-none items-center justify-between border-b border-border px-4 py-3">
+          <div>
+            <div className="text-[13px] font-semibold">Review before filing</div>
+            <div className="text-[11px] text-muted-foreground">
+              Nothing is created until you confirm · {issueCount} issue
+              {issueCount === 1 ? '' : 's'} → {providerLabel(provider)}
+              {props.workspaceName ? ` · ${props.workspaceName}` : ''}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={props.onCancel}
+            disabled={working}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent disabled:opacity-40"
+            aria-label="Cancel"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        {/* body */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+            Feature title
+          </label>
+          <input
+            value={plan.title}
+            onChange={(e) => props.onPatchPlan({ title: e.target.value })}
+            className="mb-3 w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] focus:border-foreground/30 focus:outline-none"
+          />
+
+          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Summary</label>
+          <textarea
+            value={plan.summary}
+            onChange={(e) => props.onPatchPlan({ summary: e.target.value })}
+            rows={2}
+            className="mb-3 w-full resize-y rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] focus:border-foreground/30 focus:outline-none"
+          />
+
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              Tasks ({plan.tasks.length})
+            </span>
+            <button
+              type="button"
+              onClick={props.onAddTask}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent"
+            >
+              <Plus className="size-3" /> Add task
+            </button>
+          </div>
+          <div className="flex flex-col gap-2">
+            {plan.tasks.map((t, i) => (
+              <div key={i} className="rounded-md border border-border bg-background p-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={t.title}
+                    onChange={(e) => props.onPatchTask(i, { title: e.target.value })}
+                    placeholder="Task title"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-[12.5px] focus:border-foreground/30 focus:outline-none"
+                  />
+                  <select
+                    value={t.priority}
+                    onChange={(e) =>
+                      props.onPatchTask(i, { priority: e.target.value as DraftTask['priority'] })
+                    }
+                    className="flex-none rounded-md border border-border bg-card px-1.5 py-1 text-[12px]"
+                  >
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => props.onRemoveTask(i)}
+                    className="flex-none rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-red-400"
+                    aria-label="Remove task"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+                <textarea
+                  value={t.detail}
+                  onChange={(e) => props.onPatchTask(i, { detail: e.target.value })}
+                  rows={1}
+                  placeholder="Detail (optional)"
+                  className="mt-1.5 w-full resize-y rounded-md border border-border bg-card px-2 py-1 text-[12px] focus:border-foreground/30 focus:outline-none"
+                />
+              </div>
+            ))}
+            {plan.tasks.length === 0 ? (
+              <div className="text-[12px] text-muted-foreground">
+                No tasks — add one, or regenerate.
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <div className="mb-1 text-[11px] font-medium text-muted-foreground">How to file</div>
+              <SegButtons
+                value={split}
+                onChange={(v) => props.onSplit(v as IssueSplit)}
+                options={[
+                  { v: 'single', label: 'One issue + checklist' },
+                  { v: 'per_task', label: 'One issue per task' }
+                ]}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] font-medium text-muted-foreground">Tracker</div>
+              <SegButtons
+                value={provider}
+                onChange={(v) => props.onProvider(v as IssueProvider)}
+                options={[
+                  { v: 'github', label: 'GitHub' },
+                  { v: 'linear', label: 'Linear' }
+                ]}
+              />
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+              Labels (comma-separated)
+            </label>
+            <input
+              value={props.labelsInput}
+              onChange={(e) => props.onLabels(e.target.value)}
+              placeholder="enhancement, area/chat"
+              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] focus:border-foreground/30 focus:outline-none"
+            />
+            {provider === 'linear' ? (
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                Labels are applied to GitHub only for now.
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {/* footer */}
+        <div className="flex flex-none items-center justify-between gap-2 border-t border-border px-4 py-3">
+          <button
+            type="button"
+            onClick={props.onRegenerate}
+            disabled={working}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[12.5px] hover:bg-accent disabled:opacity-40"
+          >
+            {previewing ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+            Regenerate
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={props.onCancel}
+              disabled={working}
+              className="rounded-md border border-border px-2.5 py-1 text-[12.5px] hover:bg-accent disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={props.onConfirm}
+              disabled={!canConfirm}
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-85 disabled:opacity-40"
+            >
+              {creating ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : provider === 'linear' ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Github className="size-3.5" />
+              )}
+              {creating ? 'Filing…' : `Create ${issueCount} issue${issueCount === 1 ? '' : 's'}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** A small segmented toggle used for the split / provider choices. */
+function SegButtons(props: {
+  value: string
+  onChange: (v: string) => void
+  options: { v: string; label: string }[]
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-border p-0.5">
+      {props.options.map((o) => (
+        <button
+          key={o.v}
+          type="button"
+          onClick={() => props.onChange(o.v)}
+          className={cn(
+            'rounded px-2 py-1 text-[12px]',
+            props.value === o.v
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent'
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   )
 }

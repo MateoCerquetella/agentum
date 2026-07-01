@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 003-chat-issue-preview
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 SERVER slice DONE+pushed; UI slice + /ship remain. 002 done/human-gated below.)
+- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 SERVER+UI slices coded+pushed; vite build confirm + /ship remain. 002 done/human-gated below.)
 - **mode:** HITL         <!-- HITL (human in the loop) | auto -->
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -98,6 +98,16 @@
   + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
   npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
   human-gated release** (browser QA + merge/promote/tag = Mateo).
+- 2026-07-01 — 003 UI slice CODED (draft-review modal). `chat-client.ts`:
+  `previewIssuesFromChat()` + `DraftPlan`/`DraftTask`/`IssueSplit` types +
+  `createIssuesFromChat` carries `plan`/`split`/`labels`. `ChatPage.tsx`: "Create
+  issues" → "Preview issues" → editable `DraftReview` modal (title/summary/tasks +
+  priority, add/remove task, split single/per_task, provider GitHub/Linear, labels,
+  Regenerate/Confirm/Cancel; Confirm files the shown draft verbatim, closes on
+  success). `bun install` ✓; `tsc --noEmit` clean on the two touched files (all
+  reported errors are pre-existing `shared/*` Vite-alias noise in untouched files).
+  Full `vite build` (~9.5m, > foreground cap) runs in BACKGROUND for authoritative
+  confirm. REMAINING: confirm build green, then `/ship` (issue + PR into develop).
 - 2026-07-01 — 003 SERVER slice DONE (Ralph loop iter, Mateo re-authorized full
   build). Commits `5930bf27` (spec docs) + `86c618e1` (server), pushed to
   `origin/feat/chat-board-revamp`. Implemented: `POST /api/chat/issues/preview`

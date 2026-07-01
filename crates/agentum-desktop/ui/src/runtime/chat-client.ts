@@ -206,6 +206,68 @@ export async function streamChat(
 /** Which tracker the Chat files into. GitHub/Linear only (never the board). */
 export type IssueProvider = 'github' | 'linear'
 
+/** How the confirmed draft is filed (spec 003). `single` = one issue with the
+ *  sub-tasks as a priority checklist; `per_task` = one issue per task. */
+export type IssueSplit = 'single' | 'per_task'
+
+/** One task in an editable draft plan (spec 003). */
+export type DraftTask = { title: string; detail: string; priority: 'high' | 'medium' | 'low' }
+
+/** The editable draft the preview endpoint returns BEFORE any issue is filed.
+ *  `body` is the composed single-issue markdown — a preview of the default split. */
+export type DraftPlan = { title: string; summary: string; tasks: DraftTask[]; body: string }
+
+/** Decode the server's typed error envelope — `{error:string}` or
+ *  `{error:{message}}` — into a message, falling back to `fallback`. */
+function decodeError(text: string, fallback: string): string {
+  try {
+    const parsed = JSON.parse(text) as { error?: { message?: string } | string }
+    if (parsed.error && typeof parsed.error === 'object') return parsed.error.message ?? fallback
+    if (typeof parsed.error === 'string') return parsed.error
+  } catch {
+    if (text) return text
+  }
+  return fallback
+}
+
+/**
+ * `POST /api/chat/issues/preview` (spec 003) — extract the agreed feature plan
+ * from the transcript and return it as an editable DRAFT. Files NOTHING; the UI
+ * shows it, the user edits/regenerates, then {@link createIssuesFromChat} files
+ * the (edited) plan. Same typed-error decoding as the other chat calls.
+ */
+export async function previewIssuesFromChat(
+  messages: ChatTurn[],
+  opts?: { workdir?: string; repoSlug?: string }
+): Promise<DraftPlan> {
+  const url = await apiUrl('/api/chat/issues/preview')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await authHeaders())
+    },
+    body: JSON.stringify({
+      messages,
+      workdir: opts?.workdir,
+      repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined
+    })
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(decodeError(text, `chat issues preview ${res.status}`))
+  const parsed = (text ? JSON.parse(text) : {}) as Partial<DraftPlan>
+  return {
+    title: parsed.title ?? '',
+    summary: parsed.summary ?? '',
+    tasks: (parsed.tasks ?? []).map((t) => ({
+      title: t?.title ?? '',
+      detail: t?.detail ?? '',
+      priority: (t?.priority as DraftTask['priority']) ?? 'medium'
+    })),
+    body: parsed.body ?? ''
+  }
+}
+
 /** One created issue. `url` is the issue link; `id` is the tracker's stable
  *  handle (a GitHub issue number is implicit in the url; Linear sends its
  *  human identifier like `ENG-42`). */
@@ -249,7 +311,18 @@ export function normalizeRepoSlug(raw: string | null | undefined): string {
  */
 export async function createIssuesFromChat(
   messages: ChatTurn[],
-  opts?: { workdir?: string; repoSlug?: string; provider?: IssueProvider }
+  opts?: {
+    workdir?: string
+    repoSlug?: string
+    provider?: IssueProvider
+    /** Spec 003: a user-edited draft. When present the server files it VERBATIM
+     *  (skips re-extraction) — the what-you-see-is-what-you-file guarantee. */
+    plan?: DraftPlan
+    /** Spec 003: one issue + checklist (`single`, default) or one-per-task. */
+    split?: IssueSplit
+    /** Spec 003: labels for the created issue(s) (GitHub only for now). */
+    labels?: string[]
+  }
 ): Promise<CreatedIssues> {
   const url = await apiUrl('/api/chat/issues')
   const res = await fetch(url, {
@@ -264,7 +337,14 @@ export async function createIssuesFromChat(
       // Normalize a typed repo (URL/SSH/bare) to `owner/repo`; '' → omit so the
       // server falls back to the open project's origin.
       repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined,
-      provider: opts?.provider
+      provider: opts?.provider,
+      // Send the edited plan WITHOUT its `body` (the server re-composes it from
+      // the tasks); its presence tells the server to skip re-extraction.
+      plan: opts?.plan
+        ? { title: opts.plan.title, summary: opts.plan.summary, tasks: opts.plan.tasks }
+        : undefined,
+      split: opts?.split,
+      labels: opts?.labels && opts.labels.length > 0 ? opts.labels : undefined
     })
   })
   const text = await res.text()
@@ -277,16 +357,5 @@ export async function createIssuesFromChat(
       failed: parsed.failed ?? []
     }
   }
-  let message = `chat issues ${res.status}`
-  try {
-    const parsed = JSON.parse(text) as { error?: { message?: string } | string }
-    if (parsed.error && typeof parsed.error === 'object') {
-      message = parsed.error.message ?? message
-    } else if (typeof parsed.error === 'string') {
-      message = parsed.error
-    }
-  } catch {
-    if (text) message = text
-  }
-  throw new Error(message)
+  throw new Error(decodeError(text, `chat issues ${res.status}`))
 }
