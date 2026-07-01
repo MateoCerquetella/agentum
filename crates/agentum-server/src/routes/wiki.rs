@@ -37,6 +37,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/wiki", get(get_index))
         .route("/api/wiki/generate", post(generate))
+        // Static segment — matchit prioritizes it over the `{slug}` param route.
+        .route("/api/wiki/reindex", post(reindex))
         .route("/api/wiki/{slug}", get(get_page))
 }
 
@@ -104,6 +106,50 @@ async fn get_page(
     let dir = wiki_dir(&expand_workdir(&q.workdir)?);
     let content = load_page(&dir, &slug).await?;
     Ok(Json(PageContent { content }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReindexResponse {
+    /// Number of chunks embedded into the sidecar.
+    chunks: usize,
+}
+
+/// `POST /api/wiki/reindex?workdir=` — (re)build the RAG embedding sidecar
+/// (spec 003) for an already-generated wiki, without re-running the generation
+/// agent. Lets an existing wiki gain retrieval, or refresh after a model change.
+async fn reindex(Query(q): Query<WorkdirQuery>) -> Result<Json<ReindexResponse>, ApiError> {
+    let dir = wiki_dir(&expand_workdir(&q.workdir)?);
+    if tokio::fs::metadata(dir.join("index.json")).await.is_err() {
+        return Err(ApiError::BadRequest(
+            "no wiki to index for this workdir — generate the wiki first".into(),
+        ));
+    }
+    // Blocking fs + embedding math → off the async runtime.
+    let chunks = tokio::task::spawn_blocking(move || {
+        let embedder = crate::wiki_rag::default_embedder();
+        let index = crate::wiki_rag::build_index(&dir, embedder.as_ref())?;
+        crate::wiki_rag::save_index(&dir, &index)?;
+        anyhow::Ok(index.chunks.len())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("reindex task panicked: {e}")))?
+    .map_err(|e| ApiError::Internal(format!("reindex failed: {e}")))?;
+    Ok(Json(ReindexResponse { chunks }))
+}
+
+/// Build + persist the wiki RAG embedding sidecar (spec 003), off the runtime.
+/// Best-effort: any failure is swallowed — the wiki works without RAG; retrieval
+/// simply finds no sidecar and falls back to no wiki context.
+async fn build_embeddings_sidecar(dir: &Path) {
+    let dir = dir.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        let embedder = crate::wiki_rag::default_embedder();
+        if let Ok(index) = crate::wiki_rag::build_index(&dir, embedder.as_ref()) {
+            let _ = crate::wiki_rag::save_index(&dir, &index);
+        }
+    })
+    .await;
 }
 
 async fn generate(
@@ -199,6 +245,10 @@ async fn generate(
                     tokio::fs::remove_file(dir_bg.join(".status.json"))
                         .await
                         .ok();
+                    // Build the RAG embedding sidecar (spec 003) so Chat can
+                    // retrieve from this wiki. Best-effort: the wiki is fully
+                    // usable without it; a failure just means no RAG grounding.
+                    build_embeddings_sidecar(&dir_bg).await;
                 }
                 Err(e) => {
                     write_status(

@@ -279,6 +279,7 @@ fn interviewer_instructions(
     workdir: Option<&str>,
     repo_slug: Option<&str>,
     repo_context: Option<&str>,
+    wiki_context: Option<&str>,
 ) -> String {
     let mut ctx = String::new();
     if let Some(slug) = repo_slug {
@@ -309,9 +310,21 @@ the user tells you and don't claim to have inspected the project.",
         ),
     };
 
+    // Query-relevant excerpts from the project's AutoWiki (spec 003 RAG), when a
+    // wiki exists and something scored. A distinct block from the static snapshot
+    // above: this is the retrieved, most-relevant slice for THIS question.
+    let wiki_block = match wiki_context {
+        Some(w) => format!(
+            "\n\n=== RELEVANT WIKI (excerpts from the project's generated wiki, semantically \
+retrieved for the user's latest message — prefer these as ground truth about the repo) ===\n\
+{w}\n=== END WIKI ===\n"
+        ),
+        None => String::new(),
+    };
+
     format!(
         "You are running inside agentum (a control plane for AI coding agents) as the \
-feature-intake interviewer on the Chat screen.{ctx}{repo_block}\n\n\
+feature-intake interviewer on the Chat screen.{ctx}{repo_block}{wiki_block}\n\n\
 Your job: through a short Socratic conversation, help the user turn a rough idea into a \
 clear, buildable feature THAT FITS THIS REPO, then propose a concrete task breakdown for \
 their issue tracker.\n\n\
@@ -331,6 +344,25 @@ the user to click the \"Create issues\" button below the chat to file them.\n\
 button files them directly. When the user confirms, point them at that button — never \
 tell them to \"confirm with the system\" or that someone else will take it from there."
     )
+}
+
+/// Retrieve query-relevant AutoWiki excerpts (spec 003 RAG) for the latest user
+/// turn, off the async runtime (`retrieve_context` is blocking fs + CPU math).
+/// Best-effort by contract: no user turn / no wiki / no sidecar / a model
+/// mismatch → `None`, and the interview grounds on the static snapshot alone.
+async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Option<String> {
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())?;
+    let workdir = workdir.map(str::to_string);
+    tokio::task::spawn_blocking(move || {
+        crate::wiki_rag::retrieve_context(workdir.as_deref(), &query, crate::wiki_rag::DEFAULT_TOP_K)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 async fn chat(
@@ -367,10 +399,12 @@ async fn chat(
         .collect();
 
     let repo_context = gather_repo_context(body.workdir.as_deref());
+    let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
     let instructions = interviewer_instructions(
         body.workdir.as_deref(),
         body.repo_slug.as_deref(),
         repo_context.as_deref(),
+        wiki_context.as_deref(),
     );
     let system = build_system(&auth, &instructions);
 
@@ -469,10 +503,12 @@ async fn chat_stream(
     }
 
     let repo_context = gather_repo_context(body.workdir.as_deref());
+    let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
     let instructions = interviewer_instructions(
         body.workdir.as_deref(),
         body.repo_slug.as_deref(),
         repo_context.as_deref(),
+        wiki_context.as_deref(),
     );
     let system = build_system(&auth, &instructions);
     let payload = build_stream_payload(&model, system, &messages, thinking);
@@ -1475,6 +1511,7 @@ mod tests {
             Some("/tmp/proj"),
             Some("o/r"),
             Some("## Repo guide (CLAUDE.md)\nThis project uses axum."),
+            Some("### Watchdog\nThe watchdog tails panes and emits AgentCrashed."),
         );
         assert!(
             with.contains("REPO & HARNESS CONTEXT"),
@@ -1488,11 +1525,16 @@ mod tests {
             with.contains("You HAVE the repo + harness snapshot"),
             "grounded access rule"
         );
+        assert!(with.contains("RELEVANT WIKI"), "retrieved wiki block present");
+        assert!(
+            with.contains("The watchdog tails panes and emits AgentCrashed."),
+            "wiki excerpt inlined"
+        );
     }
 
     #[test]
     fn interviewer_is_honest_blind_when_no_context() {
-        let without = interviewer_instructions(Some("/tmp/proj"), None, None);
+        let without = interviewer_instructions(Some("/tmp/proj"), None, None, None);
         assert!(
             !without.contains("REPO & HARNESS CONTEXT"),
             "no context block when absent"
