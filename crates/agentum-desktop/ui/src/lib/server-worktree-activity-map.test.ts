@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildWorktreeActivitySnapshot,
   indexSessionsByWorktree,
-  serverWorktreeActivityFromEvent
+  serverWorktreeActivityFromEvent,
+  type ServerWorktreeLiveActivity
 } from './server-worktree-activity-map'
 
 const WT_A = { id: 'repo-1::/work/a', path: '/work/a' }
@@ -50,6 +52,96 @@ describe('indexSessionsByWorktree', () => {
     )
     expect(aliveWorktreeIds).toEqual([])
     expect(sessionToWorktree.size).toBe(0)
+  })
+
+  it('tolerates a path-less worktree without throwing and still maps the others', () => {
+    // A degraded/failed detection (or unreachable remote host) can leave a
+    // worktree with no `path`. One undefined path must not abort the whole
+    // index — it would blank EVERY sidebar dot, not just that worktree's.
+    const pathless = { id: 'repo-1::', path: undefined as unknown as string }
+    const { aliveWorktreeIds, sessionToWorktree } = indexSessionsByWorktree(
+      [{ id: 's1', status: 'running', workdir: '/work/a' }],
+      [pathless, WT_A]
+    )
+    expect(aliveWorktreeIds).toEqual(['repo-1::/work/a'])
+    expect(sessionToWorktree.get('s1')).toBe('repo-1::/work/a')
+  })
+
+  it('ignores a session with an empty workdir (never binds it to a path-less worktree)', () => {
+    const { aliveWorktreeIds, sessionToWorktree } = indexSessionsByWorktree(
+      [{ id: 's1', status: 'running', workdir: '' }],
+      [WT_A]
+    )
+    expect(aliveWorktreeIds).toEqual([])
+    expect(sessionToWorktree.size).toBe(0)
+  })
+})
+
+describe('buildWorktreeActivitySnapshot', () => {
+  const idx = (pairs: [string, string][]): Map<string, string> => new Map(pairs)
+  const acts = (pairs: [string, ServerWorktreeLiveActivity][]): Map<string, ServerWorktreeLiveActivity> =>
+    new Map(pairs)
+
+  it('marks alive worktrees with the {alive:true} baseline and no activity', () => {
+    const snap = buildWorktreeActivitySnapshot(['wt-1'], idx([]), acts([]))
+    expect(snap).toEqual({ 'wt-1': { alive: true } })
+  })
+
+  it('keeps a working agent over an idle sibling in the same worktree', () => {
+    // The reload "stuck idle" bug: two sessions back one worktree; a plain
+    // last-writer-wins overlay let the idle one clobber the working one.
+    const snap = buildWorktreeActivitySnapshot(
+      ['wt-1'],
+      idx([
+        ['s-working', 'wt-1'],
+        ['s-idle', 'wt-1']
+      ]),
+      acts([
+        ['s-working', 'working'],
+        ['s-idle', 'idle']
+      ])
+    )
+    expect(snap['wt-1']).toEqual({ alive: true, activity: 'working' })
+  })
+
+  it('is order-independent (idle inserted last cannot clobber working)', () => {
+    const snap = buildWorktreeActivitySnapshot(
+      ['wt-1'],
+      idx([
+        ['s-idle', 'wt-1'],
+        ['s-working', 'wt-1']
+      ]),
+      acts([
+        ['s-idle', 'idle'],
+        ['s-working', 'working']
+      ])
+    )
+    expect(snap['wt-1']).toEqual({ alive: true, activity: 'working' })
+  })
+
+  it('ranks awaiting (needs you) above working', () => {
+    const snap = buildWorktreeActivitySnapshot(
+      ['wt-1'],
+      idx([
+        ['s-working', 'wt-1'],
+        ['s-awaiting', 'wt-1']
+      ]),
+      acts([
+        ['s-working', 'working'],
+        ['s-awaiting', 'awaiting']
+      ])
+    )
+    expect(snap['wt-1']).toEqual({ alive: true, activity: 'awaiting' })
+  })
+
+  it('marks a worktree alive from a verdict even if it was not in the alive set', () => {
+    const snap = buildWorktreeActivitySnapshot([], idx([['s1', 'wt-1']]), acts([['s1', 'working']]))
+    expect(snap['wt-1']).toEqual({ alive: true, activity: 'working' })
+  })
+
+  it('drops a verdict for a session with no worktree mapping', () => {
+    const snap = buildWorktreeActivitySnapshot(['wt-1'], idx([]), acts([['s-orphan', 'working']]))
+    expect(snap).toEqual({ 'wt-1': { alive: true } })
   })
 })
 

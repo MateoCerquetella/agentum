@@ -2,8 +2,8 @@ import { useEffect } from 'react'
 import { useAppStore } from '@/store'
 import { listSessions } from '@/runtime/agentum-server-client'
 import { getServerEndpoint, wsUrl } from '@/runtime/server-endpoint'
-import type { ServerWorktreeActivityEntry } from '@/store/slices/server-worktree-activity'
 import {
+  buildWorktreeActivitySnapshot,
   indexSessionsByWorktree,
   serverWorktreeActivityFromEvent,
   type ServerWorktreeLiveActivity,
@@ -23,7 +23,12 @@ function collectWorktrees(): WorktreeLike[] {
   const out: WorktreeLike[] = []
   for (const list of Object.values(byRepo)) {
     for (const wt of list) {
-      out.push({ id: wt.id, path: wt.path })
+      // Skip a worktree without a resolved path (degraded/failed detection,
+      // unreachable remote host, partial hydration). Passing an undefined path
+      // into the join would otherwise throw and blank the whole overlay.
+      if (wt.path) {
+        out.push({ id: wt.id, path: wt.path })
+      }
     }
   }
   return out
@@ -73,19 +78,14 @@ export function useServerWorktreeActivity(): void {
         sessionToWorktree.set(sessionId, worktreeId)
       }
 
-      const snapshot: Record<string, ServerWorktreeActivityEntry> = {}
-      for (const worktreeId of aliveWorktreeIds) {
-        snapshot[worktreeId] = { alive: true }
-      }
-      for (const [sessionId, activity] of activityBySessionId) {
-        const worktreeId = sessionToWorktree.get(sessionId)
-        if (!worktreeId) {
-          continue
-        }
-        // The cache only holds running sessions (see prune in refresh), so the
-        // worktree is in the alive set — overlay its activity.
-        snapshot[worktreeId] = { alive: true, activity }
-      }
+      // Fold every backing session's verdict into one entry per worktree,
+      // keeping the MOST active (awaiting > working > idle) so a sibling
+      // session's idle can't mask a working agent.
+      const snapshot = buildWorktreeActivitySnapshot(
+        aliveWorktreeIds,
+        sessionToWorktree,
+        activityBySessionId
+      )
       useAppStore.getState().setServerWorktreeActivitySnapshot(snapshot)
     }
 
@@ -132,13 +132,14 @@ export function useServerWorktreeActivity(): void {
         return
       }
       activityBySessionId.set(verdict.sessionId, verdict.activity)
-      const worktreeId = sessionToWorktree.get(verdict.sessionId)
-      // Known mapping → update now. Unknown (session not fetched yet) → leave it
-      // cached; the next refresh / session.started applies it. We deliberately do
-      // NOT refetch per unknown event, to avoid a refresh storm.
-      if (worktreeId) {
-        useAppStore.getState().patchServerWorktreeActivity(worktreeId, verdict.activity)
-      }
+      // Recompute so the worktree reflects the MOST-active of its sessions
+      // (awaiting > working > idle, folded in buildWorktreeActivitySnapshot). A
+      // per-session patch here let a sibling's idle/finished verdict clobber a
+      // working agent — the "working shows idle" bug. remap() is pure + cheap
+      // (no IO) and setServerWorktreeActivitySnapshot no-ops when unchanged; a
+      // verdict for a not-yet-fetched session stays cached in activityBySessionId
+      // and is applied on the next refresh (same as before).
+      remap()
     }
 
     const connect = async (): Promise<void> => {

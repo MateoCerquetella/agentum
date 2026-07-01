@@ -32,8 +32,14 @@ export type SessionWorktreeIndex = {
 // Why: paths from the server (`session.workdir`) and the store
 // (`worktree.path`) should be the same absolute path, but a trailing slash on
 // one side would silently break the join. Normalize both ends the same way.
-function normalizePath(path: string): string {
-  const trimmed = path.trim()
+//
+// Defensive against a missing path: a worktree row can lack a resolved `path`
+// (degraded/failed detection, an unreachable remote host, or partial
+// hydration), and a session can carry an empty workdir. Coerce to '' instead of
+// throwing — one `undefined.trim()` here would blow up the whole `remap()` and
+// silently blank EVERY sidebar dot, not just the offending worktree's.
+function normalizePath(path: string | null | undefined): string {
+  const trimmed = (path ?? '').trim()
   if (trimmed.length > 1 && trimmed.endsWith('/')) {
     return trimmed.replace(/\/+$/, '')
   }
@@ -52,13 +58,22 @@ export function indexSessionsByWorktree(
 ): SessionWorktreeIndex {
   const pathToWorktreeId = new Map<string, string>()
   for (const wt of worktrees) {
-    pathToWorktreeId.set(normalizePath(wt.path), wt.id)
+    const key = normalizePath(wt.path)
+    // Skip a path-less worktree rather than mapping every empty-path session to
+    // it — and never let its missing path abort the whole index.
+    if (!key) {
+      continue
+    }
+    pathToWorktreeId.set(key, wt.id)
   }
 
   const aliveWorktreeIds = new Set<string>()
   const sessionToWorktree = new Map<string, string>()
   for (const session of sessions) {
     const effectivePath = normalizePath(session.worktree_path ?? session.workdir)
+    if (!effectivePath) {
+      continue
+    }
     const worktreeId = pathToWorktreeId.get(effectivePath)
     if (!worktreeId) {
       continue
@@ -70,6 +85,52 @@ export function indexSessionsByWorktree(
   }
 
   return { aliveWorktreeIds: [...aliveWorktreeIds], sessionToWorktree }
+}
+
+/** One worktree's server-authoritative liveness + activity. Structurally equal
+ *  to the store's `ServerWorktreeActivityEntry` (kept local to avoid a slice→map
+ *  import cycle). */
+export type WorktreeActivityEntry = { alive: boolean; activity?: ServerWorktreeLiveActivity }
+
+/** Rank so a worktree with several backing sessions reflects its MOST active
+ *  one. `awaiting` (blocked on the user) > `working` > `idle`, mirroring the dot
+ *  priority in resolveWorktreeStatus. */
+const ACTIVITY_PRIORITY: Record<ServerWorktreeLiveActivity, number> = {
+  awaiting: 3,
+  working: 2,
+  idle: 1
+}
+
+/**
+ * Fold per-session activity verdicts into one entry per worktree, keeping the
+ * highest-priority activity across a worktree's sessions. This is the fix for
+ * the "working agent shows idle" bug: a worktree can back MULTIPLE sessions
+ * (an agent + a plain terminal, or two agent tabs), and a plain last-writer-wins
+ * overlay let a sibling's `idle`/`finished` verdict clobber a live `working` /
+ * `awaiting` one. Every alive worktree starts present with the `{alive:true}`
+ * baseline; a session that has emitted any verdict also implies its worktree is
+ * alive. Pure (no store/IO) so it's unit-tested directly.
+ */
+export function buildWorktreeActivitySnapshot(
+  aliveWorktreeIds: readonly string[],
+  sessionToWorktree: ReadonlyMap<string, string>,
+  activityBySessionId: ReadonlyMap<string, ServerWorktreeLiveActivity>
+): Record<string, WorktreeActivityEntry> {
+  const snapshot: Record<string, WorktreeActivityEntry> = {}
+  for (const worktreeId of aliveWorktreeIds) {
+    snapshot[worktreeId] = { alive: true }
+  }
+  for (const [sessionId, activity] of activityBySessionId) {
+    const worktreeId = sessionToWorktree.get(sessionId)
+    if (!worktreeId) {
+      continue
+    }
+    const current = snapshot[worktreeId]?.activity
+    const winner =
+      current && ACTIVITY_PRIORITY[current] >= ACTIVITY_PRIORITY[activity] ? current : activity
+    snapshot[worktreeId] = { alive: true, activity: winner }
+  }
+  return snapshot
 }
 
 /**
