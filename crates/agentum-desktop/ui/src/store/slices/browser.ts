@@ -28,6 +28,7 @@ import {
   getActiveRuntimeTarget,
   type RuntimeClientTarget
 } from '@/runtime/runtime-rpc-client'
+import { stopWorktreeCdpBrowser } from '@/runtime/cdp-screencast-client'
 import type {
   BrowserDetectProfilesResult,
   BrowserProfileClearDefaultCookiesResult,
@@ -652,6 +653,9 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
 
   closeBrowserTab: (tabId) => {
     let remotePagesToClose: { worktreeId: string; handle: RemoteBrowserPageHandle }[] = []
+    // The worktree whose LAST browser tab this close empties — its per-worktree
+    // Chromium is then torn down server-side so it doesn't linger as an orphan.
+    let emptiedWorktreeId: string | null = null
     set((s) => {
       let owningWorktreeId: string | null = null
       let closedWorkspace: BrowserWorkspace | null = null
@@ -710,6 +714,9 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       const nextActiveTabTypeByWorktree = { ...s.activeTabTypeByWorktree }
       let nextActiveTabType = s.activeTabType
       if (remainingBrowserTabs.length === 0) {
+        // No browser tabs left in this worktree → its Chromium has nothing to
+        // render, so mark it for teardown after the state update commits.
+        emptiedWorktreeId = owningWorktreeId
         const fallbackTabType = getFallbackTabTypeForWorktree(
           owningWorktreeId,
           s.openFiles,
@@ -766,6 +773,13 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
 
     for (const remotePage of remotePagesToClose) {
       closeRemoteBrowserPageInOwningEnvironment(remotePage.worktreeId, remotePage.handle)
+    }
+
+    // Closed the worktree's last browser tab → kill its per-worktree Chromium so
+    // it doesn't linger as an orphaned process. Fire-and-forget; the server
+    // relaunches on demand if an agent uses the browser again.
+    if (emptiedWorktreeId) {
+      void stopWorktreeCdpBrowser(emptiedWorktreeId)
     }
 
     for (const tabs of Object.values(get().unifiedTabsByWorktree)) {

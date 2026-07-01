@@ -402,16 +402,64 @@ fn register_worktree_browser(worktree_id: &str, port: u16, tmux: &str, profile: 
     }
 }
 
-/// Tear down a worktree's browser (kill its session, drop its profile + registry
-/// entry). Idempotent; a no-op for an unknown worktree. Wire into worktree close.
+/// Kill every process whose command line references `needle` — how we reap the
+/// Chromium launched for a CDP browser. Its `--user-data-dir` sits under our
+/// `cdp-browser` profile dir (an agentum-only absolute path), so this never
+/// matches the user's own Chrome. We match on the PROCESS, not the tmux session,
+/// because a killed session can leave the browser orphaned (the source of the
+/// leftover-Chrome pile-up). Best-effort; `pkill` is absent on Windows (where the
+/// tmux-hosted browser doesn't run anyway), so a spawn failure is ignored.
+async fn pkill_by_signature(needle: &str) {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return;
+    }
+    // `-f` matches the full argv. The signature is an absolute path, so it can't
+    // be mistaken for a pkill option (and `Command::arg` passes it verbatim, so a
+    // space in it — e.g. macOS's "Application Support" — is fine).
+    let _ = tokio::process::Command::new("pkill")
+        .arg("-f")
+        .arg(needle)
+        .output()
+        .await;
+}
+
+/// Reap every Chromium agentum launched for CDP — the shared browser and every
+/// per-worktree one — by its `--user-data-dir` under our `cdp-browser` profile
+/// dir. These live in detached tmux sessions and can outlive both the app and
+/// their session, so without an explicit reap they accumulate ("dozens of
+/// leftover Chrome processes"). Also clears the in-memory registry so a stale
+/// entry can't hand back a dead port. Best-effort; safe to call on startup (a
+/// fresh launch has no live agentum browser, so only orphans die) and on quit.
+pub async fn reap_orphaned_cdp_browsers() {
+    if let Ok(state) = agentum_store::paths::state_dir() {
+        pkill_by_signature(&state.join("cdp-browser").to_string_lossy()).await;
+    }
+    if let Ok(mut reg) = worktree_registry().lock() {
+        reg.clear();
+    }
+}
+
+/// Tear down a worktree's browser (kill its Chromium + tmux session, drop its
+/// profile + registry entry). Idempotent; safe for an unknown worktree. Called on
+/// worktree removal AND when the user closes the last browser tab in the worktree.
 pub async fn stop_local_cdp_browser_for(worktree_id: &str) -> Result<()> {
+    let key = canonical_worktree_key(worktree_id.trim());
     let entry = worktree_registry()
         .lock()
         .ok()
-        .and_then(|mut reg| reg.remove(canonical_worktree_key(worktree_id.trim())));
-    if let Some(b) = entry {
+        .and_then(|mut reg| reg.remove(key));
+    if let Some(b) = &entry {
         let _ = agentum_tmux::kill_session(&b.tmux).await;
-        let _ = std::fs::remove_dir_all(&b.profile);
+    }
+    // Kill the Chromium by its profile dir even without a live registry entry (it
+    // may have been launched in a previous run) — the browser can outlive its
+    // tmux session, so killing the session alone leaks it. Derive the SAME
+    // per-worktree profile path used at launch, then drop the dir.
+    if let Ok(state) = agentum_store::paths::state_dir() {
+        let profile = state.join("cdp-browser").join(sanitize_worktree_token(key));
+        pkill_by_signature(&profile.to_string_lossy()).await;
+        let _ = std::fs::remove_dir_all(&profile);
     }
     Ok(())
 }
