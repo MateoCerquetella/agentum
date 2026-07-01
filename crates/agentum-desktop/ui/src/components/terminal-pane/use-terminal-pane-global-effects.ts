@@ -92,6 +92,9 @@ export function useTerminalPaneGlobalEffects({
       // not jump to the wrong history entry.
       const viewportPositions = captureViewportPositions(!wasVisibleRef.current)
       withSuppressedScrollTracking(() => {
+        // Undo the hidden-pane scrollback trim BEFORE draining any backlog,
+        // so recovered output lands in the full-size buffer.
+        manager.restoreHiddenScrollback()
         // Why: hidden panes can accumulate large PTY bursts while Chromium is
         // occluded. Drain a bounded slice before fitting; the scheduler keeps
         // ordering and continues the rest asynchronously so return-to-app does
