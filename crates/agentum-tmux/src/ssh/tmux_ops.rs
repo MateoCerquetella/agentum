@@ -105,7 +105,8 @@ pub async fn sample_pane(host: &Host, target: &str, lines: usize) -> Result<Opti
             // continuous, N-scaling CPU; batching yields identical data. The
             // has-session gate above already ruled out "pane gone", so a parse
             // miss here is a real error (mirrors the SSH arm below).
-            let stdout = crate::capture_pane_sample_combined(target, lines, SAMPLE_BOUNDARY).await?;
+            let stdout =
+                crate::capture_pane_sample_combined(target, lines, SAMPLE_BOUNDARY).await?;
             parse_pane_sample(&stdout)
                 .map(Some)
                 .ok_or_else(|| TmuxError::NonZero {
