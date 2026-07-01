@@ -179,6 +179,7 @@ async fn create_goal(
         &NewFeature {
             title: title.to_string(),
             body: body.body.clone(),
+            labels: vec![],
         },
     )
     .await;
@@ -586,6 +587,7 @@ async fn plan_goal_harness(
                         &crate::task_sink::NewFeature {
                             title: c.title.clone(),
                             body: c.body.clone(),
+                            labels: vec![],
                         },
                     )
                     .await
