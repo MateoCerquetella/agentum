@@ -17,6 +17,7 @@ type WorktreeAgentRowsState = Pick<
   | 'migrationUnsupportedByPtyId'
   | 'retainedAgentsByPaneKey'
   | 'tabsByWorktree'
+  | 'serverAgentDoneByPaneKey'
 >
 
 // Stable empty fallbacks so a partial state (e.g. a minimal store mock under
@@ -25,6 +26,8 @@ type WorktreeAgentRowsState = Pick<
 const EMPTY_AGENT_STATUS_BY_PANE_KEY: WorktreeAgentRowsState['agentStatusByPaneKey'] = {}
 const EMPTY_TABS_BY_WORKTREE: WorktreeAgentRowsState['tabsByWorktree'] =
   {} as WorktreeAgentRowsState['tabsByWorktree']
+const EMPTY_SERVER_AGENT_DONE_BY_PANE_KEY: WorktreeAgentRowsState['serverAgentDoneByPaneKey'] = {}
+const EMPTY_SERVER_AGENT_DONE: Record<string, number> = {}
 
 type TabWorktreeIndexCache = {
   tabsByWorktree: WorktreeAgentRowsState['tabsByWorktree']
@@ -193,11 +196,64 @@ function getRetainedEntriesByWorktree(
   return entriesByWorktree
 }
 
+// Why: serverAgentDoneByPaneKey (title-derived "done" markers for hook-less
+// server sessions) was the ONE input useWorktreeAgentRows read via an inline
+// Object.entries filter — O(done-agents) per card on EVERY store commit, i.e.
+// O(cards × done-agents) of work per commit under many agents. Index it per
+// worktree like every sibling input so each card does an O(1) lookup and the
+// bucketing rebuilds only when the done-map or tab map identity changes.
+let serverAgentDoneByWorktreeCache: {
+  serverAgentDoneByPaneKey: WorktreeAgentRowsState['serverAgentDoneByPaneKey']
+  tabsByWorktree: WorktreeAgentRowsState['tabsByWorktree']
+  byWorktree: Map<string, Record<string, number>>
+} | null = null
+
+function getServerAgentDoneByWorktree(
+  state: WorktreeAgentRowsState
+): Map<string, Record<string, number>> {
+  const serverAgentDoneByPaneKey =
+    state.serverAgentDoneByPaneKey ?? EMPTY_SERVER_AGENT_DONE_BY_PANE_KEY
+  const tabsByWorktree = state.tabsByWorktree ?? EMPTY_TABS_BY_WORKTREE
+  if (
+    serverAgentDoneByWorktreeCache?.serverAgentDoneByPaneKey === serverAgentDoneByPaneKey &&
+    serverAgentDoneByWorktreeCache.tabsByWorktree === tabsByWorktree
+  ) {
+    return serverAgentDoneByWorktreeCache.byWorktree
+  }
+  const tabIdToWorktreeId = getTabIdToWorktreeId(tabsByWorktree)
+  const byWorktree = new Map<string, Record<string, number>>()
+  for (const [paneKey, finishedAt] of Object.entries(serverAgentDoneByPaneKey)) {
+    const parsed = parsePaneKey(paneKey)
+    if (!parsed) {
+      continue
+    }
+    const worktreeId = tabIdToWorktreeId.get(parsed.tabId)
+    if (!worktreeId) {
+      continue
+    }
+    const bucket = byWorktree.get(worktreeId)
+    if (bucket) {
+      bucket[paneKey] = finishedAt
+    } else {
+      byWorktree.set(worktreeId, { [paneKey]: finishedAt })
+    }
+  }
+  serverAgentDoneByWorktreeCache = { serverAgentDoneByPaneKey, tabsByWorktree, byWorktree }
+  return byWorktree
+}
+
 export function selectLiveAgentStatusEntriesForWorktree(
   state: WorktreeAgentRowsState,
   worktreeId: string
 ): AgentStatusEntry[] {
   return getLiveEntriesByWorktree(state).get(worktreeId) ?? EMPTY_LIVE_ENTRIES
+}
+
+export function selectServerAgentDoneForWorktree(
+  state: WorktreeAgentRowsState,
+  worktreeId: string
+): Record<string, number> {
+  return getServerAgentDoneByWorktree(state).get(worktreeId) ?? EMPTY_SERVER_AGENT_DONE
 }
 
 export function selectMigrationUnsupportedEntriesForWorktree(
