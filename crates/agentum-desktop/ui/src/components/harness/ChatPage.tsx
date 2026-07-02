@@ -193,6 +193,15 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   useEffect(() => () => abortRef.current?.abort(), [])
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
+  // Auto-grow the composer with its content. The cap matches the textarea's
+  // max-h-40 (160px); past it the textarea scrolls internally.
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [draft])
+
   // Persist history shortly after the last change — coalesces the per-token state
   // updates of a streaming reply into a single localStorage write.
   useEffect(() => {
@@ -551,7 +560,6 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
         <DrillInHeader
           icon={MessagesSquare}
           title="Chat"
-          description="Describe a feature — I'll ask a few questions, then propose the tasks to create"
           actions={
             <button
               type="button"
@@ -668,9 +676,6 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
             )}
             <ModelPicker model={model} onChange={setModel} disabled={busy} />
             <ThinkingToggle on={thinking} onToggle={setThinking} disabled={busy} />
-            <span className="ml-auto hidden font-mono text-[11px] text-muted-foreground md:inline">
-              agentum · spec → issues
-            </span>
           </div>
 
           {/* transcript */}
@@ -723,15 +728,15 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                 </button>
               </div>
             ) : null}
-            <div className="mx-auto flex max-w-[760px] items-end gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 focus-within:border-foreground/30">
+            <div className="mx-auto flex max-w-[760px] items-end gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 transition-shadow focus-within:border-foreground/30 focus-within:ring-2 focus-within:ring-foreground/10">
               <textarea
                 ref={textareaRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onKeyDown}
                 rows={1}
-                placeholder='Try "Add a CSV export to the board"…  (Enter to send · Shift+Enter for newline)'
-                className="max-h-40 flex-1 resize-none bg-transparent py-1 text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
+                placeholder='Describe a feature — try "Add a CSV export to the board"'
+                className="max-h-40 flex-1 resize-none overflow-y-auto bg-transparent py-1 text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
               />
               {busy ? (
                 <button
@@ -749,10 +754,16 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                   disabled={!draft.trim()}
                   className="inline-flex size-8 flex-none items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-85 disabled:opacity-40"
                   aria-label="Send"
+                  title="Send (⏎)"
                 >
                   <Send className="size-4" />
                 </button>
               )}
+            </div>
+            <div className="mx-auto mt-1.5 flex max-w-[760px] justify-end">
+              <span className="font-mono text-[10px] text-muted-foreground/70">
+                ⏎ send · ⇧⏎ newline
+              </span>
             </div>
           </form>
         </div>
