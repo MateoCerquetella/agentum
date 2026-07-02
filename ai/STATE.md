@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 006-sdd-native-loop-and-rich-issues
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 Developer COMPLETE 2026-07-02 in 2 slices — F1+F4 `15365352`, F2+F3 `358347dc`; final gate 535/0 lib + clippy -D warnings + vite green; handoff 03. Mateo's empty-description report: NOT reproducible, chain wire-test-pinned)
+- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 Tester PASS 9/9 ACs + C1 2026-07-02, `verification.md` + handoff 04; commits `15365352`/`358347dc` on `.claude/worktrees/finish-the-loop`)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,21 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Tester | **006 verdict PASS 9/9 ACs + C1** (`verification.md`).
+  Independent re-runs: 535/0/5 lib (139.3s), clippy -D warnings green, vite
+  2m23s, vitest 15/0, scoped chat 39/harness 86/github 32/task_sink 26. All
+  8 deviations audited ACCURATE — incl. confirming the architecture's
+  "Confirm spreads the plan verbatim" claim was WRONG (base
+  createIssuesFromChat rebuilt {title,summary,tasks}; deviation-2 fix at the
+  rebuild seam is correct). Stored-turn "not reproducible" verdict audited
+  SOUND (draftPlan ephemeral, StoredTurn persists no plan). F2 byte pin
+  traced character-by-character vs the base commit. Sacred surfaces clean
+  (drive.rs = one C1 hunk; helpers.rs untouched; auth/registry diffs empty;
+  exactly TWO env-locked tests). 5 Info findings none blocking (labels-empty
+  repo shows no chips; armed-copy staleness; 422→fallback fold; first-pair
+  provenance; author-fetch ordering pre-existing). GUI + live C1 label-flip
+  = deferred to qa.sh/staging. Handoff `04-tester-to-reviewer.md`. Phase →
+  reviewer.
 - 2026-07-02 | Developer | **006 slice 2: F2+F3 GREEN — developer phase
   COMPLETE** (`358347dc`; 535/0 lib, clippy -D warnings green, vite 2m04s;
   pins written FIRST, verified green pre-edit). F2 problem/goal extraction +
@@ -119,18 +134,3 @@
   author, GitHubItemDialog `?? 'unknown'`); AC 7 pin restated (verdict
   contract lines, not whole-prompt bytes — briefs are include_str!). Handoff
   `01-pm-to-architect.md`. Phase → architect.
-- 2026-07-02 | Reviewer | **005 SIGN-OFF → SHIP-READY** (`review.md`). All 6
-  focus items pass (C5 handler read straight-line incl. all three claim arms;
-  never-Err verified in github arm/Todo branch/report_status_text; all four
-  regression pins are REAL literals; flat-Tauri+camelCase verified end-to-end;
-  UI matches composer/pane patterns). 0 Blockers. Should-fix follow-ups:
-  (1) stale old-QA docs cluster (types.rs/helpers.rs/drive.rs comments) —
-  docs-only pass at ship or fast-follow; (2) file the pre-existing Linear
-  snake_case state-map bug (IntegrationsPane.tsx:83-89 vs linear.rs:482-486);
-  (3) NEW: find_by_workdir exact-PathBuf equality + no canonicalization →
-  symlink-aliased workdir spellings can double-register (pre-existing class,
-  named issue). 5 nits (let _ = list shrug; ""-specId; HarnessCompleted noise;
-  toggle survives unlink; lock held across gh fetch). "The four regression
-  pins are honest literals — the net actually catches drift." spec.md Status
-  → Done. Phase → done. **RELEASE = Mateo** (issue + PR w/ Closes in commit
-  MESSAGE, staging browser QA, promote + tag).
