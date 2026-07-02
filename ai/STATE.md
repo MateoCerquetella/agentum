@@ -64,6 +64,19 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Developer | **005 slice 2: F1 GREEN** (`ae8bf467`; 512/0 lib,
+  vite 1m03s, vitest 10/0). POST /api/harness/start-work + shared
+  `ensure_spec_and_plan` (Todo-at-plan inherited by 004 route, test-pinned
+  never-overwrite 400) + `start_work_lock`/`find_by_workdir` +
+  `update_backlog_knobs`; composer toggle + three-path skip
+  (`planCreatedWorkspaceOpen`) + TaskPage row action. drive_inner + run-route
+  spawn: ZERO diffs (orchestrator-verified drive.rs untouched). 8 deviations
+  in tasks.md (notable: no release_driver needed — nothing fallible after the
+  fresh claim; deleted-run claim Err falls through to fresh registration;
+  fake-gh Todo test under TEST_ENV_LOCK asserts exactly one
+  `--add-label status/todo` edit). NOT GUI-verified (toggle/dropdown/toasts =
+  unit+build pinned; browser QA = qa.sh/staging). Phase stays developer →
+  slice 3 = F5 (GithubStateMap + github.json + Settings card).
 - 2026-07-02 | Developer | **005 slice 1: F2+F3+F4 GREEN** (`197a7bea`; 507/0
   lib tests, fmt clean, vite green). F2 spec_id stamp + prompt widening (two
   byte-identical pins written against the PRE-change function). F3 pure
@@ -117,12 +130,3 @@
   LinearStateMap parity). Five increments F1–F5; 4 open questions (orchestration
   home, suppression-vs-adoption, QA default posture, state_map scope) carry
   recommendations for auto-resolution. Phase → pm→architect next.
-- 2026-07-01 — 004 Reviewer **SIGN-OFF → SHIP-READY** (`review.md`). All 6
-  focus items pass; invariants hold; "test suite unusually communicative;
-  comment discipline exemplary". 0 Blockers. Follow-ups (non-blocking):
-  narrow the `as unknown as GitHubWorkItem` cast (useComposerState.ts:1448);
-  FILE A GHES ISSUE (transitions skip on non-github.com URLs — by design,
-  name it); nits: debug-log the initial-Todo skip, scaffoldSpec reset-on-unlink.
-  spec.md Status → Done. Phase → done. **Release = Mateo** (/ship: issue + PR
-  fix-wiki→develop w/ Closes #N, staging browser QA — chip, toggle, live
-  label flip ending OPEN with exactly status/done — then promote + tag).
