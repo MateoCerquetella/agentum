@@ -95,6 +95,11 @@ import {
 } from './lib/startup-ui-hydration'
 import { shouldRenderPetOverlay } from './components/pet/pet-overlay-visibility'
 import { applyDocumentTheme } from './lib/document-theme'
+import {
+  applyAppColorTheme,
+  clearAppColorTheme,
+  readAppColorThemeName
+} from './lib/app-color-theme'
 import { getSystemPrefersDark } from './lib/terminal-theme'
 import { isEditableTarget } from './lib/editable-target'
 import { getSelectedTextForFileSearch } from './lib/file-search-selection'
@@ -976,6 +981,17 @@ function App(): React.JSX.Element {
     } catch {
       /* ignore storage failures */
     }
+
+    // A full-app color theme (Dracula, Catppuccin, …), when active, owns the
+    // document theme: it sets the dark/light class by its own luminance and
+    // overrides the chrome tokens, so skip the built-in appearance below.
+    const colorTheme = readAppColorThemeName()
+    if (colorTheme && applyAppColorTheme(colorTheme)) {
+      return undefined
+    }
+    // Otherwise clear any stale color-theme overrides and let the built-in
+    // light/dark chrome take over.
+    clearAppColorTheme()
 
     if (settings.theme === 'dark') {
       applyDocumentTheme('dark')

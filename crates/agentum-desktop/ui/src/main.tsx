@@ -9,6 +9,7 @@ import {
   recordRendererCrashBreadcrumb
 } from './lib/crash-diagnostics'
 import { applyDocumentTheme } from './lib/document-theme'
+import { applyAppColorTheme, readAppColorThemeName } from './lib/app-color-theme'
 import { logEmbeddedServerSnapshot } from './runtime/agentum-server-client'
 
 // Exercise the embedded agentum-server over its session model (the shared core
@@ -25,6 +26,14 @@ installRendererCrashDiagnostics()
 const persistedTheme =
   (localStorage.getItem('agentum-theme') as 'system' | 'dark' | 'light' | null) ?? 'system'
 applyDocumentTheme(persistedTheme, { disableTransitions: false })
+
+// If a full-app color theme is active, paint it over the built-in light/dark
+// chrome on this first frame too (it owns the dark/light class by its own
+// luminance). App.tsx re-asserts it authoritatively once settings load.
+const persistedColorTheme = readAppColorThemeName()
+if (persistedColorTheme) {
+  applyAppColorTheme(persistedColorTheme)
+}
 
 const rootElement = document.getElementById('root')
 if (!rootElement) {
