@@ -712,6 +712,17 @@ fn scaffold_files() -> Vec<(&'static str, String)> {
     .unwrap_or_else(|_| "{}".into());
     vec![
         (
+            // Self-ignoring dir: the scaffold is runtime state (backlog state
+            // writes, QA verdicts, handoffs), so it must not show up as
+            // untracked noise in the worktree's `git status` — that noise
+            // confuses both the user and the driven agent. `*` ignores the
+            // whole dir including this file; repos that deliberately track
+            // `.agentum-harness/` keep their tracked files (gitignore never
+            // untracks) and can delete this file to keep committing it.
+            ".gitignore",
+            "*\n".to_string(),
+        ),
+        (
             "AGENTS.md",
             "# AGENTS\n\n<!-- Router: keep <=200 lines, <=15 hard constraints; link detail into .agentum-harness/docs/*. -->\n\n## Project\n\nTODO: one-paragraph summary.\n\n## Run / Test\n\n- start: `./init.sh`\n- verify: `./verify.sh`\n".to_string(),
         ),

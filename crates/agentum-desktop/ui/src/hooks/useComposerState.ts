@@ -55,9 +55,14 @@ import { buildGithubIssueContextSnapshot } from '@/lib/github-linked-work-item'
 import { composeIssueContextBody, STATIC_FALLBACK_LABELS } from '@/lib/issue-context-body'
 import {
   createGithubIssue,
+  draftGithubIssueBody,
   fetchGithubRepoLabels,
   scaffoldSpecFromIssue
 } from '@/runtime/github-issue-client'
+import {
+  deriveIssueSideEffectGate,
+  describeIssueSideEffectSkip
+} from '@/lib/issue-side-effect-gate'
 import { getHarnessSettings, startGatedWork } from '@/runtime/harness-client'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
@@ -196,6 +201,10 @@ export type ComposerCardProps = {
   createIssueSubmitting: boolean
   createIssueError: string | null
   onCreateIssueSubmit: () => void
+  /** Spec 007: "Generate description" — drafts an SDD-shaped body from the
+   *  typed title + repo context into the textarea (review before filing). */
+  createIssueGenerating: boolean
+  onGenerateIssueBody: () => void
   /** Spec 006 F1: label picker selection for the create-issue form. */
   createIssueLabels: string[]
   /** Pickable label names — `null` while the fetch is in flight; the static
@@ -564,6 +573,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [createIssueBody, setCreateIssueBody] = useState('')
   const [createIssueSubmitting, setCreateIssueSubmitting] = useState(false)
   const [createIssueError, setCreateIssueError] = useState<string | null>(null)
+  // Spec 007: "Generate description" — an LLM draft of the body from the
+  // typed title + repo context. Fills the textarea for review, never files.
+  const [createIssueGenerating, setCreateIssueGenerating] = useState(false)
   // Spec 006 F1: label picker for the create-issue form. Selection resets on
   // submit-success and on form close; options are `null` while loading and
   // fall back to the static `type/*`+`priority/*` set when the fetch errors.
@@ -1424,6 +1436,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     setLinkedWorkItem(null)
     setLinkedIssue('')
     setLinkedPR(null)
+    // Spec 007 (bug 2): the issue side-effect toggles are gated on the linked
+    // issue; armed state must not outlive its (now hidden) checkbox, or the
+    // submit-time gate silently no-ops.
+    setScaffoldSpec(false)
+    setStartGatedRun(false)
     if (name === lastAutoNameRef.current) {
       lastAutoNameRef.current = ''
     }
@@ -1572,6 +1589,51 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     createIssueSubmitting,
     createIssueTitle,
     selectedRepo
+  ])
+
+  // Spec 007: draft an SDD-shaped body from the title + repo context and put
+  // it in the TEXTAREA — the user reviews/edits before filing; nothing is
+  // posted from here. Failures render inline (`createIssueError`) and leave
+  // the form usable; a missing chat credential surfaces the server's
+  // "set ANTHROPIC_API_KEY / sign in to Claude" message verbatim.
+  const handleGenerateIssueBody = useCallback(async (): Promise<void> => {
+    const title = createIssueTitle.trim()
+    const repoPath = selectedRepo?.path
+    if (createIssueGenerating || createIssueSubmitting) {
+      return
+    }
+    if (!title) {
+      setCreateIssueError('Give the issue a title first — the description is drafted from it.')
+      return
+    }
+    if (!repoPath) {
+      setCreateIssueError('Pick a project first.')
+      return
+    }
+    setCreateIssueGenerating(true)
+    setCreateIssueError(null)
+    try {
+      const { body } = await draftGithubIssueBody({
+        workdir: repoPath,
+        title,
+        slug: selectedRepoSlug
+          ? `${selectedRepoSlug.owner}/${selectedRepoSlug.repo}`
+          : undefined
+      })
+      setCreateIssueBody(body)
+    } catch (error) {
+      setCreateIssueError(
+        error instanceof Error ? error.message : 'Could not generate a description.'
+      )
+    } finally {
+      setCreateIssueGenerating(false)
+    }
+  }, [
+    createIssueGenerating,
+    createIssueSubmitting,
+    createIssueTitle,
+    selectedRepo,
+    selectedRepoSlug
   ])
 
   // Spec 004 F4 (D5): the toggle only applies to a linked *github.com issue*
@@ -1873,6 +1935,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setLinkedGitLabIssue(null)
       setLinkedGitLabMR(null)
       setLinkedWorkItem(null)
+      // Spec 007 (bug 2): the repo switch just wiped the linked issue, so the
+      // issue side-effect toggles lose their subject — disarm them instead of
+      // leaving armed state behind a hidden checkbox (silent no-op at submit).
+      setScaffoldSpec(false)
+      setStartGatedRun(false)
       setSparseEnabled(false)
       setSparseDirectories('')
       // Why: presets are repo-scoped, so a stale selection from the prior
@@ -2178,20 +2245,22 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       worktree: { path: string },
       item: LinkedWorkItemSummary | null | undefined
     ): Promise<void> => {
-      if (!scaffoldSpec || !item || item.type !== 'issue') {
+      if (!scaffoldSpec) {
         return
       }
       // Re-derive the gate from the submitted item: github.com issues only,
-      // local targets only (the endpoint writes to a local path).
-      const link = parseGitHubIssueOrPRLink(item.url)
-      if (!link || link.type !== 'issue' || selectedRepo?.connectionId) {
+      // local targets only (the endpoint writes to a local path). Spec 007:
+      // an ARMED toggle that skips must say so — the silent return was bug 2.
+      const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
+      if (gate.eligible === false) {
+        toast.warning(describeIssueSideEffectSkip('scaffold-spec', gate.reason))
         return
       }
       try {
         await scaffoldSpecFromIssue({
           workdir: worktree.path,
-          number: item.number,
-          slug: `${link.slug.owner}/${link.slug.repo}`
+          number: gate.number,
+          slug: `${gate.slug.owner}/${gate.slug.repo}`
         })
       } catch (error) {
         console.error('Failed to scaffold a spec from the linked issue', error)
@@ -2213,20 +2282,22 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       item: LinkedWorkItemSummary | null | undefined,
       agent: TuiAgent | null
     ): Promise<void> => {
-      if (!startGatedRun || !item || item.type !== 'issue') {
+      if (!startGatedRun) {
         return
       }
       // Re-derive the gate from the submitted item: github.com issues only,
       // local targets only (the start-work route writes to a local path).
-      const link = parseGitHubIssueOrPRLink(item.url)
-      if (!link || link.type !== 'issue' || selectedRepo?.connectionId) {
+      // Spec 007: an ARMED toggle that skips must say so (bug 2).
+      const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
+      if (gate.eligible === false) {
+        toast.warning(describeIssueSideEffectSkip('start-gated-run', gate.reason))
         return
       }
       try {
         const result = await startGatedWork({
           workdir: worktree.path,
-          number: item.number,
-          slug: `${link.slug.owner}/${link.slug.repo}`,
+          number: gate.number,
+          slug: `${gate.slug.owner}/${gate.slug.repo}`,
           ...(agent ? { agentTool: agent } : {})
         })
         if (result.alreadyRunning) {
@@ -2307,11 +2378,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // issue, local repo). Suppresses the issueCommand automation at its
       // source (one of D2's three skips) and routes the post-create side
       // effect to the gated-run orchestration instead of the D5 scaffold.
+      // Spec 007: the same pure gate the post-create callbacks re-derive.
       const submitGatedRun =
         startGatedRun &&
-        submitLinkedWorkItem?.type === 'issue' &&
-        parseGitHubIssueOrPRLink(submitLinkedWorkItem.url)?.type === 'issue' &&
-        !selectedRepo?.connectionId
+        deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo?.connectionId)
+          .eligible
       const submitShouldRunIssueAutomation =
         !submitGatedRun &&
         enableIssueAutomation &&
@@ -2371,9 +2442,12 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // Why: linked source metadata is already included in createWorktree.
       // Re-saving it here can trigger slow post-create PR push-target lookups.
       await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
-      if (submitGatedRun) {
+      if (startGatedRun) {
         // Spec 005 F1 (AC 1): the server converge-scaffolds + plans + runs the
         // engine — the D5 scaffold call is skipped when the toggle is armed.
+        // Spec 007: routed on the ARMED state (not eligibility) so an
+        // ineligible-but-armed run surfaces its skip reason instead of
+        // falling into the scaffold branch as a silent no-op (bug 2).
         await maybeStartGatedRun(worktree, submitLinkedWorkItem, tuiAgent)
       } else {
         // Spec 004 F4 (opt-in): write the linked issue's spec into the new
@@ -2573,16 +2647,18 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
         // Spec 005 F1: armed AND eligible for the submitted item (github.com
-        // issue, local repo) — mirrors the full submit path's derivation.
+        // issue, local repo) — mirrors the full submit path's derivation
+        // (spec 007: shared pure gate).
         const submitGatedRun =
           startGatedRun &&
-          submitLinkedWorkItem?.type === 'issue' &&
-          parseGitHubIssueOrPRLink(submitLinkedWorkItem.url)?.type === 'issue' &&
-          !selectedRepo?.connectionId
-        if (submitGatedRun) {
+          deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo?.connectionId)
+            .eligible
+        if (startGatedRun) {
           // The server converge-scaffolds + plans + runs the engine; the D5
           // scaffold call is skipped when the toggle is armed (AC 1). Runs
           // before the skip-session branch so the gated run starts either way.
+          // Spec 007: routed on the ARMED state so an ineligible-but-armed
+          // run warns instead of silently no-oping (bug 2).
           await maybeStartGatedRun(worktree, submitLinkedWorkItem, agent)
         } else {
           // Spec 004 F4 (opt-in): shared with the full submit path — runs before
@@ -2761,6 +2837,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     createIssueSubmitting,
     createIssueError,
     onCreateIssueSubmit: () => void handleCreateIssueSubmit(),
+    createIssueGenerating,
+    onGenerateIssueBody: () => void handleGenerateIssueBody(),
     createIssueLabels,
     createIssueLabelOptions,
     onToggleCreateIssueLabel: handleToggleCreateIssueLabel,

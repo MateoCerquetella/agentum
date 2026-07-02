@@ -150,6 +150,76 @@ export async function createGithubIssue(input: {
   }
 }
 
+/** Pull a human-readable message out of an agentum-server error body — either
+ *  the typed `{ error: { message } }` envelope or a plain-text body. Exported
+ *  for tests. */
+export function extractServerErrorMessage(raw: string, fallback: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return fallback
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { error?: { message?: string } | string }
+    if (typeof parsed.error === 'string' && parsed.error.trim()) {
+      return parsed.error
+    }
+    if (parsed.error && typeof parsed.error === 'object' && parsed.error.message) {
+      return parsed.error.message
+    }
+  } catch {
+    // Not JSON — the body itself is the message (ApiError::BadRequest is text).
+  }
+  return trimmed
+}
+
+// Wire shape of `POST /api/github/issues/draft-body`
+// (crates/agentum-server/src/routes/github.rs::DraftBodyResponse).
+export type DraftedGithubIssueBody = {
+  body: string
+}
+
+/**
+ * Draft an SDD-shaped issue body (## Problem / ## Goal / ## Acceptance
+ * criteria checklist) from the typed title + local repo context (spec 007).
+ * The composer puts the result in the body TEXTAREA for review — this call
+ * never files anything. Throws with the server's message on any non-2xx so
+ * the form can render it inline (including the "set ANTHROPIC_API_KEY / sign
+ * in to Claude" no-credentials message).
+ */
+export async function draftGithubIssueBody(input: {
+  workdir: string
+  title: string
+  slug?: string
+  /** Abort budget — a full LLM draft; generous but bounded. */
+  timeoutMs?: number
+}): Promise<DraftedGithubIssueBody> {
+  const url = await apiUrl('/api/github/issues/draft-body')
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 60000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+      body: JSON.stringify({
+        workdir: input.workdir,
+        title: input.title,
+        ...(input.slug ? { slug: input.slug } : {})
+      }),
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(
+        extractServerErrorMessage(detail, `draft description failed (${res.status})`)
+      )
+    }
+    const text = await res.text()
+    return JSON.parse(text) as DraftedGithubIssueBody
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
 // Wire shape of `POST /api/harness/spec-from-issue`
 // (crates/agentum-server/src/routes/harness.rs::SpecFromIssueResponse).
 export type ScaffoldedSpecFromIssue = {

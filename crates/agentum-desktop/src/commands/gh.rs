@@ -502,9 +502,154 @@ pub fn gh_check_agentum_starred() -> Option<Value> {
     None
 }
 
+// The `--json` field sets for a single-item `gh issue view` / `gh pr view`.
+// Shared by the item fetch and the details fetch so both map through the same
+// `map_issue`/`map_pr` shapes the list uses.
+const ISSUE_VIEW_FIELDS: &str = "id,number,title,state,url,labels,updatedAt,author,assignees";
+const PR_VIEW_FIELDS: &str = "id,number,title,state,url,labels,updatedAt,author,assignees,headRefName,baseRefName,isDraft,additions,deletions,changedFiles,reviewDecision";
+
+// Run `gh <issue|pr> view <n> --repo <slug> --json <fields>` and parse stdout.
+// None on any failure (gh missing/unauthed, item not found, parse error) —
+// the renderer callers degrade to their existing fallbacks.
+async fn gh_view_json(kind: WorkItemKind, slug: &str, number: i64, fields: &str) -> Option<Value> {
+    let sub = match kind {
+        WorkItemKind::Issue => "issue",
+        WorkItemKind::Pr => "pr",
+    };
+    let output = tokio::process::Command::new("gh")
+        .args([
+            sub,
+            "view",
+            &number.to_string(),
+            "--repo",
+            slug,
+            "--json",
+            fields,
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        eprintln!(
+            "[gh] {sub} view {number} failed for {slug}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+// gh's view JSON exposes comment ids only as GraphQL node strings, but the
+// renderer's PRComment.id is numeric. The numeric id is recoverable from the
+// comment URL fragment (`…#issuecomment-123` / `…#discussion_r123`); when
+// unparsable, fall back to a stable negative index so React keys stay unique.
+fn numeric_comment_id(url: &str, index: usize) -> i64 {
+    url.rsplit(['-', 'r'])
+        .next()
+        .and_then(|tail| tail.parse::<i64>().ok())
+        .unwrap_or(-(index as i64) - 1)
+}
+
+// Map `gh … view --json comments` entries onto the renderer's PRComment shape.
+fn map_comments(item: &Value) -> Vec<Value> {
+    item.get("comments")
+        .and_then(Value::as_array)
+        .map(|comments| {
+            comments
+                .iter()
+                .enumerate()
+                .map(|(index, comment)| {
+                    let login = comment
+                        .get("author")
+                        .and_then(|a| a.get("login"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let url = comment.get("url").and_then(Value::as_str).unwrap_or_default();
+                    json!({
+                        "id": numeric_comment_id(url, index),
+                        "author": login,
+                        "authorAvatarUrl": format!("https://github.com/{login}.png"),
+                        "body": comment.get("body").and_then(Value::as_str).unwrap_or_default(),
+                        "createdAt": comment.get("createdAt").and_then(Value::as_str).unwrap_or_default(),
+                        "url": url,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// Assignee logins (the details payload's issue-only `assignees: string[]`).
+fn assignee_logins(item: &Value) -> Vec<String> {
+    item.get("assignees")
+        .and_then(Value::as_array)
+        .map(|users| {
+            users
+                .iter()
+                .filter_map(|user| user.get("login").and_then(Value::as_str).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// Map one `gh … view` payload to the renderer's GitHubWorkItemDetails shape
+// ({ item, body, comments, … }). Pure so the mapping is unit-testable without
+// shelling out. PR details carry headSha (from headRefOid) for the checks tab;
+// files stay unfetched here (the diff surfaces have their own fetch paths).
+fn map_work_item_details(kind: WorkItemKind, raw: &Value) -> Value {
+    let item = match kind {
+        WorkItemKind::Issue => map_issue(raw),
+        WorkItemKind::Pr => map_pr(raw),
+    };
+    let mut details = json!({
+        "item": item,
+        "body": raw.get("body").and_then(Value::as_str).unwrap_or_default(),
+        "comments": map_comments(raw),
+    });
+    match kind {
+        WorkItemKind::Issue => {
+            details["assignees"] = json!(assignee_logins(raw));
+        }
+        WorkItemKind::Pr => {
+            if let Some(head) = raw.get("headRefOid").and_then(Value::as_str) {
+                details["headSha"] = json!(head);
+            }
+        }
+    }
+    details
+}
+
+fn work_item_kind(type_str: Option<&str>) -> WorkItemKind {
+    if type_str == Some("pr") {
+        WorkItemKind::Pr
+    } else {
+        WorkItemKind::Issue
+    }
+}
+
+// Single work-item read (no body/comments) — the new-issue flow's refine fetch
+// that replaces its optimistic `author: null` stub, and the smart name-field
+// lookup. Returns the renderer's `Omit<GitHubWorkItem,'repoId'>` shape.
 #[tauri::command]
-pub fn gh_work_item() -> Option<Value> {
-    None
+pub async fn gh_work_item(
+    repo_path: String,
+    repo_id: Option<String>,
+    number: i64,
+    r#type: Option<String>,
+) -> Option<Value> {
+    let _ = repo_id;
+    let (owner, repo) = resolve_owner_repo(&repo_path).await?;
+    let slug = format!("{owner}/{repo}");
+    let kind = work_item_kind(r#type.as_deref());
+    let fields = match kind {
+        WorkItemKind::Issue => ISSUE_VIEW_FIELDS,
+        WorkItemKind::Pr => PR_VIEW_FIELDS,
+    };
+    let raw = gh_view_json(kind, &slug, number, fields).await?;
+    Some(match kind {
+        WorkItemKind::Issue => map_issue(&raw),
+        WorkItemKind::Pr => map_pr(&raw),
+    })
 }
 
 #[tauri::command]
@@ -512,9 +657,27 @@ pub fn gh_work_item_by_owner_repo() -> Option<Value> {
     None
 }
 
+// The detail drawer/page's hydration fetch: item + body + conversation
+// comments (+ headSha for PRs). Previously a stub returning None — which the
+// dialog rendered as an empty success ("No description provided." + author
+// "unknown"). None now means a REAL failure; the renderer surfaces it inline.
 #[tauri::command]
-pub fn gh_work_item_details() -> Option<Value> {
-    None
+pub async fn gh_work_item_details(
+    repo_path: String,
+    repo_id: Option<String>,
+    number: i64,
+    r#type: Option<String>,
+) -> Option<Value> {
+    let _ = repo_id;
+    let (owner, repo) = resolve_owner_repo(&repo_path).await?;
+    let slug = format!("{owner}/{repo}");
+    let kind = work_item_kind(r#type.as_deref());
+    let fields = match kind {
+        WorkItemKind::Issue => format!("{ISSUE_VIEW_FIELDS},body,comments"),
+        WorkItemKind::Pr => format!("{PR_VIEW_FIELDS},body,comments,headRefOid"),
+    };
+    let raw = gh_view_json(kind, &slug, number, &fields).await?;
+    Some(map_work_item_details(kind, &raw))
 }
 
 // Single-issue read for the sidebar/worktree "linked issue" surfaces. None on
@@ -969,5 +1132,78 @@ mod tests {
     fn classify_gh_error_maps_unresolved_repo_to_not_found() {
         let err = classify_gh_error("Could not resolve to a Repository with the name 'x/y'.");
         assert_eq!(err.kind, "not_found");
+    }
+
+    // Regression for the v0.54.0 "unknown opened this issue / No description
+    // provided." bug: the details mapping must carry body + author + comments
+    // through from the `gh issue view` payload.
+    #[test]
+    fn map_work_item_details_issue_keeps_body_author_and_comments() {
+        let raw = json!({
+            "id": "I_abc",
+            "number": 237,
+            "title": "Fix the loop",
+            "state": "OPEN",
+            "url": "https://github.com/o/r/issues/237",
+            "labels": [{ "name": "type/bug" }],
+            "updatedAt": "2026-07-01T00:00:00Z",
+            "author": { "login": "MateoCerquetella" },
+            "assignees": [{ "login": "MateoCerquetella" }],
+            "body": "## Problem\nA 2940-char body.",
+            "comments": [{
+                "id": "IC_node",
+                "author": { "login": "someone" },
+                "body": "first!",
+                "createdAt": "2026-07-01T01:00:00Z",
+                "url": "https://github.com/o/r/issues/237#issuecomment-98765"
+            }],
+        });
+        let details = map_work_item_details(WorkItemKind::Issue, &raw);
+        assert_eq!(details["body"], "## Problem\nA 2940-char body.");
+        assert_eq!(details["item"]["author"], "MateoCerquetella");
+        assert_eq!(details["item"]["state"], "open");
+        assert_eq!(details["assignees"], json!(["MateoCerquetella"]));
+        let comments = details["comments"].as_array().unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0]["id"], 98765);
+        assert_eq!(comments[0]["author"], "someone");
+        assert_eq!(comments[0]["body"], "first!");
+    }
+
+    #[test]
+    fn map_work_item_details_pr_carries_head_sha() {
+        let raw = json!({
+            "id": "PR_abc",
+            "number": 9,
+            "title": "A PR",
+            "state": "OPEN",
+            "isDraft": false,
+            "url": "https://github.com/o/r/pull/9",
+            "labels": [],
+            "updatedAt": "2026-07-01T00:00:00Z",
+            "author": { "login": "someone" },
+            "body": "pr body",
+            "comments": [],
+            "headRefOid": "deadbeef",
+        });
+        let details = map_work_item_details(WorkItemKind::Pr, &raw);
+        assert_eq!(details["headSha"], "deadbeef");
+        assert_eq!(details["body"], "pr body");
+        assert_eq!(details["item"]["type"], "pr");
+    }
+
+    #[test]
+    fn numeric_comment_id_parses_url_fragments_and_falls_back_uniquely() {
+        assert_eq!(
+            numeric_comment_id("https://github.com/o/r/issues/1#issuecomment-42", 0),
+            42
+        );
+        assert_eq!(
+            numeric_comment_id("https://github.com/o/r/pull/1#discussion_r777", 3),
+            777
+        );
+        // Unparsable URLs get stable, unique negative ids (React keys).
+        assert_eq!(numeric_comment_id("", 0), -1);
+        assert_eq!(numeric_comment_id("no-digits-here-", 2), -3);
     }
 }

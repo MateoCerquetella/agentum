@@ -10,7 +10,8 @@ import {
   LoaderCircle,
   PlugZap,
   Plus,
-  Settings2
+  Settings2,
+  Sparkles
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -89,6 +90,10 @@ type NewWorkspaceComposerCardProps = {
   createIssueSubmitting: boolean
   createIssueError: string | null
   onCreateIssueSubmit: () => void
+  /** Spec 007: "Generate description" — drafts an SDD-shaped body from the
+   *  typed title + repo context into the textarea (review before filing). */
+  createIssueGenerating: boolean
+  onGenerateIssueBody: () => void
   /** Spec 006 F1: label picker for the create-issue form. `null` options =
    *  fetch in flight (the row hides until the names arrive). */
   createIssueLabels: string[]
@@ -291,6 +296,8 @@ export default function NewWorkspaceComposerCard({
   createIssueSubmitting,
   createIssueError,
   onCreateIssueSubmit,
+  createIssueGenerating,
+  onGenerateIssueBody,
   createIssueLabels,
   createIssueLabelOptions,
   onToggleCreateIssueLabel,
@@ -622,9 +629,31 @@ export default function NewWorkspaceComposerCard({
                 onChange={(event) => onCreateIssueBodyChange(event.target.value)}
                 placeholder="Body (optional)"
                 rows={3}
-                disabled={createIssueSubmitting}
+                disabled={createIssueSubmitting || createIssueGenerating}
                 className="w-full min-w-0 resize-none rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
+              {/* Spec 007: offer a drafted description while the body is
+                  blank. The result lands in the textarea above so the user
+                  reviews/edits before filing — LLM text is never auto-posted. */}
+              {!createIssueBody.trim() ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={onGenerateIssueBody}
+                  disabled={
+                    createIssueSubmitting || createIssueGenerating || !createIssueTitle.trim()
+                  }
+                  className="-ml-2 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  {createIssueGenerating ? (
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3.5" />
+                  )}
+                  {createIssueGenerating ? 'Generating description…' : 'Generate description'}
+                </Button>
+              ) : null}
               {/* Spec 006 F1 (AC 2): toggleable label chips seeded from the
                   repo's label set (static fallback on fetch error). Hidden
                   while the fetch is in flight — filing never waits on it. */}
@@ -672,7 +701,12 @@ export default function NewWorkspaceComposerCard({
                   type="button"
                   size="sm"
                   onClick={onCreateIssueSubmit}
-                  disabled={createIssueSubmitting || !createIssueTitle.trim()}
+                  // Why: also hold filing while a description draft is in
+                  // flight — otherwise the generated body could land after
+                  // the (bodyless) issue was already created.
+                  disabled={
+                    createIssueSubmitting || createIssueGenerating || !createIssueTitle.trim()
+                  }
                   className="text-xs"
                 >
                   {createIssueSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}

@@ -1403,6 +1403,12 @@ mod surface_tests {
         let out = scaffold_harness(wd).await.unwrap();
         assert!(wd.join(".agentum-harness/feature_list.json").exists());
         assert!(wd.join(".agentum-harness/AGENTS.md").exists());
+        // Spec 007: the scaffold self-ignores so a fresh worktree's git status
+        // isn't polluted by harness runtime state.
+        assert_eq!(
+            std::fs::read_to_string(wd.join(".agentum-harness/.gitignore")).unwrap(),
+            "*\n"
+        );
         assert!(out.written.iter().any(|w| w.contains("feature_list.json")));
         // the scaffolded surface loads through the normal engine path.
         let cfg = HarnessConfig::load(wd).await.unwrap();

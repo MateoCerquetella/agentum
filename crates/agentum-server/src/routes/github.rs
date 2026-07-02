@@ -33,6 +33,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/github/issue", get(get_issue))
         .route("/api/github/issues", post(create_issue))
+        // Spec 007: title → SDD-shaped issue body draft (LLM, chat plumbing).
+        .route("/api/github/issues/draft-body", post(draft_issue_body))
         .route("/api/github/labels", get(list_labels))
 }
 
@@ -276,6 +278,50 @@ async fn create_issue(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftBodyRequest {
+    /// The typed issue title — the only user input the draft grounds on.
+    title: String,
+    /// Project dir for repo-context gathering (LOCAL only, like `/api/chat`).
+    workdir: String,
+    /// Optional `owner/repo` hint, threaded into the prompt for grounding.
+    #[serde(default)]
+    slug: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DraftBodyResponse {
+    body: String,
+}
+
+/// `POST /api/github/issues/draft-body` — draft an SDD-shaped issue body
+/// (## Problem / ## Goal / ## Acceptance criteria checklist) from the typed
+/// title + the local repo snapshot (spec 007). Thin over the chat module's
+/// LLM plumbing; the composer fills its body textarea with the result so the
+/// user reviews/edits before filing — nothing is posted from here.
+async fn draft_issue_body(
+    State(_state): State<AppState>,
+    Json(body): Json<DraftBodyRequest>,
+) -> Result<Json<DraftBodyResponse>, ApiError> {
+    let workdir = body.workdir.trim();
+    if workdir.is_empty() {
+        return Err(ApiError::BadRequest("`workdir` is required".into()));
+    }
+    // Title validation (blank → 400) lives in the shared helper so every
+    // future caller inherits it.
+    let drafted = super::chat::draft_issue_body(
+        Some(workdir),
+        body.slug
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        &body.title,
+    )
+    .await?;
+    Ok(Json(DraftBodyResponse { body: drafted }))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LabelsQuery {
     /// Project dir for the `origin` read when no `slug` hint is supplied.
     pub workdir: String,
@@ -504,5 +550,43 @@ mod tests {
         assert_eq!(parse_gh_login(b"mateo\n"), Some("mateo".to_string()));
         assert_eq!(parse_gh_login(b"  \n"), None);
         assert_eq!(parse_gh_login(b""), None);
+    }
+
+    // ── Spec 007: draft-body wire shape ─────────────────────────────────
+
+    #[test]
+    fn draft_body_request_deserializes_with_and_without_slug() {
+        let full: DraftBodyRequest = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo",
+            "slug": "acme/widgets"
+        }))
+        .unwrap();
+        assert_eq!(full.title, "Add a widget");
+        assert_eq!(full.workdir, "/tmp/repo");
+        assert_eq!(full.slug.as_deref(), Some("acme/widgets"));
+
+        let minimal: DraftBodyRequest = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo"
+        }))
+        .unwrap();
+        assert!(minimal.slug.is_none());
+
+        // A missing workdir is a deserialization error (the field is required),
+        // matching the sibling create-issue contract.
+        assert!(
+            serde_json::from_value::<DraftBodyRequest>(serde_json::json!({ "title": "x" }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn draft_body_response_serializes_body_field() {
+        let json = serde_json::to_string(&DraftBodyResponse {
+            body: "## Problem".into(),
+        })
+        .unwrap();
+        assert_eq!(json, "{\"body\":\"## Problem\"}");
     }
 }

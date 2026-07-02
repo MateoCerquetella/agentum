@@ -525,9 +525,12 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   const openIssueOnBoard = useCallback(
     (filed: FiledResult, issue: FiledResult['issues'][number]) => {
       const number = parseIssueNumber(issue)
+      // Spec 007 (bugs 1+2): the effective repo — pinned (Project Hub) wins
+      // over the picked workspace, mirroring the `workspace` memo above.
+      const filedRepoId = pinnedRepo?.id ?? workspaceId ?? undefined
       if (filed.provider === 'github' && number != null) {
         openTaskPage({
-          preselectedRepoId: workspaceId ?? undefined,
+          preselectedRepoId: filedRepoId,
           taskSource: 'github',
           openGitHubWorkItem: {
             id: issue.url || String(number),
@@ -538,18 +541,23 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
             url: issue.url,
             labels: [],
             updatedAt: new Date().toISOString(),
-            author: null
+            author: null,
+            // Without a repoId the detail page can't resolve a repoPath, so
+            // the details fetch never fires (body + author stay blank) and
+            // "Start workspace from issue" opens the composer with no
+            // initialRepoId. The Chat workspace IS the repo.
+            repoId: filedRepoId ?? ''
           },
           openGitHubInitialTab: 'conversation'
         })
         return
       }
       openTaskPage({
-        preselectedRepoId: workspaceId ?? undefined,
+        preselectedRepoId: filedRepoId,
         taskSource: filed.provider === 'linear' ? 'linear' : 'github'
       })
     },
-    [openTaskPage, workspaceId]
+    [openTaskPage, pinnedRepo, workspaceId]
   )
 
   return (

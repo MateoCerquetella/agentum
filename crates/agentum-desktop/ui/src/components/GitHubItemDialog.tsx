@@ -565,6 +565,17 @@ export default function GitHubItemDialog({
             fetchedAt: prev.fetchedAt,
             error: undefined
           })
+        } else if (result === null) {
+          // Spec 007 (bug 1): a null IPC result with nothing cached is a REAL
+          // failure (gh missing/unauthed/item gone), not an empty success.
+          // Writing it as a success made the view render "No description
+          // provided." + author "unknown" with zero error surface.
+          touchWorkItemDetailsCache(detailsCacheKey, {
+            details: null,
+            fetchedAt: prev?.fetchedAt ?? 0,
+            error:
+              'Could not load this item from GitHub — check that the `gh` CLI is installed and signed in, and that the item still exists.'
+          })
         } else {
           touchWorkItemDetailsCache(detailsCacheKey, {
             details: result,
@@ -889,7 +900,9 @@ export default function GitHubItemDialog({
               </span>
               <span className="flex flex-wrap items-center gap-1.5">
                 <span className="font-semibold text-foreground">
-                  {workItem.author ?? 'unknown'}
+                  {/* Spec 007 (bug 1): list rows / stubs can carry author: null;
+                      the hydrated details are the authoritative source. */}
+                  {(displayWorkItem ?? workItem).author ?? 'unknown'}
                 </span>
                 <span>opened this issue</span>
                 <span className="text-muted-foreground/80">
@@ -935,7 +948,8 @@ export default function GitHubItemDialog({
                 {workItem.title}
               </h2>
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                <span>{workItem.author ?? 'unknown'}</span>
+                {/* Spec 007 (bug 1): prefer the hydrated author (see above). */}
+                <span>{(displayWorkItem ?? workItem).author ?? 'unknown'}</span>
                 <span>updated {formatRelativeTime(workItem.updatedAt)}</span>
                 {workItem.branchName && (
                   <span className="max-w-full truncate rounded-md border border-border/50 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">

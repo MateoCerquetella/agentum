@@ -581,6 +581,15 @@ export default function PullRequestPage({
             fetchedAt: prev.fetchedAt,
             error: undefined
           })
+        } else if (result === null) {
+          // Spec 007 (bug 1): a null IPC result with nothing cached is a REAL
+          // failure — surface it instead of painting an empty success.
+          touchWorkItemDetailsCache(detailsCacheKey, {
+            details: null,
+            fetchedAt: prev?.fetchedAt ?? 0,
+            error:
+              'Could not load this pull request from GitHub — check that the `gh` CLI is installed and signed in, and that the item still exists.'
+          })
         } else {
           touchWorkItemDetailsCache(detailsCacheKey, {
             details: result,

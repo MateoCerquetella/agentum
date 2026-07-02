@@ -1484,6 +1484,102 @@ fn redact(msg: &str, token: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Issue-body drafting (spec 007) — one-shot "title → SDD-shaped description"
+// for `POST /api/github/issues/draft-body` (routes::github). Lives here so it
+// reuses the chat module's whole LLM surface (auth resolution, the byte-exact
+// OAuth identity block, repo-context gathering, the shared Anthropic call)
+// instead of growing a second one.
+
+/// Hard cap on a generated body — the model is asked for a compact spec, so
+/// anything beyond this is runaway output, not signal.
+const DRAFT_BODY_MAX_CHARS: usize = 12_000;
+
+/// Instructions for the drafting call. Pinned as a `const` so the prompt test
+/// can assert the section contract without duplicating strings.
+const DRAFT_BODY_INSTRUCTIONS: &str = "You draft GitHub issue descriptions for the repository described below.\n\
+Given an issue TITLE, write the issue BODY as GitHub-flavored markdown with exactly these sections:\n\
+## Problem — what is wrong or missing today, grounded in the repo context when available.\n\
+## Goal — the observable outcome when this issue is done.\n\
+## Acceptance criteria — 3 to 6 checklist items, each on its own line as `- [ ] …`, concrete and testable.\n\
+Rules: output ONLY the markdown body (no title heading, no code fences around the whole reply, no preamble or sign-off). \
+Reference real files/areas from the repo context when it is provided; never invent paths.";
+
+/// The user turn for the drafting call — kept tiny; the repo grounding rides in
+/// the system block like every other call in this module.
+fn draft_body_user_message(title: &str) -> String {
+    format!("TITLE: {title}\n\nWrite the issue body.")
+}
+
+/// Assemble the drafting system instructions: the pinned section contract plus
+/// the repo snapshot (when a local workdir is available) and the slug hint.
+fn draft_body_instructions(repo_slug: Option<&str>, repo_context: Option<&str>) -> String {
+    let mut out = String::from(DRAFT_BODY_INSTRUCTIONS);
+    if let Some(slug) = repo_slug {
+        out.push_str(&format!("\n\nThe GitHub repository is `{slug}`."));
+    }
+    match repo_context {
+        Some(ctx) => out.push_str(&format!(
+            "\n\n=== REPO CONTEXT (a real snapshot of the project — ground the body in it) ===\n{ctx}\n=== END CONTEXT ===",
+        )),
+        None => out.push_str(
+            "\n\nNo repo snapshot is available; keep the body honest and generic — do not invent project details.",
+        ),
+    }
+    out
+}
+
+/// Clean a model reply into a postable body: strip a whole-reply code fence if
+/// the model wrapped one anyway, trim, and cap at [`DRAFT_BODY_MAX_CHARS`].
+fn sanitize_draft_body(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // A reply that IS one fenced block (```markdown\n…\n```) gets unwrapped;
+    // fences inside a longer body are legitimate markdown and stay.
+    let unfenced = trimmed
+        .strip_prefix("```")
+        .and_then(|rest| {
+            let rest = rest.split_once('\n').map(|(_, tail)| tail).unwrap_or(rest);
+            rest.strip_suffix("```")
+        })
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    truncate_chars(unfenced, DRAFT_BODY_MAX_CHARS)
+}
+
+/// Draft an SDD-shaped issue body from a title + local repo context. Shared
+/// plumbing with `/api/chat`: same credential resolution (loud, actionable
+/// error naming both recovery paths when absent), same repo snapshot, same
+/// Anthropic call. `pub(crate)` — the HTTP surface lives in `routes::github`.
+pub(crate) async fn draft_issue_body(
+    workdir: Option<&str>,
+    repo_slug: Option<&str>,
+    title: &str,
+) -> Result<String, ApiError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(ApiError::BadRequest(
+            "issue `title` must not be blank".into(),
+        ));
+    }
+    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
+
+    let repo_context = gather_repo_context(workdir);
+    let instructions = draft_body_instructions(repo_slug, repo_context.as_deref());
+    let system = build_system(&auth, &instructions);
+    let messages = vec![json!({ "role": "user", "content": draft_body_user_message(title) })];
+
+    // 2048 output tokens: a full Problem/Goal/ACs body comfortably fits; the
+    // interview's 1024 reply cap is tuned for short turns, not a document.
+    let text = call_anthropic(&auth, DEFAULT_MODEL, system, &messages, 2048).await?;
+    let body = sanitize_draft_body(&text);
+    if body.is_empty() {
+        return Err(ApiError::Internal(
+            "the model returned an empty issue body".into(),
+        ));
+    }
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2289,5 +2385,41 @@ mod tests {
         for f in &features {
             assert_eq!(f.labels, labels, "labels ride on every split issue");
         }
+    }
+
+    // ── Spec 007: issue-body drafting ────────────────────────────────────
+
+    #[test]
+    fn draft_body_prompt_carries_title_and_section_contract() {
+        // The user turn names the title; the system instructions pin the
+        // SDD sections and the checkbox shape (AC7's prompt-content test).
+        let user = draft_body_user_message("Fix the sidebar flicker");
+        assert!(user.contains("Fix the sidebar flicker"));
+
+        let instructions = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"));
+        assert!(instructions.contains("## Problem"));
+        assert!(instructions.contains("## Goal"));
+        assert!(instructions.contains("## Acceptance criteria"));
+        assert!(instructions.contains("- [ ]"));
+        assert!(instructions.contains("`o/r`"));
+        assert!(instructions.contains("## Repo guide\nstuff"));
+
+        // Without a snapshot the prompt says so instead of inviting invention.
+        let blind = draft_body_instructions(None, None);
+        assert!(blind.contains("No repo snapshot is available"));
+    }
+
+    #[test]
+    fn sanitize_draft_body_unwraps_whole_reply_fences_and_keeps_inner_ones() {
+        // A reply that IS one fenced block gets unwrapped…
+        assert_eq!(
+            sanitize_draft_body("```markdown\n## Problem\nx\n```"),
+            "## Problem\nx"
+        );
+        assert_eq!(sanitize_draft_body("```\nbody\n```"), "body");
+        // …but fences inside a longer body are legitimate markdown.
+        let mixed = "## Problem\n```sh\nls\n```\ndone";
+        assert_eq!(sanitize_draft_body(mixed), mixed);
+        assert_eq!(sanitize_draft_body("  plain  "), "plain");
     }
 }
