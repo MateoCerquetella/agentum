@@ -200,6 +200,17 @@ struct UpdateMetaBody {
     updates: Map<String, Value>,
 }
 
+/// Map wire-casing variants onto the registry struct's serde names before the
+/// metadata upsert. The UI writes `linkedPR` (shared/types.ts pins that
+/// casing) but the registry field serializes as `linkedPr`; without this the
+/// update lands in `extra` and shadows the typed field forever (spec 004 C3).
+fn canonical_meta_key(key: &str) -> &str {
+    match key {
+        "linkedPR" => "linkedPr",
+        other => other,
+    }
+}
+
 /// `POST /api/worktrees/update-meta` — upsert metadata for a worktree (git-detected
 /// trees often have no registry row, so this seeds a minimal one rather than 404).
 async fn update_meta(Json(body): Json<UpdateMetaBody>) -> Result<Json<Worktree>, ApiError> {
@@ -231,6 +242,7 @@ async fn update_meta(Json(body): Json<UpdateMetaBody>) -> Result<Json<Worktree>,
         }
     };
     for (key, value) in body.updates {
+        let key = canonical_meta_key(&key).to_string();
         if key == "id" || key == "repoId" {
             continue;
         }
@@ -257,6 +269,18 @@ struct CreateBody {
     branch_name_override: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
+    /// Linked work-item metadata (spec 004 AC 2). The UI sends `linkedPR`
+    /// (shared/types.ts pins that casing) while camelCase yields `linkedPr` —
+    /// alias HERE only, never on the registry `Worktree` struct: legacy rows
+    /// can carry a shadowed `linkedPR` in `extra`, and a struct alias would
+    /// make serde see the field twice → parse error → `read_worktrees`
+    /// collapses to `[]` and the next write wipes the registry.
+    #[serde(default)]
+    linked_issue: Option<i64>,
+    #[serde(default, alias = "linkedPR")]
+    linked_pr: Option<i64>,
+    #[serde(default)]
+    linked_linear_issue: Option<String>,
 }
 
 /// `POST /api/worktrees/create` — `git worktree add` under
@@ -348,9 +372,9 @@ async fn create(
         repo_id: body.repo_id,
         display_name: body.display_name.unwrap_or(body.name),
         comment: String::new(),
-        linked_issue: None,
-        linked_pr: None,
-        linked_linear_issue: None,
+        linked_issue: body.linked_issue,
+        linked_pr: body.linked_pr,
+        linked_linear_issue: body.linked_linear_issue,
         is_archived: false,
         is_unread: false,
         is_pinned: false,
@@ -736,7 +760,9 @@ async fn scan_git_worktrees(host: &Host, repo_id: &str) -> Result<Vec<Value>, Ap
                     .unwrap_or(name),
                 "comment": meta.map(|m| m.comment.clone()).unwrap_or_default(),
                 "linkedIssue": meta.and_then(|m| m.linked_issue),
-                "linkedPr": meta.and_then(|m| m.linked_pr),
+                // The UI reads `linkedPR` (shared/types.ts pins that casing);
+                // the old `linkedPr` key here was dead — no reader anywhere.
+                "linkedPR": meta.and_then(|m| m.linked_pr),
                 "linkedLinearIssue": meta.and_then(|m| m.linked_linear_issue.clone()),
                 "isArchived": meta.map(|m| m.is_archived).unwrap_or(false),
                 "isUnread": meta.map(|m| m.is_unread).unwrap_or(false),
@@ -981,5 +1007,69 @@ prunable gitdir file points to non-existent location
         assert_eq!(v["linkedPr"], 7);
         assert!(v["linkedIssue"].is_null()); // required+nullable serialize as null
         assert_eq!(v["branch"], "main"); // flattened from extra
+
+        // Spec 004 regression guard (the no-alias rule): the registry struct's
+        // on-disk keys are exactly these — `linkedPr`, never `linkedPR`.
+        // Aliasing the struct would make serde see legacy rows' shadowed
+        // `linkedPR` extra key as a duplicate field → `read_worktrees` wipes
+        // the registry to `[]` on the next write.
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("linkedPr"));
+        assert!(obj.contains_key("linkedIssue"));
+        assert!(obj.contains_key("linkedLinearIssue"));
+        assert!(!obj.contains_key("linkedPR"));
+    }
+
+    /// Spec 004 AC 2: the create body accepts the UI's exact wire casing
+    /// (`linkedPR` — shared/types.ts) and the camelCase spelling (`linkedPr`).
+    #[test]
+    fn create_body_accepts_ui_linked_keys() {
+        let body: CreateBody = serde_json::from_value(serde_json::json!({
+            "repoId": "r1",
+            "name": "feat",
+            "linkedIssue": 42,
+            "linkedPR": 7,
+            "linkedLinearIssue": "ENG-9"
+        }))
+        .unwrap();
+        assert_eq!(body.linked_issue, Some(42));
+        assert_eq!(body.linked_pr, Some(7));
+        assert_eq!(body.linked_linear_issue.as_deref(), Some("ENG-9"));
+
+        // The camelCase variant is accepted too (alias, not rename).
+        let body: CreateBody = serde_json::from_value(serde_json::json!({
+            "repoId": "r1",
+            "name": "feat",
+            "linkedPr": 7
+        }))
+        .unwrap();
+        assert_eq!(body.linked_pr, Some(7));
+    }
+
+    /// An old client's payload (the original five keys only) still parses;
+    /// the linked fields default to None — purely additive widening.
+    #[test]
+    fn create_body_defaults_absent_linked_fields() {
+        let body: CreateBody = serde_json::from_value(serde_json::json!({
+            "repoId": "r1",
+            "name": "feat",
+            "baseBranch": "develop",
+            "branchNameOverride": "feat/x",
+            "displayName": "Feat"
+        }))
+        .unwrap();
+        assert_eq!(body.linked_issue, None);
+        assert_eq!(body.linked_pr, None);
+        assert_eq!(body.linked_linear_issue, None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn canonical_meta_key_maps_linkedPR() {
+        assert_eq!(canonical_meta_key("linkedPR"), "linkedPr");
+        // Everything else passes through untouched.
+        assert_eq!(canonical_meta_key("linkedPr"), "linkedPr");
+        assert_eq!(canonical_meta_key("linkedIssue"), "linkedIssue");
+        assert_eq!(canonical_meta_key("comment"), "comment");
     }
 }

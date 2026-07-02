@@ -447,8 +447,9 @@ async fn create_github_issue_remote(
 /// Map a sink `create_feature` error onto the typed AC-3 envelope by inspecting
 /// the message the sink emits (`task_sink.rs` raises distinct strings). The
 /// provider is known from `sink`, so the UI can show "Connect GitHub" vs.
-/// "Linear failed".
-fn map_sink_error(sink: TaskSink, err: &anyhow::Error) -> ApiError {
+/// "Linear failed". `pub(crate)` so the composer's create-issue route
+/// (`routes::github`) reuses the exact same classification (spec 004 F3).
+pub(crate) fn map_sink_error(sink: TaskSink, err: &anyhow::Error) -> ApiError {
     let msg = err.to_string();
     let (code, message): (&str, String) = match sink {
         TaskSink::Github => {
@@ -605,6 +606,7 @@ async fn plan_goal_harness(
                 &state.store,
                 p,
                 &id,
+                url.as_deref(),
                 crate::task_sink::TrackerPhase::Todo,
             )
             .await

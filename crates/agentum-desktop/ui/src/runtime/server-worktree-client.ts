@@ -29,6 +29,11 @@ export function worktreesCreate(args: {
   baseBranch?: string
   branchNameOverride?: string
   displayName?: string
+  // Linked work-item metadata (spec 004 AC 2). `linkedPR` is the UI's wire
+  // casing (shared/types.ts); the server aliases it onto its camelCase field.
+  linkedIssue?: number
+  linkedPR?: number
+  linkedLinearIssue?: string
 }): Promise<unknown> {
   return postJson('/api/worktrees/create', args)
 }

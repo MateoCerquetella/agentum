@@ -3,27 +3,19 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 003-chat-issue-preview
-- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (003 CODE COMPLETE + gate-green; PR #199 into develop, issue #198. Browser QA (staging) + release = human. 002 below.)
-- **mode:** HITL         <!-- HITL (human in the loop) | auto -->
+- **current_spec:** 004-workspace-issue-loop
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (004 SIGNED OFF + SHIPPED to PR: issue #212, PR #213 fix-wiki→develop OPEN — merge = Mateo, classifier blocks self-merge. 002 + 003 parked at human-gated release)
+- **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
-- **003-chat-issue-preview** — Drafted + PM-gated (`ai/specs/003-chat-issue-preview/spec.md`).
-  Grounded on a FRESH `feat/chat-board-revamp` worktree off `origin/develop` @ v0.46.1
-  (the `chat-revamp` worktree the user invoked from was **258 commits behind** — v0.26;
-  even local `develop` is stale). Scope (Mateo): Chat gets an editable **draft before
-  filing** — preview + edit + regenerate + confirm, with **full multi-issue control**
-  (split one-issue-checklist vs one-per-task, provider GitHub/Linear, labels). Key
-  finding: `chat_issues` (`chat.rs:950`) files atomically from a **second** extraction
-  call, so the filed issue can differ from the prose shown; the draft pieces
-  (`extract_feature_plan` `chat.rs:1197`, `compose_issue_body` `chat.rs:914`,
-  `provider` field `chat.rs:846`) already exist — no endpoint returns a plan without
-  filing. ⚠️ **One-slice caveat for architect:** labels + `per_task` split are
-  deferrable to a 003b (Open-Q5); the spine (preview/edit/regenerate/confirm,
-  single-issue GitHub) is the core increment. Board asks → roadmap 004-006. Ready for
-  architect.
+- **003-chat-issue-preview** — CODE COMPLETE + SHIPPED to develop (issue **#198**,
+  PR **#199**, `feat/chat-board-revamp`). All 4 increments gated. ⏭ Browser QA at
+  STAGING + tagged release = Mateo-gated. [Merged into this worktree 2026-07-01;
+  note it added `NewFeature.labels` + `gh --label` to `task_sink.rs`/`chat.rs` —
+  spec 004's cited line numbers may have drifted.] Roadmap asks: specs
+  Kanban-read / status write-back / projects-first (numbers now shifted by 004).
 - **001-autowiki** — COMMITTED (`3a8dbf06`) + **PR #183** (OPEN, into develop),
   issue #182. Browser QA pending downstream (staging). [Local autowiki worktree was
   lost to an env reset; work is safe on `origin/feat/autowiki`.]
@@ -39,111 +31,87 @@
   `routes/github.rs` `GET /api/github/issue` + UI fetch → linkedContext → prompt;
   npm build + cargo test (453/0) green; AC-3 verified. NOT runtime/browser-verified.
   Release = human-gated.
+- **004-workspace-issue-loop** — Drafted + PM-gated (2026-07-01). Three increments:
+  (A) composer "Create GitHub issue" + worktree registry persists linked metadata
+  (`worktrees.rs:249/351` drops it today); (B) real GitHub arm for
+  `apply_tracker_transition` (`task_sink.rs` no-op arm; drive.rs call sites already
+  correct); (C) issue→`.agentum-harness/specs/<id>/spec.md` scaffold over an HTTP
+  seam (helpers exist, MCP-only today). ✅ PM-locked D1–D5 (Done=label-only, gh CLI
+  writes, `status/*` canon labels, one spec built status-sync-first, scaffold
+  opt-in/off); AC 4 softened — thread `feature.tracker_url` through the seam.
+  ✅ **Architect DONE** (`architecture.md`, line-verified pre-merge): widened
+  `apply_tracker_transition(…, tracker_url: Option<&str>, …)` serving BOTH callers
+  (drive.rs + board_goals initial-Todo); URL-authoritative slug+number; pure gh
+  argv builders + fake-gh subprocess tests; C1 Tasks-page create = local STUB →
+  F3 = new `POST /api/github/issues`; C2 two UI client layers strip linked fields;
+  C3 `linkedPR`/`linkedPr` wire fix, NO registry-struct alias (wipe hazard);
+  C4 remove only the 3 canonical labels (never `status/qa*`); C5 direct local gh
+  from `neutral_cwd` (no Host in seam). F4 = `POST /api/harness/spec-from-issue`,
+  keep-existing spec semantics, `plan_from_spec_with_tracker`. ⚠️ 35 develop
+  commits merged in AFTER line verification — re-locate lines before editing.
+  Handoffs: `01-pm-to-architect.md`, `02-architect-to-developer.md`. Phase →
+  developer (build F1→F4, one gated slice each). ✅ **F1+F2 GREEN** (slice 1,
+  `85c48e0d`). ✅ **F3+F4 GREEN** (slice 2): `POST /api/github/issues` +
+  composer create-issue affordance (chip renders pre-worktree);
+  `fetch_github_issue` + `spec_md_from_issue`/`issue_spec_id` +
+  `POST /api/harness/spec-from-issue` (never-overwrite) + `scaffoldSpec`
+  toggle (OFF default) in both submit paths; `plan_from_spec_with_tracker`
+  stamps provider+url (MCP `plan_from_spec` unchanged). Gate: 494/0 lib tests,
+  fmt+check clean, vite build ✓ 1m04s. **Developer phase COMPLETE → tester**
+  (handoff `03-developer-to-tester.md`; browser QA of chip/toggle/live-label =
+  qa.sh/staging, not the tester phase).
 
 ## Decision log
 
-<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>` -->
-- 2026-06-30 — Adopted the `ai/` SDD scaffold; retired `docs/superpowers/`.
-  Execution runs through the Harness Engine (`.harness/`), gated by
-  `verify.sh` + `qa.sh`.
-- 2026-06-30 — From the "Ara" idea, scoped spec **001-autowiki** as the first
-  slice (AutoWiki: generate + browse a repo wiki on demand). Deferred graph
-  memory + autonomous PR-review bot; kept `examples/harness-demo` (live-test
-  fixture).
-- 2026-06-30 — Found `new-idea` was 237 commits behind `origin/develop` (HEAD
-  v0.26). Re-based onto a fresh `feat/autowiki` worktree off `origin/develop` @
-  `fe1a2a6a`; re-grounded reuse-vs-build on current code. Mermaid diagrams pulled
-  into v1 (renderer already draws them); persistence is on-disk `.agentum/wiki/`.
-  PM gate passed → phase `pm` (ready for architect).
-- 2026-06-30 — Architect blueprint complete (`architecture.md`): job-model generate
-  (returns `sessionId`); on-disk `.agentum/wiki/` + `.status.json`; reuse
-  `MarkdownPreview` as-is; git-ignore via `.agentum/.gitignore`; widen
-  `wait_for_settle`/`teardown_session`/`gather_repo_context` to `pub(crate)`. Phase
-  → developer; scaffolded `.harness/`, building slices behind the verify gate.
-- 2026-06-30 — Slice 1 (wiki-contract) GREEN: `crates/agentum-server/src/wiki.rs`
-  (WikiIndex/WikiPageMeta, parse_wiki_index, is_valid_slug, build_wiki_prompt) +
-  `lib.rs` mod; 9 unit tests pass, fmt-clean (reverted unrelated mcp.rs fmt drift).
-  Gate run scoped to `wiki::` (full lib suite times out locally). Next: wiki-routes.
-- 2026-06-30 — Slice 2 (wiki-routes) GREEN: `routes/wiki.rs` (GET list/page + POST
-  generate via `spawn_agent_into_pane` + the QA-capture recipe; on-disk
-  `.status.json`; slug-traversal guard; job-model returns sessionId). Widened
-  `wait_for_settle`/`teardown_session`/`gather_repo_context` to pub(crate) +
-  re-exported from `harness`. 14 wiki tests pass. Next: wiki-view (desktop UI).
-- 2026-06-30 — Slice 3 (wiki-view) BUILD-GREEN: `runtime/wiki-client.ts` +
-  `components/wiki/WikiPage.tsx` (reuses `MarkdownPreview` as-is; empty/running/
-  failed/ready states; workdir via `splitWorktreeIdForFilesystem`; `[[Title]]` nav;
-  3s poll for running→ready) + 6 store/nav edits (`BookText` rail). `bun install` +
-  `npm run build` ✓ (9m23s). All 3 slices green at the unit/build gate; browser QA
-  + commit/PR remain.
-- 2026-06-30 — AutoWiki committed (`3a8dbf06`) + pushed; issue #182, PR #183 into
-  develop (MERGEABLE; the merge was blocked by the safety classifier — user merges).
-  An env reset then wiped the local autowiki worktree (work safe on origin).
-- 2026-06-30 — Scoped spec **002-start-loads-spec** (Start an external ticket → the
-  agent gets the spec, no internal board). Grounded on current develop in a fresh
-  `feat/chat-spec-roundtrip` worktree off `origin/feat/autowiki` (a stale-reading
-  subagent had to be discarded). Finding: chat creation already does
-  title+body+external-only; the gap is **Start** not feeding the issue body to the
-  agent. PM-gated; awaiting the user on 4 open questions.
-- 2026-06-30 — 002 scope LOCKED (Mateo): creation is fine (installed app behind, not
-  a bug) → **Start-only**; Start runs **directly off the external ticket** (no card,
-  live body fetch). Ready for architect.
-- 2026-06-30 — 002 architect blueprint complete (`architecture.md`). FINDING: the
-  spec's Path A (board-card Start) has NO UI caller (dead code); the live "start a
-  ticket" flow is Path B (Tasks "Use" → local PTY; snapshots Linear body, not
-  GitHub). ⛔ R1 (human gate): Option A (new server "Start", spec-faithful) vs
-  Option B (fix "Use", lighter, local-PTY). /loop paused for R1.
-- 2026-06-30 — R1 → **Option B** (Mateo). Developer DONE + pushed (`e0faf420`):
-  server `GET /api/github/issue` (`gh issue view --json title,body`, numeric-id
-  guard, authed, outside `/api/board`) + UI client + GitHub linked-context snapshot
-  + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
-  npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
-  human-gated release** (browser QA + merge/promote/tag = Mateo).
-- 2026-07-01 — 003 CODE COMPLETE + SHIPPED to develop. `vite build` GREEN
-  (`✓ built in 4m24s`; needed `--max-old-space-size=6144` — 4096 OOM'd). Issue
-  **#198** + PR **#199** (feat/chat-board-revamp → develop, `Closes #198`). All 4
-  increments done + gated (cargo check + 25 unit tests + full UI build). Ralph loop
-  cancelled (would tight-spin against the >10-min background build). ⏭ Browser QA
-  runs at STAGING per branch flow; tagged release to main stays Mateo-gated
-  (classifier + presence). Board asks = specs 004–006.
-- 2026-07-01 — 003 UI slice CODED (draft-review modal). `chat-client.ts`:
-  `previewIssuesFromChat()` + `DraftPlan`/`DraftTask`/`IssueSplit` types +
-  `createIssuesFromChat` carries `plan`/`split`/`labels`. `ChatPage.tsx`: "Create
-  issues" → "Preview issues" → editable `DraftReview` modal (title/summary/tasks +
-  priority, add/remove task, split single/per_task, provider GitHub/Linear, labels,
-  Regenerate/Confirm/Cancel; Confirm files the shown draft verbatim, closes on
-  success). `bun install` ✓; `tsc --noEmit` clean on the two touched files (all
-  reported errors are pre-existing `shared/*` Vite-alias noise in untouched files).
-  Full `vite build` (~9.5m, > foreground cap) runs in BACKGROUND for authoritative
-  confirm. REMAINING: confirm build green, then `/ship` (issue + PR into develop).
-- 2026-07-01 — 003 SERVER slice DONE (Ralph loop iter, Mateo re-authorized full
-  build). Commits `5930bf27` (spec docs) + `86c618e1` (server), pushed to
-  `origin/feat/chat-board-revamp`. Implemented: `POST /api/chat/issues/preview`
-  (draft, files nothing) + shared `extract_plan()` + `chat_issues` accepts a
-  client `plan` filed VERBATIM (skip re-extract) + `split` single/per_task via
-  `plan_to_features()` + `labels`→`gh --label` (`NewFeature.labels`, Linear no-op).
-  `cargo check -p agentum-server` + 25 touched unit tests green (fmt-clean; reverted
-  unrelated gh.rs/cdp_driver.rs/mcp.rs fmt churn). REMAINING: (4) desktop UI draft
-  panel in `ChatPage.tsx` + `chat-client.ts` preview/confirm + `npm run build`;
-  then `/ship` (issue + PR into develop). Tagged release still Mateo-gated.
-- 2026-07-01 — Ralph loop fired ("finish this spec and release with /ship").
-  Spec *document* is finished (drafted + PM-gated + open questions listed — that IS
-  the /sdd-spec deliverable). "Finish → release" would be the full gated SDD build
-  (architect→dev→test→review) + a **human-gated release** (classifier blocks
-  push/tag/self-merge without an explicit `Bash(...)` rule + Mateo present — verbal
-  "go" ≠ enough; ephemeral env has wiped mid-session work before). **Mateo's call:
-  FINALIZE THE SPEC ONLY** — do NOT run architect/build/release; he/the team drive it
-  from here. Loop kept running as-is (will re-feed; standing instruction = hold at
-  "spec finalized", don't auto-build/release). STANDING GATE for any future
-  iteration: the build + release require Mateo to explicitly re-authorize (and the
-  release still needs his presence + a permission rule).
-- 2026-07-01 — Scoped spec **003-chat-issue-preview** from Mateo's ask ("chat
-  creation is too simple — let me see/regenerate what gets created"). Re-grounded on
-  a fresh `feat/chat-board-revamp` worktree off `origin/develop` @ v0.46.1 (the
-  `chat-revamp` worktree the ask came from was 258 commits behind; two initial
-  Explore passes on it read stale v0.26 code and were re-run on develop). Finding:
-  Chat files atomically from a separate extraction call (no preview; filed ≠ shown);
-  draft pieces already exist. Answers (Mateo): spec 003 = chat preview FIRST; depth =
-  **full multi-issue control** (split/provider/labels); board end-state =
-  **projects-first** (→ roadmap specs 004 Kanban-read, 005 status write-back, 006
-  projects-first). PM gate passed (one-slice flagged: labels/split → possible 003b) →
-  phase `pm`, ready for architect.
+<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-01 — 004 architect blueprint COMPLETE (`architecture.md`). Corrections
+  C1–C5 (Tasks-page create is a local stub → new `POST /api/github/issues`; UI
+  shim strips linked fields → widen 2 TS layers; `linkedPR` wire fix + registry
+  NO-alias rule (duplicate-field → `read_worktrees` wipes to `[]`); remove only
+  the 3 canonical labels; direct local gh, no Host). Confirmed `board_sync`
+  cannot strip labels (PATCH = `{title,body,state}` only). Merged develop
+  (+35 commits, incl. 003's `task_sink.rs` labels support) → line cites drift,
+  re-locate before editing. Phase → developer.
+- 2026-07-01 — 004 Developer slice 2: **F3+F4 GREEN**; developer phase
+  COMPLETE. F3: `POST /api/github/issues` (blank-title 400, 422
+  `no_github_repo`, TaskSink create, id→i64) + composer affordance
+  (Card-rendered, only when unlinked + local git) → chip pre-worktree. F4:
+  `fetch_github_issue` refactor (+url, no wire change), `spec_md_from_issue`
+  (control-strip, 64KiB cap, fallback AC via real derive), traversal-proof
+  `issue_spec_id`, `POST /api/harness/spec-from-issue` (never-overwrite),
+  `scaffoldSpec` toggle OFF-default in both submit paths (non-fatal failure),
+  `plan_from_spec_with_tracker` stamps provider+url (delegation pinned).
+  Gate: 494/0 tests, fmt+check clean, vite ✓ 1m04s. 5 deviations accepted
+  (Card-not-Modal markup; documented allow(dead_code) on FetchedIssue.slug;
+  tests in harness.rs surface_tests per convention; typed conditional;
+  pure-gate title test). Phase → tester.
+- 2026-07-01 — 004 Tester: **7/7 ACs PASS** (`verification.md`). Independently
+  re-ran the full suite (494/0/5) + 4 scoped suites + vite (✓ 1m11s) + the
+  auth.rs no-`is_public` diff (empty). Exactness confirmed by reading code:
+  label table verbatim, remove-set can never name `status/qa*`, NO close path
+  in the arm (D1), all 6 failure paths → `Ok(Skipped)` (no `?`/`Err`).
+  Commit-attributed the drive.rs range diff: spec-004 = only the
+  `transition_tracker` widening (second hunk = pre-spec `05abe6f1`). 4 Info
+  findings (GHES URLs skip silently; no handler-level 400 tests; no dedicated
+  30s-timeout test; the attribution note) — none blocking. GUI behaviors
+  (chip, toggle, live label flip) = qa.sh/staging gate. **ADVANCE → reviewer**
+  (handoff `04-tester-to-reviewer.md`).
+- 2026-07-01 — 004 Reviewer **SIGN-OFF → SHIP-READY** (`review.md`). All 6
+  focus items pass; invariants hold; "test suite unusually communicative;
+  comment discipline exemplary". 0 Blockers. Follow-ups (non-blocking):
+  narrow the `as unknown as GitHubWorkItem` cast (useComposerState.ts:1448);
+  FILE A GHES ISSUE (transitions skip on non-github.com URLs — by design,
+  name it); nits: debug-log the initial-Todo skip, scaffoldSpec reset-on-unlink.
+  spec.md Status → Done. Phase → done. **Release = Mateo** (/ship: issue + PR
+  fix-wiki→develop w/ Closes #N, staging browser QA — chip, toggle, live
+  label flip ending OPEN with exactly status/done — then promote + tag).
+- 2026-07-01 — 004 Developer slice 1: **F1+F2 GREEN** (486/0 lib tests, fmt +
+  check clean). F1: `GITHUB_STATUS_LABELS` + pure gh argv builders +
+  `github_slug_and_number_from_issue_url` + `run_gh` (30s timeout) +
+  `github_transition_with` in task_sink; seam widened with `tracker_url`
+  (both callers, one logical line each); every failure → `Ok(Skipped)`, never
+  `Err`. F2: `CreateBody`+3 (`linkedPR` alias), registry persistence,
+  detected-scan emits `linkedPR`, `canonical_meta_key`, NO registry-struct
+  alias; 2 TS layers forward the fields. Vite build deferred to the F3/F4
+  slice. Deviations logged in tasks.md (rustfmt reflow; gh empty-stderr
+  message; URL parser also strips #fragment). RELEASE stays human-gated.

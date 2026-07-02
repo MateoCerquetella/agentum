@@ -1307,6 +1307,149 @@ mod surface_tests {
         );
     }
 
+    // --- 004 F4: issue → spec.md transform + tracker-stamped planning ---
+
+    #[test]
+    fn spec_md_from_issue_preserves_checkboxes() {
+        let body = "Intro prose.\n\n- [ ] First criterion\n- [x] Done criterion\n- [ ] Third\n";
+        let md = spec_md_from_issue(
+            "42",
+            "Add widget",
+            body,
+            "https://github.com/acme/widgets/issues/42",
+        );
+        assert!(md.starts_with("# Spec 42 — Add widget\n"));
+        assert!(md.contains("https://github.com/acme/widgets/issues/42"));
+        // Round-trip through the REAL parser: exactly the body's boxes, with
+        // checked → Done and unchecked → Pending (no synthesized fallback).
+        let list = derive_backlog_from_spec(&md);
+        assert_eq!(list.features.len(), 3, "exactly the body's checkboxes");
+        assert_eq!(list.features[0].name, "First criterion");
+        assert_eq!(list.features[0].state, FeatureState::Pending);
+        assert_eq!(list.features[1].name, "Done criterion");
+        assert_eq!(list.features[1].state, FeatureState::Done);
+        assert_eq!(list.features[2].name, "Third");
+        assert!(
+            !md.contains("## Acceptance criteria"),
+            "no fallback section"
+        );
+    }
+
+    #[test]
+    fn spec_md_from_issue_synthesizes_fallback_ac() {
+        let md = spec_md_from_issue(
+            "7",
+            "Fix the flaky test",
+            "Just prose — no checklist anywhere.",
+            "https://github.com/acme/widgets/issues/7",
+        );
+        assert!(md.contains("## Acceptance criteria"));
+        let list = derive_backlog_from_spec(&md);
+        assert_eq!(list.features.len(), 1, "exactly one synthesized feature");
+        assert_eq!(list.features[0].name, "Fix the flaky test");
+        assert_eq!(list.features[0].state, FeatureState::Pending);
+    }
+
+    #[test]
+    fn spec_md_from_issue_strips_control_chars_and_caps() {
+        // ESC (C0), a C1 control, DEL — all stripped; \t → two spaces; \n kept.
+        let body = "safe\u{1b}[31mred\u{9b}x\u{7f}\tend\nline two";
+        let md = spec_md_from_issue("9", "T", body, "https://github.com/a/b/issues/9");
+        assert!(!md.contains('\u{1b}'), "ESC stripped");
+        assert!(!md.contains('\u{9b}'), "C1 CSI stripped");
+        assert!(!md.contains('\u{7f}'), "DEL stripped");
+        assert!(md.contains("safe[31mred"), "text around controls survives");
+        assert!(md.contains("x  end"), "tab became two spaces");
+        assert!(md.contains("line two"), "newlines kept");
+
+        // Oversize body → capped with the marker, and still round-trips.
+        let big = "x".repeat(70 * 1024);
+        let md = spec_md_from_issue("9", "T", &big, "https://github.com/a/b/issues/9");
+        assert!(md.contains("[truncated]"), "cap marker present");
+        assert!(
+            md.len() < 66 * 1024,
+            "body capped near 64 KiB (got {})",
+            md.len()
+        );
+        assert_eq!(
+            derive_backlog_from_spec(&md).features.len(),
+            1,
+            "capped checkbox-free body still gets the fallback AC"
+        );
+    }
+
+    #[test]
+    fn issue_spec_id_is_traversal_proof() {
+        // A crafted title cannot escape specs/ — the slug alphabet is [a-z0-9-].
+        assert_eq!(issue_spec_id("42", "../../etc/passwd"), "42-etc-passwd");
+        assert_eq!(
+            issue_spec_id("42", "Add ~/.ssh support!"),
+            "42-add-ssh-support"
+        );
+        // Empty / symbol-only titles fall back to "issue".
+        assert_eq!(issue_spec_id("42", ""), "42-issue");
+        assert_eq!(issue_spec_id("42", "!!! ///"), "42-issue");
+        // The slug caps at 40 chars with no trailing dash.
+        let long = issue_spec_id("7", &"very long title ".repeat(10));
+        let slug = long.strip_prefix("7-").unwrap();
+        assert!(slug.len() <= 40, "slug capped (got {})", slug.len());
+        assert!(!slug.ends_with('-'));
+        // Case folds; runs of separators collapse to one dash.
+        assert_eq!(issue_spec_id("3", "Fix — the   THING"), "3-fix-the-thing");
+    }
+
+    #[tokio::test]
+    async fn plan_from_spec_with_tracker_stamps_provider_and_url() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let url = "https://github.com/acme/widgets/issues/42";
+        let md = spec_md_from_issue("42", "Add widget", "- [ ] A\n- [ ] B\n", url);
+        let spec_id = issue_spec_id("42", "Add widget");
+        let spec_dir = wd.join(".agentum-harness/specs").join(&spec_id);
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(spec_dir.join("spec.md"), md).unwrap();
+
+        let list = plan_from_spec_with_tracker(wd, &spec_id, "github", url)
+            .await
+            .unwrap();
+        assert_eq!(list.features.len(), 2);
+        // The AC 7 closer: EVERY derived feature carries the issue's provenance
+        // (F1's GitHub arm reads slug+number from this URL).
+        for f in &list.features {
+            assert_eq!(f.tracker_provider.as_deref(), Some("github"));
+            assert_eq!(f.tracker_url.as_deref(), Some(url));
+        }
+        // …and the stamped backlog is what landed on disk.
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert!(
+            cfg.features
+                .features
+                .iter()
+                .all(|f| f.tracker_url.as_deref() == Some(url))
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_from_spec_delegation_unchanged() {
+        // The inner refactor must not change plan_from_spec's behavior: no
+        // tracker stamping, same derive + persist semantics (the MCP tool path).
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let spec_dir = wd.join(".agentum-harness/specs/s1");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(spec_dir.join("spec.md"), "- [ ] A\n- [x] B\n").unwrap();
+
+        let list = plan_from_spec(wd, "s1").await.unwrap();
+        assert_eq!(list.features.len(), 2);
+        assert_eq!(list.features[1].state, FeatureState::Done);
+        assert!(
+            list.features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none()),
+            "plan_from_spec stamps no tracker provenance"
+        );
+    }
+
     #[tokio::test]
     async fn write_backlog_from_features_writes_loadable_idle_backlog() {
         let dir = TempDir::new().unwrap();

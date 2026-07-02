@@ -51,6 +51,8 @@ import {
   getLinkedWorkItemPromptContext,
   resolveQuickCreateLinkedWorkItemPrompt
 } from '@/lib/linked-work-item-context'
+import { buildGithubIssueContextSnapshot } from '@/lib/github-linked-work-item'
+import { createGithubIssue, scaffoldSpecFromIssue } from '@/runtime/github-issue-client'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
   getFullComposerCreateDisabled,
@@ -173,6 +175,25 @@ export type ComposerCardProps = {
   onRemoveAttachment: (pathValue: string) => void
   linkedWorkItem: LinkedWorkItemSummary | null
   onRemoveLinkedWorkItem: () => void
+  /** True when the composer should offer "Create GitHub issue": nothing is
+   *  linked yet and the selected repo is a local git repo (spec 004 F3). */
+  canCreateGithubIssue: boolean
+  createIssueOpen: boolean
+  onCreateIssueOpenChange: (open: boolean) => void
+  createIssueTitle: string
+  onCreateIssueTitleChange: (value: string) => void
+  createIssueBody: string
+  onCreateIssueBodyChange: (value: string) => void
+  createIssueSubmitting: boolean
+  createIssueError: string | null
+  onCreateIssueSubmit: () => void
+  /** True when the "Scaffold spec" toggle applies: a github.com issue is
+   *  linked and the target is a local git repo (spec 004 F4, D5). */
+  canScaffoldSpec: boolean
+  /** Opt-in, off by default (D5): after the worktree is created, write
+   *  `.agentum-harness/specs/<n>-<slug>/spec.md` from the linked issue. */
+  scaffoldSpec: boolean
+  onScaffoldSpecChange: (value: boolean) => void
   linkPopoverOpen: boolean
   onLinkPopoverOpenChange: (open: boolean) => void
   linkQuery: string
@@ -508,6 +529,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
     return initialLinkedWorkItem?.type === 'mr' ? initialLinkedWorkItem.number : null
   })
+  // Spec 004 F3: inline "Create GitHub issue" mini-form. Transient by design —
+  // never persisted into the long-running draft (a half-typed issue is not
+  // workspace state; the *linked* result is, via linkedWorkItem above).
+  const [createIssueOpen, setCreateIssueOpen] = useState(false)
+  const [createIssueTitle, setCreateIssueTitle] = useState('')
+  const [createIssueBody, setCreateIssueBody] = useState('')
+  const [createIssueSubmitting, setCreateIssueSubmitting] = useState(false)
+  const [createIssueError, setCreateIssueError] = useState<string | null>(null)
+  // Spec 004 F4 (D5): opt-in, off by default. Not draft-persisted — trust in
+  // the deterministic transform is earned per creation, not remembered.
+  const [scaffoldSpec, setScaffoldSpec] = useState(false)
   const [baseBranch, setBaseBranch] = useState<string | undefined>(
     persistDraft ? newWorkspaceDraft?.baseBranch : initialBaseBranch
   )
@@ -1361,6 +1393,117 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
   }, [name])
 
+  // Spec 004 F3: the affordance only renders when nothing is linked yet and
+  // the selected repo is a *local git* repo — issue creation resolves the slug
+  // from the local origin and runs the local `gh`.
+  const canCreateGithubIssue = Boolean(
+    !linkedWorkItem && selectedRepo && selectedRepoIsGit && !selectedRepo.connectionId
+  )
+
+  const handleCreateIssueOpenChange = useCallback(
+    (open: boolean): void => {
+      setCreateIssueOpen(open)
+      setCreateIssueError(null)
+      if (open) {
+        // Pre-seed the title from what the user already typed (workspace name,
+        // else the prompt's first line) so filing is one review + click.
+        setCreateIssueTitle((current) => {
+          if (current.trim()) {
+            return current
+          }
+          return name.trim() || (agentPrompt.trim().split('\n')[0]?.trim() ?? '')
+        })
+      }
+    },
+    [agentPrompt, name]
+  )
+
+  const handleCreateIssueSubmit = useCallback(async (): Promise<void> => {
+    const title = createIssueTitle.trim()
+    const repoPath = selectedRepo?.path
+    if (createIssueSubmitting) {
+      return
+    }
+    if (!title) {
+      setCreateIssueError('Give the issue a title.')
+      return
+    }
+    if (!repoPath) {
+      setCreateIssueError('Pick a project first.')
+      return
+    }
+    setCreateIssueSubmitting(true)
+    setCreateIssueError(null)
+    try {
+      const body = createIssueBody.trim()
+      const created = await createGithubIssue({
+        title,
+        ...(body ? { body } : {}),
+        workdir: repoPath
+      })
+      // Reuse the standard linked-item application (linkedIssue slot, suggested
+      // workspace name), then overwrite linkedWorkItem to attach the typed body
+      // as linked context — the body is in hand, so no refetch (mirrors
+      // buildGithubIssueLinkedWorkItem's snapshot shape).
+      applyLinkedWorkItem({
+        type: 'issue',
+        number: created.number,
+        title,
+        url: created.url
+      } as unknown as GitHubWorkItem)
+      const summary: LinkedWorkItemSummary = {
+        type: 'issue',
+        number: created.number,
+        title,
+        url: created.url
+      }
+      setLinkedWorkItem(
+        body
+          ? {
+              ...summary,
+              linkedContext: {
+                provider: 'github',
+                version: 1,
+                renderedText: buildGithubIssueContextSnapshot({
+                  number: created.number,
+                  title,
+                  url: created.url,
+                  body
+                })
+              }
+            }
+          : summary
+      )
+      setCreateIssueOpen(false)
+      setCreateIssueTitle('')
+      setCreateIssueBody('')
+    } catch (error) {
+      // Zero state change on failure — the form stays filled for a retry.
+      setCreateIssueError(
+        error instanceof Error ? error.message : 'Could not create the GitHub issue.'
+      )
+    } finally {
+      setCreateIssueSubmitting(false)
+    }
+  }, [
+    applyLinkedWorkItem,
+    createIssueBody,
+    createIssueSubmitting,
+    createIssueTitle,
+    selectedRepo
+  ])
+
+  // Spec 004 F4 (D5): the toggle only applies to a linked *github.com issue*
+  // targeting a local git repo — the scaffold endpoint writes into the new
+  // worktree's local path.
+  const linkedGithubIssueLink = useMemo(
+    () => (linkedWorkItem?.type === 'issue' ? parseGitHubIssueOrPRLink(linkedWorkItem.url) : null),
+    [linkedWorkItem]
+  )
+  const canScaffoldSpec = Boolean(
+    linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit && !selectedRepo?.connectionId
+  )
+
   const handleNameValueChange = useCallback(
     (nextName: string): void => {
       // Why: linked GitHub items should keep refreshing the suggested workspace
@@ -1915,6 +2058,38 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     [updateWorktreeMeta]
   )
 
+  // Spec 004 F4: after createWorktree succeeds (both submit paths), write the
+  // linked issue's spec into the new worktree when the user opted in (D5).
+  // Non-fatal by contract: a scaffold failure must never roll back or block
+  // the freshly created workspace.
+  const maybeScaffoldSpecFromIssue = useCallback(
+    async (
+      worktree: { path: string },
+      item: LinkedWorkItemSummary | null | undefined
+    ): Promise<void> => {
+      if (!scaffoldSpec || !item || item.type !== 'issue') {
+        return
+      }
+      // Re-derive the gate from the submitted item: github.com issues only,
+      // local targets only (the endpoint writes to a local path).
+      const link = parseGitHubIssueOrPRLink(item.url)
+      if (!link || link.type !== 'issue' || selectedRepo?.connectionId) {
+        return
+      }
+      try {
+        await scaffoldSpecFromIssue({
+          workdir: worktree.path,
+          number: item.number,
+          slug: `${link.slug.owner}/${link.slug.repo}`
+        })
+      } catch (error) {
+        console.error('Failed to scaffold a spec from the linked issue', error)
+        toast.error('Workspace created, but the spec scaffold failed.')
+      }
+    },
+    [scaffoldSpec, selectedRepo]
+  )
+
   const submit = useCallback(async (): Promise<void> => {
     if (
       !repoId ||
@@ -2034,6 +2209,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // Why: linked source metadata is already included in createWorktree.
       // Re-saving it here can trigger slow post-create PR push-target lookups.
       await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
+      // Spec 004 F4 (opt-in): write the linked issue's spec into the new
+      // worktree before the agent opens, so it can start from the spec.
+      await maybeScaffoldSpecFromIssue(worktree, submitLinkedWorkItem)
 
       const issueCommand =
         submitShouldRunIssueAutomation && issueCommandTrustDecision === 'run'
@@ -2079,6 +2257,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     clearNewWorkspaceDraft,
     createWorktree,
     applyWorktreeMeta,
+    maybeScaffoldSpecFromIssue,
     enableIssueAutomation,
     issueCommandTemplate,
     effectiveLinkedPR,
@@ -2220,6 +2399,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
+        // Spec 004 F4 (opt-in): shared with the full submit path — runs before
+        // the skip-session branch so the spec lands either way.
+        await maybeScaffoldSpecFromIssue(worktree, submitLinkedWorkItem)
 
         // Why: "Don't start a session" — the worktree is created (and remembers
         // its agent via createdWithAgent) but no tmux session/agent is launched
@@ -2265,6 +2447,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     },
     [
       applyWorktreeMeta,
+      maybeScaffoldSpecFromIssue,
       baseBranch,
       branchNameOverride,
       branchNameOverridePreservesNameEdits,
@@ -2376,6 +2559,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setAttachmentPaths((current) => current.filter((currentPath) => currentPath !== pathValue)),
     linkedWorkItem,
     onRemoveLinkedWorkItem: handleRemoveLinkedWorkItem,
+    canCreateGithubIssue,
+    createIssueOpen,
+    onCreateIssueOpenChange: handleCreateIssueOpenChange,
+    createIssueTitle,
+    onCreateIssueTitleChange: setCreateIssueTitle,
+    createIssueBody,
+    onCreateIssueBodyChange: setCreateIssueBody,
+    createIssueSubmitting,
+    createIssueError,
+    onCreateIssueSubmit: () => void handleCreateIssueSubmit(),
+    canScaffoldSpec,
+    scaffoldSpec,
+    onScaffoldSpecChange: setScaffoldSpec,
     linkPopoverOpen,
     onLinkPopoverOpenChange: handleLinkPopoverChange,
     linkQuery,
