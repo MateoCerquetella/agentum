@@ -28,6 +28,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/harness", get(list).post(start))
         .route("/api/harness/events", get(events))
+        .route("/api/harness/spec-from-issue", post(spec_from_issue))
         .route("/api/harness/{id}", get(status).delete(stop))
         .route("/api/harness/{id}/run", post(run))
         .route("/api/harness/{id}/init", post(init))
@@ -175,6 +176,119 @@ async fn files(
         .await
         .map_err(|e| ApiError::NotFound(e.to_string()))?;
     Ok(axum::Json(HarnessConfig::read_files(&workdir).await))
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecFromIssueRequest {
+    /// The NEW worktree's path — the spec is written INTO it.
+    workdir: String,
+    /// Issue number, digits-only (validated by the shared fetch).
+    number: String,
+    /// `owner/repo` fast path for the slug resolution.
+    #[serde(default)]
+    slug: Option<String>,
+    /// Also derive + write `feature_list.json` (default true).
+    #[serde(default = "default_true")]
+    plan: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpecFromIssueResponse {
+    spec_id: String,
+    /// Relative to `workdir`, e.g. `.agentum-harness/specs/42-add-widget/spec.md`.
+    spec_path: String,
+    /// Scaffold + spec files written (relative paths).
+    written: Vec<String>,
+    /// The derived backlog when `plan` — every feature stamped with the issue's
+    /// tracker provenance (spec 004 AC 7).
+    features: Option<crate::harness::FeatureList>,
+}
+
+/// `POST /api/harness/spec-from-issue` — scaffold a spec (and optionally a
+/// backlog) from a GitHub issue into a worktree (spec 004 F4, AC 6–7). The
+/// issue is fetched server-side (`gh issue view`) so the transform's input is
+/// authoritative, then turned into `specs/<n>-<slug>/spec.md` by the pure
+/// [`crate::harness::spec_md_from_issue`] transform. An existing spec.md is
+/// **never overwritten** (it may be human-edited) — that's a 400, mirroring the
+/// scaffold's keep-existing ethos.
+async fn spec_from_issue(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<SpecFromIssueRequest>,
+) -> Result<axum::Json<SpecFromIssueResponse>, ApiError> {
+    let workdir = super::util::expand_workdir(&req.workdir)?;
+    if !workdir.is_dir() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            workdir.display()
+        )));
+    }
+    let workdir_str = workdir.to_string_lossy().to_string();
+
+    // Server-authoritative fetch (validates the digits-only number). The
+    // worktree shares the parent repo's `origin`, so it resolves the slug.
+    let issue =
+        super::github::fetch_github_issue(&state, &workdir_str, &req.number, req.slug.as_deref())
+            .await?;
+
+    // Idempotent: existing contract files are kept; only missing ones written.
+    let scaffold = crate::harness::scaffold_harness(&workdir)
+        .await
+        .map_err(|e| ApiError::Internal(format!("could not scaffold the harness: {e}")))?;
+
+    let spec_id = crate::harness::issue_spec_id(req.number.trim(), &issue.title);
+    let rel_spec_path = format!("{}/specs/{spec_id}/spec.md", crate::harness::HARNESS_DIR);
+    let spec_md_path = workdir.join(&rel_spec_path);
+    if spec_md_path.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "spec {spec_id} already exists — not overwriting {rel_spec_path}"
+        )));
+    }
+    if let Some(parent) = spec_md_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ApiError::Internal(format!("could not create the spec dir: {e}")))?;
+    }
+    let spec_md = crate::harness::spec_md_from_issue(
+        req.number.trim(),
+        &issue.title,
+        &issue.body,
+        &issue.url,
+    );
+    tokio::fs::write(&spec_md_path, spec_md)
+        .await
+        .map_err(|e| ApiError::Internal(format!("could not write spec.md: {e}")))?;
+
+    let mut written = scaffold.written;
+    written.push(rel_spec_path.clone());
+
+    // The transform guarantees ≥1 checkbox, so a plan failure here is IO-class.
+    let features = if req.plan {
+        let list =
+            crate::harness::plan_from_spec_with_tracker(&workdir, &spec_id, "github", &issue.url)
+                .await
+                .map_err(|e| ApiError::Internal(format!("could not plan from the spec: {e}")))?;
+        let backlog = format!("{}/feature_list.json", crate::harness::HARNESS_DIR);
+        // The scaffold may have just seeded the same file — list it once.
+        if !written.contains(&backlog) {
+            written.push(backlog);
+        }
+        Some(list)
+    } else {
+        None
+    };
+
+    Ok(axum::Json(SpecFromIssueResponse {
+        spec_id,
+        spec_path: rel_spec_path,
+        written,
+        features,
+    }))
 }
 
 /// `DELETE /api/harness/{id}` — drop the run from the engine.

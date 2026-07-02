@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 004-workspace-issue-loop
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (004 architect DONE; 002 + 003-chat-issue-preview parked at human-gated release)
+- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (004 F1–F4 built + gate-green; 002 + 003-chat-issue-preview parked at human-gated release)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -50,18 +50,20 @@
   keep-existing spec semantics, `plan_from_spec_with_tracker`. ⚠️ 35 develop
   commits merged in AFTER line verification — re-locate lines before editing.
   Handoffs: `01-pm-to-architect.md`, `02-architect-to-developer.md`. Phase →
-  developer (build F1→F4, one gated slice each). ✅ **F1+F2 GREEN** (slice 1):
-  486/0 lib tests, fmt+check clean; vite build DEFERRED to the F3/F4 slice
-  (TS diffs are additive). Remaining: F3 composer-create-issue, F4
-  spec-from-issue-scaffold (F4 MUST stamp tracker_url on derived features or
-  F1 transitions skip — see tasks.md).
+  developer (build F1→F4, one gated slice each). ✅ **F1+F2 GREEN** (slice 1,
+  `85c48e0d`). ✅ **F3+F4 GREEN** (slice 2): `POST /api/github/issues` +
+  composer create-issue affordance (chip renders pre-worktree);
+  `fetch_github_issue` + `spec_md_from_issue`/`issue_spec_id` +
+  `POST /api/harness/spec-from-issue` (never-overwrite) + `scaffoldSpec`
+  toggle (OFF default) in both submit paths; `plan_from_spec_with_tracker`
+  stamps provider+url (MCP `plan_from_spec` unchanged). Gate: 494/0 lib tests,
+  fmt+check clean, vite build ✓ 1m04s. **Developer phase COMPLETE → tester**
+  (handoff `03-developer-to-tester.md`; browser QA of chip/toggle/live-label =
+  qa.sh/staging, not the tester phase).
 
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-01 — 003 CODE COMPLETE + SHIPPED to develop. `vite build` GREEN (needed
-  `--max-old-space-size=6144`). Issue **#198** + PR **#199**. Browser QA at
-  STAGING; tagged release Mateo-gated. Board asks = Kanban/status/projects specs.
 - 2026-07-01 — Drafted spec **004-workspace-issue-loop** from Mateo's ask (issue
   flow + status movement missing; workspace creation should create the GitHub
   issue + the spec). Findings: GitHub tracker transition is a logged no-op while
@@ -81,6 +83,19 @@
   cannot strip labels (PATCH = `{title,body,state}` only). Merged develop
   (+35 commits, incl. 003's `task_sink.rs` labels support) → line cites drift,
   re-locate before editing. Phase → developer.
+- 2026-07-01 — 004 Developer slice 2: **F3+F4 GREEN**; developer phase
+  COMPLETE. F3: `POST /api/github/issues` (blank-title 400, 422
+  `no_github_repo`, TaskSink create, id→i64) + composer affordance
+  (Card-rendered, only when unlinked + local git) → chip pre-worktree. F4:
+  `fetch_github_issue` refactor (+url, no wire change), `spec_md_from_issue`
+  (control-strip, 64KiB cap, fallback AC via real derive), traversal-proof
+  `issue_spec_id`, `POST /api/harness/spec-from-issue` (never-overwrite),
+  `scaffoldSpec` toggle OFF-default in both submit paths (non-fatal failure),
+  `plan_from_spec_with_tracker` stamps provider+url (delegation pinned).
+  Gate: 494/0 tests, fmt+check clean, vite ✓ 1m04s. 5 deviations accepted
+  (Card-not-Modal markup; documented allow(dead_code) on FetchedIssue.slug;
+  tests in harness.rs surface_tests per convention; typed conditional;
+  pure-gate title test). Phase → tester.
 - 2026-07-01 — 004 Developer slice 1: **F1+F2 GREEN** (486/0 lib tests, fmt +
   check clean). F1: `GITHUB_STATUS_LABELS` + pure gh argv builders +
   `github_slug_and_number_from_issue_url` + `run_gh` (30s timeout) +

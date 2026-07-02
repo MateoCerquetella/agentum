@@ -9,6 +9,7 @@ import {
   FolderPlus,
   LoaderCircle,
   PlugZap,
+  Plus,
   Settings2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -76,6 +77,23 @@ type NewWorkspaceComposerCardProps = {
   onSmartLinearIssueSelect: (issue: LinearIssue) => void
   smartNameSelection: SmartWorkspaceNameSelection | null
   onClearSmartNameSelection: () => void
+  /** Spec 004 F3: offer "Create GitHub issue" when nothing is linked yet and
+   *  the selected repo is a local git repo. */
+  canCreateGithubIssue: boolean
+  createIssueOpen: boolean
+  onCreateIssueOpenChange: (open: boolean) => void
+  createIssueTitle: string
+  onCreateIssueTitleChange: (value: string) => void
+  createIssueBody: string
+  onCreateIssueBodyChange: (value: string) => void
+  createIssueSubmitting: boolean
+  createIssueError: string | null
+  onCreateIssueSubmit: () => void
+  /** Spec 004 F4 (D5): "Scaffold spec" toggle, shown only for a linked
+   *  github.com issue targeting a local git repo. Off by default. */
+  canScaffoldSpec: boolean
+  scaffoldSpec: boolean
+  onScaffoldSpecChange: (value: boolean) => void
   detectedAgentIds: Set<TuiAgent> | null
   onOpenAgentSettings: () => void
   advancedOpen: boolean
@@ -249,6 +267,19 @@ export default function NewWorkspaceComposerCard({
   onSmartLinearIssueSelect,
   smartNameSelection,
   onClearSmartNameSelection,
+  canCreateGithubIssue,
+  createIssueOpen,
+  onCreateIssueOpenChange,
+  createIssueTitle,
+  onCreateIssueTitleChange,
+  createIssueBody,
+  onCreateIssueBodyChange,
+  createIssueSubmitting,
+  createIssueError,
+  onCreateIssueSubmit,
+  canScaffoldSpec,
+  scaffoldSpec,
+  onScaffoldSpecChange,
   detectedAgentIds,
   onOpenAgentSettings,
   advancedOpen,
@@ -538,6 +569,91 @@ export default function NewWorkspaceComposerCard({
               agentTrigger?.focus()
             }}
           />
+
+          {/* Spec 004 F3: issue-first workspaces. Only when nothing is linked
+              yet (linking an existing item replaces this affordance) and the
+              repo is a local git repo — creation runs the local `gh`. */}
+          {canCreateGithubIssue && !createIssueOpen ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onCreateIssueOpenChange(true)}
+              className="-ml-2 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <Plus className="size-3.5" />
+              Create GitHub issue
+            </Button>
+          ) : null}
+          {canCreateGithubIssue && createIssueOpen ? (
+            <div className="space-y-2 rounded-md border border-border/70 bg-muted/30 p-3">
+              <div className="text-xs font-medium text-foreground">New GitHub issue</div>
+              <input
+                type="text"
+                value={createIssueTitle}
+                onChange={(event) => onCreateIssueTitleChange(event.target.value)}
+                placeholder="Issue title"
+                disabled={createIssueSubmitting}
+                className="w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              />
+              <textarea
+                value={createIssueBody}
+                onChange={(event) => onCreateIssueBodyChange(event.target.value)}
+                placeholder="Body (optional)"
+                rows={3}
+                disabled={createIssueSubmitting}
+                className="w-full min-w-0 resize-none rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              />
+              {createIssueError ? (
+                <div role="alert" className="text-xs text-destructive">
+                  {createIssueError}
+                </div>
+              ) : null}
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onCreateIssueOpenChange(false)}
+                  disabled={createIssueSubmitting}
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={onCreateIssueSubmit}
+                  disabled={createIssueSubmitting || !createIssueTitle.trim()}
+                  className="text-xs"
+                >
+                  {createIssueSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                  Create issue
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Spec 004 F4 (D5): opt-in spec scaffold for a linked github.com
+              issue on a local repo. Off by default. */}
+          {canScaffoldSpec ? (
+            <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={scaffoldSpec}
+                onChange={(event) => onScaffoldSpecChange(event.target.checked)}
+                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-foreground"
+              />
+              <span className="min-w-0">
+                <span className="block text-xs font-medium text-foreground">
+                  Scaffold spec from issue
+                </span>
+                <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                  Writes the linked issue into the new worktree as a harness spec + backlog.
+                </span>
+              </span>
+            </label>
+          ) : null}
         </div>
 
         <div className="space-y-1">

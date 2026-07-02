@@ -53,10 +53,65 @@ Status board for the developer phase. Build order per D4: F1 → F2 → F3 → F
         `canonical_meta_key_maps_linkedPR`, extended
         `worktree_serializes_camel_case_and_flattens_extra`.
 
-- [ ] **F3 — composer-create-issue** (AC 1) — NOT STARTED (next slice)
-- [ ] **F4 — spec-from-issue-scaffold** (AC 6–7) — NOT STARTED
+- [x] **F3 — composer-create-issue** (AC 1) — DONE, unit gate green
+  - [x] `POST /api/github/issues` in `routes/github.rs` per the blueprint
+        contract (`CreateIssueBody{title, body?, workdir, slug?}` camelCase →
+        `CreateIssueResponse{provider:"github", number:i64, url, slug}`).
+        Flow: blank-title 400 → `resolve_github_slug` (miss → typed 422
+        `no_github_repo`, chat.rs's exact envelope) →
+        `TaskSink::Github.create_feature(SinkCtx{slug: Some})` →
+        `map_sink_error` → `FeatureRef.id` → i64 (junk = 500). Registered in
+        `router()`; `is_public` untouched (rides `require_token`).
+  - [x] `board_goals::map_sink_error` widened to `pub(crate)` (one word +
+        doc note).
+  - [x] UI: `createGithubIssue()` in `runtime/github-issue-client.ts`;
+        `useComposerState` gains the mini-form state/handlers
+        (`canCreateGithubIssue` = nothing linked + local git repo; success →
+        `applyLinkedWorkItem` + `setLinkedWorkItem` with typed-body
+        `linkedContext` snapshot + `setLinkedIssue`; failure → inline error,
+        zero state change); affordance + inline form rendered in
+        `NewWorkspaceComposerCard` (the modal's shared markup surface) under
+        the Name field.
+  - [x] Tests: `create_issue_rejects_blank_title`,
+        `issue_number_parses_digits_and_rejects_junk`.
 
-## Verify gate results (F1+F2, 2026-07-01)
+- [x] **F4 — spec-from-issue-scaffold** (AC 6–7) — DONE, unit gate green
+  - [x] `routes/github.rs::get_issue` core extracted into `pub(crate)
+        fetch_github_issue(state, workdir, number, slug_hint) →
+        FetchedIssue{title, body, url, slug}` (`url` added to the `gh --json`
+        fields; `get_issue` delegates — no wire change; `slug` carries a
+        documented `#[allow(dead_code)]`, no in-tree reader yet).
+  - [x] `harness/types.rs`: `spec_md_from_issue` (verbatim body; C0/C1
+        stripped, `\t`→two spaces, `\r` dropped; 64 KiB cap + `[truncated]`;
+        fallback `## Acceptance criteria\n\n- [ ] <title>` decided by running
+        the REAL `derive_backlog_from_spec` on the assembled doc; checkbox
+        lines stay bare) + `issue_spec_id` (`<number>-<slug>`, `[a-z0-9-]`
+        alphabet, 40-char cap, fallback `issue` — traversal-proof) +
+        `plan_from_spec` refactored to `plan_from_spec_inner(…, tracker:
+        Option<(&str,&str)>)`; `plan_from_spec` delegates `None` (MCP tool
+        unchanged); `plan_from_spec_with_tracker` stamps
+        `tracker_provider`/`tracker_url` on EVERY feature (F1 prerequisite).
+  - [x] `routes/harness.rs`: `POST /api/harness/spec-from-issue`
+        (`SpecFromIssueRequest{workdir, number, slug?, plan=true}` →
+        `SpecFromIssueResponse{specId, specPath, written, features?}`).
+        `expand_workdir` + `is_dir` → server fetch → `scaffold_harness`
+        (idempotent) → existing spec.md = 400 "already exists — not
+        overwriting" (never overwrite) → write → optional tracker-stamped
+        plan.
+  - [x] UI (D5): `scaffoldSpec` toggle (default **false**) in
+        `useComposerState`, rendered only when a github.com issue is linked
+        AND the target repo is a local git repo; shared
+        `maybeScaffoldSpecFromIssue(worktree, submitLinkedWorkItem)` called
+        after `createWorktree` in BOTH `submit` and `submitQuick` (before the
+        skip-session early return; uses `result.worktree.path`); failure →
+        console + toast, non-fatal. `scaffoldSpecFromIssue()` client fn added.
+  - [x] Tests (the 6 from architecture §5, in `harness.rs::surface_tests`):
+        checkbox round-trip incl. checked→Done; fallback AC; control-strip +
+        64 KiB cap; traversal-proof id (incl. cap + fallback cases); tracker
+        stamping on every feature + on-disk; `plan_from_spec` delegation
+        unchanged (no stamping).
+
+## Verify gate results (F1+F2 slice, 2026-07-01)
 
 - `cargo fmt --all` → `cargo fmt --all -- --check` clean.
 - `cargo test -p agentum-server --lib` → **486 passed; 0 failed; 5 ignored**
@@ -64,11 +119,17 @@ Status board for the developer phase. Build order per D4: F1 → F2 → F3 → F
   tests). Scoped runs: `task_sink` 19 passed / 1 ignored; `routes::worktrees`
   12 passed.
 - `cargo check -p agentum-server` → clean, no warnings.
-- **vite build DEFERRED**: `npm run build --prefix crates/agentum-desktop/ui`
-  (~9 min) was intentionally NOT run for the F2 TS widenings (both are
-  additive: an optional-args type widening + a shim forwarding fields the
-  store already sends). It MUST run at the end of the developer phase with
-  F3/F4's UI work — do not ship without it.
+- vite build deferred to the end of the developer phase (ran below).
+
+## Verify gate results (F3+F4 + authoritative UI build, 2026-07-01)
+
+- `cargo fmt --all` → `cargo fmt --all -- --check` clean.
+- `cargo test -p agentum-server --lib` → **494 passed; 0 failed; 5 ignored**
+  (~68s wall; +8 new: 2 github.rs, 6 harness surface_tests).
+- `cargo check -p agentum-server` → clean, no warnings.
+- `NODE_OPTIONS=--max-old-space-size=6144 npm run build --prefix
+  crates/agentum-desktop/ui` → **green** ("✓ built"), covering slice 1's TS
+  widenings + F3/F4 UI. Pre-existing chunk-size warnings only.
 
 ## Notes for F3/F4 (read before starting)
 

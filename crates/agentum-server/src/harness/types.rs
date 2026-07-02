@@ -903,17 +903,49 @@ pub fn derive_backlog_from_spec(spec_md: &str) -> FeatureList {
 /// `.agentum-harness/feature_list.json`. Returns the derived list; errors if the
 /// spec.md is missing or has no criteria (no silent empty backlog).
 pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<FeatureList> {
+    plan_from_spec_inner(workdir, spec_id, None).await
+}
+
+/// [`plan_from_spec`] + stamp tracker provenance onto every derived feature
+/// (spec 004 AC 7): a spec generated from a GitHub issue yields a backlog whose
+/// features all carry `tracker_provider`/`tracker_url`, so the harness's
+/// existing transition points move the real issue. N features share ONE issue —
+/// which is exactly why the GitHub transition arm reads the issue number from
+/// the URL, never from the feature id.
+pub async fn plan_from_spec_with_tracker(
+    workdir: &Path,
+    spec_id: &str,
+    provider: &str,
+    url: &str,
+) -> anyhow::Result<FeatureList> {
+    plan_from_spec_inner(workdir, spec_id, Some((provider, url))).await
+}
+
+/// Shared core: derive the backlog from the spec's checkboxes, optionally stamp
+/// tracker provenance, persist `feature_list.json`. The `tracker: None` path is
+/// byte-for-byte the pre-004 `plan_from_spec` (the MCP tool is unchanged).
+async fn plan_from_spec_inner(
+    workdir: &Path,
+    spec_id: &str,
+    tracker: Option<(&str, &str)>,
+) -> anyhow::Result<FeatureList> {
     let dir = workdir.join(HARNESS_DIR);
     let spec_md = dir.join("specs").join(spec_id).join("spec.md");
     let content = tokio::fs::read_to_string(&spec_md)
         .await
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", spec_md.display()))?;
-    let list = derive_backlog_from_spec(&content);
+    let mut list = derive_backlog_from_spec(&content);
     if list.features.is_empty() {
         anyhow::bail!(
             "no acceptance-criteria checkboxes (`- [ ]`) found in {}",
             spec_md.display()
         );
+    }
+    if let Some((provider, url)) = tracker {
+        for f in &mut list.features {
+            f.tracker_provider = Some(provider.to_string());
+            f.tracker_url = Some(url.to_string());
+        }
     }
     tokio::fs::create_dir_all(&dir).await?;
     tokio::fs::write(
@@ -922,6 +954,128 @@ pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<Fea
     )
     .await?;
     Ok(list)
+}
+
+/// Hard cap on the issue body embedded into a generated spec.md (spec 004 F4).
+/// Mirrors the UI's snapshot ethos (`GITHUB_ISSUE_BODY_MAX_CHARS`) at a
+/// file-appropriate scale: a runaway issue body must not produce an unbounded
+/// spec file.
+const ISSUE_SPEC_BODY_MAX_BYTES: usize = 64 * 1024;
+
+/// Strip C0/C1 control characters from untrusted issue text so a crafted body
+/// cannot smuggle terminal escapes into files/panes. `\n` is kept (structure),
+/// `\t` becomes two spaces (mirrors the UI's
+/// `escapeLinkedContextControlChars`); `\r` is dropped, which also normalizes
+/// CRLF for the checkbox parser.
+fn strip_control_chars(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => out.push('\n'),
+            '\t' => out.push_str("  "),
+            // `is_control` is Unicode Cc: C0 (incl. ESC), DEL, and C1.
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// One-line rendering of an untrusted title: control chars (incl. newlines)
+/// collapse into single spaces so the title can sit inside a heading or a
+/// `- [ ]` line without breaking either.
+fn inline_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut last_was_space = true;
+    for c in title.chars() {
+        let mapped = if c.is_control() || c.is_whitespace() {
+            ' '
+        } else {
+            c
+        };
+        if mapped == ' ' {
+            if !last_was_space {
+                out.push(' ');
+            }
+            last_was_space = true;
+        } else {
+            out.push(mapped);
+            last_was_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Deterministic spec.md from a GitHub issue — no LLM (spec 004 non-goal). The
+/// body is verbatim except: C0/C1 control chars stripped (`\n` kept, `\t` →
+/// two spaces), capped at 64 KiB with a `[truncated]` marker. When the (capped)
+/// body contains no `- [ ]`/`- [x]` checkbox, a fallback
+/// "## Acceptance criteria" section with `- [ ] <title>` is appended so
+/// [`plan_from_spec`] always round-trips. Checkbox lines stay bare at line
+/// start — prefixing them would break [`derive_backlog_from_spec`]'s parse.
+pub fn spec_md_from_issue(number: &str, title: &str, body: &str, url: &str) -> String {
+    let title = inline_title(title);
+    let title = if title.is_empty() {
+        format!("Issue {number}")
+    } else {
+        title
+    };
+
+    let mut body = strip_control_chars(body);
+    if body.len() > ISSUE_SPEC_BODY_MAX_BYTES {
+        let mut end = ISSUE_SPEC_BODY_MAX_BYTES;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        body.truncate(end);
+        body.push_str("\n[truncated]");
+    }
+    let body = body.trim();
+
+    let mut out = format!(
+        "# Spec {number} — {title}\n\n\
+         > Generated from GitHub issue {url}. The body below is verbatim issue content.\n\n"
+    );
+    if !body.is_empty() {
+        out.push_str(body);
+        out.push('\n');
+    }
+    // Reuse the real parser to decide whether the round-trip would fail — the
+    // fallback must trigger exactly when plan_from_spec would bail.
+    if derive_backlog_from_spec(&out).features.is_empty() {
+        out.push_str(&format!("\n## Acceptance criteria\n\n- [ ] {title}\n"));
+    }
+    out
+}
+
+/// `"<number>-<slug>"` spec directory id for an issue-generated spec. The slug
+/// is the title lowercased with `[a-z0-9]+` runs joined by `-`, capped at 40
+/// chars, falling back to `"issue"`. Both atoms are server-constructed —
+/// `number` is digits-validated by the route and the slug alphabet excludes
+/// `/`/`.` — so the `specs/` path join cannot traverse.
+pub fn issue_spec_id(number: &str, title: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = true;
+    for c in title.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+            last_was_dash = false;
+        } else if !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let mut slug = slug.to_string();
+    if slug.len() > 40 {
+        slug.truncate(40);
+        slug = slug.trim_end_matches('-').to_string();
+    }
+    if slug.is_empty() {
+        slug = "issue".to_string();
+    }
+    format!("{number}-{slug}")
 }
 
 /// One feature to seed into a harness backlog, carrying the tracker provenance
