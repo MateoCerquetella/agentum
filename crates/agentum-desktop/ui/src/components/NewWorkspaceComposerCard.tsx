@@ -94,6 +94,12 @@ type NewWorkspaceComposerCardProps = {
   canScaffoldSpec: boolean
   scaffoldSpec: boolean
   onScaffoldSpecChange: (value: boolean) => void
+  /** Spec 005 F1: "Start gated run" toggle — same eligibility gate as the
+   *  scaffold toggle. Armed → the linked issue becomes the spec and the
+   *  Harness Engine drives the worktree (the scaffold toggle hides). */
+  canStartGatedRun: boolean
+  startGatedRun: boolean
+  onStartGatedRunChange: (value: boolean) => void
   detectedAgentIds: Set<TuiAgent> | null
   onOpenAgentSettings: () => void
   advancedOpen: boolean
@@ -280,6 +286,9 @@ export default function NewWorkspaceComposerCard({
   canScaffoldSpec,
   scaffoldSpec,
   onScaffoldSpecChange,
+  canStartGatedRun,
+  startGatedRun,
+  onStartGatedRunChange,
   detectedAgentIds,
   onOpenAgentSettings,
   advancedOpen,
@@ -635,8 +644,9 @@ export default function NewWorkspaceComposerCard({
           ) : null}
 
           {/* Spec 004 F4 (D5): opt-in spec scaffold for a linked github.com
-              issue on a local repo. Off by default. */}
-          {canScaffoldSpec ? (
+              issue on a local repo. Off by default. Hidden while "Start gated
+              run" is armed — the server converge-scaffolds, subsuming it. */}
+          {canScaffoldSpec && !startGatedRun ? (
             <label className="mt-2 flex cursor-pointer items-start gap-2.5">
               <input
                 type="checkbox"
@@ -650,6 +660,29 @@ export default function NewWorkspaceComposerCard({
                 </span>
                 <span className="mt-0.5 block text-[11px] text-muted-foreground">
                   Writes the linked issue into the new worktree as a harness spec + backlog.
+                </span>
+              </span>
+            </label>
+          ) : null}
+
+          {/* Spec 005 F1 (D2): "Start gated run" — same eligibility gate as
+              the scaffold toggle. The linked issue becomes the spec and the
+              Harness Engine drives verification-gated agents in the worktree;
+              every plain agent delivery is suppressed. */}
+          {canStartGatedRun ? (
+            <label className="mt-2 flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={startGatedRun}
+                onChange={(event) => onStartGatedRunChange(event.target.checked)}
+                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-foreground"
+              />
+              <span className="min-w-0">
+                <span className="block text-xs font-medium text-foreground">Start gated run</span>
+                <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                  {startGatedRun
+                    ? "Your typed prompt won't be sent — the linked issue becomes the spec and drives the gated agents. The selected agent runs inside the engine."
+                    : 'Plan the linked issue into a spec and drive it with verification-gated agents.'}
                 </span>
               </span>
             </label>

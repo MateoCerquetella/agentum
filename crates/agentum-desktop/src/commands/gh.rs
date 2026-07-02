@@ -517,9 +517,38 @@ pub fn gh_work_item_details() -> Option<Value> {
     None
 }
 
+// Single-issue read for the sidebar/worktree "linked issue" surfaces. None on
+// any failure (no origin remote, gh missing/unauthenticated, issue not found)
+// so the renderer degrades to its "details unavailable" fallback.
 #[tauri::command]
-pub fn gh_issue() -> Option<Value> {
-    None
+pub async fn gh_issue(repo_path: String, repo_id: Option<String>, number: i64) -> Option<Value> {
+    let _ = repo_id;
+    let (owner, repo) = resolve_owner_repo(&repo_path).await?;
+    let output = tokio::process::Command::new("gh")
+        .args([
+            "issue",
+            "view",
+            &number.to_string(),
+            "--repo",
+            &format!("{owner}/{repo}"),
+            "--json",
+            "number,title,state,url,labels",
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let item: Value = serde_json::from_slice(&output.stdout).ok()?;
+    Some(json!({
+        "number": item.get("number").and_then(Value::as_i64).unwrap_or(number),
+        "title": item.get("title").and_then(Value::as_str).unwrap_or_default(),
+        // gh emits "OPEN"/"CLOSED"; the renderer's IssueState union is lowercase.
+        "state": item.get("state").and_then(Value::as_str).unwrap_or("OPEN").to_lowercase(),
+        "url": item.get("url").and_then(Value::as_str).unwrap_or_default(),
+        "labels": label_names(&item),
+    }))
 }
 
 #[tauri::command]

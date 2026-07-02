@@ -921,9 +921,12 @@ pub async fn plan_from_spec_with_tracker(
     plan_from_spec_inner(workdir, spec_id, Some((provider, url))).await
 }
 
-/// Shared core: derive the backlog from the spec's checkboxes, optionally stamp
-/// tracker provenance, persist `feature_list.json`. The `tracker: None` path is
-/// byte-for-byte the pre-004 `plan_from_spec` (the MCP tool is unchanged).
+/// Shared core: derive the backlog from the spec's checkboxes, stamp the spec's
+/// id, optionally stamp tracker provenance, persist `feature_list.json`. Every
+/// backlog planned from a spec records `spec_id` (spec 005 F2/C4 — deliberately
+/// including the MCP `agentum_harness_plan` path) so the feature prompt can
+/// point the agent at the spec file; the role gates stay off (`roles: false`),
+/// so spec-013's phase machinery is untouched by the stamp.
 async fn plan_from_spec_inner(
     workdir: &Path,
     spec_id: &str,
@@ -935,6 +938,7 @@ async fn plan_from_spec_inner(
         .await
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", spec_md.display()))?;
     let mut list = derive_backlog_from_spec(&content);
+    list.spec_id = Some(spec_id.to_string());
     if list.features.is_empty() {
         anyhow::bail!(
             "no acceptance-criteria checkboxes (`- [ ]`) found in {}",
@@ -953,6 +957,28 @@ async fn plan_from_spec_inner(
         serde_json::to_string_pretty(&list)?,
     )
     .await?;
+    Ok(list)
+}
+
+/// Load → mutate → persist `feature_list.json`; returns the saved list. The
+/// post-plan knob-write seam (spec 005 F1, AC 2): start-work writes the
+/// composer's `agent_tool`/`agent_model` into the freshly planned backlog.
+/// Knob writes only by contract — the `features` vector passes through
+/// untouched (contrast [`FeatureList::copy_knobs_from`], which copies knobs
+/// *onto* a derived feature set). `spec_id` is already stamped by
+/// [`plan_from_spec_inner`]; callers must not re-stamp it here.
+pub async fn update_backlog_knobs(
+    workdir: &Path,
+    apply: impl FnOnce(&mut FeatureList),
+) -> anyhow::Result<FeatureList> {
+    let path = resolve_harness_dir(workdir).join("feature_list.json");
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+    let mut list: FeatureList = serde_json::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("feature_list.json is invalid: {e}"))?;
+    apply(&mut list);
+    tokio::fs::write(&path, serde_json::to_string_pretty(&list)?).await?;
     Ok(list)
 }
 

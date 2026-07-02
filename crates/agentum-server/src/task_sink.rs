@@ -13,7 +13,7 @@
 //! dependency (`async-trait`). v1 ships the internal board (011a) and GitHub
 //! Issues (011b); Linear (011c) slots in as a new variant.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use agentum_core::NewBoardItem;
 use agentum_store::Store;
@@ -219,6 +219,20 @@ pub enum TrackerPhase {
     Done,
 }
 
+/// Parse a wire-format phase string (`todo` / `in_progress` / `ready_to_test` /
+/// `done`) into a [`TrackerPhase`]. Pure; `None` for anything else — the MCP
+/// `agentum_report_status` tool (spec 005 F4) treats that as a caller bug, not
+/// a tracker hiccup.
+pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
+    match s {
+        "todo" => Some(TrackerPhase::Todo),
+        "in_progress" => Some(TrackerPhase::InProgress),
+        "ready_to_test" => Some(TrackerPhase::ReadyToTest),
+        "done" => Some(TrackerPhase::Done),
+        _ => None,
+    }
+}
+
 /// Outcome of a transition, for the harness log. Transitions are a side-channel:
 /// a tracker hiccup must never halt the run, so even failures come back as a
 /// value the caller logs rather than an error that propagates.
@@ -251,13 +265,164 @@ const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 4] = [
     (TrackerPhase::Done, "status/done", "0e8a16"),
 ];
 
-/// The canonical GitHub label for a phase.
+/// The canonical (default) GitHub label for a phase. Stays the default-name
+/// accessor after spec 005 F5 made names configurable: [`GithubStateMap`]'s
+/// `Default` delegates here so the two can never drift.
 fn github_status_label(phase: TrackerPhase) -> &'static str {
     GITHUB_STATUS_LABELS
         .iter()
         .find(|(p, _, _)| *p == phase)
         .map(|(_, name, _)| *name)
         .expect("GITHUB_STATUS_LABELS covers every TrackerPhase")
+}
+
+/// The canonical ensure-create color for a phase. Colors key off the PHASE,
+/// never the label name (spec 005 F5): a custom-named label inherits its
+/// phase's canonical color via the same `--force` ensure-create, so a renamed
+/// pipeline still reads at a glance and a manually recolored label self-heals.
+fn github_status_color(phase: TrackerPhase) -> &'static str {
+    GITHUB_STATUS_LABELS
+        .iter()
+        .find(|(p, _, _)| *p == phase)
+        .map(|(_, _, color)| *color)
+        .expect("GITHUB_STATUS_LABELS covers every TrackerPhase")
+}
+
+/// The four pipeline phases → GitHub *label names* (spec 005 F5, D4). Teams
+/// with their own status vocabulary configure names here; the transport
+/// (ensure-create + one edit) is unchanged from spec 004.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubStateMap {
+    pub todo: String,
+    pub in_progress: String,
+    pub ready_to_test: String,
+    pub done: String,
+}
+
+impl Default for GithubStateMap {
+    /// The canonical four from [`GITHUB_STATUS_LABELS`], via the
+    /// [`github_status_label`] accessor so defaults and table can't drift.
+    fn default() -> Self {
+        Self {
+            todo: github_status_label(TrackerPhase::Todo).into(),
+            in_progress: github_status_label(TrackerPhase::InProgress).into(),
+            ready_to_test: github_status_label(TrackerPhase::ReadyToTest).into(),
+            done: github_status_label(TrackerPhase::Done).into(),
+        }
+    }
+}
+
+/// The persisted label-name overrides (Settings → Integrations → GitHub).
+/// Each field optional so a partial override keeps the default for the rest.
+/// Field names match the desktop's `commands/github_labels.rs` exactly — the
+/// server reads the same `github.json` the desktop writes.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct StoredGithubStateMap {
+    #[serde(default)]
+    todo: Option<String>,
+    #[serde(default)]
+    in_progress: Option<String>,
+    #[serde(default)]
+    ready_to_test: Option<String>,
+    #[serde(default)]
+    done: Option<String>,
+}
+
+/// `github.json` — the desktop-owned GitHub pipeline config (the `linear.json`
+/// sibling). Only `state_map` today.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct GithubConfigFile {
+    #[serde(default)]
+    state_map: Option<StoredGithubStateMap>,
+}
+
+/// Path to the desktop's GitHub pipeline config. Mirrors
+/// `linear.rs::creds_path` exactly (`<data_local_dir|data_dir>/Agentum/
+/// github.json`) so the server reads the same file the desktop Settings pane
+/// writes. `AGENTUM_GITHUB_CONFIG` overrides it (tests/CI — mirrors
+/// `AGENTUM_LINEAR_CREDS`).
+fn github_config_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("AGENTUM_GITHUB_CONFIG") {
+        return Some(PathBuf::from(p));
+    }
+    let base = dirs::data_local_dir().or_else(dirs::data_dir)?;
+    Some(base.join("Agentum").join("github.json"))
+}
+
+/// Absent/unreadable/garbled → `Default` (no overrides), never an error — the
+/// map must resolve even on a machine with no desktop config.
+fn read_github_config() -> GithubConfigFile {
+    github_config_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+impl GithubStateMap {
+    /// Resolve the effective label map: defaults → `github.json` `state_map`
+    /// (written by Settings) → `AGENTUM_GITHUB_STATUS_{TODO,IN_PROGRESS,
+    /// READY_TO_TEST,DONE}` env (highest precedence, for tests/CI). A partial
+    /// override at any layer keeps the lower layer's value — byte-for-byte the
+    /// `LinearStateMap::from_env` layering.
+    pub fn from_env() -> Self {
+        Self::apply_layers(read_github_config().state_map, |k| std::env::var(k).ok())
+    }
+
+    /// Pure layering core: precedence is tested by injecting the file shape
+    /// and an env closure — never by mutating process env (parallel tests).
+    /// Blank/whitespace values at any layer keep the lower layer's value.
+    fn apply_layers(
+        file: Option<StoredGithubStateMap>,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Self {
+        let mut m = Self::default();
+        // Layer 1: persisted Settings overrides from github.json.
+        if let Some(sm) = file {
+            for (slot, v) in [
+                (&mut m.todo, sm.todo),
+                (&mut m.in_progress, sm.in_progress),
+                (&mut m.ready_to_test, sm.ready_to_test),
+                (&mut m.done, sm.done),
+            ] {
+                if let Some(v) = v.filter(|s| !s.trim().is_empty()) {
+                    *slot = v.trim().to_string();
+                }
+            }
+        }
+        // Layer 2: env overrides (win over the file).
+        for (slot, key) in [
+            (&mut m.todo, "AGENTUM_GITHUB_STATUS_TODO"),
+            (&mut m.in_progress, "AGENTUM_GITHUB_STATUS_IN_PROGRESS"),
+            (&mut m.ready_to_test, "AGENTUM_GITHUB_STATUS_READY_TO_TEST"),
+            (&mut m.done, "AGENTUM_GITHUB_STATUS_DONE"),
+        ] {
+            if let Some(v) = env(key).filter(|s| !s.trim().is_empty()) {
+                *slot = v.trim().to_string();
+            }
+        }
+        m
+    }
+
+    /// The configured label name for a pipeline phase.
+    pub fn label_for(&self, phase: TrackerPhase) -> &str {
+        match phase {
+            TrackerPhase::Todo => &self.todo,
+            TrackerPhase::InProgress => &self.in_progress,
+            TrackerPhase::ReadyToTest => &self.ready_to_test,
+            TrackerPhase::Done => &self.done,
+        }
+    }
+
+    /// The configured names in canonical phase order (may contain duplicates
+    /// when a user maps two phases to one name — callers dedupe by name).
+    fn labels(&self) -> [&str; 4] {
+        [
+            &self.todo,
+            &self.in_progress,
+            &self.ready_to_test,
+            &self.done,
+        ]
+    }
 }
 
 /// Idempotent ensure-create: `--force` updates an existing label's color to
@@ -268,17 +433,24 @@ fn gh_label_ensure_argv<'a>(name: &'a str, slug: &'a str, color: &'a str) -> [&'
     ]
 }
 
-/// Set-one/remove-others in ONE `gh issue edit`: add the target label, then
-/// deterministically remove the other THREE canonical labels (no
-/// read-modify-write; `gh` treats removing an absent label as a no-op). By
-/// construction the argv can only name canonical labels, so foreign `status/*`
-/// labels (e.g. `status/qa*`) are never touched (C4).
+/// Set-one/remove-others in ONE `gh issue edit`, against the CONFIGURED label
+/// set (spec 005 F5): add the target label, then deterministically remove the
+/// other configured names (no read-modify-write; `gh` treats removing an
+/// absent label as a no-op). The remove-filter is by NAME, not phase: if a
+/// user maps two phases to one name, the target never appears in its own
+/// remove list; duplicate names are deduped. By construction the argv can only
+/// name configured labels, so foreign `status/*` labels — `status/qa*` (C4),
+/// or a label applied under an OLDER map whose name is no longer configured —
+/// are never touched. (Removing a stale-map label would require
+/// read-modify-write over arbitrary `status/*` names, exactly the
+/// foreign-label hazard the deterministic remove-set exists to prevent.)
 fn gh_set_status_label_argv<'a>(
     number: &'a str,
     slug: &'a str,
     phase: TrackerPhase,
+    map: &'a GithubStateMap,
 ) -> Vec<&'a str> {
-    let target = github_status_label(phase);
+    let target = map.label_for(phase);
     let mut argv = vec![
         "issue",
         "edit",
@@ -288,8 +460,10 @@ fn gh_set_status_label_argv<'a>(
         "--add-label",
         target,
     ];
-    for (p, name, _) in GITHUB_STATUS_LABELS.iter() {
-        if *p != phase {
+    let mut removed: Vec<&str> = Vec::new();
+    for name in map.labels() {
+        if name != target && !removed.contains(&name) {
+            removed.push(name);
             argv.push("--remove-label");
             argv.push(name);
         }
@@ -301,7 +475,9 @@ fn gh_set_status_label_argv<'a>(
 /// a trailing slash and a query/fragment; rejects `/pull/` URLs, non-github
 /// hosts, and non-numeric tails. Pure. Lives here (not `board_sync`) because
 /// `task_sink` is a crate-root seam and must not depend on a route module.
-fn github_slug_and_number_from_issue_url(url: &str) -> Option<(String, String)> {
+/// `pub(crate)` so the MCP `agentum_report_status` tool (spec 005 F4) can
+/// derive a missing GitHub `id` from the ticket URL with the same parser.
+pub(crate) fn github_slug_and_number_from_issue_url(url: &str) -> Option<(String, String)> {
     let url = url.trim();
     let url = url.split(['?', '#']).next().unwrap_or(url);
     let rest = url.strip_prefix("https://github.com/")?;
@@ -357,21 +533,35 @@ async fn run_gh(program: &str, args: &[&str]) -> Result<(), String> {
     Err(msg)
 }
 
-/// Ensure the 4 canonical labels exist (each failure NON-fatal — a shared repo
-/// without label-create permission can still add an existing label), then the
-/// single `issue edit` decides: exit 0 → `Applied`; anything else →
+/// Ensure the 4 configured labels exist (each failure NON-fatal — a shared
+/// repo without label-create permission can still add an existing label), then
+/// the single `issue edit` decides: exit 0 → `Applied`; anything else →
 /// `Skipped(reason)`. Never returns `Err` — tracker sync is best-effort (AC 5).
-/// `program` is explicit so tests inject a fake `gh` without env mutation.
+/// `program` is explicit so tests inject a fake `gh` without env mutation;
+/// `map` is explicit for the same reason (spec 005 F5). Colors key off the
+/// PHASE ([`github_status_color`]); a duplicate name is ensured once — the
+/// first phase in canonical order wins its color.
 async fn github_transition_with(
     program: &str,
     slug: &str,
     number: &str,
     phase: TrackerPhase,
+    map: &GithubStateMap,
 ) -> TransitionResult {
-    for (_, name, color) in GITHUB_STATUS_LABELS.iter() {
-        let _ = run_gh(program, &gh_label_ensure_argv(name, slug, color)).await;
+    let mut ensured: Vec<&str> = Vec::new();
+    for (p, _, _) in GITHUB_STATUS_LABELS.iter() {
+        let name = map.label_for(*p);
+        if ensured.contains(&name) {
+            continue;
+        }
+        ensured.push(name);
+        let _ = run_gh(
+            program,
+            &gh_label_ensure_argv(name, slug, github_status_color(*p)),
+        )
+        .await;
     }
-    match run_gh(program, &gh_set_status_label_argv(number, slug, phase)).await {
+    match run_gh(program, &gh_set_status_label_argv(number, slug, phase, map)).await {
         Ok(()) => TransitionResult::Applied,
         Err(reason) => TransitionResult::Skipped(reason),
     }
@@ -440,7 +630,11 @@ pub async fn apply_tracker_transition(
                     "cannot parse a GitHub issue from {url}"
                 )));
             };
-            Ok(github_transition_with(&gh_bin(), &slug, &number, phase).await)
+            // Label names are configurable (spec 005 F5). Resolve the map only
+            // AFTER the URL parse succeeds so the no-url/unparseable skips
+            // never touch the config file (keeps those tests hermetic).
+            let map = GithubStateMap::from_env();
+            Ok(github_transition_with(&gh_bin(), &slug, &number, phase, &map).await)
         }
         other => Ok(TransitionResult::Skipped(format!(
             "unknown tracker provider {other:?}"
@@ -760,6 +954,11 @@ mod tests {
     /// target label and removes exactly the OTHER three canonical labels —
     /// the target is never removed, and no non-canonical name (e.g. this
     /// repo's own `status/qa*` human-QA labels) ever appears in the argv.
+    ///
+    /// Spec 005 F5 regression pin: with the DEFAULT map the argv must stay
+    /// **byte-identical** to what spec 004 shipped — same tokens, same order.
+    /// The `expected` literals below were captured against the pre-F5
+    /// (map-less) builder; do not regenerate them from the code under test.
     #[test]
     fn gh_set_status_label_argv_adds_one_removes_exactly_the_other_three() {
         let all_phases = [
@@ -768,9 +967,73 @@ mod tests {
             TrackerPhase::ReadyToTest,
             TrackerPhase::Done,
         ];
+        let map = GithubStateMap::default();
         for phase in all_phases {
             let target = github_status_label(phase);
-            let argv = gh_set_status_label_argv("42", "owner/repo", phase);
+            let argv = gh_set_status_label_argv("42", "owner/repo", phase, &map);
+            let expected: Vec<&str> = match phase {
+                TrackerPhase::Todo => vec![
+                    "issue",
+                    "edit",
+                    "42",
+                    "--repo",
+                    "owner/repo",
+                    "--add-label",
+                    "status/todo",
+                    "--remove-label",
+                    "status/in-progress",
+                    "--remove-label",
+                    "status/ready-to-test",
+                    "--remove-label",
+                    "status/done",
+                ],
+                TrackerPhase::InProgress => vec![
+                    "issue",
+                    "edit",
+                    "42",
+                    "--repo",
+                    "owner/repo",
+                    "--add-label",
+                    "status/in-progress",
+                    "--remove-label",
+                    "status/todo",
+                    "--remove-label",
+                    "status/ready-to-test",
+                    "--remove-label",
+                    "status/done",
+                ],
+                TrackerPhase::ReadyToTest => vec![
+                    "issue",
+                    "edit",
+                    "42",
+                    "--repo",
+                    "owner/repo",
+                    "--add-label",
+                    "status/ready-to-test",
+                    "--remove-label",
+                    "status/todo",
+                    "--remove-label",
+                    "status/in-progress",
+                    "--remove-label",
+                    "status/done",
+                ],
+                TrackerPhase::Done => vec![
+                    "issue",
+                    "edit",
+                    "42",
+                    "--repo",
+                    "owner/repo",
+                    "--add-label",
+                    "status/done",
+                    "--remove-label",
+                    "status/todo",
+                    "--remove-label",
+                    "status/in-progress",
+                    "--remove-label",
+                    "status/ready-to-test",
+                ],
+            };
+            assert_eq!(argv, expected, "default-map argv drifted for {phase:?}");
             // Head: one edit targeting the issue + repo, adding exactly the target.
             assert_eq!(
                 &argv[..7],
@@ -808,6 +1071,251 @@ mod tests {
                     assert!(removed.contains(name), "{name} missing from remove set");
                 }
             }
+        }
+    }
+
+    /// Spec 005 F5: the default map IS the canonical `GITHUB_STATUS_LABELS`
+    /// name set, and `label_for` agrees with the const-table accessor.
+    #[test]
+    fn github_state_map_defaults_are_canonical() {
+        let m = GithubStateMap::default();
+        assert_eq!(m.todo, "status/todo");
+        assert_eq!(m.in_progress, "status/in-progress");
+        assert_eq!(m.ready_to_test, "status/ready-to-test");
+        assert_eq!(m.done, "status/done");
+        for (p, name, _) in GITHUB_STATUS_LABELS.iter() {
+            assert_eq!(m.label_for(*p), *name);
+            assert_eq!(github_status_label(*p), *name);
+        }
+    }
+
+    /// Spec 005 F5 layering, via the pure `apply_layers` injection — NO env
+    /// mutation, no config file: defaults → file → env, with blank/whitespace
+    /// values at any layer keeping the lower layer, and values trimmed.
+    #[test]
+    fn github_state_map_precedence_file_then_env() {
+        let no_env = |_: &str| None;
+        // No file, no env → defaults.
+        assert_eq!(
+            GithubStateMap::apply_layers(None, no_env),
+            GithubStateMap::default()
+        );
+        // File overrides defaults; a partial/blank file keeps defaults.
+        let file = StoredGithubStateMap {
+            todo: Some("triage".into()),
+            in_progress: Some(" wip ".into()), // trimmed
+            ready_to_test: None,
+            done: Some("   ".into()), // blank keeps the lower layer
+        };
+        let m = GithubStateMap::apply_layers(Some(file), no_env);
+        assert_eq!(m.todo, "triage");
+        assert_eq!(m.in_progress, "wip");
+        assert_eq!(m.ready_to_test, "status/ready-to-test");
+        assert_eq!(m.done, "status/done");
+        // Env wins over the file; a blank env value keeps the file layer.
+        let file = StoredGithubStateMap {
+            todo: Some("triage".into()),
+            in_progress: Some("wip".into()),
+            ..Default::default()
+        };
+        let env = |k: &str| match k {
+            "AGENTUM_GITHUB_STATUS_TODO" => Some(" backlog ".to_string()),
+            "AGENTUM_GITHUB_STATUS_IN_PROGRESS" => Some("".to_string()),
+            "AGENTUM_GITHUB_STATUS_DONE" => Some("shipped".to_string()),
+            _ => None,
+        };
+        let m = GithubStateMap::apply_layers(Some(file), env);
+        assert_eq!(m.todo, "backlog"); // env over file, trimmed
+        assert_eq!(m.in_progress, "wip"); // blank env keeps the file value
+        assert_eq!(m.ready_to_test, "status/ready-to-test"); // default survives
+        assert_eq!(m.done, "shipped"); // env over default
+    }
+
+    /// Spec 005 F5 (the mid-flight/foreign-label pin at argv level): a fully
+    /// renamed map produces an argv of ONLY the configured names — the target
+    /// custom name is added, the other three custom names are removed, and no
+    /// canonical default appears anywhere.
+    #[test]
+    fn gh_set_status_label_argv_uses_configured_names() {
+        let map = GithubStateMap {
+            todo: "triage".into(),
+            in_progress: "wip".into(),
+            ready_to_test: "qa-ready".into(),
+            done: "shipped".into(),
+        };
+        let argv = gh_set_status_label_argv("7", "o/r", TrackerPhase::InProgress, &map);
+        assert_eq!(
+            argv,
+            vec![
+                "issue",
+                "edit",
+                "7",
+                "--repo",
+                "o/r",
+                "--add-label",
+                "wip",
+                "--remove-label",
+                "triage",
+                "--remove-label",
+                "qa-ready",
+                "--remove-label",
+                "shipped",
+            ]
+        );
+        for (_, canonical, _) in GITHUB_STATUS_LABELS.iter() {
+            assert!(
+                !argv.contains(canonical),
+                "canonical default {canonical} leaked into a custom-map argv"
+            );
+        }
+    }
+
+    /// Spec 005 F5: the remove-set filters by NAME. Two phases mapped to one
+    /// name: when that name is the target it is added and NEVER removed; when
+    /// it is not the target it is removed exactly once (deduped).
+    #[test]
+    fn gh_set_status_label_argv_never_removes_the_target_on_name_collision() {
+        let map = GithubStateMap {
+            todo: "status/todo".into(),
+            in_progress: "active".into(),
+            ready_to_test: "active".into(),
+            done: "status/done".into(),
+        };
+        for phase in [TrackerPhase::InProgress, TrackerPhase::ReadyToTest] {
+            let argv = gh_set_status_label_argv("42", "o/r", phase, &map);
+            assert_eq!(&argv[5..7], &["--add-label", "active"]);
+            let removed: Vec<&str> = argv[7..]
+                .chunks(2)
+                .map(|pair| {
+                    assert_eq!(pair[0], "--remove-label");
+                    pair[1]
+                })
+                .collect();
+            assert_eq!(
+                removed,
+                ["status/todo", "status/done"],
+                "the shared target must be absent from its own remove list"
+            );
+        }
+        // Shared name NOT the target → removed once, not twice.
+        let argv = gh_set_status_label_argv("42", "o/r", TrackerPhase::Done, &map);
+        let removed: Vec<&str> = argv[7..].chunks(2).map(|pair| pair[1]).collect();
+        assert_eq!(removed, ["status/todo", "active"]);
+    }
+
+    /// Spec 005 F5 (§6 item 6): a fake `gh` logs the full custom-map
+    /// transition — 4 ensure-creates carrying the CUSTOM names with the
+    /// canonical PHASE colors, then one edit that adds/removes only configured
+    /// names. Explicit `program` + explicit `map` → no env mutation, no lock.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_with_custom_map_flips_configured_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+        let map = GithubStateMap {
+            todo: "triage".into(),
+            in_progress: "wip".into(),
+            ready_to_test: "qa-ready".into(),
+            done: "shipped".into(),
+        };
+
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::ReadyToTest,
+            &map,
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 5, "4 ensure-creates + 1 edit, got: {calls}");
+        assert_eq!(
+            lines[..4],
+            [
+                "label create triage --repo owner/repo --color ededed --force",
+                "label create wip --repo owner/repo --color 1d76db --force",
+                "label create qa-ready --repo owner/repo --color fbca04 --force",
+                "label create shipped --repo owner/repo --color 0e8a16 --force",
+            ]
+        );
+        assert_eq!(
+            lines[4],
+            "issue edit 42 --repo owner/repo --add-label qa-ready \
+             --remove-label triage --remove-label wip --remove-label shipped"
+        );
+        for (_, canonical, _) in GITHUB_STATUS_LABELS.iter() {
+            assert!(
+                !calls.contains(canonical),
+                "canonical default {canonical} leaked into a custom-map transition"
+            );
+        }
+    }
+
+    /// Spec 005 F5: the ensure-loop dedupes by name — a shared name is
+    /// ensure-created once, with the FIRST phase's canonical color winning.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_ensures_duplicate_names_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+        let map = GithubStateMap {
+            todo: "status/todo".into(),
+            in_progress: "active".into(),
+            ready_to_test: "active".into(),
+            done: "status/done".into(),
+        };
+
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::Done,
+            &map,
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 4, "3 deduped ensure-creates + 1 edit: {calls}");
+        assert_eq!(
+            lines[..3],
+            [
+                "label create status/todo --repo owner/repo --color ededed --force",
+                // InProgress comes first in canonical order, so its color wins.
+                "label create active --repo owner/repo --color 1d76db --force",
+                "label create status/done --repo owner/repo --color 0e8a16 --force",
+            ]
+        );
+    }
+
+    /// Spec 005 F4: the wire-format phase parser accepts exactly the four
+    /// pipeline phases and rejects everything else (case-sensitive, no aliases).
+    #[test]
+    fn parse_tracker_phase_accepts_the_four_and_rejects_junk() {
+        assert_eq!(parse_tracker_phase("todo"), Some(TrackerPhase::Todo));
+        assert_eq!(
+            parse_tracker_phase("in_progress"),
+            Some(TrackerPhase::InProgress)
+        );
+        assert_eq!(
+            parse_tracker_phase("ready_to_test"),
+            Some(TrackerPhase::ReadyToTest)
+        );
+        assert_eq!(parse_tracker_phase("done"), Some(TrackerPhase::Done));
+        for junk in ["", "Todo", "DONE", "in-progress", "ready to test", "qa"] {
+            assert_eq!(parse_tracker_phase(junk), None, "{junk:?} must be rejected");
         }
     }
 
@@ -912,6 +1420,7 @@ mod tests {
             "owner/repo",
             "42",
             TrackerPhase::InProgress,
+            &GithubStateMap::default(),
         )
         .await;
         assert_eq!(res, TransitionResult::Applied);
@@ -948,6 +1457,7 @@ mod tests {
             "owner/repo",
             "42",
             TrackerPhase::Done,
+            &GithubStateMap::default(),
         )
         .await;
         // Ensure-create failures are non-fatal; the failed edit surfaces its

@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 004-workspace-issue-loop
-- **phase:** idle        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (004 **RELEASED v0.49.0** 2026-07-02: PR #213 merged, issue #212 closed, develop=staging=main=`efd4a003`, tag pushed, release CI in flight. 002 + 003 rode along in the release. Installed-app spot-check pending: chip, toggle, live label flip)
+- **current_spec:** 005-one-shot-issue-loop
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 **RELEASED v0.51.0** 2026-07-02, Mateo-authorized: issue #224 CLOSED via Closes-in-commit-message on main, PR #227 MERGED, develop=staging=main=`c970d8db` (all FF; carries v0.50.0 Project Hub which had been sitting unpromoted), tag `v0.51.0` pushed, release CI in flight. Follow-ups: #225 Linear snake_case state-map bug, #226 workdir canonicalization + stale QA docs. Staging browser-QA items (composer toggle, Settings cards, live label flips, agentum_browser verdict run) remain an installed-app spot-check)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,54 +64,71 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-01 — 004 architect blueprint COMPLETE (`architecture.md`). Corrections
-  C1–C5 (Tasks-page create is a local stub → new `POST /api/github/issues`; UI
-  shim strips linked fields → widen 2 TS layers; `linkedPR` wire fix + registry
-  NO-alias rule (duplicate-field → `read_worktrees` wipes to `[]`); remove only
-  the 3 canonical labels; direct local gh, no Host). Confirmed `board_sync`
-  cannot strip labels (PATCH = `{title,body,state}` only). Merged develop
-  (+35 commits, incl. 003's `task_sink.rs` labels support) → line cites drift,
-  re-locate before editing. Phase → developer.
-- 2026-07-01 — 004 Developer slice 2: **F3+F4 GREEN**; developer phase
-  COMPLETE. F3: `POST /api/github/issues` (blank-title 400, 422
-  `no_github_repo`, TaskSink create, id→i64) + composer affordance
-  (Card-rendered, only when unlinked + local git) → chip pre-worktree. F4:
-  `fetch_github_issue` refactor (+url, no wire change), `spec_md_from_issue`
-  (control-strip, 64KiB cap, fallback AC via real derive), traversal-proof
-  `issue_spec_id`, `POST /api/harness/spec-from-issue` (never-overwrite),
-  `scaffoldSpec` toggle OFF-default in both submit paths (non-fatal failure),
-  `plan_from_spec_with_tracker` stamps provider+url (delegation pinned).
-  Gate: 494/0 tests, fmt+check clean, vite ✓ 1m04s. 5 deviations accepted
-  (Card-not-Modal markup; documented allow(dead_code) on FetchedIssue.slug;
-  tests in harness.rs surface_tests per convention; typed conditional;
-  pure-gate title test). Phase → tester.
-- 2026-07-01 — 004 Tester: **7/7 ACs PASS** (`verification.md`). Independently
-  re-ran the full suite (494/0/5) + 4 scoped suites + vite (✓ 1m11s) + the
-  auth.rs no-`is_public` diff (empty). Exactness confirmed by reading code:
-  label table verbatim, remove-set can never name `status/qa*`, NO close path
-  in the arm (D1), all 6 failure paths → `Ok(Skipped)` (no `?`/`Err`).
-  Commit-attributed the drive.rs range diff: spec-004 = only the
-  `transition_tracker` widening (second hunk = pre-spec `05abe6f1`). 4 Info
-  findings (GHES URLs skip silently; no handler-level 400 tests; no dedicated
-  30s-timeout test; the attribution note) — none blocking. GUI behaviors
-  (chip, toggle, live label flip) = qa.sh/staging gate. **ADVANCE → reviewer**
-  (handoff `04-tester-to-reviewer.md`).
-- 2026-07-01 — 004 Reviewer **SIGN-OFF → SHIP-READY** (`review.md`). All 6
-  focus items pass; invariants hold; "test suite unusually communicative;
-  comment discipline exemplary". 0 Blockers. Follow-ups (non-blocking):
-  narrow the `as unknown as GitHubWorkItem` cast (useComposerState.ts:1448);
-  FILE A GHES ISSUE (transitions skip on non-github.com URLs — by design,
-  name it); nits: debug-log the initial-Todo skip, scaffoldSpec reset-on-unlink.
-  spec.md Status → Done. Phase → done. **Release = Mateo** (/ship: issue + PR
-  fix-wiki→develop w/ Closes #N, staging browser QA — chip, toggle, live
-  label flip ending OPEN with exactly status/done — then promote + tag).
-- 2026-07-01 — 004 Developer slice 1: **F1+F2 GREEN** (486/0 lib tests, fmt +
-  check clean). F1: `GITHUB_STATUS_LABELS` + pure gh argv builders +
-  `github_slug_and_number_from_issue_url` + `run_gh` (30s timeout) +
-  `github_transition_with` in task_sink; seam widened with `tracker_url`
-  (both callers, one logical line each); every failure → `Ok(Skipped)`, never
-  `Err`. F2: `CreateBody`+3 (`linkedPR` alias), registry persistence,
-  detected-scan emits `linkedPR`, `canonical_meta_key`, NO registry-struct
-  alias; 2 TS layers forward the fields. Vite build deferred to the F3/F4
-  slice. Deviations logged in tasks.md (rustfmt reflow; gh empty-stderr
-  message; URL parser also strips #fragment). RELEASE stays human-gated.
+- 2026-07-02 | Reviewer | **005 SIGN-OFF → SHIP-READY** (`review.md`). All 6
+  focus items pass (C5 handler read straight-line incl. all three claim arms;
+  never-Err verified in github arm/Todo branch/report_status_text; all four
+  regression pins are REAL literals; flat-Tauri+camelCase verified end-to-end;
+  UI matches composer/pane patterns). 0 Blockers. Should-fix follow-ups:
+  (1) stale old-QA docs cluster (types.rs/helpers.rs/drive.rs comments) —
+  docs-only pass at ship or fast-follow; (2) file the pre-existing Linear
+  snake_case state-map bug (IntegrationsPane.tsx:83-89 vs linear.rs:482-486);
+  (3) NEW: find_by_workdir exact-PathBuf equality + no canonicalization →
+  symlink-aliased workdir spellings can double-register (pre-existing class,
+  named issue). 5 nits (let _ = list shrug; ""-specId; HarnessCompleted noise;
+  toggle survives unlink; lock held across gh fetch). "The four regression
+  pins are honest literals — the net actually catches drift." spec.md Status
+  → Done. Phase → done. **RELEASE = Mateo** (issue + PR w/ Closes in commit
+  MESSAGE, staging browser QA, promote + tag).
+- 2026-07-02 | Tester | **005 verdict PASS 10/10 ACs** (`verification.md`).
+  Independently re-ran everything: 518/0/5 lib (124.4s), scoped
+  task_sink 26 / harness 80 / mcp 25, vite 1m54s, vitest 10/0, desktop check
+  green, fmt clean. Read assertion BODIES, not names; all 14 developer
+  deviations audited ACCURATE. Cross-cutting: auth.rs + worktrees.rs diffs
+  EMPTY, drive.rs = blueprint hunks only, mcp.rs insert-only, exactly ONE
+  env-mutating test (locked). 5 Info findings, none blocking: (1) pre-existing
+  Linear snake_case state-map save bug CONFIRMED (file issue at ship);
+  (2) stale qa docs in types.rs + scaffold template; (3) no handler-level
+  start_work e2e test (seam-pinned, 004-accepted class); (4) alreadyRunning
+  specId can be "" for pre-F2 runs; (5) HarnessCompleted{success:false} noise
+  on stale-idle re-registration. GUI + live label flips = deferred to
+  qa.sh/staging by contract. Handoff `04-tester-to-reviewer.md`. Phase →
+  reviewer.
+- 2026-07-02 | Developer | **005 slice 3: F5 GREEN — developer phase
+  COMPLETE** (`3b0a00d0`; 518/0 lib, cargo check -p agentum-desktop green,
+  vite green). GithubStateMap (defaults→github.json→env via pure
+  `apply_layers`; label_for/labels; phase-keyed `github_status_color`);
+  argv builders widened (name-filtered remove-set, dedup, byte-identical
+  default pin honored pre/post); flat-arg `github_get/set_state_map` Tauri
+  commands + unconditional Settings editor. Todo-at-plan test hardened with
+  `AGENTUM_GITHUB_CONFIG`→absent-file pin (github arm now reads from_env).
+  🐛 PRE-EXISTING found, not fixed: Linear editor sends snake_case invoke
+  keys that never bind → every Linear save silently clears
+  in_progress/ready_to_test overrides — file an issue at ship time. Handoff
+  `03-developer-to-tester.md`. Phase → tester.
+- 2026-07-02 | Developer | **005 slice 2: F1 GREEN** (`ae8bf467`; 512/0 lib,
+  vite 1m03s, vitest 10/0). POST /api/harness/start-work + shared
+  `ensure_spec_and_plan` (Todo-at-plan inherited by 004 route, test-pinned
+  never-overwrite 400) + `start_work_lock`/`find_by_workdir` +
+  `update_backlog_knobs`; composer toggle + three-path skip
+  (`planCreatedWorkspaceOpen`) + TaskPage row action. drive_inner + run-route
+  spawn: ZERO diffs (orchestrator-verified drive.rs untouched). 8 deviations
+  in tasks.md (notable: no release_driver needed — nothing fallible after the
+  fresh claim; deleted-run claim Err falls through to fresh registration;
+  fake-gh Todo test under TEST_ENV_LOCK asserts exactly one
+  `--add-label status/todo` edit). NOT GUI-verified (toggle/dropdown/toasts =
+  unit+build pinned; browser QA = qa.sh/staging). Phase stays developer →
+  slice 3 = F5 (GithubStateMap + github.json + Settings card).
+- 2026-07-02 | Architect | **005 blueprint COMPLETE (`architecture.md`), gate
+  PASS 5/5.** Route = `POST /api/harness/start-work` (harness namespace, not
+  /api/workflows — YAGNI); shared `ensure_spec_and_plan` core (converge flag)
+  serves start-work AND the 004 route, Todo-at-plan lives there (route layer
+  has &Store); post-plan `update_backlog_knobs` seam; C1 pre-registration
+  failures = HTTP toast (no nil-id events); C2 NO new InProgress call (drive
+  already fires it at spawn); C3 QA knob = store setting
+  `harness.qa.agent_browser.enabled` + GET/PUT /api/harness/settings (NOT a
+  json file); C4 spec_id stamp in `plan_from_spec_inner` (MCP plan tool widens
+  too, deliberate); C5 engine `start_work_lock` + already-running check before
+  any fs write, stale-idle runs stopped+re-registered. resolve_qa_mode becomes
+  pure (capability bit computed at caller). F5 colors key off PHASE not name;
+  remove-set filtered by name (collision-safe); old-map labels = foreign,
+  never touched. Orchestrator spot-verified seams. Phase → developer.

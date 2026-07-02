@@ -437,13 +437,24 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'wiki'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'wiki'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'wiki'
-  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'wiki'
-  previousViewBeforeWiki: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness'
+  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
+  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
+  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
+  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'wiki' | 'project'
+  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'wiki' | 'project'
+  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'wiki' | 'project'
+  previousViewBeforeWiki: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
+  previousViewBeforeProject: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki'
+  /** Which tab the Project Hub shows (ADE redesign: a project opens as a hub
+   *  with per-project Chat / Wiki / Tasks / Sessions). Survives tab switches
+   *  within a session; the repo itself is `activeRepoId`. */
+  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'sessions'
+  setProjectHubTab: (tab: UISlice['projectHubTab']) => void
+  /** Open the per-project hub for a repo (sidebar project click). Sets the
+   *  active repo, seeds the embedded Tasks tab's repo preselection, and
+   *  switches the main view. */
+  openProjectHub: (repoId: string, tab?: UISlice['projectHubTab']) => void
+  closeProjectHub: () => void
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
     preselectedRepoId?: string
@@ -859,6 +870,27 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeSkills: 'terminal',
   previousViewBeforeHarness: 'terminal',
   previousViewBeforeWiki: 'terminal',
+  previousViewBeforeProject: 'terminal',
+  projectHubTab: 'chat',
+  setProjectHubTab: (tab) => set({ projectHubTab: tab }),
+  openProjectHub: (repoId, tab) => {
+    // Why: the hub's embedded Tasks tab is the full TaskPage seeded from
+    // taskPageData at mount — preselect the hub's repo here so it scopes
+    // correctly without going through openTaskPage (which would also flip
+    // activeView to 'tasks' and record Board history).
+    get().setActiveRepo(repoId)
+    set((state) => ({
+      activeView: 'project',
+      projectHubTab: tab ?? state.projectHubTab,
+      taskPageData: { preselectedRepoId: repoId },
+      previousViewBeforeProject:
+        state.activeView === 'project' ? state.previousViewBeforeProject : state.activeView
+    }))
+  },
+  closeProjectHub: () =>
+    set((state) => ({
+      activeView: state.previousViewBeforeProject
+    })),
   setActiveView: (view) => set({ activeView: view }),
   taskPageData: {},
   taskResumeState: undefined,

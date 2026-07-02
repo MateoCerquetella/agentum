@@ -551,6 +551,21 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             },
         },
         {
+            "name": "agentum_report_status",
+            "description": "Report a work item's pipeline phase to its tracker: GitHub = flip the status/* label, Linear = move the workflow state, board = move the card column. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, ready_to_test, done).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "provider": { "type": "string", "enum": ["github", "linear", "board"] },
+                    "id": { "type": "string", "description": "The tracker's stable handle: board card key (AG-12), Linear identifier (ENG-42), or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
+                    "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear/board." },
+                    "phase": { "type": "string", "enum": ["todo", "in_progress", "ready_to_test", "done"] }
+                },
+                "required": ["provider", "phase"],
+                "additionalProperties": false,
+            },
+        },
+        {
             "name": "agentum_harness_log_decision",
             "description": "Append one entry to the project's append-only decision log \
                 (`.agentum-harness/decisions.md`, spec 010e) — the durable 'why', incl. \
@@ -635,6 +650,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_plan" => tool_harness_plan(&args).await,
         "agentum_harness_check" => tool_harness_check(&args).await,
         "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
+        "agentum_report_status" => tool_report_status(state, &args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -1117,6 +1133,82 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
     Ok(crate::harness::read_decisions(&workdir).await)
 }
 
+/// Parse + validate `agentum_report_status` inputs (spec 005 F4). Pure →
+/// unit-testable without AppState. Errors here are CALLER bugs (missing/unknown
+/// args) and DO surface as `isError: true` — the best-effort contract covers
+/// tracker failures, not typos. `id` is required, EXCEPT `provider == "github"`
+/// with a parseable issue `url` (then id := the URL's number).
+fn parse_report_status_args(
+    args: &Value,
+) -> anyhow::Result<(
+    String,
+    String,
+    Option<String>,
+    crate::task_sink::TrackerPhase,
+)> {
+    let provider = args
+        .get("provider")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `provider`"))?
+        .to_string();
+    let phase_str = args
+        .get("phase")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `phase`"))?;
+    let phase = crate::task_sink::parse_tracker_phase(phase_str).ok_or_else(|| {
+        anyhow::anyhow!("unknown `phase` {phase_str:?} (todo|in_progress|ready_to_test|done)")
+    })?;
+    let url = args.get("url").and_then(Value::as_str).map(str::to_string);
+    let id = match args.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None if provider == "github" => {
+            let url = url
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing `id` (or a github issue `url`)"))?;
+            crate::task_sink::github_slug_and_number_from_issue_url(url)
+                .map(|(_slug, number)| number)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("missing `id` and `url` is not a GitHub issue URL: {url}")
+                })?
+        }
+        None => anyhow::bail!("missing `id`"),
+    };
+    Ok((provider, id, url, phase))
+}
+
+/// Map the transition seam's outcome to the tool's text. Pure. NEVER an `Err`
+/// for a tracker failure (AC 9 / the best-effort invariant): transport errors
+/// from the linear/board arms come back as a "skipped" note the agent can read.
+fn report_status_text(
+    outcome: anyhow::Result<crate::task_sink::TransitionResult>,
+    provider: &str,
+    phase: crate::task_sink::TrackerPhase,
+) -> String {
+    match outcome {
+        Ok(crate::task_sink::TransitionResult::Applied) => {
+            format!("applied: {provider} → {phase:?}")
+        }
+        Ok(crate::task_sink::TransitionResult::Skipped(w)) => format!("skipped: {w}"),
+        Err(e) => format!("skipped (tracker error, non-fatal): {e:#}"),
+    }
+}
+
+/// Report a work item's pipeline phase to its tracker — a thin arm over
+/// [`crate::task_sink::apply_tracker_transition`] (spec 005 F4), the same seam
+/// the harness's own transitions use. Never reimplements label/state mechanics.
+async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let (provider, id, url, phase) = parse_report_status_args(args)?;
+    let outcome = crate::task_sink::apply_tracker_transition(
+        &state.store,
+        &provider,
+        &id,
+        url.as_deref(),
+        phase,
+    )
+    .await;
+    Ok(report_status_text(outcome, &provider, phase))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1267,5 +1359,192 @@ mod tests {
         }
         assert!(off.contains(&"agentum_list_worktrees".to_string()));
         assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());
+    }
+
+    // --- spec 005 F4: agentum_report_status ---
+
+    #[test]
+    fn report_status_is_in_the_catalog() {
+        // A status verb, not the mailbox/DAG surface — present with the gate on.
+        assert!(tool_names(true).contains(&"agentum_report_status".to_string()));
+    }
+
+    #[test]
+    fn report_status_survives_orchestration_gate_off() {
+        // Deliberately NOT in ORCHESTRATION_TOOLS: advertised (and callable)
+        // regardless of that gate, like agentum_list_sessions.
+        assert!(!is_orchestration_tool("agentum_report_status"));
+        assert!(tool_names(false).contains(&"agentum_report_status".to_string()));
+    }
+
+    #[test]
+    fn report_status_args_require_id_except_github_url() {
+        use crate::task_sink::TrackerPhase;
+
+        // id-less linear → Err (caller bug).
+        let e = parse_report_status_args(&json!({ "provider": "linear", "phase": "done" }));
+        assert!(e.is_err(), "linear without id must be a caller error");
+
+        // id-less github + issue URL → Ok with the derived number.
+        let (provider, id, url, phase) = parse_report_status_args(&json!({
+            "provider": "github",
+            "url": "https://github.com/owner/repo/issues/42",
+            "phase": "in_progress",
+        }))
+        .unwrap();
+        assert_eq!(provider, "github");
+        assert_eq!(id, "42");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://github.com/owner/repo/issues/42")
+        );
+        assert_eq!(phase, TrackerPhase::InProgress);
+
+        // id-less github + garbage URL → Err.
+        assert!(
+            parse_report_status_args(&json!({
+                "provider": "github",
+                "url": "https://github.com/o/r/pull/42",
+                "phase": "done",
+            }))
+            .is_err(),
+            "a PR link is not an issue URL"
+        );
+        // id-less github with NO url → Err.
+        assert!(
+            parse_report_status_args(&json!({ "provider": "github", "phase": "done" })).is_err()
+        );
+
+        // An explicit id always wins (no URL needed for linear/board).
+        let (_, id, _, _) = parse_report_status_args(&json!({
+            "provider": "board", "id": "AG-12", "phase": "todo",
+        }))
+        .unwrap();
+        assert_eq!(id, "AG-12");
+
+        // A junk phase is a caller error, never silently coerced.
+        assert!(
+            parse_report_status_args(&json!({
+                "provider": "board", "id": "AG-12", "phase": "shipped",
+            }))
+            .is_err()
+        );
+    }
+
+    /// The AC 9 pin: every outcome shape — including a seam `Err` — maps to a
+    /// normal text result. A tracker hiccup is a readable "skipped" note, never
+    /// a tool error.
+    #[test]
+    fn report_status_text_never_errs_on_tracker_failure() {
+        use crate::task_sink::{TrackerPhase, TransitionResult};
+
+        assert_eq!(
+            report_status_text(Ok(TransitionResult::Applied), "github", TrackerPhase::Done),
+            "applied: github → Done"
+        );
+        assert_eq!(
+            report_status_text(
+                Ok(TransitionResult::Skipped("no board card with key X".into())),
+                "board",
+                TrackerPhase::Todo,
+            ),
+            "skipped: no board card with key X"
+        );
+        let text = report_status_text(
+            Err(anyhow::anyhow!("network down")),
+            "linear",
+            TrackerPhase::ReadyToTest,
+        );
+        assert!(
+            text.starts_with("skipped (tracker error, non-fatal):"),
+            "got: {text}"
+        );
+        assert!(text.contains("network down"));
+    }
+
+    /// Minimal AppState over a tempdir store (the board_sync `fresh_state`
+    /// pattern) so the wire-level delegation test drives the REAL tool fn.
+    async fn fresh_state() -> AppState {
+        use std::sync::Arc;
+        use tokio::sync::broadcast;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("test.sqlite");
+        std::mem::forget(dir); // keep the tempdir alive for the test
+        let store = agentum_store::Store::open(&p).await.unwrap();
+        let (bus, _rx) = broadcast::channel(16);
+        AppState {
+            store: Arc::new(store),
+            bus,
+            started_at: std::time::Instant::now(),
+            version: "test",
+            auth_limiter: Arc::new(crate::ratelimit::RateLimiter::new(
+                8,
+                std::time::Duration::from_secs(60),
+            )),
+            cert_fingerprint: Arc::new(String::new()),
+            transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
+            stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            hostname: "test".to_string(),
+            no_auth: true,
+            clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            clipboard_request_bus: broadcast::channel(64).0,
+            hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            mcp_token: Arc::new(String::from("test-mcp-token")),
+            api_base_url: None,
+            desktop_bridge: None,
+            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+            events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Wire-level delegation (board arm, no subprocess): the tool moves a real
+    /// board card's column through `apply_tracker_transition` — proof the arm
+    /// delegates to the seam rather than reimplementing tracker mechanics.
+    #[tokio::test]
+    async fn report_status_moves_a_board_card() {
+        let state = fresh_state().await;
+        let card = state
+            .store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "Add OAuth login".into(),
+                body: None,
+                lbl: Some("feat".into()),
+                status: Some("todo".into()),
+                workdir: None,
+                parent_goal_id: None,
+                tool: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+
+        let text = tool_report_status(
+            &state,
+            &json!({ "provider": "board", "id": card.key, "phase": "in_progress" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(text, "applied: board → InProgress");
+
+        let moved = state
+            .store
+            .list_board_items()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.key == card.key)
+            .unwrap();
+        assert_eq!(moved.status, "doing");
+
+        // Unknown provider flows to the seam's Skipped — visible, non-fatal.
+        let text = tool_report_status(
+            &state,
+            &json!({ "provider": "jira", "id": "X-1", "phase": "done" }),
+        )
+        .await
+        .unwrap();
+        assert!(text.starts_with("skipped:"), "got: {text}");
     }
 }

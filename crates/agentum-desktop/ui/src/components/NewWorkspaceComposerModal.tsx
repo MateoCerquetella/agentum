@@ -23,6 +23,9 @@ type ComposerModalData = {
   linkedWorkItem?: LinkedWorkItemSummary | null
   initialBaseBranch?: string
   initialWorkspaceStatus?: WorkspaceStatus
+  /** Spec 005 F1 (AC 3): open with the "Start gated run" toggle armed — set by
+   *  the Tasks page issue-row action. */
+  startGatedRun?: boolean
   /** Telemetry surface that opened the composer. Set by each
    *  `openModal('new-workspace-composer', ...)` site so
    *  `workspace_created.source` carries the right value. Falls back to
@@ -117,6 +120,7 @@ function QuickTabBody({
     initialLinkedWorkItem: modalData.linkedWorkItem ?? null,
     initialRepoId: modalData.initialRepoId,
     initialWorkspaceStatus: modalData.initialWorkspaceStatus,
+    ...(modalData.startGatedRun ? { initialStartGatedRun: true } : {}),
     ...(modalData.initialBaseBranch ? { initialBaseBranch: modalData.initialBaseBranch } : {}),
     persistDraft: false,
     onCreated: onClose,
