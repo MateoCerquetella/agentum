@@ -303,6 +303,34 @@ export function getFileExtension(filePath: string): string {
   return getExtension(getFilename(filePath))
 }
 
+// Broad colour categories for the Lucide fallback glyphs. Only the visually
+// distinct file kinds get a colour so the tree gains tasteful pops (media, data
+// stores, archives, secrets) while prose/code/config stay calm. Keys the
+// per-theme colour in main.css (`.file-type-icon[data-fcategory='…']`), matching
+// how the extension badges are coloured.
+export type LucideFileIconCategory = 'media' | 'archive' | 'data' | 'secure'
+
+const CATEGORY_BY_ICON = new Map<LucideIcon, LucideFileIconCategory>([
+  [FileImage, 'media'],
+  [FileVideo, 'media'],
+  [FileMusic, 'media'],
+  [FileAxis3D, 'media'],
+  [FileArchive, 'archive'],
+  [FileBox, 'archive'],
+  [Database, 'data'],
+  [FileJson, 'data'],
+  [FileBraces, 'data'],
+  [FileSpreadsheet, 'data'],
+  [FileChartColumn, 'data'],
+  [FileKey, 'secure'],
+  [FileLock, 'secure']
+])
+
+/** Colour category for a resolved Lucide file icon, or null to keep it calm. */
+export function getLucideFileIconCategory(icon: LucideIcon): LucideFileIconCategory | null {
+  return CATEGORY_BY_ICON.get(icon) ?? null
+}
+
 export function getLucideFileIcon(filePath: string): LucideIcon {
   const filename = getFilename(filePath)
   const lowerName = filename.toLowerCase()

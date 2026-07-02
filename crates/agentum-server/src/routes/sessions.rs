@@ -1193,6 +1193,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
 
@@ -1338,6 +1339,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
 

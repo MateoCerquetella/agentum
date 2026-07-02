@@ -915,10 +915,15 @@ pub(crate) async fn inject_prompt(
         .tmux_target
         .clone()
         .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
-    // Step 1: type/paste the prompt body, no Enter.
-    crate::host_runtime::send_keys(&host, &target, prompt, false)
+    // Step 1: paste the prompt body, no Enter. Deliver as chunked raw bytes
+    // (`send-keys -H`, the same path the interactive terminal uses) rather than
+    // one `tmux send-keys "<text>"`: a large prompt — the AutoWiki generator
+    // inlines a ~22k-token repo-context starter map — overflows tmux's command
+    // length and fails the whole run with "command too long". `send_bytes`
+    // chunks under the argv limit, so prompt size stops being a cliff.
+    crate::host_runtime::send_bytes(&host, &target, prompt.as_bytes())
         .await
-        .map_err(|e| anyhow::anyhow!("send_keys failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("send prompt failed: {e}"))?;
     // Step 2: let the paste settle, then submit with a bare Enter.
     tokio::time::sleep(SUBMIT_DELAY).await;
     crate::host_runtime::send_keys(&host, &target, "", true)

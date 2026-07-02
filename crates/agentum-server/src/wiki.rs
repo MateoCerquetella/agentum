@@ -56,7 +56,7 @@ pub(crate) fn wiki_store_dir(key: &str) -> anyhow::Result<PathBuf> {
 /// with no `origin` yet). Reuses `forge::parse_remote_url` so remote normalization
 /// has a single source of truth.
 pub(crate) fn wiki_key(remote_url: Option<&str>, fallback_path: &str) -> String {
-    match remote_url.and_then(|u| crate::routes::forge::parse_remote_url(u)) {
+    match remote_url.and_then(crate::routes::forge::parse_remote_url) {
         Some((host, project)) => format!("git__{}", slugify_key(&format!("{host}/{project}"))),
         None => format!("path__{}", short_hash(fallback_path)),
     }
@@ -143,7 +143,11 @@ pub(crate) fn parse_wiki_index(json: &str) -> anyhow::Result<WikiIndex> {
 /// not the mechanism — the agent reads the repo from its workdir for anything the
 /// seed truncated. Built with `push_str` (not `format!`) so the JSON example's
 /// braces need no escaping.
-pub(crate) fn build_wiki_prompt(workdir: &str, out_dir: &str, repo_context: Option<&str>) -> String {
+pub(crate) fn build_wiki_prompt(
+    workdir: &str,
+    out_dir: &str,
+    repo_context: Option<&str>,
+) -> String {
     let mut p = String::new();
     p.push_str(
         "You are the AutoWiki generator in the Agentum Harness. Produce a structured, \

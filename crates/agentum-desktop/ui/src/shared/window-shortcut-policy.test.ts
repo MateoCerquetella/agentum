@@ -37,7 +37,7 @@ describe('resolveWindowShortcutAction', () => {
 
     expect(
       resolveWindowShortcutAction(
-        { code: 'KeyE', key: 'e', meta: false, control: true, alt: false, shift: false },
+        { code: 'KeyO', key: 'o', meta: false, control: true, alt: false, shift: false },
         'linux'
       )
     ).toEqual({ type: 'dictationKeyDown' })
@@ -198,14 +198,14 @@ describe('resolveWindowShortcutAction', () => {
   it('resolves dictation using the layout-aware key value', () => {
     expect(
       resolveWindowShortcutAction(
-        { code: 'KeyD', key: 'e', meta: true, control: false, alt: false, shift: false },
+        { code: 'KeyD', key: 'o', meta: true, control: false, alt: false, shift: false },
         'darwin'
       )
     ).toEqual({ type: 'dictationKeyDown' })
 
     expect(
       resolveWindowShortcutAction(
-        { code: 'KeyE', key: 'd', meta: true, control: false, alt: false, shift: false },
+        { code: 'KeyO', key: 'd', meta: true, control: false, alt: false, shift: false },
         'darwin'
       )
     ).toBeNull()
@@ -214,7 +214,7 @@ describe('resolveWindowShortcutAction', () => {
   it('applies custom keybinding overrides to dictation and main-process shortcuts', () => {
     expect(
       resolveWindowShortcutAction(
-        { code: 'KeyE', key: 'e', meta: false, control: true, alt: false, shift: false },
+        { code: 'KeyO', key: 'o', meta: false, control: true, alt: false, shift: false },
         'linux',
         { 'voice.dictation': [] }
       )

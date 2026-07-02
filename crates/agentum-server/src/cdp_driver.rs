@@ -576,7 +576,11 @@ fn scroll_deltas(args: &Value) -> (f64, f64, &'static str) {
         .and_then(Value::as_f64)
         .filter(|v| v.is_finite() && *v > 0.0)
         .unwrap_or(600.0);
-    match args.get("direction").and_then(Value::as_str).unwrap_or("down") {
+    match args
+        .get("direction")
+        .and_then(Value::as_str)
+        .unwrap_or("down")
+    {
         "up" => (0.0, -amount, "up"),
         "left" => (-amount, 0.0, "left"),
         "right" => (amount, 0.0, "right"),
@@ -973,13 +977,31 @@ mod tests {
     #[test]
     fn scroll_deltas_maps_direction_to_wheel() {
         // down/up move Y; right/left move X; the third field echoes the direction.
-        assert_eq!(scroll_deltas(&json!({ "direction": "down" })), (0.0, 600.0, "down"));
-        assert_eq!(scroll_deltas(&json!({ "direction": "up" })), (0.0, -600.0, "up"));
-        assert_eq!(scroll_deltas(&json!({ "direction": "right" })), (600.0, 0.0, "right"));
-        assert_eq!(scroll_deltas(&json!({ "direction": "left" })), (-600.0, 0.0, "left"));
+        assert_eq!(
+            scroll_deltas(&json!({ "direction": "down" })),
+            (0.0, 600.0, "down")
+        );
+        assert_eq!(
+            scroll_deltas(&json!({ "direction": "up" })),
+            (0.0, -600.0, "up")
+        );
+        assert_eq!(
+            scroll_deltas(&json!({ "direction": "right" })),
+            (600.0, 0.0, "right")
+        );
+        assert_eq!(
+            scroll_deltas(&json!({ "direction": "left" })),
+            (-600.0, 0.0, "left")
+        );
         // explicit amount overrides the default; absent/garbage direction → down.
-        assert_eq!(scroll_deltas(&json!({ "amount": 120 })), (0.0, 120.0, "down"));
-        assert_eq!(scroll_deltas(&json!({ "direction": "sideways" })), (0.0, 600.0, "down"));
+        assert_eq!(
+            scroll_deltas(&json!({ "amount": 120 })),
+            (0.0, 120.0, "down")
+        );
+        assert_eq!(
+            scroll_deltas(&json!({ "direction": "sideways" })),
+            (0.0, 600.0, "down")
+        );
         // non-positive / non-finite amount falls back to the default.
         assert_eq!(
             scroll_deltas(&json!({ "direction": "up", "amount": -5 })),

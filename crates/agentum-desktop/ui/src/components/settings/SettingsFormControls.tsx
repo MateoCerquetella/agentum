@@ -7,7 +7,11 @@ import { ScrollArea } from '../ui/scroll-area'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Check, ChevronsUpDown, CircleX } from 'lucide-react'
-import { BUILTIN_TERMINAL_THEME_NAMES, normalizeColor } from '@/lib/terminal-theme'
+import {
+  BUILTIN_TERMINAL_THEME_NAMES,
+  getTerminalThemePreview,
+  normalizeColor
+} from '@/lib/terminal-theme'
 import { MAX_THEME_RESULTS } from './SettingsConstants'
 import { cn } from '@/lib/utils'
 
@@ -272,6 +276,36 @@ type FontAutocompleteProps = {
   onPreviewFontFamily?: (font: string | null) => void
 }
 
+// A small preview chip for a terminal theme: its background with a strip of
+// representative ANSI colors, so the picker reads as a gallery rather than a
+// bare list of names.
+function TerminalThemeSwatch({ theme }: { theme: string }): React.JSX.Element {
+  const preview = getTerminalThemePreview(theme)
+  const accents = [
+    preview?.red ?? '#f00',
+    preview?.green ?? '#0f0',
+    preview?.yellow ?? '#ff0',
+    preview?.blue ?? '#00f'
+  ]
+  return (
+    <span
+      aria-hidden
+      className="flex size-5 shrink-0 flex-col overflow-hidden rounded-[4px] border border-border/60"
+      style={{ backgroundColor: preview?.background ?? '#000' }}
+    >
+      <span className="flex h-1/2 w-full">
+        {accents.map((color, index) => (
+          <span key={index} className="h-full flex-1" style={{ backgroundColor: color }} />
+        ))}
+      </span>
+      <span
+        className="mx-0.5 mt-auto mb-0.5 h-[3px] w-2/3 rounded-full"
+        style={{ backgroundColor: preview?.foreground ?? '#fff' }}
+      />
+    </span>
+  )
+}
+
 export function ThemePicker({
   label,
   description,
@@ -312,15 +346,16 @@ export function ThemePicker({
               <button
                 key={theme}
                 onClick={() => onSelectTheme(theme)}
-                className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors ${
                   selectedTheme === theme
                     ? 'bg-accent font-medium text-accent-foreground'
                     : 'hover:bg-muted/60'
                 }`}
               >
+                <TerminalThemeSwatch theme={theme} />
                 <span className="truncate">{theme}</span>
                 {selectedTheme === theme ? (
-                  <span className="ml-3 shrink-0 text-[11px] uppercase tracking-[0.16em]">
+                  <span className="ml-auto shrink-0 text-[11px] uppercase tracking-[0.16em]">
                     Current
                   </span>
                 ) : null}

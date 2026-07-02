@@ -3,7 +3,11 @@
 // local PTY. Mirrors connectPanePty's PanePtyBinding contract so the pane
 // lifecycle treats both identically. Off by default — see shouldUseServerTerminals.
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
-import { connectPanePty, type PanePtyBinding } from './pty-connection'
+import {
+  connectPanePty,
+  shouldWritePtyOutputForeground,
+  type PanePtyBinding
+} from './pty-connection'
 import { getSession } from '@/runtime/agentum-server-client'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { useAppStore } from '@/store'
@@ -360,6 +364,10 @@ export function connectPaneServerSession(
           startupCommand,
           onTitle: handleServerSessionTitle,
           onActivity: handleServerSessionActivity,
+          // Live per-write visibility, read from the same ref the native PTY
+          // path uses, so the scheduler throttles this pane's output only while
+          // it is a background pane and writes synchronously while it is focused.
+          isForeground: () => shouldWritePtyOutputForeground(deps.isVisibleRef.current),
           // Bucket this pane's WS throughput by host so the status-bar I/O chip
           // can show per-host rates. Mirrors the hosts-slice HostKey scheme:
           // `local` for the daemon's machine, `ssh:<connectionId>` for a remote.

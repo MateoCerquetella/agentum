@@ -12,10 +12,10 @@ import { ShortcutKeyCombo } from '../ShortcutKeyCombo'
 import {
   FontAutocomplete,
   SettingsRow,
-  SettingsSegmentedControl,
   SettingsSubsectionHeader,
   SettingsSwitchRow
 } from './SettingsFormControls'
+import { ThemeGallery } from './ThemeGallery'
 import { DEFAULT_APP_FONT_FAMILY } from '../../../../shared/constants'
 import { useAvailableStatusBarToggles } from '../status-bar/use-available-status-bar-toggles'
 import {
@@ -89,27 +89,23 @@ export function AppearancePane({
           <SearchableSetting
             title="Theme"
             description="Choose how Agentum looks in the app window."
-            keywords={['dark', 'light', 'system']}
+            keywords={['dark', 'light', 'system', 'appearance', 'color theme']}
           >
-            <SettingsRow
-              label="Theme"
-              description="Choose how Agentum looks in the app window."
-              control={
-                <SettingsSegmentedControl
-                  ariaLabel="Theme"
-                  value={settings.theme}
-                  onChange={(option) => {
-                    updateSettings({ theme: option })
-                    applyTheme(option)
-                  }}
-                  options={[
-                    { value: 'system', label: 'System' },
-                    { value: 'dark', label: 'Dark' },
-                    { value: 'light', label: 'Light' }
-                  ]}
-                />
-              }
-            />
+            <div className="space-y-2.5 py-2">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">Theme</div>
+                <p className="text-xs text-muted-foreground">
+                  Choose how Agentum looks in the app window.
+                </p>
+              </div>
+              <ThemeGallery
+                value={settings.theme}
+                onSelect={(option) => {
+                  updateSettings({ theme: option })
+                  applyTheme(option)
+                }}
+              />
+            </div>
           </SearchableSetting>
         ) : null}
 

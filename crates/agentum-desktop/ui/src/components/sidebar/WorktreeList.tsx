@@ -21,6 +21,7 @@ import {
   X
 } from 'lucide-react'
 import { useAppStore } from '@/store'
+import type { AppState } from '@/store'
 import {
   getAllWorktreesFromState,
   useAllWorktrees,
@@ -122,6 +123,7 @@ import {
   type VirtualizedScrollAnchor
 } from '@/hooks/useVirtualizedScrollAnchor'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
+import { focusActiveSessionSurface } from '@/lib/focus-session-surface'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { SCROLL_TO_CURRENT_WORKSPACE_REVEAL_REQUEST_EVENT } from '@/lib/scroll-to-current-workspace-status'
 import { useRepoHeaderDrag } from './project-header-drag'
@@ -196,6 +198,7 @@ import {
 import { buildImportedWorktreesCardCandidates } from './imported-worktrees-card-candidates'
 import {
   buildWorktreeSectionActivitySummaries,
+  reuseSectionActivitySummariesIfEqual,
   EMPTY_WORKTREE_SECTION_ACTIVITY,
   type WorktreeSectionActivityState,
   type WorktreeSectionActivitySummary
@@ -222,6 +225,11 @@ type ProjectGroupDeleteDialogState = {
 const SORT_SETTLE_MS = 3_000
 const USER_SCROLL_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS = 500
 const EMPTY_PROJECT_GROUPS: readonly ProjectGroup[] = []
+// Why: a stable empty map so the whole-`agentStatusByPaneKey` subscription below
+// only observes the real (per-ping churning) map while the agent-send popover is
+// open. When it's closed — the overwhelmingly common case — this component would
+// otherwise re-render on every agent status ping from every pane (O(agents) jank).
+const EMPTY_AGENT_STATUS_BY_PANE_KEY: AppState['agentStatusByPaneKey'] = {}
 const EXPANDING_CARD_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS = 300
 const WORKTREE_SIDEBAR_SCROLL_STYLE: React.CSSProperties = {
   // Why: TanStack Virtual owns scroll correction. Native browser anchoring can
@@ -844,6 +852,14 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const scrollRef = useRef<HTMLDivElement>(null)
   const suppressMeasurementAdjustmentUntilRef = useRef(0)
   const directScrollInputUntilRef = useRef(0)
+  // VS Code-style keyboard cursor: arrows move this highlight through the list
+  // WITHOUT switching sessions; Enter opens the highlighted worktree. Kept
+  // distinct from activeWorktreeId (the open session) and mirrored into a ref so
+  // the window/keydown callbacks read the latest value without re-subscribing.
+  const [focusedWorktreeId, setFocusedWorktreeId] = useState<string | null>(null)
+  const focusedWorktreeIdRef = useRef<string | null>(null)
+  focusedWorktreeIdRef.current = focusedWorktreeId
+  const [isListboxFocused, setIsListboxFocused] = useState(false)
   const [dragOverStatus, setDragOverStatus] = useState<WorkspaceStatus | null>(null)
   const [pinDragOver, setPinDragOver] = useState(false)
   // Single open-at-a-time right-click menu for project header rows. Hoisted to
@@ -1070,6 +1086,24 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     [worktreeDragUnitGroups]
   )
   const renderRows = useMemo(() => buildRenderableRows(rows), [rows])
+  // Worktree ids the keyboard cursor can land on, in visible display order.
+  // Collapsed lineage groups render only their parent, so their hidden children
+  // are naturally excluded (VS Code explorer semantics).
+  const visibleNavigableWorktreeIds = useMemo(() => {
+    const ids: string[] = []
+    for (const row of renderRows) {
+      if (row.type === 'item') {
+        ids.push(row.worktree.id)
+      } else if (row.type === 'lineage-group') {
+        for (const child of row.rows) {
+          ids.push(child.worktree.id)
+        }
+      }
+    }
+    return ids
+  }, [renderRows])
+  const visibleNavigableWorktreeIdsRef = useRef(visibleNavigableWorktreeIds)
+  visibleNavigableWorktreeIdsRef.current = visibleNavigableWorktreeIds
   const firstHeaderIndex = useMemo(
     () => renderRows.findIndex((row) => row.type === 'header'),
     [renderRows]
@@ -1122,6 +1156,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   )
   const renderRowsRef = useRef(renderRows)
   renderRowsRef.current = renderRows
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
   const getVirtualItemKey = useCallback(
     (index: number) => {
       const row = renderRows[index]
@@ -1573,6 +1609,150 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     ]
   )
 
+  const scrollWorktreeIntoView = useCallback(
+    (worktreeId: string) => {
+      const rowIndex = renderRowsRef.current.findIndex((row) =>
+        renderRowContainsWorktree(row, worktreeId)
+      )
+      if (rowIndex !== -1) {
+        virtualizer.scrollToIndex(rowIndex, { align: 'auto' })
+      }
+    },
+    [virtualizer]
+  )
+
+  // VS Code-style cursor move: shift the keyboard highlight across visible rows
+  // without switching sessions. Clamps at the ends (the explorer does not wrap).
+  const moveFocusCursor = useCallback(
+    (direction: 'up' | 'down') => {
+      const ids = visibleNavigableWorktreeIdsRef.current
+      if (ids.length === 0) {
+        return
+      }
+      const currentId = focusedWorktreeIdRef.current ?? activeWorktreeId
+      const currentIndex = currentId ? ids.indexOf(currentId) : -1
+      let nextIndex: number
+      if (currentIndex === -1) {
+        nextIndex = direction === 'down' ? 0 : ids.length - 1
+      } else {
+        nextIndex = Math.max(
+          0,
+          Math.min(ids.length - 1, currentIndex + (direction === 'down' ? 1 : -1))
+        )
+      }
+      const nextId = ids[nextIndex]
+      setFocusedWorktreeId(nextId)
+      markDirectScrollInput()
+      scrollWorktreeIntoView(nextId)
+    },
+    [activeWorktreeId, markDirectScrollInput, scrollWorktreeIntoView]
+  )
+
+  const moveFocusCursorToEdge = useCallback(
+    (edge: 'start' | 'end') => {
+      const ids = visibleNavigableWorktreeIdsRef.current
+      if (ids.length === 0) {
+        return
+      }
+      const nextId = edge === 'start' ? ids[0] : ids[ids.length - 1]
+      setFocusedWorktreeId(nextId)
+      markDirectScrollInput()
+      scrollWorktreeIntoView(nextId)
+    },
+    [markDirectScrollInput, scrollWorktreeIntoView]
+  )
+
+  // Left/Right collapse or expand the focused lineage node, matching VS Code's
+  // tree-arrow behaviour. Leaf rows outside a lineage are a no-op.
+  const handleLineageArrow = useCallback(
+    (direction: 'left' | 'right') => {
+      const focusedId = focusedWorktreeIdRef.current
+      if (!focusedId) {
+        return
+      }
+      const flatRows = rowsRef.current
+      const index = flatRows.findIndex(
+        (row): row is WorktreeItemRow => row.type === 'item' && row.worktree.id === focusedId
+      )
+      if (index === -1) {
+        return
+      }
+      const itemRow = flatRows[index] as WorktreeItemRow
+      const isLineageParent = itemRow.lineageChildCount > 0
+      if (direction === 'right') {
+        if (isLineageParent && itemRow.lineageCollapsed) {
+          toggleGroupWithScrollAnchor(getLineageGroupKey(itemRow.worktree.id))
+        } else if (isLineageParent) {
+          // Already expanded — step into the first child.
+          moveFocusCursor('down')
+        }
+        return
+      }
+      if (isLineageParent && !itemRow.lineageCollapsed) {
+        toggleGroupWithScrollAnchor(getLineageGroupKey(itemRow.worktree.id))
+        return
+      }
+      // A lineage child: jump the cursor up to its parent (nearest shallower row).
+      for (let i = index - 1; i >= 0; i--) {
+        const row = flatRows[i]
+        if (row.type !== 'item') {
+          break
+        }
+        if (row.depth < itemRow.depth) {
+          setFocusedWorktreeId(row.worktree.id)
+          scrollWorktreeIntoView(row.worktree.id)
+          return
+        }
+      }
+    },
+    [moveFocusCursor, scrollWorktreeIntoView, toggleGroupWithScrollAnchor]
+  )
+
+  // Enter opens the highlighted worktree — activate it and land focus in the
+  // session, so the cursor is a browse step and Enter is the commit.
+  const activateFocusedWorktree = useCallback(() => {
+    const focusedId = focusedWorktreeIdRef.current ?? activeWorktreeId
+    if (!focusedId) {
+      return
+    }
+    activateAndRevealWorktree(focusedId)
+    focusActiveSessionSurface()
+  }, [activeWorktreeId])
+
+  const handleListboxFocus = useCallback(
+    (e: React.FocusEvent) => {
+      if (e.target !== e.currentTarget) {
+        return
+      }
+      setIsListboxFocused(true)
+      const ids = visibleNavigableWorktreeIdsRef.current
+      const current = focusedWorktreeIdRef.current
+      const cursorId =
+        current && ids.includes(current)
+          ? current
+          : activeWorktreeId && ids.includes(activeWorktreeId)
+            ? activeWorktreeId
+            : (ids[0] ?? null)
+      if (cursorId !== current) {
+        setFocusedWorktreeId(cursorId)
+      }
+      // Why: reveal the cursor row so its focus ring is visible and
+      // aria-activedescendant points at a mounted option — the list is
+      // virtualized, so the seeded row may be scrolled out of the window.
+      if (cursorId) {
+        scrollWorktreeIntoView(cursorId)
+      }
+    },
+    [activeWorktreeId, scrollWorktreeIntoView]
+  )
+
+  const handleListboxBlur = useCallback((e: React.FocusEvent) => {
+    if (e.target !== e.currentTarget) {
+      return
+    }
+    setIsListboxFocused(false)
+  }, [])
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (activeModal !== 'none' || isEditableTarget(e.target)) {
@@ -1614,26 +1794,56 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
 
   const handleContainerKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        if (e.target !== e.currentTarget) {
-          return
-        }
-        markDirectScrollInput()
-        navigateWorktree(e.key === 'ArrowUp' ? 'up' : 'down')
-        e.preventDefault()
-      } else if (e.key === 'Enter') {
-        const helper = document.querySelector(
-          '.xterm-helper-textarea'
-        ) as HTMLTextAreaElement | null
-        if (helper) {
-          helper.focus()
-        }
-        e.preventDefault()
-      } else if (['PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) {
-        markDirectScrollInput()
+      // Only drive cursor navigation when the listbox container itself holds
+      // focus; inner controls (checkboxes, menus) keep their own key handling.
+      if (e.target !== e.currentTarget) {
+        return
+      }
+      switch (e.key) {
+        case 'ArrowUp':
+          moveFocusCursor('up')
+          e.preventDefault()
+          break
+        case 'ArrowDown':
+          moveFocusCursor('down')
+          e.preventDefault()
+          break
+        case 'ArrowLeft':
+          handleLineageArrow('left')
+          e.preventDefault()
+          break
+        case 'ArrowRight':
+          handleLineageArrow('right')
+          e.preventDefault()
+          break
+        case 'Home':
+          moveFocusCursorToEdge('start')
+          e.preventDefault()
+          break
+        case 'End':
+          moveFocusCursorToEdge('end')
+          e.preventDefault()
+          break
+        case 'Enter':
+          activateFocusedWorktree()
+          e.preventDefault()
+          break
+        case 'PageUp':
+        case 'PageDown':
+        case ' ':
+          markDirectScrollInput()
+          break
+        default:
+          break
       }
     },
-    [markDirectScrollInput, navigateWorktree]
+    [
+      moveFocusCursor,
+      moveFocusCursorToEdge,
+      handleLineageArrow,
+      activateFocusedWorktree,
+      markDirectScrollInput
+    ]
   )
 
   const handleScrollPointerDown = useCallback(
@@ -2370,10 +2580,21 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     worktreeMap
   ])
 
-  const activeDescendantId =
-    activeWorktreeId != null &&
-    activeWorktreeRowIndex !== -1 &&
-    virtualItems.some((item) => item.index === activeWorktreeRowIndex)
+  // The row the keyboard cursor sits on while the list has focus. Drives both
+  // the focus ring and aria-activedescendant so screen readers track the cursor,
+  // not the open session, during arrow navigation.
+  const keyboardCursorWorktreeId =
+    isListboxFocused &&
+    focusedWorktreeId != null &&
+    visibleNavigableWorktreeIds.includes(focusedWorktreeId)
+      ? focusedWorktreeId
+      : null
+
+  const activeDescendantId = keyboardCursorWorktreeId
+    ? getWorktreeOptionId(keyboardCursorWorktreeId)
+    : activeWorktreeId != null &&
+        activeWorktreeRowIndex !== -1 &&
+        virtualItems.some((item) => item.index === activeWorktreeRowIndex)
       ? getWorktreeOptionId(activeWorktreeId)
       : undefined
 
@@ -2564,6 +2785,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         aria-multiselectable="true"
         aria-activedescendant={activeDescendantId}
         onKeyDown={handleContainerKeyDown}
+        onFocus={handleListboxFocus}
+        onBlur={handleListboxBlur}
         // Why: trackpad momentum can continue as sparse scroll events after the
         // original wheel/touch event stream quiets down. Keep measurement-based
         // scroll correction suppressed until the viewport itself has stopped.
@@ -3048,10 +3271,16 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   data-worktree-drag-id={worktreeDragGroupKey ? itemRow.worktree.id : undefined}
                   data-worktree-drag-group-key={worktreeDragGroupKey}
                   data-worktree-drag-group-index={worktreeDragGroupIndex}
+                  data-kbd-focused={
+                    keyboardCursorWorktreeId === itemRow.worktree.id ? 'true' : undefined
+                  }
                   className={cn(
                     // Why: avoid transitioning 'transform' to prevent browser-side lag and flashing
                     // when TanStack Virtual programmatically repositions adjacent rows.
                     'relative transition-[opacity,filter] duration-150 ease-out',
+                    // VS Code-style keyboard focus ring on the cursor row.
+                    keyboardCursorWorktreeId === itemRow.worktree.id &&
+                      'rounded-md ring-1 ring-inset ring-ring',
                     worktreeDragState.draggingWorktreeId === itemRow.worktree.id &&
                       // Why: the fixed drag preview is the visible affordance; leaving the
                       // source row translucent lets it bleed through sticky headers/footers.
@@ -3168,8 +3397,13 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         role="option"
                         aria-selected={selectedWorktreeIds.has(child.worktree.id)}
                         aria-current={isActive ? 'page' : undefined}
+                        data-kbd-focused={
+                          keyboardCursorWorktreeId === child.worktree.id ? 'true' : undefined
+                        }
                         className={cn(
                           'relative flex min-w-0 flex-1 cursor-pointer items-start gap-1.5 rounded-md border border-transparent px-2 py-1.5 transition-colors',
+                          // VS Code-style keyboard focus ring on the cursor row.
+                          keyboardCursorWorktreeId === child.worktree.id && 'ring-1 ring-inset ring-ring',
                           highlightedRevealWorktreeId === child.worktree.id && [
                             'scroll-to-current-workspace-reveal-highlight',
                             revealHighlightTone === 'ai' &&
@@ -3478,7 +3712,14 @@ const WorktreeList = React.memo(function WorktreeList({
   const revealWorktreeInSidebar = useAppStore((s) => s.revealWorktreeInSidebar)
   const clearPendingRevealWorktreeId = useAppStore((s) => s.clearPendingRevealWorktreeId)
   const agentSendPopoverTargetMode = useAppStore((s) => s.agentSendPopoverTargetMode)
-  const agentTargetStatusByPaneKey = useAppStore((s) => s.agentStatusByPaneKey)
+  // Why: only subscribe to the live status map while the send popover is open.
+  // The map reference churns on every status ping (updatedAt moves each ping), so
+  // an unconditional subscription re-rendered the whole sidebar per ping per agent.
+  // The dependent memo below returns null when the popover is closed, so an empty
+  // map here changes nothing but the re-render fan-out.
+  const agentTargetStatusByPaneKey = useAppStore((s) =>
+    s.agentSendPopoverTargetMode ? s.agentStatusByPaneKey : EMPTY_AGENT_STATUS_BY_PANE_KEY
+  )
   const agentTargetStatusEpoch = useAppStore((s) => s.agentStatusEpoch)
   const agentTargetTabsByWorktree = useAppStore((s) => s.tabsByWorktree)
   const agentTargetTerminalLayoutsByTabId = useAppStore((s) => s.terminalLayoutsByTabId)
@@ -3912,6 +4153,16 @@ const WorktreeList = React.memo(function WorktreeList({
   }, [filterRepoIds, groupBy, projectGroups.length, repos, worktreesByRepo])
   const allRepoIds = useMemo(() => repos.map((r) => r.id), [repos])
   const reorderReposAction = useAppStore((s) => s.reorderRepos)
+  // Why: a stable callback so the memoized VirtualizedWorktreeViewport can
+  // short-circuit. An inline arrow prop was a fresh reference every render,
+  // defeating React.memo and re-rendering the entire virtualized list whenever
+  // the parent re-rendered.
+  const handleReorderRepos = useCallback(
+    (orderedIds: string[]) => {
+      void reorderReposAction(orderedIds)
+    },
+    [reorderReposAction]
+  )
   // Why: host mode is a post-processing layer on top of repo grouping; the
   // inner builder always gets 'repo' so host headers can bucket repo groups.
   const effectiveGroupBy: WorktreeGroupBy = groupBy === 'host' ? 'repo' : groupBy
@@ -3941,32 +4192,39 @@ const WorktreeList = React.memo(function WorktreeList({
     sectionActivityRuntimePaneTitlesByTabId,
     sectionActivityTabsByWorktree
   ])
-  const sectionActivityByGroupKey = useMemo(
-    () =>
-      showSectionStatus
-        ? buildWorktreeSectionActivitySummaries({
-            groupBy: effectiveGroupBy,
-            worktrees,
-            repoMap,
-            prCache,
-            workspaceStatuses,
-            projectGroups,
-            settings,
-            state: sectionActivityState
-          })
-        : new Map<string, WorktreeSectionActivitySummary>(),
-    [
-      groupBy,
-      prCache,
-      projectGroups,
-      repoMap,
-      sectionActivityState,
-      settings,
-      showSectionStatus,
-      workspaceStatuses,
-      worktrees
-    ]
+  // Identity-stable across rebuilds: the epoch-driven useMemo re-runs on every
+  // agent transition, but when no section count changed we hand the memoized
+  // VirtualizedWorktreeViewport the PREVIOUS Map so its React.memo holds.
+  const sectionActivityByGroupKeyRef = useRef<Map<string, WorktreeSectionActivitySummary>>(
+    new Map()
   )
+  const sectionActivityByGroupKey = useMemo(() => {
+    const next = showSectionStatus
+      ? buildWorktreeSectionActivitySummaries({
+          groupBy: effectiveGroupBy,
+          worktrees,
+          repoMap,
+          prCache,
+          workspaceStatuses,
+          projectGroups,
+          settings,
+          state: sectionActivityState
+        })
+      : new Map<string, WorktreeSectionActivitySummary>()
+    const reused = reuseSectionActivitySummariesIfEqual(sectionActivityByGroupKeyRef.current, next)
+    sectionActivityByGroupKeyRef.current = reused
+    return reused
+  }, [
+    groupBy,
+    prCache,
+    projectGroups,
+    repoMap,
+    sectionActivityState,
+    settings,
+    showSectionStatus,
+    workspaceStatuses,
+    worktrees
+  ])
 
   // Reactive per-host "open tmux pane" set. Recomputes whenever a pane binds or
   // disposes a tmux session (tmuxByPaneKey) or the tab/worktree/repo topology
@@ -4821,9 +5079,7 @@ const WorktreeList = React.memo(function WorktreeList({
         worktreeLineageById={worktreeLineageById}
         repoOrder={repoOrder}
         allRepoIds={allRepoIds}
-        reorderRepos={(orderedIds) => {
-          void reorderReposAction(orderedIds)
-        }}
+        reorderRepos={handleReorderRepos}
         prCache={prCache}
         workspaceStatuses={workspaceStatuses}
         projectGroups={projectGroups}

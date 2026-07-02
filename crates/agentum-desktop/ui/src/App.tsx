@@ -25,6 +25,11 @@ import { SYNC_FIT_PANES_EVENT, TOGGLE_TERMINAL_PANE_EXPAND_EVENT } from '@/const
 import { syncZoomCSSVar } from '@/lib/ui-zoom'
 import { canShowRightSidebarForView } from '@/lib/right-sidebar-visibility'
 import { buildAppFontFamily } from '@/lib/app-font-family'
+import {
+  focusActiveSessionSurface,
+  focusWorktreeSidebar,
+  isFocusInWorktreeSidebar
+} from '@/lib/focus-session-surface'
 import { toast } from 'sonner'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -225,6 +230,7 @@ const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const CommandPalette = lazy(() => import('./components/CommandPalette'))
+const ThemeCommandPalette = lazy(() => import('./components/ThemeCommandPalette'))
 const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
 const WorkspaceCleanupDialog = lazy(
@@ -1178,6 +1184,24 @@ function App(): React.JSX.Element {
         return
       }
 
+      // Cmd/Ctrl+E — flip keyboard focus between the active session and the
+      // worktree list (VS Code's "focus explorer / focus editor" muscle memory).
+      // Reveals the sidebar first when it is collapsed so the jump always lands.
+      if (matchShortcut('view.toggleSidebarFocus')) {
+        e.preventDefault()
+        notifyTerminalCapture('view.toggleSidebarFocus')
+        if (isFocusInWorktreeSidebar()) {
+          focusActiveSessionSurface()
+        } else {
+          const store = useAppStore.getState()
+          if (!store.sidebarOpen) {
+            store.setSidebarOpen(true)
+          }
+          focusWorktreeSidebar()
+        }
+        return
+      }
+
       // Command palette + quick-open — the "search" palettes. In the Electron
       // build these fired from the main-process before-input-event; the Tauri
       // shell has no equivalent, so without these renderer handlers the search
@@ -1857,6 +1881,16 @@ function App(): React.JSX.Element {
                 compact
               >
                 <CommandPalette />
+              </RecoverableRenderErrorBoundary>
+            ) : null}
+            {resolvedMountedLazyModalIds.has('theme-palette') ? (
+              <RecoverableRenderErrorBoundary
+                boundaryId="modal.theme-palette"
+                surface="modal"
+                resetKey={activeModal === 'theme-palette'}
+                compact
+              >
+                <ThemeCommandPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
             {resolvedMountedLazyModalIds.has('feature-wall') ? (

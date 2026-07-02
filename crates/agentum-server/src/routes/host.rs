@@ -96,7 +96,16 @@ fn sample_now() -> HostMetrics {
 /// the bus. Call once from `serve()`. The ticker holds its own
 /// long-lived `System` to avoid re-allocating the per-CPU buffers each
 /// tick — sysinfo's whole reason for being a stateful type.
-pub fn spawn_ticker(bus: broadcast::Sender<Event>) {
+///
+/// `events_ws_clients` is the live `/api/events` connection count. It — not
+/// `bus.receiver_count()` — decides whether anyone can see these samples:
+/// the daemon's own background workers (goal reconciler, comment bridge)
+/// subscribe to the bus permanently, so the receiver count is never zero and
+/// gating on it sampled all cores every 2 s with no dashboard open.
+pub fn spawn_ticker(
+    bus: broadcast::Sender<Event>,
+    events_ws_clients: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
     tokio::task::spawn_blocking(move || {
         let refresh = RefreshKind::new()
             .with_cpu(CpuRefreshKind::new().with_cpu_usage())
@@ -109,10 +118,10 @@ pub fn spawn_ticker(bus: broadcast::Sender<Event>) {
 
         loop {
             std::thread::sleep(HOST_METRICS_INTERVAL);
-            // No subscribers → don't bother sampling. `receiver_count`
-            // is cheap (atomic load); skipping the syscall when no
-            // dashboards are open keeps the daemon at zero idle cost.
-            if bus.receiver_count() == 0 {
+            // No dashboards connected → don't bother sampling; the atomic
+            // load is free and skipping the all-cores refresh keeps the
+            // daemon at zero idle cost.
+            if events_ws_clients.load(std::sync::atomic::Ordering::Relaxed) == 0 {
                 continue;
             }
             let snap = {

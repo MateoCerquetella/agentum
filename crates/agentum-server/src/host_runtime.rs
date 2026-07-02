@@ -275,8 +275,8 @@ pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]
 /// appears in the script — that's the whole point ([`write_remote_file_bytes`]),
 /// since a multi-MB image in the argv overran the remote ARG_MAX. The host's
 /// LOGIN shell may be fish/zsh (not POSIX sh), so wrap the script in `sh -c`
-/// (the established cross-shell form); `q` shell-quotes every path. `umask 077`
-/// + `chmod 600` keep the file owner-only; the caller's random-UUID filename
+/// (the established cross-shell form); `q` shell-quotes every path. `umask 077` +
+/// `chmod 600` keep the file owner-only; the caller's random-UUID filename
 /// means no attacker can pre-plant a symlink to follow.
 fn remote_stdin_write_script(parent: &str, abs_path: &str) -> Result<String> {
     let inner = format!(

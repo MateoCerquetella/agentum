@@ -48,6 +48,31 @@ impl Store {
         rows.into_iter().map(Event::try_from).collect()
     }
 
+    /// Prune events older than `keep_days`, preserving each session's most
+    /// recent `agent.*` row regardless of age — that row backs the cold-start
+    /// activity overlay (see [`Self::latest_agent_event_per_session`]), and a
+    /// long-idle running session must not lose it. Everything else past the
+    /// window is history nothing reads: the watchdog feed shows the newest ~50
+    /// rows. Without this the table grew for the life of the install and the
+    /// connect-time queries slowed with it. Returns the number of rows pruned.
+    pub async fn prune_events(&self, keep_days: i64) -> Result<u64> {
+        let cutoff =
+            (OffsetDateTime::now_utc() - time::Duration::days(keep_days)).format(&Rfc3339)?;
+        let result = sqlx::query(
+            "DELETE FROM events
+             WHERE ts < ?
+               AND id NOT IN (
+                   SELECT MAX(id) FROM events
+                   WHERE session_id IS NOT NULL AND kind LIKE 'agent.%'
+                   GROUP BY session_id
+               )",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Persist an event row. Best-effort (failures should not break callers).
     pub async fn insert_event(&self, ev: &Event) -> Result<()> {
         let payload = serde_json::to_string(&ev.payload)?;

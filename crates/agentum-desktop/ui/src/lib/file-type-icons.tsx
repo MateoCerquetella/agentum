@@ -1,6 +1,12 @@
 import React from 'react'
+import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { getFileExtension, getLucideFileIcon } from './lucide-file-icons'
+import {
+  getFileExtension,
+  getLucideFileIcon,
+  getLucideFileIconCategory,
+  type LucideFileIconCategory
+} from './lucide-file-icons'
 
 // File-type icons. For recognised source/config extensions we render a small
 // colored monospace label (`rs`, `TS`, `S`, `#`, `N`, …) — the "Seti" badge
@@ -118,13 +124,40 @@ function badgeComponentForGroup(group: string): FileIconComponent {
   return Component
 }
 
+// Why cache (same reason as badges): one stable wrapper per (icon, category)
+// keeps React element identity steady so tinted fallback icons don't remount.
+const categoryIconCache = new Map<string, FileIconComponent>()
+
+function categoryTintedIcon(Icon: LucideIcon, category: LucideFileIconCategory): FileIconComponent {
+  const key = `${category}:${Icon.displayName ?? Icon.name ?? 'icon'}`
+  const cached = categoryIconCache.get(key)
+  if (cached) {
+    return cached
+  }
+  // `data-fcategory` keys the per-theme colour in main.css. Like the badge
+  // rules, that CSS is unlayered so it wins over any `text-*` in `className`.
+  const Component: FileIconComponent = ({ className }) => (
+    <Icon data-fcategory={category} className={cn('file-type-icon', className)} />
+  )
+  Component.displayName = `FileTypeIcon(${category})`
+  categoryIconCache.set(key, Component)
+  return Component
+}
+
 /**
  * Icon component for a file path: a colored extension badge for recognised
- * source/config types, otherwise the Lucide glyph. The returned component
- * accepts `className` for sizing/spacing (badge color comes from CSS, so any
- * `text-*` class in `className` is overridden for badged types).
+ * source/config types, otherwise the Lucide glyph — tinted by broad category
+ * (media/data/archive/secrets) for a little more colour, calm for prose/code.
+ * The returned component accepts `className` for sizing/spacing (badge and
+ * category colors come from CSS, so any `text-*` in `className` is overridden
+ * for those types).
  */
 export function getFileTypeIcon(filePath: string): FileIconComponent {
   const group = fileTypeBadgeGroup(filePath)
-  return group ? badgeComponentForGroup(group) : getLucideFileIcon(filePath)
+  if (group) {
+    return badgeComponentForGroup(group)
+  }
+  const Icon = getLucideFileIcon(filePath)
+  const category = getLucideFileIconCategory(Icon)
+  return category ? categoryTintedIcon(Icon, category) : Icon
 }
