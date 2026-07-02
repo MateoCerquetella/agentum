@@ -836,6 +836,19 @@
   background: color-mix(in srgb, var(--sidebar-accent) 40%, transparent);
 }
 
+/* Keyboard cursor row (Cmd+E → arrow navigation). A hover-like tint, NOT a
+   focus ring — the blue outline read as an alarm, the cursor should just say
+   "you are here". Slightly stronger than :hover so it survives sitting next
+   to hovered rows. */
+[role='option'][data-kbd-focused='true'] {
+  background: color-mix(in srgb, var(--sidebar-foreground) 6%, transparent);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.dark [role='option'][data-kbd-focused='true'] {
+  background: color-mix(in srgb, var(--sidebar-accent) 55%, transparent);
+}
+
 .worktree-agent-row-hover:hover {
   background: color-mix(in srgb, var(--sidebar-foreground) 1.25%, transparent);
 }

@@ -1824,13 +1824,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
           moveFocusCursorToEdge('end')
           e.preventDefault()
           break
+        // Space opens the highlighted worktree just like Enter (and must NOT
+        // fall through to the browser's default page-scroll).
         case 'Enter':
+        case ' ':
           activateFocusedWorktree()
           e.preventDefault()
           break
         case 'PageUp':
         case 'PageDown':
-        case ' ':
           markDirectScrollInput()
           break
         default:
@@ -2796,7 +2798,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         onWheel={markDirectScrollInput}
         onDragOver={handleWorktreeDragOver}
         onDrop={handleWorktreeDrop}
-        className="worktree-sidebar-scrollbar h-full overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset pt-px"
+        // No focus ring on the listbox itself: the cursor row's background
+        // (data-kbd-focused, main.css) is the only keyboard-focus indicator.
+        className="worktree-sidebar-scrollbar h-full overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek outline-none pt-px"
         style={WORKTREE_SIDEBAR_SCROLL_STYLE}
       >
         <TmuxSessionsModal
@@ -3278,9 +3282,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     // Why: avoid transitioning 'transform' to prevent browser-side lag and flashing
                     // when TanStack Virtual programmatically repositions adjacent rows.
                     'relative transition-[opacity,filter] duration-150 ease-out',
-                    // VS Code-style keyboard focus ring on the cursor row.
-                    keyboardCursorWorktreeId === itemRow.worktree.id &&
-                      'rounded-md ring-1 ring-inset ring-ring',
+                    // Keyboard cursor styling rides the data-kbd-focused
+                    // attribute (main.css) — a hover-like tint, not a ring.
                     worktreeDragState.draggingWorktreeId === itemRow.worktree.id &&
                       // Why: the fixed drag preview is the visible affordance; leaving the
                       // source row translucent lets it bleed through sticky headers/footers.
@@ -3402,8 +3405,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         }
                         className={cn(
                           'relative flex min-w-0 flex-1 cursor-pointer items-start gap-1.5 rounded-md border border-transparent px-2 py-1.5 transition-colors',
-                          // VS Code-style keyboard focus ring on the cursor row.
-                          keyboardCursorWorktreeId === child.worktree.id && 'ring-1 ring-inset ring-ring',
+                          // Keyboard cursor styling rides the data-kbd-focused
+                          // attribute (main.css) — a hover-like tint, not a ring.
                           highlightedRevealWorktreeId === child.worktree.id && [
                             'scroll-to-current-workspace-reveal-highlight',
                             revealHighlightTone === 'ai' &&
