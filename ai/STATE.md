@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 006-sdd-native-loop-and-rich-issues
-- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 **RELEASED v0.54.0** 2026-07-02, Mateo-authorized "release with everything": issue #235 CLOSED via Closes-in-commit-message, develop=staging=main=`fa553ff3` (carried v0.53.0 back-merge + PR #234), tag pushed, release CI in flight. Staging browser-QA items remain an installed-app spot-check incl. the C1 live label-flip on a roles-ON run. Follow-ups #225/#226 open)
+- **current_spec:** 007-issue-detail-and-generated-descriptions
+- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (007 Developer COMPLETE 2026-07-02 `96c98955` — compressed SDD from Mateo's bug report: detail-view hydration stub, silent toggle gates, generated descriptions, .agentum-harness self-gitignore; gate 539/0 server + 75/0 desktop + clippy + vite + vitest 21/21; handoff = tasks.md root causes. 006 RELEASED v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,19 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Developer | **007 fixes + feature GREEN** (`96c98955`; compressed
+  SDD, spec.md+tasks.md carry the trail). ROOT CAUSES: (1) detail page's ONLY
+  data source `gh_work_item_details()` was a STUB returning None (gh.rs:516),
+  null cached as loaded-success, header read the un-hydrated prop — GitHub had
+  everything, the app showed 'unknown/No description'; (2) toggles: four
+  diverging silent gates + armed state outliving eligibility + ChatPage
+  hand-off missing repoId → armed-but-skipped total no-op. FIXED: real gh view
+  --json hydration + visible errors; pure `deriveIssueSideEffectGate` feeding
+  all paths + skip-reason toasts + disarm on repo-switch/unlink. FEATURE:
+  POST /api/github/issues/draft-body (LLM, chat plumbing, SDD-shaped) +
+  'Generate description' button (fills textarea, never files silently).
+  BONUS: `.agentum-harness/.gitignore` self-ignore (the 'bad inside the
+  worktree' fix). NOT GUI-verified. Phase → tester.
 - 2026-07-02 | Reviewer | **006 SIGN-OFF → SHIP-READY** (`review.md`). All 6
   focus items pass (four pins re-verified character-level; deviation-2 fix
   confirmed COMPLETE — createIssuesFromChat is the only plan-constructing
@@ -120,16 +133,3 @@
   (confirmed). Phase stays developer → slice 2 = F2 (chat SDD shape +
   Mateo's empty-body wire test + stored-turn check) + F3 (roles inherited
   + C1 provenance fix).
-- 2026-07-02 | Architect | **006 blueprint COMPLETE (`architecture.md`), gate
-  PASS 5/5.** C1 MATERIAL (orchestrator spot-verified): Decompose re-plans
-  tracker-less (`drive.rs:846`) + `transition_tracker` silently no-ops on
-  None provider → roles-on would kill the label trail; fix =
-  `shared_tracker_provenance` + `plan_from_spec_with_tracker` in Decompose.
-  C2 settings wire = GET-full/PUT-patch split (exact-string pin updates). C3
-  Tasks LIST already carries author — F4 is create-response+snapshot only.
-  C4 preview/DraftPlan must pass problem/goal through Confirm or only the
-  no-plan path ships SDD bodies. Brief deltas specified verbatim (PM gate
-  checklist from validate_handoff/write_spec; architect +3 bullets; reviewer
-  +2). NEW Mateo report folded into handoff 02: chat-created issues empty on
-  GitHub — mandatory F2 fake-gh wire test (--body non-empty w/ summary +
-  checklist) + stored-turn/DraftReview restore-path check. Phase → developer.
