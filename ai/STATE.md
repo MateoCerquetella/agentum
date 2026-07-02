@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 005-one-shot-issue-loop
-- **phase:** architect   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 PM phase COMPLETE 2026-07-02, D1–D4 locked, handoff 01 written; worktree `.claude/worktrees/finish-the-loop` on develop tip `1e259604`; 004 **RELEASED v0.49.0**. Installed-app spot-check still pending: chip, toggle, live label flip)
+- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 Architect COMPLETE 2026-07-02, `architecture.md` gate 5/5, C1–C5 corrections, handoff 02 written; worktree `.claude/worktrees/finish-the-loop`, base `7e9afaa4`; 004 **RELEASED v0.49.0**. Installed-app spot-check still pending: chip, toggle, live label flip)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,20 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Architect | **005 blueprint COMPLETE (`architecture.md`), gate
+  PASS 5/5.** Route = `POST /api/harness/start-work` (harness namespace, not
+  /api/workflows — YAGNI); shared `ensure_spec_and_plan` core (converge flag)
+  serves start-work AND the 004 route, Todo-at-plan lives there (route layer
+  has &Store); post-plan `update_backlog_knobs` seam; C1 pre-registration
+  failures = HTTP toast (no nil-id events); C2 NO new InProgress call (drive
+  already fires it at spawn); C3 QA knob = store setting
+  `harness.qa.agent_browser.enabled` + GET/PUT /api/harness/settings (NOT a
+  json file); C4 spec_id stamp in `plan_from_spec_inner` (MCP plan tool widens
+  too, deliberate); C5 engine `start_work_lock` + already-running check before
+  any fs write, stale-idle runs stopped+re-registered. resolve_qa_mode becomes
+  pure (capability bit computed at caller). F5 colors key off PHASE not name;
+  remove-set filtered by name (collision-safe); old-map labels = foreign,
+  never touched. Orchestrator spot-verified seams. Phase → developer.
 - 2026-07-02 | PM | **005 PM phase COMPLETE, gate PASS after 8 edits; D1–D4
   locked** (server-side start-work route; adoption-not-co-existence with ALL
   THREE plain-delivery paths skipped incl. issueCommand; QA knob = second
@@ -89,19 +103,6 @@
   LinearStateMap parity). Five increments F1–F5; 4 open questions (orchestration
   home, suppression-vs-adoption, QA default posture, state_map scope) carry
   recommendations for auto-resolution. Phase → pm→architect next.
-- 2026-07-01 — 004 Developer slice 2: **F3+F4 GREEN**; developer phase
-  COMPLETE. F3: `POST /api/github/issues` (blank-title 400, 422
-  `no_github_repo`, TaskSink create, id→i64) + composer affordance
-  (Card-rendered, only when unlinked + local git) → chip pre-worktree. F4:
-  `fetch_github_issue` refactor (+url, no wire change), `spec_md_from_issue`
-  (control-strip, 64KiB cap, fallback AC via real derive), traversal-proof
-  `issue_spec_id`, `POST /api/harness/spec-from-issue` (never-overwrite),
-  `scaffoldSpec` toggle OFF-default in both submit paths (non-fatal failure),
-  `plan_from_spec_with_tracker` stamps provider+url (delegation pinned).
-  Gate: 494/0 tests, fmt+check clean, vite ✓ 1m04s. 5 deviations accepted
-  (Card-not-Modal markup; documented allow(dead_code) on FetchedIssue.slug;
-  tests in harness.rs surface_tests per convention; typed conditional;
-  pure-gate title test). Phase → tester.
 - 2026-07-01 — 004 Tester: **7/7 ACs PASS** (`verification.md`). Independently
   re-ran the full suite (494/0/5) + 4 scoped suites + vite (✓ 1m11s) + the
   auth.rs no-`is_public` diff (empty). Exactness confirmed by reading code:
