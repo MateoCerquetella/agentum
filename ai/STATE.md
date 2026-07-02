@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 004-workspace-issue-loop
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (004 F1–F4 built + gate-green; 002 + 003-chat-issue-preview parked at human-gated release)
+- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (004 tested: 7/7 ACs PASS; 002 + 003-chat-issue-preview parked at human-gated release)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,12 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-01 — Drafted spec **004-workspace-issue-loop** from Mateo's ask (issue
-  flow + status movement missing; workspace creation should create the GitHub
-  issue + the spec). Findings: GitHub tracker transition is a logged no-op while
-  drive.rs already fires InProgress/ReadyToTest/Done; composer can only LINK
-  issues; `POST /api/worktrees/create` drops linked metadata; no code authors a
-  spec.md (helpers MCP-only). PM gate passed → phase `pm`.
 - 2026-07-01 — 004 PM gate PASSED (autonomous; loop-armed = adopt recommendations).
   D1 Done=label-only. D2 gh CLI. D3 labels `status/todo|in-progress|ready-to-test|
   done` (ensure-created, exactly one per issue). D4 build F1=status-transition
@@ -96,6 +90,17 @@
   (Card-not-Modal markup; documented allow(dead_code) on FetchedIssue.slug;
   tests in harness.rs surface_tests per convention; typed conditional;
   pure-gate title test). Phase → tester.
+- 2026-07-01 — 004 Tester: **7/7 ACs PASS** (`verification.md`). Independently
+  re-ran the full suite (494/0/5) + 4 scoped suites + vite (✓ 1m11s) + the
+  auth.rs no-`is_public` diff (empty). Exactness confirmed by reading code:
+  label table verbatim, remove-set can never name `status/qa*`, NO close path
+  in the arm (D1), all 6 failure paths → `Ok(Skipped)` (no `?`/`Err`).
+  Commit-attributed the drive.rs range diff: spec-004 = only the
+  `transition_tracker` widening (second hunk = pre-spec `05abe6f1`). 4 Info
+  findings (GHES URLs skip silently; no handler-level 400 tests; no dedicated
+  30s-timeout test; the attribution note) — none blocking. GUI behaviors
+  (chip, toggle, live label flip) = qa.sh/staging gate. **ADVANCE → reviewer**
+  (handoff `04-tester-to-reviewer.md`).
 - 2026-07-01 — 004 Developer slice 1: **F1+F2 GREEN** (486/0 lib tests, fmt +
   check clean). F1: `GITHUB_STATUS_LABELS` + pure gh argv builders +
   `github_slug_and_number_from_issue_url` + `run_gh` (30s timeout) +
