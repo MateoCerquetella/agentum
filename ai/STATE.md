@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 004-workspace-issue-loop
-- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (004 SIGNED OFF + SHIPPED to PR: issue #212, PR #213 fix-wiki→develop OPEN — merge = Mateo, classifier blocks self-merge. 002 + 003 parked at human-gated release)
+- **phase:** idle        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (004 **RELEASED v0.49.0** 2026-07-02: PR #213 merged, issue #212 closed, develop=staging=main=`efd4a003`, tag pushed, release CI in flight. 002 + 003 rode along in the release. Installed-app spot-check pending: chip, toggle, live label flip)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
