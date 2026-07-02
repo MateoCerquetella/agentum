@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 006-sdd-native-loop-and-rich-issues
-- **phase:** pm          <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 drafted 2026-07-02 from Mateo's ask: chat should comport with the SDD process, inherited in-app so nothing needs installing + issue #232-style bare issues. Root causes verified: `routes/github.rs:237` hardcodes `labels: Vec::new()`; spec-013 role gates exist but default-OFF/no-UI. 005 **RELEASED v0.51.0** `c970d8db`; tag ci was red on 2 clippy errors, fixed on develop + dispatch-verified green. Follow-ups open: #225, #226)
+- **phase:** architect   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 PM phase COMPLETE 2026-07-02 — run INLINE, sdd-pm subagent died on the account SPEND LIMIT; D1–D3 locked, handoff 01 written. Ask: chat should comport with the SDD process, inherited in-app so nothing needs installing + issue #232-style bare issues. Root causes verified: `routes/github.rs:237` hardcodes `labels: Vec::new()`; spec-013 role gates exist but default-OFF/no-UI. 005 **RELEASED v0.51.0** `c970d8db`; tag ci was red on 2 clippy errors, fixed on develop + dispatch-verified green. Follow-ups open: #225, #226)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,19 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | PM | **006 PM phase COMPLETE (INLINE), gate PASS after 5 AC
+  edits; D1–D3 locked** (roles setting default ON scoped to start-work
+  backlogs only — argued divergence from 005-D3; label picker = new
+  GET /api/github/labels + static fallback; author fix = create response +
+  snapshot). ⚠️ The dispatched sdd-pm DIED on the account monthly SPEND LIMIT
+  (claude.ai/settings/usage) — phase completed inline by the orchestrator;
+  subsequent phases need the limit raised for fresh subagents. Material
+  findings: chat bodies are COMPOSED (`compose_issue_body` chat.rs:973), not
+  model-emitted — F2 rewritten to JSON-extension + composer reshaping with
+  byte-identical absent-fields pin; F4 root cause FOUND (snapshot lacks
+  author, GitHubItemDialog `?? 'unknown'`); AC 7 pin restated (verdict
+  contract lines, not whole-prompt bytes — briefs are include_str!). Handoff
+  `01-pm-to-architect.md`. Phase → architect.
 - 2026-07-02 | Reviewer | **005 SIGN-OFF → SHIP-READY** (`review.md`). All 6
   focus items pass (C5 handler read straight-line incl. all three claim arms;
   never-Err verified in github arm/Todo branch/report_status_text; all four
@@ -118,17 +131,3 @@
   `--add-label status/todo` edit). NOT GUI-verified (toggle/dropdown/toasts =
   unit+build pinned; browser QA = qa.sh/staging). Phase stays developer →
   slice 3 = F5 (GithubStateMap + github.json + Settings card).
-- 2026-07-02 | Architect | **005 blueprint COMPLETE (`architecture.md`), gate
-  PASS 5/5.** Route = `POST /api/harness/start-work` (harness namespace, not
-  /api/workflows — YAGNI); shared `ensure_spec_and_plan` core (converge flag)
-  serves start-work AND the 004 route, Todo-at-plan lives there (route layer
-  has &Store); post-plan `update_backlog_knobs` seam; C1 pre-registration
-  failures = HTTP toast (no nil-id events); C2 NO new InProgress call (drive
-  already fires it at spawn); C3 QA knob = store setting
-  `harness.qa.agent_browser.enabled` + GET/PUT /api/harness/settings (NOT a
-  json file); C4 spec_id stamp in `plan_from_spec_inner` (MCP plan tool widens
-  too, deliberate); C5 engine `start_work_lock` + already-running check before
-  any fs write, stale-idle runs stopped+re-registered. resolve_qa_mode becomes
-  pure (capability bit computed at caller). F5 colors key off PHASE not name;
-  remove-set filtered by name (collision-safe); old-map labels = foreign,
-  never touched. Orchestrator spot-verified seams. Phase → developer.

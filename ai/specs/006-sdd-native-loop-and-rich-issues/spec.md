@@ -1,7 +1,7 @@
 # Spec 006 — SDD-native loop + rich issues (no install required)
 
 - **Number:** 006
-- **Status:** PM               <!-- Draft | PM | Architect | In progress | Done -->
+- **Status:** Architect        <!-- Draft | PM | Architect | In progress | Done -->  (PM-gated 2026-07-02, D1–D3 locked)
 - **Surface:** `crates/agentum-server` (routes/github, routes/chat, harness roles/drive) + `crates/agentum-desktop/ui` (composer create-issue form, TaskPage issue detail)
 - **Author:** Mateo Cerquetella (drafted with Claude)
 - **Date:** 2026-07-02
@@ -52,17 +52,22 @@ criteria — nothing to install.
    or a static `type/*`+`priority/*` fallback when unfetchable) and sends the
    selection; it renders the applied labels on the created-issue chip.
 3. When the body field is left blank, the created issue's body is auto-filled
-   from what the composer already has in hand — the typed agent prompt and/or
-   note — rendered under a "## Context" heading (never an empty body when any
-   context exists); a fully-empty context still creates (no new failure mode).
+   from what the composer already has in hand — **context is defined as
+   exactly the composer's typed agent-prompt field and note field** — rendered
+   under a "## Context" heading (never an empty body when either field is
+   non-blank); both blank still creates with no body (no new failure mode;
+   pinned both ways).
 
 *Increment F2 — Chat issues are SDD-shaped:*
 
-4. The Chat extraction prompt (routes/chat.rs) instructs the model to emit
-   each issue body with `## Problem`, `## Goal`, and `## Acceptance criteria`
-   (`- [ ]` checklist) sections; the existing one-issue-with-checklist
-   contract, `labels` threading, and the 64KiB/sanitize handling are
-   unchanged (existing tests stay green).
+4. The issue body is COMPOSED, not model-emitted (`compose_issue_body`,
+   `routes/chat.rs:973`) — so: the extraction JSON (`EXTRACT_INSTRUCTIONS`,
+   `:866`) gains optional `problem` and `goal` string fields (serde-default),
+   and `compose_issue_body` renders `## Problem` / `## Goal` /
+   `## Acceptance criteria` (`- [ ]` checklist from `tasks`, priorities
+   preserved) when they're present; when absent, the rendered body is
+   **byte-identical to today** (pinned) — so the one-issue contract, `labels`
+   threading, sanitize handling, and every existing chat test stay green.
 5. `spec_md_from_issue` over such a body produces a worktree spec whose AC
    checkboxes are exactly the issue's `- [ ]` lines (already true — pinned by
    a round-trip test with an SDD-shaped fixture body).
@@ -73,15 +78,21 @@ criteria — nothing to install.
    `FeatureList.roles = true` on the backlog it plans (via the existing
    `update_backlog_knobs` write), gated by a persisted setting
    `harness.sdd.roles.enabled` (Settings-writable, same
-   `GET/PUT /api/harness/settings` surface as the QA knob) — so a gated run
-   executes spec 013's phases: PM verdict-gate on the spec → Architect
-   verdict-gate → Decompose → per-feature Execute → Review verdict-gate,
-   with the existing verdict-file fail-closed contract untouched.
-7. The role briefs (`harness_roles/{pm,architect,reviewer}.md`) are refreshed
-   to carry the same gate checklists as `ai/skills/validate_handoff.md` and
+   `GET/PUT /api/harness/settings` surface as the QA knob; **read once at
+   start-work plan time** — `roles` is a backlog knob stamped into
+   `feature_list.json`, not a per-drive-tick read) — so a gated run executes
+   spec 013's phases: PM verdict-gate on the spec → Architect verdict-gate →
+   Decompose → per-feature Execute → Review verdict-gate, with the existing
+   verdict-file fail-closed contract untouched.
+7. The role briefs (`harness_roles/{pm,architect,reviewer}.md`) are aligned
+   with the gate checklists in `ai/skills/validate_handoff.md` and
    `ai/skills/write_spec.md` (one-slice, testable ACs, grounded-in-code,
-   invariants) — content-only; the `build_role_prompt` contract and verdict
-   shape stay byte-compatible (pinned).
+   invariants) — the architect diffs the current briefs against those
+   checklists and specifies the exact deltas. Brief content is embedded via
+   `include_str!`, so prompt BYTES change by design; the pin is the
+   **verdict-file contract**: the "HOW TO RECORD YOUR VERDICT" lines of
+   `build_role_prompt` and the `RoleVerdict` wire shape stay
+   character-identical (pinned by test).
 8. The composer's "Start gated run" armed copy names the role loop when the
    setting is on; the Harness page's existing roles strip
    (`HarnessEngine.tsx:292`) renders the phase for such runs (it already
@@ -90,9 +101,14 @@ criteria — nothing to install.
 *Increment F4 — issue detail credibility:*
 
 9. The in-app issue detail no longer renders "unknown" for the author of an
-   issue the current user just created: root-cause the missing author in the
-   Tasks detail data path (fetch hydration vs list payload) and render the
-   actual login (or the authenticated user for optimistic just-created rows).
+   issue the current user just created. Root cause (PM-verified): the render
+   is `workItem.author ?? 'unknown'` (`GitHubItemDialog.tsx:892/:938`), and
+   the composer's just-created snapshot is built with only
+   `{type, number, title, url}` (`useComposerState.ts:1455-1470`) — no
+   `author`. Fix: the create response carries the authenticated login (server
+   side — `gh` knows the user) and the snapshot populates it; the `??
+   'unknown'` fallback stays for genuinely unknown authors. The architect
+   confirms whether the Tasks LIST payload also lacks author for fresh rows.
 
 ## Scope & non-goals (YAGNI)
 
@@ -183,16 +199,34 @@ criteria — nothing to install.
   roles knob ON shows PM/Architect/Review phases in the Harness strip and
   blocks on a failing PM verdict.
 
-## Open questions
+## Decisions (PM-locked)
 
-1. **Roles knob default:** OFF like the QA knob (consistent, trust-earning) or
-   ON for start-work runs (the user's ask is "inherited by default")?
-   *Recommend: default ON for start-work-planned backlogs only* (the seam
-   knows its caller), OFF for manually-registered runs — the ask is
-   explicitly "so the user doesn't need to install/enable anything", and
-   start-work runs always have a spec for the PM gate to read.
-2. **Label picker scope:** repo labels fetched live vs the static
-   `type/*`+`priority/*` set? *Recommend: live fetch with static fallback.*
-3. **F4 unknowns:** if the "unknown author" turns out to be a `gh` payload
-   gap (not a UI hydration bug), the fix may belong in the fetch layer —
-   architect decides after root-causing.
+> Auto-resolved (autonomous run, 2026-07-02, PM phase run inline by the
+> orchestrator — the dispatched sdd-pm died on the account spend limit after
+> its verification pass began; all cites below were re-verified inline).
+> Overridable by a human note in `ai/STATE.md`.
+
+1. **D1 — The roles setting defaults ON, scoped to start-work-planned
+   backlogs only.** `harness.sdd.roles.enabled` defaults `true`; it is read
+   exactly once, inside `start_work`'s post-plan knob write — so manually
+   registered runs (Harness page, MCP scaffold/plan) are NEVER touched and
+   today's behavior there regresses nothing. Rationale: the ask is literally
+   "inherited so the user doesn't need to install/enable anything"; start-work
+   runs always have a spec for the PM gate to read; the cost (3 extra agent
+   spawns per run: PM, Architect, Review) is the product working as designed,
+   and the Settings toggle is the global opt-out. This deliberately diverges
+   from 005-D3's default-OFF precedent — that knob changed a PASS into a
+   possible FAIL for non-web projects; this one only adds gates to a flow
+   that is new surface (005) with no installed base.
+2. **D2 — Label picker: live fetch behind a thin new seam, static fallback.**
+   No repo-label fetch exists in the UI runtime today (PM-verified); add
+   `GET /api/github/labels?workdir=…` (thin `gh label list --json name`
+   wrapper, same slug resolution as the create route) and fall back to the
+   static `type/*` + `priority/*` set when it errors. No label creation from
+   the picker (spec 004 D3: ensure-create stays a transition-time concern).
+3. **D3 — F4 fix lands server + snapshot, not the dialog.** The create
+   response (`CreateIssueResponse`) gains the authenticated login (the `gh`
+   CLI knows its user); the composer populates `author` on the snapshot it
+   builds at `useComposerState.ts:1455-1470`. The dialog's `?? 'unknown'`
+   fallback stays. The architect confirms whether the Tasks LIST payload also
+   drops author for fresh rows and, if so, fixes the hydration there too.
