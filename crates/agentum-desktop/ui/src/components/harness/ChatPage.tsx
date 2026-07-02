@@ -176,6 +176,10 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
 
   // The in-flight stream's abort handle, so the Stop button can cancel it.
   const abortRef = useRef<AbortController | null>(null)
+  // Abort on unmount: hub tab switches unmount this page mid-stream far more
+  // casually than full-page navigation ever did — without this the fetch
+  // keeps streaming server-side into a discarded component.
+  useEffect(() => () => abortRef.current?.abort(), [])
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // Persist history shortly after the last change — coalesces the per-token state

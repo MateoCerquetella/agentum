@@ -6,7 +6,7 @@
 // into the hub's single project scope), so the hub adds navigation, not a
 // parallel implementation. The rail's Chat / Wiki / Board entries stay the
 // global, cross-project views.
-import React, { lazy, Suspense, useMemo } from 'react'
+import React, { lazy, Suspense, useEffect, useMemo } from 'react'
 import { ChevronLeft } from 'lucide-react'
 
 import { useAppStore } from '@/store'
@@ -36,6 +36,22 @@ export default function ProjectHubPage(): React.JSX.Element {
   const tab = useAppStore((s) => s.projectHubTab)
   const setProjectHubTab = useAppStore((s) => s.setProjectHubTab)
   const closeProjectHub = useAppStore((s) => s.closeProjectHub)
+
+  // The embedded TaskPage seeds its repo selection from taskPageData at MOUNT,
+  // and a detour through the global Board (rail click, palette) wipes that
+  // data (openTaskPage replaces it; closeTaskPage clears it). Re-assert the
+  // hub's repo before letting TaskPage mount — the render gate below holds the
+  // tab back for the one frame the effect needs, so it can never seed from
+  // stale data and silently show every repo's issues.
+  const taskDataSeeded = useAppStore((s) =>
+    repo != null && s.taskPageData.preselectedRepoId === repo.id
+  )
+  useEffect(() => {
+    if (!repo || tab !== 'tasks' || taskDataSeeded) return
+    useAppStore.setState((s) => ({
+      taskPageData: { ...s.taskPageData, preselectedRepoId: repo.id }
+    }))
+  }, [repo, tab, taskDataSeeded])
 
   const worktrees = useWorktreesForRepo(repo?.id ?? null)
   const visibleWorktrees = useMemo(() => worktrees.filter((w) => !w.isArchived), [worktrees])
@@ -125,7 +141,7 @@ export default function ProjectHubPage(): React.JSX.Element {
               transcript state) re-seeds instead of leaking across projects. */}
           {tab === 'chat' ? <ChatPage key={repo.id} pinnedRepo={repo} /> : null}
           {tab === 'wiki' ? <WikiPage key={repo.id} pinnedRepoId={repo.id} /> : null}
-          {tab === 'tasks' ? <TaskPage key={repo.id} embedded /> : null}
+          {tab === 'tasks' && taskDataSeeded ? <TaskPage key={repo.id} embedded /> : null}
           {tab === 'sessions' ? <ProjectSessionsList repoId={repo.id} /> : null}
         </Suspense>
       </div>

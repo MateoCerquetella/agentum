@@ -841,7 +841,11 @@ export default function TaskPage({
   // The Tasks view is a sync source for the Board: map the loaded issues of the
   // active provider into board cards (idempotent upsert keyed on issue URL), so
   // GitHub/Linear issues flow in as cards on the one board.
-  const setActiveBoardView = useAppStore((s) => s.setActiveView)
+  // Why routed (not raw setActiveView): from the embedded hub Tasks tab this
+  // is a real navigation to the full Board page — openTaskPage records
+  // previousViewBeforeTasks ('project') so Esc/X return to the hub instead of
+  // whatever stale view the last Board visit left behind.
+  const routedOpenBoardPage = useAppStore((s) => s.openTaskPage)
   const [syncingToBoard, setSyncingToBoard] = useState(false)
   const syncTasksToBoard = useCallback(async () => {
     let inputs: SyncIssueInput[] = []
@@ -881,14 +885,14 @@ export default function TaskPage({
       const { synced } = await syncExternalIssues(inputs)
       toast.success(
         `Synced ${synced.length} ${taskSource} issue${synced.length === 1 ? '' : 's'} to the Board.`,
-        { action: { label: 'Open Board', onClick: () => setActiveBoardView('tasks') } }
+        { action: { label: 'Open Board', onClick: () => routedOpenBoardPage() } }
       )
     } catch (e) {
       toast.error(`Sync to Board failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSyncingToBoard(false)
     }
-  }, [taskSource, pages, linearIssues, setActiveBoardView])
+  }, [taskSource, pages, linearIssues, routedOpenBoardPage])
   const [linearDisplayProperties, setLinearDisplayProperties] = useState<
     ReadonlySet<LinearDisplayProperty>
   >(() => new Set(DEFAULT_LINEAR_DISPLAY_PROPERTIES))
@@ -3395,26 +3399,33 @@ export default function TaskPage({
                         something. */}
                     {githubMode !== 'project' && (
                       <>
-                        <div className="min-w-0 max-w-[220px] shrink-0">
-                          <RepoMultiCombobox
-                            repos={eligibleRepos}
-                            selected={repoSelection}
-                            onChange={(next) => {
-                              setRepoSelection(next)
-                              void updateSettings({ defaultRepoSelection: [...next] }).catch(() => {
-                                toast.error('Failed to save project selection.')
-                              })
-                            }}
-                            onSelectAll={() => {
-                              const allIds = new Set(eligibleRepos.map((r) => r.id))
-                              setRepoSelection(allIds)
-                              void updateSettings({ defaultRepoSelection: null }).catch(() => {
-                                toast.error('Failed to save project selection.')
-                              })
-                            }}
-                            triggerClassName="h-8 w-auto max-w-[220px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs font-medium shadow-sm transition hover:bg-muted/50 focus:ring-2 focus:ring-ring/20 focus:outline-none"
-                          />
-                        </div>
+                        {/* Embedded (Project Hub): the repo scope IS the hub's
+                            project — no multi-repo picker, and crucially no
+                            updateSettings writes that would overwrite the
+                            user's global Board repo default from inside a
+                            per-project view. */}
+                        {embedded ? null : (
+                          <div className="min-w-0 max-w-[220px] shrink-0">
+                            <RepoMultiCombobox
+                              repos={eligibleRepos}
+                              selected={repoSelection}
+                              onChange={(next) => {
+                                setRepoSelection(next)
+                                void updateSettings({ defaultRepoSelection: [...next] }).catch(() => {
+                                  toast.error('Failed to save project selection.')
+                                })
+                              }}
+                              onSelectAll={() => {
+                                const allIds = new Set(eligibleRepos.map((r) => r.id))
+                                setRepoSelection(allIds)
+                                void updateSettings({ defaultRepoSelection: null }).catch(() => {
+                                  toast.error('Failed to save project selection.')
+                                })
+                              }}
+                              triggerClassName="h-8 w-auto max-w-[220px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs font-medium shadow-sm transition hover:bg-muted/50 focus:ring-2 focus:ring-ring/20 focus:outline-none"
+                            />
+                          </div>
+                        )}
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
