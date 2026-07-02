@@ -9,9 +9,23 @@ const STORAGE_KEY = 'agentum.chat.conversations.v1'
  *  single localStorage key can't grow unbounded across months of use. */
 const MAX_CONVERSATIONS = 200
 
+/** The outcome of a confirmed draft: what got filed, where. Stored on the
+ *  summary turn so the transcript can render a clickable issues card instead of
+ *  plain markdown. Structurally mirrors the create response but is declared
+ *  here so the storage schema can't drift under a wire-type change. */
+export type FiledResult = {
+  provider: 'github' | 'linear'
+  repo: string | null
+  issues: { title: string; url: string; id?: string }[]
+  failed: { title: string; error: string }[]
+}
+
 /** A transcript turn as stored/rendered — the wire {@link ChatTurn} plus the
- *  optional extended-thinking trace captured alongside an assistant reply. */
-export type StoredTurn = ChatTurn & { thinking?: string }
+ *  optional extended-thinking trace captured alongside an assistant reply and,
+ *  on a filing-summary turn, the {@link FiledResult}. `content` always keeps
+ *  the markdown fallback so pre-existing chats and old builds render the same
+ *  information. */
+export type StoredTurn = ChatTurn & { thinking?: string; filed?: FiledResult }
 
 /** One saved conversation. `model`/`thinking` are the settings it was last run
  *  with, so reopening it restores the picker state. `repoId` scopes the thread
