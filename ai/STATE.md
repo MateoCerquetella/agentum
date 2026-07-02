@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 005-one-shot-issue-loop
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 Architect COMPLETE 2026-07-02, `architecture.md` gate 5/5, C1–C5 corrections, handoff 02 written; worktree `.claude/worktrees/finish-the-loop`, base `7e9afaa4`; 004 **RELEASED v0.49.0**. Installed-app spot-check still pending: chip, toggle, live label flip)
+- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 Developer COMPLETE 2026-07-02 in 3 gated slices — F2+F3+F4 `197a7bea`, F1 `ae8bf467`, F5 `3b0a00d0`; final gate 518/0 lib + desktop check + vite green; handoff 03 written; worktree `.claude/worktrees/finish-the-loop`. 004 **RELEASED v0.49.0**; installed-app spot-check still pending)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,18 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Developer | **005 slice 3: F5 GREEN — developer phase
+  COMPLETE** (`3b0a00d0`; 518/0 lib, cargo check -p agentum-desktop green,
+  vite green). GithubStateMap (defaults→github.json→env via pure
+  `apply_layers`; label_for/labels; phase-keyed `github_status_color`);
+  argv builders widened (name-filtered remove-set, dedup, byte-identical
+  default pin honored pre/post); flat-arg `github_get/set_state_map` Tauri
+  commands + unconditional Settings editor. Todo-at-plan test hardened with
+  `AGENTUM_GITHUB_CONFIG`→absent-file pin (github arm now reads from_env).
+  🐛 PRE-EXISTING found, not fixed: Linear editor sends snake_case invoke
+  keys that never bind → every Linear save silently clears
+  in_progress/ready_to_test overrides — file an issue at ship time. Handoff
+  `03-developer-to-tester.md`. Phase → tester.
 - 2026-07-02 | Developer | **005 slice 2: F1 GREEN** (`ae8bf467`; 512/0 lib,
   vite 1m03s, vitest 10/0). POST /api/harness/start-work + shared
   `ensure_spec_and_plan` (Todo-at-plan inherited by 004 route, test-pinned
@@ -117,16 +129,3 @@
   drifted (resolve_qa_mode → drive.rs:407-423; Todo-at-plan →
   board_goals.rs:604-616; draft-open → open-created-workspace.ts:52-66).
   Handoff `01-pm-to-architect.md`. Phase → architect.
-- 2026-07-02 — **Spec 005 drafted (one-shot issue loop) + PM gate PASSED** from
-  Mateo's ask (chat → issue → Start work → boards live even w/ custom statuses →
-  spec in worktree → seamless prompt-injected agent loop → agentum_browser QA).
-  Code-verified gap map on develop tip `1e259604`: the pieces all exist but the
-  chain stalls after workspace creation — nothing registers/runs the engine in
-  the new worktree (Harness page is a separate manual hop, `HarnessEngine.tsx:588`);
-  composer opens the agent with a **draft** prompt (never submitted); the engine's
-  feature prompt ignores the scaffolded spec (`harness/helpers.rs:33`); QA prompt
-  steers to Playwright skill not `agentum_browser` (`helpers.rs:141`); no MCP/HTTP
-  status verb for out-of-engine (/sdd-loop) agents; GitHub labels hardcoded (no
-  LinearStateMap parity). Five increments F1–F5; 4 open questions (orchestration
-  home, suppression-vs-adoption, QA default posture, state_map scope) carry
-  recommendations for auto-resolution. Phase → pm→architect next.
