@@ -38,8 +38,7 @@ function PrimaryNavItem({
   active,
   onClick,
   badge,
-  soon,
-  iconClassName
+  soon
 }: {
   icon: LucideIcon
   label: string
@@ -47,10 +46,6 @@ function PrimaryNavItem({
   onClick: () => void
   badge?: number
   soon?: boolean
-  // A per-destination accent (--chart-* token) so the rail reads as colorful
-  // instead of a wall of grey. Kept in both states — the small icon carries the
-  // colour while the row background/label still signal the active item.
-  iconClassName?: string
 }): React.JSX.Element {
   return (
     <button
@@ -65,7 +60,7 @@ function PrimaryNavItem({
       )}
     >
       <Icon
-        className={cn('mt-0.5 size-4 shrink-0', iconClassName ?? 'text-sidebar-foreground/40')}
+        className="mt-0.5 size-4 shrink-0 text-sidebar-foreground/40"
         strokeWidth={active ? 2.25 : 1.75}
       />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -200,14 +195,12 @@ const SidebarNav = React.memo(function SidebarNav() {
         active={activityActive}
         onClick={openActivityPage}
         badge={activityUnreadCount}
-        iconClassName="text-chart-2"
       />
       <PrimaryNavItem
         icon={MessagesSquare}
         label="Chat"
         active={harnessActive}
         onClick={openHarnessPage}
-        iconClassName="text-chart-1"
       />
       <PrimaryNavItem icon={BookText} label="Wiki" active={wikiActive} onClick={openWikiPage} />
 
@@ -249,7 +242,7 @@ const SidebarNav = React.memo(function SidebarNav() {
         aria-label="Search worktrees and browser tabs"
         className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight text-sidebar-foreground/60 transition-colors hover:bg-sidebar-foreground/8"
       >
-        <Search className="size-4 shrink-0 text-chart-3" strokeWidth={1.75} />
+        <Search className="size-4 shrink-0 text-sidebar-foreground/40" strokeWidth={1.75} />
         <span className="flex-1">Search</span>
         <kbd className="hidden rounded border border-border/60 bg-background/40 px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground group-hover:inline-flex items-center">
           {worktreePaletteShortcut}
