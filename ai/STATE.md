@@ -3,9 +3,9 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 002-start-loads-spec
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (002 Option B impl + gated; browser QA + release = human)
-- **mode:** HITL         <!-- HITL (human in the loop) | auto -->
+- **current_spec:** 004-workspace-issue-loop
+- **phase:** architect   <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (004 PM gate passed; 002 parked at human-gated release)
+- **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
@@ -25,51 +25,22 @@
   `routes/github.rs` `GET /api/github/issue` + UI fetch → linkedContext → prompt;
   npm build + cargo test (453/0) green; AC-3 verified. NOT runtime/browser-verified.
   Release = human-gated.
+- **004-workspace-issue-loop** — Drafted + PM-gated (2026-07-01). Three increments:
+  (A) composer "Create GitHub issue" + worktree registry persists linked metadata
+  (`worktrees.rs:249/351` drops it today); (B) real GitHub arm for
+  `apply_tracker_transition` (`task_sink.rs:278-282` is a logged no-op; drive.rs
+  call sites already correct); (C) issue→`.agentum-harness/specs/<id>/spec.md`
+  scaffold over an HTTP seam (helpers exist, MCP-only today). ✅ PM-locked D1–D5
+  (Done=label-only, gh CLI writes, `status/*` canon labels, one spec built
+  status-sync-first, scaffold opt-in/off); AC 4 softened — the GitHub arm needs
+  the repo slug, so threading `feature.tracker_url` through the seam
+  (`drive.rs:321`) is the one permitted drive.rs touch. Handoff:
+  `ai/specs/004-workspace-issue-loop/handoffs/01-pm-to-architect.md`. Phase →
+  architect.
 
 ## Decision log
 
-<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>` -->
-- 2026-06-30 — Adopted the `ai/` SDD scaffold; retired `docs/superpowers/`.
-  Execution runs through the Harness Engine (`.harness/`), gated by
-  `verify.sh` + `qa.sh`.
-- 2026-06-30 — From the "Ara" idea, scoped spec **001-autowiki** as the first
-  slice (AutoWiki: generate + browse a repo wiki on demand). Deferred graph
-  memory + autonomous PR-review bot; kept `examples/harness-demo` (live-test
-  fixture).
-- 2026-06-30 — Found `new-idea` was 237 commits behind `origin/develop` (HEAD
-  v0.26). Re-based onto a fresh `feat/autowiki` worktree off `origin/develop` @
-  `fe1a2a6a`; re-grounded reuse-vs-build on current code. Mermaid diagrams pulled
-  into v1 (renderer already draws them); persistence is on-disk `.agentum/wiki/`.
-  PM gate passed → phase `pm` (ready for architect).
-- 2026-06-30 — Architect blueprint complete (`architecture.md`): job-model generate
-  (returns `sessionId`); on-disk `.agentum/wiki/` + `.status.json`; reuse
-  `MarkdownPreview` as-is; git-ignore via `.agentum/.gitignore`; widen
-  `wait_for_settle`/`teardown_session`/`gather_repo_context` to `pub(crate)`. Phase
-  → developer; scaffolded `.harness/`, building slices behind the verify gate.
-- 2026-06-30 — Slice 1 (wiki-contract) GREEN: `crates/agentum-server/src/wiki.rs`
-  (WikiIndex/WikiPageMeta, parse_wiki_index, is_valid_slug, build_wiki_prompt) +
-  `lib.rs` mod; 9 unit tests pass, fmt-clean (reverted unrelated mcp.rs fmt drift).
-  Gate run scoped to `wiki::` (full lib suite times out locally). Next: wiki-routes.
-- 2026-06-30 — Slice 2 (wiki-routes) GREEN: `routes/wiki.rs` (GET list/page + POST
-  generate via `spawn_agent_into_pane` + the QA-capture recipe; on-disk
-  `.status.json`; slug-traversal guard; job-model returns sessionId). Widened
-  `wait_for_settle`/`teardown_session`/`gather_repo_context` to pub(crate) +
-  re-exported from `harness`. 14 wiki tests pass. Next: wiki-view (desktop UI).
-- 2026-06-30 — Slice 3 (wiki-view) BUILD-GREEN: `runtime/wiki-client.ts` +
-  `components/wiki/WikiPage.tsx` (reuses `MarkdownPreview` as-is; empty/running/
-  failed/ready states; workdir via `splitWorktreeIdForFilesystem`; `[[Title]]` nav;
-  3s poll for running→ready) + 6 store/nav edits (`BookText` rail). `bun install` +
-  `npm run build` ✓ (9m23s). All 3 slices green at the unit/build gate; browser QA
-  + commit/PR remain.
-- 2026-06-30 — AutoWiki committed (`3a8dbf06`) + pushed; issue #182, PR #183 into
-  develop (MERGEABLE; the merge was blocked by the safety classifier — user merges).
-  An env reset then wiped the local autowiki worktree (work safe on origin).
-- 2026-06-30 — Scoped spec **002-start-loads-spec** (Start an external ticket → the
-  agent gets the spec, no internal board). Grounded on current develop in a fresh
-  `feat/chat-spec-roundtrip` worktree off `origin/feat/autowiki` (a stale-reading
-  subagent had to be discarded). Finding: chat creation already does
-  title+body+external-only; the gap is **Start** not feeding the issue body to the
-  agent. PM-gated; awaiting the user on 4 open questions.
+<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
 - 2026-06-30 — 002 scope LOCKED (Mateo): creation is fine (installed app behind, not
   a bug) → **Start-only**; Start runs **directly off the external ticket** (no card,
   live body fetch). Ready for architect.
@@ -84,3 +55,21 @@
   + `openComposerForItem` folds the body into the agent prompt (graceful fallback).
   npm build + cargo test (453/0) green; AC-3 held. **/loop STOPPED at the
   human-gated release** (browser QA + merge/promote/tag = Mateo).
+- 2026-07-01 — Drafted spec **004-workspace-issue-loop** from Mateo's ask (issue
+  flow + status movement missing; workspace creation should create the GitHub
+  issue + the spec). Research findings: GitHub tracker transition is a logged
+  no-op (`task_sink.rs:278-282`) while `harness/drive.rs` already fires
+  InProgress/ReadyToTest/Done at the right points; the composer can only LINK
+  issues (create lives on Tasks/Chat, disconnected); local
+  `POST /api/worktrees/create` drops linkedIssue/PR metadata (`worktrees.rs:351`);
+  no code authors a spec.md (scaffold/plan helpers exist but are MCP-only, no
+  HTTP seam); `board_sync.rs:456-478` already closes GitHub issues via
+  `forge_send` REST (proven write path). PM gate passed → phase `pm`.
+- 2026-07-01 — 004 PM gate PASSED (autonomous; loop-armed = adopt recommendations).
+  D1 Done=label-only (no auto-close; per-repo toggle deferred). D2 transitions via
+  gh CLI. D3 labels `status/todo|in-progress|ready-to-test|done` (ensure-created,
+  fixed colors, exactly one per issue). D4 one spec, build order
+  F1=github-status-transition first. D5 scaffold opt-in, off by default. Fixed:
+  AC 4's "zero drive.rs changes" was unsatisfiable (seam gets only `feature.id`;
+  GitHub arm needs the repo slug from `tracker_url` — `drive.rs:321` widening
+  allowed). Mode → auto (/sdd-loop). Phase → architect.
