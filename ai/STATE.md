@@ -64,6 +64,20 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Developer | **005 slice 1: F2+F3+F4 GREEN** (`197a7bea`; 507/0
+  lib tests, fmt clean, vite green). F2 spec_id stamp + prompt widening (two
+  byte-identical pins written against the PRE-change function). F3 pure
+  resolve_qa_mode + `harness.qa.agent_browser.enabled` store setting +
+  GET/PUT /api/harness/settings + IntegrationsPane toggle; QA prompt →
+  agentum_browser (verdict contract character-identical). F4
+  agentum_report_status (ungated, never-Err text mapping, board-card wire
+  test). Deviations logged in tasks.md: skill-name still present in the
+  "Do NOT use" steer (test asserts no *instruction*); toggle is a standalone
+  card (Linear editor renders only when connected); stale
+  qa_mode/qa_agent_tool doc comments flagged for reviewer. Zero structural
+  diffs in drive_inner/spawn (orchestrator-verified). Fresh-worktree gotcha:
+  `bun install` before the vite gate. Phase stays developer → slice 2 = F1
+  (start-work route + engine lock + composer/Tasks UI), slice 3 = F5.
 - 2026-07-02 | Architect | **005 blueprint COMPLETE (`architecture.md`), gate
   PASS 5/5.** Route = `POST /api/harness/start-work` (harness namespace, not
   /api/workflows — YAGNI); shared `ensure_spec_and_plan` core (converge flag)
@@ -103,17 +117,6 @@
   LinearStateMap parity). Five increments F1–F5; 4 open questions (orchestration
   home, suppression-vs-adoption, QA default posture, state_map scope) carry
   recommendations for auto-resolution. Phase → pm→architect next.
-- 2026-07-01 — 004 Tester: **7/7 ACs PASS** (`verification.md`). Independently
-  re-ran the full suite (494/0/5) + 4 scoped suites + vite (✓ 1m11s) + the
-  auth.rs no-`is_public` diff (empty). Exactness confirmed by reading code:
-  label table verbatim, remove-set can never name `status/qa*`, NO close path
-  in the arm (D1), all 6 failure paths → `Ok(Skipped)` (no `?`/`Err`).
-  Commit-attributed the drive.rs range diff: spec-004 = only the
-  `transition_tracker` widening (second hunk = pre-spec `05abe6f1`). 4 Info
-  findings (GHES URLs skip silently; no handler-level 400 tests; no dedicated
-  30s-timeout test; the attribution note) — none blocking. GUI behaviors
-  (chip, toggle, live label flip) = qa.sh/staging gate. **ADVANCE → reviewer**
-  (handoff `04-tester-to-reviewer.md`).
 - 2026-07-01 — 004 Reviewer **SIGN-OFF → SHIP-READY** (`review.md`). All 6
   focus items pass; invariants hold; "test suite unusually communicative;
   comment discipline exemplary". 0 Blockers. Follow-ups (non-blocking):
