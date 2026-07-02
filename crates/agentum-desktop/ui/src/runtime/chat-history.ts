@@ -28,7 +28,9 @@ export type FiledResult = {
 export type StoredTurn = ChatTurn & { thinking?: string; filed?: FiledResult }
 
 /** One saved conversation. `model`/`thinking` are the settings it was last run
- *  with, so reopening it restores the picker state. */
+ *  with, so reopening it restores the picker state. `repoId` scopes the thread
+ *  to the project it was grounded in (the Project Hub filters by it); optional
+ *  because conversations predating the hub carry no scope. */
 export type Conversation = {
   id: string
   title: string
@@ -37,6 +39,7 @@ export type Conversation = {
   thinking: boolean
   createdAt: number
   updatedAt: number
+  repoId?: string
 }
 
 /** A unique-enough id without a uuid dependency (time + random suffix). */

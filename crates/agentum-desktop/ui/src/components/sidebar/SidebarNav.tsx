@@ -237,7 +237,7 @@ const SidebarNav = React.memo(function SidebarNav() {
           {/* "Board" = the Tasks view: your GitHub/Linear issues. Chat creates
               issues that show up here. (Tasks renamed to Board, #48 redo.) */}
           <Columns3
-            className="size-4 shrink-0 text-chart-4"
+            className="size-4 shrink-0 text-sidebar-foreground/40"
             strokeWidth={tasksActive ? 2.25 : 1.75}
           />
           <span className="flex-1">Board</span>

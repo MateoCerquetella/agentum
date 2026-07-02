@@ -94,7 +94,13 @@ function pageToDocument(workdir: string, page: WikiPageMeta): MarkdownDocument {
   }
 }
 
-export default function WikiPage(): React.JSX.Element {
+export default function WikiPage({
+  pinnedRepoId
+}: {
+  /** Project Hub embed: lock the wiki to one project and drop the Projects
+   *  rail + page title (the hub renders its own chrome). */
+  pinnedRepoId?: string
+} = {}): React.JSX.Element {
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
   const detectedAgentIds = useAppStore((s) => s.detectedAgentIds)
@@ -108,14 +114,18 @@ export default function WikiPage(): React.JSX.Element {
 
   // Which project's wiki we're viewing. Default to the active repo, else the
   // first; keep it valid as repos come and go.
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(pinnedRepoId ?? null)
   useEffect(() => {
+    if (pinnedRepoId) {
+      setSelectedRepoId(pinnedRepoId)
+      return
+    }
     setSelectedRepoId((cur) => {
       if (cur && repos.some((r) => r.id === cur)) return cur
       if (activeRepoId && repos.some((r) => r.id === activeRepoId)) return activeRepoId
       return repos[0]?.id ?? null
     })
-  }, [repos, activeRepoId])
+  }, [repos, activeRepoId, pinnedRepoId])
 
   const selectedRepo = useMemo(
     () => repos.find((r) => r.id === selectedRepoId) ?? null,
@@ -163,8 +173,10 @@ export default function WikiPage(): React.JSX.Element {
   // probed too now (the wiki is git-keyed, so a shared one resolves for them).
   const [repoStatuses, setRepoStatuses] = useState<Record<string, RepoWikiStatus>>({})
   const sweep = useCallback(async (): Promise<void> => {
+    // Hub embed: the rail is hidden, so only the pinned project needs a probe.
+    const targets = pinnedRepoId ? repos.filter((r) => r.id === pinnedRepoId) : repos
     const entries = await Promise.all(
-      repos.map(async (r): Promise<[string, RepoWikiStatus]> => {
+      targets.map(async (r): Promise<[string, RepoWikiStatus]> => {
         try {
           const res = await getWiki(r.id)
           return [r.id, res.state]
@@ -174,7 +186,7 @@ export default function WikiPage(): React.JSX.Element {
       })
     )
     setRepoStatuses(Object.fromEntries(entries))
-  }, [repos])
+  }, [repos, pinnedRepoId])
   useEffect(() => {
     void sweep()
   }, [sweep])
@@ -338,14 +350,20 @@ export default function WikiPage(): React.JSX.Element {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
+        {/* Hub embed keeps the action strip (generate/save are per-project) but
+            drops the page title — the hub header already names the project. */}
         <div className="flex items-center gap-2">
-          <BookText className="size-4 text-muted-foreground" />
-          <h1 className="text-sm font-semibold tracking-tight">Wiki</h1>
-          {repos.length > 0 ? (
-            <span className="text-xs text-muted-foreground">
-              · {repos.length} project{repos.length === 1 ? '' : 's'}
-            </span>
-          ) : null}
+          {pinnedRepoId ? null : (
+            <>
+              <BookText className="size-4 text-muted-foreground" />
+              <h1 className="text-sm font-semibold tracking-tight">Wiki</h1>
+              {repos.length > 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  · {repos.length} project{repos.length === 1 ? '' : 's'}
+                </span>
+              ) : null}
+            </>
+          )}
         </div>
         {index?.state === 'ready' && !isRemote ? (
           <div className="flex items-center gap-2">
@@ -397,12 +415,14 @@ export default function WikiPage(): React.JSX.Element {
         />
       ) : (
         <div className="flex min-h-0 flex-1">
-          <RepoRail
-            repos={repos}
-            statuses={repoStatuses}
-            selectedRepoId={selectedRepoId}
-            onSelect={setSelectedRepoId}
-          />
+          {pinnedRepoId ? null : (
+            <RepoRail
+              repos={repos}
+              statuses={repoStatuses}
+              selectedRepoId={selectedRepoId}
+              onSelect={setSelectedRepoId}
+            />
+          )}
           <div className="min-w-0 flex-1">
             {renderBody({
               repoId,
