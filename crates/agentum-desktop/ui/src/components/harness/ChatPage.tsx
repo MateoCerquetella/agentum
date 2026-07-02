@@ -92,6 +92,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
   const setActiveView = useAppStore((s) => s.setActiveView)
+  const openProjectHub = useAppStore((s) => s.openProjectHub)
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations())
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -522,18 +523,50 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
             ) : (
               visibleConversations.map((c) => {
                 const isActive = c.id === activeId
+                // Global view: a thread grounded in a project links to that
+                // project's hub chat (ADE prototype "open a thread to scope
+                // it"). Pinned (hub) mode skips the chip — every row is
+                // already this project.
+                const threadRepo =
+                  !pinnedRepo && c.repoId ? (repos.find((r) => r.id === c.repoId) ?? null) : null
                 return (
                   <div key={c.id} className="group relative">
-                    <button
-                      type="button"
+                    {/* div-with-button-role (not <button>) so the project chip
+                        below can be a real nested button without invalid
+                        interactive nesting — same pattern as sidebar headers. */}
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => selectConversation(c)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          selectConversation(c)
+                        }
+                      }}
                       className={cn(
-                        'flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 pr-8 text-left transition-colors',
+                        'flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2 pr-8 text-left transition-colors',
                         isActive ? 'bg-accent' : 'hover:bg-foreground/5'
                       )}
                     >
                       <span className="truncate text-[13px]">{c.title}</span>
                       <span className="flex items-center gap-1.5 truncate font-mono text-[10px] text-muted-foreground">
+                        {threadRepo ? (
+                          <>
+                            <button
+                              type="button"
+                              title={`Open ${threadRepo.displayName} hub`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openProjectHub(threadRepo.id, 'chat')
+                              }}
+                              className="max-w-[9rem] truncate rounded-sm border border-border/70 px-1 py-px text-[9.5px] leading-none hover:border-foreground/40 hover:text-foreground"
+                            >
+                              {threadRepo.displayName}
+                            </button>
+                            <span aria-hidden>·</span>
+                          </>
+                        ) : null}
                         <span>{timeAgo(c.updatedAt)}</span>
                         <span aria-hidden>·</span>
                         <span className="truncate">{shortModel(c.model)}</span>
@@ -541,7 +574,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                           <Brain className="size-3 text-primary/70" aria-label="thinking" />
                         ) : null}
                       </span>
-                    </button>
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeConversation(c)}
