@@ -119,6 +119,9 @@ export type ManagedPaneInternal = {
   paneDragCleanup?: (() => void) | null
   // Stored so disposePane() can remove it and avoid a memory leak.
   compositionHandler: (() => void) | null
+  // The user-configured xterm scrollback, stashed while a hidden-pane trim
+  // is in effect (see trimHiddenPaneScrollback). undefined = not trimmed.
+  configuredScrollback?: number
   // Why: splitPane reparents DOM; its delayed restore owns scroll until the
   // browser settles, so intermediate fits must not compete with it.
   pendingSplitScrollState: ScrollState | null

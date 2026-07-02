@@ -12,8 +12,8 @@
 //! window); everything else — list/add/update/create/clone/remove/reorder and
 //! the base-ref helpers — is here.
 
+use super::util::now_millis;
 use std::path::{Path as StdPath, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use agentum_core::{Host, LOCAL_HOST_ID};
 use axum::Json;
@@ -70,13 +70,6 @@ struct Repo {
 const BADGE_COLORS: [&str; 8] = [
     "#5b8def", "#27c498", "#e0556a", "#d99e3f", "#9b6ef3", "#3fb6d9", "#e07a3f", "#7a8aa0",
 ];
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 /// `~/.agentum/repos.json` — the legacy desktop registry location (see module doc).
 fn registry_path() -> Result<PathBuf, ApiError> {

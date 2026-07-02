@@ -25,6 +25,8 @@ import {
 import { Button } from '@/components/ui/button'
 import TabBar from './tab-bar/TabBar'
 import TerminalPane from './terminal-pane/TerminalPane'
+import CloseTerminalDialog from './terminal-pane/CloseTerminalDialog'
+import { useRunningTerminalCloseGuard } from './terminal-pane/use-running-terminal-close-guard'
 import {
   AGENTUM_EDITOR_REQUEST_FILE_CLOSE_EVENT,
   AGENTUM_EDITOR_SAVE_AND_CLOSE_EVENT,
@@ -316,6 +318,10 @@ function Terminal(): React.JSX.Element | null {
   // Window close confirmation dialog — shown for local terminals with running
   // child processes. SSH terminals detach/persist through the relay lifecycle.
   const [windowCloseDialogOpen, setWindowCloseDialogOpen] = useState(false)
+
+  // Per-tab "Stop running command?" guard for the fallback tab bar's close (X).
+  // The modern split-group tab strip runs its own guard in TabGroupPanel.
+  const closeTabGuard = useRunningTerminalCloseGuard()
 
   // Why: when the main process requests a close while editor tabs are dirty, we
   // must not call confirmWindowClose() until the user saves or discards. The
@@ -944,6 +950,16 @@ function Terminal(): React.JSX.Element | null {
     ]
   )
 
+  // Why: the tab bar's X closes directly, unlike Cmd+W / context-menu "Close
+  // Pane" which already confirm at the pane level. Route it through the guard so
+  // closing a session tab with a running command double-checks first.
+  const requestCloseTab = useCallback(
+    (tabId: string) => {
+      closeTabGuard.requestClose(tabId, () => handleCloseTab(tabId))
+    },
+    [closeTabGuard.requestClose, handleCloseTab]
+  )
+
   const handleCloseBrowserTab = useCallback(
     (tabId: string) => {
       const state = useAppStore.getState()
@@ -1566,7 +1582,7 @@ function Terminal(): React.JSX.Element | null {
             activeTabId={activeTabId}
             worktreeId={activeWorktreeId}
             onActivate={handleActivateTab}
-            onClose={handleCloseTab}
+            onClose={requestCloseTab}
             onCloseOthers={handleCloseOthers}
             onCloseToRight={handleCloseTabsToRight}
             onNewTerminalTab={() => handleNewTab()}
@@ -1863,6 +1879,13 @@ function Terminal(): React.JSX.Element | null {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <CloseTerminalDialog
+        open={closeTabGuard.dialog.open}
+        dontAskAgain={closeTabGuard.dialog.dontAskAgain}
+        onDontAskAgainChange={closeTabGuard.dialog.onDontAskAgainChange}
+        onCancel={closeTabGuard.dialog.onCancel}
+        onConfirm={closeTabGuard.dialog.onConfirm}
+      />
     </div>
   )
 }

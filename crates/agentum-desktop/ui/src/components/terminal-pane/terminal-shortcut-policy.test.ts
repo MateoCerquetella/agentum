@@ -42,6 +42,8 @@ describe('resolveTerminalShortcutAction', () => {
     ).toEqual({
       type: 'toggleSearch'
     })
+    // Cmd+K is the terminal's clear chord — the app command palette lives on
+    // Cmd+Shift+P (the palettes merged in #210), so there is no double-bind.
     expect(
       resolveTerminalShortcutAction(event({ key: 'k', code: 'KeyK', metaKey: true }), true)
     ).toEqual({
@@ -163,9 +165,11 @@ describe('resolveTerminalShortcutAction', () => {
       'terminal.search': []
     }
 
+    // Rebinding clear frees its default chord. (Ctrl+Shift+K would resolve to
+    // terminal.redraw, which owns Mod+Shift+K by default.)
     expect(
       resolveTerminalShortcutAction(
-        event({ key: 'k', code: 'KeyK', ctrlKey: true, shiftKey: true }),
+        event({ key: 'k', code: 'KeyK', ctrlKey: true }),
         false,
         'false',
         0,
@@ -194,6 +198,7 @@ describe('resolveTerminalShortcutAction', () => {
       )
     ).toBeNull()
   })
+
 
   it('resolves equalize pane sizes only when users assign it', () => {
     expect(

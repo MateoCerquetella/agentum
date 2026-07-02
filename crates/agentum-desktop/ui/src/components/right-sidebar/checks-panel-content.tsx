@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { CHECK_SORT_ORDER, formatCheckTimestamp, getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
 /* eslint-disable max-lines -- Why: co-locating all checks-panel sub-components (checks list,
 conflict sections, threaded PR comments) keeps the shared icon/color maps in one place. */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
@@ -337,16 +338,6 @@ export function PRTriageStrip({
   )
 }
 
-const CHECK_SORT_ORDER: Record<string, number> = {
-  failure: 0,
-  timed_out: 0,
-  cancelled: 1,
-  pending: 2,
-  neutral: 3,
-  skipped: 4,
-  success: 5
-}
-
 type CheckDetailsLoadState = {
   loading: boolean
   details: PRCheckRunDetails | null
@@ -370,61 +361,12 @@ function getCheckDetailsKey(contextKey: string, check: PRCheckDetail, index: num
   return `${contextKey}::${getCheckIdentityKey(check, index)}`
 }
 
-function getCheckConclusion(check: PRCheckDetail): NonNullable<PRCheckDetail['conclusion']> {
-  return check.conclusion ?? 'pending'
-}
-
 function isFailedCheck(check: PRCheckDetail): boolean {
   return ['failure', 'cancelled', 'timed_out'].includes(getCheckConclusion(check))
 }
 
 function isFailureState(state: string | null | undefined): boolean {
   return state === 'failure' || state === 'failed' || state === 'cancelled' || state === 'timed_out'
-}
-
-function getCheckStatusLabel(check: PRCheckDetail): string {
-  const conclusion = getCheckConclusion(check)
-  if (conclusion === 'success') {
-    return 'Successful'
-  }
-  if (conclusion === 'failure') {
-    return 'Failed'
-  }
-  if (conclusion === 'cancelled') {
-    return 'Cancelled'
-  }
-  if (conclusion === 'timed_out') {
-    return 'Timed out'
-  }
-  if (conclusion === 'neutral') {
-    return 'Neutral'
-  }
-  if (conclusion === 'skipped') {
-    return 'Skipped'
-  }
-  if (check.status === 'queued') {
-    return 'Queued'
-  }
-  if (check.status === 'in_progress') {
-    return 'In progress'
-  }
-  return 'Pending'
-}
-
-function formatCheckTimestamp(input: string | null | undefined): string | null {
-  if (!input) {
-    return null
-  }
-  const date = new Date(input)
-  if (Number.isNaN(date.getTime())) {
-    return null
-  }
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  })
 }
 
 export function getFailedChecksForDetails(checks: PRCheckDetail[]): PRCheckDetail[] {

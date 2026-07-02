@@ -25,6 +25,15 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use uuid::Uuid;
 
+// Two independent background workers built on the same event bus, split into
+// their own modules; each reaches back for the crate's shared `Store`/`Event`/
+// `emit`/error types via `use super::*`. Their `run_*` entry points are the
+// crate's public API (the server's `spawn_background_workers` spawns them).
+mod comment_bridge;
+mod reconciler;
+pub use comment_bridge::run_session_comment_bridge;
+pub use reconciler::run_goal_reconciler;
+
 /// How often each session's pane is sampled for activity / crash
 /// signatures. Was 5 s; halved to 1 s so the sidebar dot follows the
 /// agent's Working ↔ Idle ↔ AwaitingInput transitions on perceived-
@@ -51,6 +60,33 @@ fn sample_tick(kind: &agentum_core::HostKind) -> Duration {
     match kind {
         agentum_core::HostKind::Ssh { .. } => REMOTE_TICK,
         agentum_core::HostKind::Local => TICK,
+    }
+}
+
+/// How long a pane must stay visually quiet (footer hash unchanged) while settled
+/// out of the Working state before its sample cadence backs off. Under many
+/// agents most panes sit idle, and the dominant per-pane cost is the tmux sample
+/// spawn, so halving it for long-quiet panes cuts idle-fleet OS load. Kept well
+/// above [`IDLE_AFTER_QUIET`] so a pane is confidently idle before we slow down.
+const SAMPLE_BACKOFF_AFTER: Duration = Duration::from_secs(10);
+
+/// The delay before the NEXT pane sample. A Working pane, or one whose footer
+/// changed within the last [`SAMPLE_BACKOFF_AFTER`], samples at the base cadence
+/// ([`sample_tick`]); a pane that has settled non-Working and stayed quiet longer
+/// samples half as often. A resumed agent is still caught within one slow tick,
+/// and the live sidebar signal comes from agent hooks / pane byte-flow (not this
+/// poll), so the extra latency is invisible in practice while crash detection
+/// stays well within a couple of seconds.
+fn next_sample_delay(
+    kind: &agentum_core::HostKind,
+    activity: ActivityState,
+    pane_quiet_for: Duration,
+) -> Duration {
+    let base = sample_tick(kind);
+    if activity == ActivityState::Working || pane_quiet_for < SAMPLE_BACKOFF_AFTER {
+        base
+    } else {
+        base * 2
     }
 }
 
@@ -262,12 +298,15 @@ async fn watch_session(
     let mut last_change_at = Instant::now();
     // Slower sample cadence on SSH hosts: the per-tick `sample_pane` is a remote
     // `ssh` exec, so 1 s × N sessions flooded the host (see REMOTE_TICK).
-    let mut tick = interval(sample_tick(&host.kind));
-    // Drop the immediate first tick so we don't fire before the pane is alive.
-    tick.tick().await;
+    // Adaptive sample cadence: the base rate ([`sample_tick`]) while a pane is
+    // active, backing off once it has settled quiet (see [`next_sample_delay`]).
+    // Replaces the fixed `interval` so an idle fleet stops paying the base-rate
+    // sample spawn on every pane. The initial `base` delay stands in for the old
+    // drop-first-immediate-tick — don't sample before the pane is alive.
+    let mut next_delay = sample_tick(&host.kind);
 
     loop {
-        tick.tick().await;
+        tokio::time::sleep(next_delay).await;
 
         // One sample per tick: existence + both captures + foreground command
         // in a single round trip (on SSH hosts, one exec instead of four —
@@ -513,6 +552,13 @@ async fn watch_session(
             }
             activity = next;
         }
+
+        // Decide how long to wait before the next sample from the state we just
+        // observed. `activity` reflects the current sample (it equals `next`
+        // whether or not the transition block above ran); `pane_quiet_for` is how
+        // long the footer has been unchanged. A settled, long-quiet pane samples
+        // half as often — the idle-fleet OS-load win.
+        next_delay = next_sample_delay(&host.kind, activity, pane_quiet_for);
     }
 }
 
@@ -632,384 +678,6 @@ fn hash_str(s: &str) -> u64 {
     h.finish()
 }
 
-/// Subscribes to the broadcast bus and reconciles goal statuses against their
-/// children per CONTEXT D-03 (`goal.status = max(child statuses)`).
-///
-/// Spawned alongside `Watchdog::run` in `agentum-server::serve()`. Handles:
-/// - `board.created` / `board.updated` / `board.deleted` events with a
-///   `parent_goal_id` payload — recomputes the parent goal's status via a
-///   single `max_child_status_rank` SQL call and patches if the rank differs.
-/// - D-07 planner auto-stop: on the *first* `board.created` event for each
-///   goal, emits `goal.planner.first_child` and calls `graceful_stop` on the
-///   planner session bound via `session.card_id = goal.id`.
-///
-/// The `planner_stopped` HashSet is in-memory only: a daemon restart resets
-/// it, which may cause a duplicate `graceful_stop` call on already-dead
-/// planner panes. Those calls log a warning and are otherwise harmless.
-pub async fn run_goal_reconciler(store: Arc<Store>, bus: tokio::sync::broadcast::Sender<Event>) {
-    let mut rx = bus.subscribe();
-    // Tracks which goal ids have already had their planner session stopped so
-    // we never fire the auto-stop twice per daemon lifetime (D-07 idempotency).
-    let mut planner_stopped: std::collections::HashSet<i64> = std::collections::HashSet::new();
-
-    loop {
-        let ev = match rx.recv().await {
-            Ok(ev) => ev,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                // The bus dropped events we couldn't consume fast enough. The
-                // next event triggers a fresh `max_child_status_rank` read, so
-                // the goal status will converge on the next child transition
-                // even if we missed intermediate events here (T-04-02).
-                tracing::warn!(
-                    lagged = n,
-                    "goal reconciler lagged; will recompute on next event"
-                );
-                continue;
-            }
-        };
-        if !matches!(
-            ev.kind.as_str(),
-            "board.created" | "board.updated" | "board.deleted"
-        ) {
-            continue;
-        }
-        if let Err(e) = handle_board_event(&store, &bus, &ev, &mut planner_stopped).await {
-            tracing::warn!(error = ?e, kind = %ev.kind, "goal reconcile failed");
-        }
-    }
-}
-
-/// Core dispatch for a single board event. Extracts the parent goal id,
-/// applies depth-1 guard, fires the planner auto-stop on first child, then
-/// patches the goal's status when the computed rank diverges.
-async fn handle_board_event(
-    store: &Store,
-    bus: &tokio::sync::broadcast::Sender<Event>,
-    ev: &Event,
-    planner_stopped: &mut std::collections::HashSet<i64>,
-) -> Result<(), WatchdogError> {
-    let Some(goal_id) = extract_parent_goal_id(store, ev).await? else {
-        return Ok(());
-    };
-
-    let goal = match store.get_board_item(goal_id).await? {
-        Some(item) => item,
-        // Goal row deleted concurrently; nothing to reconcile.
-        None => return Ok(()),
-    };
-
-    // Depth-1 invariant (CONTEXT D-03 + PATTERNS.md): goals don't have
-    // parents in v1. If this goal row itself has a parent_goal_id, the data
-    // is in an unexpected state. Log a warning and skip rather than silently
-    // cascading writes up an unbounded tree.
-    if goal.parent_goal_id.is_some() {
-        tracing::warn!(
-            goal_id,
-            "v1 depth-1 invariant violated: goal has a parent; skipping recompute"
-        );
-        return Ok(());
-    }
-
-    // D-07 planner auto-stop — only on the first board.created child observed
-    // for this goal per daemon lifetime. `HashSet::insert` returns true only
-    // on the first insertion, ensuring idempotency.
-    if ev.kind == "board.created" && planner_stopped.insert(goal_id) {
-        if let Some(session) = store.get_session_by_card_id(goal_id).await? {
-            if matches!(session.status, agentum_core::Status::Running) {
-                // Emit the event BEFORE the tmux call so tests without a real
-                // tmux fixture (and downstream observers like the dashboard)
-                // still observe "first child arrived" even when the stop fails.
-                let _ = bus.send(Event::new("goal.planner.first_child").with_payload(
-                    serde_json::json!({
-                        "goal_id": goal_id,
-                        "planner_session_id": session.id.to_string(),
-                    }),
-                ));
-                let target = agentum_tmux::target_for(&session.name);
-                // 5-second timeout mirrors the sessions route's GRACEFUL_STOP_TIMEOUT.
-                if let Err(e) = agentum_tmux::graceful_stop(&target, Duration::from_secs(5)).await {
-                    // Best-effort: the event already fired; log the failure but
-                    // don't propagate it — the goal-status recompute below is
-                    // the important part and must not be skipped.
-                    tracing::warn!(
-                        error = %e,
-                        session = %session.name,
-                        "planner graceful_stop failed; pane may have already exited"
-                    );
-                }
-            }
-        }
-    }
-
-    // Recompute goal status (D-03 invariant). Single SQL call returns the
-    // MAX rank across all children, or NULL when no children exist.
-    let rank = store.max_child_status_rank(goal_id).await?;
-    let target_status = match rank {
-        // No children: max of empty set → todo (D-03 "empty-children" rule).
-        None | Some(0) => "todo",
-        Some(1) => "doing",
-        Some(2) => "done",
-        // Negative ranks come from the SQL ELSE -1 arm (unrecognised status
-        // strings from future migrations or legacy data). Do NOT silently
-        // demote the goal — a bad child status is not a signal to move the
-        // goal backwards. Log and skip.
-        Some(r) if r < 0 => {
-            tracing::warn!(
-                goal_id,
-                rank = r,
-                "child has unrecognised status string; skipping goal recompute"
-            );
-            return Ok(());
-        }
-        Some(other) => {
-            tracing::warn!(
-                goal_id,
-                rank = other,
-                "unexpected child status rank; skipping goal recompute"
-            );
-            return Ok(());
-        }
-    };
-
-    // Skip the PATCH when the goal is already at the right status. Keeps the
-    // bus quiet and prevents spurious `goal.status.changed` events on
-    // repeated identical child events.
-    let current_rank = status_rank(&goal.status);
-    let target_rank = status_rank(target_status);
-    if current_rank == target_rank {
-        return Ok(());
-    }
-
-    // Write directly through `patch_board_item`, bypassing `enforce_transition`.
-    // The watchdog is the sole auto-writer of goal status; goals are not
-    // required to have workdir/tool so the normal gate would reject them.
-    let patch = agentum_core::BoardPatch {
-        status: Some(target_status.to_string()),
-        ..Default::default()
-    };
-    store.patch_board_item(goal_id, patch).await?;
-    let _ = bus.send(
-        Event::new("goal.status.changed").with_payload(serde_json::json!({
-            "goal_id": goal_id,
-            "from": goal.status,
-            "to": target_status,
-        })),
-    );
-    Ok(())
-}
-
-/// Extract the `parent_goal_id` from the event payload.
-///
-/// For `board.created` and `board.updated`, the payload includes
-/// `parent_goal_id` set by the route handler (plan 01-03). For
-/// `board.deleted`, the payload also includes `parent_goal_id` (plan 01-03
-/// Task 1 step 5b extends the delete handler). Falls back to a DB lookup for
-/// `board.updated` events whose payload lacks the field (defensive, shouldn't
-/// happen with plan 01-03 in place). For `board.deleted` without the field,
-/// there is no fallback — the row is gone — so returns `None`.
-async fn extract_parent_goal_id(store: &Store, ev: &Event) -> Result<Option<i64>, WatchdogError> {
-    // Fast path: payload carries parent_goal_id directly.
-    if let Some(v) = ev.payload.get("parent_goal_id") {
-        return Ok(v.as_i64());
-    }
-
-    // Deleted rows can't be re-fetched; accept absence as "no parent".
-    if ev.kind == "board.deleted" {
-        return Ok(None);
-    }
-
-    // Fallback for board.updated/created without the field: DB lookup.
-    if let Some(id) = ev.payload.get("id").and_then(|v| v.as_i64()) {
-        if let Some(item) = store.get_board_item(id).await? {
-            return Ok(item.parent_goal_id);
-        }
-    }
-    Ok(None)
-}
-
-/// Rank ordering used by D-03's invariant: goal.status = max(child statuses).
-/// Returns -1 for any status string not in the canonical set; the caller
-/// must treat negative ranks as "unknown / skip recompute" rather than
-/// silently treating them as todo.
-pub(crate) fn status_rank(s: &str) -> i32 {
-    match s {
-        "todo" => 0,
-        "doing" => 1,
-        // `review` ranks with `doing` for goal rollup — a child awaiting
-        // verification keeps the goal in-progress, not done (mirrors the
-        // `max_child_status_rank` SQL CASE).
-        "review" => 1,
-        "done" => 2,
-        _ => -1,
-    }
-}
-
-/// Inverse of [`status_rank`]. Returns `None` for ranks outside [0, 2].
-/// Available to tests and to any future consumer that needs to convert
-/// a DB-origin i32 rank back to the canonical status string.
-#[allow(dead_code)]
-pub(crate) fn rank_to_status(r: i32) -> Option<&'static str> {
-    match r {
-        0 => Some("todo"),
-        1 => Some("doing"),
-        2 => Some("done"),
-        _ => None,
-    }
-}
-
-/// Bridge from watchdog/agent events onto the bound card's comment thread.
-///
-/// CONTEXT D-05: separate bus-subscriber task (not folded into watch_session),
-///   sibling to run_goal_reconciler.
-/// CONTEXT D-06: body templates + 80-char signature cap.
-/// CONTEXT D-07: in-memory HashMap<session_id, &'static str> dedupe;
-///   skip identical back-to-back inserts.
-/// CONTEXT D-08: skip events on goal cards (lbl == "goal") — the goal
-///   reconciler already surfaces those state changes via goal.status.changed.
-/// CONTEXT D-09: RecvError::Lagged logs warn and continues; no resync.
-pub async fn run_session_comment_bridge(
-    store: Arc<Store>,
-    bus: tokio::sync::broadcast::Sender<Event>,
-) {
-    use tokio::sync::broadcast::error::RecvError;
-    let mut rx = bus.subscribe();
-    // Last comment kind per session; dedupes back-to-back identical inserts
-    // (defense-in-depth against bus-lag double-fires — D-07).
-    let mut last_kind: std::collections::HashMap<Uuid, &'static str> =
-        std::collections::HashMap::new();
-
-    loop {
-        let ev = match rx.recv().await {
-            Ok(ev) => ev,
-            Err(RecvError::Closed) => break,
-            Err(RecvError::Lagged(n)) => {
-                tracing::warn!(
-                    lagged = n,
-                    "session_comment_bridge: bus lagged; will resume on next event"
-                );
-                continue;
-            }
-        };
-
-        // Filter to the three observable agent events ONLY (D-06).
-        let kind: &'static str = match ev.kind.as_str() {
-            "agent.awaiting_input" => "awaiting_input",
-            "agent.finished" => "finished",
-            "session.crashed" => "crashed",
-            _ => continue,
-        };
-
-        if let Err(e) = handle_session_event(&store, &bus, &ev, kind, &mut last_kind).await {
-            tracing::warn!(
-                error = ?e, kind = %ev.kind,
-                "session_comment_bridge: handle failed"
-            );
-        }
-    }
-}
-
-/// Core dispatch for a single agent/session event.
-///
-/// Resolves session → card → applies goal-card filter → dedupe → inserts
-/// the `[system]` comment.
-async fn handle_session_event(
-    store: &Store,
-    bus: &broadcast::Sender<Event>,
-    ev: &Event,
-    kind: &'static str,
-    last_kind: &mut std::collections::HashMap<Uuid, &'static str>,
-) -> Result<(), WatchdogError> {
-    let Some(session_id) = ev.session_id else {
-        return Ok(());
-    };
-
-    // Resolve the bound card (if any).
-    let session = match store.get_session_by_id(session_id).await? {
-        Some(s) => s,
-        None => return Ok(()), // concurrent session delete; benign
-    };
-    let Some(card_id) = session.card_id else {
-        return Ok(());
-    };
-
-    // Goal-card filter (CONTEXT D-08): skip planner sessions bound to goal
-    // cards — the goal-status reconciler already surfaces those state changes.
-    let card = match store.get_board_item(card_id).await? {
-        Some(c) => c,
-        None => return Ok(()), // card was deleted; benign
-    };
-    if card.lbl.as_deref() == Some("goal") {
-        return Ok(());
-    }
-
-    // In-memory dedupe: skip identical back-to-back (session_id, kind) pairs
-    // to guard against bus-lag double-fires (CONTEXT D-07).
-    if last_kind.get(&session_id) == Some(&kind) {
-        return Ok(());
-    }
-    last_kind.insert(session_id, kind);
-
-    // Compose the body template (CONTEXT D-06 + UI-SPEC §Copywriting Contract).
-    let body = match kind {
-        "awaiting_input" => "[system] agent awaiting input".to_string(),
-        "finished" => "[system] agent finished".to_string(),
-        "crashed" => {
-            let raw_sig = ev
-                .payload
-                .get("signature")
-                .and_then(|v| v.as_str())
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .unwrap_or("unknown");
-            // 80-char cap prevents comment-body amplification (T-02-15).
-            let sig: String = raw_sig.chars().take(80).collect();
-            format!("[system] session crashed: {sig}")
-        }
-        // SAFETY: kind is one of the three literals matched above.
-        _ => unreachable!("kind matched one of the three literals above"),
-    };
-
-    store
-        .create_board_comment(
-            card_id,
-            agentum_core::NewBoardComment {
-                author: "system".to_string(),
-                body,
-            },
-        )
-        .await?;
-
-    // Auto-advance the card's column to track the agent lifecycle — the user-
-    // facing "update each task as it progresses" behaviour. A card an agent is
-    // actively building sits in `doing`; when the agent finishes its turn the
-    // work is ready for a human/verify pass, so move it to `review`. We do NOT
-    // move on `awaiting_input` (the agent is mid-task, paused for input — still
-    // Building) or `crashed` (left in place, with the system comment above), and
-    // we only ever transition OUT of `doing`, so a manual move (straight to
-    // `done`, or back to `todo`) is never clobbered. Emitting `board.updated`
-    // with `parent_goal_id` both refreshes the board UI (it's a board-relevant
-    // kind) and lets the goal-status reconciler roll the change up to the goal.
-    if kind == "finished" && card.status == "doing" {
-        let updated = store
-            .patch_board_item(
-                card_id,
-                agentum_core::BoardPatch {
-                    status: Some("review".to_string()),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        let _ = bus.send(Event::new("board.updated").with_payload(serde_json::json!({
-            "id": updated.id,
-            "status": updated.status,
-            "parent_goal_id": updated.parent_goal_id,
-        })));
-    }
-
-    Ok(())
-}
-
 /// Broadcast + persist. Failures on either are logged but don't break the loop.
 async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Result<(), ()> {
     if let Err(e) = store.insert_event(&ev).await {
@@ -1024,6 +692,10 @@ async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The status-rank helpers moved to `reconciler` with their concern; the
+    // reconciler/bridge tests below drive the public `run_*` workers (re-exported
+    // above) but two tests exercise these pure helpers directly.
+    use super::reconciler::{rank_to_status, status_rank};
 
     #[test]
     fn remote_sessions_sample_slower_than_local() {
@@ -1038,6 +710,39 @@ mod tests {
         assert_eq!(sample_tick(&HostKind::Local), TICK);
         assert_eq!(sample_tick(&ssh), REMOTE_TICK);
         assert!(sample_tick(&ssh) > sample_tick(&HostKind::Local));
+    }
+
+    #[test]
+    fn idle_quiet_panes_sample_less_often() {
+        use agentum_core::HostKind;
+        let recent = Duration::from_secs(1);
+        let long_quiet = SAMPLE_BACKOFF_AFTER + Duration::from_secs(1);
+
+        // Working always samples at the base cadence, however long it's been quiet.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Working, long_quiet),
+            TICK
+        );
+        // A settled idle/awaiting pane that only just went quiet stays at base —
+        // we don't slow down until we're confident it's idle.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Idle, recent),
+            TICK
+        );
+        // Long-quiet idle / awaiting-input panes back off to half the base rate.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Idle, long_quiet),
+            TICK * 2
+        );
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::AwaitingInput, long_quiet),
+            TICK * 2
+        );
+        // Backoff is relative to each host's base cadence.
+        assert_eq!(
+            next_sample_delay(&HostKind::Local, ActivityState::Unknown, long_quiet),
+            TICK * 2
+        );
     }
 
     #[test]

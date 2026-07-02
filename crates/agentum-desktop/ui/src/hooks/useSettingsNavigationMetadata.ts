@@ -28,7 +28,7 @@ import type { Repo } from '../../../shared/types'
 import { getRepoKindLabel } from '../../../shared/repo-kind'
 import { useAppStore } from '@/store'
 import { isMacUserAgent, isWindowsUserAgent } from '@/components/terminal-pane/pane-helpers'
-import type { SettingsNavSection } from '@/lib/settings-navigation-types'
+import type { SettingsNavSection, SettingsNavTarget } from '@/lib/settings-navigation-types'
 import { GENERAL_PANE_SEARCH_ENTRIES } from '@/components/settings/general-search'
 import { AGENTS_PANE_SEARCH_ENTRIES } from '@/components/settings/agents-search'
 import { ACCOUNTS_PANE_SEARCH_ENTRIES } from '@/components/settings/accounts-search'
@@ -43,6 +43,7 @@ import { QUICK_COMMANDS_PANE_SEARCH_ENTRIES } from '@/components/settings/quick-
 import { BROWSER_PANE_SEARCH_ENTRIES } from '@/components/settings/browser-pane-search'
 import { NOTIFICATIONS_PANE_SEARCH_ENTRIES } from '@/components/settings/notifications-search'
 import { ORCHESTRATION_PANE_SEARCH_ENTRIES } from '@/components/settings/orchestration-search'
+import { MCP_PANE_SEARCH_ENTRIES } from '@/components/settings/mcp-search'
 import { BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES } from '@/components/settings/browser-verification-loop-search'
 import { SSH_PANE_SEARCH_ENTRIES } from '@/components/settings/ssh-search'
 import { COMPUTER_USE_PANE_SEARCH_ENTRIES } from '@/components/settings/computer-use-search'
@@ -108,11 +109,16 @@ export function buildSettingsNavigationMetadata({
       icon: Network,
       searchEntries: showDesktopOnlySettings
         ? [
+            ...MCP_PANE_SEARCH_ENTRIES,
             ...ORCHESTRATION_PANE_SEARCH_ENTRIES,
             ...BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES,
             ...COMPUTER_USE_PANE_SEARCH_ENTRIES
           ]
-        : [...ORCHESTRATION_PANE_SEARCH_ENTRIES, ...BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES],
+        : [
+            ...MCP_PANE_SEARCH_ENTRIES,
+            ...ORCHESTRATION_PANE_SEARCH_ENTRIES,
+            ...BROWSER_VERIFICATION_LOOP_PANE_SEARCH_ENTRIES
+          ],
       group: 'capabilities'
     },
     ...(showDesktopOnlySettings
@@ -290,4 +296,17 @@ export function useSettingsNavigationMetadata(): SettingsNavSection[] {
     () => buildSettingsNavigationMetadata({ isMac, isWindows, isWebClient, repos }),
     [isMac, isWindows, isWebClient, repos]
   )
+}
+
+// Map a settings section id to its nav target: a `repo-<id>` row opens that
+// repo's pane while every other row maps 1:1.
+export function getSettingsTargetFromSectionId(sectionId: string): {
+  pane: SettingsNavTarget
+  repoId: string | null
+  sectionId?: string
+} {
+  if (sectionId.startsWith('repo-')) {
+    return { pane: 'repo', repoId: sectionId.slice('repo-'.length) }
+  }
+  return { pane: sectionId as SettingsNavTarget, repoId: null }
 }

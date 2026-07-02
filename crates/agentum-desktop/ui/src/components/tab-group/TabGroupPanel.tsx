@@ -10,6 +10,8 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import TabBar from '../tab-bar/TabBar'
+import CloseTerminalDialog from '../terminal-pane/CloseTerminalDialog'
+import { useRunningTerminalCloseGuard } from '../terminal-pane/use-running-terminal-close-guard'
 import { TabBarQuickCommandsButton } from '../tab-bar/TabBarQuickCommandsButton'
 import { useTabGroupWorkspaceModel } from './useTabGroupWorkspaceModel'
 import TabGroupDropOverlay from './TabGroupDropOverlay'
@@ -53,6 +55,8 @@ export default function TabGroupPanel({
 
   const model = useTabGroupWorkspaceModel({ groupId, worktreeId })
   const { activeTab, browserItems, commands, editorItems, tabBarOrder, terminalTabs } = model
+  // Double-check before closing a terminal tab whose command is still running.
+  const closeGuard = useRunningTerminalCloseGuard()
   const { setNodeRef: setBodyDropRef } = useDroppable({
     id: getTabPaneBodyDroppableId(groupId),
     data: {
@@ -92,7 +96,7 @@ export default function TabGroupPanel({
           (candidate) => candidate.entityId === terminalId && candidate.contentType === 'terminal'
         )
         if (item) {
-          commands.closeItem(item.id)
+          closeGuard.requestClose(item.entityId, () => commands.closeItem(item.id))
         }
       }}
       onCloseOthers={(visibleId) => {
@@ -373,6 +377,13 @@ export default function TabGroupPanel({
             split moves to remount xterm or reparent Electron `<webview>`,
             losing TUI state or reloading the page. */}
       </div>
+      <CloseTerminalDialog
+        open={closeGuard.dialog.open}
+        dontAskAgain={closeGuard.dialog.dontAskAgain}
+        onDontAskAgainChange={closeGuard.dialog.onDontAskAgainChange}
+        onCancel={closeGuard.dialog.onCancel}
+        onConfirm={closeGuard.dialog.onConfirm}
+      />
     </div>
   )
 }

@@ -1,26 +1,8 @@
-import { api } from '@/tauri'
-/* eslint-disable max-lines -- Why: Browser Use setup keeps enablement, CLI registration, skill install, cookie import, examples, and interaction tracking in one pane so the three-step setup state stays coherent. */
-import { useCallback, useEffect, useState } from 'react'
-import { Import, Loader2, MousePointerClick } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Globe2, Import, Loader2, MousePointerClick } from 'lucide-react'
 import { toast } from 'sonner'
-import type { CliInstallStatus } from '../../../../shared/cli-install-types'
-import {
-  AGENTUM_CLI_SKILL_INSTALL_COMMAND,
-  AGENTUM_CLI_SKILL_NAME
-} from '@/lib/agent-feature-install-commands'
-import {
-  AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureAgentumCliAvailableForAgentSkillTerminal,
-  isAgentumCliAvailableOnPath
-} from '@/lib/agent-skill-cli-prerequisite'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
-import {
-  GLOBAL_AGENT_SKILL_SOURCE_KINDS,
-  useInstalledAgentSkill
-} from '@/hooks/useInstalledAgentSkills'
-import { useMountedRef } from '@/hooks/useMountedRef'
 import { Button } from '../ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,8 +20,6 @@ import { SearchableSetting } from './SearchableSetting'
 import { matchesSettingsSearch } from './settings-search'
 import { BROWSER_USE_PANE_SEARCH_ENTRIES } from './browser-use-search'
 import { BrowserUseExamples } from './BrowserUseExamples'
-import { StepBadge } from './BrowserUseStepBadge'
-import { BrowserUseSkillStep } from './BrowserUseSkillStep'
 
 type BrowserUseSetupProps = {
   onConfigureMoreBrowsers?: () => void
@@ -57,24 +37,10 @@ export function BrowserUseSetup({
   const fetchDetectedBrowsers = useAppStore((s) => s.fetchDetectedBrowsers)
   const browserSessionImportState = useAppStore((s) => s.browserSessionImportState)
 
-  const [cliStatus, setCliStatus] = useState<CliInstallStatus | null>(null)
-  const [cliLoading, setCliLoading] = useState(true)
-  const [cliBusy, setCliBusy] = useState(false)
-  const mountedRef = useMountedRef()
-
-  const handleCliStatusChange = useCallback(
-    (nextStatus: CliInstallStatus): void => {
-      if (mountedRef.current) {
-        setCliStatus(nextStatus)
-      }
-    },
-    [mountedRef]
-  )
-
-  // Why: the toggle gates only whether we show the setup instructions. We
-  // persist it in localStorage instead of global settings because it has no
-  // functional effect elsewhere in the app — it's a UI affordance local to
-  // this pane, consistent with the skill-installed marker below.
+  // Why: the toggle gates only whether we show the cookie-import setup. Browser
+  // control itself is always available through agentum's MCP (`agentum_browser`),
+  // so this is a UI affordance persisted in localStorage — it has no functional
+  // effect elsewhere in the app.
   const [browserUseEnabled, setBrowserUseEnabled] = useState<boolean>(() => {
     return localStorage.getItem(BROWSER_USE_ENABLED_STORAGE_KEY) === '1'
   })
@@ -87,67 +53,21 @@ export function BrowserUseSetup({
     }
   }
 
-  const refreshCli = useCallback(async (): Promise<void> => {
-    setCliLoading(true)
-    try {
-      handleCliStatusChange(await api.cli.getInstallStatus())
-    } catch (error) {
-      if (mountedRef.current) {
-        toast.error(error instanceof Error ? error.message : 'Failed to load CLI status.')
-      }
-    } finally {
-      if (mountedRef.current) {
-        setCliLoading(false)
-      }
-    }
-  }, [handleCliStatusChange, mountedRef])
-
   useEffect(() => {
     // Why: skip IPC work when the feature is toggled off — the component
     // returns early below and none of this data is rendered.
     if (!browserUseEnabled) {
       return
     }
-    void refreshCli()
     void fetchBrowserSessionProfiles()
-  }, [browserUseEnabled, fetchBrowserSessionProfiles, refreshCli])
+  }, [browserUseEnabled, fetchBrowserSessionProfiles])
 
   const defaultProfile = browserSessionProfiles.find((p) => p.id === 'default')
-  // Why: this step explicitly imports into the default profile, so completion
-  // must track that profile only. Marking done when a non-default profile has
-  // cookies would mislead users into thinking agents can reach their logins
-  // when the default profile — the one agents use — is still empty.
+  // Why: agents reach authenticated pages through the default profile, so
+  // completion tracks that profile only. Cookies on a non-default profile would
+  // mislead users into thinking agents can reach their logins when the profile
+  // agents actually use is still empty.
   const cookiesImported = !!defaultProfile?.source
-
-  const cliEnabled = isAgentumCliAvailableOnPath(cliStatus)
-  const cliPathNeedsAttention = cliStatus?.state === 'installed' && !cliStatus.pathConfigured
-  const cliSupported = cliStatus?.supported ?? false
-
-  const {
-    installed: skillDetected,
-    loading: skillLoading,
-    error: skillError,
-    refresh: refreshSkill
-  } = useInstalledAgentSkill(AGENTUM_CLI_SKILL_NAME, {
-    enabled: browserUseEnabled,
-    sourceKinds: GLOBAL_AGENT_SKILL_SOURCE_KINDS
-  })
-
-  const handleEnableCli = async (): Promise<void> => {
-    setCliBusy(true)
-    try {
-      const next = await ensureAgentumCliAvailableForAgentSkillTerminal({
-        onStatusChange: handleCliStatusChange
-      })
-      if (mountedRef.current && isAgentumCliAvailableOnPath(next)) {
-        toast.success('Registered the Agentum CLI in PATH.')
-      }
-    } finally {
-      if (mountedRef.current) {
-        setCliBusy(false)
-      }
-    }
-  }
 
   const handleImportFromBrowser = async (
     browserFamily: string,
@@ -180,10 +100,8 @@ export function BrowserUseSetup({
     browserSessionImportState?.profileId === 'default' &&
     browserSessionImportState.status === 'importing'
 
-  const showStep1 = matchesSettingsSearch(searchQuery, [BROWSER_USE_PANE_SEARCH_ENTRIES[0]])
-  const showStep2 = matchesSettingsSearch(searchQuery, [BROWSER_USE_PANE_SEARCH_ENTRIES[1]])
-  const showStep3 = matchesSettingsSearch(searchQuery, [BROWSER_USE_PANE_SEARCH_ENTRIES[2]])
-  const completedCount = [cliEnabled, skillDetected, cookiesImported].filter(Boolean).length
+  const showOverview = matchesSettingsSearch(searchQuery, [BROWSER_USE_PANE_SEARCH_ENTRIES[0]])
+  const showCookies = matchesSettingsSearch(searchQuery, [BROWSER_USE_PANE_SEARCH_ENTRIES[1]])
 
   const sourceLabel = defaultProfile?.source
     ? `${BROWSER_FAMILY_LABELS[defaultProfile.source.browserFamily] ?? defaultProfile.source.browserFamily}${defaultProfile.source.profileName ? ` (${defaultProfile.source.profileName})` : ''}`
@@ -227,22 +145,32 @@ export function BrowserUseSetup({
         <div className="space-y-0.5">
           <p className="text-sm font-semibold">Agent Browser Use</p>
           <p className="text-xs text-muted-foreground">
-            Let coding agents drive this browser with your logins. Finish the three steps below.
+            Built into the agentum MCP — agents can already drive this browser. Import your logins
+            so they can reach authenticated pages.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <span
-            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-              completedCount === 3
-                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                : 'bg-muted text-muted-foreground'
-            }`}
-          >
-            {completedCount}/3
-          </span>
+          {cookiesImported ? (
+            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+              Logins ready
+            </span>
+          ) : null}
           {toggleSwitch}
         </div>
       </div>
+
+      {showOverview ? (
+        <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-card/50 p-4">
+          <div className="mt-0.5 text-muted-foreground">
+            <Globe2 className="size-4" />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Browser control ships with agentum&apos;s MCP server — every agent agentum launches can
+            call the <code className="text-foreground">agentum_browser</code> tool to navigate,
+            inspect, and act on pages. There&apos;s no skill to install.
+          </p>
+        </div>
+      ) : null}
 
       {onOpenComputerUse ? (
         <div className="rounded-xl border border-border/60 bg-card/50 p-4">
@@ -250,9 +178,9 @@ export function BrowserUseSetup({
             <div className="min-w-0 flex-1 space-y-1">
               <p className="text-sm font-medium">Use an existing browser session</p>
               <p className="text-xs text-muted-foreground">
-                If cookie import is not the right fit, Computer Use can control local apps and may
-                use existing logged-in browser sessions where applicable. Install the Computer Use
-                skill; macOS also requires privacy permissions.
+                If cookie import is not the right fit, Computer Use — also built into the agentum
+                MCP — can control local apps and may use existing logged-in browser sessions where
+                applicable. macOS requires privacy permissions.
               </p>
             </div>
             <Button
@@ -269,106 +197,14 @@ export function BrowserUseSetup({
         </div>
       ) : null}
 
-      {showStep1 ? (
-        <SearchableSetting
-          title="Enable Agentum CLI"
-          description="Register the Agentum CLI so agents can drive the browser."
-          keywords={BROWSER_USE_PANE_SEARCH_ENTRIES[0].keywords}
-          className="rounded-xl border border-border/60 bg-card/50 p-4"
-        >
-          <div className="flex items-start gap-3">
-            <StepBadge
-              index={1}
-              state={cliEnabled ? 'done' : cliBusy ? 'in-progress' : 'pending'}
-            />
-            <div className="min-w-0 flex-1 space-y-1">
-              <p className="text-sm font-medium">Enable Agentum CLI</p>
-              <p className="text-xs text-muted-foreground">
-                Registers the Agentum CLI command so agents can orchestrate the browser from their
-                shell.
-              </p>
-              {cliStatus?.commandPath && cliEnabled ? (
-                <p className="text-[11px] text-muted-foreground">
-                  Installed at{' '}
-                  <code className="rounded bg-muted px-1 py-0.5">{cliStatus.commandPath}</code>
-                </p>
-              ) : null}
-              {cliPathNeedsAttention && cliStatus?.detail ? (
-                <p className="text-[11px] text-amber-600 dark:text-amber-400">{cliStatus.detail}</p>
-              ) : null}
-            </div>
-            <TooltipProvider delayDuration={250}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>
-                    <Button
-                      size="sm"
-                      variant={cliEnabled ? 'outline' : 'default'}
-                      disabled={cliLoading || cliBusy || !cliSupported || cliEnabled}
-                      onClick={() => void handleEnableCli()}
-                    >
-                      {cliBusy
-                        ? 'Registering...'
-                        : cliEnabled
-                          ? 'Enabled'
-                          : cliPathNeedsAttention
-                            ? 'Fix PATH'
-                            : 'Enable'}
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                {!cliSupported && !cliLoading && cliStatus?.detail ? (
-                  <TooltipContent side="left" sideOffset={6}>
-                    {cliStatus.detail}
-                  </TooltipContent>
-                ) : null}
-              </Tooltip>
-            </TooltipProvider>
-          </div>
-        </SearchableSetting>
-      ) : null}
-
-      {showStep2 ? (
-        <SearchableSetting
-          title="Install Browser Use Skill"
-          description="Install the Browser Use skill so agents can operate Agentum's browser."
-          keywords={BROWSER_USE_PANE_SEARCH_ENTRIES[1].keywords}
-          className={`rounded-xl border border-border/60 bg-card/50 p-4 ${
-            cliEnabled ? '' : 'opacity-60'
-          }`}
-        >
-          <BrowserUseSkillStep
-            command={AGENTUM_CLI_SKILL_INSTALL_COMMAND}
-            skillDetected={skillDetected}
-            skillLoading={skillLoading}
-            skillError={skillError}
-            disabled={!cliEnabled}
-            preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
-            onBeforeOpenTerminal={async () => {
-              useAppStore.getState().recordFeatureInteraction('agent-browser-setup')
-              await ensureAgentumCliAvailableForAgentSkillTerminal({
-                onStatusChange: handleCliStatusChange
-              })
-            }}
-            onRecheck={refreshSkill}
-          />
-        </SearchableSetting>
-      ) : null}
-
-      {showStep3 ? (
+      {showCookies ? (
         <SearchableSetting
           title="Import Browser Cookies"
           description="Import cookies from Chrome, Edge, or other browsers so agents can reuse your logins."
-          keywords={BROWSER_USE_PANE_SEARCH_ENTRIES[2].keywords}
-          className={`rounded-xl border border-border/60 bg-card/50 p-4 ${
-            cliEnabled && skillDetected ? '' : 'opacity-60'
-          }`}
+          keywords={BROWSER_USE_PANE_SEARCH_ENTRIES[1].keywords}
+          className="rounded-xl border border-border/60 bg-card/50 p-4"
         >
           <div className="flex items-start gap-3">
-            <StepBadge
-              index={3}
-              state={cookiesImported ? 'done' : isImportingDefault ? 'in-progress' : 'pending'}
-            />
             <div className="min-w-0 flex-1 space-y-1">
               <p className="text-sm font-medium">Import Browser Cookies</p>
               <p className="text-xs text-muted-foreground">
@@ -376,9 +212,7 @@ export function BrowserUseSetup({
                 Imports into the default profile.
               </p>
               {sourceLabel ? (
-                <p className="text-[11px] text-muted-foreground">
-                  Last imported from {sourceLabel}
-                </p>
+                <p className="text-[11px] text-muted-foreground">Last imported from {sourceLabel}</p>
               ) : null}
               {onConfigureMoreBrowsers ? (
                 <button

@@ -28,6 +28,7 @@ pub mod auth;
 pub mod bridge;
 pub mod cdp_browser;
 pub mod cdp_driver;
+pub(crate) mod cdp_http;
 pub mod cdp_screencast;
 pub mod endpoint;
 mod error;
@@ -39,8 +40,10 @@ pub mod host_runtime;
 pub mod linear;
 mod logging;
 pub mod mcp_provision;
+mod pane_log_reaper;
 pub mod planner;
 pub mod playwright_mcp;
+mod port_wait;
 pub mod ratelimit;
 mod routes;
 mod rules;
@@ -48,6 +51,8 @@ pub mod task_sink;
 pub mod tls;
 mod transcript_store;
 pub mod usage;
+pub(crate) mod wiki;
+pub(crate) mod wiki_rag;
 
 pub use transcript_store::TranscriptStore;
 
@@ -180,6 +185,13 @@ pub struct AppState {
     /// background [`harness::drive`] task operate on the same in-memory runs +
     /// event bus. Cheap to construct; always present.
     pub harness: Arc<harness::HarnessEngine>,
+    /// Live `/api/events` WebSocket client count. The host-metrics ticker
+    /// gates its sysinfo sampling on THIS, not `bus.receiver_count()`: the
+    /// goal reconciler and comment bridge hold permanent bus subscriptions,
+    /// so the receiver count never reaches zero and the "no dashboards →
+    /// don't sample" guard was dead code — the daemon paid an all-cores CPU
+    /// refresh every 2 s forever. Only the events route touches this.
+    pub events_ws_clients: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AppState {
@@ -221,6 +233,7 @@ impl AppState {
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
             harness: Arc::new(harness::HarnessEngine::new()),
+            events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 }
@@ -273,12 +286,13 @@ pub fn router(state: AppState) -> Router {
         // `board::router()` above, untouched.
         .merge(routes::board_sync::router())
         .merge(routes::notes::router())
+        .merge(routes::wiki::router())
         .merge(routes::preferences::router())
         .merge(routes::preflight::router())
         .merge(routes::profiles::router())
         .merge(routes::channels::router())
+        .merge(routes::chat::router())
         .merge(routes::orchestration::router())
-        .merge(routes::browser::router())
         .merge(routes::cdp_browser::router())
         .merge(routes::cdp_screencast::router())
         .merge(routes::computer::router())
@@ -290,6 +304,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::repos::router())
         .merge(routes::worktrees::router())
         .merge(routes::forge::router())
+        .merge(routes::github::router())
         .merge(routes::usage::router())
         .merge(routes::harness::router())
         .layer(axum_mw::from_fn_with_state(
@@ -437,8 +452,33 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     }
 
     // Host-metrics ticker: publishes CPU+RAM onto the bus so one sampler feeds
-    // every connected client over the events WS.
-    routes::host::spawn_ticker(bus.clone());
+    // every connected client over the events WS; idles while no client is on.
+    routes::host::spawn_ticker(bus.clone(), state.events_ws_clients.clone());
+
+    // One-shot cache hygiene: drop pane logs whose session no longer exists
+    // (pipe-pane appends every session's raw output forever; deleted sessions
+    // used to leave their logs behind for the life of the install), then
+    // prune aged event history (the connect-time snapshot queries scan this
+    // table; unbounded growth made them slower every month). 30 days keeps
+    // far more than the watchdog feed's ~50-row window ever shows, and each
+    // session's newest agent.* row survives regardless of age.
+    {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            // Disjoint resources (filesystem cache vs sqlite) — run them
+            // concurrently so the DB prune isn't gated on the log sweep.
+            let prune = async {
+                match store.prune_events(30).await {
+                    Ok(pruned) if pruned > 0 => {
+                        tracing::info!(pruned, "pruned aged event history")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = ?e, "event history prune failed"),
+                }
+            };
+            tokio::join!(pane_log_reaper::reap_orphan_pane_logs(store.clone()), prune);
+        });
+    }
 
     // SSH ControlMaster warmer: a no-op exec per known SSH host opens the
     // pooled master at boot (interval's first tick is immediate) and refreshes

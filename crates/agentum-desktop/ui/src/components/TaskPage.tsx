@@ -1,50 +1,20 @@
 import { api } from '@/tauri'
+import { GHAssigneesCell, GHStatusCell, GitHubIssueAssigneeSelector, GitHubIssueLabelSelector, LinearStateCell, PRChecksCell, PRMergeCell, PRReviewCell, PaginationBar } from './task-page-list-cells'
+import { LinearIcon } from '@/components/icons/LinearIcon'
 /* eslint-disable max-lines -- Why: the tasks page keeps the repo selector,
 task source controls, and GitHub task list co-located so the wiring between the
 selected repo, the task filters, and the work-item list stays readable in one
 place while this surface is still evolving. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import {
-  AlertCircle,
-  ArrowDownUp,
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  CircleDot,
-  Clock3,
-  EllipsisVertical,
-  ExternalLink,
-  Eye,
-  Files,
-  Github,
-  Gitlab,
-  GitMerge,
-  GitPullRequest,
-  LayoutGrid,
-  List,
-  LoaderCircle,
-  Minus,
-  Plus,
-  RefreshCw,
-  Search,
-  SlidersHorizontal,
-  Users,
-  X,
-  FolderKanban,
-  Tag,
-  UserRound,
-  AlertTriangle
-} from 'lucide-react'
+import { ArrowDownUp, ArrowRight, Check, ChevronDown, ChevronLeft, CircleDot, EllipsisVertical, ExternalLink, Eye, Files, Github, Gitlab, GitPullRequest, LayoutGrid, List, LoaderCircle, Plus, RefreshCw, Search, SlidersHorizontal, X, FolderKanban, Tag, UserRound, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { type SyncIssueInput, syncExternalIssues } from '@/runtime/board-client'
+import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Input } from '@/components/ui/input'
@@ -86,17 +56,6 @@ import { TaskKanbanBoard } from '@/components/tasks/TaskKanbanBoard'
 import { TWO_COLUMNS, githubColumn } from '@/components/tasks/task-kanban'
 import { transitionGithubIssue } from '@/components/tasks/task-kanban-github'
 import { reconcileLinearTeamSelection } from '@/components/task-page-linear-team-selection'
-import { useConfirmationDialog } from '@/components/confirmation-dialog'
-import {
-  getGitHubPRPrimaryReviewer,
-  getGitHubPRReviewLabel,
-  normalizeGitHubReviewerLogins,
-  type GitHubPRPrimaryReviewer
-} from '@/components/github-pr-reviewer-display'
-import {
-  getLinearStateMarkerStyle,
-  getLinearStatePillStyle
-} from '@/components/linear-state-pill-style'
 import { parseTaskQuery, stripRepoQualifiers, withQualifier } from '../../../shared/task-query'
 import {
   buildLinearTeamUrl,
@@ -110,7 +69,6 @@ import {
   getGithubWorkItemWorkspaceAttachmentLabel
 } from '@/lib/github-work-item-workspace-attachment'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { useRepoAssigneesBySlug } from '@/hooks/useGitHubSlugMetadata'
 import GitHubItemDialog, { type ItemDialogTab } from '@/components/GitHubItemDialog'
 import PullRequestPage from '@/components/PullRequestPage'
 import GitLabItemDialog from '@/components/GitLabItemDialog'
@@ -131,6 +89,7 @@ import {
 } from '@/lib/new-workspace'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
+import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import {
   buildTaskPageRepoSourceState,
@@ -145,37 +104,8 @@ import {
   shouldReplaceTaskPageItemsAfterRefresh,
   type TaskPageRepoSourceState
 } from '@/components/task-page-cache-selectors'
-import {
-  createTaskPageGitHubStatusStateDraft,
-  resolveTaskPageGitHubStatusStateDraft,
-  updateTaskPageGitHubStatusLocalState
-} from '@/components/task-page-github-status-state'
 import { deriveTaskPagePRCheckSummary } from '@/components/task-page-pr-check-summary'
-import { presentGitHubPRMergeState } from '@/components/github-pr-merge-state'
-import {
-  GITHUB_PR_MERGE_METHOD_LABELS,
-  resolveGitHubPRMergeMethods
-} from '../../../shared/github-pr-merge-methods'
-import type {
-  GitHubOwnerRepo,
-  GitHubAssignableUser,
-  GitHubPRMergeMethod,
-  GitHubWorkItem,
-  GitLabTodo,
-  GitLabWorkItem,
-  LinearCollectionResult,
-  LinearCustomViewModel,
-  LinearCustomViewSummary,
-  LinearIssue,
-  LinearProjectDetail,
-  LinearProjectSummary,
-  LinearTeam,
-  LinearWorkspaceSelection,
-  LinearWorkflowState,
-  Repo,
-  TaskProvider,
-  TaskViewPresetId
-} from '../../../shared/types'
+import type { GitHubOwnerRepo, GitHubAssignableUser, GitHubWorkItem, GitLabTodo, GitLabWorkItem, LinearCollectionResult, LinearCustomViewModel, LinearCustomViewSummary, LinearIssue, LinearProjectDetail, LinearProjectSummary, LinearTeam, LinearWorkspaceSelection, TaskProvider, TaskViewPresetId } from '../../../shared/types'
 import { shouldSuppressEnterSubmit } from '@/lib/new-workspace-enter-guard'
 import { getScreenSubmitShortcutLabel, isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
 import {
@@ -197,2026 +127,80 @@ import {
   restoreAvailableDefaultTaskProvider,
   resolveVisibleTaskProvider
 } from '../../../shared/task-providers'
-
-type TaskSource = TaskProvider
-
-type GitLabTaskFilter = 'opened' | 'merged' | 'closed' | 'all'
-type GitLabIssueFilter = 'opened' | 'assigned-to-me'
-
-const GITLAB_MR_FILTERS: { id: GitLabTaskFilter; label: string }[] = [
-  { id: 'opened', label: 'Open' },
-  { id: 'merged', label: 'Merged' },
-  { id: 'closed', label: 'Closed' },
-  { id: 'all', label: 'All' }
-]
-
-const GITLAB_ISSUE_FILTERS: { id: GitLabIssueFilter; label: string }[] = [
-  { id: 'opened', label: 'Open' },
-  { id: 'assigned-to-me', label: 'Assigned to me' }
-]
-
-function isGitLabMRFilter(value: GitLabTaskFilter | GitLabIssueFilter): value is GitLabTaskFilter {
-  return value === 'opened' || value === 'merged' || value === 'closed' || value === 'all'
-}
-
-function isGitLabIssueFilter(
-  value: GitLabTaskFilter | GitLabIssueFilter
-): value is GitLabIssueFilter {
-  return value === 'opened' || value === 'assigned-to-me'
-}
-type TaskQueryPreset = {
-  id: TaskViewPresetId
-  label: string
-  query: string
-}
-type GitHubTaskKind = 'issues' | 'prs'
-
-const ISSUE_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
-  { id: 'issues', label: 'Open', query: getTaskPresetQuery('issues') },
-  { id: 'my-issues', label: 'Assigned to me', query: getTaskPresetQuery('my-issues') }
-]
-
-const PR_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
-  { id: 'prs', label: 'Open', query: getTaskPresetQuery('prs') },
-  { id: 'my-prs', label: 'Mine', query: getTaskPresetQuery('my-prs') },
-  { id: 'review', label: 'Needs review', query: getTaskPresetQuery('review') }
-]
-
-function getGitHubTaskKindPresets(kind: GitHubTaskKind): TaskQueryPreset[] {
-  return kind === 'prs' ? PR_TASK_QUERY_PRESETS : ISSUE_TASK_QUERY_PRESETS
-}
-
-type SourceOption = {
-  id: TaskSource
-  label: string
-  Icon: (props: { className?: string }) => React.JSX.Element
-  disabled?: boolean
-}
-
-function LinearIcon({ className }: { className?: string }): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden className={className} fill="currentColor">
-      <path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z" />
-    </svg>
-  )
-}
-
-const SOURCE_OPTIONS: SourceOption[] = [
-  {
-    id: 'github',
-    label: 'GitHub',
-    Icon: ({ className }) => <Github className={className} />
-  },
-  {
-    id: 'gitlab',
-    label: 'GitLab',
-    Icon: ({ className }) => <Gitlab className={className} />
-  },
-  {
-    id: 'linear',
-    label: 'Linear',
-    Icon: ({ className }) => <LinearIcon className={className} />
-  }
-]
-
-type LinearPresetId = 'assigned' | 'created' | 'all' | 'completed'
-type LinearPreset = { id: LinearPresetId; label: string }
-
-const LINEAR_PRESETS: LinearPreset[] = [
-  { id: 'all', label: 'All' },
-  { id: 'assigned', label: 'My Issues' },
-  { id: 'created', label: 'Created' },
-  { id: 'completed', label: 'Completed' }
-]
+import {
+  GITLAB_ISSUE_FILTERS,
+  GITLAB_MR_FILTERS,
+  isGitLabIssueFilter,
+  isGitLabMRFilter,
+  type GitLabIssueFilter,
+  type GitLabTaskFilter
+} from './task-page/gitlab-filters'
+import {
+  GITHUB_MODE_BUTTONS,
+  getDefaultPresetForGitHubTaskKind,
+  getGitHubTaskKind,
+  getGitHubTaskKindPresets,
+  normalizeGitHubTaskPreset,
+  scopeGitHubTaskSearch,
+  type GitHubTaskKind
+} from './task-page/github-task-view'
+import {
+  findLinearWorkflowStateForStatus,
+  getLinearIssueGridTemplate,
+  getLinearPriorityLabel,
+  getLinearStatusSectionState,
+  groupLinearIssues,
+  type LinearDisplayProperty,
+  type LinearGroupBy,
+  type LinearGroupSection,
+  type LinearOrderBy
+} from './task-page/linear-helpers'
+import { formatRelativeTime } from '@/lib/relative-time'
+import { formatPRDelta, sameOptionalGitHubOwnerRepo } from './task-page/work-item-helpers'
+import {
+  GITHUB_TASK_GRID_CLASS,
+  GITHUB_PR_TASK_GRID_CLASS,
+  GITHUB_TASK_ROW_SURFACE_CLASS,
+  GITHUB_TASK_ROW_HOVER_SURFACE_CLASS,
+  GITHUB_TASK_STICKY_ID_HEADER_CLASS,
+  GITHUB_TASK_STICKY_TITLE_HEADER_CLASS,
+  GITHUB_TASK_STICKY_ID_CELL_CLASS,
+  GITHUB_TASK_STICKY_TITLE_CELL_CLASS
+} from './task-page/github-grid-styles'
+import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_BOARD_DRAG_ISSUE_MIME, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
+import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
+import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
 
-const GITHUB_TASK_GRID_CLASS =
-  'min-w-[790px] grid-cols-[72px_minmax(320px,1fr)_84px_100px_92px_122px]'
-const GITHUB_PR_TASK_GRID_CLASS =
-  'min-w-[1020px] grid-cols-[72px_minmax(360px,2fr)_132px_128px_132px_92px_158px]'
-const GITHUB_TASK_ROW_SURFACE_CLASS =
-  '[background:color-mix(in_srgb,var(--muted)_50%,var(--background))]'
-const GITHUB_TASK_ROW_HOVER_SURFACE_CLASS =
-  'group-hover/github-task-row:[background:color-mix(in_srgb,var(--muted)_70%,var(--background))]'
-// Why: the row's px-3 left padding leaves a 12px gap between the scroll-viewport
-// edge and the sticky ID column; without a covering ::before, scrolled cell text
-// bleeds through that strip. Same trick as the title column for its 8px gap.
-const GITHUB_TASK_STICKY_ID_HEADER_CLASS = cn(
-  'sticky left-3 z-30 before:absolute before:-left-3 before:top-0 before:bottom-0 before:w-3 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS
-)
-const GITHUB_TASK_STICKY_TITLE_HEADER_CLASS = cn(
-  'sticky left-[92px] z-30 border-r border-border/50 before:absolute before:-left-2 before:top-0 before:bottom-0 before:w-2 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS
-)
-const GITHUB_TASK_STICKY_ID_CELL_CLASS = cn(
-  'sticky left-3 z-20 flex items-center before:absolute before:-left-3 before:top-0 before:bottom-0 before:w-3 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS,
-  GITHUB_TASK_ROW_HOVER_SURFACE_CLASS
-)
-const GITHUB_TASK_STICKY_TITLE_CELL_CLASS = cn(
-  'sticky left-[92px] z-20 min-w-0 border-r border-border/50 pr-2 before:absolute before:-left-2 before:top-0 before:bottom-0 before:w-2 before:bg-inherit',
-  GITHUB_TASK_ROW_SURFACE_CLASS,
-  GITHUB_TASK_ROW_HOVER_SURFACE_CLASS
-)
-
-type GitHubModeButton = { id: GitHubTaskKind | 'project'; label: string }
-
-const GITHUB_MODE_BUTTONS: GitHubModeButton[] = [
-  { id: 'issues', label: 'Issues' },
-  { id: 'prs', label: 'PRs' },
-  { id: 'project', label: 'Projects' }
-]
-
-function isPRFocusedTaskView(preset: TaskViewPresetId | null, query: string): boolean {
-  if (preset === 'prs' || preset === 'my-prs' || preset === 'review') {
-    return true
-  }
-  const parsed = parseTaskQuery(query)
-  return (
-    parsed.scope === 'pr' ||
-    parsed.state === 'merged' ||
-    parsed.draft ||
-    parsed.reviewRequested !== null ||
-    parsed.reviewedBy !== null
-  )
-}
-
-function normalizeGitHubTaskPreset(preset: TaskViewPresetId | null | undefined): TaskViewPresetId {
-  // Why: the split Issues/PRs tabs no longer have a mixed "All" view, so
-  // legacy saved defaults should land on the first tab instead of mixing rows.
-  return !preset || preset === 'all' ? 'issues' : preset
-}
-
-function getGitHubTaskKind(preset: TaskViewPresetId | null, query: string): GitHubTaskKind {
-  return isPRFocusedTaskView(preset, query) ? 'prs' : 'issues'
-}
-
-function getDefaultPresetForGitHubTaskKind(kind: GitHubTaskKind): TaskViewPresetId {
-  return kind === 'prs' ? 'prs' : 'issues'
-}
-
-function scopeGitHubTaskSearch(query: string, kind: GitHubTaskKind): string {
-  const trimmed = query.trim()
-  if (!trimmed) {
-    return getTaskPresetQuery(getDefaultPresetForGitHubTaskKind(kind))
-  }
-  if (/\bis:(?:issue|pr|pull-request)\b/i.test(trimmed)) {
-    return trimmed
-  }
-  const parsed = parseTaskQuery(trimmed)
-  const inferredKind = parsed.scope === 'pr' ? 'prs' : parsed.scope === 'issue' ? 'issues' : kind
-  return `${inferredKind === 'prs' ? 'is:pr' : 'is:issue'} ${trimmed}`
-}
-
-// Why: Intl.RelativeTimeFormat allocation is non-trivial, and previously we
-// built a new formatter per work-item row render. Hoisting to module scope
-// means all rows share one instance — zero per-row allocation cost.
-const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-
-function formatRelativeTime(input: string): string {
-  const date = new Date(input)
-  if (Number.isNaN(date.getTime())) {
-    return 'recently'
-  }
-
-  const diffMs = date.getTime() - Date.now()
-  const diffMinutes = Math.round(diffMs / 60_000)
-
-  if (Math.abs(diffMinutes) < 60) {
-    return relativeTimeFormatter.format(diffMinutes, 'minute')
-  }
-
-  const diffHours = Math.round(diffMinutes / 60)
-  if (Math.abs(diffHours) < 24) {
-    return relativeTimeFormatter.format(diffHours, 'hour')
-  }
-
-  const diffDays = Math.round(diffHours / 24)
-  return relativeTimeFormatter.format(diffDays, 'day')
-}
-
-// Why: Linear encodes priority as an integer (0–4). Map to human-readable
-// labels so the table column is scannable without memorising the scale.
-const LINEAR_PRIORITY_LABELS: Record<number, string> = {
-  0: 'None',
-  1: 'Urgent',
-  2: 'High',
-  3: 'Medium',
-  4: 'Low'
-}
-
-type LinearViewMode = 'list' | 'board'
-type LinearMode = 'issues' | 'projects' | 'views'
-type LinearProjectTab = 'overview' | 'issues'
-type LinearGroupBy = 'none' | 'status' | 'assignee' | 'priority' | 'team'
-type LinearOrderBy = 'priority' | 'updated' | 'identifier'
-type LinearDisplayProperty = 'state' | 'priority' | 'assignee' | 'team' | 'labels' | 'updated'
-
-type LinearGroupSection = {
-  key: string
-  label: string
-  issues: LinearIssue[]
-}
-
-type LinearIssueListRow =
-  | { type: 'section'; key: string; label: string; count: number }
-  | { type: 'issue'; issue: LinearIssue }
-
-const LINEAR_BOARD_DRAG_ISSUE_MIME = 'application/x-agentum-linear-issue-id'
-
-const LINEAR_MODE_OPTIONS: { id: LinearMode; label: string }[] = [
-  { id: 'issues', label: 'Issues' },
-  { id: 'projects', label: 'Projects' },
-  { id: 'views', label: 'Views' }
-]
-
-const LINEAR_CUSTOM_VIEW_MODEL_OPTIONS: { id: LinearCustomViewModel; label: string }[] = [
-  { id: 'issue', label: 'Issues' },
-  { id: 'project', label: 'Projects' }
-]
-
-const LINEAR_VIEW_OPTIONS: {
-  id: LinearViewMode
-  label: string
-  Icon: typeof List
-}[] = [
-  { id: 'list', label: 'List', Icon: List },
-  { id: 'board', label: 'Board', Icon: LayoutGrid }
-]
-
-const LINEAR_GROUP_OPTIONS: { id: LinearGroupBy; label: string }[] = [
-  { id: 'none', label: 'No grouping' },
-  { id: 'status', label: 'Status' },
-  { id: 'assignee', label: 'Assignee' },
-  { id: 'priority', label: 'Priority' },
-  { id: 'team', label: 'Team' }
-]
-
-const LINEAR_ORDER_OPTIONS: { id: LinearOrderBy; label: string }[] = [
-  { id: 'priority', label: 'Priority' },
-  { id: 'updated', label: 'Updated' },
-  { id: 'identifier', label: 'Identifier' }
-]
-
-const LINEAR_DISPLAY_PROPERTIES: { id: LinearDisplayProperty; label: string }[] = [
-  { id: 'state', label: 'Status' },
-  { id: 'priority', label: 'Priority' },
-  { id: 'assignee', label: 'Assignee' },
-  { id: 'team', label: 'Team' },
-  { id: 'labels', label: 'Labels' },
-  { id: 'updated', label: 'Updated' }
-]
-
-const DEFAULT_LINEAR_DISPLAY_PROPERTIES: LinearDisplayProperty[] = [
-  'state',
-  'priority',
-  'assignee',
-  'team',
-  'labels',
-  'updated'
-]
-
-function getLinearPriorityLabel(priority: number): string {
-  return LINEAR_PRIORITY_LABELS[priority] ?? `P${priority}`
-}
-
-function getLinearStatusSectionState(section: LinearGroupSection): LinearIssue['state'] | null {
-  if (!section.key.startsWith('status:')) {
-    return null
-  }
-  return section.issues[0]?.state ?? null
-}
-
-function findLinearWorkflowStateForStatus(
-  states: LinearWorkflowState[],
-  targetState: LinearIssue['state']
-): LinearWorkflowState | undefined {
-  return (
-    states.find((state) => state.name === targetState.name && state.type === targetState.type) ??
-    states.find((state) => state.name === targetState.name)
-  )
-}
-
-function LinearStateCell({
-  issue,
-  className
+export default function TaskPage({
+  embedded = false
 }: {
-  issue: LinearIssue
-  className?: string
-}): React.JSX.Element {
-  const settings = useAppStore((s) => s.settings)
-  const patchLinearIssue = useAppStore((s) => s.patchLinearIssue)
-  const states = useTeamStates(issue.team.id, settings, issue.workspaceId)
-  const [open, setOpen] = useState(false)
-  const [pending, setPending] = useState(false)
-  const reqRef = useRef(0)
-
-  const currentStateId = states.data.find(
-    (s) => s.name === issue.state.name && s.type === issue.state.type
-  )?.id
-
-  const handleStateChange = useCallback(
-    (stateId: string) => {
-      const newState = states.data.find((s) => s.id === stateId)
-      if (!newState || stateId === currentStateId || pending) {
-        return
-      }
-
-      reqRef.current += 1
-      const reqId = reqRef.current
-      const previousState = issue.state
-      const nextState: LinearIssue['state'] = {
-        name: newState.name,
-        type: newState.type,
-        color: newState.color
-      }
-
-      setPending(true)
-      patchLinearIssue(issue.id, { state: nextState })
-      void linearUpdateIssue(settings, issue.id, { stateId }, issue.workspaceId)
-        .then((result) => {
-          if (reqId !== reqRef.current) {
-            return
-          }
-          if (result.ok === false) {
-            patchLinearIssue(issue.id, { state: previousState })
-            toast.error(result.error ?? 'Failed to update Linear state')
-          }
-        })
-        .catch(() => {
-          if (reqId !== reqRef.current) {
-            return
-          }
-          patchLinearIssue(issue.id, { state: previousState })
-          toast.error('Failed to update Linear state')
-        })
-        .finally(() => {
-          if (reqId === reqRef.current) {
-            setPending(false)
-          }
-        })
-    },
-    [
-      currentStateId,
-      issue.id,
-      issue.state,
-      issue.workspaceId,
-      patchLinearIssue,
-      pending,
-      settings,
-      states.data
-    ]
-  )
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={pending}
-          onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'inline-flex min-w-0 cursor-pointer! items-center gap-1 rounded-full border text-[11px] font-medium transition-[background-color,border-color,color,box-shadow] hover:[--linear-state-pill-current-background:var(--linear-state-pill-hover-background)] hover:[--linear-state-pill-current-border:var(--linear-state-pill-hover-border)] hover:[--linear-state-pill-current-foreground:var(--linear-state-pill-hover-foreground)] hover:ring-1 hover:ring-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-default! disabled:opacity-80 [&_*]:cursor-pointer! disabled:[&_*]:cursor-default!',
-            className
-          )}
-          style={{
-            ...getLinearStatePillStyle(issue.state.color),
-            cursor: pending ? 'default' : 'pointer'
-          }}
-          aria-label={`Change Linear state from ${issue.state.name}`}
-          aria-busy={pending || states.loading}
-        >
-          <span
-            className="size-1.5 shrink-0 rounded-full"
-            style={getLinearStateMarkerStyle(issue.state.color)}
-          />
-          <span className="truncate">{issue.state.name}</span>
-          {pending || states.loading ? (
-            <LoaderCircle className="size-3 shrink-0 animate-spin opacity-70" />
-          ) : (
-            <ChevronDown className="size-3 shrink-0 opacity-55" />
-          )}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="popover-scroll-content scrollbar-sleek w-48 p-1"
-        align="start"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {states.error ? (
-          <div className="px-2 py-3 text-center text-[12px] text-destructive">{states.error}</div>
-        ) : states.loading ? (
-          <div className="flex items-center gap-2 px-2 py-3 text-[12px] text-muted-foreground">
-            <LoaderCircle className="size-3 animate-spin" />
-            Loading states
-          </div>
-        ) : states.data.length > 0 ? (
-          states.data.map((state) => (
-            <button
-              key={state.id}
-              type="button"
-              onClick={() => {
-                handleStateChange(state.id)
-                setOpen(false)
-              }}
-              className={cn(
-                'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12px] hover:bg-accent',
-                currentStateId === state.id && 'bg-accent/50'
-              )}
-            >
-              <span
-                className="inline-block size-2 rounded-full"
-                style={{ backgroundColor: state.color }}
-              />
-              {state.name}
-            </button>
-          ))
-        ) : (
-          <div className="px-2 py-3 text-center text-[12px] text-muted-foreground">
-            No states found
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function getLinearPriorityRank(priority: number): number {
-  return priority === 0 ? 5 : priority
-}
-
-function compareLinearIssues(a: LinearIssue, b: LinearIssue, orderBy: LinearOrderBy): number {
-  if (orderBy === 'updated') {
-    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  }
-  if (orderBy === 'identifier') {
-    return a.identifier.localeCompare(b.identifier, undefined, { numeric: true })
-  }
-
-  const priorityDelta = getLinearPriorityRank(a.priority) - getLinearPriorityRank(b.priority)
-  if (priorityDelta !== 0) {
-    return priorityDelta
-  }
-  return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-}
-
-function getLinearIssueGroup(
-  issue: LinearIssue,
-  groupBy: LinearGroupBy
-): { key: string; label: string } {
-  if (groupBy === 'status') {
-    return { key: `status:${issue.state.name}`, label: issue.state.name }
-  }
-  if (groupBy === 'assignee') {
-    return {
-      key: `assignee:${issue.assignee?.id ?? 'unassigned'}`,
-      label: issue.assignee?.displayName ?? 'Unassigned'
-    }
-  }
-  if (groupBy === 'priority') {
-    return {
-      key: `priority:${issue.priority}`,
-      label: getLinearPriorityLabel(issue.priority)
-    }
-  }
-  if (groupBy === 'team') {
-    return { key: `team:${issue.team.id}`, label: issue.team.name }
-  }
-  return { key: 'all', label: 'Issues' }
-}
-
-function groupLinearIssues(
-  issues: LinearIssue[],
-  groupBy: LinearGroupBy,
-  orderBy: LinearOrderBy
-): LinearGroupSection[] {
-  const sorted = [...issues].sort((a, b) => compareLinearIssues(a, b, orderBy))
-  if (groupBy === 'none') {
-    return [{ key: 'all', label: 'Issues', issues: sorted }]
-  }
-
-  const sections = new Map<string, LinearGroupSection>()
-  for (const issue of sorted) {
-    const group = getLinearIssueGroup(issue, groupBy)
-    const section = sections.get(group.key)
-    if (section) {
-      section.issues.push(issue)
-    } else {
-      sections.set(group.key, { key: group.key, label: group.label, issues: [issue] })
-    }
-  }
-  return [...sections.values()]
-}
-
-function getLinearIssueGridTemplate(visibleProperties: ReadonlySet<LinearDisplayProperty>): string {
-  const columns = ['96px', 'minmax(180px,1.4fr)']
-  if (visibleProperties.has('state')) {
-    columns.push('140px')
-  }
-  if (visibleProperties.has('priority')) {
-    columns.push('92px')
-  }
-  if (visibleProperties.has('assignee')) {
-    columns.push('150px')
-  }
-  if (visibleProperties.has('team')) {
-    columns.push('160px')
-  }
-  if (visibleProperties.has('updated')) {
-    columns.push('100px')
-  }
-  columns.push('72px')
-  return columns.join(' ')
-}
-
-function GHStatusCell({
-  item,
-  repo
-}: {
-  item: GitHubWorkItem
-  repo: Repo | null
-}): React.JSX.Element {
-  const patchWorkItem = useAppStore((s) => s.patchWorkItem)
-  const [statusStateDraft, setStatusStateDraft] = useState(() =>
-    createTaskPageGitHubStatusStateDraft(item)
-  )
-  const [open, setOpen] = useState(false)
-  const reqRef = useRef(0)
-
-  const resolvedStatusStateDraft = resolveTaskPageGitHubStatusStateDraft(statusStateDraft, item)
-  if (resolvedStatusStateDraft !== statusStateDraft) {
-    // Why: item rows can refresh from the GitHub cache while this cell is still
-    // mounted; reconcile before paint instead of showing one stale status frame.
-    setStatusStateDraft(resolvedStatusStateDraft)
-  }
-  const localState = resolvedStatusStateDraft.localState
-  const updateLocalState = useCallback(
-    (nextState: GitHubWorkItem['state']) => {
-      setStatusStateDraft((current) =>
-        updateTaskPageGitHubStatusLocalState(current, item, nextState)
-      )
-    },
-    [item]
-  )
-
-  const handleStateChange = useCallback(
-    (newState: 'open' | 'closed') => {
-      if (newState === localState || !repo || item.type !== 'issue') {
-        return
-      }
-      reqRef.current += 1
-      const reqId = reqRef.current
-      updateLocalState(newState)
-      patchWorkItem(item.id, { state: newState }, item.repoId)
-      const target = getActiveRuntimeTarget(useAppStore.getState().settings)
-      const updatePromise =
-        target.kind === 'environment'
-          ? callRuntimeRpc<{ ok?: boolean; error?: string }>(
-              target,
-              'github.updateIssue',
-              { repo: repo.id, number: item.number, updates: { state: newState } },
-              { timeoutMs: 30_000 }
-            )
-          : api.gh.updateIssue({
-              repoPath: repo.path,
-              repoId: repo.id,
-              number: item.number,
-              updates: { state: newState }
-            })
-      updatePromise
-        .then((result) => {
-          if (reqId !== reqRef.current) {
-            return
-          }
-          const typed = result as { ok?: boolean; error?: string }
-          if (typed && typed.ok === false) {
-            updateLocalState(newState === 'closed' ? 'open' : 'closed')
-            patchWorkItem(
-              item.id,
-              { state: newState === 'closed' ? 'open' : 'closed' },
-              item.repoId
-            )
-            toast.error(typed.error ?? 'Failed to update state')
-          }
-        })
-        .catch(() => {
-          if (reqId !== reqRef.current) {
-            return
-          }
-          updateLocalState(newState === 'closed' ? 'open' : 'closed')
-          patchWorkItem(item.id, { state: newState === 'closed' ? 'open' : 'closed' }, item.repoId)
-          toast.error('Failed to update state')
-        })
-    },
-    [item, localState, repo, patchWorkItem, updateLocalState]
-  )
-
-  if (item.type !== 'issue' || !repo) {
-    return (
-      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 opacity-70 dark:text-emerald-200">
-        Open
-      </span>
-    )
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          onClick={(e) => e.stopPropagation()}
-          className={cn(
-            'group/status inline-flex cursor-pointer items-center gap-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium transition hover:brightness-125 hover:ring-1 hover:ring-white/10',
-            localState === 'closed'
-              ? 'border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300'
-              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
-          )}
-        >
-          {localState === 'closed' ? 'Closed' : 'Open'}
-          <ChevronDown className="size-2.5 opacity-50" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-36 p-1" align="start" onClick={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          onClick={() => {
-            handleStateChange('open')
-            setOpen(false)
-          }}
-          className={cn(
-            'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent',
-            localState === 'open' && 'bg-accent/50'
-          )}
-        >
-          <CircleDot className="size-3 text-emerald-500" />
-          Open
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            handleStateChange('closed')
-            setOpen(false)
-          }}
-          className={cn(
-            'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent',
-            localState === 'closed' && 'bg-accent/50'
-          )}
-        >
-          <CircleDot className="size-3 text-rose-500" />
-          Closed
-        </button>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function formatPRDelta(item: GitHubWorkItem): string | null {
-  const parts: string[] = []
-  if (typeof item.additions === 'number') {
-    parts.push(`+${item.additions}`)
-  }
-  if (typeof item.deletions === 'number') {
-    parts.push(`-${item.deletions}`)
-  }
-  if (typeof item.changedFiles === 'number') {
-    parts.push(`${item.changedFiles} ${item.changedFiles === 1 ? 'file' : 'files'}`)
-  }
-  return parts.length > 0 ? parts.join(' ') : null
-}
-
-function getReviewTone(item: GitHubWorkItem): string {
-  if (item.reviewDecision === 'APPROVED') {
-    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-  }
-  if (item.reviewDecision === 'CHANGES_REQUESTED') {
-    return 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200'
-  }
-  if (item.reviewRequests && item.reviewRequests.length > 0) {
-    return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200'
-  }
-  return 'border-border/60 bg-background/70 text-muted-foreground'
-}
-
-function ReviewChipAvatar({
-  reviewer
-}: {
-  reviewer: GitHubPRPrimaryReviewer | null
-}): React.JSX.Element {
-  if (reviewer?.avatarUrl) {
-    return (
-      <img
-        src={reviewer.avatarUrl}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        title={reviewer.name ? `${reviewer.name} (${reviewer.login})` : reviewer.login}
-        className="size-3.5 shrink-0 rounded-full border border-border/50 bg-muted object-cover"
-      />
-    )
-  }
-  if (reviewer?.login) {
-    return (
-      <span
-        title={reviewer.login}
-        className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full border border-border/50 bg-muted text-[8px] font-medium text-muted-foreground"
-      >
-        {reviewer.login.slice(0, 1).toUpperCase()}
-      </span>
-    )
-  }
-  return <Users className="size-3 shrink-0" />
-}
-
-function GitHubAssigneeAvatar({ assignee }: { assignee: GitHubAssignableUser }): React.JSX.Element {
-  if (assignee.avatarUrl) {
-    return (
-      <img
-        src={assignee.avatarUrl}
-        alt={assignee.login}
-        loading="lazy"
-        decoding="async"
-        title={assignee.name ? `${assignee.name} (${assignee.login})` : assignee.login}
-        className="size-5 rounded-full border border-border/40 bg-muted object-cover"
-      />
-    )
-  }
-  return (
-    <span
-      title={assignee.login}
-      className="inline-flex size-5 items-center justify-center rounded-full border border-border/40 bg-muted text-[10px] font-medium text-muted-foreground"
-    >
-      {assignee.login.slice(0, 1).toUpperCase()}
-    </span>
-  )
-}
-
-function GitHubIssueLabelSelector({
-  labels,
-  selectedLabels,
-  loading,
-  error,
-  disabled,
-  onChange
-}: {
-  labels: string[]
-  selectedLabels: string[]
-  loading: boolean
-  error: string | null
-  disabled: boolean
-  onChange: (labels: string[]) => void
-}): React.JSX.Element {
-  const selectedSet = useMemo(() => new Set(selectedLabels), [selectedLabels])
-  const toggleLabel = useCallback(
-    (label: string) => {
-      onChange(
-        selectedSet.has(label)
-          ? selectedLabels.filter((name) => name !== label)
-          : [...selectedLabels, label]
-      )
-    },
-    [onChange, selectedLabels, selectedSet]
-  )
-
-  return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <label className="text-[11px] font-medium text-muted-foreground">Labels</label>
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={disabled}
-            className="h-auto min-h-9 justify-start gap-2 px-3 py-2 text-left"
-          >
-            {selectedLabels.length === 0 ? (
-              <span className="text-muted-foreground">None</span>
-            ) : (
-              <span className="flex min-w-0 flex-wrap gap-1.5">
-                {selectedLabels.map((label) => (
-                  <span
-                    key={label}
-                    className="rounded-full border border-border/50 bg-muted/40 px-2 py-0.5 text-[11px] font-medium"
-                  >
-                    {label}
-                  </span>
-                ))}
-              </span>
-            )}
-            {loading ? <LoaderCircle className="ml-auto size-3.5 animate-spin" /> : null}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="popover-scroll-content scrollbar-sleek w-64 p-1" align="start">
-          {error ? (
-            <div className="px-2 py-2 text-xs text-destructive">{error}</div>
-          ) : labels.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-muted-foreground">No labels.</div>
-          ) : (
-            labels.map((label) => (
-              <button
-                key={label}
-                type="button"
-                onClick={() => toggleLabel(label)}
-                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent"
-              >
-                <span
-                  className={cn(
-                    'flex size-3.5 shrink-0 items-center justify-center rounded-sm border',
-                    selectedSet.has(label)
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-input'
-                  )}
-                >
-                  {selectedSet.has(label) ? <Check className="size-2.5" /> : null}
-                </span>
-                <span className="min-w-0 truncate">{label}</span>
-              </button>
-            ))
-          )}
-        </PopoverContent>
-      </Popover>
-    </div>
-  )
-}
-
-function GitHubIssueAssigneeSelector({
-  assignees,
-  selectedAssignees,
-  loading,
-  error,
-  disabled,
-  onChange
-}: {
-  assignees: GitHubAssignableUser[]
-  selectedAssignees: GitHubAssignableUser[]
-  loading: boolean
-  error: string | null
-  disabled: boolean
-  onChange: (assignees: GitHubAssignableUser[]) => void
-}): React.JSX.Element {
-  const selectedLogins = useMemo(
-    () => new Set(selectedAssignees.map((assignee) => assignee.login.toLowerCase())),
-    [selectedAssignees]
-  )
-  const toggleAssignee = useCallback(
-    (assignee: GitHubAssignableUser) => {
-      const key = assignee.login.toLowerCase()
-      onChange(
-        selectedLogins.has(key)
-          ? selectedAssignees.filter((current) => current.login.toLowerCase() !== key)
-          : [...selectedAssignees, assignee]
-      )
-    },
-    [onChange, selectedAssignees, selectedLogins]
-  )
-
-  return (
-    <div className="flex min-w-0 flex-col gap-1">
-      <label className="text-[11px] font-medium text-muted-foreground">Assignees</label>
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={disabled}
-            className="h-auto min-h-9 justify-start gap-2 px-3 py-2 text-left"
-          >
-            {selectedAssignees.length === 0 ? (
-              <span className="text-muted-foreground">Unassigned</span>
-            ) : (
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className="flex -space-x-1">
-                  {selectedAssignees.slice(0, 3).map((assignee) => (
-                    <GitHubAssigneeAvatar key={assignee.login} assignee={assignee} />
-                  ))}
-                </span>
-                <span className="min-w-0 truncate text-xs">
-                  {selectedAssignees.map((assignee) => assignee.login).join(', ')}
-                </span>
-              </span>
-            )}
-            {loading ? <LoaderCircle className="ml-auto size-3.5 animate-spin" /> : null}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="popover-scroll-content scrollbar-sleek w-72 p-1" align="start">
-          {error ? (
-            <div className="px-2 py-2 text-xs text-destructive">{error}</div>
-          ) : assignees.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-muted-foreground">No assignable users.</div>
-          ) : (
-            assignees.map((assignee) => {
-              const selected = selectedLogins.has(assignee.login.toLowerCase())
-              return (
-                <button
-                  key={assignee.login}
-                  type="button"
-                  onClick={() => toggleAssignee(assignee)}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent"
-                >
-                  <span
-                    className={cn(
-                      'flex size-3.5 shrink-0 items-center justify-center rounded-sm border',
-                      selected
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-input'
-                    )}
-                  >
-                    {selected ? <Check className="size-2.5" /> : null}
-                  </span>
-                  <GitHubAssigneeAvatar assignee={assignee} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{assignee.login}</span>
-                    {assignee.name ? (
-                      <span className="block truncate text-[11px] text-muted-foreground">
-                        {assignee.name}
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
-              )
-            })
-          )}
-        </PopoverContent>
-      </Popover>
-    </div>
-  )
-}
-
-function GHAssigneesCell({
-  item,
-  repo
-}: {
-  item: GitHubWorkItem
-  repo: Repo | null
-}): React.JSX.Element {
-  const patchWorkItem = useAppStore((s) => s.patchWorkItem)
-  const settings = useAppStore((s) => s.settings)
-  const [open, setOpen] = useState(false)
-  const [pendingLogin, setPendingLogin] = useState<string | null>(null)
-  const assignees = useMemo(() => item.assignees ?? [], [item.assignees])
-  const parsed = useMemo(() => parseGitHubIssueOrPRLink(item.url), [item.url])
-  const owner = parsed?.slug.owner ?? null
-  const repoName = parsed?.slug.repo ?? null
-  const seedLogins = useMemo(
-    () =>
-      assignees
-        .map((a) => a.login)
-        .sort()
-        .filter(Boolean),
-    [assignees]
-  )
-  const metadata = useRepoAssigneesBySlug(
-    open ? owner : null,
-    open ? repoName : null,
-    seedLogins,
-    settings
-  )
-
-  const toggleAssignee = useCallback(
-    async (user: GitHubAssignableUser): Promise<void> => {
-      if (item.type !== 'issue' || pendingLogin) {
-        return
-      }
-      const userLoginKey = user.login.toLowerCase()
-      const isOn = assignees.some((a) => a.login.toLowerCase() === userLoginKey)
-      const previousAssignees = assignees
-      const nextAssignees = isOn
-        ? assignees.filter((a) => a.login.toLowerCase() !== userLoginKey)
-        : [...assignees, user]
-      setPendingLogin(user.login)
-      patchWorkItem(item.id, { assignees: nextAssignees }, item.repoId)
-
-      try {
-        const updates = isOn ? { removeAssignees: [user.login] } : { addAssignees: [user.login] }
-        const target = getActiveRuntimeTarget(settings)
-        if (owner && repoName) {
-          const args = {
-            owner,
-            repo: repoName,
-            number: item.number,
-            updates
-          }
-          const res =
-            target.kind === 'environment'
-              ? await callRuntimeRpc<Awaited<ReturnType<typeof api.gh.updateIssueBySlug>>>(
-                  target,
-                  'github.project.updateIssueBySlug',
-                  args,
-                  { timeoutMs: 30_000 }
-                )
-              : await api.gh.updateIssueBySlug(args)
-          if (!res.ok) {
-            throw new Error(res.error.message)
-          }
-        } else if (repo) {
-          const res =
-            target.kind === 'environment'
-              ? await callRuntimeRpc<{ ok?: boolean; error?: string }>(
-                  target,
-                  'github.updateIssue',
-                  { repo: repo.id, number: item.number, updates },
-                  { timeoutMs: 30_000 }
-                )
-              : await api.gh.updateIssue({
-                  repoPath: repo.path,
-                  repoId: repo.id,
-                  number: item.number,
-                  updates
-                })
-          if (res && res.ok === false) {
-            throw new Error(res.error)
-          }
-        } else {
-          throw new Error('No GitHub repository context available for this issue.')
-        }
-      } catch (err) {
-        patchWorkItem(item.id, { assignees: previousAssignees }, item.repoId)
-        toast.error(err instanceof Error ? err.message : 'Failed to update assignees.')
-      } finally {
-        setPendingLogin(null)
-      }
-    },
-    [
-      assignees,
-      item.id,
-      item.number,
-      item.repoId,
-      item.type,
-      owner,
-      patchWorkItem,
-      pendingLogin,
-      repo,
-      repoName,
-      settings
-    ]
-  )
-
-  const triggerContent =
-    assignees.length > 0 ? (
-      <>
-        <div className="flex min-w-0 -space-x-1 overflow-hidden">
-          {assignees.slice(0, 3).map((assignee) => (
-            <GitHubAssigneeAvatar key={assignee.login} assignee={assignee} />
-          ))}
-        </div>
-        {assignees.length > 3 ? (
-          <span className="ml-1 shrink-0 text-[10px] font-medium text-muted-foreground">
-            +{assignees.length - 3}
-          </span>
-        ) : null}
-      </>
-    ) : (
-      <span className="text-xs text-muted-foreground/60">-</span>
-    )
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={
-            assignees.length
-              ? `Assigned to ${assignees.map((a) => a.login).join(', ')}`
-              : 'Assign issue'
-          }
-          aria-busy={pendingLogin !== null}
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-          className={cn(
-            'inline-flex h-6 max-w-full items-center gap-1 text-left transition disabled:opacity-60',
-            assignees.length > 0
-              ? 'rounded-full border border-border/40 bg-background/70 px-1.5 hover:bg-muted/60'
-              : 'w-full rounded-sm border border-transparent bg-transparent px-1 hover:bg-muted/40'
-          )}
-        >
-          {triggerContent}
-          {pendingLogin ? (
-            <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" />
-          ) : assignees.length > 0 ? (
-            <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
-          ) : null}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        className="popover-scroll-content scrollbar-sleek w-64 p-1"
-        onClick={(event) => event.stopPropagation()}
-      >
-        {!owner || !repoName ? (
-          <div className="px-2 py-2 text-xs text-muted-foreground">Issue has no repo slug.</div>
-        ) : metadata.loading ? (
-          <div className="px-2 py-2 text-xs text-muted-foreground">Loading…</div>
-        ) : metadata.error ? (
-          <div className="px-2 py-2 text-xs text-destructive">{metadata.error}</div>
-        ) : metadata.data.length === 0 ? (
-          <div className="px-2 py-2 text-xs text-muted-foreground">No assignable users.</div>
-        ) : (
-          metadata.data.map((user) => {
-            const isOn = assignees.some((a) => a.login.toLowerCase() === user.login.toLowerCase())
-            const pending = pendingLogin === user.login
-            return (
-              <button
-                key={user.login}
-                type="button"
-                disabled={pendingLogin !== null}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-muted/50 disabled:opacity-60"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void toggleAssignee(user)
-                }}
-              >
-                <span
-                  className={cn(
-                    'flex size-3.5 shrink-0 items-center justify-center rounded-sm border',
-                    isOn ? 'border-primary bg-primary text-primary-foreground' : 'border-input'
-                  )}
-                >
-                  {pending ? (
-                    <LoaderCircle className="size-3 animate-spin" />
-                  ) : isOn ? (
-                    <Check className="size-3" />
-                  ) : null}
-                </span>
-                {user.avatarUrl ? (
-                  <img src={user.avatarUrl} alt="" className="size-5 shrink-0 rounded-full" />
-                ) : (
-                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
-                    {user.login.slice(0, 1).toUpperCase()}
-                  </span>
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">{user.login}</span>
-                  {user.name ? (
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {user.name}
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-            )
-          })
-        )}
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function getChecksLabel(item: GitHubWorkItem): string {
-  const summary = item.checksSummary
-  if (!summary) {
-    return 'Checks'
-  }
-  if (summary.total === 0) {
-    return 'No checks'
-  }
-  if (summary.failed > 0) {
-    return `${summary.failed} failing`
-  }
-  if (summary.pending > 0) {
-    return `${summary.pending} pending`
-  }
-  return `${summary.passed}/${summary.total} passed`
-}
-
-function getChecksTone(item: GitHubWorkItem): string {
-  const state = item.checksSummary?.state
-  if (state === 'success') {
-    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-  }
-  if (state === 'failure') {
-    return 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200'
-  }
-  if (state === 'pending') {
-    return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-200'
-  }
-  return 'border-border/60 bg-background/70 text-muted-foreground'
-}
-
-function sameOptionalGitHubOwnerRepo(
-  left: GitHubOwnerRepo | null | undefined,
-  right: GitHubOwnerRepo | null | undefined
-): boolean {
-  const leftValue = left ?? null
-  const rightValue = right ?? null
-  return leftValue === null && rightValue === null
-    ? true
-    : sameGitHubOwnerRepo(leftValue, rightValue)
-}
-
-function mergeReviewerSuggestions(
-  users: GitHubAssignableUser[],
-  seedUsers: GitHubAssignableUser[]
-): GitHubAssignableUser[] {
-  const byLogin = new Map<string, GitHubAssignableUser>()
-  for (const user of [...seedUsers, ...users]) {
-    const key = user.login.toLowerCase()
-    const existing = byLogin.get(key)
-    if (!existing) {
-      byLogin.set(key, user)
-      continue
-    }
-    if (!existing.avatarUrl && user.avatarUrl) {
-      byLogin.set(key, { ...existing, avatarUrl: user.avatarUrl })
-    }
-  }
-  return Array.from(byLogin.values()).sort((a, b) => a.login.localeCompare(b.login))
-}
-
-function buildRequestedReviewUsers(
-  logins: string[],
-  candidates: GitHubAssignableUser[],
-  existingRequests: GitHubAssignableUser[]
-): GitHubAssignableUser[] {
-  const byLogin = new Map<string, GitHubAssignableUser>()
-  for (const user of existingRequests) {
-    byLogin.set(user.login.toLowerCase(), user)
-  }
-  const candidatesByLogin = new Map(candidates.map((user) => [user.login.toLowerCase(), user]))
-  for (const login of logins) {
-    const key = login.toLowerCase()
-    if (byLogin.has(key)) {
-      continue
-    }
-    byLogin.set(key, candidatesByLogin.get(key) ?? { login, name: null, avatarUrl: '' })
-  }
-  return Array.from(byLogin.values())
-}
-
-function PRReviewCell({
-  item,
-  repo
-}: {
-  item: GitHubWorkItem
-  repo: Repo | null
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const [reviewerInput, setReviewerInput] = useState('')
-  const [localReviewRequests, setLocalReviewRequests] = useState<GitHubAssignableUser[]>(
-    () => item.reviewRequests ?? []
-  )
-  const [reviewRequestsSource, setReviewRequestsSource] = useState(() => ({
-    itemId: item.id,
-    repoId: item.repoId,
-    reviewRequests: item.reviewRequests
-  }))
-  const patchWorkItem = useAppStore((s) => s.patchWorkItem)
-  const [activeReviewerCursor, setActiveReviewerCursor] = useState({ resetKey: '', index: 0 })
-  const [submitting, setSubmitting] = useState(false)
-  const settings = useAppStore((s) => s.settings)
-  const reviewerInputRef = useRef<HTMLInputElement | null>(null)
-  const reviewerInputFocusFrameRef = useRef<number | null>(null)
-
-  const cancelReviewerInputFocusFrame = useCallback((): void => {
-    if (reviewerInputFocusFrameRef.current === null) {
-      return
-    }
-    cancelAnimationFrame(reviewerInputFocusFrameRef.current)
-    reviewerInputFocusFrameRef.current = null
-  }, [])
-
-  const setReviewerInputNode = useCallback(
-    (node: HTMLInputElement | null): void => {
-      // Why: the queued picker focus is only valid while this input is mounted.
-      if (!node) {
-        cancelReviewerInputFocusFrame()
-      }
-      reviewerInputRef.current = node
-    },
-    [cancelReviewerInputFocusFrame]
-  )
-
-  // Why: reviewer edits are optimistic, but item switches/refetches must clear
-  // stale local requests before paint; a passive Effect leaves one stale render.
-  if (
-    reviewRequestsSource.itemId !== item.id ||
-    reviewRequestsSource.repoId !== item.repoId ||
-    reviewRequestsSource.reviewRequests !== item.reviewRequests
-  ) {
-    setReviewRequestsSource({
-      itemId: item.id,
-      repoId: item.repoId,
-      reviewRequests: item.reviewRequests
-    })
-    setLocalReviewRequests(item.reviewRequests ?? [])
-  }
-
-  const reviewerSeedUsers = useMemo<GitHubAssignableUser[]>(() => {
-    const byLogin = new Map<string, GitHubAssignableUser>()
-    const add = (user: GitHubAssignableUser): void => {
-      if (!user.login) {
-        return
-      }
-      byLogin.set(user.login.toLowerCase(), user)
-    }
-    for (const user of localReviewRequests) {
-      add(user)
-    }
-    for (const review of item.latestReviews ?? []) {
-      add({
-        login: review.login,
-        name: null,
-        avatarUrl: review.avatarUrl ?? ''
-      })
-    }
-    if (item.author) {
-      add({ login: item.author, name: null, avatarUrl: '' })
-    }
-    return Array.from(byLogin.values())
-  }, [item.author, item.latestReviews, localReviewRequests])
-
-  const reviewSlug = useMemo(() => parseGitHubIssueOrPRLink(item.url)?.slug ?? null, [item.url])
-  const reviewerMetadata = useRepoAssigneesBySlug(
-    open && reviewSlug ? reviewSlug.owner : null,
-    open && reviewSlug ? reviewSlug.repo : null,
-    reviewerSeedUsers.map((user) => user.login),
-    settings
-  )
-
-  const authorLogin = item.author?.toLowerCase() ?? null
-  const reviewerCandidates = useMemo(
-    () =>
-      mergeReviewerSuggestions(reviewerMetadata.data, reviewerSeedUsers).filter(
-        (user) => user.login.toLowerCase() !== authorLogin
-      ),
-    [authorLogin, reviewerMetadata.data, reviewerSeedUsers]
-  )
-  const reviewerCandidatesByLogin = useMemo(
-    () => new Map(reviewerCandidates.map((user) => [user.login.toLowerCase(), user])),
-    [reviewerCandidates]
-  )
-  const selectedReviewerLogins = useMemo(
-    () =>
-      new Set(
-        localReviewRequests.map((reviewer) => reviewer.login.trim().toLowerCase()).filter(Boolean)
-      ),
-    [localReviewRequests]
-  )
-  const reviewerQuery = reviewerInput.trim().replace(/^@/, '').toLowerCase()
-  const filteredReviewerCandidates = useMemo(() => {
-    const query = reviewerQuery
-    return reviewerCandidates
-      .filter((user) => {
-        const login = user.login.toLowerCase()
-        return (
-          query.length === 0 ||
-          login.includes(query) ||
-          (user.name ?? '').toLowerCase().includes(query)
-        )
-      })
-      .sort((a, b) => {
-        const aLogin = a.login.toLowerCase()
-        const bLogin = b.login.toLowerCase()
-        const aStarts = aLogin.startsWith(query)
-        const bStarts = bLogin.startsWith(query)
-        if (aStarts !== bStarts) {
-          return aStarts ? -1 : 1
-        }
-        return a.login.localeCompare(b.login)
-      })
-  }, [reviewerCandidates, reviewerQuery])
-  const suggestedReviewerRows = useMemo(
-    () =>
-      reviewerQuery.length === 0
-        ? reviewerSeedUsers
-            .filter((user) => !selectedReviewerLogins.has(user.login.toLowerCase()))
-            .filter((user) => user.login.toLowerCase() !== authorLogin)
-            .map((user) => reviewerCandidatesByLogin.get(user.login.toLowerCase()) ?? user)
-            .slice(0, 1)
-        : [],
-    [
-      authorLogin,
-      reviewerCandidatesByLogin,
-      reviewerQuery.length,
-      reviewerSeedUsers,
-      selectedReviewerLogins
-    ]
-  )
-  const everyoneElseReviewerRows = useMemo(() => {
-    const suggestedLogins = new Set(suggestedReviewerRows.map((user) => user.login.toLowerCase()))
-    return filteredReviewerCandidates.filter(
-      (user) => !suggestedLogins.has(user.login.toLowerCase())
-    )
-  }, [filteredReviewerCandidates, suggestedReviewerRows])
-  const actionableReviewerRows = useMemo(
-    () => [...suggestedReviewerRows, ...everyoneElseReviewerRows],
-    [everyoneElseReviewerRows, suggestedReviewerRows]
-  )
-
-  const reviewerCursorResetKey = `${reviewerQuery}\u0000${actionableReviewerRows.length}`
-  if (activeReviewerCursor.resetKey !== reviewerCursorResetKey) {
-    setActiveReviewerCursor({ resetKey: reviewerCursorResetKey, index: 0 })
-  }
-  const activeReviewerIndex =
-    activeReviewerCursor.resetKey === reviewerCursorResetKey ? activeReviewerCursor.index : 0
-  const setActiveReviewerIndex = useCallback(
-    (nextIndex: number | ((current: number) => number)): void => {
-      setActiveReviewerCursor((current) => {
-        const currentIndex = current.resetKey === reviewerCursorResetKey ? current.index : 0
-        return {
-          resetKey: reviewerCursorResetKey,
-          index: typeof nextIndex === 'function' ? nextIndex(currentIndex) : nextIndex
-        }
-      })
-    },
-    [reviewerCursorResetKey]
-  )
-
-  if (item.type !== 'pr') {
-    return <span className="text-[11px] text-muted-foreground">Issue</span>
-  }
-
-  const itemWithLocalReviewRequests = { ...item, reviewRequests: localReviewRequests }
-  const primaryReviewer = getGitHubPRPrimaryReviewer(itemWithLocalReviewRequests)
-  const hasReviewerMetadata =
-    item.reviewDecision !== undefined ||
-    localReviewRequests.length > 0 ||
-    item.reviewRequests !== undefined ||
-    item.latestReviews !== undefined
-
-  const handleRequestReview = async (requestedLogins?: string[]): Promise<void> => {
-    if (!repo || submitting) {
-      return
-    }
-    const logins = normalizeGitHubReviewerLogins(
-      requestedLogins ?? reviewerInput.split(/[\s,]+/),
-      selectedReviewerLogins
-    )
-    if (logins.length === 0) {
-      toast.error('Enter a reviewer')
-      return
-    }
-    if (localReviewRequests.length + logins.length > 15) {
-      toast.error('You can request up to 15 reviewers')
-      return
-    }
-    setSubmitting(true)
-    try {
-      const target = getActiveRuntimeTarget(settings)
-      const result =
-        target.kind === 'environment'
-          ? await callRuntimeRpc<{ ok: boolean; error?: string }>(
-              target,
-              'github.requestPRReviewers',
-              { repo: repo.id, prNumber: item.number, reviewers: logins },
-              { timeoutMs: 30_000 }
-            )
-          : await api.gh.requestPRReviewers({
-              repoPath: repo.path,
-              repoId: repo.id,
-              prNumber: item.number,
-              reviewers: logins
-            })
-      if (result.ok) {
-        toast.success('Reviewer requested')
-        const nextReviewRequests = buildRequestedReviewUsers(
-          logins,
-          reviewerCandidates,
-          localReviewRequests
-        )
-        setLocalReviewRequests(nextReviewRequests)
-        patchWorkItem(item.id, { reviewRequests: nextReviewRequests }, item.repoId)
-        setReviewerInput('')
-      } else {
-        toast.error(result.error)
-      }
-    } catch {
-      toast.error('Failed to request reviewer')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const requestReviewer = async (reviewer: GitHubAssignableUser): Promise<void> => {
-    if (selectedReviewerLogins.has(reviewer.login.toLowerCase())) {
-      return
-    }
-    // Close the popover immediately so the UI feels responsive; the GitHub
-    // request runs in the background and toasts on completion.
-    setOpen(false)
-    setReviewerInput('')
-    await handleRequestReview([reviewer.login])
-  }
-
-  const handleReviewerPickerOpenChange = (nextOpen: boolean): void => {
-    setOpen(nextOpen)
-    if (nextOpen) {
-      cancelReviewerInputFocusFrame()
-      reviewerInputFocusFrameRef.current = requestAnimationFrame(() => {
-        reviewerInputFocusFrameRef.current = null
-        reviewerInputRef.current?.focus()
-      })
-      return
-    }
-    cancelReviewerInputFocusFrame()
-    setReviewerInput('')
-  }
-
-  const renderReviewerPickerRow = (
-    reviewer: GitHubAssignableUser,
-    options: { suggested: boolean; activeIndex: number }
-  ): React.JSX.Element => {
-    const selected = selectedReviewerLogins.has(reviewer.login.toLowerCase())
-    const active = actionableReviewerRows[activeReviewerIndex]?.login === reviewer.login
-    return (
-      <button
-        key={`${options.suggested ? 'suggested' : 'reviewer'}:${reviewer.login}`}
-        type="button"
-        className={cn(
-          'flex min-h-10 w-full items-center gap-2 border-b border-border/50 px-3 py-2 text-left text-[13px] outline-none last:border-b-0 hover:bg-accent/70',
-          active && 'bg-accent text-accent-foreground',
-          selected && 'font-medium'
-        )}
-        onMouseEnter={() => setActiveReviewerIndex(options.activeIndex)}
-        onMouseDown={(event) => {
-          event.preventDefault()
-          void requestReviewer(reviewer)
-        }}
-      >
-        <span className="flex size-4 shrink-0 items-center justify-center text-foreground">
-          {selected ? <Check className="size-3.5" /> : null}
-        </span>
-        {reviewer.avatarUrl ? (
-          <img src={reviewer.avatarUrl} alt="" className="size-5 shrink-0 rounded-full" />
-        ) : (
-          <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
-            {reviewer.login.slice(0, 1).toUpperCase()}
-          </span>
-        )}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate">
-            <span className="font-semibold text-foreground">{reviewer.login}</span>
-            {reviewer.name ? (
-              <span className="ml-1 font-normal text-muted-foreground">{reviewer.name}</span>
-            ) : null}
-          </span>
-          {options.suggested ? (
-            <span className="block truncate text-[12px] leading-4 text-muted-foreground">
-              Recently active in this pull request
-            </span>
-          ) : null}
-        </span>
-      </button>
-    )
-  }
-
-  return (
-    <Popover open={open} onOpenChange={handleReviewerPickerOpenChange}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          onClick={(event) => event.stopPropagation()}
-          className={cn(
-            'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition hover:brightness-110',
-            getReviewTone(itemWithLocalReviewRequests)
-          )}
-        >
-          <ReviewChipAvatar reviewer={primaryReviewer} />
-          <span className="truncate">{getGitHubPRReviewLabel(itemWithLocalReviewRequests)}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="w-[330px] overflow-hidden rounded-md border-border/70 p-0"
-        align="start"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="border-b border-border/70 px-3 py-2">
-          <div className="text-[13px] font-semibold text-foreground">
-            Request up to 15 reviewers
-          </div>
-        </div>
-        <div className="border-b border-border/70 p-3">
-          <Input
-            ref={setReviewerInputNode}
-            value={reviewerInput}
-            onChange={(event) => setReviewerInput(event.target.value)}
-            placeholder="Type or choose a user"
-            disabled={!repo || submitting}
-            className="h-8 rounded-md bg-background px-2 text-[13px]"
-            aria-label="Type or choose a user"
-            aria-autocomplete="list"
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowDown' && actionableReviewerRows.length > 0) {
-                event.preventDefault()
-                setActiveReviewerIndex((current) => (current + 1) % actionableReviewerRows.length)
-                return
-              }
-              if (event.key === 'ArrowUp' && actionableReviewerRows.length > 0) {
-                event.preventDefault()
-                setActiveReviewerIndex(
-                  (current) =>
-                    (current - 1 + actionableReviewerRows.length) % actionableReviewerRows.length
-                )
-                return
-              }
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                const activeReviewer = actionableReviewerRows[activeReviewerIndex]
-                if (activeReviewer) {
-                  void requestReviewer(activeReviewer)
-                  return
-                }
-                void handleRequestReview()
-                return
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                handleReviewerPickerOpenChange(false)
-              }
-            }}
-          />
-        </div>
-        <div className="max-h-[300px] overflow-y-auto scrollbar-sleek">
-          {reviewerMetadata.loading ? (
-            <div className="px-3 py-2 text-[13px] text-muted-foreground">Loading…</div>
-          ) : filteredReviewerCandidates.length > 0 ? (
-            <>
-              {suggestedReviewerRows.length > 0 ? (
-                <>
-                  <div className="border-b border-border/70 bg-muted/50 px-3 py-1.5 text-[12px] font-semibold text-foreground">
-                    Suggestions
-                  </div>
-                  {suggestedReviewerRows.map((reviewer, index) =>
-                    renderReviewerPickerRow(reviewer, { suggested: true, activeIndex: index })
-                  )}
-                </>
-              ) : null}
-              <div className="border-b border-border/70 bg-muted/50 px-3 py-1.5 text-[12px] font-semibold text-foreground">
-                Everyone else
-              </div>
-              {everyoneElseReviewerRows.length > 0 ? (
-                everyoneElseReviewerRows.map((reviewer, index) =>
-                  renderReviewerPickerRow(reviewer, {
-                    suggested: false,
-                    activeIndex: suggestedReviewerRows.length + index
-                  })
-                )
-              ) : (
-                <div className="px-3 py-2 text-[13px] text-muted-foreground">
-                  No matching reviewers.
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="px-3 py-2 text-[13px] text-muted-foreground">
-              {reviewerMetadata.error ??
-                (hasReviewerMetadata
-                  ? 'No matching reviewers.'
-                  : 'Open the PR details to view current reviewers.')}
-            </div>
-          )}
-        </div>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function PRChecksCell({
-  item,
-  onOpen,
-  onLoadChecks
-}: {
-  item: GitHubWorkItem
-  onOpen: () => void
-  onLoadChecks: () => void
-}): React.JSX.Element {
-  const triggerRef = useRef<HTMLButtonElement | null>(null)
-
-  useEffect(() => {
-    if (item.type !== 'pr' || item.checksSummary) {
-      return
-    }
-    const node = triggerRef.current
-    if (!node || typeof IntersectionObserver === 'undefined') {
-      return
-    }
-    let requested = false
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (requested || !entries.some((entry) => entry.isIntersecting)) {
-          return
-        }
-        requested = true
-        onLoadChecks()
-        observer.disconnect()
-      },
-      { rootMargin: '160px 0px' }
-    )
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [item.checksSummary, item.type, onLoadChecks])
-
-  if (item.type !== 'pr') {
-    return <span className="text-[11px] text-muted-foreground">Issue</span>
-  }
-  const summary = item.checksSummary
-  const Icon =
-    summary?.state === 'success'
-      ? CheckCircle2
-      : summary?.state === 'failure'
-        ? AlertCircle
-        : summary?.state === 'pending'
-          ? Clock3
-          : Minus
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          ref={triggerRef}
-          type="button"
-          onFocus={onLoadChecks}
-          onMouseEnter={onLoadChecks}
-          onClick={(event) => {
-            event.stopPropagation()
-            onLoadChecks()
-            onOpen()
-          }}
-          className={cn(
-            'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition hover:brightness-110',
-            getChecksTone(item)
-          )}
-        >
-          <Icon className="size-3" />
-          <span className="truncate">{getChecksLabel(item)}</span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>
-        Open PR checks
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
-function PRMergeCell({
-  item,
-  repo,
-  onRefresh
-}: {
-  item: GitHubWorkItem
-  repo: Repo | null
-  onRefresh: () => void
-}): React.JSX.Element {
-  const [merging, setMerging] = useState(false)
-  const confirm = useConfirmationDialog()
-  if (item.type !== 'pr') {
-    return <span className="text-[11px] text-muted-foreground">Issue</span>
-  }
-  const mergePresentation = presentGitHubPRMergeState(item)
-  const mergeMethods = resolveGitHubPRMergeMethods(item.mergeMethodSettings)
-  const mergeDisabled = !repo || merging || !mergePresentation.directMergeAvailable
-
-  const handleMerge = async (method: GitHubPRMergeMethod): Promise<void> => {
-    if (!repo || mergeDisabled) {
-      return
-    }
-    const label = GITHUB_PR_MERGE_METHOD_LABELS[method]
-    const confirmed = await confirm({
-      title: `${label} PR #${item.number}?`,
-      description: 'This will update the pull request on GitHub.',
-      confirmLabel: label
-    })
-    if (!confirmed) {
-      return
-    }
-    setMerging(true)
-    try {
-      const result = await api.gh.mergePR({
-        repoPath: repo.path,
-        repoId: repo.id,
-        prNumber: item.number,
-        method,
-        prRepo: item.prRepo ?? null
-      })
-      if (result.ok) {
-        toast.success('Pull request merged')
-        onRefresh()
-      } else {
-        toast.error(result.error)
-      }
-    } catch {
-      toast.error('Failed to merge pull request')
-    } finally {
-      setMerging(false)
-    }
-  }
-
-  const handleAutoMerge = async (): Promise<void> => {
-    if (!repo || !mergePresentation.autoMergeAction) {
-      return
-    }
-    const enabled = mergePresentation.autoMergeAction.kind === 'enable'
-    setMerging(true)
-    try {
-      const result = await api.gh.setPRAutoMerge({
-        repoPath: repo.path,
-        repoId: repo.id,
-        prNumber: item.number,
-        enabled,
-        prRepo: item.prRepo ?? null
-      })
-      if (result.ok) {
-        toast.success(enabled ? 'Auto-merge enabled' : 'Auto-merge disabled')
-        onRefresh()
-      } else {
-        toast.error(result.error)
-      }
-    } catch {
-      toast.error(enabled ? 'Failed to enable auto-merge' : 'Failed to disable auto-merge')
-    } finally {
-      setMerging(false)
-    }
-  }
-
-  return (
-    <DropdownMenu modal={false}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              onClick={(event) => event.stopPropagation()}
-              className={cn(
-                'inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition hover:brightness-110',
-                mergePresentation.tone
-              )}
-            >
-              {merging ? (
-                <LoaderCircle className="size-3 animate-spin" />
-              ) : (
-                <GitMerge className="size-3" />
-              )}
-              <span className="truncate">{mergePresentation.label}</span>
-              <ChevronDown className="size-2.5 opacity-60" />
-            </button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={6}>
-          {mergePresentation.tooltip}
-        </TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="start" onClick={(event) => event.stopPropagation()}>
-        {mergePresentation.autoMergeAction && (
-          <DropdownMenuItem disabled={!repo || merging} onSelect={() => void handleAutoMerge()}>
-            <GitMerge className="size-4" />
-            {mergePresentation.autoMergeAction.label}
-          </DropdownMenuItem>
-        )}
-        {mergePresentation.autoMergeAction && <DropdownMenuSeparator />}
-        {mergeMethods.methods.map(({ method, label }) => (
-          <DropdownMenuItem
-            key={method}
-            disabled={mergeDisabled}
-            onSelect={() => void handleMerge(method)}
-          >
-            <GitMerge className="size-4" />
-            {label}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuItem onSelect={() => api.shell.openUrl(item.url)}>
-          <ExternalLink className="size-4" />
-          Open GitHub merge box
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-// Why: builds the page number array with ellipsis gaps, matching GitHub's
-// pagination pattern: always show first page, last page, and a window of
-// pages around the current page with "..." gaps between distant ranges.
-function getPageNumbers(current: number, total: number): (number | 'ellipsis')[] {
-  if (total <= 9) {
-    return Array.from({ length: total }, (_, i) => i)
-  }
-  const pages = new Set<number>()
-  pages.add(0)
-  pages.add(total - 1)
-  for (let i = Math.max(0, current - 2); i <= Math.min(total - 1, current + 2); i++) {
-    pages.add(i)
-  }
-  const sorted = [...pages].sort((a, b) => a - b)
-  const result: (number | 'ellipsis')[] = []
-  for (let i = 0; i < sorted.length; i++) {
-    if (i > 0 && sorted[i] - sorted[i - 1] > 1) {
-      result.push('ellipsis')
-    }
-    result.push(sorted[i])
-  }
-  return result
-}
-
-function PaginationBar({
-  currentPage,
-  totalPages,
-  loadingTarget,
-  onPageChange
-}: {
-  currentPage: number
-  totalPages: number
-  loadingTarget: number | null
-  onPageChange: (page: number) => void
-}): React.JSX.Element {
-  const pageNumbers = getPageNumbers(currentPage, totalPages)
-  const btnClass =
-    'inline-flex w-24 items-center justify-center gap-0.5 rounded-md px-2 py-1 text-sm text-muted-foreground transition hover:bg-muted/60 hover:text-foreground disabled:pointer-events-none disabled:opacity-40'
-  const numClass = (page: number): string =>
-    cn(
-      'inline-flex size-8 items-center justify-center rounded-md text-sm transition',
-      page === currentPage
-        ? 'bg-primary text-primary-foreground font-medium'
-        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-    )
-
-  return (
-    <nav
-      aria-label="Pagination"
-      className="flex items-center justify-center gap-1 border-t border-border/50 px-4 py-3"
-    >
-      <button
-        type="button"
-        disabled={currentPage === 0 || loadingTarget !== null}
-        onClick={() => onPageChange(currentPage - 1)}
-        aria-label="Previous page"
-        className={btnClass}
-      >
-        <ChevronLeft className="size-4" />
-        Previous
-      </button>
-
-      {pageNumbers.map((entry, idx) =>
-        entry === 'ellipsis' ? (
-          <span
-            key={`ellipsis-${idx}`}
-            aria-hidden
-            className="inline-flex size-8 items-center justify-center text-sm text-muted-foreground"
-          >
-            &hellip;
-          </span>
-        ) : (
-          <button
-            key={entry}
-            type="button"
-            disabled={loadingTarget !== null && loadingTarget !== entry}
-            onClick={() => onPageChange(entry)}
-            aria-label={`Page ${entry + 1}`}
-            aria-current={entry === currentPage ? 'page' : undefined}
-            className={numClass(entry)}
-          >
-            {loadingTarget === entry ? (
-              <LoaderCircle className="size-3.5 animate-spin" />
-            ) : (
-              entry + 1
-            )}
-          </button>
-        )
-      )}
-
-      <button
-        type="button"
-        disabled={currentPage >= totalPages - 1 || loadingTarget !== null}
-        onClick={() => onPageChange(currentPage + 1)}
-        aria-label="Next page"
-        className={btnClass}
-      >
-        Next
-        <ChevronRight className="size-4" />
-      </button>
-    </nav>
-  )
-}
-
-// Why: type-guard predicate used to filter `perRepoSourceState` down to rows
-// whose issue-source and PR-source slugs differ. Hoisted to module scope so
-// the predicate isn't re-allocated on every TaskPage render.
-const hasDivergentSources = (
-  s: TaskPageRepoSourceState
-): s is TaskPageRepoSourceState & {
-  sources: { issues: GitHubOwnerRepo; prs: GitHubOwnerRepo }
-} => !!s.sources?.issues && !!s.sources.prs && !sameGitHubOwnerRepo(s.sources.issues, s.sources.prs)
-
-// Why: the selector keeps rendering even after the user picks 'origin' (which
-// collapses `sources.issues` onto origin). Upstream-candidate divergence is
-// the right render gate — a repo that has an `upstream` remote pointing
-// somewhere different from origin is always a candidate for the toggle,
-// regardless of the current effective preference.
-const hasUpstreamCandidateDivergence = (
-  s: TaskPageRepoSourceState
-): s is TaskPageRepoSourceState & {
-  sources: { prs: GitHubOwnerRepo; upstreamCandidate: GitHubOwnerRepo }
-} =>
-  !!s.sources?.prs &&
-  !!s.sources.upstreamCandidate &&
-  !sameGitHubOwnerRepo(s.sources.prs, s.sources.upstreamCandidate)
-
-export default function TaskPage(): React.JSX.Element {
+  /** Project Hub embed: the page renders inside the hub's Tasks tab instead of
+   *  as the routed 'tasks' view. Internal navigation (source switch, detail
+   *  open) must then mutate taskPageData WITHOUT flipping activeView — going
+   *  through openTaskPage would silently swap the hub for the global Board.
+   *  Esc-close and the Close button are also disabled: the hub owns leaving. */
+  embedded?: boolean
+} = {}): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
   const taskResumeState = useAppStore((s) => s.taskResumeState)
   const setTaskResumeState = useAppStore((s) => s.setTaskResumeState)
   const pageData = useAppStore((s) => s.taskPageData)
-  const openTaskPage = useAppStore((s) => s.openTaskPage)
+  const routedOpenTaskPage = useAppStore((s) => s.openTaskPage)
+  const openTaskPage = useMemo(() => {
+    if (!embedded) return routedOpenTaskPage
+    return (data: Parameters<typeof routedOpenTaskPage>[0] = {}) => {
+      useAppStore.setState((s) => ({
+        // Merge (not replace): a detail-open must keep the hub's repo
+        // preselection so closing the detail lands back on the scoped list.
+        taskPageData: { ...s.taskPageData, ...data }
+      }))
+    }
+  }, [embedded, routedOpenTaskPage])
   const closeTaskPage = useAppStore((s) => s.closeTaskPage)
   const activeModal = useAppStore((s) => s.activeModal)
   const repos = useAppStore((s) => s.repos)
@@ -2857,7 +841,11 @@ export default function TaskPage(): React.JSX.Element {
   // The Tasks view is a sync source for the Board: map the loaded issues of the
   // active provider into board cards (idempotent upsert keyed on issue URL), so
   // GitHub/Linear issues flow in as cards on the one board.
-  const setActiveBoardView = useAppStore((s) => s.setActiveView)
+  // Why routed (not raw setActiveView): from the embedded hub Tasks tab this
+  // is a real navigation to the full Board page — openTaskPage records
+  // previousViewBeforeTasks ('project') so Esc/X return to the hub instead of
+  // whatever stale view the last Board visit left behind.
+  const routedOpenBoardPage = useAppStore((s) => s.openTaskPage)
   const [syncingToBoard, setSyncingToBoard] = useState(false)
   const syncTasksToBoard = useCallback(async () => {
     let inputs: SyncIssueInput[] = []
@@ -2897,14 +885,14 @@ export default function TaskPage(): React.JSX.Element {
       const { synced } = await syncExternalIssues(inputs)
       toast.success(
         `Synced ${synced.length} ${taskSource} issue${synced.length === 1 ? '' : 's'} to the Board.`,
-        { action: { label: 'Open Board', onClick: () => setActiveBoardView('board') } }
+        { action: { label: 'Open Board', onClick: () => routedOpenBoardPage() } }
       )
     } catch (e) {
       toast.error(`Sync to Board failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSyncingToBoard(false)
     }
-  }, [taskSource, pages, linearIssues, setActiveBoardView])
+  }, [taskSource, pages, linearIssues, routedOpenBoardPage])
   const [linearDisplayProperties, setLinearDisplayProperties] = useState<
     ReadonlySet<LinearDisplayProperty>
   >(() => new Set(DEFAULT_LINEAR_DISPLAY_PROPERTIES))
@@ -4382,21 +2370,44 @@ export default function TaskPage(): React.JSX.Element {
   }, [activeModal, dialogWorkItem, githubMode, newIssueOpen, newLinearIssueOpen, taskSource])
 
   const openComposerForItem = useCallback(
-    (item: GitHubWorkItem): void => {
-      const linkedWorkItem: LinkedWorkItemSummary = {
+    async (item: GitHubWorkItem, opts?: { startGatedRun?: boolean }): Promise<void> => {
+      // Why: a GitHub work item carries no body in memory, so without this the
+      // spawned agent would only get the URL — unlike Linear, which already
+      // snapshots its description into linkedContext. Fetch the issue body
+      // (server-side `gh issue view`) and fold it into the prompt the same way.
+      // PRs and any fetch failure fall back to the title+URL linked item so
+      // "Use" is never blocked (spec 002, Option B).
+      let linkedWorkItem: LinkedWorkItemSummary = {
         type: item.type,
         number: item.number,
         title: item.title,
         url: item.url
       }
+      const workdir = repoMap.get(item.repoId)?.path
+      if (item.type === 'issue' && workdir) {
+        try {
+          const slug = parseGitHubIssueOrPRLink(item.url)?.slug
+          const fetched = await fetchGithubIssueBody({
+            number: item.number,
+            workdir,
+            slug: slug ? `${slug.owner}/${slug.repo}` : undefined
+          })
+          linkedWorkItem = buildGithubIssueLinkedWorkItem(item, fetched)
+        } catch (err) {
+          // Best-effort: keep the title+URL fallback so the composer still opens.
+          console.warn('[tasks] could not load GitHub issue body for Use:', err)
+        }
+      }
       openModal('new-workspace-composer', {
         linkedWorkItem,
         prefilledName: getLinkedWorkItemSuggestedName(item),
         initialRepoId: item.repoId,
+        // Spec 005 F1 (AC 3): pre-fill with the "Start gated run" toggle armed.
+        ...(opts?.startGatedRun ? { startGatedRun: true } : {}),
         telemetrySource: 'sidebar'
       })
     },
-    [openModal]
+    [openModal, repoMap]
   )
 
   const handleUseWorkItem = useCallback(
@@ -4408,7 +2419,7 @@ export default function TaskPage(): React.JSX.Element {
       // the worktree appeared in the sidebar before the user had a chance
       // to review it. The composer already owns the prefill flow. Telemetry
       // attribution flows via `openComposerForItem` (sets telemetrySource).
-      openComposerForItem(item)
+      void openComposerForItem(item)
     },
     [openComposerForItem]
   )
@@ -4653,6 +2664,11 @@ export default function TaskPage(): React.JSX.Element {
   const githubTasksBusy = tasksLoading || tasksRefreshing || tasksFiltering
 
   useEffect(() => {
+    // Why: embedded in the Project Hub there is no page to close — Esc would
+    // yank the whole hub view out from under the user.
+    if (embedded) {
+      return
+    }
     // Why: when a modal is open, let it own Esc dismissal.
     if (
       dialogWorkItem ||
@@ -4698,6 +2714,7 @@ export default function TaskPage(): React.JSX.Element {
     activeModal,
     closeTaskPage,
     dialogWorkItem,
+    embedded,
     newIssueOpen,
     newLinearIssueOpen,
     selectedLinearIssue
@@ -5221,23 +3238,27 @@ export default function TaskPage(): React.JSX.Element {
                         source icons so the top chrome is one compact band.
                         Left-aligned keeps it clear of the app sidebar on the
                         right edge. */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7 rounded-full"
-                          onClick={closeTaskPage}
-                          aria-label="Close tasks"
-                        >
-                          <X className="size-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" sideOffset={6}>
-                        Close · Esc
-                      </TooltipContent>
-                    </Tooltip>
-                    <div className="mx-1 h-5 w-px bg-border/50" aria-hidden />
+                    {embedded ? null : (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 rounded-full"
+                              onClick={closeTaskPage}
+                              aria-label="Close tasks"
+                            >
+                              <X className="size-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" sideOffset={6}>
+                            Close · Esc
+                          </TooltipContent>
+                        </Tooltip>
+                        <div className="mx-1 h-5 w-px bg-border/50" aria-hidden />
+                      </>
+                    )}
                     {visibleSourceOptions.map((source) => {
                       const active = taskSource === source.id
                       return (
@@ -5380,26 +3401,33 @@ export default function TaskPage(): React.JSX.Element {
                         something. */}
                     {githubMode !== 'project' && (
                       <>
-                        <div className="min-w-0 max-w-[220px] shrink-0">
-                          <RepoMultiCombobox
-                            repos={eligibleRepos}
-                            selected={repoSelection}
-                            onChange={(next) => {
-                              setRepoSelection(next)
-                              void updateSettings({ defaultRepoSelection: [...next] }).catch(() => {
-                                toast.error('Failed to save project selection.')
-                              })
-                            }}
-                            onSelectAll={() => {
-                              const allIds = new Set(eligibleRepos.map((r) => r.id))
-                              setRepoSelection(allIds)
-                              void updateSettings({ defaultRepoSelection: null }).catch(() => {
-                                toast.error('Failed to save project selection.')
-                              })
-                            }}
-                            triggerClassName="h-8 w-auto max-w-[220px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs font-medium shadow-sm transition hover:bg-muted/50 focus:ring-2 focus:ring-ring/20 focus:outline-none"
-                          />
-                        </div>
+                        {/* Embedded (Project Hub): the repo scope IS the hub's
+                            project — no multi-repo picker, and crucially no
+                            updateSettings writes that would overwrite the
+                            user's global Board repo default from inside a
+                            per-project view. */}
+                        {embedded ? null : (
+                          <div className="min-w-0 max-w-[220px] shrink-0">
+                            <RepoMultiCombobox
+                              repos={eligibleRepos}
+                              selected={repoSelection}
+                              onChange={(next) => {
+                                setRepoSelection(next)
+                                void updateSettings({ defaultRepoSelection: [...next] }).catch(() => {
+                                  toast.error('Failed to save project selection.')
+                                })
+                              }}
+                              onSelectAll={() => {
+                                const allIds = new Set(eligibleRepos.map((r) => r.id))
+                                setRepoSelection(allIds)
+                                void updateSettings({ defaultRepoSelection: null }).catch(() => {
+                                  toast.error('Failed to save project selection.')
+                                })
+                              }}
+                              triggerClassName="h-8 w-auto max-w-[220px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs font-medium shadow-sm transition hover:bg-muted/50 focus:ring-2 focus:ring-ring/20 focus:outline-none"
+                            />
+                          </div>
+                        )}
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
@@ -6495,6 +4523,17 @@ export default function TaskPage(): React.JSX.Element {
                                       Start new workspace
                                     </DropdownMenuItem>
                                   ) : null}
+                                  {/* Spec 005 F1 (AC 3): pre-fill the composer
+                                      with the "Start gated run" toggle armed —
+                                      the chat→Tasks→click path into the loop. */}
+                                  <DropdownMenuItem
+                                    onSelect={() =>
+                                      void openComposerForItem(item, { startGatedRun: true })
+                                    }
+                                  >
+                                    <CircleDot className="size-4" />
+                                    Start gated run
+                                  </DropdownMenuItem>
                                   <DropdownMenuItem
                                     onSelect={() => api.shell.openUrl(item.url)}
                                   >

@@ -1,8 +1,5 @@
 import type { GitHubPRCheckSummary, PRCheckDetail } from '../../../shared/types'
-
-function getCheckConclusion(check: PRCheckDetail): NonNullable<PRCheckDetail['conclusion']> {
-  return check.conclusion ?? 'pending'
-}
+import { getCheckConclusion } from '@/lib/pr-check-format'
 
 function isPendingCheck(check: PRCheckDetail): boolean {
   return (

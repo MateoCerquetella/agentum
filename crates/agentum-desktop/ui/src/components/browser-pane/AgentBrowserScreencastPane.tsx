@@ -31,7 +31,14 @@ import {
 } from './remote-browser-keyboard'
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+
+/** Device scale the page lays out at, sent via `sendViewport`. Kept at 1× to match
+ *  the server's 1× capture (`cdp_device_scale` → `--force-device-scale-factor`):
+ *  capturing at 1× makes every JPEG frame ~4× smaller, so the stream is fast — the
+ *  speed-over-sharpness default. MUST stay in lockstep with the server's launch
+ *  scale, else the page lays out at one DPR but is captured at another (soft AND
+ *  wasteful). Override both via `AGENTUM_CDP_DEVICE_SCALE=2` for a sharp, slower capture. */
+const SCREENCAST_DEVICE_SCALE = 1
 
 /** Strip the `about:blank` placeholder so the address bar starts empty. */
 function toDisplayUrl(url: string): string {
@@ -83,16 +90,17 @@ export default function AgentBrowserScreencastPane({
   groupId
 }: AgentBrowserScreencastPaneProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // The pane wrapper — what we measure for the render viewport. NEVER measure the
+  // <canvas>: its intrinsic size IS the frame's pixel size (e.g. 402×9200), and a
+  // replaced element with such an extreme aspect collapses in flex layout, so its
+  // getBoundingClientRect reports a bogus width — which sendViewport then fed back
+  // as the page's render width (the "renders at phone width, smeared across the
+  // pane" bug). The container div has no intrinsic size; it's always the true pane.
+  const containerRef = useRef<HTMLDivElement | null>(null)
   const subRef = useRef<CdpScreencastSubscription | null>(null)
   const metadataRef = useRef<BrowserScreencastFrameMetadata | null>(null)
   // Stable getter so the picker overlay's memoized handlers don't churn each render.
   const getScreencastMetadata = useCallback(() => metadataRef.current, [])
-  // The shipped WKWebView reports window.devicePixelRatio=1 over the custom
-  // `tauri://` scheme (a WebKit defect), which captures the page at 1× and upscales
-  // it 2× on a Retina display → blurry. Seed from devicePixelRatio (reliable in the
-  // http dev server) and correct to the TRUE backing scale via Tauri's native
-  // scaleFactor() below.
-  const scaleFactorRef = useRef<number>(Math.min(2, Math.max(1, window.devicePixelRatio || 1)))
   // Bumped on every navigation so the annotate overlay drops markers whose clips
   // belong to the previous page (else they stay stuck over every later page).
   const [navToken, setNavToken] = useState(0)
@@ -122,47 +130,29 @@ export default function AgentBrowserScreencastPane({
     subRef.current?.sendInput(method, params)
   }, [])
 
-  // Match the headless page's LAYOUT viewport to the pane. Without this the page
-  // lays out at the launcher's fixed `--window-size=1280,800`, so the frame is
-  // `object-contain`-letterboxed (cut off top/bottom) in a differently-shaped
-  // pane. Clamp DPR to [1,2] (matches the legacy pane) so a hi-DPI display can't
-  // quadruple the frame size. No-op until a subscription exists.
+  // Match the headless page's LAYOUT viewport to the pane so the frame fills it
+  // edge-to-edge (no letterbox/cropping). Without this the page lays out at the
+  // launcher's fixed `--window-size=1280,800` and gets letterboxed in a differently-
+  // shaped pane — this is what keeps the browser correctly sized as the pane resizes.
+  // The deviceScaleFactor we send is SCREENCAST_DEVICE_SCALE so the page's DPR matches
+  // the server's capture scale (`--force-device-scale-factor`); 1× keeps frames small
+  // and fast. No-op until a subscription exists.
   const sendViewport = useCallback((): void => {
-    const canvas = canvasRef.current
-    if (!canvas) {
+    // Measure the CONTAINER, never the <canvas> (see containerRef): the canvas box
+    // tracks the frame's intrinsic pixel size and collapses in flex, which fed a
+    // wrong width back as the render viewport.
+    const el = containerRef.current
+    if (!el) {
       return
     }
-    const rect = canvas.getBoundingClientRect()
+    const rect = el.getBoundingClientRect()
     const width = Math.round(rect.width)
     const height = Math.round(rect.height)
     if (width <= 0 || height <= 0) {
       return
     }
-    const deviceScaleFactor = Math.min(2, Math.max(1, scaleFactorRef.current || 1))
-    sendInput('browser.setViewport', { width, height, deviceScaleFactor })
+    sendInput('browser.setViewport', { width, height, deviceScaleFactor: SCREENCAST_DEVICE_SCALE })
   }, [sendInput])
-
-  // Resolve the TRUE display backing scale from the native shell — window.
-  // devicePixelRatio lies (=1) in the shipped WKWebView — and re-send the viewport
-  // so the headless page is captured at device-pixel resolution (sharp on Retina).
-  useEffect(() => {
-    let cancelled = false
-    void getCurrentWindow()
-      .scaleFactor()
-      .then((sf) => {
-        if (cancelled) {
-          return
-        }
-        const clamped = Math.min(2, Math.max(1, sf || 1))
-        if (clamped !== scaleFactorRef.current) {
-          scaleFactorRef.current = clamped
-          sendViewport()
-        }
-      })
-      .catch(() => {
-        // Not inside a Tauri window (dev/web) — keep the devicePixelRatio seed.
-      })
-  }, [sendViewport])
 
   // Co-browse banner (F12): flips on briefly after the human interacts. The same
   // human input also gives the human the wheel server-side, so the agent's input
@@ -220,14 +210,14 @@ export default function AgentBrowserScreencastPane({
     setError(null)
 
     void openCdpScreencast(
-      // quality 90 (not 80): the canvas already backs at full device resolution
-      // and downscales 1:1 on a 2× display, so JPEG ringing on text was the last
-      // softness left. 90 sharpens glyph edges for a small bandwidth cost; PNG
-      // would be lossless but 3-5× larger and slower to encode — not worth it.
-      // worktreeId attaches to THIS worktree's own browser (per-worktree
+      // quality 75 + 1× capture (SCREENCAST_DEVICE_SCALE) keep each frame small so
+      // the stream stays fast — the speed-over-sharpness default the user asked for.
+      // (Raise AGENTUM_CDP_DEVICE_SCALE to 2 for a sharper, heavier capture.)
+      // everyNthFrame stays 1: dropping frames blanks a static page until its next
+      // repaint. worktreeId attaches to THIS worktree's own browser (per-worktree
       // isolation) — the same instance its agent drives. cdpPort (SSH host) wins
       // over it when set.
-      { cdpPort, worktreeId, format: 'jpeg', quality: 90, everyNthFrame: 1 },
+      { cdpPort, worktreeId, format: 'jpeg', quality: 75, everyNthFrame: 1 },
       {
         onBinary: (bytes) => {
           if (disposed) {
@@ -315,8 +305,8 @@ export default function AgentBrowserScreencastPane({
     if (!isActive) {
       return
     }
-    const canvas = canvasRef.current
-    if (!canvas || typeof ResizeObserver === 'undefined') {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') {
       return
     }
     let raf: number | null = null
@@ -329,7 +319,7 @@ export default function AgentBrowserScreencastPane({
         sendViewport()
       })
     })
-    observer.observe(canvas)
+    observer.observe(el)
     return () => {
       observer.disconnect()
       if (raf != null) {
@@ -488,7 +478,10 @@ export default function AgentBrowserScreencastPane({
         />
       </div>
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+      <div
+        ref={containerRef}
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden"
+      >
         {error ? (
           <div className="px-4 text-center text-xs text-muted-foreground">{error}</div>
         ) : (
@@ -497,7 +490,13 @@ export default function AgentBrowserScreencastPane({
             <canvas
               ref={canvasRef}
               tabIndex={0}
-              className="h-full w-full object-contain outline-none"
+              // Absolutely fill the (relative) container so the canvas box is ALWAYS the
+              // pane size — decoupled from the frame's intrinsic pixel size, which
+              // otherwise collapses the canvas in flex. object-contain preserves the
+              // frame's aspect (never stretch/smear); since the render viewport is now
+              // matched to the pane (sendViewport measures the container), the frame
+              // fills the pane with no letterbox.
+              className="absolute inset-0 h-full w-full object-contain outline-none"
               onMouseMove={onMouseMove}
               onMouseDown={onMouseDown}
               onMouseUp={onMouseUp}

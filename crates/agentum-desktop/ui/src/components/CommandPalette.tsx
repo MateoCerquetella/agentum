@@ -1,8 +1,8 @@
-import React, { useMemo } from 'react'
+import React, { useCallback, useDeferredValue, useMemo, useState } from 'react'
 import {
   Columns3,
-  List,
   MessagesSquare,
+  Palette,
   Radar,
   Settings as SettingsIcon,
   type LucideIcon
@@ -20,6 +20,15 @@ import {
 } from '@/components/ui/command'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { branchName } from '@/lib/git-utils'
+import {
+  getSettingsTargetFromSectionId,
+  useSettingsNavigationMetadata
+} from '@/hooks/useSettingsNavigationMetadata'
+import {
+  buildCmdJSettingsResults,
+  rankCmdJMiddleResults,
+  type CmdJSettingsResult
+} from '@/components/cmd-j/palette-results'
 
 type ViewCommand = {
   id: string
@@ -29,29 +38,45 @@ type ViewCommand = {
   run: () => void
 }
 
+// Why: shouldFilter={false} (needed so settings results can use the Cmd+J
+// ranking) means we filter the other groups ourselves. Every query token must
+// appear somewhere in the haystack — forgiving enough for palette typing.
+function matchesQuery(query: string, haystack: string): boolean {
+  const target = haystack.toLowerCase()
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((token) => target.includes(token))
+}
+
 /**
- * Cmd+K command palette (Phase 1 nav shell, #48) — the "jump to any view or
- * agent from anywhere" surface, one of the three rules that keep the app
- * un-trappable (rail always visible, Back + breadcrumb, ⌘K). It complements the
- * Cmd+J worktree/tab switcher by adding top-level view navigation; cmdk handles
- * the fuzzy filtering via each item's `value`.
+ * Cmd+Shift+P — THE command palette (one surface, VS Code muscle memory):
+ * top-level view navigation, agent jumping, the Color Theme picker, and
+ * settings search. Absorbed the former Cmd+K "Go to" palette and the separate
+ * settings-only palette (#210) — Cmd+K belongs to the terminal (clear pane).
+ * It complements the Cmd+J worktree/tab switcher.
  */
 export default function CommandPalette(): React.JSX.Element {
   const visible = useAppStore((s) => s.activeModal === 'command-palette')
   const closeModal = useAppStore((s) => s.closeModal)
-  const setActiveView = useAppStore((s) => s.setActiveView)
+  const openModal = useAppStore((s) => s.openModal)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
+  const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
   const repos = useAppStore((s) => s.repos)
   const allWorktrees = useAllWorktrees()
+  const sections = useSettingsNavigationMetadata()
+
+  const [query, setQuery] = useState('')
+  const deferredQuery = useDeferredValue(query)
+  const trimmedQuery = deferredQuery.trim()
 
   const repoMap = useMemo(() => new Map(repos.map((r) => [r.id, r])), [repos])
-  const agentItems = useMemo(
-    () => allWorktrees.filter((w) => !w.isArchived),
-    [allWorktrees]
-  )
+  const agentItems = useMemo(() => allWorktrees.filter((w) => !w.isArchived), [allWorktrees])
+  const allSettingsResults = useMemo(() => buildCmdJSettingsResults(sections), [sections])
 
   // Why: every action dismisses the palette first so Radix finishes its focus
   // teardown before the destination view (or worktree activation) takes over.
@@ -83,6 +108,13 @@ export default function CommandPalette(): React.JSX.Element {
       run: go(() => openTaskPage())
     },
     {
+      id: 'view-color-theme',
+      label: 'Color Theme…',
+      hint: 'Switch app & terminal themes',
+      icon: Palette,
+      run: go(() => openModal('theme-palette'))
+    },
+    {
       id: 'view-settings',
       label: 'Settings',
       hint: 'Preferences & integrations',
@@ -91,48 +123,110 @@ export default function CommandPalette(): React.JSX.Element {
     }
   ]
 
+  const filteredCommands = trimmedQuery
+    ? viewCommands.filter((command) =>
+        matchesQuery(trimmedQuery, `${command.label} ${command.hint}`)
+      )
+    : viewCommands
+
+  const filteredAgents = trimmedQuery
+    ? agentItems.filter((worktree) =>
+        matchesQuery(
+          trimmedQuery,
+          `${worktree.displayName} ${branchName(worktree.branch)} ${
+            repoMap.get(worktree.repoId)?.displayName ?? ''
+          }`
+        )
+      )
+    : agentItems
+
+  // Settings only surface once the user types — reusing the Cmd+J ranking so
+  // filtering and ordering match the unified Cmd+J palette exactly.
+  const settingsResults = useMemo<CmdJSettingsResult[]>(() => {
+    if (!trimmedQuery) {
+      return []
+    }
+    return rankCmdJMiddleResults({
+      query: trimmedQuery,
+      settingsResults: allSettingsResults,
+      actionResults: []
+    }).filter((result): result is CmdJSettingsResult => result.kind === 'settings')
+  }, [allSettingsResults, trimmedQuery])
+
+  const handleSelectSettings = useCallback(
+    (result: CmdJSettingsResult) => {
+      const target = getSettingsTargetFromSectionId(result.sectionId)
+      if (result.targetSectionId) {
+        target.sectionId = result.targetSectionId
+      }
+      // Mirror WorktreeJumpPalette.handleSelectSettings: close the palette,
+      // then route Settings to the chosen pane.
+      closeModal()
+      openSettingsTarget(target)
+      openSettingsPage()
+    },
+    [closeModal, openSettingsPage, openSettingsTarget]
+  )
+
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        setQuery('')
+        closeModal()
+      }
+    },
+    [closeModal]
+  )
+
+  const nothingMatches =
+    filteredCommands.length === 0 && filteredAgents.length === 0 && settingsResults.length === 0
+
   return (
     <CommandDialog
       open={visible}
-      onOpenChange={(open) => {
-        if (!open) {
-          closeModal()
-        }
-      }}
-      title="Go to…"
-      description="Jump to any view or agent"
+      onOpenChange={handleOpenChange}
+      shouldFilter={false}
+      title="Command Palette"
+      description="Search commands, agents, and settings"
+      commandProps={{ loop: true }}
     >
-      <CommandInput placeholder="Go to a view or agent…" />
+      <CommandInput
+        placeholder="Search commands, agents, settings…"
+        value={query}
+        onValueChange={setQuery}
+      />
       <CommandList>
-        <CommandEmpty>No matching views or agents.</CommandEmpty>
-        <CommandGroup heading="Go to">
-          {viewCommands.map((command) => {
-            const Icon = command.icon
-            return (
-              <CommandItem
-                key={command.id}
-                value={`${command.label} ${command.hint}`}
-                onSelect={command.run}
-                className="flex items-center gap-2.5"
-              >
-                <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                <span className="font-medium">{command.label}</span>
-                <span className="ml-auto truncate pl-3 text-[12px] text-muted-foreground">
-                  {command.hint}
-                </span>
-              </CommandItem>
-            )
-          })}
-        </CommandGroup>
-        {agentItems.length > 0 ? (
+        {nothingMatches ? <CommandEmpty>No matching commands, agents, or settings.</CommandEmpty> : null}
+        {filteredCommands.length > 0 ? (
+          <CommandGroup heading="Go to">
+            {filteredCommands.map((command) => {
+              const Icon = command.icon
+              return (
+                <CommandItem
+                  key={command.id}
+                  value={command.id}
+                  onSelect={command.run}
+                  className="flex items-center gap-2.5"
+                >
+                  <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="font-medium">{command.label}</span>
+                  <span className="ml-auto truncate pl-3 text-[12px] text-muted-foreground">
+                    {command.hint}
+                  </span>
+                </CommandItem>
+              )
+            })}
+          </CommandGroup>
+        ) : null}
+        {filteredAgents.length > 0 ? (
           <CommandGroup heading="Agents">
-            {agentItems.map((worktree) => {
+            {filteredAgents.map((worktree) => {
               const repo = repoMap.get(worktree.repoId)
               const branch = branchName(worktree.branch)
               return (
                 <CommandItem
                   key={worktree.id}
-                  value={`${worktree.displayName} ${branch} ${repo?.displayName ?? ''} ${worktree.id}`}
+                  value={worktree.id}
                   onSelect={go(() => {
                     activateAndRevealWorktree(worktree.id)
                   })}
@@ -145,6 +239,27 @@ export default function CommandPalette(): React.JSX.Element {
                       {repo.displayName}
                     </span>
                   ) : null}
+                </CommandItem>
+              )
+            })}
+          </CommandGroup>
+        ) : null}
+        {settingsResults.length > 0 ? (
+          <CommandGroup heading="Settings">
+            {settingsResults.map((result) => {
+              const Icon = result.icon
+              return (
+                <CommandItem
+                  key={result.id}
+                  value={result.id}
+                  onSelect={() => handleSelectSettings(result)}
+                  className="flex items-center gap-2.5"
+                >
+                  <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="truncate font-medium">{result.title}</span>
+                  <span className="ml-auto truncate pl-3 text-[12px] text-muted-foreground">
+                    {result.description}
+                  </span>
                 </CommandItem>
               )
             })}

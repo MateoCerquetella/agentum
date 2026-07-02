@@ -3,10 +3,12 @@ import { api } from '@/tauri'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '../store'
+import { findSplitPathForGroup } from '@/store/slices/tabs'
 import { formatBrowserAnnotationsAsMarkdown } from '../components/browser-pane/browser-annotation-output'
 import { getWorktreeMapFromState, getRepoMapFromState } from '@/store/selectors'
 import { applyUIZoom } from '@/lib/ui-zoom'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
+import { resolveOpenTabWorktreeId } from '@/lib/open-tab-worktree'
 import { runWorktreeDelete } from '@/components/sidebar/delete-worktree-flow'
 import { runSleepWorktree } from '@/components/sidebar/sleep-worktree-flow'
 import {
@@ -151,6 +153,35 @@ const MAX_PENDING_AGENT_STATUS_EVENTS = 100
 let remoteWorkspaceSnapshotApplyDepth = 0
 let remoteWorkspaceSnapshotWriteSuppressUntil = 0
 const REMOTE_WORKSPACE_SNAPSHOT_WRITE_SUPPRESS_MS = 1000
+
+// Why: resolvePaneKey runs on every hook status event (many/sec/agent) and used
+// to nested-loop over every worktree's tabs to locate one tab — O(total tabs)
+// per event, i.e. O(N^2)/sec under many agents. This index turns the lookup
+// into O(1), cached on `tabsByWorktree` identity so it rebuilds only when the
+// tabs map is actually replaced (any tab add/remove/move), which is rare next
+// to hook events. First occurrence wins, mirroring the old loop's `break`.
+type ResolveTabEntry = { worktreeId: string; tab: AppState['tabsByWorktree'][string][number] }
+let tabResolveIndexSource: AppState['tabsByWorktree'] | null = null
+let tabResolveIndex: Map<string, ResolveTabEntry> | null = null
+
+function getTabResolveIndex(
+  tabsByWorktree: AppState['tabsByWorktree']
+): Map<string, ResolveTabEntry> {
+  if (tabResolveIndexSource === tabsByWorktree && tabResolveIndex) {
+    return tabResolveIndex
+  }
+  const index = new Map<string, ResolveTabEntry>()
+  for (const [worktreeId, tabs] of Object.entries(tabsByWorktree)) {
+    for (const tab of tabs) {
+      if (!index.has(tab.id)) {
+        index.set(tab.id, { worktreeId, tab })
+      }
+    }
+  }
+  tabResolveIndex = index
+  tabResolveIndexSource = tabsByWorktree
+  return index
+}
 
 function getAuthoritativeDetectedWorktreeIds(state: AppState, repoId: string): Set<string> | null {
   const detected = state.detectedWorktreesByRepo[repoId]
@@ -1451,20 +1482,51 @@ export function useIpcEvents(): void {
             return
           }
           const store = useAppStore.getState()
-          const worktreeId = data.worktreeId ?? store.activeWorktreeId
+          // Land the tab in the CALLING agent's worktree (the server tags its
+          // MCP url with its work path), not whatever the UI is focused on. The
+          // hint is a bare path; match it across registered AND git-detected
+          // worktrees, reconciling a differing repoId by path, and fall back to
+          // the active worktree when there's no usable hint.
+          const knownWorktrees = [
+            ...store.allWorktrees(),
+            ...Object.values(store.detectedWorktreesByRepo).flatMap((result) => result.worktrees)
+          ]
+          const worktreeId = resolveOpenTabWorktreeId(
+            data.worktreeId,
+            knownWorktrees,
+            store.activeWorktreeId
+          )
           if (!worktreeId) {
             api.ui.replyTabCreate({ requestId: data.requestId, error: 'No active worktree' })
             return
           }
-          // Why: CLI-created tabs should land in the same group as the active
-          // browser tab, not the terminal's group (which is typically the
-          // UI-active group when an agent is running commands).
-          const activeBrowserTabId = store.activeBrowserTabIdByWorktree[worktreeId]
-          const activeBrowserUnifiedTab = activeBrowserTabId
-            ? (store.unifiedTabsByWorktree[worktreeId] ?? []).find(
-                (t) => t.contentType === 'browser' && t.entityId === activeBrowserTabId
-              )
-            : undefined
+          // Side-by-side (`split` = left|right|up|down): open the browser BESIDE the
+          // worktree's agent by splitting its active group, instead of stacking it in
+          // the active browser group. No `split` → unchanged default placement.
+          const SPLIT_DIRS = ['left', 'right', 'up', 'down'] as const
+          const split = SPLIT_DIRS.find((d) => d === data.split)
+          let targetGroupId: string | undefined
+          let splitGroupId: string | null = null
+          if (split) {
+            const agentGroupId =
+              store.activeGroupIdByWorktree[worktreeId] ??
+              store.groupsByWorktree[worktreeId]?.[0]?.id
+            if (agentGroupId) {
+              splitGroupId = store.createEmptySplitGroup(worktreeId, agentGroupId, split)
+              targetGroupId = splitGroupId
+            }
+          }
+          if (!targetGroupId) {
+            // Why: CLI-created tabs should land in the same group as the active
+            // browser tab, not the terminal's group (which is typically the
+            // UI-active group when an agent is running commands).
+            const activeBrowserTabId = store.activeBrowserTabIdByWorktree[worktreeId]
+            targetGroupId = activeBrowserTabId
+              ? (store.unifiedTabsByWorktree[worktreeId] ?? []).find(
+                  (t) => t.contentType === 'browser' && t.entityId === activeBrowserTabId
+                )?.groupId
+              : undefined
+          }
 
           // Why: activate the tab so its native webview actually mounts (the
           // bootstrap lease alone left it unmounted, so `tabs`/navigate/click
@@ -1473,10 +1535,23 @@ export function useIpcEvents(): void {
           // non-surprising behaviour.
           const workspace = store.createBrowserTab(worktreeId, data.url, {
             title: data.url,
-            targetGroupId: activeBrowserUnifiedTab?.groupId,
+            targetGroupId,
             sessionProfileId: data.sessionProfileId,
             activate: true
           })
+          // Size the fresh side-by-side split when a ratio (0–1, exclusive) was given.
+          if (
+            splitGroupId &&
+            typeof data.ratio === 'number' &&
+            data.ratio > 0 &&
+            data.ratio < 1
+          ) {
+            const layout = useAppStore.getState().layoutByWorktree[worktreeId]
+            const path = layout ? findSplitPathForGroup(layout, splitGroupId) : null
+            if (path) {
+              store.setTabGroupSplitRatio(worktreeId, path.join('.'), data.ratio)
+            }
+          }
           // Why: registerGuest fires with the page ID (not workspace ID) as
           // browserPageId. Return the page ID so waitForTabRegistration can
           // correlate correctly.
@@ -1488,6 +1563,55 @@ export function useIpcEvents(): void {
           api.ui.replyTabCreate({
             requestId: data.requestId,
             error: err instanceof Error ? err.message : 'Tab creation failed'
+          })
+        }
+      })
+    )
+
+    // Why: the agentum MCP `agentum_browser {op:"set_split_ratio"}` round-trips here
+    // to RESIZE the layout split holding the worktree's browser pane (the renderer
+    // owns layout). Resolve the worktree's browser group, find its split, set the ratio.
+    unsubs.push(
+      api.ui.onRequestSplitRatio((data) => {
+        try {
+          if (isRuntimeEnvironmentActive()) {
+            api.ui.replyBrowserOp({
+              requestId: data.requestId,
+              error: 'split-ratio unavailable in this runtime'
+            })
+            return
+          }
+          const store = useAppStore.getState()
+          const worktreeId = data.worktreeId ?? store.activeWorktreeId
+          if (!worktreeId) {
+            api.ui.replyBrowserOp({ requestId: data.requestId, error: 'No active worktree' })
+            return
+          }
+          const layout = store.layoutByWorktree[worktreeId]
+          // Target the group showing the active browser tab, else the worktree's
+          // active group — whichever is in a split with the agent.
+          const activeBrowserTabId = store.activeBrowserTabIdByWorktree[worktreeId]
+          const browserGroupId =
+            (activeBrowserTabId
+              ? (store.unifiedTabsByWorktree[worktreeId] ?? []).find(
+                  (t) => t.contentType === 'browser' && t.entityId === activeBrowserTabId
+                )?.groupId
+              : undefined) ?? store.activeGroupIdByWorktree[worktreeId]
+          const path =
+            layout && browserGroupId ? findSplitPathForGroup(layout, browserGroupId) : null
+          if (!path) {
+            api.ui.replyBrowserOp({
+              requestId: data.requestId,
+              error: 'No split to resize (open a browser beside the agent first)'
+            })
+            return
+          }
+          store.setTabGroupSplitRatio(worktreeId, path.join('.'), data.ratio)
+          api.ui.replyBrowserOp({ requestId: data.requestId, result: { ok: true } })
+        } catch (err) {
+          api.ui.replyBrowserOp({
+            requestId: data.requestId,
+            error: err instanceof Error ? err.message : String(err)
           })
         }
       })
@@ -2416,10 +2540,31 @@ export function useIpcEvents(): void {
     // renderer state.
     requestAgentStatusSnapshotIfReady()
     unsubs.push(
-      useAppStore.subscribe(() => {
-        requestAgentStatusSnapshotIfReady()
-        flushPendingAgentStatuses()
-        syncAgentHookCompletionNotificationSettings()
+      // Why: this subscriber previously ran on EVERY store mutation with no
+      // selector, so each agent-status ping (which fires setAgentStatus →
+      // set()) triggered `syncAgentHookCompletionNotificationSettings`, whose
+      // `pruneClosedPaneCoordinators` walks every coordinator with a per-pane
+      // layout tree-walk — O(agents) work per write × O(agents) writes/sec was
+      // an O(N^2) tax under many agents. Gate each function on the inputs it
+      // actually depends on (read from the (state, prev) the vanilla store
+      // subscription already provides) so pings — which only touch the
+      // agent-status maps/epochs — do no work here:
+      //  - snapshot pull + prompt flush only matter the moment workspace tabs
+      //    flip ready (the retry timer drives the flush thereafter).
+      //  - the coordinator sync only cares about notification settings and pane
+      //    liveness (ptyIds/layouts move when a pane opens, closes, or sleeps).
+      useAppStore.subscribe((state, prev) => {
+        if (state.workspaceSessionReady !== prev.workspaceSessionReady) {
+          requestAgentStatusSnapshotIfReady()
+          flushPendingAgentStatuses()
+        }
+        if (
+          state.settings?.notifications !== prev.settings?.notifications ||
+          state.ptyIdsByTabId !== prev.ptyIdsByTabId ||
+          state.terminalLayoutsByTabId !== prev.terminalLayoutsByTabId
+        ) {
+          syncAgentHookCompletionNotificationSettings()
+        }
       })
     )
 
@@ -2473,24 +2618,16 @@ function resolvePaneKey(
   let tabTitle: string | undefined
   let unifiedTabLabel: string | undefined
   let owningWorktreeId: string | undefined
-  for (const [worktreeId, tabs] of Object.entries(store.tabsByWorktree)) {
-    for (const tab of tabs) {
-      if (tab.id === tabId) {
-        exists = true
-        tabTitle = tab.title
-        owningWorktreeId = worktreeId
-        const visibleTab = (store.unifiedTabsByWorktree?.[worktreeId] ?? []).find(
-          (entry) => entry.contentType === 'terminal' && entry.entityId === tabId
-        )
-        const rawVisibleLabel = visibleTab?.label?.trim()
-        unifiedTabLabel =
-          rawVisibleLabel && rawVisibleLabel.length > 0 ? rawVisibleLabel : undefined
-        break
-      }
-    }
-    if (exists) {
-      break
-    }
+  const resolvedTab = getTabResolveIndex(store.tabsByWorktree).get(tabId)
+  if (resolvedTab) {
+    exists = true
+    tabTitle = resolvedTab.tab.title
+    owningWorktreeId = resolvedTab.worktreeId
+    const visibleTab = (store.unifiedTabsByWorktree?.[resolvedTab.worktreeId] ?? []).find(
+      (entry) => entry.contentType === 'terminal' && entry.entityId === tabId
+    )
+    const rawVisibleLabel = visibleTab?.label?.trim()
+    unifiedTabLabel = rawVisibleLabel && rawVisibleLabel.length > 0 ? rawVisibleLabel : undefined
   }
   // Why: ownership lookup is `tab → worktree → repo → repo.connectionId`.
   // Keep "resolved to a local repo" distinct from "not hydrated yet" so the

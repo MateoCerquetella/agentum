@@ -1,0 +1,158 @@
+// Typed client for `GET /api/github/issue` on the embedded agentum-server.
+// Mirrors `board-client.ts`: same loopback endpoint + bearer auth. The Tasks
+// "Use" path calls this to fetch a GitHub issue's body so the spawned agent
+// starts from the spec — the same way Linear already snapshots its description
+// into linked context (spec 002, Option B). Wire shape is faithful to
+// `crates/agentum-server/src/routes/github.rs::IssueBody`.
+import { apiUrl, getServerEndpoint } from './server-endpoint'
+
+export type GithubIssueBody = {
+  title: string
+  body: string
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const { token } = await getServerEndpoint()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/**
+ * Fetch a single GitHub issue's title + body via the embedded server's `gh`
+ * runner. `slug` (owner/repo, parsed from the item URL) lets the server skip the
+ * `origin` read; `workdir` is the project dir used as the resolution fallback.
+ * Throws on any non-2xx (or timeout) so the caller can fall back to the
+ * title+URL prompt — fetching the body must never break "Use".
+ */
+export async function fetchGithubIssueBody(input: {
+  number: number
+  workdir: string
+  slug?: string
+  /** Abort budget — a slow/hung `gh` must not delay the composer. */
+  timeoutMs?: number
+}): Promise<GithubIssueBody> {
+  const params = new URLSearchParams({
+    number: String(input.number),
+    workdir: input.workdir
+  })
+  if (input.slug) {
+    params.set('slug', input.slug)
+  }
+  const url = await apiUrl(`/api/github/issue?${params.toString()}`)
+
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 6000)
+  try {
+    const res = await fetch(url, {
+      headers: { ...(await authHeaders()) },
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`github issue ${res.status}${detail ? ` — ${detail}` : ''}`)
+    }
+    const text = await res.text()
+    return JSON.parse(text) as GithubIssueBody
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+// Wire shape of `POST /api/github/issues`
+// (crates/agentum-server/src/routes/github.rs::CreateIssueResponse).
+export type CreatedGithubIssue = {
+  provider: 'github'
+  number: number
+  url: string
+  slug: string
+}
+
+/**
+ * File a new GitHub issue through the embedded server's `TaskSink::Github`
+ * path (spec 004 F3) — the composer's issue-first affordance. `workdir` is the
+ * selected repo's path (used for the `origin` slug read when no `slug` hint is
+ * supplied). Throws on any non-2xx so the caller can render an inline error
+ * without mutating composer state.
+ */
+export async function createGithubIssue(input: {
+  title: string
+  body?: string
+  workdir: string
+  slug?: string
+  /** Abort budget — issue creation shells out to `gh`. */
+  timeoutMs?: number
+}): Promise<CreatedGithubIssue> {
+  const url = await apiUrl('/api/github/issues')
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 15000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+      body: JSON.stringify({
+        title: input.title,
+        ...(input.body ? { body: input.body } : {}),
+        workdir: input.workdir,
+        ...(input.slug ? { slug: input.slug } : {})
+      }),
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`create issue ${res.status}${detail ? ` — ${detail}` : ''}`)
+    }
+    const text = await res.text()
+    return JSON.parse(text) as CreatedGithubIssue
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+// Wire shape of `POST /api/harness/spec-from-issue`
+// (crates/agentum-server/src/routes/harness.rs::SpecFromIssueResponse).
+export type ScaffoldedSpecFromIssue = {
+  specId: string
+  specPath: string
+  written: string[]
+}
+
+/**
+ * Scaffold `.agentum-harness/specs/<n>-<slug>/spec.md` (+ a tracker-stamped
+ * backlog) from a linked GitHub issue into a freshly created worktree
+ * (spec 004 F4, opt-in via the composer's "Scaffold spec" toggle — D5).
+ * Failures are the caller's to swallow: the workspace must stay usable even
+ * when the scaffold fails.
+ */
+export async function scaffoldSpecFromIssue(input: {
+  /** The new worktree's absolute path — the spec is written INTO it. */
+  workdir: string
+  number: number
+  slug?: string
+  /** Also derive feature_list.json (server default: true). */
+  plan?: boolean
+  timeoutMs?: number
+}): Promise<ScaffoldedSpecFromIssue> {
+  const url = await apiUrl('/api/harness/spec-from-issue')
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 15000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+      body: JSON.stringify({
+        workdir: input.workdir,
+        number: String(input.number),
+        ...(input.slug ? { slug: input.slug } : {}),
+        ...(input.plan !== undefined ? { plan: input.plan } : {})
+      }),
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`spec from issue ${res.status}${detail ? ` — ${detail}` : ''}`)
+    }
+    const text = await res.text()
+    return JSON.parse(text) as ScaffoldedSpecFromIssue
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}

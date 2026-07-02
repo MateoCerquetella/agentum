@@ -33,7 +33,7 @@ const StatusIndicator = React.memo(function StatusIndicator({
         title={resolvedTitle}
         {...rest}
       >
-        <span className="block size-2 rounded-full border-2 border-yellow-500 border-t-transparent animate-spin" />
+        <span className="block size-2 rounded-full border-2 border-yellow-500/70 border-t-transparent animate-spin" />
       </span>
     )
   }
@@ -48,13 +48,13 @@ const StatusIndicator = React.memo(function StatusIndicator({
         className={cn(
           'block size-2 rounded-full',
           status === 'permission'
-            ? 'bg-amber-500'
+            ? 'bg-amber-500/70'
             : status === 'done' || status === 'active'
               ? // Green dot for both hook-reported 'done' and the heuristic
                 // 'active' (terminal open, quiet). Working uses a yellow
                 // spinner so working vs done differ by motion; 'inactive'
                 // stays grey.
-                'bg-emerald-500'
+                'bg-emerald-500/70'
               : 'bg-neutral-500/40'
         )}
       />

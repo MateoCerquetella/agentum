@@ -12,6 +12,11 @@ type PasteTerminalClipboardDeps = {
   pasteText: (text: string, options?: PasteTextOptions) => void
   connectionId?: string | null
   onImagePasteError?: (error: unknown) => void
+  // Why: on an SSH worktree the saved clipboard image is a LOCAL temp path the
+  // remote agent can't read. When provided, deliver the image to the remote
+  // instead of pasting the path (the server writes it remote-side and types the
+  // path itself). Throwing routes to onImagePasteError.
+  uploadImageForRemote?: (localPath: string) => Promise<void>
 }
 
 export async function pasteTerminalClipboard({
@@ -19,7 +24,8 @@ export async function pasteTerminalClipboard({
   saveClipboardImageAsTempFile,
   pasteText,
   connectionId,
-  onImagePasteError
+  onImagePasteError,
+  uploadImageForRemote
 }: PasteTerminalClipboardDeps): Promise<void> {
   let text = ''
   try {
@@ -36,6 +42,13 @@ export async function pasteTerminalClipboard({
   try {
     const filePath = await saveClipboardImageAsTempFile({ connectionId })
     if (!filePath) {
+      return
+    }
+    if (uploadImageForRemote) {
+      // SSH worktree: the local path is unreachable to the remote agent. Upload
+      // the bytes to the remote workdir; the server types the path itself, so we
+      // don't also paste here.
+      await uploadImageForRemote(filePath)
       return
     }
     pasteText(filePath, {

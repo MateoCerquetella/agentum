@@ -23,8 +23,9 @@
 //! than guessing a system Chrome. Fails **loud** (descriptive error) when the
 //! browser isn't installed or never opens its CDP port — never a silent hang.
 
+use crate::port_wait::{port_listening, wait_until_listening};
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -49,6 +50,46 @@ fn cdp_port() -> u16 {
         .unwrap_or(DEFAULT_CDP_PORT)
 }
 
+/// Device-scale the headless browser captures the screencast at. **1 (fast) by
+/// default.** `Page.startScreencast` fixes its surface scale at browser LAUNCH, so
+/// this is a `--force-device-scale-factor` flag. 2× quadruples the pixels in EVERY
+/// JPEG frame streamed over the WebSocket — sharp on Retina but heavy and laggy,
+/// which is the "browser is super slow / unusable" users hit. 1× is ~4× less data
+/// per frame; it upscales on a Retina pane (slightly soft) but is the speed-over-
+/// sharpness trade we default to. Tunable via `AGENTUM_CDP_DEVICE_SCALE` (clamped
+/// to [1, 4]) — set `2` for a sharp (slower) capture on a Retina display.
+fn cdp_device_scale() -> f64 {
+    std::env::var("AGENTUM_CDP_DEVICE_SCALE")
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1.0)
+        .clamp(1.0, 4.0)
+}
+
+/// How long to wait for a freshly-launched Chromium to bind its CDP debug port.
+/// Default 45s (was a hard-coded 20s). A cold profile plus GPU/Metal init — and
+/// several per-worktree Chrome instances booting at once on a loaded machine —
+/// routinely needs more than 20s to bind the port, which surfaced as a spurious
+/// "did not expose CDP within 20s" failure while the browser was still coming up
+/// (and would have worked on a retry). Overridable via
+/// `AGENTUM_CDP_READY_TIMEOUT_SECS` for especially slow/contended machines.
+fn cdp_ready_timeout() -> Duration {
+    std::env::var("AGENTUM_CDP_READY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(45))
+}
+
+/// Grace window for a leftover (not-yet-listening) tmux session before we treat it
+/// as dead and kill+relaunch. Bumped from 2s so a slow-booting Chromium left by a
+/// prior open isn't repeatedly killed and restarted (thrash) under load.
+fn cdp_leftover_grace() -> Duration {
+    Duration::from_secs(10)
+}
+
 /// The CDP base URL a Playwright MCP attaches to via `--cdp-endpoint`. Pinned to
 /// IPv4 `127.0.0.1` for the same reason as the MCP host (macOS resolves
 /// `localhost` to `::1`, which would miss our IPv4 launch + probe).
@@ -59,6 +100,32 @@ pub fn cdp_endpoint_for(port: u16) -> String {
 /// The configured CDP port for the shared local browser (env override → default).
 pub fn port() -> u16 {
     cdp_port()
+}
+
+/// CDP port of the in-app browser the user is currently watching — the most recent
+/// screencast pane attach (set by `routes::cdp_screencast`). A contextless MCP
+/// `agentum_browser` op (no `worktreeId`/`cdpPort`, e.g. a top-level agent not
+/// spawned into a worktree) drives THIS port, so "the agent drives the browser you
+/// see" holds even without worktree context. `0` = no pane has attached yet.
+/// Process-global because there is one desktop app (one foreground browser); this
+/// keeps it out of `AppState` and every test constructor.
+fn foreground_port_cell() -> &'static std::sync::atomic::AtomicU16 {
+    static P: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+    &P
+}
+
+/// Record the browser the user is now watching (called on each screencast attach).
+/// Last attach wins — the foreground pane.
+pub fn set_foreground_cdp_port(port: u16) {
+    foreground_port_cell().store(port, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The foreground browser's CDP port, or `None` if no screencast pane has attached.
+pub fn foreground_cdp_port() -> Option<u16> {
+    match foreground_port_cell().load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        p => Some(p),
+    }
 }
 
 /// Is the shared local CDP browser currently up (serving on its port)? Cheap
@@ -107,7 +174,7 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
         .await
         .unwrap_or(false)
     {
-        if wait_until_listening(port, Duration::from_secs(2)).await {
+        if wait_until_listening(port, cdp_leftover_grace()).await {
             return Ok(endpoint);
         }
         let _ = agentum_tmux::kill_session(CDP_TMUX_TARGET).await;
@@ -122,14 +189,16 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
         .context("start the shared local CDP-Chromium tmux session")?;
 
     // Headless Chromium boots then binds the debugging port; allow boot time
-    // (an MCP-cold machine populating the profile can take a few seconds).
-    if wait_until_listening(port, Duration::from_secs(20)).await {
+    // (a cold profile + GPU init on a loaded machine can take tens of seconds).
+    let ready = cdp_ready_timeout();
+    if wait_until_listening(port, ready).await {
         Ok(endpoint)
     } else {
         anyhow::bail!(
-            "Chromium launched but did not expose CDP on 127.0.0.1:{port} within 20s \
+            "Chromium launched but did not expose CDP on 127.0.0.1:{port} within {}s \
              (tmux session `{CDP_TMUX_TARGET}`). Check the pane; the browser may have \
-             failed to start."
+             failed to start. Set AGENTUM_CDP_READY_TIMEOUT_SECS to allow more time.",
+            ready.as_secs()
         )
     }
 }
@@ -174,6 +243,10 @@ fn launch_lock() -> &'static Mutex<()> {
 struct WorktreeBrowser {
     port: u16,
     tmux: String,
+    // Kept so a registry entry fully describes its Chromium (port + tmux +
+    // profile). Reap currently re-derives the profile path from the key; this
+    // field keeps the entry self-contained for a future direct-path teardown.
+    #[allow(dead_code)]
     profile: PathBuf,
 }
 
@@ -182,6 +255,25 @@ struct WorktreeBrowser {
 fn worktree_registry() -> &'static std::sync::Mutex<HashMap<String, WorktreeBrowser>> {
     static REG: OnceLock<std::sync::Mutex<HashMap<String, WorktreeBrowser>>> = OnceLock::new();
     REG.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Reduce a browser worktree key to the bare filesystem path that BOTH the
+/// user's pane and the worktree's agent agree on. The desktop sends the full UI
+/// worktree id `<repoId>::<path>` (folder projects append a `::workspace:<uuid>`
+/// instance suffix); the agent sends the bare `worktree_path`. Both MUST map to
+/// one registry key, or the agent drives a different Chromium than the user
+/// watches. Mirrors the desktop's `splitWorktreeIdForFilesystem`: drop the
+/// `<repoId>::` prefix, then any `::workspace:<uuid>` suffix.
+///
+/// Assumes a worktree path contains no `::` (true for agentum-managed worktrees,
+/// which live under a sanitized root) — the same assumption the desktop makes by
+/// splitting the worktree id on its first `::`.
+fn canonical_worktree_key(raw: &str) -> &str {
+    // `<repoId>::<path>` → `<path>` (split on the FIRST `::`, as the desktop does).
+    let path = raw.split_once("::").map_or(raw, |(_, rest)| rest);
+    // Folder-project instance suffix `<path>::workspace:<uuid>` → `<path>`.
+    path.split_once("::workspace:")
+        .map_or(path, |(head, _)| head)
 }
 
 /// Make a worktree id safe for a tmux session name and a directory component.
@@ -233,32 +325,37 @@ async fn registered_listening_port(worktree_id: &str) -> Option<u16> {
 }
 
 /// Ensure a per-WORKTREE CDP browser and return `(endpoint, port)`. Idempotent per
-/// worktree (reuses the registered, still-serving port). An empty `worktree_id`
-/// falls back to the shared default browser so contextless callers don't regress.
+/// worktree (reuses the registered, still-serving port). A `worktree_id` with no
+/// worktree path falls back to the shared default browser so contextless callers
+/// don't regress.
 pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, u16)> {
-    let wt = worktree_id.trim();
-    // Opt-in gate. Per-worktree isolation needs BOTH the user's pane AND the
-    // worktree's agent to resolve the same worktree key; that agent side can't be
-    // auto-verified, and a key mismatch would break agent-watches-browser. Until
-    // verified, default to the shared browser (v0.25.0 behavior — no regression);
-    // set `AGENTUM_BROWSER_PER_WORKTREE=1` to enable + test the isolation.
-    let enabled = std::env::var_os("AGENTUM_BROWSER_PER_WORKTREE").is_some_and(|v| v != "0");
-    if wt.is_empty() || !enabled {
+    // Canonical key: the user's pane sends the full UI worktree id
+    // `<repoId>::<path>` (folder projects append `::workspace:<uuid>`), while the
+    // worktree's agent sends the bare `worktree_path`. Reduce BOTH to the same
+    // filesystem path so they resolve to ONE browser — otherwise the agent would
+    // drive a different Chromium than the user watches (see `canonical_worktree_key`).
+    let key = canonical_worktree_key(worktree_id.trim());
+    // Per-worktree isolation is ON by default; set `AGENTUM_BROWSER_PER_WORKTREE=0`
+    // to opt out (every worktree shares one browser, the pre-v0.27 behavior).
+    let enabled = std::env::var("AGENTUM_BROWSER_PER_WORKTREE")
+        .map(|v| v.trim() != "0")
+        .unwrap_or(true);
+    if key.is_empty() || !enabled {
         let endpoint = ensure_local_cdp_browser().await?;
         return Ok((endpoint, cdp_port()));
     }
 
-    if let Some(port) = registered_listening_port(wt).await {
+    if let Some(port) = registered_listening_port(key).await {
         return Ok((cdp_endpoint_for(port), port));
     }
 
     let _guard = launch_lock().lock().await;
-    if let Some(port) = registered_listening_port(wt).await {
+    if let Some(port) = registered_listening_port(key).await {
         return Ok((cdp_endpoint_for(port), port));
     }
 
     let exe = chromium_executable()?;
-    let token = sanitize_worktree_token(wt);
+    let token = sanitize_worktree_token(key);
     let tmux = format!("{CDP_TMUX_TARGET}-{token}");
     let profile = worktree_profile_dir(&token)?;
     // Reuse this worktree's previously-allocated port (re-launch on the same port
@@ -266,13 +363,13 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
     let port = worktree_registry()
         .lock()
         .ok()
-        .and_then(|reg| reg.get(wt).map(|b| b.port))
+        .and_then(|reg| reg.get(key).map(|b| b.port))
         .map_or_else(free_local_port, Ok)?;
 
     // A leftover-but-not-listening session is either booting or dead.
     if agentum_tmux::has_session(&tmux).await.unwrap_or(false) {
-        if wait_until_listening(port, Duration::from_secs(2)).await {
-            register_worktree_browser(wt, port, &tmux, &profile);
+        if wait_until_listening(port, cdp_leftover_grace()).await {
+            register_worktree_browser(key, port, &tmux, &profile);
             return Ok((cdp_endpoint_for(port), port));
         }
         let _ = agentum_tmux::kill_session(&tmux).await;
@@ -281,15 +378,17 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
     let argv = build_chrome_argv(&exe, port, &profile);
     agentum_tmux::new_session(&tmux, &home_dir(), &argv, &[])
         .await
-        .with_context(|| format!("start CDP-Chromium for worktree `{wt}`"))?;
+        .with_context(|| format!("start CDP-Chromium for worktree `{key}`"))?;
 
-    if wait_until_listening(port, Duration::from_secs(20)).await {
-        register_worktree_browser(wt, port, &tmux, &profile);
+    let ready = cdp_ready_timeout();
+    if wait_until_listening(port, ready).await {
+        register_worktree_browser(key, port, &tmux, &profile);
         Ok((cdp_endpoint_for(port), port))
     } else {
         anyhow::bail!(
-            "Chromium for worktree `{wt}` did not expose CDP on 127.0.0.1:{port} within 20s \
-             (tmux `{tmux}`)."
+            "Chromium for worktree `{key}` did not expose CDP on 127.0.0.1:{port} within {}s \
+             (tmux `{tmux}`). Set AGENTUM_CDP_READY_TIMEOUT_SECS to allow more time.",
+            ready.as_secs()
         )
     }
 }
@@ -307,16 +406,64 @@ fn register_worktree_browser(worktree_id: &str, port: u16, tmux: &str, profile: 
     }
 }
 
-/// Tear down a worktree's browser (kill its session, drop its profile + registry
-/// entry). Idempotent; a no-op for an unknown worktree. Wire into worktree close.
+/// Kill every process whose command line references `needle` — how we reap the
+/// Chromium launched for a CDP browser. Its `--user-data-dir` sits under our
+/// `cdp-browser` profile dir (an agentum-only absolute path), so this never
+/// matches the user's own Chrome. We match on the PROCESS, not the tmux session,
+/// because a killed session can leave the browser orphaned (the source of the
+/// leftover-Chrome pile-up). Best-effort; `pkill` is absent on Windows (where the
+/// tmux-hosted browser doesn't run anyway), so a spawn failure is ignored.
+async fn pkill_by_signature(needle: &str) {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return;
+    }
+    // `-f` matches the full argv. The signature is an absolute path, so it can't
+    // be mistaken for a pkill option (and `Command::arg` passes it verbatim, so a
+    // space in it — e.g. macOS's "Application Support" — is fine).
+    let _ = tokio::process::Command::new("pkill")
+        .arg("-f")
+        .arg(needle)
+        .output()
+        .await;
+}
+
+/// Reap every Chromium agentum launched for CDP — the shared browser and every
+/// per-worktree one — by its `--user-data-dir` under our `cdp-browser` profile
+/// dir. These live in detached tmux sessions and can outlive both the app and
+/// their session, so without an explicit reap they accumulate ("dozens of
+/// leftover Chrome processes"). Also clears the in-memory registry so a stale
+/// entry can't hand back a dead port. Best-effort; safe to call on startup (a
+/// fresh launch has no live agentum browser, so only orphans die) and on quit.
+pub async fn reap_orphaned_cdp_browsers() {
+    if let Ok(state) = agentum_store::paths::state_dir() {
+        pkill_by_signature(&state.join("cdp-browser").to_string_lossy()).await;
+    }
+    if let Ok(mut reg) = worktree_registry().lock() {
+        reg.clear();
+    }
+}
+
+/// Tear down a worktree's browser (kill its Chromium + tmux session, drop its
+/// profile + registry entry). Idempotent; safe for an unknown worktree. Called on
+/// worktree removal AND when the user closes the last browser tab in the worktree.
 pub async fn stop_local_cdp_browser_for(worktree_id: &str) -> Result<()> {
+    let key = canonical_worktree_key(worktree_id.trim());
     let entry = worktree_registry()
         .lock()
         .ok()
-        .and_then(|mut reg| reg.remove(worktree_id.trim()));
-    if let Some(b) = entry {
+        .and_then(|mut reg| reg.remove(key));
+    if let Some(b) = &entry {
         let _ = agentum_tmux::kill_session(&b.tmux).await;
-        let _ = std::fs::remove_dir_all(&b.profile);
+    }
+    // Kill the Chromium by its profile dir even without a live registry entry (it
+    // may have been launched in a previous run) — the browser can outlive its
+    // tmux session, so killing the session alone leaks it. Derive the SAME
+    // per-worktree profile path used at launch, then drop the dir.
+    if let Ok(state) = agentum_store::paths::state_dir() {
+        let profile = state.join("cdp-browser").join(sanitize_worktree_token(key));
+        pkill_by_signature(&profile.to_string_lossy()).await;
+        let _ = std::fs::remove_dir_all(&profile);
     }
     Ok(())
 }
@@ -341,6 +488,7 @@ const REMOTE_CDP_PORT: u16 = 9222;
 fn remote_chrome_launch_script(host_port: u16) -> String {
     let flags = format!(
         "--headless=new --hide-scrollbars --window-size=1280,800 \
+         --force-device-scale-factor=2 \
          --remote-debugging-address=127.0.0.1 --remote-debugging-port={host_port} \
          --user-data-dir=$HOME/.agentum/cdp-browser --no-first-run \
          --no-default-browser-check about:blank"
@@ -419,37 +567,39 @@ pub async fn ensure_remote_cdp_browser(host: &agentum_core::Host) -> Result<u16>
     }
 }
 
-/// Build the headless-Chromium argv. Split out so the flag shape is unit-testable
-/// without launching a browser.
+/// Build the Chromium argv for the headless (screencast) browser. Split out so the
+/// flag shape is unit-testable without launching a browser.
 ///
-/// `--headless=new` runs Chrome's modern headless (full rendering + CDP
-/// `Page.startScreencast`, unlike the reduced `chromium_headless_shell`) — agentum
-/// renders the frames inside its own pane (009c-3), so there is no OS window.
-/// `--window-size` fixes the headless viewport so screencast frames have a sane
-/// default size (the screencast `maxWidth/maxHeight` caps it further).
-/// `--remote-debugging-address=127.0.0.1` keeps CDP loopback-only (never a public
-/// interface; 009c-2 reaches it solely via the authenticated SSH tunnel).
-/// `--no-first-run` / `--no-default-browser-check` suppress the first-run nags
-/// that would otherwise block automation. An isolated `--user-data-dir` keeps
-/// this browser off the user's real profile. `about:blank` is a benign initial
-/// page (the agent navigates its own tab afterwards).
+/// `--remote-debugging-address=127.0.0.1` keeps CDP loopback-only (remote reaches it
+/// solely via the authenticated SSH tunnel); `--no-first-run` / `--no-default-browser-check`
+/// suppress nags; an isolated `--user-data-dir` keeps this browser off the user's real
+/// profile. `--headless=new` is full modern headless (has `Page.startScreencast`, unlike
+/// `chromium_headless_shell`); `--force-device-scale-factor` (see [`cdp_device_scale`])
+/// MUST be a launch flag because `Page.startScreencast` fixes its surface scale at launch
+/// and ignores the per-frame `setDeviceMetricsOverride.deviceScaleFactor` the pane sends.
 fn build_chrome_argv(
     exe: &std::path::Path,
     port: u16,
     user_data_dir: &std::path::Path,
 ) -> Vec<String> {
-    vec![
-        exe.to_string_lossy().into_owned(),
-        "--headless=new".to_string(),
-        "--hide-scrollbars".to_string(),
-        "--window-size=1280,800".to_string(),
-        "--remote-debugging-address=127.0.0.1".to_string(),
-        format!("--remote-debugging-port={port}"),
-        format!("--user-data-dir={}", user_data_dir.to_string_lossy()),
-        "--no-first-run".to_string(),
-        "--no-default-browser-check".to_string(),
-        "about:blank".to_string(),
-    ]
+    let mut argv = vec![exe.to_string_lossy().into_owned()];
+    argv.push("--headless=new".to_string());
+    argv.push("--window-size=1280,800".to_string());
+    argv.push(format!(
+        "--force-device-scale-factor={}",
+        cdp_device_scale()
+    ));
+    argv.push("--hide-scrollbars".to_string());
+    argv.push("--remote-debugging-address=127.0.0.1".to_string());
+    argv.push(format!("--remote-debugging-port={port}"));
+    argv.push(format!(
+        "--user-data-dir={}",
+        user_data_dir.to_string_lossy()
+    ));
+    argv.push("--no-first-run".to_string());
+    argv.push("--no-default-browser-check".to_string());
+    argv.push("about:blank".to_string());
+    argv
 }
 
 /// Candidate locations for a system-installed full Chrome/Chromium, by OS. Pure
@@ -632,35 +782,6 @@ fn user_data_dir() -> Result<PathBuf> {
 
 // --- small network/path helpers, mirroring `playwright_mcp`'s shape ---------
 
-/// A plain TCP connect is enough to know "something is serving here"; the bound
-/// MCP's CDP client performs the protocol handshake (with its own
-/// `--cdp-timeout`). Short timeout so a dead port fails fast on the hot path.
-async fn port_listening(port: u16) -> bool {
-    let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    matches!(
-        tokio::time::timeout(
-            Duration::from_millis(300),
-            tokio::net::TcpStream::connect(addr),
-        )
-        .await,
-        Ok(Ok(_))
-    )
-}
-
-/// Poll the port until it accepts connections or the deadline passes.
-async fn wait_until_listening(port: u16, max: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + max;
-    loop {
-        if port_listening(port).await {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
 /// `$HOME`, falling back to `/` so a spawn never fails on an unset HOME.
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
@@ -680,9 +801,35 @@ mod tests {
     }
 
     #[test]
+    fn canonical_worktree_key_unifies_pane_id_and_agent_path() {
+        // The whole per-worktree contract: the user's pane (full UI id) and the
+        // worktree's agent (bare path) MUST collapse to the SAME registry key, or
+        // the agent drives a different browser than the user is watching.
+        let path = "/Users/x/.agentum/worktrees/feat";
+        assert_eq!(
+            canonical_worktree_key(&format!("repo-abc::{path}")),
+            canonical_worktree_key(path),
+        );
+        assert_eq!(canonical_worktree_key("repo::/a/b"), "/a/b");
+        assert_eq!(canonical_worktree_key("/a/b"), "/a/b");
+        // Folder-project instance suffix is stripped so both sides still match.
+        assert_eq!(
+            canonical_worktree_key("repo::/folder::workspace:0123abcd-0000-0000-0000-000000000000"),
+            "/folder",
+        );
+        // No worktree context → empty → caller falls back to the shared browser.
+        assert_eq!(canonical_worktree_key(""), "");
+        // A github-pr pseudo-worktree (single colons) keeps its own isolated key.
+        assert_eq!(
+            canonical_worktree_key("github-pr:repo:42"),
+            "github-pr:repo:42"
+        );
+    }
+
+    #[test]
     fn chrome_argv_is_headless_with_debugging_and_isolated_profile() {
         let argv = build_chrome_argv(Path::new("/x/Chromium"), 9300, Path::new("/tmp/prof"));
-        // Headless since 009c-3 — agentum renders the frames in its own pane.
+        // Headless screencast path — agentum renders the frames in its own pane.
         // Must be the full `--headless=new` (screencast-capable), not the bare
         // legacy flag, and never windowed.
         assert!(argv.iter().any(|a| a == "--headless=new"));
@@ -694,6 +841,12 @@ mod tests {
         );
         // A fixed viewport so screencast frames have a sane default size.
         assert!(argv.iter().any(|a| a == "--window-size=1280,800"));
+        // Force the capture device-scale so the screencast is device-pixel sharp.
+        assert!(
+            argv.iter()
+                .any(|a| a.starts_with("--force-device-scale-factor=")),
+            "headless must force a capture device-scale: {argv:?}"
+        );
         // Isolated profile + first-run nags suppressed.
         assert!(argv.iter().any(|a| a == "--user-data-dir=/tmp/prof"));
         assert!(argv.iter().any(|a| a == "--no-first-run"));

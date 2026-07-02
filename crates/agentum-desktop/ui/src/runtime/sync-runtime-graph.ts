@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { hexToRgba } from '@/lib/color'
 /* eslint-disable max-lines -- Why: runtime graph sync and mobile session-tab publication share the same injected renderer state and terminal registry. Keeping them together prevents a second store/registry reader from drifting. */
 import {
   collectLeafIdsInOrder,
@@ -873,20 +874,6 @@ function getEditorDraftVersionByFileId(
 
 function mobileTerminalSurfaceId(parentTabId: string, leafId: string): string {
   return `${parentTabId}::${leafId}`
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  let clean = hex.replace('#', '')
-  if (clean.length === 3) {
-    clean = clean
-      .split('')
-      .map((c) => c + c)
-      .join('')
-  }
-  const r = parseInt(clean.slice(0, 2), 16)
-  const g = parseInt(clean.slice(2, 4), 16)
-  const b = parseInt(clean.slice(4, 6), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
 function isHexColor(value: string | undefined): value is string {

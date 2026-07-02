@@ -30,7 +30,3 @@ crates/agentum-desktop/ui/dist
 # Runtime upload sink — written by the dashboard's drag-drop / paste flow.
 # Local data, not source — should never enter the repo.
 .agentum-uploads/
-
-# empirical-sdd-ddd-starter scaffold (dropped in locally, not part of agentum).
-# .claude/ is already ignored above, which covers .claude/commands/sdd-*.md.
-/ai/

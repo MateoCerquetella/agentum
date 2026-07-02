@@ -4,6 +4,7 @@
 // faithful to `crates/agentum-server/src/harness.rs` (serde snake_case) so there
 // is one source of truth and no silent field drift.
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
+import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 
 export type FeatureState =
   | 'pending'
@@ -148,6 +149,44 @@ export function startHarness(workdir: string): Promise<{ harness_id: string }> {
   return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
 }
 
+/** Wire shape of `POST /api/harness/start-work` (spec 005 F1 — camelCase,
+ *  matching the newer `SpecFromIssueResponse` precedent). */
+export type StartGatedWorkResult = {
+  harnessId: string
+  specId: string
+  specExisted: boolean
+  planned: number
+  runStarted: boolean
+  /** A live run already drives this worktree — a friendly state, not an error. */
+  alreadyRunning: boolean
+}
+
+/**
+ * `POST /api/harness/start-work` — the one-click issue → gated run
+ * orchestration (spec 005 F1): converge-scaffold + plan from the linked issue,
+ * initial Todo transition, agent/model knob write, then register + run the
+ * Harness Engine against the worktree. Server-side so every caller (composer,
+ * Tasks page) shares one failure surface.
+ */
+export function startGatedWork(input: {
+  workdir: string
+  number: number
+  slug?: string
+  agentTool?: string
+  agentModel?: string
+}): Promise<StartGatedWorkResult> {
+  return request('/api/harness/start-work', {
+    method: 'POST',
+    body: JSON.stringify({
+      workdir: input.workdir,
+      number: String(input.number),
+      ...(input.slug ? { slug: input.slug } : {}),
+      ...(input.agentTool ? { agentTool: input.agentTool } : {}),
+      ...(input.agentModel ? { agentModel: input.agentModel } : {})
+    })
+  })
+}
+
 export type PlanGoalHarnessResult = {
   /** Which task manager backed the features: "board" | "github" | "linear". */
   provider: string
@@ -200,6 +239,27 @@ export async function callMcpTool(
 /** Scaffold the unified `.agentum-harness/` surface into `workdir` (spec 010a). */
 export function scaffoldHarness(workdir: string): Promise<string> {
   return callMcpTool('agentum_harness_scaffold', { workdir })
+}
+
+/** Wire shape of `/api/harness/settings` (spec 005 F3). */
+export type HarnessSettings = { browserQaAgentEnabled: boolean }
+
+/**
+ * `GET /api/harness/settings` — engine-wide run behavior knobs. Today just the
+ * browser-QA capability switch: when on, the QA gate's `Auto` arm treats a
+ * spawned `agentum_browser` QA agent as capable without `AGENTUM_BROWSER_VERIFY`.
+ * Default OFF (D3) so non-web projects keep the skip-pass.
+ */
+export function getHarnessSettings(): Promise<HarnessSettings> {
+  return request('/api/harness/settings')
+}
+
+/** `PUT /api/harness/settings` — persist the harness run-behavior knobs. */
+export function setHarnessSettings(settings: HarnessSettings): Promise<HarnessSettings> {
+  return request('/api/harness/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings)
+  })
 }
 
 /** `GET /api/harness` — status for every registered run. */
@@ -260,9 +320,6 @@ export async function openHarnessEventStream(
   let disposed = false
   let attempt = 0
   let timer: ReturnType<typeof setTimeout> | null = null
-
-  const backoffMs = (n: number): number =>
-    Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
 
   const connect = (): void => {
     if (disposed) return

@@ -19,10 +19,12 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import RepoBadgeLabel from '@/components/repo/RepoBadgeLabel'
 import { searchRepos } from '@/lib/repo-search'
 import { cn } from '@/lib/utils'
+import { FilterToggleRow } from './FilterToggleRow'
 import {
-  DEFAULT_SHOW_SLEEPING_WORKSPACES,
-  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
+  DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
+  DEFAULT_SHOW_SLEEPING_WORKSPACES
 } from '../../../../shared/constants'
+import { deriveWorkspaceFilterSummary } from './workspace-filter-summary'
 
 type SidebarFilterProps = {
   preserveWorkspaceBoardOpen?: boolean
@@ -85,16 +87,11 @@ const SidebarFilter = React.memo(function SidebarFilter({
     return set
   }, [repos, filterRepoIds])
   const selectedCount = selectedRepoIdSet.size
-  const hasRepoFilter = selectedCount > 0
-  const hasSleepingFilter = showSleepingWorkspaces !== DEFAULT_SHOW_SLEEPING_WORKSPACES
-  // Why: count the default-branch toggle against its baseline, not against
-  // `true`. Hiding the primary is now the default, so it should not light up the
-  // badge — only an explicit deviation (showing it again) counts as a filter.
-  const hasDefaultBranchFilter =
-    hideDefaultBranchWorkspace !== DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
-  const hasAnyFilter = hasSleepingFilter || hasDefaultBranchFilter || hasRepoFilter
-  const activeFilterCount =
-    (hasSleepingFilter ? 1 : 0) + (hasDefaultBranchFilter ? 1 : 0) + selectedCount
+  const { hasRepoFilter, hasAnyFilter, activeFilterCount } = deriveWorkspaceFilterSummary({
+    showSleepingWorkspaces,
+    hideDefaultBranchWorkspace,
+    selectedRepoCount: selectedCount
+  })
 
   const filteredRepos = useMemo(() => searchRepos(repos, query), [repos, query])
   const commandValue =
@@ -105,8 +102,8 @@ const SidebarFilter = React.memo(function SidebarFilter({
 
   const clearAll = useCallback(() => {
     setShowSleepingWorkspaces(DEFAULT_SHOW_SLEEPING_WORKSPACES)
-    // Why: "Reset filters" returns to defaults, and hidden is now the default —
-    // so this re-hides the primary rather than forcing it back on.
+    // Why: "Reset filters" returns to defaults, and hiding the primary is now the
+    // default — so this re-hides it rather than forcing the default branch back on.
     setHideDefaultBranchWorkspace(DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE)
     setFilterRepoIds([])
   }, [setShowSleepingWorkspaces, setHideDefaultBranchWorkspace, setFilterRepoIds])
@@ -289,46 +286,5 @@ const SidebarFilter = React.memo(function SidebarFilter({
     </DropdownMenu>
   )
 })
-
-function FilterToggleRow({
-  icon,
-  label,
-  checked,
-  onChange
-}: {
-  icon: React.ReactNode
-  label: string
-  checked: boolean
-  onChange: (next: boolean) => void
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className="flex w-full items-center justify-between gap-2 rounded-[5px] px-2 py-1.5 text-[12px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-    >
-      <span className="inline-flex items-center gap-2 text-foreground">
-        <span className="text-muted-foreground">{icon}</span>
-        {label}
-      </span>
-      <span
-        aria-hidden
-        className={cn(
-          'relative h-3.5 w-6 shrink-0 rounded-full transition-colors',
-          checked ? 'bg-primary' : 'bg-muted-foreground/30'
-        )}
-      >
-        <span
-          className={cn(
-            'absolute top-0.5 left-0.5 size-2.5 rounded-full bg-background shadow-sm transition-transform',
-            checked && 'translate-x-2.5'
-          )}
-        />
-      </span>
-    </button>
-  )
-}
 
 export default SidebarFilter

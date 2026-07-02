@@ -2097,6 +2097,12 @@ export type GlobalSettings = {
    *  again" checkbox inside it or from the General settings pane. We keep this
    *  defaulted to false so first-time behavior stays safe. */
   skipDeleteWorktreeConfirm: boolean
+  /** Why: closing a terminal/session tab that still has a running command kills
+   *  that command. Agentum double-checks with a confirmation dialog by default
+   *  so an in-flight build/agent isn't lost to a stray tab close. Users can opt
+   *  out via the dialog's "Don't ask again for running terminals" checkbox or
+   *  the General settings toggle. Defaults to false so first-run stays safe. */
+  skipRunningTerminalCloseConfirm: boolean
   /** Default preset in the new-workspace GitHub task view. */
   defaultTaskViewPreset: TaskViewPresetId
   /** Why: persists the user's last-used task source so the Tasks page
@@ -2867,3 +2873,5 @@ export type StatsSummary = {
 // the IPC payload is the same shape everywhere. Memory is in bytes; CPU
 // is a percentage (can exceed 100 on multi-core).
 
+// Tabs shown in the GitHub work-item detail dialog / PR page.
+export type ItemDialogTab = 'conversation' | 'checks' | 'files'

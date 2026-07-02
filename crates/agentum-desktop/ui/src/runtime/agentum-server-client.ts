@@ -4,6 +4,7 @@
 // loopback endpoint resolved in server-endpoint.ts. Mirrors the TUI client in
 // crates/agentum-tui/src/commands/terminal/api.rs.
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
+import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 import { record as recordHostIo, LOCAL_HOST_KEY, type HostKey } from './io-meter'
 
 export type SessionStatus = 'idle' | 'running' | 'stopped' | 'crashed'
@@ -152,6 +153,26 @@ export function setOrchestrationSettings(enabled: boolean): Promise<Orchestratio
   })
 }
 
+/** Wire shape of `/api/mcp/settings`. */
+export type McpSettings = { enabled: boolean }
+
+/**
+ * `GET /api/mcp/settings` — is agentum's MCP wired into the agents agentum
+ * launches? The master switch (default on), read at provision time by
+ * `mcp_provision::provision`. Source of truth for the Settings → Agent MCP toggle.
+ */
+export function getMcpSettings(): Promise<McpSettings> {
+  return request<McpSettings>('/api/mcp/settings')
+}
+
+/** `PUT /api/mcp/settings` — flip the agentum-MCP master switch. */
+export function setMcpSettings(enabled: boolean): Promise<McpSettings> {
+  return request<McpSettings>('/api/mcp/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled })
+  })
+}
+
 /**
  * Boot-time smoke check: confirm the embedded server answers a real
  * session-model round-trip (not just /api/health) and log what it sees.
@@ -177,6 +198,29 @@ export function listSessions(): Promise<Session[]> {
 /** `GET /api/sessions/{id}` — one session by id. */
 export function getSession(id: string): Promise<Session> {
   return request<Session>(`/api/sessions/${id}`)
+}
+
+/** Wire shape of `POST /api/sessions/{id}/uploads`. */
+export type UploadResponse = { path: string; relative_path: string; size_bytes: number }
+
+/**
+ * `POST /api/sessions/{id}/uploads` — upload raw image bytes for a session. The
+ * (host-aware) server writes them into the session's workdir — on the REMOTE
+ * host over SSH for a remote session — and types the relative path into the
+ * pane (no Enter) so the agent attaches the screenshot. This is how the desktop
+ * delivers a pasted/dropped image to an SSH agent, where a local temp path is
+ * unreachable. `Content-Type` selects the extension (image/png|jpeg|gif|webp|bmp).
+ */
+export function uploadSessionImage(
+  id: string,
+  bytes: Uint8Array | ArrayBuffer | Blob,
+  contentType = 'image/png'
+): Promise<UploadResponse> {
+  return request<UploadResponse>(`/api/sessions/${id}/uploads`, {
+    method: 'POST',
+    body: bytes as BodyInit,
+    headers: { 'Content-Type': contentType }
+  })
 }
 
 /** `POST /api/sessions` — create a session (optionally in a dedicated worktree). */
@@ -222,6 +266,18 @@ export function sendToSession(
   return request<void>(`/api/sessions/${id}/send`, {
     method: 'POST',
     body: JSON.stringify(payload)
+  })
+}
+
+/** `POST /api/sessions/{id}/submit` — deliver a prompt to a RUNNING agent's REPL and
+ *  submit it robustly: the server types the body, waits for the paste to settle, then
+ *  sends a SEPARATE Enter so a multi-line prompt isn't swallowed as a "[Pasted text]"
+ *  block. Use this (not `sendToSession`) for "send to an agent"; it reaches any session
+ *  on the worktree, including tmux/MCP-spawned agents never opened as terminal tabs. */
+export function submitPromptToSession(id: string, text: string): Promise<void> {
+  return request<void>(`/api/sessions/${id}/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ text })
   })
 }
 
@@ -329,10 +385,6 @@ export async function openSessionStream(
     const qs = params.toString()
     return qs ? `${base}?${qs}` : base
   }
-
-  // Capped exponential backoff with jitter — same shape as the TUI's loop.
-  const backoffMs = (n: number): number =>
-    Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
 
   const clearTimers = (): void => {
     if (reconnectTimer) {

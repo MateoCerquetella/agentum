@@ -548,6 +548,7 @@ export interface AgentumApi {
     onRenameTerminal: ApiEvent
     onRequestTabClose: ApiEvent
     onRequestTabCreate: ApiEvent
+    onRequestSplitRatio: ApiEvent
     onRequestBrowserAnnotations: ApiEvent
     onRequestBrowserGrab: ApiEvent
     onRequestBrowserAnnotate: ApiEvent

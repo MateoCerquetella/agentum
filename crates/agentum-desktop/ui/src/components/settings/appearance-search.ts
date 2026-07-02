@@ -59,7 +59,7 @@ export const THEME_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Theme',
     description: 'Choose how Agentum looks in the app window.',
-    keywords: ['dark', 'light', 'system']
+    keywords: ['dark', 'light', 'system', 'appearance', 'color theme']
   }
 ]
 

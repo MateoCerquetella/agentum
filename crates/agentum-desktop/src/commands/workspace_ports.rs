@@ -1,7 +1,7 @@
+use super::timestamps::now_millis;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -37,13 +37,6 @@ struct Listener {
     /// Address `lsof` reported the socket bound to (may be `*` / `0.0.0.0` / `::`).
     bind_host: String,
     port: u16,
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn platform() -> &'static str {
@@ -343,21 +336,14 @@ pub async fn workspace_ports_scan(request: Option<WorkspacePortScanRequest>) -> 
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspacePortKillRequest {
-    pid: u32,
-    // port/repoId arrive from the renderer's kill request but the kill itself
-    // only needs the pid; kept so the wire shape stays self-documenting.
-    #[allow(dead_code)]
-    port: u16,
-    #[allow(dead_code)]
-    repo_id: Option<String>,
-}
-
 #[tauri::command]
-pub async fn workspace_ports_kill(request: WorkspacePortKillRequest) -> Value {
-    let pid = request.pid;
+pub async fn workspace_ports_kill(pid: u32) -> Value {
+    // Why a flat `pid` param instead of a single `request: Struct`: the renderer's
+    // typed Tauri client sends invoke args FLAT (`{ pid, port, repoId }`) — it never
+    // wraps them under a `request` key. A `request: WorkspacePortKillRequest` param
+    // made Tauri look for a missing `request` key, fail to deserialize the required
+    // arg, and reject the call — so "Stop Process" silently did nothing. Killing only
+    // needs the pid; Tauri ignores the renderer's extra `port`/`repoId` keys.
     let result = tokio::task::spawn_blocking(move || kill_pid(pid))
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
@@ -519,5 +505,24 @@ mod tests {
         let ports = build_ports(&listeners, &cwds, &filtered);
         // The listener lives in repoB, which was filtered out -> external.
         assert_eq!(ports[0]["kind"], "external");
+    }
+
+    // Regression lock for the silent "Stop Process" failure: the renderer's typed
+    // Tauri client sends invoke args FLAT, so the command must take a bare `pid`.
+    // A single `request: Struct` param made Tauri look for a missing `request` key
+    // and reject the call. Calling the command here with a bare pid keeps that
+    // signature from regressing (a struct param would fail to compile) and exercises
+    // the happy path end to end.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_ports_kill_stops_target_pid() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn throwaway child");
+        let pid = child.id();
+        let result = workspace_ports_kill(pid).await;
+        assert_eq!(result["ok"].as_bool(), Some(true), "kill result: {result}");
+        let _ = child.wait();
     }
 }

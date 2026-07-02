@@ -1,4 +1,5 @@
 import { api } from '@/tauri'
+import { LinearIcon } from '@/components/icons/LinearIcon'
 /* eslint-disable max-lines -- Why: this pane co-locates source-host and
    Linear integration cards so the preflight-check + status-badge +
    install/auth-prompt scaffolding lives in one place rather than fanning
@@ -20,20 +21,18 @@ import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { getHarnessSettings, setHarnessSettings } from '@/runtime/harness-client'
+import {
+  githubGetStateMap,
+  githubSetStateMap,
+  type GithubStateMap
+} from '@/tauri/github-labels'
 import { LinearApiKeyDialog } from '@/components/linear-api-key-dialog'
 import {
   getPreflightIntegrationStatuses,
   type PreflightRefreshProvider
 } from './integrations-pane-status'
 export { INTEGRATIONS_PANE_SEARCH_ENTRIES } from './integrations-search'
-
-function LinearIcon({ className }: { className?: string }): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden className={className} fill="currentColor">
-      <path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z" />
-    </svg>
-  )
-}
 
 /** Map of pipeline phase → Linear workflow-state name (spec 012). */
 type LinearStateMap = { todo: string; inProgress: string; readyToTest: string; done: string }
@@ -124,6 +123,168 @@ function LinearStateMapEditor(): React.JSX.Element {
           </span>
         ) : null}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Editor for the harness pipeline → GitHub status-label names (spec 005 F5).
+ * The embedded server flips exactly one of these labels on the issue as a
+ * gated run moves a feature (Todo → In Progress → Ready to Test → Done); a
+ * custom name inherits its phase's canonical color. Renders unconditionally
+ * (unlike the Linear editor, which needs a connected workspace): GitHub via
+ * `gh` is the default tracker.
+ */
+function GithubStatusLabelsEditor(): React.JSX.Element {
+  const mounted = useMountedRef()
+  const [map, setMap] = useState<GithubStateMap | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    void (async () => {
+      const m = (await githubGetStateMap()) as Partial<GithubStateMap> | null
+      if (!mounted.current || !m) return
+      setMap({
+        todo: m.todo ?? 'status/todo',
+        inProgress: m.inProgress ?? 'status/in-progress',
+        readyToTest: m.readyToTest ?? 'status/ready-to-test',
+        done: m.done ?? 'status/done'
+      })
+    })()
+  }, [mounted])
+
+  if (!map) return <></>
+
+  const field = (key: keyof GithubStateMap, label: string) => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <Input
+        value={map[key]}
+        onChange={(e) => {
+          setSaved(false)
+          setMap({ ...map, [key]: e.target.value })
+        }}
+        className="h-8 text-sm"
+      />
+    </label>
+  )
+
+  const handleSave = async (): Promise<void> => {
+    setSaving(true)
+    // The command returns the EFFECTIVE map (a blanked field snaps back to
+    // its canonical status/* default), so re-render from the response.
+    const effective = await githubSetStateMap({
+      todo: map.todo,
+      inProgress: map.inProgress,
+      readyToTest: map.readyToTest,
+      done: map.done
+    })
+    if (!mounted.current) return
+    setMap(effective)
+    setSaving(false)
+    setSaved(true)
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-border/50 bg-background/60 p-3">
+      <p className="text-sm font-medium text-foreground">Pipeline status labels</p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+        Labels the harness flips on an issue as it codes and verifies a feature — exactly one is
+        present at a time. Clearing a field restores the canonical{' '}
+        <span className="font-mono text-[10px]">status/*</span> name; custom names keep each
+        phase&apos;s color.
+      </p>
+      <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+        {field('todo', 'Backlog / Todo')}
+        {field('inProgress', 'Coding')}
+        {field('readyToTest', 'Ready to Test')}
+        {field('done', 'Done')}
+      </div>
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => void handleSave()} disabled={saving}>
+          {saving ? (
+            <>
+              <LoaderCircle className="mr-1.5 size-3.5 animate-spin" />
+              Saving…
+            </>
+          ) : (
+            'Save labels'
+          )}
+        </Button>
+        {saved ? (
+          <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="size-3.5" />
+            Saved
+          </span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Toggle for the harness browser-QA capability (spec 005 F3, D3 — default OFF).
+ * When on, the QA gate's `Auto` arm spawns an `agentum_browser`-driven QA agent
+ * even without `AGENTUM_BROWSER_VERIFY`; when off, projects with no `qa.sh` keep
+ * today's skip-pass. Mirrors the LinearStateMapEditor load flow + the McpPane
+ * optimistic-write toggle.
+ */
+function BrowserQaGateToggle(): React.JSX.Element {
+  const mounted = useMountedRef()
+  const [enabled, setEnabled] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void getHarnessSettings()
+      .then((s) => {
+        if (mounted.current) setEnabled(s.browserQaAgentEnabled)
+      })
+      .catch(() => {
+        // Leave the default-OFF value; the toggle still works and surfaces a
+        // write error if the server is unreachable.
+      })
+  }, [mounted])
+
+  const toggle = (value: boolean): void => {
+    // Optimistic: flip the UI, write the server flag, revert if it fails.
+    setEnabled(value)
+    setError(null)
+    void setHarnessSettings({ browserQaAgentEnabled: value }).catch((err: unknown) => {
+      if (!mounted.current) return
+      setEnabled(!value)
+      setError(err instanceof Error ? err.message : 'Could not update the browser QA setting.')
+    })
+  }
+
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/30 px-4 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <p className="text-sm font-medium">Harness browser QA agent</p>
+          <p className="text-xs text-muted-foreground">
+            Let gated runs verify features by spawning a QA agent that drives the in-app browser
+            (the <span className="font-mono text-[11px]">agentum_browser</span> tool). Off (the
+            default), projects without a <span className="font-mono text-[11px]">qa.sh</span> skip
+            the browser gate — turn this on for web projects you want QA&apos;d automatically.
+          </p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={enabled}
+          onClick={() => toggle(!enabled)}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors ${
+            enabled ? 'bg-foreground' : 'bg-muted-foreground/30'
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background shadow-sm transition-transform ${
+              enabled ? 'translate-x-4' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </div>
+      {error ? <p className="mt-1.5 text-xs text-destructive">{error}</p> : null}
     </div>
   )
 }
@@ -305,6 +466,10 @@ export function IntegrationsPane(): React.JSX.Element {
             )}
           </div>
         )}
+
+        {/* Rendered regardless of gh auth status — gh is the default tracker,
+            and the labels are plain config (no gh call happens here). */}
+        <GithubStatusLabelsEditor />
       </div>
 
       {/* GitLab */}
@@ -736,6 +901,10 @@ export function IntegrationsPane(): React.JSX.Element {
           </div>
         )}
       </div>
+
+      {/* Harness pipeline behavior (spec 005 F3) — sits beside the Linear
+          state-map config: both configure how gated runs drive a tracker/QA. */}
+      <BrowserQaGateToggle />
 
       <LinearApiKeyDialog
         open={linearDialogOpen}

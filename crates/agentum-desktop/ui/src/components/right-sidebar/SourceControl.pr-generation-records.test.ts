@@ -9,7 +9,7 @@ import {
   shouldApplyPullRequestGenerationResult,
   shouldHydratePullRequestGenerationResult,
   type PullRequestGenerationRecord
-} from './SourceControl'
+} from './source-control-pr-generation'
 
 const seed = {
   base: 'main',

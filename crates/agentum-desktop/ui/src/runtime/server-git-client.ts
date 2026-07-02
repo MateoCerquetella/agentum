@@ -123,7 +123,8 @@ export type GitUpstreamStatus = {
   behind: number
 }
 
-/** Restore tracked paths to HEAD (drops staged + worktree changes). */
+/** Drop changes to the given paths: tracked paths restore to HEAD (staged +
+ *  worktree), untracked paths/dirs are deleted (`git clean -fd`). */
 export function gitDiscard(sessionId: string, paths: string[]): Promise<void> {
   return postJson<void>(`/api/sessions/${sessionId}/git/discard`, { paths })
 }

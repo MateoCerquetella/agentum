@@ -368,7 +368,7 @@ export default function FeatureTipsModal(): JSX.Element | null {
                   command={AGENTUM_CLI_SKILL_INSTALL_COMMAND}
                   title="Skill setup"
                   ariaLabel="Agentum CLI skill install terminal"
-                  description="Press Enter to install the Agentum CLI skill. Orchestration is already on — it's a built-in MCP, no install needed."
+                  description="Press Enter to install the Agentum CLI skill — it adds scheduling and terminal control. Browser, computer use, and orchestration are already built into the agentum MCP."
                   terminalHeightPx={150}
                   terminalTopMarginPx={4}
                   descriptionPaddingClassName="px-4 py-2"

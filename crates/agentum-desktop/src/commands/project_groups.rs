@@ -1,5 +1,5 @@
+use super::timestamps::now_millis;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -23,13 +23,6 @@ pub struct ProjectGroup {
 
 fn map_err(error: impl std::fmt::Display) -> String {
     error.to_string()
-}
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|delta| delta.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn agentum_file(name: &str) -> Result<PathBuf, String> {

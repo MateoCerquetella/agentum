@@ -16,6 +16,7 @@ import {
   selectRuntimePaneTitlesForWorktree
 } from './worktree-card-status-inputs'
 import { selectWorktreeAgentActivitySummary } from './worktree-agent-activity-summary'
+import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 
 export type WorktreeSectionActivityState = Pick<
   AppState,
@@ -28,6 +29,7 @@ export type WorktreeSectionActivityState = Pick<
   | 'migrationUnsupportedByPtyId'
   | 'retainedAgentsByPaneKey'
   | 'awaitingInputByPaneKey'
+  | 'serverWorktreeActivityByWorktreeId'
 >
 
 export type WorktreeSectionActivitySummary = {
@@ -42,6 +44,33 @@ export type WorktreeSectionActivitySummary = {
 export const EMPTY_WORKTREE_SECTION_ACTIVITY: WorktreeSectionActivitySummary = {
   runningCount: 0,
   unreadCount: 0
+}
+
+/**
+ * Return `previous` when `next` carries identical per-group counts, so the
+ * consumer can keep a stable Map identity. The summaries are rebuilt on every
+ * agent-status epoch bump and passed as a prop to the memoized virtualized
+ * viewport — without identity reuse, every agent transition re-rendered the
+ * whole sidebar list even when no section count actually changed.
+ */
+export function reuseSectionActivitySummariesIfEqual(
+  previous: Map<string, WorktreeSectionActivitySummary> | null,
+  next: Map<string, WorktreeSectionActivitySummary>
+): Map<string, WorktreeSectionActivitySummary> {
+  if (!previous || previous.size !== next.size) {
+    return next
+  }
+  for (const [groupKey, summary] of next) {
+    const prev = previous.get(groupKey)
+    if (
+      !prev ||
+      prev.runningCount !== summary.runningCount ||
+      prev.unreadCount !== summary.unreadCount
+    ) {
+      return next
+    }
+  }
+  return previous
 }
 
 export function buildWorktreeSectionActivitySummaries({
@@ -102,6 +131,7 @@ function getSectionWorktreeStatus(
   worktreeId: string
 ): ReturnType<typeof resolveWorktreeStatus> {
   const agentSummary = selectWorktreeAgentActivitySummary(state, worktreeId)
+  const serverActivity = selectServerWorktreeActivity(state, worktreeId)
 
   // Why: collapsed headers must mirror the card dot semantics exactly; otherwise
   // a hidden section can advertise different activity than its visible cards.
@@ -113,6 +143,8 @@ function getSectionWorktreeStatus(
     hasPermission: agentSummary.hasPermission,
     hasLiveWorking: agentSummary.hasLiveWorking,
     hasLiveDone: agentSummary.hasLiveDone,
-    hasRetainedDone: agentSummary.hasRetainedDone
+    hasRetainedDone: agentSummary.hasRetainedDone,
+    isAlive: serverActivity.isAlive,
+    liveActivity: serverActivity.liveActivity
   })
 }

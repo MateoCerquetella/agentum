@@ -93,14 +93,14 @@ pub fn encode_frame(
 // the pane's input/navigation back to `Input.*` / `Page.*`. (009c-3 step 2.)
 // ============================================================================
 
-use std::time::Duration;
-
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use futures_util::{SinkExt as _, StreamExt as _};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
+
+use crate::cdp_http::discover_page_ws_url;
 
 /// Screencast knobs passed straight to `Page.startScreencast`. `format=jpeg,
 /// quality=90` match the pane's subscribe params (90 keeps text glyph edges
@@ -125,8 +125,11 @@ impl Default for ScreencastOptions {
         Self {
             format: FrameFormat::Jpeg,
             quality: 90,
-            max_width: 3840,
-            max_height: 2160,
+            // 5K. We now capture at 2× (see cdp_browser `--force-device-scale-factor`),
+            // so a 2× frame of a 2560×1440-CSS pane lands here. The old 4K cap capped
+            // the pane at ~1920×1080 CSS before scaling the 2× frame back toward 1×.
+            max_width: 5120,
+            max_height: 2880,
             every_nth_frame: 1,
         }
     }
@@ -429,37 +432,6 @@ pub fn metadata_from_cdp(md: &Value) -> FrameMetadata {
     }
 }
 
-/// Pick the first inspectable **page** target's `webSocketDebuggerUrl` from a
-/// CDP `GET /json` listing. Pure so the parse is unit-tested off a fixture.
-pub fn pick_page_ws_url(listing: &Value) -> Option<String> {
-    listing.as_array()?.iter().find_map(|t| {
-        let is_page = t.get("type").and_then(Value::as_str) == Some("page");
-        let url = t.get("webSocketDebuggerUrl").and_then(Value::as_str);
-        match (is_page, url) {
-            (true, Some(u)) => Some(u.to_string()),
-            _ => None,
-        }
-    })
-}
-
-/// Resolve the CDP page-target WebSocket URL for a browser exposing CDP at
-/// `cdp_http_base` (e.g. `http://127.0.0.1:9300`). Fetches `/json` and returns
-/// the first `type:"page"` target — the tab the agent drives and the user watches.
-pub(crate) async fn discover_page_ws_url(cdp_http_base: &str) -> Result<String> {
-    let url = format!("{}/json", cdp_http_base.trim_end_matches('/'));
-    let body: Value = reqwest::Client::new()
-        .get(&url)
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-        .with_context(|| format!("query CDP target list at {url}"))?
-        .json()
-        .await
-        .context("parse CDP /json listing")?;
-    pick_page_ws_url(&body)
-        .with_context(|| format!("no inspectable page target at {url} (browser has no open tab?)"))
-}
-
 /// Connect to the headless CDP browser at `cdp_http_base`, start a screencast on
 /// its page target, and run the bridge until either side closes:
 ///   - each `Page.screencastFrame` → ack back to CDP **immediately** (required, or
@@ -578,6 +550,7 @@ fn decode_cdp_frame(txt: &str, format: FrameFormat, seq: &mut u32) -> Option<(Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cdp_http::pick_page_ws_url;
 
     #[test]
     fn header_matches_the_ts_decoder_layout() {

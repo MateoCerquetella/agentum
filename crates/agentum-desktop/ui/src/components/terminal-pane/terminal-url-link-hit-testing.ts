@@ -1,6 +1,6 @@
 import type { IBufferLine, IBufferRange, IDisposable, Terminal } from '@xterm/xterm'
 import { openHttpLink } from '@/lib/http-link-routing'
-import { buildCandidateLogicalLinesForBufferPosition } from './terminal-file-link-hit-testing'
+import { buildCandidateLogicalLinesForBufferPosition, rangeContainsBufferPosition } from './terminal-file-link-hit-testing'
 import { rangeForParsedFileLink } from './wrapped-terminal-link-ranges'
 
 type UrlLinkHitTestDeps = {
@@ -52,7 +52,7 @@ function getTerminalScreenElement(terminal: Terminal): HTMLElement | null {
   return terminal.element?.querySelector('.xterm-screen') ?? null
 }
 
-function getBufferPositionForTerminalMouseEvent(
+export function getBufferPositionForTerminalMouseEvent(
   terminal: Terminal,
   event: MouseEvent
 ): { x: number; y: number } | null {
@@ -85,7 +85,13 @@ export function installHttpLinkClickFallback(
   deps: UrlLinkClickFallbackDeps
 ): IDisposable {
   const handleMouseUp = (event: MouseEvent): void => {
-    if (event.defaultPrevented || event.button !== 0 || !isTerminalLinkActivation(event)) {
+    // Why: do NOT bail on event.defaultPrevented. In an agent terminal with mouse
+    // tracking on, xterm consumes the click for its mouse report and
+    // preventDefaults the mouseup, and the WebLinksAddon never fires — so the old
+    // defaultPrevented guard made ⌘/Ctrl+click do nothing on URLs. We still open
+    // here; double-opening (addon + this fallback for one click) is prevented by
+    // openHttpLink's coalescing, not by skipping the click.
+    if (event.button !== 0 || !isTerminalLinkActivation(event)) {
       return
     }
 
@@ -94,10 +100,6 @@ export function installHttpLinkClickFallback(
       return
     }
 
-    // Why: xterm's WebLinksAddon only activates after hover state exists. This
-    // direct mouseup fallback preserves Cmd/Ctrl-click when the hover link was
-    // never established, while defaultPrevented avoids double-opening links
-    // that xterm already handled.
     const opened = openHttpLinkAtBufferPosition(terminal.buffer.active, position, terminal.cols, {
       worktreeId: deps.worktreeId,
       forceSystemBrowser: event.shiftKey
@@ -145,13 +147,3 @@ export function openHttpLinkAtBufferPosition(
   return false
 }
 
-function rangeContainsBufferPosition(
-  range: IBufferRange,
-  position: { x: number; y: number },
-  terminalColumns: number
-): boolean {
-  const lower = range.start.y * terminalColumns + range.start.x
-  const upper = range.end.y * terminalColumns + range.end.x
-  const current = position.y * terminalColumns + position.x
-  return lower <= current && current <= upper
-}

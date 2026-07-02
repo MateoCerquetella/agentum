@@ -11,15 +11,15 @@ mod state;
 
 use commands::{
     accounts, agent_status, app, browser, browser_native, cache, claude_usage, cli, clipboard,
-    codex_usage, crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, gl, hooks,
-    hosted_review, html_export, keybindings, linear, mobile, notebook, notifications, onboarding,
-    open_code_usage, permissions, pet, project_groups, pty, rate_limits, remote_workspace, repos,
-    runtime, server, session, settings, shell, shell_runtimes, skills, sparse_presets, speech, ssh,
-    star_nag, stats, telemetry, ui, updater, window, workspace_cleanup, workspace_ports,
-    workspace_space,
+    codex_usage, crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, github_labels, gl,
+    hooks, hosted_review, html_export, keybindings, linear, mobile, notebook, notifications,
+    onboarding, open_code_usage, permissions, pet, project_groups, pty, rate_limits,
+    remote_workspace, repos, runtime, server, session, settings, shell, shell_runtimes, skills,
+    sparse_presets, speech, ssh, star_nag, stats, telemetry, ui, updater, window,
+    workspace_cleanup, workspace_ports, workspace_space,
 };
 use state::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -60,6 +60,30 @@ pub fn run() {
         // instead of quitting the window. See `menu.rs`.
         .menu(menu::build)
         .on_menu_event(menu::on_menu_event)
+        // Native OS file drops are intercepted by Tauri at the window level and
+        // never reach the webview DOM, so the renderer's terminal drop pipeline
+        // can't see them on its own. Forward a Drop as the `ui-file-drop` event
+        // the UI already listens for (subscribe → @tauri-apps/api `listen`),
+        // tagged `target: "terminal"` with no tabId so it routes to the focused
+        // terminal pane (see use-terminal-pane-global-effects.ts). That pane
+        // references each path — local pastes the absolute path, SSH uploads to
+        // `.agentum/drops` first — so a dragged-in screenshot reaches the agent.
+        // Other drop regions (editor, sidebar) stay unwired, same as before.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if paths.is_empty() {
+                    return;
+                }
+                let paths: Vec<String> = paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                let _ = window.emit(
+                    "ui-file-drop",
+                    serde_json::json!({ "paths": paths, "target": "terminal" }),
+                );
+            }
+        })
         .setup(move |app| {
             let state = AppState::new().map_err(|error| {
                 Box::<dyn std::error::Error>::from(std::io::Error::other(error.to_string()))
@@ -95,6 +119,15 @@ pub fn run() {
             app.manage(server::ServerEndpoint {
                 url: format!("http://{addr}"),
                 token: None,
+            });
+
+            // Reap any Chromium left over from a previous run. Our per-worktree
+            // CDP browsers live in detached tmux sessions and can outlive both the
+            // app and their session, so without this they pile up (the user's
+            // "20+ orphaned Chrome processes"). Safe on a fresh launch: no agentum
+            // browser is running yet, so only orphans are killed. Non-blocking.
+            tauri::async_runtime::spawn(async {
+                agentum_server::cdp_browser::reap_orphaned_cdp_browsers().await;
             });
 
             // On-device speech-to-text state (Voice dictation). Models live under
@@ -276,6 +309,8 @@ pub fn run() {
             gh::gh_pr_check_details,
             gh::gh_pr_checks,
             gh::gh_count_work_items,
+            github_labels::github_get_state_map,
+            github_labels::github_set_state_map,
             gl::gl_list_labels,
             gl::gl_list_assignable_users,
             gl::gl_work_item_details,

@@ -37,7 +37,31 @@ async fn stream(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl Int
     // duplicate.
     let rx = state.bus.subscribe();
     let store = state.store.clone();
-    ws.on_upgrade(move |socket| run(socket, rx, store))
+    let clients = state.events_ws_clients.clone();
+    ws.on_upgrade(move |socket| async move {
+        // RAII count of live dashboard connections — the host-metrics ticker
+        // idles at zero. A guard (not inc/dec around run()) so a panicking
+        // handler can't leak a count and pin the sampler on forever.
+        let _guard = ClientCountGuard::new(clients);
+        run(socket, rx, store).await;
+    })
+}
+
+/// Increments on construction, decrements on drop. See
+/// [`crate::AppState::events_ws_clients`].
+struct ClientCountGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl ClientCountGuard {
+    fn new(count: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(count)
+    }
+}
+
+impl Drop for ClientCountGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 async fn run(

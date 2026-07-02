@@ -1,0 +1,146 @@
+import React from 'react'
+import { cn } from '@/lib/utils'
+import { Check, LoaderCircle } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { getStateLabel, getStateTone } from '@/lib/github-work-item-state'
+import type { GitHubReaction, GitHubWorkItem } from '@/shared/types'
+
+const REACTION_EMOJI: Record<GitHubReaction['content'], string> = {
+  '+1': '👍',
+  '-1': '👎',
+  laugh: '😄',
+  confused: '😕',
+  heart: '❤️',
+  hooray: '🎉',
+  rocket: '🚀',
+  eyes: '👀'
+}
+
+export function WorkItemStateBadge({
+  item,
+  className
+}: {
+  item: GitHubWorkItem
+  className?: string
+}): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium',
+        getStateTone(item),
+        className
+      )}
+    >
+      {getStateLabel(item)}
+    </span>
+  )
+}
+
+export function ReviewerAvatar({
+  login,
+  avatarUrl
+}: {
+  login: string
+  avatarUrl: string
+}): React.JSX.Element {
+  if (avatarUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        title={login}
+        className="size-6 shrink-0 rounded-full border border-border/50 bg-muted object-cover"
+      />
+    )
+  }
+  return (
+    <span
+      title={login}
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-border/50 bg-muted text-[10px] font-medium text-muted-foreground"
+    >
+      {login.slice(0, 1).toUpperCase()}
+    </span>
+  )
+}
+
+export function CommentReactions({
+  reactions
+}: {
+  reactions?: GitHubReaction[]
+}): React.JSX.Element | null {
+  const visibleReactions = (reactions ?? []).filter((reaction) => reaction.count > 0)
+  if (visibleReactions.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {visibleReactions.map((reaction) => (
+        <span
+          key={reaction.content}
+          className="inline-flex h-6 items-center gap-1 rounded-full border border-border/60 bg-muted/35 px-2 text-[12px] leading-none text-foreground"
+          aria-label={`${reaction.count} ${reaction.content} reaction${reaction.count === 1 ? '' : 's'}`}
+        >
+          <span aria-hidden="true">{REACTION_EMOJI[reaction.content]}</span>
+          <span className="tabular-nums">{reaction.count}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+export function PRViewedCheckbox({
+  checked,
+  pending,
+  filePath,
+  onToggle
+}: {
+  checked: boolean
+  pending: boolean
+  filePath: string
+  onToggle: () => void
+}): React.JSX.Element {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={checked}
+          aria-label={`${checked ? 'Unmark' : 'Mark'} ${filePath} as viewed`}
+          disabled={pending}
+          onClick={(event) => {
+            event.stopPropagation()
+            onToggle()
+          }}
+          className={cn(
+            'flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-[11px] text-muted-foreground transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            checked && 'text-foreground',
+            pending && 'cursor-default opacity-60'
+          )}
+        >
+          <span
+            className={cn(
+              'flex size-4 items-center justify-center rounded-sm border transition-colors',
+              checked
+                ? 'border-foreground bg-foreground text-background'
+                : 'border-muted-foreground/50 bg-background text-transparent'
+            )}
+          >
+            {pending ? (
+              <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
+            ) : checked ? (
+              <Check className="size-3" strokeWidth={3} />
+            ) : null}
+          </span>
+          <span>Viewed</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" sideOffset={4}>
+        {checked ? 'Unmark viewed' : 'Mark viewed'}
+      </TooltipContent>
+    </Tooltip>
+  )
+}

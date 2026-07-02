@@ -31,7 +31,7 @@ serde = { version = "1", features = ["derive"] }
 log = "0.4"
 # `unstable` enables multiwebview (Window::add_child) — the native in-window
 # browser pane embeds one child webview per browser page.
-tauri = { version = "2", features = ["tray-icon", "unstable"] }
+tauri = { version = "2", features = ["tray-icon", "unstable", "image-png"] }
 tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-clipboard-manager = "2"
@@ -47,6 +47,10 @@ anyhow = "1"
 thiserror = "2"
 portable-pty = "0.9"
 base64 = "0.22"
+# PNG-encode the clipboard's RGBA pixels when a screenshot is pasted into an
+# agent terminal (commands/ui.rs). A lean encoder is all we need — RGBA8 → PNG,
+# not the full `image` crate's codec zoo.
+png = "0.18"
 notify = "7"
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
@@ -82,8 +86,16 @@ futures-util = "0.3"
 # AXIsProcessTrustedWithOptions — the call that registers the app in the
 # Accessibility list and shows the system prompt. Pin to 0.10 to match the
 # core-foundation-sys that core-graphics 0.25 links against.
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # `elcapitan` exposes CGEvent::post_to_pid — computer-use types/keys into a
 # specific target app by pid rather than only the frontmost window.
 core-graphics = { version = "0.25", features = ["link", "elcapitan"] }
 core-foundation = "0.10"
+# Raw Objective-C messaging for the WKWebView `_setOverrideDeviceScaleFactor:`
+# SPI used by browser_native.rs to keep the in-app browser sharp on Retina when
+# the shipped (custom-scheme) WKWebView reports devicePixelRatio=1. Already in the
+# tree via wry; pinned here so we can `use objc2` directly.
+objc2 = "0.6"

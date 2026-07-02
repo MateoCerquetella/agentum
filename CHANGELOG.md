@@ -4,6 +4,92 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] — 2026-06-25
+
+### Added
+- **Chat can file tickets to Linear, not just GitHub.** The "Create issues" step
+  in Chat now has a GitHub/Linear toggle (shown when Linear is connected), so a
+  converged conversation can become Linear issues — each rendered with its
+  identifier (e.g. `ENG-42`) and URL. (`ChatPage.tsx`, `chat-client.ts`)
+
+### Changed
+- **`POST /api/chat/issues` takes a `provider`** (`github` default · `linear`)
+  and routes Linear creates through the existing `TaskSink::Linear`; the GitHub
+  path is unchanged. A chosen-but-unconnected tracker fails loudly with a typed
+  `no_linear` / `no_github_repo` 422 and an unknown provider is a 400 — never a
+  silent internal-board fallback. The Socratic interviewer prompt is now
+  tracker-neutral. (`routes/chat.rs`)
+
+> The board Kanban already rendered both GitHub and Linear, so no board change
+> was needed — this completes the Chat→ticket half for both trackers. (#112)
+
+## [0.30.0] — 2026-06-25
+
+### Fixed
+- **The in-app browser is now isolated per worktree for the DEFAULT (native)
+  engine too.** v0.28.0 only isolated the CDP/screencast browser; the default
+  native WKWebView still shared one session across worktrees, so opening a
+  browser in one worktree showed another's tabs/logins. Each worktree now gets
+  its own WKWebView data store (macOS/iOS ≥ 14/17), keyed by the worktree — so
+  cookies, logins, and storage no longer cross worktrees. (`browser_native.rs`,
+  `NativeBrowserPagePane.tsx`)
+
+### Added
+- **Browsers are listed in the sidebar** under each worktree card, beside the
+  agent and terminal rows — click a row to open that browser tab.
+  (`WorktreeCardBrowserRow.tsx`, `WorktreeCardAgents.tsx`)
+- **Drag a sidebar browser row onto another worktree card to move the browser
+  there.** Replaces the (non-working) tab-bar drag handle; the right-click
+  "Move to Worktree" menu stays. (`BrowserTab.tsx`)
+
+## [0.28.0] — 2026-06-25
+
+### Added
+- **Move a browser tab to another worktree.** Right-click a browser tab and pick
+  "Move to Worktree", or drag the tab's grip handle onto a worktree card in the
+  sidebar — the tab and its pages relocate to that worktree.
+  (`store/slices/browser.ts`, `BrowserTab.tsx`, `WorktreeCard.tsx`)
+
+### Fixed
+- **The in-app browser is now isolated per git worktree.** Opening a browser in
+  one worktree no longer shows another worktree's tabs: each worktree gets its
+  own headless Chromium, and that worktree's agent drives the same instance the
+  pane shows. On by default (opt out with `AGENTUM_BROWSER_PER_WORKTREE=0`), and a
+  deleted worktree tears its browser down. (`cdp_browser.rs`, `routes/sessions.rs`,
+  `routes/worktrees.rs`)
+- **⌘/Ctrl-click a URL in an agent terminal now opens it.** URL detection now
+  works inside agent and tmux terminal panes, not just plain shells.
+- **The sidebar worktree card lists plain terminals, not just agents** — a
+  freshly created terminal shows up immediately instead of being hidden until a
+  live PTY/agent attaches. (#107)
+
+## [0.27.0] — 2026-06-25
+
+### Fixed
+- **Send browser annotations to a running agent even when its terminal isn't
+  open.** The annotation tray's "Send to an agent in this worktree" only offered
+  agents whose terminal tab was already open with a live PTY, so a running agent
+  in the worktree showed as unsendable ("no agent active" / "Terminal is no
+  longer available"). A fresh, idle agent now stays **eligible**; selecting it
+  activates its terminal tab, waits for the PTY to spawn, then submits the
+  annotations. Genuinely un-sendable states still disable the row with a real
+  reason ("Agent is working", "Agent status is stale").
+  (`running-agent-targets.ts`, `ui.ts`)
+- **`agentum_browser` no longer silently drops a concurrent `navigate`.** Two
+  CDP browser ops issued at once (e.g. `navigate` alongside `close_context`)
+  raced the driver's shared per-op connection and global state, so a navigation
+  could no-op while still returning a success-shaped result *without*
+  `http_status`. Browser ops are now serialized per browser, so concurrent MCP
+  calls queue instead of corrupt. (`cdp_driver.rs`)
+
+### Changed
+- **`agentum_browser` `open`/`tabs` drive the same CDP browser as every other
+  op.** They previously went to the desktop webview bridge, so `tabs` always
+  returned `[]` and a second `open` handed back a tab id that `navigate`/
+  `screenshot` ignored. `open` now creates a real CDP page target and `tabs`
+  lists them; the `tab` argument is honored by every page op (an alias of
+  `target`), so multi-tab automation works headless. (`cdp_driver.rs`)
+
 ## [0.25.1] — 2026-06-25
 
 ### Fixed

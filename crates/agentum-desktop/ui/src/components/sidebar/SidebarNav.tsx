@@ -1,5 +1,6 @@
 import React from 'react'
 import {
+  BookText,
   Columns3,
   MessagesSquare,
   Radar,
@@ -100,6 +101,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
+  const openWikiPage = useAppStore((s) => s.openWikiPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
@@ -190,6 +192,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
+  const wikiActive = activeView === 'wiki'
   // Why: Mission Control is now the always-on home, so its "needs you" badge is
   // always tracked (no longer gated behind the old experimental Agents button).
   const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
@@ -213,6 +216,7 @@ const SidebarNav = React.memo(function SidebarNav() {
         active={harnessActive}
         onClick={openHarnessPage}
       />
+      <PrimaryNavItem icon={BookText} label="Wiki" active={wikiActive} onClick={openWikiPage} />
 
       {/* Secondary utilities: external task trackers, the goals pipeline, and
           fuzzy search. Tasks + Goals fold into Board in Phase 2/3. */}

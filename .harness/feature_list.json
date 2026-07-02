@@ -1,0 +1,28 @@
+{
+  "agent_tool": "claude",
+  "agent_yolo": true,
+  "max_retries": 2,
+  "settle_grace_secs": 8,
+  "settle_timeout_secs": 1200,
+  "qa_mode": "auto",
+  "features": [
+    {
+      "id": "wiki-contract",
+      "name": "Wiki on-disk contract + parser + prompt builder",
+      "description": "Define the .agentum/wiki/ contract and its PURE helpers in agentum-server. Add WikiPageMeta {slug,title} + a WikiIndex {schema_version, pages} (serde rename_all camelCase) and parse_wiki_index(json) -> Result that ACCEPTS a valid index and REJECTS missing/garbled input (mirror harness/helpers.rs:132 parse_qa_verdict). Add the generation-prompt builder (architecture.md §3.3: identity + gather_repo_context seed + output dir + required pages overview/architecture[mermaid]/<module> + index.json contract + [[Title]] links + 'do not stop / do not ask the human'). Unit test: good index parses; garbled fails. Gate: cargo test -p agentum-server --lib. Refs: ai/specs/001-autowiki/architecture.md §3.1, §3.3, §4.",
+      "state": "done"
+    },
+    {
+      "id": "wiki-routes",
+      "name": "routes/wiki.rs (list / page / generate) registered + authed",
+      "description": "Add crates/agentum-server/src/routes/wiki.rs (template = routes/notes.rs:13). GET /api/wiki?workdir= => Empty | Running | Ready{schemaVersion,generatedAt,pages} | Failed{error} (from index.json + .status.json). GET /api/wiki/{slug}?workdir= => guard slug ^[a-z0-9][a-z0-9-]*$ then read <wiki_dir>/<slug>.md (404 if absent). POST /api/wiki/generate {workdir} => {sessionId}. Generate = the run_qa_agent_gate recipe (architecture.md §3.2): expand_workdir (routes/util.rs:19) -> clear .agentum/wiki/ + write .agentum/.gitignore('wiki/') + .status.json{running} -> build Session with flags vec![YOLO_MARKER] like spawn_qa_agent (harness/drive.rs:423-461) -> spawn_agent_into_pane (routes/sessions/provision.rs:91) -> tokio::spawn { inject_prompt -> wait_for_settle -> teardown_session -> readback: valid index ⇒ stamp generatedAt + rm .status.json, else .status.json{failed,error} } -> return {sessionId} immediately. Widen to pub(crate): wait_for_settle (drive.rs:956), teardown_session (drive.rs:931), gather_repo_context (chat.rs:207). Register in lib.rs (~:277) next to notes; DO NOT touch is_public (auth.rs:74). Gate: a route test round-trips a hand-written fixture .agentum/wiki/ (list + a page's content) AND rejects a traversal slug; cargo test -p agentum-server --lib. Refs: architecture.md §3.2, §5.",
+      "state": "done"
+    },
+    {
+      "id": "wiki-view",
+      "name": "Desktop Wiki view (TOC + MarkdownPreview + mermaid + nav)",
+      "description": "Add the desktop Wiki surface. New crates/agentum-desktop/ui/src/components/wiki/WikiPage.tsx: 2-pane (left TOC from index.json pages; right standalone <MarkdownPreview content filePath scrollCacheKey markdownDocuments onOpenDocument/> per architecture.md §3.4 — reuse AS-IS, no extraction) with explained EMPTY state (single 'Generate wiki' button), RUNNING state (tie to sessionId / /api/events), and FAILURE state (show .status.json error — AC-9, never half-empty). New runtime/wiki-client.ts: getWiki/getWikiPage/generateWiki over runtime/server-http.ts. Wire the 'wiki' view (architecture.md §3.5): add 'wiki' to the activeView union AND all 5 previousViewBefore* unions + a previousViewBeforeWiki field (store/slices/ui.ts:440-445); openWikiPage/closeWikiPage (~:1033); lazy WikiPage import (App.tsx:221) + switch case (~:1755); a <PrimaryNavItem label='Wiki' onClick={openWikiPage}/> in SidebarNav.tsx (~:201). Internal [[Title]] links navigate via onOpenDocument (map pages to MarkdownDocument with name=title). Gate: npm run build --prefix crates/agentum-desktop/ui (green) + qa.sh browser checks. Refs: architecture.md §3.4, §3.5, §4.",
+      "state": "ready_to_test"
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import type {
   ClaudeUsageSummary
 } from '../../../../shared/claude-usage-types'
 import type { CodexUsageDailyPoint, CodexUsageSummary } from '../../../../shared/codex-usage-types'
+import { formatTokens } from '@/lib/stats-format'
 
 export type ClaudeShareData = {
   provider: 'claude'
@@ -14,23 +15,6 @@ export type CodexShareData = {
   provider: 'codex'
   summary: CodexUsageSummary
   daily: CodexUsageDailyPoint[]
-}
-
-export function formatTokens(value: number): string {
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}M`
-  }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`
-  }
-  return value.toLocaleString()
-}
-
-export function formatCost(value: number | null): string {
-  if (value === null) {
-    return 'n/a'
-  }
-  return value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`
 }
 
 export function formatDateRange(range: string): string {

@@ -76,37 +76,35 @@ export function StatsPane(): React.JSX.Element {
 
   return (
     <div className="space-y-5">
-      {summary ? (
+      {/* Why: stats_get_summary is a zeroed placeholder until real app-telemetry lands.
+          Showing the empty-state banner above live usage charts is confusing, so we
+          render the app-cards section only when there is actual telemetry data. */}
+      {summary &&
+      (summary.totalAgentsSpawned > 0 ||
+        summary.totalPRsCreated > 0 ||
+        summary.firstEventAt !== null) ? (
         <div className="space-y-3">
-          {summary.totalAgentsSpawned === 0 && summary.totalPRsCreated === 0 ? (
-            <div className="flex min-h-[8rem] items-center justify-center rounded-lg border border-dashed border-border/60 bg-card/30 text-sm text-muted-foreground">
-              Start your first agent to begin tracking
-            </div>
-          ) : (
-            <>
-              <div className="grid grid-cols-3 gap-3">
-                <StatCard
-                  label="Agents spawned"
-                  value={summary.totalAgentsSpawned.toLocaleString()}
-                  icon={<Bot className="size-4" />}
-                />
-                <StatCard
-                  label="Time agents worked"
-                  value={formatDuration(summary.totalAgentTimeMs)}
-                  icon={<Clock className="size-4" />}
-                />
-                <StatCard
-                  label="PRs created"
-                  value={summary.totalPRsCreated.toLocaleString()}
-                  icon={<GitPullRequest className="size-4" />}
-                />
-              </div>
-              {formatTrackingSince(summary.firstEventAt) && (
-                <p className="px-1 text-xs text-muted-foreground">
-                  {formatTrackingSince(summary.firstEventAt)}
-                </p>
-              )}
-            </>
+          <div className="grid grid-cols-3 gap-3">
+            <StatCard
+              label="Agents spawned"
+              value={summary.totalAgentsSpawned.toLocaleString()}
+              icon={<Bot className="size-4" />}
+            />
+            <StatCard
+              label="Time agents worked"
+              value={formatDuration(summary.totalAgentTimeMs)}
+              icon={<Clock className="size-4" />}
+            />
+            <StatCard
+              label="PRs created"
+              value={summary.totalPRsCreated.toLocaleString()}
+              icon={<GitPullRequest className="size-4" />}
+            />
+          </div>
+          {formatTrackingSince(summary.firstEventAt) && (
+            <p className="px-1 text-xs text-muted-foreground">
+              {formatTrackingSince(summary.firstEventAt)}
+            </p>
           )}
         </div>
       ) : null}

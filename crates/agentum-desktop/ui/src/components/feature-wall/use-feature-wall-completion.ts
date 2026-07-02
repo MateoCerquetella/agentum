@@ -39,6 +39,11 @@ export function useFeatureWallCompletion(
   isOpen: boolean,
   hasConnectedTaskSource: boolean,
   isCheckingTaskSources: boolean,
+  // These two flags now mean "the capability is enabled via the agentum MCP"
+  // (the orchestration server gate / the Browser Use toggle), not "a skill is
+  // installed" — the skills were removed in v0.35.0. Param names are kept so the
+  // session-depth + completion-progress consumers that share these keys don't
+  // need to churn.
   orchestrationSkillInstalled: boolean,
   browserUseSkillInstalled: boolean,
   options: { onTourDepthSummaryChange?: (summary: FeatureWallTourDepthSummary) => void } = {}

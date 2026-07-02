@@ -28,8 +28,31 @@ export function registerHttpLinkStoreAccessor(fn: StoreAccessor): void {
 // is only invoked on target.kind === 'external' (and for the terminal's http
 // branch). Shift+Cmd/Ctrl is the escape hatch: callers pass forceSystemBrowser
 // to bypass the setting entirely.
+// Why: one ⌘/Ctrl+click on a terminal URL can reach openHttpLink twice — the
+// WebLinksAddon's click handler AND the mouseup fallback both fire (the fallback
+// no longer bails on defaultPrevented, so it still opens in agent terminals whose
+// mouse-tracking consumed the click). Coalesce identical opens within a short
+// window so the user gets ONE tab, not two. (The file-path path de-dupes the same
+// way, via openDetectedFilePath's request-id guard.)
+const HTTP_LINK_OPEN_COALESCE_MS = 150
+let lastHttpLinkOpen: { url: string; at: number } | null = null
+
+/** Test-only: clear the open-coalescing state between cases. */
+export function resetRecentHttpLinkOpensForTests(): void {
+  lastHttpLinkOpen = null
+}
+
 export function openHttpLink(url: string, opts: OpenHttpLinkOptions = {}): void {
   const { worktreeId, forceSystemBrowser } = opts
+  const now = Date.now()
+  if (
+    lastHttpLinkOpen &&
+    lastHttpLinkOpen.url === url &&
+    now - lastHttpLinkOpen.at < HTTP_LINK_OPEN_COALESCE_MS
+  ) {
+    return
+  }
+  lastHttpLinkOpen = { url, at: now }
   const state = storeAccessor?.()
   const remoteRuntimeActive = Boolean(state?.settings?.activeRuntimeEnvironmentId?.trim())
   const routeToAgentum =

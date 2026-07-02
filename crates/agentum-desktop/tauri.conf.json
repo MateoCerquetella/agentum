@@ -1,6 +1,6 @@
 {
   "productName": "Agentum",
-  "version": "0.26.0",
+  "version": "0.52.0",
   "identifier": "dev.agentum.app",
   "build": {
     "frontendDist": "ui/dist",

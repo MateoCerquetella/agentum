@@ -33,6 +33,7 @@ import { VoicePane } from './VoicePane'
 import { SshPane } from './SshPane'
 import { ExperimentalPane } from './ExperimentalPane'
 import { AgentsPane } from './AgentsPane'
+import { McpPane } from './McpPane'
 import { OrchestrationPane } from './OrchestrationPane'
 import { BrowserVerificationLoopPane } from './BrowserVerificationLoopPane'
 import { AccountsPane } from './AccountsPane'
@@ -71,7 +72,9 @@ import {
 } from './settings-load-performance'
 
 const SETTINGS_NAV_GROUPS = [
-  { id: 'capabilities', title: 'AI Capabilities' },
+  // Internal id stays 'capabilities' (persisted deep links, section.group
+  // matching); the label is the agentum-MCP-facing name shown in the sidebar.
+  { id: 'capabilities', title: 'Agent MCP' },
   { id: 'setup', title: 'Set Up' },
   { id: 'workflows', title: 'Workflows' },
   { id: 'interface', title: 'Interface' },
@@ -843,7 +846,11 @@ function Settings(): React.JSX.Element {
                 >
                   {isSectionMounted('agents-automation') ? (
                     <div className="space-y-10">
-                      <OrchestrationPane />
+                      <McpPane />
+
+                      <div className="border-t border-border/60 pt-8">
+                        <OrchestrationPane />
+                      </div>
 
                       <div className="border-t border-border/60 pt-8">
                         <BrowserVerificationLoopPane />

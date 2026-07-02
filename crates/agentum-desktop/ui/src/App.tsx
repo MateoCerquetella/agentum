@@ -25,6 +25,11 @@ import { SYNC_FIT_PANES_EVENT, TOGGLE_TERMINAL_PANE_EXPAND_EVENT } from '@/const
 import { syncZoomCSSVar } from '@/lib/ui-zoom'
 import { canShowRightSidebarForView } from '@/lib/right-sidebar-visibility'
 import { buildAppFontFamily } from '@/lib/app-font-family'
+import {
+  focusActiveSessionSurface,
+  focusWorktreeSidebar,
+  isFocusInWorktreeSidebar
+} from '@/lib/focus-session-surface'
 import { toast } from 'sonner'
 import { Toaster } from '@/components/ui/sonner'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
@@ -37,6 +42,7 @@ import {
 import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
+import { useServerWorktreeActivity } from './hooks/useServerWorktreeActivity'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
 import Sidebar from './components/Sidebar'
 import { shutdownBufferCaptures } from './components/terminal-pane/shutdown-buffer-captures'
@@ -213,18 +219,21 @@ function WindowControls(): React.JSX.Element {
 // at the render site keeps the (CSS-hidden) workbench area blank for the one
 // frame it takes the chunk to resolve.
 const Terminal = lazy(() => import('./components/Terminal'))
-const Landing = lazy(() => import('./components/Landing'))
 // The "Board" sidebar entry IS the Tasks view (the GitHub/Linear issue list) —
 // Tasks was renamed to Board (#48 redo). The standalone Kanban (BoardPage) was
 // removed; Chat creates GitHub issues that show up here.
 const TaskPage = lazy(() => import('./components/TaskPage'))
-const ActivityPrototypePage = lazy(() => import('./components/activity/ActivityPrototypePage'))
+const MissionControlPage = lazy(() => import('./components/mission-control/MissionControlPage'))
+const WikiPage = lazy(() => import('./components/wiki/WikiPage'))
+// Project Hub (ADE redesign): per-project Chat / Wiki / Tasks / Sessions tabs,
+// opened by clicking a project header in the sidebar.
+const ProjectHubPage = lazy(() => import('./components/project-hub/ProjectHubPage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const CommandPalette = lazy(() => import('./components/CommandPalette'))
-const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
+const ThemeCommandPalette = lazy(() => import('./components/ThemeCommandPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
 const WorkspaceCleanupDialog = lazy(
   () => import('./components/workspace-cleanup/WorkspaceCleanupDialog')
@@ -392,6 +401,10 @@ function App(): React.JSX.Element {
 
   // Subscribe to IPC push events
   useIpcEvents()
+  // Keep the sidebar's per-worktree running/working state in sync with the
+  // server (alive sessions + watchdog activity), so agents don't read as idle
+  // after an app relaunch before their pane is opened.
+  useServerWorktreeActivity()
   // Why: retention must run at App level so the inline per-card agents list
   // always sees retained entries. If retention ran inside the sidebar-card
   // subtree, "done" agents would vanish any time the user collapsed a card's
@@ -1020,13 +1033,18 @@ function App(): React.JSX.Element {
     activeWorktreeId !== null &&
     !hasTabBar &&
     effectiveActiveTabExpanded
-  // Why (Phase 1 nav shell, #48): the left rail must render on EVERY view so the
-  // app can never trap the user in a full-page takeover. This previously hid the
+  // Why (Phase 1 nav shell, #48): the left rail renders on most views so the
+  // app can never trap the user in a full-page takeover — it previously hid the
   // rail for settings/activity/skills/harness/goals, stranding the user with no
-  // visible navigation (the only escape was a secret Cmd+B). The rail (nav +
-  // worktree list) now stays put on every view — the same way the `tasks` view
-  // already rendered alongside the sidebar.
-  const showSidebar = true
+  // visible navigation (the only escape was a secret Cmd+B).
+  //
+  // Settings is the deliberate exception: it's a self-contained full-page view
+  // with its OWN navigation (SettingsSidebar) plus a Back button and Esc-to-close,
+  // so it can never strand the user. Keeping the worktree rail beside it made
+  // Settings render cramped *inside* the workspace next to the session list
+  // instead of taking the whole page — so hide the worktree rail for Settings
+  // and let it own the full content area.
+  const showSidebar = activeView !== 'settings'
   // Why: only the terminal workspace replaces the full-width titlebar with
   // split-column chrome. Full-page navigation views keep the draggable app
   // titlebar so their page-level controls can live in that window strip.
@@ -1168,6 +1186,24 @@ function App(): React.JSX.Element {
         return
       }
 
+      // Cmd/Ctrl+E — flip keyboard focus between the active session and the
+      // worktree list (VS Code's "focus explorer / focus editor" muscle memory).
+      // Reveals the sidebar first when it is collapsed so the jump always lands.
+      if (matchShortcut('view.toggleSidebarFocus')) {
+        e.preventDefault()
+        notifyTerminalCapture('view.toggleSidebarFocus')
+        if (isFocusInWorktreeSidebar()) {
+          focusActiveSessionSurface()
+        } else {
+          const store = useAppStore.getState()
+          if (!store.sidebarOpen) {
+            store.setSidebarOpen(true)
+          }
+          focusWorktreeSidebar()
+        }
+        return
+      }
+
       // Command palette + quick-open — the "search" palettes. In the Electron
       // build these fired from the main-process before-input-event; the Tauri
       // shell has no equivalent, so without these renderer handlers the search
@@ -1185,25 +1221,13 @@ function App(): React.JSX.Element {
         return
       }
 
-      // Cmd+Shift+P — settings command palette. Mirrors the worktree.palette
-      // toggle above; the proven Cmd+J path drives navigation from here.
+      // Cmd+Shift+P — THE command palette (VS Code muscle memory): view/agent
+      // navigation, the Color Theme picker, and settings search in one surface.
+      // Absorbed the former Cmd+K "Go to" palette (#210) so Cmd+K stays the
+      // terminal's clear-pane chord. Same toggle pattern as Cmd+J.
       if (matchShortcut('settings.commandPalette')) {
         e.preventDefault()
         notifyTerminalCapture('settings.commandPalette')
-        const store = useAppStore.getState()
-        if (store.activeModal === 'settings-command-palette') {
-          store.closeModal()
-        } else {
-          store.openModal('settings-command-palette')
-        }
-        return
-      }
-
-      // Cmd+K — the nav command palette: jump to any view or agent from
-      // anywhere (Phase 1 nav shell, #48). Same toggle pattern as Cmd+J.
-      if (matchShortcut('view.commandPalette')) {
-        e.preventDefault()
-        notifyTerminalCapture('view.commandPalette')
         const store = useAppStore.getState()
         if (store.activeModal === 'command-palette') {
           store.closeModal()
@@ -1742,9 +1766,14 @@ function App(): React.JSX.Element {
                               issues) — Tasks renamed to Board (#48 redo). The standalone
                               Kanban 'board' view was removed. */}
                           {activeView === 'tasks' ? <TaskPage /> : null}
-                          {activeView === 'activity' ? <ActivityPrototypePage /> : null}
+                          {activeView === 'activity' ? <MissionControlPage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
-                          {activeView === 'terminal' && !activeWorktreeId ? <Landing /> : null}
+                          {activeView === 'wiki' ? <WikiPage /> : null}
+                          {activeView === 'project' ? <ProjectHubPage /> : null}
+                          {/* No workspace selected on the terminal view → fall back to
+                              Mission Control (Landing.tsx removed; the dashboard needs no
+                              workspace) so the user is never stranded on a blank pane. */}
+                          {activeView === 'terminal' && !activeWorktreeId ? <MissionControlPage /> : null}
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
                     </div>
@@ -1754,8 +1783,9 @@ function App(): React.JSX.Element {
               {/* Why: keep RightSidebar mounted even when closed so that its
               child components (FileExplorer, SourceControl, etc.) and their
               filesystem watchers + cached directory trees survive across
-              open/close toggles. Unmount on the tasks view since that
-              surface is intentionally distraction-free. */}
+              open/close toggles. Unmount on the full-page views (tasks, Chat,
+              settings, …) since those surfaces are intentionally
+              distraction-free — see canShowRightSidebarForView. */}
               {showRightSidebarControls ? (
                 <RecoverableRenderErrorBoundary
                   boundaryId="right-sidebar"
@@ -1824,16 +1854,6 @@ function App(): React.JSX.Element {
                 <WorktreeJumpPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
-            {resolvedMountedLazyModalIds.has('settings-command-palette') ? (
-              <RecoverableRenderErrorBoundary
-                boundaryId="modal.settings-command-palette"
-                surface="modal"
-                resetKey={activeModal === 'settings-command-palette'}
-                compact
-              >
-                <SettingsCommandPalette />
-              </RecoverableRenderErrorBoundary>
-            ) : null}
             {resolvedMountedLazyModalIds.has('command-palette') ? (
               <RecoverableRenderErrorBoundary
                 boundaryId="modal.command-palette"
@@ -1842,6 +1862,16 @@ function App(): React.JSX.Element {
                 compact
               >
                 <CommandPalette />
+              </RecoverableRenderErrorBoundary>
+            ) : null}
+            {resolvedMountedLazyModalIds.has('theme-palette') ? (
+              <RecoverableRenderErrorBoundary
+                boundaryId="modal.theme-palette"
+                surface="modal"
+                resetKey={activeModal === 'theme-palette'}
+                compact
+              >
+                <ThemeCommandPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
             {resolvedMountedLazyModalIds.has('feature-wall') ? (

@@ -35,10 +35,8 @@ import type {
 import { getConnectionId } from '@/lib/connection-context'
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
-import {
-  buildResolvePullRequestConflictsPrompt,
-  pickDefaultSourceControlAgent
-} from './SourceControl'
+import { pickDefaultSourceControlAgent } from './SourceControl'
+import { buildResolvePullRequestConflictsPrompt } from './source-control-prompts'
 import { buildFixBrokenChecksPrompt, getBrokenChecks } from '../pr-checks-fix-prompt'
 import { CreatePullRequestDialog } from './CreatePullRequestDialog'
 import type {

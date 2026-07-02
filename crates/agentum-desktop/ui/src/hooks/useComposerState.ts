@@ -13,8 +13,7 @@ import {
   parseGitHubIssueOrPRLink,
   normalizeGitHubLinkQuery
 } from '@/lib/github-links'
-import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { stashPendingSessionPrompt } from '@/lib/pending-session-prompt'
+import { openCreatedWorkspace } from '@/lib/open-created-workspace'
 import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../shared/tui-agent-selection'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
@@ -52,6 +51,9 @@ import {
   getLinkedWorkItemPromptContext,
   resolveQuickCreateLinkedWorkItemPrompt
 } from '@/lib/linked-work-item-context'
+import { buildGithubIssueContextSnapshot } from '@/lib/github-linked-work-item'
+import { createGithubIssue, scaffoldSpecFromIssue } from '@/runtime/github-issue-client'
+import { startGatedWork } from '@/runtime/harness-client'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
   getFullComposerCreateDisabled,
@@ -104,6 +106,9 @@ export type UseComposerStateOptions = {
   initialPrompt?: string
   initialLinkedWorkItem?: LinkedWorkItemSummary | null
   initialWorkspaceStatus?: WorkspaceStatus
+  /** Spec 005 F1 (AC 3): open with the "Start gated run" toggle armed — the
+   *  Tasks page row action pre-fills the composer this way. */
+  initialStartGatedRun?: boolean
   /** Seed the Start-from selection when the composer opens. Used by the
    *  Create-from → Quick fallback path so a PR pick that needs a setup
    *  decision still lands with the resolved PR head as the base branch. */
@@ -174,6 +179,32 @@ export type ComposerCardProps = {
   onRemoveAttachment: (pathValue: string) => void
   linkedWorkItem: LinkedWorkItemSummary | null
   onRemoveLinkedWorkItem: () => void
+  /** True when the composer should offer "Create GitHub issue": nothing is
+   *  linked yet and the selected repo is a local git repo (spec 004 F3). */
+  canCreateGithubIssue: boolean
+  createIssueOpen: boolean
+  onCreateIssueOpenChange: (open: boolean) => void
+  createIssueTitle: string
+  onCreateIssueTitleChange: (value: string) => void
+  createIssueBody: string
+  onCreateIssueBodyChange: (value: string) => void
+  createIssueSubmitting: boolean
+  createIssueError: string | null
+  onCreateIssueSubmit: () => void
+  /** True when the "Scaffold spec" toggle applies: a github.com issue is
+   *  linked and the target is a local git repo (spec 004 F4, D5). */
+  canScaffoldSpec: boolean
+  /** Opt-in, off by default (D5): after the worktree is created, write
+   *  `.agentum-harness/specs/<n>-<slug>/spec.md` from the linked issue. */
+  scaffoldSpec: boolean
+  onScaffoldSpecChange: (value: boolean) => void
+  /** Spec 005 F1: "Start gated run" — same eligibility gate as the scaffold
+   *  toggle (linked github.com issue + local repo). When armed the linked
+   *  issue becomes the spec and the Harness Engine drives the worktree; the
+   *  scaffold toggle hides (subsumed — the server converge-scaffolds). */
+  canStartGatedRun: boolean
+  startGatedRun: boolean
+  onStartGatedRunChange: (value: boolean) => void
   linkPopoverOpen: boolean
   onLinkPopoverOpenChange: (open: boolean) => void
   linkQuery: string
@@ -269,6 +300,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     initialPrompt = '',
     initialLinkedWorkItem = null,
     initialWorkspaceStatus,
+    initialStartGatedRun,
     initialBaseBranch,
     persistDraft,
     onCreated,
@@ -509,6 +541,21 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
     return initialLinkedWorkItem?.type === 'mr' ? initialLinkedWorkItem.number : null
   })
+  // Spec 004 F3: inline "Create GitHub issue" mini-form. Transient by design —
+  // never persisted into the long-running draft (a half-typed issue is not
+  // workspace state; the *linked* result is, via linkedWorkItem above).
+  const [createIssueOpen, setCreateIssueOpen] = useState(false)
+  const [createIssueTitle, setCreateIssueTitle] = useState('')
+  const [createIssueBody, setCreateIssueBody] = useState('')
+  const [createIssueSubmitting, setCreateIssueSubmitting] = useState(false)
+  const [createIssueError, setCreateIssueError] = useState<string | null>(null)
+  // Spec 004 F4 (D5): opt-in, off by default. Not draft-persisted — trust in
+  // the deterministic transform is earned per creation, not remembered.
+  const [scaffoldSpec, setScaffoldSpec] = useState(false)
+  // Spec 005 F1: "Start gated run" — the linked issue becomes the spec and the
+  // Harness Engine drives gated agents in the new worktree. Armed up front by
+  // the Tasks page row action (AC 3); like scaffoldSpec, never draft-persisted.
+  const [startGatedRun, setStartGatedRun] = useState(Boolean(initialStartGatedRun))
   const [baseBranch, setBaseBranch] = useState<string | undefined>(
     persistDraft ? newWorkspaceDraft?.baseBranch : initialBaseBranch
   )
@@ -1362,6 +1409,117 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
   }, [name])
 
+  // Spec 004 F3: the affordance only renders when nothing is linked yet and
+  // the selected repo is a *local git* repo — issue creation resolves the slug
+  // from the local origin and runs the local `gh`.
+  const canCreateGithubIssue = Boolean(
+    !linkedWorkItem && selectedRepo && selectedRepoIsGit && !selectedRepo.connectionId
+  )
+
+  const handleCreateIssueOpenChange = useCallback(
+    (open: boolean): void => {
+      setCreateIssueOpen(open)
+      setCreateIssueError(null)
+      if (open) {
+        // Pre-seed the title from what the user already typed (workspace name,
+        // else the prompt's first line) so filing is one review + click.
+        setCreateIssueTitle((current) => {
+          if (current.trim()) {
+            return current
+          }
+          return name.trim() || (agentPrompt.trim().split('\n')[0]?.trim() ?? '')
+        })
+      }
+    },
+    [agentPrompt, name]
+  )
+
+  const handleCreateIssueSubmit = useCallback(async (): Promise<void> => {
+    const title = createIssueTitle.trim()
+    const repoPath = selectedRepo?.path
+    if (createIssueSubmitting) {
+      return
+    }
+    if (!title) {
+      setCreateIssueError('Give the issue a title.')
+      return
+    }
+    if (!repoPath) {
+      setCreateIssueError('Pick a project first.')
+      return
+    }
+    setCreateIssueSubmitting(true)
+    setCreateIssueError(null)
+    try {
+      const body = createIssueBody.trim()
+      const created = await createGithubIssue({
+        title,
+        ...(body ? { body } : {}),
+        workdir: repoPath
+      })
+      // Reuse the standard linked-item application (linkedIssue slot, suggested
+      // workspace name), then overwrite linkedWorkItem to attach the typed body
+      // as linked context — the body is in hand, so no refetch (mirrors
+      // buildGithubIssueLinkedWorkItem's snapshot shape).
+      applyLinkedWorkItem({
+        type: 'issue',
+        number: created.number,
+        title,
+        url: created.url
+      } as unknown as GitHubWorkItem)
+      const summary: LinkedWorkItemSummary = {
+        type: 'issue',
+        number: created.number,
+        title,
+        url: created.url
+      }
+      setLinkedWorkItem(
+        body
+          ? {
+              ...summary,
+              linkedContext: {
+                provider: 'github',
+                version: 1,
+                renderedText: buildGithubIssueContextSnapshot({
+                  number: created.number,
+                  title,
+                  url: created.url,
+                  body
+                })
+              }
+            }
+          : summary
+      )
+      setCreateIssueOpen(false)
+      setCreateIssueTitle('')
+      setCreateIssueBody('')
+    } catch (error) {
+      // Zero state change on failure — the form stays filled for a retry.
+      setCreateIssueError(
+        error instanceof Error ? error.message : 'Could not create the GitHub issue.'
+      )
+    } finally {
+      setCreateIssueSubmitting(false)
+    }
+  }, [
+    applyLinkedWorkItem,
+    createIssueBody,
+    createIssueSubmitting,
+    createIssueTitle,
+    selectedRepo
+  ])
+
+  // Spec 004 F4 (D5): the toggle only applies to a linked *github.com issue*
+  // targeting a local git repo — the scaffold endpoint writes into the new
+  // worktree's local path.
+  const linkedGithubIssueLink = useMemo(
+    () => (linkedWorkItem?.type === 'issue' ? parseGitHubIssueOrPRLink(linkedWorkItem.url) : null),
+    [linkedWorkItem]
+  )
+  const canScaffoldSpec = Boolean(
+    linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit && !selectedRepo?.connectionId
+  )
+
   const handleNameValueChange = useCallback(
     (nextName: string): void => {
       // Why: linked GitHub items should keep refreshing the suggested workspace
@@ -1916,6 +2074,79 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     [updateWorktreeMeta]
   )
 
+  // Spec 004 F4: after createWorktree succeeds (both submit paths), write the
+  // linked issue's spec into the new worktree when the user opted in (D5).
+  // Non-fatal by contract: a scaffold failure must never roll back or block
+  // the freshly created workspace.
+  const maybeScaffoldSpecFromIssue = useCallback(
+    async (
+      worktree: { path: string },
+      item: LinkedWorkItemSummary | null | undefined
+    ): Promise<void> => {
+      if (!scaffoldSpec || !item || item.type !== 'issue') {
+        return
+      }
+      // Re-derive the gate from the submitted item: github.com issues only,
+      // local targets only (the endpoint writes to a local path).
+      const link = parseGitHubIssueOrPRLink(item.url)
+      if (!link || link.type !== 'issue' || selectedRepo?.connectionId) {
+        return
+      }
+      try {
+        await scaffoldSpecFromIssue({
+          workdir: worktree.path,
+          number: item.number,
+          slug: `${link.slug.owner}/${link.slug.repo}`
+        })
+      } catch (error) {
+        console.error('Failed to scaffold a spec from the linked issue', error)
+        toast.error('Workspace created, but the spec scaffold failed.')
+      }
+    },
+    [scaffoldSpec, selectedRepo]
+  )
+
+  // Spec 005 F1: with "Start gated run" armed, after createWorktree succeeds
+  // (both submit paths) drive the server-side orchestration — converge-scaffold
+  // + plan + Todo + register + run — against the new worktree. Mirrors
+  // maybeScaffoldSpecFromIssue's non-fatal contract (AC 5): a failure toasts
+  // but never rolls back the created workspace. `agent` is the composer's
+  // selection, written into the run's agent_tool knob post-plan (D2).
+  const maybeStartGatedRun = useCallback(
+    async (
+      worktree: { path: string },
+      item: LinkedWorkItemSummary | null | undefined,
+      agent: TuiAgent | null
+    ): Promise<void> => {
+      if (!startGatedRun || !item || item.type !== 'issue') {
+        return
+      }
+      // Re-derive the gate from the submitted item: github.com issues only,
+      // local targets only (the start-work route writes to a local path).
+      const link = parseGitHubIssueOrPRLink(item.url)
+      if (!link || link.type !== 'issue' || selectedRepo?.connectionId) {
+        return
+      }
+      try {
+        const result = await startGatedWork({
+          workdir: worktree.path,
+          number: item.number,
+          slug: `${link.slug.owner}/${link.slug.repo}`,
+          ...(agent ? { agentTool: agent } : {})
+        })
+        if (result.alreadyRunning) {
+          // The friendly state (C5), not an error: a live run already owns
+          // this worktree and was left untouched.
+          toast.info('A gated run is already driving this workspace.')
+        }
+      } catch (error) {
+        console.error('Failed to start the gated run', error)
+        toast.error('Workspace created, but the gated run could not start.')
+      }
+    },
+    [startGatedRun, selectedRepo]
+  )
+
   const submit = useCallback(async (): Promise<void> => {
     if (
       !repoId ||
@@ -1977,7 +2208,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
             linkedPromptContext.linkedUrls,
             linkedPromptContext.linkedContextBlocks
           )
+      // Spec 005 F1: armed AND eligible for the submitted item (github.com
+      // issue, local repo). Suppresses the issueCommand automation at its
+      // source (one of D2's three skips) and routes the post-create side
+      // effect to the gated-run orchestration instead of the D5 scaffold.
+      const submitGatedRun =
+        startGatedRun &&
+        submitLinkedWorkItem?.type === 'issue' &&
+        parseGitHubIssueOrPRLink(submitLinkedWorkItem.url)?.type === 'issue' &&
+        !selectedRepo?.connectionId
       const submitShouldRunIssueAutomation =
+        !submitGatedRun &&
         enableIssueAutomation &&
         submitLinkedIssueNumber !== null &&
         issueCommandTemplate.length > 0 &&
@@ -2035,6 +2276,15 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // Why: linked source metadata is already included in createWorktree.
       // Re-saving it here can trigger slow post-create PR push-target lookups.
       await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
+      if (submitGatedRun) {
+        // Spec 005 F1 (AC 1): the server converge-scaffolds + plans + runs the
+        // engine — the D5 scaffold call is skipped when the toggle is armed.
+        await maybeStartGatedRun(worktree, submitLinkedWorkItem, tuiAgent)
+      } else {
+        // Spec 004 F4 (opt-in): write the linked issue's spec into the new
+        // worktree before the agent opens, so it can start from the spec.
+        await maybeScaffoldSpecFromIssue(worktree, submitLinkedWorkItem)
+      }
 
       const issueCommand =
         submitShouldRunIssueAutomation && issueCommandTrustDecision === 'run'
@@ -2045,21 +2295,22 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
               })
             }
           : undefined
-      // Why: creating a workspace no longer auto-launches an agent. Stash any
-      // prompt the user typed so the "Start a session" picker can deliver it as
-      // an editable draft once an agent is chosen — otherwise it would be lost.
-      // Then activate + reveal the worktree (branch selected, user lands on it);
-      // `skipCreatedAgentStartup` stops the activation fallback from relaunching
-      // the agent the composer stamped, so the WorkspaceAgentLauncher picker
-      // shows instead. Repo `setup`/`defaultTabs`/`issueCommand` still apply —
-      // those are project config, not the agent.
-      stashPendingSessionPrompt(worktree.id, submitStartupPrompt)
-      activateAndRevealWorktree(worktree.id, {
-        sidebarRevealBehavior: 'auto',
+      // Why: the composer already let the user pick the agent — open it directly
+      // instead of bouncing them to the "Start a session" picker to pick again.
+      // openCreatedWorkspace launches the selected agent (delivering the typed
+      // prompt as an editable draft) and only falls back to the picker when no
+      // agent was chosen. Repo `setup`/`defaultTabs`/`issueCommand` still apply —
+      // those are project config, not the agent. With a gated run armed (spec
+      // 005 D2) every plain delivery is suppressed — the engine's sessions are
+      // the only agents in the worktree.
+      openCreatedWorkspace({
+        worktreeId: worktree.id,
+        agent: tuiAgent,
+        prompt: submitStartupPrompt,
         setup: result.setup,
         defaultTabs: result.defaultTabs,
-        issueCommand,
-        skipCreatedAgentStartup: true
+        issueCommand: submitGatedRun ? undefined : issueCommand,
+        gatedRun: submitGatedRun
       })
       setSidebarOpen(true)
       if (persistDraft) {
@@ -2082,6 +2333,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     clearNewWorkspaceDraft,
     createWorktree,
     applyWorktreeMeta,
+    maybeScaffoldSpecFromIssue,
+    maybeStartGatedRun,
+    startGatedRun,
     enableIssueAutomation,
     issueCommandTemplate,
     effectiveLinkedPR,
@@ -2223,6 +2477,23 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
+        // Spec 005 F1: armed AND eligible for the submitted item (github.com
+        // issue, local repo) — mirrors the full submit path's derivation.
+        const submitGatedRun =
+          startGatedRun &&
+          submitLinkedWorkItem?.type === 'issue' &&
+          parseGitHubIssueOrPRLink(submitLinkedWorkItem.url)?.type === 'issue' &&
+          !selectedRepo?.connectionId
+        if (submitGatedRun) {
+          // The server converge-scaffolds + plans + runs the engine; the D5
+          // scaffold call is skipped when the toggle is armed (AC 1). Runs
+          // before the skip-session branch so the gated run starts either way.
+          await maybeStartGatedRun(worktree, submitLinkedWorkItem, agent)
+        } else {
+          // Spec 004 F4 (opt-in): shared with the full submit path — runs before
+          // the skip-session branch so the spec lands either way.
+          await maybeScaffoldSpecFromIssue(worktree, submitLinkedWorkItem)
+        }
 
         // Why: "Don't start a session" — the worktree is created (and remembers
         // its agent via createdWithAgent) but no tmux session/agent is launched
@@ -2238,25 +2509,23 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           return
         }
 
-        // Why: quick create no longer auto-launches the agent — it lands on the
-        // "Start a session" picker (WorkspaceAgentLauncher) so the user picks
-        // what to start. Resolve any linked/typed prompt and stash it so the
-        // picker can deliver it as an editable draft once an agent is chosen;
-        // otherwise the text would be silently dropped. Rich linked context wins
-        // over URL fallback; typed-only Linear entries use the note.
+        // Why: the user picked the agent in the quick-create form — open it
+        // directly instead of landing on the redundant "Start a session" picker.
+        // openCreatedWorkspace launches the selected agent (delivering any
+        // linked/typed prompt as an editable draft) and only falls back to the
+        // picker when no agent was chosen. Rich linked context wins over URL
+        // fallback; typed-only Linear entries use the note.
         const { prompt: quickPrompt, draftPrompt: quickDraftPrompt } =
           resolveQuickCreateLinkedWorkItemPrompt(submitLinkedWorkItem, trimmedNote)
-        stashPendingSessionPrompt(worktree.id, quickDraftPrompt || quickPrompt)
-
-        // Why: activate + reveal so the new branch is selected and the user
-        // lands on the picker. `skipCreatedAgentStartup` stops the activation
-        // fallback from relaunching the stamped agent. Repo setup/default-tabs
-        // still apply — they are project config, not the agent.
-        activateAndRevealWorktree(worktree.id, {
-          sidebarRevealBehavior: 'auto',
+        openCreatedWorkspace({
+          worktreeId: worktree.id,
+          agent,
+          prompt: quickDraftPrompt || quickPrompt,
           setup: result.setup,
           defaultTabs: result.defaultTabs,
-          skipCreatedAgentStartup: true
+          // Spec 005 D2: a gated run suppresses the plain deliveries — the
+          // engine's sessions are the only agents in the worktree.
+          gatedRun: submitGatedRun
         })
         setSidebarOpen(true)
         if (persistDraft) {
@@ -2273,6 +2542,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     },
     [
       applyWorktreeMeta,
+      maybeScaffoldSpecFromIssue,
+      maybeStartGatedRun,
+      startGatedRun,
       baseBranch,
       branchNameOverride,
       branchNameOverridePreservesNameEdits,
@@ -2384,6 +2656,23 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setAttachmentPaths((current) => current.filter((currentPath) => currentPath !== pathValue)),
     linkedWorkItem,
     onRemoveLinkedWorkItem: handleRemoveLinkedWorkItem,
+    canCreateGithubIssue,
+    createIssueOpen,
+    onCreateIssueOpenChange: handleCreateIssueOpenChange,
+    createIssueTitle,
+    onCreateIssueTitleChange: setCreateIssueTitle,
+    createIssueBody,
+    onCreateIssueBodyChange: setCreateIssueBody,
+    createIssueSubmitting,
+    createIssueError,
+    onCreateIssueSubmit: () => void handleCreateIssueSubmit(),
+    canScaffoldSpec,
+    scaffoldSpec,
+    onScaffoldSpecChange: setScaffoldSpec,
+    // Spec 005 F1: identical eligibility derivation to the D5 scaffold toggle.
+    canStartGatedRun: canScaffoldSpec,
+    startGatedRun,
+    onStartGatedRunChange: setStartGatedRun,
     linkPopoverOpen,
     onLinkPopoverOpenChange: handleLinkPopoverChange,
     linkQuery,

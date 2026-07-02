@@ -39,6 +39,20 @@ fn webview_label(browser_page_id: &str) -> String {
     format!("{LABEL_PREFIX}{safe}")
 }
 
+/// Stable 16-byte WKWebView data-store id for a worktree, so each worktree's
+/// native browser keeps its OWN cookies / logins / storage instead of sharing
+/// one global session (the root cause of "worktree B shows worktree A's
+/// browser"). Derived from the worktree id via SHA-256 (first 16 bytes) so it's
+/// deterministic across launches. All browser tabs in the same worktree share
+/// this store; a different worktree gets a different one.
+fn worktree_data_store_id(worktree_id: &str) -> [u8; 16] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(worktree_id.as_bytes());
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&digest[..16]);
+    id
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct BrowserWebviewBounds {
     pub x: f64,
@@ -72,12 +86,53 @@ fn get_browser_webview(app: &AppHandle, browser_page_id: &str) -> Option<tauri::
     app.get_webview(&webview_label(browser_page_id))
 }
 
+/// Pin the native browser webview to the display's true backing scale so it
+/// renders at device resolution (sharp) on Retina. A WKWebView whose
+/// configuration carries a custom URL-scheme handler — which ours do (the
+/// app-wide `agentumgrab` scheme, alongside the shipped `tauri://` main webview)
+/// — can report `deviceScaleFactor = 1` on a HiDPI display, so WebKit rasterizes
+/// the WHOLE page (text + graphics) at 1× and macOS upscales it 2× → blurry. The
+/// stable `_setOverrideDeviceScaleFactor:` SPI (used by Electron, Playwright, and
+/// WebKit's own test harness since macOS 10.11) sets WebKit's internal device
+/// scale — the authoritative source of `window.devicePixelRatio` — which the
+/// public `layer.contentsScale` cannot. A no-op when the scale is already
+/// correct, so it is safe to apply unconditionally.
+///
+/// The scale is read from the webview's OWN `NSWindow.backingScaleFactor` (the
+/// authoritative, per-display value) rather than trusting the passed
+/// `fallback_scale` — which comes from Tauri's `window.scale_factor()` and can
+/// report 1 on the shipped build (the same unreliable source the screencast pane
+/// already had to abandon). `fallback_scale` is used only before the view is in a
+/// window (early create); the on-load re-pin then reads the real value.
+pub(crate) fn force_device_scale(webview: &tauri::Webview, fallback_scale: f64) {
+    // NO-OP (native rendering). WKWebView handles HiDPI natively: its layer's
+    // contentsScale follows the window's backing scale, so it rasterizes at device
+    // resolution AND lays out at the frame's point size — sharp and reflowing to the
+    // pane, "like any browser". The `_setOverrideDeviceScaleFactor:` override that
+    // v0.32.0 added (to chase a reported dpr=1) instead made the shipped child
+    // webview render compressed/chunky. Removing the override is the fix the user
+    // asked for ("resolución nativa, que se adapte al size"). The call sites are
+    // kept so the override can be reinstated behind a flag if a real dpr=1 case
+    // resurfaces, but by default we let WebKit do what it already does correctly.
+    let _ = (webview, fallback_scale);
+}
+
+/// The main window's backing scale factor (2.0 on Retina; 1.0 on a standard
+/// display), or 2.0 if it can't be read — the scale we pin the browser webview to.
+fn main_window_scale(app: &AppHandle) -> f64 {
+    app.get_window("main")
+        .and_then(|w| w.scale_factor().ok())
+        .filter(|s| *s > 0.0)
+        .unwrap_or(2.0)
+}
+
 /// Create (or reveal) the native webview for a browser page at the given
 /// window-relative logical bounds, navigated to `url`.
 #[tauri::command]
 pub fn browser_webview_open(
     app: AppHandle,
     browser_page_id: String,
+    worktree_id: String,
     url: String,
     bounds: BrowserWebviewBounds,
 ) -> Result<(), String> {
@@ -87,6 +142,9 @@ pub fn browser_webview_open(
             .set_bounds(bounds.rect())
             .map_err(|e| e.to_string())?;
         let _ = webview.show();
+        // Re-pin device scale on reveal (e.g. the window moved to a display with
+        // a different backing scale while this tab was hidden).
+        force_device_scale(&webview, main_window_scale(&app));
         return Ok(());
     }
 
@@ -95,6 +153,9 @@ pub fn browser_webview_open(
         .ok_or_else(|| "main window not found".to_string())?;
     let label = webview_label(&browser_page_id);
     let event_page_id = browser_page_id.clone();
+    // Per-worktree session: this worktree's own WKWebView data store, so its
+    // browser doesn't share cookies / logins / storage with other worktrees.
+    let data_store_id = worktree_data_store_id(&worktree_id);
 
     // Webview creation must run on the main thread on macOS; commands execute
     // on the async runtime, so hop over and relay the result back.
@@ -102,11 +163,24 @@ pub fn browser_webview_open(
     app.run_on_main_thread(move || {
         let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(parsed))
             .user_agent(BROWSER_USER_AGENT)
+            // Each worktree gets its OWN data store (macOS/iOS >= 14/17; a no-op
+            // on other OSes) so two worktrees never share one browser session.
+            .data_store_identifier(data_store_id)
             .on_page_load(move |webview, payload| {
                 let event = match payload.event() {
                     PageLoadEvent::Started => "started",
                     PageLoadEvent::Finished => "finished",
                 };
+                // Re-pin the device scale once the page has loaded. A WKWebView with
+                // a custom URL-scheme handler resets to deviceScaleFactor=1 on each
+                // navigation, so the create-time pin is undone by the time the page
+                // paints → blurry/chunky on Retina, every load, on every display.
+                // Re-applying on Finished (the view is in its window by now, so
+                // force_device_scale reads the real backing scale) is what actually
+                // makes the in-app browser render at device resolution.
+                if matches!(payload.event(), PageLoadEvent::Finished) {
+                    force_device_scale(&webview, 2.0);
+                }
                 let _ = webview.app_handle().emit_to(
                     "main",
                     "browser-page-load",
@@ -130,6 +204,12 @@ pub fn browser_webview_open(
     .map_err(|e| e.to_string())?;
     rx.recv().map_err(|e| e.to_string())??;
 
+    // Pin the freshly-created webview to the display's true backing scale so it
+    // renders sharp on Retina (see `force_device_scale`).
+    if let Some(child) = get_browser_webview(&app, &browser_page_id) {
+        force_device_scale(&child, main_window_scale(&app));
+    }
+
     // macOS WKWebView child webviews added via `add_child` can stay black until
     // a relayout pass forces them to composite — on first paint the view exists,
     // loads, and is scriptable, but the window shows only the dark pane beneath.
@@ -152,6 +232,10 @@ pub fn browser_webview_open(
                     };
                     let _ = webview.set_bounds(nudged.rect());
                     let _ = webview.set_bounds(bounds.rect());
+                    // Re-pin device scale after the relayout settles — covers the
+                    // case where the webview was created before the window's
+                    // backing scale was established.
+                    force_device_scale(&webview, main_window_scale(&app_main));
                 }
             });
         });

@@ -1,4 +1,5 @@
 import type { HostedReviewInfo, HostedReviewQueueSummary } from './hosted-review'
+import { unresolvedThreadCount } from './hosted-review-threads'
 import type { PRCheckDetail, PRComment } from './types'
 
 export type HostedReviewFromGitLabInfoArgs = {
@@ -38,20 +39,6 @@ function parseGitLabIdentity(url: string): GitLabIdentityParts {
     // Why: queue badges should degrade gracefully for hand-entered/self-hosted URLs.
     return { host: 'gitlab.com', owner: 'unknown', repo: 'unknown' }
   }
-}
-
-function unresolvedThreadCount(comments?: PRComment[]): number | null {
-  if (comments === undefined) {
-    return null
-  }
-  const unresolved = new Set<string>()
-  for (const comment of comments) {
-    if (!comment.threadId || comment.isResolved !== false) {
-      continue
-    }
-    unresolved.add(comment.threadId)
-  }
-  return unresolved.size
 }
 
 function deriveChecksStatus(

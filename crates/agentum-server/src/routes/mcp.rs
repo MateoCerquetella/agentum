@@ -19,18 +19,98 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::AppState;
+use crate::error::ApiError;
 
 /// MCP protocol version we default to when a client doesn't pin one. We echo
 /// the client's requested version when present (below) for max compatibility.
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// Server-level guidance surfaced to every connecting agent via the MCP
+/// `initialize` `instructions` field. Tailored by whether this is the desktop app
+/// (a browser the user can SEE exists) or a headless daemon. The browser steer is
+/// the important part: agents otherwise default to claude-in-chrome / the `agentum`
+/// shell CLI / Playwright and drive a browser the user can't see — or hit "no
+/// browser tab open" because the shell CLI has no tab-create. `agentum_browser`'s
+/// `open` is the only thing that creates a VISIBLE tab.
+fn mcp_instructions(has_desktop_bridge: bool) -> &'static str {
+    if has_desktop_bridge {
+        "agentum exposes this desktop app's control plane as MCP tools.\n\n\
+         BROWSER: for ANY web/browser task, use the `agentum_browser` tool — it drives the \
+         browser the user is watching live in this app. Open a page with op `open` and a `url` \
+         (this creates a VISIBLE tab and returns its id); add `split:\"right\"` (or left/up/down) \
+         to place the browser BESIDE the agent; then drive it with navigate / click / fill / \
+         snapshot / screenshot. Do NOT use claude-in-chrome, Playwright, chrome-devtools, or the \
+         `agentum` shell CLI for browser work in this app — they drive a browser the user cannot \
+         see, or cannot open a tab. `agentum_browser` is the first (and only) browser tool to \
+         reach for here; start with `open`.\n\n\
+         Other tools: agentum_list_sessions / agentum_list_worktrees inspect this app's agents; \
+         agentum_send_message / agentum_check_messages are the agent mailbox."
+    } else {
+        "agentum exposes this server's control plane as MCP tools. For browser automation use the \
+         `agentum_browser` tool (it drives a server-side headless Chromium here — there is no GUI \
+         on this daemon). agentum_list_sessions / agentum_list_worktrees inspect agents; \
+         agentum_send_message / agentum_check_messages are the agent mailbox."
+    }
+}
+
+/// Master switch (default ON) for whether agentum's own MCP server is wired into
+/// the agents agentum launches. Read at provision time in `mcp_provision::provision`;
+/// written by the desktop Settings → Agent MCP toggle via `/api/mcp/settings`.
+/// When off, NO agentum tools (sessions, worktrees, browser, computer,
+/// orchestration, harness) reach any agent. Absent = on, so existing setups are
+/// unchanged. (The orchestration gate still nests under this.)
+pub const MCP_ENABLED_SETTING: &str = "mcp.enabled";
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/mcp", post(handle).get(handle_get))
+    Router::new()
+        .route("/mcp", post(handle).get(handle_get))
+        .route(
+            "/api/mcp/settings",
+            get(get_mcp_settings).put(put_mcp_settings),
+        )
+}
+
+/// The agentum-MCP master-switch state — what the desktop toggle reflects and
+/// what `mcp_provision::provision` reads to decide whether to wire the server.
+#[derive(Serialize)]
+struct McpSettings {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct McpSettingsReq {
+    enabled: bool,
+}
+
+/// `GET /api/mcp/settings` — is agentum's MCP wired into agents? (default on)
+async fn get_mcp_settings(State(state): State<AppState>) -> Result<Json<McpSettings>, ApiError> {
+    let enabled = state
+        .store
+        .setting_get_bool(MCP_ENABLED_SETTING, true)
+        .await?;
+    Ok(Json(McpSettings { enabled }))
+}
+
+/// `PUT /api/mcp/settings` — flip the master switch. Takes effect on the next
+/// agent launch (provisioning is launch-time, unlike the per-call orchestration
+/// gate), so already-running agents keep the tools they were launched with.
+async fn put_mcp_settings(
+    State(state): State<AppState>,
+    Json(req): Json<McpSettingsReq>,
+) -> Result<Json<McpSettings>, ApiError> {
+    state
+        .store
+        .setting_set_bool(MCP_ENABLED_SETTING, req.enabled)
+        .await?;
+    Ok(Json(McpSettings {
+        enabled: req.enabled,
+    }))
 }
 
 /// We don't push server-initiated messages, so there's no SSE channel to open.
@@ -137,6 +217,11 @@ async fn dispatch(
                 "protocolVersion": pv,
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "agentum", "version": state.version },
+                // Top-level guidance surfaced to every connecting agent. The browser
+                // steer is the point: without it agents reach for claude-in-chrome /
+                // the `agentum` shell CLI / Playwright and either drive a browser the
+                // user can't see or hit "no browser tab open" (the CLI has no tab-create).
+                "instructions": mcp_instructions(state.desktop_bridge.is_some()),
             }))
         }
         "ping" => Ok(json!({})),
@@ -301,12 +386,17 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         },
         {
             "name": "agentum_browser",
-            "description": "Drive agentum's built-in browser webview — the agentum-cli \
-                browser skill. Pass `op` and its params: open (url) — opens a NEW tab \
+            "description": "FIRST-CHOICE browser tool in the agentum desktop app — drives the \
+                browser the user is watching live in the pane. Use this directly; do NOT shell \
+                out to the `agentum` CLI for browser work (it has no tab-create) and do NOT use \
+                claude-in-chrome / Playwright / chrome-devtools here. Pass `op` and its params: \
+                open (url) — opens a NEW tab \
                 navigated to url and returns its `tab` id; tabs — lists open tabs; \
                 navigate (url, wait_until?) → {http_status, final_url, title} | \
                 snapshot (returns interactive element refs + a generation) | click \
                 (ref or selector) | fill (ref or selector, text, submit?) | \
+                scroll (direction up|down|left|right, amount?) — wheel-scroll the page \
+                (or whatever scroller is under the viewport center) | \
                 screenshot | node_at_point (x, y, capture?) — resolve the DOM element \
                 at a viewport pixel, returning its clip + label (+ a sharp element PNG \
                 when capture:true); used by the in-pane annotate picker | \
@@ -331,13 +421,16 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 annotate (selector, comment, intent?) — attach a design-feedback \
                 annotation to an element (intent: change|fix|question|approve), which \
                 shows in the browser tray and is returned by `annotations`. \
-                Start with `open` when no tab is listed by `tabs`. Requires the agentum \
-                desktop app. (For headless browser automation an agent should use the \
-                Playwright MCP instead.)",
+                Start with `open` when no tab is listed by `tabs` — `open` also creates the \
+                visible pane, so it works even when nothing is open yet (and `open` with \
+                `split` places the browser beside the agent). By DEFAULT these ops drive the \
+                VISIBLE in-app browser the user sees — set `headless:true` (or \
+                AGENTUM_BROWSER_HEADLESS=1) ONLY for QA / no-GUI, which drives a hidden \
+                server-side Chromium the user CANNOT see.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|screenshot|node_at_point|get_console|wait|eval|new_context|close_context|reap_contexts|connect_host|annotations|grab|annotate" },
+                    "op": { "type": "string", "description": "open|tabs|navigate|snapshot|click|fill|scroll|screenshot|node_at_point|get_console|wait|eval|new_context|close_context|reap_contexts|connect_host|annotations|grab|annotate|set_split_ratio" },
                     "url": { "type": "string", "description": "Target URL for `open`/`navigate`" },
                     "tab": { "type": "string", "description": "Tab id to act on (default: the active tab)" },
                     "selector": { "type": "string", "description": "CSS selector for `click`/`fill`/`grab`/`annotate`" },
@@ -355,6 +448,8 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "x": { "type": "number", "description": "`node_at_point`: viewport X (CSS px) to hit-test" },
                     "y": { "type": "number", "description": "`node_at_point`: viewport Y (CSS px) to hit-test" },
                     "capture": { "type": "boolean", "description": "`node_at_point`: also capture a sharp PNG of the resolved element (default false)" },
+                    "direction": { "type": "string", "description": "`scroll`: up|down|left|right (default down)" },
+                    "amount": { "type": "number", "description": "`scroll`: distance in CSS px (default 600 ≈ one screenful)" },
                     "min_level": { "type": "string", "description": "`get_console`: minimum level to return — info|warning|error (default warning)" },
                     "since_generation": { "type": "integer", "description": "`get_console`: only entries since this snapshot generation (default 0 = all)" },
                     "wait_until": { "type": "string", "description": "`navigate`: load|domcontentloaded|network_idle (default load)" },
@@ -365,7 +460,10 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "target": { "type": "string", "description": "Route the op to a specific per-task context page (the `target` from `new_context`); omit for the shared active page" },
                     "browser_context_id": { "type": "string", "description": "`close_context`: the context id from `new_context` to dispose" },
                     "host": { "type": "string", "description": "`connect_host`: SSH host name/id to launch a headless Chromium on (over `ssh -L`); returns a `cdpPort`" },
-                    "cdpPort": { "type": "integer", "description": "Drive a browser already reachable at 127.0.0.1:<port> (e.g. the `cdpPort` from `connect_host`) instead of the local one" }
+                    "cdpPort": { "type": "integer", "description": "Drive a browser already reachable at 127.0.0.1:<port> (e.g. the `cdpPort` from `connect_host`) instead of the local one" },
+                    "headless": { "type": "boolean", "description": "Drive a hidden server-side Chromium instead of the visible in-app browser (default false). Use for QA / no-GUI; the user won't see it" },
+                    "split": { "type": "string", "description": "`open`: place the new browser pane BESIDE the worktree's agent (side by side) instead of as a stacked tab — left|right|up|down (e.g. right = browser to the right of the agent)" },
+                    "ratio": { "type": "number", "description": "Split size 0–1 for `open`+`split` and for `set_split_ratio`: the fraction of space given to the LEFT/TOP pane (default 0.5 = even). With split=right the agent is the left pane, so 0.6 = agent 60% / browser 40%" }
                 },
                 "required": ["op"],
                 "additionalProperties": true,
@@ -449,6 +547,21 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                     "workdir": { "type": "string", "description": "Project directory to check" }
                 },
                 "required": ["workdir"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_report_status",
+            "description": "Report a work item's pipeline phase to its tracker: GitHub = flip the status/* label, Linear = move the workflow state, board = move the card column. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, ready_to_test, done).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "provider": { "type": "string", "enum": ["github", "linear", "board"] },
+                    "id": { "type": "string", "description": "The tracker's stable handle: board card key (AG-12), Linear identifier (ENG-42), or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
+                    "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear/board." },
+                    "phase": { "type": "string", "enum": ["todo", "in_progress", "ready_to_test", "done"] }
+                },
+                "required": ["provider", "phase"],
                 "additionalProperties": false,
             },
         },
@@ -537,6 +650,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_plan" => tool_harness_plan(&args).await,
         "agentum_harness_check" => tool_harness_check(&args).await,
         "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
+        "agentum_report_status" => tool_report_status(state, &args).await,
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -724,17 +838,39 @@ async fn tool_list_tasks(state: &AppState, args: &Value) -> anyhow::Result<Strin
     Ok(serde_json::to_string_pretty(&json!({ "tasks": tasks }))?)
 }
 
-/// `agentum_browser`: the page-driving ops (navigate/snapshot/screenshot/click/
-/// fill) go SERVER-SIDE over CDP to the persistent Chromium — so they return REAL
-/// page state and work headless (no desktop app / GUI webview needed), which is
-/// the QA-agent case. The rest (open/tabs/grab/annotate/annotations) stay on the
-/// desktop bridge, which owns the tab lifecycle + annotation store.
+/// `agentum_browser`: drive the **headless CDP Chromium that the screencast pane
+/// streams** — the SAME browser the user sees. The page-driving / perception ops
+/// (`open`/`navigate`/`tabs`/`click`/`fill`/`snapshot`/`screenshot`/`eval`/…) go to
+/// the CDP driver, resolved to the worktree's browser via `worktreeId` (or, for a
+/// contextless caller, the foreground pane's `cdpPort`), so they act live on the
+/// visible browser. Only the renderer-owned annotation ops (`grab`/`annotate`/
+/// `annotations`) round-trip to the desktop bridge. `headless:true` (or
+/// `AGENTUM_BROWSER_HEADLESS=1`) forces a hidden server-side Chromium for QA / a
+/// no-desktop daemon; the bridge is likewise skipped when no desktop is attached.
+///
+/// (Until v0.41.x the driving ops wrongly routed to the bridge, which drove Tauri
+/// `browser-page-*` child webviews that no longer exist — so `tabs` was always empty
+/// and `navigate`/`snapshot`/`screenshot` returned "no browser tab open".)
 async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
     let op = args.get("op").and_then(Value::as_str).unwrap_or_default();
     // F11: launch + tunnel a headless Chromium on an SSH host, returning the local
     // `cdpPort` the agent then passes to the normal ops (contract identical to local).
     if op == "connect_host" {
         return tool_browser_connect_host(state, args).await;
+    }
+    // `headless:true` (or AGENTUM_BROWSER_HEADLESS=1) forces a hidden server-side
+    // Chromium (QA / no-desktop daemon). Otherwise the page-driving ops use the CDP
+    // driver against the SAME Chromium the screencast pane streams (the visible
+    // browser); only the renderer-owned annotation ops fall through to the bridge.
+    let want_headless = args
+        .get("headless")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || std::env::var("AGENTUM_BROWSER_HEADLESS")
+            .map(|v| matches!(v.trim(), "1" | "true"))
+            .unwrap_or(false);
+    if !want_headless && state.desktop_bridge.is_some() && bridge_browser_op(op) {
+        return Ok(text_result(tool_bridge(state, "browser", args).await?));
     }
     if crate::cdp_driver::handles_op(op) {
         // Per-worktree isolation: when the agent's MCP carried a `worktreeId` (set
@@ -752,11 +888,62 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
             {
-                if let Ok((_, port)) = crate::cdp_browser::ensure_local_cdp_browser_for(&wt).await {
+                // Resolve the worktree's own browser to a `cdpPort` so the agent
+                // drives the SAME instance the user's pane watches.
+                let port = crate::cdp_browser::ensure_local_cdp_browser_for(&wt)
+                    .await
+                    .ok()
+                    .map(|(_, p)| p);
+                if let Some(port) = port {
                     if let Some(obj) = call_args.as_object_mut() {
                         obj.insert("cdpPort".to_string(), Value::from(port));
                     }
                 }
+            }
+        }
+        // No worktree context (e.g. a top-level agent not spawned into a worktree):
+        // drive the browser the user is currently watching — the most recent
+        // screencast pane attach — so the op still acts on the visible browser
+        // instead of a separate shared Chromium. A worktree-scoped agent keeps its
+        // own browser (the block above), so this only catches the contextless case.
+        if call_args.get("cdpPort").is_none() && call_args.get("worktreeId").is_none() {
+            if let Some(fg) = crate::cdp_browser::foreground_cdp_port() {
+                if let Some(obj) = call_args.as_object_mut() {
+                    obj.insert("cdpPort".to_string(), Value::from(fg));
+                }
+            }
+        }
+        // Visible-only guarantee in the desktop app: if we STILL have no target —
+        // contextless AND no screencast pane has ever attached (foreground is None) —
+        // do NOT fall through to the hidden shared Chromium. That silent fallback is
+        // the "MCP drove a browser I can't see" complaint. `headless:true`, a worktree
+        // context, or an SSH `cdpPort` all skip this (they resolved a target above).
+        if !want_headless
+            && state.desktop_bridge.is_some()
+            && call_args.get("cdpPort").is_none()
+            && call_args.get("worktreeId").is_none()
+        {
+            // `navigate` with nothing open is just "open a visible tab at this url":
+            // route it through the renderer so a VISIBLE pane appears (and is driven).
+            if op == "navigate" {
+                let mut open_args = call_args.clone();
+                if let Some(obj) = open_args.as_object_mut() {
+                    obj.insert("op".to_string(), Value::from("open"));
+                }
+                return Ok(text_result(
+                    tool_bridge(state, "browser", &open_args).await?,
+                ));
+            }
+            // Ops that act on an existing page can't meaningfully drive a browser the
+            // user can't see — tell the agent to open a visible one first instead of
+            // silently driving the hidden default. (`tabs` falls through: listing is
+            // a harmless read.)
+            if op != "tabs" {
+                anyhow::bail!(
+                    "No visible browser is open in the agentum desktop app. Open one first \
+                     with `agentum_browser` op `open` (add split:\"right\" to place it beside \
+                     the agent), then retry `{op}`."
+                );
             }
         }
         let result = crate::cdp_driver::run_browser_op(op, &call_args).await?;
@@ -785,6 +972,23 @@ async fn tool_browser(state: &AppState, args: &Value) -> anyhow::Result<Value> {
         return Ok(text_result(serde_json::to_string_pretty(&result)?));
     }
     Ok(text_result(tool_bridge(state, "browser", args).await?))
+}
+
+/// Browser ops that go to the desktop bridge (the renderer) rather than the CDP driver:
+/// - `open` — the renderer owns the browser-pane lifecycle, so opening a tab there makes
+///   a VISIBLE pane appear (and, with a `split`, places it beside the agent) and
+///   navigates it. The page PERCEPTION/DRIVE ops (`navigate`/`tabs`/`click`/`fill`/
+///   `snapshot`/`screenshot`) go to the CDP driver, which drives the SAME Chromium the
+///   screencast streams — they used to route here too, but the bridge drives Tauri
+///   `browser-page-*` webviews that no longer exist (the browser became a CDP
+///   screencast), so they returned "no browser tab open" / an empty tab list.
+/// - `grab`/`annotate`/`annotations` — live in the renderer's visual annotation store.
+/// - `set_split_ratio` — resizes a renderer layout split (no browser equivalent).
+fn bridge_browser_op(op: &str) -> bool {
+    matches!(
+        op,
+        "open" | "grab" | "annotate" | "annotations" | "set_split_ratio"
+    )
 }
 
 /// Wrap a string as a plain MCP text result.
@@ -929,9 +1133,180 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
     Ok(crate::harness::read_decisions(&workdir).await)
 }
 
+/// Parse + validate `agentum_report_status` inputs (spec 005 F4). Pure →
+/// unit-testable without AppState. Errors here are CALLER bugs (missing/unknown
+/// args) and DO surface as `isError: true` — the best-effort contract covers
+/// tracker failures, not typos. `id` is required, EXCEPT `provider == "github"`
+/// with a parseable issue `url` (then id := the URL's number).
+fn parse_report_status_args(
+    args: &Value,
+) -> anyhow::Result<(
+    String,
+    String,
+    Option<String>,
+    crate::task_sink::TrackerPhase,
+)> {
+    let provider = args
+        .get("provider")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `provider`"))?
+        .to_string();
+    let phase_str = args
+        .get("phase")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `phase`"))?;
+    let phase = crate::task_sink::parse_tracker_phase(phase_str).ok_or_else(|| {
+        anyhow::anyhow!("unknown `phase` {phase_str:?} (todo|in_progress|ready_to_test|done)")
+    })?;
+    let url = args.get("url").and_then(Value::as_str).map(str::to_string);
+    let id = match args.get("id").and_then(Value::as_str) {
+        Some(id) => id.to_string(),
+        None if provider == "github" => {
+            let url = url
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("missing `id` (or a github issue `url`)"))?;
+            crate::task_sink::github_slug_and_number_from_issue_url(url)
+                .map(|(_slug, number)| number)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("missing `id` and `url` is not a GitHub issue URL: {url}")
+                })?
+        }
+        None => anyhow::bail!("missing `id`"),
+    };
+    Ok((provider, id, url, phase))
+}
+
+/// Map the transition seam's outcome to the tool's text. Pure. NEVER an `Err`
+/// for a tracker failure (AC 9 / the best-effort invariant): transport errors
+/// from the linear/board arms come back as a "skipped" note the agent can read.
+fn report_status_text(
+    outcome: anyhow::Result<crate::task_sink::TransitionResult>,
+    provider: &str,
+    phase: crate::task_sink::TrackerPhase,
+) -> String {
+    match outcome {
+        Ok(crate::task_sink::TransitionResult::Applied) => {
+            format!("applied: {provider} → {phase:?}")
+        }
+        Ok(crate::task_sink::TransitionResult::Skipped(w)) => format!("skipped: {w}"),
+        Err(e) => format!("skipped (tracker error, non-fatal): {e:#}"),
+    }
+}
+
+/// Report a work item's pipeline phase to its tracker — a thin arm over
+/// [`crate::task_sink::apply_tracker_transition`] (spec 005 F4), the same seam
+/// the harness's own transitions use. Never reimplements label/state mechanics.
+async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let (provider, id, url, phase) = parse_report_status_args(args)?;
+    let outcome = crate::task_sink::apply_tracker_transition(
+        &state.store,
+        &provider,
+        &id,
+        url.as_deref(),
+        phase,
+    )
+    .await;
+    Ok(report_status_text(outcome, &provider, phase))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_instructions_steer_agents_to_agentum_browser_in_the_desktop_app() {
+        // Desktop-app guidance must push agents to `agentum_browser` (with `open`/`split`)
+        // and AWAY from the shell CLI / other browser tools — the fix for agents fumbling
+        // to claude-in-chrome / the `agentum` shell CLI (which can't open a tab). Lock the
+        // key phrases so the steer can't silently regress.
+        let d = mcp_instructions(true);
+        assert!(d.contains("agentum_browser"), "names the tool");
+        assert!(d.contains("open"), "tells them to open a visible tab");
+        assert!(d.contains("split"), "mentions side-by-side");
+        assert!(
+            d.contains("claude-in-chrome"),
+            "explicitly deprioritizes other browser tools"
+        );
+        assert!(d.contains("shell CLI"), "warns off the shell CLI");
+        // A headless daemon (no desktop bridge) still points at agentum_browser, but
+        // drops the "visible / user is watching" promise.
+        assert!(mcp_instructions(false).contains("agentum_browser"));
+        assert!(!mcp_instructions(false).contains("watching live"));
+    }
+
+    #[test]
+    fn browser_op_routing_splits_bridge_vs_cdp() {
+        // The renderer owns these: `open` (visible pane + split placement), the
+        // annotation store, and layout resize. They round-trip to the desktop bridge.
+        for op in ["open", "grab", "annotate", "annotations", "set_split_ratio"] {
+            assert!(bridge_browser_op(op), "{op} should route to the bridge");
+        }
+        // Every page PERCEPTION / DRIVE op is handled by the CDP driver instead — it
+        // drives the SAME Chromium the screencast streams, so the op acts on the
+        // browser the user sees. They MUST NOT route to the bridge (whose webview path
+        // is dead and returned "no browser tab open"). This is the fix.
+        for op in [
+            "tabs",
+            "navigate",
+            "click",
+            "fill",
+            "snapshot",
+            "screenshot",
+        ] {
+            assert!(
+                !bridge_browser_op(op),
+                "{op} must be CDP-driven, not bridged"
+            );
+            assert!(
+                crate::cdp_driver::handles_op(op),
+                "{op} must be claimed by the CDP driver"
+            );
+        }
+        // `open` is special: bridged for the VISIBLE pane, but ALSO CDP-claimed so a
+        // `headless:true` open still gets a real new target server-side.
+        assert!(crate::cdp_driver::handles_op("open"));
+        // CDP-only ops have no webview equivalent → always headless CDP, never bridged.
+        for op in [
+            "eval",
+            "get_console",
+            "node_at_point",
+            "wait",
+            "new_context",
+            "close_context",
+            "reap_contexts",
+            "connect_host",
+            "bogus",
+        ] {
+            assert!(!bridge_browser_op(op), "{op} must NOT route to the bridge");
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_master_switch_defaults_on_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&dir.path().join("t.db"))
+            .await
+            .unwrap();
+        // Default ON: a fresh install must wire agentum's MCP. Turning it off has
+        // to be an explicit opt-out, never the mere absence of the setting —
+        // otherwise every agent would silently lose agentum's tools.
+        assert!(
+            store
+                .setting_get_bool(MCP_ENABLED_SETTING, true)
+                .await
+                .unwrap()
+        );
+        store
+            .setting_set_bool(MCP_ENABLED_SETTING, false)
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .setting_get_bool(MCP_ENABLED_SETTING, true)
+                .await
+                .unwrap()
+        );
+    }
 
     fn tool_names(orchestration_enabled: bool) -> Vec<String> {
         tool_specs(orchestration_enabled)
@@ -984,5 +1359,192 @@ mod tests {
         }
         assert!(off.contains(&"agentum_list_worktrees".to_string()));
         assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());
+    }
+
+    // --- spec 005 F4: agentum_report_status ---
+
+    #[test]
+    fn report_status_is_in_the_catalog() {
+        // A status verb, not the mailbox/DAG surface — present with the gate on.
+        assert!(tool_names(true).contains(&"agentum_report_status".to_string()));
+    }
+
+    #[test]
+    fn report_status_survives_orchestration_gate_off() {
+        // Deliberately NOT in ORCHESTRATION_TOOLS: advertised (and callable)
+        // regardless of that gate, like agentum_list_sessions.
+        assert!(!is_orchestration_tool("agentum_report_status"));
+        assert!(tool_names(false).contains(&"agentum_report_status".to_string()));
+    }
+
+    #[test]
+    fn report_status_args_require_id_except_github_url() {
+        use crate::task_sink::TrackerPhase;
+
+        // id-less linear → Err (caller bug).
+        let e = parse_report_status_args(&json!({ "provider": "linear", "phase": "done" }));
+        assert!(e.is_err(), "linear without id must be a caller error");
+
+        // id-less github + issue URL → Ok with the derived number.
+        let (provider, id, url, phase) = parse_report_status_args(&json!({
+            "provider": "github",
+            "url": "https://github.com/owner/repo/issues/42",
+            "phase": "in_progress",
+        }))
+        .unwrap();
+        assert_eq!(provider, "github");
+        assert_eq!(id, "42");
+        assert_eq!(
+            url.as_deref(),
+            Some("https://github.com/owner/repo/issues/42")
+        );
+        assert_eq!(phase, TrackerPhase::InProgress);
+
+        // id-less github + garbage URL → Err.
+        assert!(
+            parse_report_status_args(&json!({
+                "provider": "github",
+                "url": "https://github.com/o/r/pull/42",
+                "phase": "done",
+            }))
+            .is_err(),
+            "a PR link is not an issue URL"
+        );
+        // id-less github with NO url → Err.
+        assert!(
+            parse_report_status_args(&json!({ "provider": "github", "phase": "done" })).is_err()
+        );
+
+        // An explicit id always wins (no URL needed for linear/board).
+        let (_, id, _, _) = parse_report_status_args(&json!({
+            "provider": "board", "id": "AG-12", "phase": "todo",
+        }))
+        .unwrap();
+        assert_eq!(id, "AG-12");
+
+        // A junk phase is a caller error, never silently coerced.
+        assert!(
+            parse_report_status_args(&json!({
+                "provider": "board", "id": "AG-12", "phase": "shipped",
+            }))
+            .is_err()
+        );
+    }
+
+    /// The AC 9 pin: every outcome shape — including a seam `Err` — maps to a
+    /// normal text result. A tracker hiccup is a readable "skipped" note, never
+    /// a tool error.
+    #[test]
+    fn report_status_text_never_errs_on_tracker_failure() {
+        use crate::task_sink::{TrackerPhase, TransitionResult};
+
+        assert_eq!(
+            report_status_text(Ok(TransitionResult::Applied), "github", TrackerPhase::Done),
+            "applied: github → Done"
+        );
+        assert_eq!(
+            report_status_text(
+                Ok(TransitionResult::Skipped("no board card with key X".into())),
+                "board",
+                TrackerPhase::Todo,
+            ),
+            "skipped: no board card with key X"
+        );
+        let text = report_status_text(
+            Err(anyhow::anyhow!("network down")),
+            "linear",
+            TrackerPhase::ReadyToTest,
+        );
+        assert!(
+            text.starts_with("skipped (tracker error, non-fatal):"),
+            "got: {text}"
+        );
+        assert!(text.contains("network down"));
+    }
+
+    /// Minimal AppState over a tempdir store (the board_sync `fresh_state`
+    /// pattern) so the wire-level delegation test drives the REAL tool fn.
+    async fn fresh_state() -> AppState {
+        use std::sync::Arc;
+        use tokio::sync::broadcast;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("test.sqlite");
+        std::mem::forget(dir); // keep the tempdir alive for the test
+        let store = agentum_store::Store::open(&p).await.unwrap();
+        let (bus, _rx) = broadcast::channel(16);
+        AppState {
+            store: Arc::new(store),
+            bus,
+            started_at: std::time::Instant::now(),
+            version: "test",
+            auth_limiter: Arc::new(crate::ratelimit::RateLimiter::new(
+                8,
+                std::time::Duration::from_secs(60),
+            )),
+            cert_fingerprint: Arc::new(String::new()),
+            transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
+            stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            hostname: "test".to_string(),
+            no_auth: true,
+            clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            clipboard_request_bus: broadcast::channel(64).0,
+            hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            mcp_token: Arc::new(String::from("test-mcp-token")),
+            api_base_url: None,
+            desktop_bridge: None,
+            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+            events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    /// Wire-level delegation (board arm, no subprocess): the tool moves a real
+    /// board card's column through `apply_tracker_transition` — proof the arm
+    /// delegates to the seam rather than reimplementing tracker mechanics.
+    #[tokio::test]
+    async fn report_status_moves_a_board_card() {
+        let state = fresh_state().await;
+        let card = state
+            .store
+            .create_board_item(agentum_core::NewBoardItem {
+                title: "Add OAuth login".into(),
+                body: None,
+                lbl: Some("feat".into()),
+                status: Some("todo".into()),
+                workdir: None,
+                parent_goal_id: None,
+                tool: None,
+                model: None,
+                session_id: None,
+                priority: None,
+            })
+            .await
+            .unwrap();
+
+        let text = tool_report_status(
+            &state,
+            &json!({ "provider": "board", "id": card.key, "phase": "in_progress" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(text, "applied: board → InProgress");
+
+        let moved = state
+            .store
+            .list_board_items()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.key == card.key)
+            .unwrap();
+        assert_eq!(moved.status, "doing");
+
+        // Unknown provider flows to the seam's Skipped — visible, non-fatal.
+        let text = tool_report_status(
+            &state,
+            &json!({ "provider": "jira", "id": "X-1", "phase": "done" }),
+        )
+        .await
+        .unwrap();
+        assert!(text.starts_with("skipped:"), "got: {text}");
     }
 }

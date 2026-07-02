@@ -1,3 +1,4 @@
+use super::platform::platform_label;
 use serde::Serialize;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 
@@ -22,16 +23,6 @@ pub struct NotificationPermissionStatusResult {
     pub supported: bool,
     pub platform: String,
     pub requested: bool,
-}
-
-fn platform_label() -> String {
-    if cfg!(target_os = "macos") {
-        "darwin".to_string()
-    } else if cfg!(target_os = "windows") {
-        "win32".to_string()
-    } else {
-        "linux".to_string()
-    }
 }
 
 // A non-Prompt state means the user already made a grant/deny decision.

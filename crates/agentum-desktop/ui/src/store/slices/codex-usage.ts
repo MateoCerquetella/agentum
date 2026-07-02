@@ -23,7 +23,7 @@ export type CodexUsageSlice = {
   setCodexUsageEnabled: (enabled: boolean) => Promise<void>
   setCodexUsageScope: (scope: CodexUsageScope) => Promise<void>
   setCodexUsageRange: (range: CodexUsageRange) => Promise<void>
-  fetchCodexUsage: (opts?: { forceRefresh?: boolean }) => Promise<void>
+  fetchCodexUsage: (opts?: { forceRefresh?: boolean; skipRefresh?: boolean }) => Promise<void>
   enableCodexUsage: () => Promise<void>
   refreshCodexUsage: () => Promise<void>
 }
@@ -76,7 +76,7 @@ export const createCodexUsageSlice: StateCreator<AppState, [], [], CodexUsageSli
 
   setCodexUsageRange: async (range) => {
     set({ codexUsageRange: range })
-    await get().fetchCodexUsage()
+    await get().fetchCodexUsage({ skipRefresh: true })
   },
 
   fetchCodexUsage: async (opts) => {
@@ -101,9 +101,14 @@ export const createCodexUsageSlice: StateCreator<AppState, [], [], CodexUsageSli
         return
       }
 
-      const nextScanState = (await api.codexUsage.refresh({
-        force: opts?.forceRefresh ?? false
-      })) as CodexUsageScanState
+      // Why: range changes use the cache (skipRefresh); mount fetch and explicit Refresh
+      // still invalidate via force so fresh data flows in. Skip the round-trip when
+      // the caller opts out to keep range switching instant.
+      const nextScanState = opts?.skipRefresh
+        ? scanState
+        : ((await api.codexUsage.refresh({
+            force: opts?.forceRefresh ?? false
+          })) as CodexUsageScanState)
       const { codexUsageScope, codexUsageRange } = get()
 
       const [summary, daily, modelBreakdown, projectBreakdown, recentSessions] = await Promise.all([

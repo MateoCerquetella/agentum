@@ -1,6 +1,9 @@
 //! Shared route helpers.
 
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use uuid::Uuid;
 
 use crate::error::ApiError;
 
@@ -36,6 +39,19 @@ fn expand_with_home(raw: &str, home: Option<&Path>) -> Result<PathBuf, ApiError>
         return Ok(home.join(&trimmed[2..]));
     }
     Ok(PathBuf::from(trimmed))
+}
+
+/// Parse a path-segment UUID, mapping a malformed id to a 400. Shared by the
+/// session/git/host/upload routes (previously copy-pasted into each).
+pub(crate) fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
+    Uuid::parse_str(s).map_err(|e| ApiError::BadRequest(e.to_string()))
+}
+
+pub(crate) fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|delta| delta.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

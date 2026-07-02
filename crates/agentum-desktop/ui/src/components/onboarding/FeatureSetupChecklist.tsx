@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Check, Globe2, MonitorCog, Workflow } from 'lucide-react'
+import { Globe2, MonitorCog, Workflow } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type {
   OnboardingFeatureSetupId,
@@ -15,30 +15,33 @@ type FeatureSetupRow = {
   id: OnboardingFeatureSetupId
   title: string
   description: string
-  setupSummary: string
   icon: ReactNode
 }
 
+// Each row is an agentum MCP tool, not a "skill" to install: agentum wires its
+// own MCP server into every agent it launches, and these switches pick which of
+// its tools those agents get. Mirrors the Settings "Agent MCP" panes so the two
+// surfaces read the same way.
 const FEATURE_SETUP_ROWS: readonly FeatureSetupRow[] = [
   {
     id: 'browserUse',
     title: 'Agent Browser Use',
-    description: 'Agents can navigate sites, inspect pages, and work through browser tasks.',
-    setupSummary: 'Enables browser use, prepares agentum-cli, and leaves cookies for Settings.',
+    description:
+      'Agents drive and inspect web pages with the agentum_browser tool. Add your logins later in Settings.',
     icon: <Globe2 className="size-4" />
   },
   {
     id: 'computerUse',
     title: 'Computer Use',
-    description: 'Agents can inspect app windows and operate local apps when you ask.',
-    setupSummary: 'Registers the Agentum CLI, opens permissions, and prepares the skill.',
+    description:
+      'Agents inspect windows and operate local apps with the agentum_computer tool. Grant the macOS permissions when prompted.',
     icon: <MonitorCog className="size-4" />
   },
   {
     id: 'orchestration',
     title: 'Agent Orchestration',
-    description: 'Agents can message each other, take tasks, and coordinate handoffs.',
-    setupSummary: "Turns on agentum's orchestration MCP — no skill to install.",
+    description:
+      'Agents message each other, take tasks, and coordinate handoffs through the orchestration tools.',
     icon: <Workflow className="size-4" />
   }
 ]
@@ -48,56 +51,48 @@ export function FeatureSetupChecklist({
   onChange
 }: FeatureSetupChecklistProps): React.JSX.Element {
   return (
-    <section className="mt-6">
-      <div className="grid gap-3 md:grid-cols-3">
+    <section className="mt-6 space-y-3">
+      <div className="space-y-0.5">
+        <p className="text-sm font-medium text-foreground">Agent MCP tools</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          agentum wires its own MCP into every agent it launches. Choose which tools they get — you
+          can toggle any of these later in Settings.
+        </p>
+      </div>
+      <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/60 bg-muted/10">
         {FEATURE_SETUP_ROWS.map((row) => {
-          const selected = value[row.id]
+          const enabled = value[row.id]
           return (
-            <button
-              key={row.id}
-              type="button"
-              role="checkbox"
-              aria-checked={selected}
-              className={cn(
-                'flex min-h-40 flex-col rounded-lg border px-4 py-3 text-left transition-colors',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                selected
-                  ? 'border-violet-500/60 bg-violet-500/10 text-foreground ring-2 ring-violet-500/30'
-                  : 'border-border bg-muted/20 text-muted-foreground hover:bg-muted/40'
-              )}
-              onClick={() => onChange({ ...value, [row.id]: !selected })}
-            >
-              <span className="flex items-start justify-between gap-3">
-                <span
-                  className={cn(
-                    'flex size-8 items-center justify-center rounded-lg border',
-                    selected
-                      ? 'border-border bg-muted text-foreground'
-                      : 'border-border bg-muted/40'
-                  )}
-                >
+            <div key={row.id} className="flex items-start justify-between gap-4 px-4 py-3">
+              <div className="flex min-w-0 items-start gap-3">
+                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/40 text-foreground">
                   {row.icon}
                 </span>
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-sm font-medium text-foreground">{row.title}</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">{row.description}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={enabled}
+                aria-label={row.title}
+                onClick={() => onChange({ ...value, [row.id]: !enabled })}
+                className={cn(
+                  'relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  enabled ? 'bg-foreground' : 'bg-muted-foreground/30'
+                )}
+              >
                 <span
-                  aria-hidden
                   className={cn(
-                    'flex size-5 items-center justify-center rounded-full border transition-colors',
-                    selected
-                      ? 'border-violet-500 bg-violet-500 text-white'
-                      : 'border-border bg-background'
+                    'inline-block h-3.5 w-3.5 transform rounded-full bg-background shadow-sm transition-transform',
+                    enabled ? 'translate-x-4' : 'translate-x-0.5'
                   )}
-                >
-                  {selected ? <Check className="size-3" strokeWidth={3} /> : null}
-                </span>
-              </span>
-              <span className="mt-3 text-sm font-medium text-foreground">{row.title}</span>
-              <span className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {row.description}
-              </span>
-              <span className="mt-auto pt-3 text-[11px] leading-relaxed text-muted-foreground">
-                {row.setupSummary}
-              </span>
-            </button>
+                />
+              </button>
+            </div>
           )
         })}
       </div>

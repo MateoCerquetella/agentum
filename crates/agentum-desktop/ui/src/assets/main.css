@@ -836,6 +836,19 @@
   background: color-mix(in srgb, var(--sidebar-accent) 40%, transparent);
 }
 
+/* Keyboard cursor row (Cmd+E → arrow navigation). A hover-like tint, NOT a
+   focus ring — the blue outline read as an alarm, the cursor should just say
+   "you are here". Slightly stronger than :hover so it survives sitting next
+   to hovered rows. */
+[role='option'][data-kbd-focused='true'] {
+  background: color-mix(in srgb, var(--sidebar-foreground) 6%, transparent);
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.dark [role='option'][data-kbd-focused='true'] {
+  background: color-mix(in srgb, var(--sidebar-accent) 55%, transparent);
+}
+
 .worktree-agent-row-hover:hover {
   background: color-mix(in srgb, var(--sidebar-foreground) 1.25%, transparent);
 }
@@ -2811,3 +2824,19 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 .dark .file-type-badge[data-ft='kt'] { color: #b39bff; }
 .file-type-badge[data-ft='php'] { color: #5f63a6; }
 .dark .file-type-badge[data-ft='php'] { color: #9b9fd6; }
+
+/* ── File-type icon tints ──────────────────────────────────────────────────
+   The Lucide fallback glyphs (images, media, data stores, archives, secrets)
+   used when a file has no dedicated badge. Coloured by broad category so the
+   tree/tabs gain a little colour without a rainbow; prose/code/config keep the
+   caller's calm `text-*`. Light value is the default; `.dark` lifts the hue for
+   the dark background. Unlayered so it wins over Tailwind `text-*` utilities,
+   like the badge rules above. */
+.file-type-icon[data-fcategory='media'] { color: #b5299e; }
+.dark .file-type-icon[data-fcategory='media'] { color: #f19bf0; }
+.file-type-icon[data-fcategory='archive'] { color: #a06722; }
+.dark .file-type-icon[data-fcategory='archive'] { color: #e0b060; }
+.file-type-icon[data-fcategory='data'] { color: #1f7a9e; }
+.dark .file-type-icon[data-fcategory='data'] { color: #5cc9e8; }
+.file-type-icon[data-fcategory='secure'] { color: #b0870e; }
+.dark .file-type-icon[data-fcategory='secure'] { color: #f0c94a; }

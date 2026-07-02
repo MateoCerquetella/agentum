@@ -58,6 +58,27 @@ fn isolate_xdg() -> TestEnv {
     }
 }
 
+/// Put a fake `gh` on PATH that always prints a canned issue URL, so the
+/// Spec-019 create-goal GitHub path returns 201 without network. Keep the
+/// returned `TempDir` alive for the duration of the call (the script must exist
+/// when `gh issue create` runs). PATH mutation is safe under the module
+/// ENV_LOCK held by the caller's `isolate_xdg` guard.
+fn install_fake_gh() -> TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let gh = dir.path().join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\n# fake gh for tests: any `gh issue create …` prints a canned URL\necho 'https://github.com/agentum-test/repo/issues/1'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let prev = std::env::var("PATH").unwrap_or_default();
+    // SAFETY: ENV_LOCK serialises env mutation across this module's tests.
+    unsafe { std::env::set_var("PATH", format!("{}:{prev}", dir.path().display())) };
+    dir
+}
+
 /// Build an in-process AppState backed by a fresh tempdir SQLite database.
 ///
 /// Mirrors `routes::board::tests::fresh_state()` exactly, lifted here so
@@ -89,6 +110,7 @@ async fn make_state(dir: &std::path::Path) -> AppState {
         api_base_url: None,
         desktop_bridge: None,
         harness: Arc::new(agentum_server::harness::HarnessEngine::new()),
+        events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     }
 }
 
@@ -171,9 +193,9 @@ async fn expect_event(rx: &mut broadcast::Receiver<Event>, target_kind: &str, ms
 /// Full goal-cards happy-path integration test.
 ///
 /// Sequence:
-/// 1. POST /api/board/goals — creates the goal card + the board-sink feature
-///    (Spec 018, hermetic via AGENTUM_TASK_SINK=board); returns 201.
-/// 2. Bus: `goal.created` → `goal.feature.created` (provider=board).
+/// 1. POST /api/board/goals — creates the goal card + the GitHub feature
+///    (Spec 019, hermetic via a `repo_slug` hint + a fake `gh`); returns 201.
+/// 2. Bus: `goal.created` → `goal.feature.created` (provider=github).
 /// 3. POST /api/board ×3 — simulate child cards under the goal.
 /// 4. POST /api/board/links — add a `blocks` edge (b blocks a).
 /// 5. Bus: `board.created` ×3 + `board.link.created`.
@@ -188,11 +210,13 @@ async fn expect_event(rx: &mut broadcast::Receiver<Event>, target_kind: &str, ms
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal_cards_full_happy_path() {
     let _env = isolate_xdg();
-    // Spec 018: force the board task-sink so create-goal is hermetic — it
-    // creates a `feat` board card (no `gh`/network) and returns 201 with a
-    // `FeatureRef{provider:"board"}`, independent of whether `gh` is on PATH.
-    // SAFETY: ENV_LOCK (held by `_env`) serialises all env mutation here.
-    unsafe { std::env::set_var("AGENTUM_TASK_SINK", "board") };
+    // Spec 019: create-goal no longer has a Board fallback — it files the issue
+    // against GitHub (or Linear), or returns a typed `no_tracker`. Drive the real
+    // GitHub path hermetically: the POST carries a `repo_slug` hint (so no `git`
+    // IO is needed to resolve the slug) and a fake `gh` on PATH echoes a canned
+    // issue URL, so create-goal returns 201 with `provider:"github"` and no
+    // network. SAFETY: ENV_LOCK (held by `_env`) serialises all env mutation here.
+    let _fake_gh = install_fake_gh();
     let dir = TempDir::new().unwrap();
     let state = make_state(dir.path()).await;
 
@@ -224,17 +248,18 @@ async fn goal_cards_full_happy_path() {
 
     // ── Step 1: POST /api/board/goals ────────────────────────────────────
     //
-    // Spec 018: create-goal makes the goal card, then SYNCHRONOUSLY creates
-    // the feature in the task sink (forced to `board` above) and returns 201
-    // with the `FeatureRef`. "/tmp" always exists, so the local-workdir
-    // existence check passes.
+    // Spec 019: create-goal makes the goal card, then SYNCHRONOUSLY files the
+    // feature on GitHub (resolved from the `repo_slug` hint, run via the fake
+    // `gh`) and returns 201 with the `FeatureRef`. There is no local-workdir
+    // existence gate anymore — the `workdir` is only a slug-read cwd.
     let resp = app
         .clone()
         .oneshot(post_json(
             "/api/board/goals",
             json!({
                 "title": "deliver feature",
-                "workdir": "/tmp"
+                "workdir": "/tmp",
+                "repo_slug": "agentum-test/repo"
             }),
         ))
         .await
@@ -257,10 +282,10 @@ async fn goal_cards_full_happy_path() {
         goal_body["goal"]["status"], "todo",
         "goal must start in todo"
     );
-    // The board sink returns a board-backed FeatureRef (AC-4), not a planner.
+    // Spec 019: the feature is filed on GitHub (via the fake `gh`), never Board.
     assert_eq!(
-        goal_body["feature"]["provider"], "board",
-        "forced board sink must back the feature"
+        goal_body["feature"]["provider"], "github",
+        "create-goal must file the feature on GitHub (Spec 019: no Board fallback)"
     );
 
     // ── Step 2: observe goal.created + goal.feature.created ───────────────
@@ -279,8 +304,8 @@ async fn goal_cards_full_happy_path() {
         "goal.feature.created must reference the goal"
     );
     assert_eq!(
-        feature_created.payload["provider"], "board",
-        "feature must be backed by the forced board sink"
+        feature_created.payload["provider"], "github",
+        "feature must be filed on GitHub (Spec 019: no Board fallback)"
     );
 
     // ── Step 3: simulate child cards — POST 3 child cards ────────────────

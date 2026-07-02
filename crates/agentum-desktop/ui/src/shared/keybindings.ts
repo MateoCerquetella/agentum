@@ -26,7 +26,6 @@ export type KeybindingActionId =
   | 'worktree.quickOpen'
   | 'worktree.palette'
   | 'settings.commandPalette'
-  | 'view.commandPalette'
   | 'worktree.navigateUp'
   | 'worktree.navigateDown'
   | 'app.settings'
@@ -44,6 +43,7 @@ export type KeybindingActionId =
   | 'sidebar.checks.toggle'
   | 'sidebar.ports.toggle'
   | 'sidebar.focusWorktreeList'
+  | 'view.toggleSidebarFocus'
   | 'zoom.in'
   | 'zoom.out'
   | 'zoom.reset'
@@ -211,20 +211,27 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     }
   },
   {
+    // Why: the id keeps its historical "settings." prefix so existing user
+    // overrides survive — since the palette merge (#210) this opens the ONE
+    // command palette (views, agents, Color Theme, settings search). The old
+    // Mod+K view.commandPalette action is gone; Mod+K belongs to the terminal.
     id: 'settings.commandPalette',
-    title: 'Open Settings Search',
+    title: 'Open Command Palette',
     group: 'Global',
     scope: 'global',
-    searchKeywords: ['shortcut', 'settings', 'search', 'palette', 'preferences'],
+    searchKeywords: [
+      'shortcut',
+      'global',
+      'command',
+      'palette',
+      'settings',
+      'search',
+      'preferences',
+      'go to',
+      'navigate',
+      'view'
+    ],
     defaultBindings: platformBindings(['Mod+Shift+P'])
-  },
-  {
-    id: 'view.commandPalette',
-    title: 'Go to View or Agent',
-    group: 'Global',
-    scope: 'global',
-    searchKeywords: ['shortcut', 'global', 'command', 'palette', 'go to', 'navigate', 'view'],
-    defaultBindings: platformBindings(['Mod+K'])
   },
   {
     id: 'worktree.navigateUp',
@@ -275,8 +282,10 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     title: 'Dictation',
     group: 'Global',
     scope: 'global',
-    searchKeywords: ['shortcut', 'dictation', 'voice', 'speech', 'microphone'],
-    defaultBindings: platformBindings(['Mod+E'])
+    searchKeywords: ['shortcut', 'dictation', 'voice', 'speech', 'microphone', 'mic'],
+    // Why: Mod+E is reserved for view.toggleSidebarFocus (session ↔ sidebar);
+    // the microphone lives on the otherwise-free Mod+O.
+    defaultBindings: platformBindings(['Mod+O'])
   },
   {
     id: 'view.tasks',
@@ -353,6 +362,26 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     scope: 'global',
     searchKeywords: ['shortcut', 'sidebar', 'worktree', 'focus'],
     defaultBindings: platformBindings(['Mod+0'])
+  },
+  {
+    id: 'view.toggleSidebarFocus',
+    title: 'Toggle Sidebar Focus',
+    group: 'Global',
+    scope: 'global',
+    searchKeywords: [
+      'shortcut',
+      'sidebar',
+      'focus',
+      'toggle',
+      'session',
+      'workspace',
+      'switch focus'
+    ],
+    // Why: mirrors VS Code's "focus the explorer / focus back to the editor"
+    // muscle memory — flip keyboard focus between the active session and the
+    // worktree list. Took over Mod+E when Dictation moved to Mod+O.
+    defaultBindings: platformBindings(['Mod+E']),
+    allowInTerminal: true
   },
   {
     id: 'zoom.in',

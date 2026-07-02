@@ -3,6 +3,7 @@ import { api } from '@/tauri'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { GlobalSettings } from '../../../../shared/types'
+import { CHOOSE_CUSTOM_SOUND_VALUE, isNotificationSoundId, type NotificationSoundSelectValue } from '@/lib/notification-sound-select'
 import { Button } from '../ui/button'
 import { Label } from '../ui/label'
 import { Separator } from '../ui/separator'
@@ -25,18 +26,6 @@ export { NOTIFICATIONS_PANE_SEARCH_ENTRIES } from './notifications-search'
 type NotificationsPaneProps = {
   settings: GlobalSettings
   updateSettings: (updates: Partial<GlobalSettings>) => void | Promise<void>
-}
-
-const CHOOSE_CUSTOM_SOUND_VALUE = 'choose-custom-file'
-
-type NotificationSoundSelectValue =
-  | GlobalSettings['notifications']['customSoundId']
-  | typeof CHOOSE_CUSTOM_SOUND_VALUE
-
-function isNotificationSoundId(
-  value: NotificationSoundSelectValue
-): value is GlobalSettings['notifications']['customSoundId'] {
-  return value !== CHOOSE_CUSTOM_SOUND_VALUE
 }
 
 type SystemNotificationSettingsCopy = {

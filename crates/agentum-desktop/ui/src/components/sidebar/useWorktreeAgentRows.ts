@@ -4,7 +4,6 @@ import type { DashboardAgentRow } from '@/components/dashboard/useDashboardData'
 import { applyAgentRowLineage } from '@/components/dashboard/agent-row-lineage'
 import { migrationUnsupportedToAgentStatusEntry } from '@/lib/migration-unsupported-agent-entry'
 import { useAppStore } from '@/store'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
 import {
   selectLivePtyIdsForWorktree,
   selectRuntimePaneTitlesForWorktree
@@ -14,6 +13,7 @@ import {
   selectLiveAgentStatusEntriesForWorktree,
   selectMigrationUnsupportedEntriesForWorktree,
   selectRetainedAgentEntriesForWorktree,
+  selectServerAgentDoneForWorktree,
   selectTerminalLayoutsForWorktree
 } from './worktree-agent-row-selectors'
 
@@ -68,19 +68,10 @@ export function useWorktreeAgentRows(worktreeId: string): DashboardAgentRow[] {
   // Why: title-derived server-session agents have no completion hook, so a
   // finished turn is recorded here (working→idle edge). An idle row whose pane
   // is marked done renders the green ✓ completion state. Narrowed to this
-  // worktree's tabs so unrelated completions don't re-render the card.
+  // worktree via the shared per-worktree index so the selector is O(1) per card
+  // instead of scanning every done marker on every store commit.
   const serverAgentDoneByPaneKey = useAppStore(
-    useShallow((s) => {
-      const tabIds = new Set((s.tabsByWorktree[worktreeId] ?? []).map((t) => t.id))
-      const out: Record<string, number> = {}
-      for (const [paneKey, finishedAt] of Object.entries(s.serverAgentDoneByPaneKey)) {
-        const parsed = parsePaneKey(paneKey)
-        if (parsed && tabIds.has(parsed.tabId)) {
-          out[paneKey] = finishedAt
-        }
-      }
-      return out
-    })
+    useShallow((s) => selectServerAgentDoneForWorktree(s, worktreeId))
   )
 
   return useMemo<DashboardAgentRow[]>(() => {
