@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 006-sdd-native-loop-and-rich-issues
-- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 Tester PASS 9/9 ACs + C1 2026-07-02, `verification.md` + handoff 04; commits `15365352`/`358347dc` on `.claude/worktrees/finish-the-loop`)
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 **SHIP-READY** — Reviewer SIGN-OFF 2026-07-02, zero Blockers, `review.md`; commits `15365352`/`358347dc`. RELEASE = Mateo: issue + PR w/ Closes in commit MESSAGE, staging browser QA per verification.md deferred list incl. the C1 live label-flip check, promote + tag. Follow-ups #225/#226 open — fold review Nits 1-2 into #226)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,18 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Reviewer | **006 SIGN-OFF → SHIP-READY** (`review.md`). All 6
+  focus items pass (four pins re-verified character-level; deviation-2 fix
+  confirmed COMPLETE — createIssuesFromChat is the only plan-constructing
+  caller; C1 one-hunk discipline + documented first-pair invariant; opposite
+  defaults named in read_settings' doc; brief deltas verbatim). 0 Blockers,
+  0 new Should-fix; 4 nits (stale gh_bin doc contradicted by the two
+  env-locked tests; parse_label_names comment overstates stable-sort dedup;
+  empty-label-repo note for staging QA; refs-not-state rationale lives only
+  in a comment) — Nits 1-2 fold into #226's docs pass. "The riskiest
+  correction (C4) was caught landing at the wrong seam and fixed at the real
+  one with the architecture's error documented rather than papered over."
+  spec.md Status → Done. Phase → done. **RELEASE = Mateo.**
 - 2026-07-02 | Tester | **006 verdict PASS 9/9 ACs + C1** (`verification.md`).
   Independent re-runs: 535/0/5 lib (139.3s), clippy -D warnings green, vite
   2m23s, vitest 15/0, scoped chat 39/harness 86/github 32/task_sink 26. All
@@ -121,16 +133,3 @@
   +2). NEW Mateo report folded into handoff 02: chat-created issues empty on
   GitHub — mandatory F2 fake-gh wire test (--body non-empty w/ summary +
   checklist) + stored-turn/DraftReview restore-path check. Phase → developer.
-- 2026-07-02 | PM | **006 PM phase COMPLETE (INLINE), gate PASS after 5 AC
-  edits; D1–D3 locked** (roles setting default ON scoped to start-work
-  backlogs only — argued divergence from 005-D3; label picker = new
-  GET /api/github/labels + static fallback; author fix = create response +
-  snapshot). ⚠️ The dispatched sdd-pm DIED on the account monthly SPEND LIMIT
-  (claude.ai/settings/usage) — phase completed inline by the orchestrator;
-  subsequent phases need the limit raised for fresh subagents. Material
-  findings: chat bodies are COMPOSED (`compose_issue_body` chat.rs:973), not
-  model-emitted — F2 rewritten to JSON-extension + composer reshaping with
-  byte-identical absent-fields pin; F4 root cause FOUND (snapshot lacks
-  author, GitHubItemDialog `?? 'unknown'`); AC 7 pin restated (verdict
-  contract lines, not whole-prompt bytes — briefs are include_str!). Handoff
-  `01-pm-to-architect.md`. Phase → architect.

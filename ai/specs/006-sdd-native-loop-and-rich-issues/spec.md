@@ -1,7 +1,7 @@
 # Spec 006 — SDD-native loop + rich issues (no install required)
 
 - **Number:** 006
-- **Status:** Architect        <!-- Draft | PM | Architect | In progress | Done -->  (PM-gated 2026-07-02, D1–D3 locked)
+- **Status:** Done             <!-- Draft | PM | Architect | In progress | Done -->  (Reviewer sign-off 2026-07-02; release human-gated)
 - **Surface:** `crates/agentum-server` (routes/github, routes/chat, harness roles/drive) + `crates/agentum-desktop/ui` (composer create-issue form, TaskPage issue detail)
 - **Author:** Mateo Cerquetella (drafted with Claude)
 - **Date:** 2026-07-02
