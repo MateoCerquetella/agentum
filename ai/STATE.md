@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 006-sdd-native-loop-and-rich-issues
-- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 **SHIP-READY** — Reviewer SIGN-OFF 2026-07-02, zero Blockers, `review.md`; commits `15365352`/`358347dc`. RELEASE = Mateo: issue + PR w/ Closes in commit MESSAGE, staging browser QA per verification.md deferred list incl. the C1 live label-flip check, promote + tag. Follow-ups #225/#226 open — fold review Nits 1-2 into #226)
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 **RELEASED v0.54.0** 2026-07-02, Mateo-authorized "release with everything": issue #235 CLOSED via Closes-in-commit-message, develop=staging=main=`fa553ff3` (carried v0.53.0 back-merge + PR #234), tag pushed, release CI in flight. Staging browser-QA items remain an installed-app spot-check incl. the C1 live label-flip on a roles-ON run. Follow-ups #225/#226 open)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
