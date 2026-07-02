@@ -12,17 +12,25 @@ import {
 } from '@/components/ui/command'
 import { applyDocumentTheme, type DocumentThemePreference } from '@/lib/document-theme'
 import {
+  applyAppColorTheme,
+  clearAppColorTheme,
+  persistAppColorThemeName,
+  readAppColorThemeName
+} from '@/lib/app-color-theme'
+import {
   BUILTIN_TERMINAL_THEME_NAMES,
   getSystemPrefersDark,
   getTerminalThemePreview,
   resolveEffectiveTerminalAppearance
 } from '@/lib/terminal-theme'
 
-// VS Code's "Preferences: Color Theme" flow, adapted to this app's two theme
-// axes: the window appearance (System/Light/Dark) previews live as you arrow and
-// reverts on cancel; the terminal colour themes show a swatch and apply on Enter
-// (they repaint live panes through the normal settings → lifecycle path). Opened
-// from the ⌘K palette's "Color Theme…" entry.
+// VS Code's "Preferences: Color Theme" flow, adapted to this app. Two rows of
+// choices, both previewing live as you arrow and reverting on cancel:
+//   • App Appearance (System/Light/Dark) — the built-in light/dark chrome.
+//   • Color themes (Dracula, Catppuccin, …) — a terminal palette that now paints
+//     the WHOLE app (derived chrome tokens) AND the terminal panes. Committing
+//     one persists it as the app color theme; picking an Appearance row clears it
+//     back to the built-in chrome. Opened from the ⌘K palette's "Color Theme…".
 
 type AppearanceOption = {
   value: DocumentThemePreference
@@ -68,11 +76,16 @@ export default function ThemeCommandPalette(): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
 
-  // The window theme in effect when the picker opened, restored on cancel so a
-  // live preview never leaks out as a committed change.
+  // The theme state in effect when the picker opened, restored on cancel so a
+  // live preview never leaks out as a committed change. Two axes: the window
+  // appearance and the full-app color theme (a terminal theme name, or null).
   const originalThemeRef = useRef<DocumentThemePreference>('system')
+  const originalColorThemeRef = useRef<string | null>(null)
   const committedRef = useRef(false)
   const [highlighted, setHighlighted] = useState<string>(appearanceValue('system'))
+  // The committed full-app color theme (drives the checkmarks). Snapshotted on
+  // open; preview never mutates it.
+  const [activeColorTheme, setActiveColorTheme] = useState<string | null>(null)
 
   const currentAppearance: DocumentThemePreference = settings?.theme ?? 'system'
 
@@ -88,30 +101,46 @@ export default function ThemeCommandPalette(): React.JSX.Element {
     return { slot, currentName: effective.themeName }
   }, [settings])
 
-  // Capture the starting appearance whenever the picker opens.
+  // Capture the starting state whenever the picker opens.
   useEffect(() => {
     if (!visible) {
       return
     }
     originalThemeRef.current = currentAppearance
+    originalColorThemeRef.current = readAppColorThemeName()
     committedRef.current = false
-    setHighlighted(appearanceValue(currentAppearance))
-    // Intentionally only re-run on open; currentAppearance is the snapshot.
+    setActiveColorTheme(originalColorThemeRef.current)
+    setHighlighted(
+      originalColorThemeRef.current
+        ? terminalValue(originalColorThemeRef.current)
+        : appearanceValue(currentAppearance)
+    )
+    // Intentionally only re-run on open; the values above are the snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible])
 
-  const revertAppearancePreview = (): void => {
+  // Roll the document back to whatever was in effect when the picker opened —
+  // the original color theme if there was one, otherwise the built-in appearance.
+  const revertPreview = (): void => {
+    const originalColor = originalColorThemeRef.current
+    if (originalColor && applyAppColorTheme(originalColor)) {
+      return
+    }
+    clearAppColorTheme()
     applyDocumentTheme(originalThemeRef.current)
   }
 
   const handleValueChange = (value: string): void => {
     setHighlighted(value)
     if (value.startsWith(APPEARANCE_PREFIX)) {
-      // Preview the window theme live as the cursor lands on it.
+      // Preview the built-in chrome for this appearance (drop any color theme).
+      clearAppColorTheme()
       applyDocumentTheme(value.slice(APPEARANCE_PREFIX.length) as DocumentThemePreference)
+    } else if (value.startsWith(TERMINAL_PREFIX)) {
+      // Preview the whole app painted in this color theme.
+      applyAppColorTheme(value.slice(TERMINAL_PREFIX.length))
     } else {
-      // Off the appearance rows — undo any in-flight window preview.
-      revertAppearancePreview()
+      revertPreview()
     }
   }
 
@@ -120,22 +149,28 @@ export default function ThemeCommandPalette(): React.JSX.Element {
       return
     }
     if (!committedRef.current) {
-      revertAppearancePreview()
+      revertPreview()
     }
     closeModal()
   }
 
+  // Picking an Appearance row clears any full-app color theme and returns to the
+  // built-in light/dark chrome.
   const commitAppearance = (mode: DocumentThemePreference): void => {
     committedRef.current = true
+    persistAppColorThemeName(null)
+    clearAppColorTheme()
     void updateSettings({ theme: mode })
     applyDocumentTheme(mode)
     closeModal()
   }
 
-  const commitTerminalTheme = (name: string): void => {
+  // Picking a color theme paints the whole app in it (persisted) and points the
+  // matching terminal slot at the same theme so panes agree.
+  const commitColorTheme = (name: string): void => {
     committedRef.current = true
-    // Selecting a terminal theme must not keep a stray window preview.
-    revertAppearancePreview()
+    persistAppColorThemeName(name)
+    applyAppColorTheme(name)
     void updateSettings({ [terminalContext.slot]: name })
     closeModal()
   }
@@ -145,16 +180,16 @@ export default function ThemeCommandPalette(): React.JSX.Element {
       open={visible}
       onOpenChange={handleOpenChange}
       title="Color Theme"
-      description="Preview and switch the app and terminal color themes"
+      description="Preview and switch the whole app's color theme"
       commandProps={{ value: highlighted, onValueChange: handleValueChange }}
     >
       <CommandInput placeholder="Search color themes…" />
       <CommandList>
         <CommandEmpty>No matching themes.</CommandEmpty>
-        <CommandGroup heading="App Appearance — previews as you move">
+        <CommandGroup heading="App Appearance — built-in light / dark">
           {APPEARANCE_OPTIONS.map((option) => {
             const Icon = option.icon
-            const selected = currentAppearance === option.value
+            const selected = !activeColorTheme && currentAppearance === option.value
             return (
               <CommandItem
                 key={option.value}
@@ -172,20 +207,16 @@ export default function ThemeCommandPalette(): React.JSX.Element {
             )
           })}
         </CommandGroup>
-        <CommandGroup
-          heading={`Terminal Theme — ${
-            terminalContext.slot === 'terminalThemeLight' ? 'light mode' : 'dark mode'
-          }`}
-        >
+        <CommandGroup heading="Color Theme — recolors the whole app">
           {BUILTIN_TERMINAL_THEME_NAMES.map((name) => {
-            const selected = terminalContext.currentName === name
+            const selected = activeColorTheme === name
             const swatch = terminalSwatch(name)
             return (
               <CommandItem
                 key={name}
                 value={terminalValue(name)}
                 keywords={['terminal', 'theme', 'color theme', name]}
-                onSelect={() => commitTerminalTheme(name)}
+                onSelect={() => commitColorTheme(name)}
                 className="flex items-center gap-2.5"
               >
                 <span
