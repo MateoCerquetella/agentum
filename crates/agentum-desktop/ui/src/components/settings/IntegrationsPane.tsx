@@ -22,6 +22,11 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { getHarnessSettings, setHarnessSettings } from '@/runtime/harness-client'
+import {
+  githubGetStateMap,
+  githubSetStateMap,
+  type GithubStateMap
+} from '@/tauri/github-labels'
 import { LinearApiKeyDialog } from '@/components/linear-api-key-dialog'
 import {
   getPreflightIntegrationStatuses,
@@ -109,6 +114,102 @@ function LinearStateMapEditor(): React.JSX.Element {
             </>
           ) : (
             'Save states'
+          )}
+        </Button>
+        {saved ? (
+          <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="size-3.5" />
+            Saved
+          </span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Editor for the harness pipeline → GitHub status-label names (spec 005 F5).
+ * The embedded server flips exactly one of these labels on the issue as a
+ * gated run moves a feature (Todo → In Progress → Ready to Test → Done); a
+ * custom name inherits its phase's canonical color. Renders unconditionally
+ * (unlike the Linear editor, which needs a connected workspace): GitHub via
+ * `gh` is the default tracker.
+ */
+function GithubStatusLabelsEditor(): React.JSX.Element {
+  const mounted = useMountedRef()
+  const [map, setMap] = useState<GithubStateMap | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    void (async () => {
+      const m = (await githubGetStateMap()) as Partial<GithubStateMap> | null
+      if (!mounted.current || !m) return
+      setMap({
+        todo: m.todo ?? 'status/todo',
+        inProgress: m.inProgress ?? 'status/in-progress',
+        readyToTest: m.readyToTest ?? 'status/ready-to-test',
+        done: m.done ?? 'status/done'
+      })
+    })()
+  }, [mounted])
+
+  if (!map) return <></>
+
+  const field = (key: keyof GithubStateMap, label: string) => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <Input
+        value={map[key]}
+        onChange={(e) => {
+          setSaved(false)
+          setMap({ ...map, [key]: e.target.value })
+        }}
+        className="h-8 text-sm"
+      />
+    </label>
+  )
+
+  const handleSave = async (): Promise<void> => {
+    setSaving(true)
+    // The command returns the EFFECTIVE map (a blanked field snaps back to
+    // its canonical status/* default), so re-render from the response.
+    const effective = await githubSetStateMap({
+      todo: map.todo,
+      inProgress: map.inProgress,
+      readyToTest: map.readyToTest,
+      done: map.done
+    })
+    if (!mounted.current) return
+    setMap(effective)
+    setSaving(false)
+    setSaved(true)
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-border/50 bg-background/60 p-3">
+      <p className="text-sm font-medium text-foreground">Pipeline status labels</p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+        Labels the harness flips on an issue as it codes and verifies a feature — exactly one is
+        present at a time. Clearing a field restores the canonical{' '}
+        <span className="font-mono text-[10px]">status/*</span> name; custom names keep each
+        phase&apos;s color.
+      </p>
+      <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+        {field('todo', 'Backlog / Todo')}
+        {field('inProgress', 'Coding')}
+        {field('readyToTest', 'Ready to Test')}
+        {field('done', 'Done')}
+      </div>
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => void handleSave()} disabled={saving}>
+          {saving ? (
+            <>
+              <LoaderCircle className="mr-1.5 size-3.5 animate-spin" />
+              Saving…
+            </>
+          ) : (
+            'Save labels'
           )}
         </Button>
         {saved ? (
@@ -365,6 +466,10 @@ export function IntegrationsPane(): React.JSX.Element {
             )}
           </div>
         )}
+
+        {/* Rendered regardless of gh auth status — gh is the default tracker,
+            and the labels are plain config (no gh call happens here). */}
+        <GithubStatusLabelsEditor />
       </div>
 
       {/* GitLab */}

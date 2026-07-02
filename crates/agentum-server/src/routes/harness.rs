@@ -711,9 +711,16 @@ mod tests {
         // github-arm call resolves `gh_bin()` while the var is set (all other
         // tracker tests either pass the program explicitly or skip at the URL
         // parse), so the fake never leaks into a parallel test.
+        //
+        // AGENTUM_GITHUB_CONFIG points at an ABSENT tempdir file (spec 005
+        // F5): the github arm now resolves `GithubStateMap::from_env()`, and
+        // without this override a real `<data_dir>/Agentum/github.json` on the
+        // dev machine would rename the asserted default `status/todo` label.
         unsafe { std::env::set_var("AGENTUM_GH_BIN", &script) };
+        unsafe { std::env::set_var("AGENTUM_GITHUB_CONFIG", dir.path().join("github.json")) };
         let result = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, false).await;
         unsafe { std::env::remove_var("AGENTUM_GH_BIN") };
+        unsafe { std::env::remove_var("AGENTUM_GITHUB_CONFIG") };
         drop(guard);
         result.unwrap();
 

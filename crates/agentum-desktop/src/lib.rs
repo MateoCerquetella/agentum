@@ -11,12 +11,12 @@ mod state;
 
 use commands::{
     accounts, agent_status, app, browser, browser_native, cache, claude_usage, cli, clipboard,
-    codex_usage, crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, gl, hooks,
-    hosted_review, html_export, keybindings, linear, mobile, notebook, notifications, onboarding,
-    open_code_usage, permissions, pet, project_groups, pty, rate_limits, remote_workspace, repos,
-    runtime, server, session, settings, shell, shell_runtimes, skills, sparse_presets, speech, ssh,
-    star_nag, stats, telemetry, ui, updater, window, workspace_cleanup, workspace_ports,
-    workspace_space,
+    codex_usage, crash_reports, diagnostics, e2e, feedback, fs, gh, gh_projects, github_labels, gl,
+    hooks, hosted_review, html_export, keybindings, linear, mobile, notebook, notifications,
+    onboarding, open_code_usage, permissions, pet, project_groups, pty, rate_limits,
+    remote_workspace, repos, runtime, server, session, settings, shell, shell_runtimes, skills,
+    sparse_presets, speech, ssh, star_nag, stats, telemetry, ui, updater, window,
+    workspace_cleanup, workspace_ports, workspace_space,
 };
 use state::AppState;
 use tauri::{Emitter, Manager};
@@ -309,6 +309,8 @@ pub fn run() {
             gh::gh_pr_check_details,
             gh::gh_pr_checks,
             gh::gh_count_work_items,
+            github_labels::github_get_state_map,
+            github_labels::github_set_state_map,
             gl::gl_list_labels,
             gl::gl_list_assignable_users,
             gl::gl_work_item_details,

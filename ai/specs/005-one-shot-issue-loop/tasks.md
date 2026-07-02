@@ -2,7 +2,8 @@
 
 Status legend: `[x]` done in this worktree · `[ ]` not started (later slice).
 Developer slice 1 (iteration 3) scope: **F2, F3, F4 only**. Developer slice 2
-(iteration 4) scope: **F1 only** — F5 is the next slice.
+(iteration 4) scope: **F1 only**. Developer slice 3 (iteration 5) scope: **F5**
+— the developer phase is COMPLETE (see "ready for tester" below).
 
 ## F1 — start-work-gated-run (AC 1–5) — DONE (slice 2)
 
@@ -81,27 +82,120 @@ Developer slice 1 (iteration 3) scope: **F2, F3, F4 only**. Developer slice 2
 
 1. **AppState fixture, not the bare task_sink fixture.** §5 item 5 cites the `board_transition_moves_card_status` fixture pattern; since `tool_report_status` takes `&AppState` (per the §5 signature), the test uses the established `fresh_state()` AppState-over-tempdir-Store fixture (copied from `routes/board_sync.rs` tests) so it drives the real tool fn end-to-end. No production-code change was made to accommodate the test.
 
-## F5 — github-state-map (AC 10) — NOT STARTED (later slice)
+## F5 — github-state-map (AC 10) — DONE (slice 3)
 
-- [ ] `GithubStateMap` + `github.json`/env layering + `github_status_color(phase)`
-- [ ] Widened `gh_set_status_label_argv` / `github_transition_with` (name-filtered remove-set)
-- [ ] Desktop `github_labels.rs` flat-arg Tauri commands + `ui/src/tauri/github-labels.ts` + IntegrationsPane GitHub card
-- [ ] §6 tests (incl. byte-identical default-map argv pin)
+- [x] Pin FIRST: `gh_set_status_label_argv_adds_one_removes_exactly_the_other_three`
+  extended with per-phase **byte-exact** expected argv literals against the
+  PRE-change 3-arg builder, run to green (1 passed / 516 filtered), THEN the
+  builder was widened and the call updated to `&GithubStateMap::default()`
+  with the literals unchanged (the F5-changes-nothing-by-default pin).
+- [x] `GithubStateMap` (+ `Default` delegating to `github_status_label`, so
+  defaults and the `GITHUB_STATUS_LABELS` table can't drift), `StoredGithubStateMap`
+  / `GithubConfigFile` serde shapes, `github_config_path()` (`AGENTUM_GITHUB_CONFIG`
+  override else `<data_local_dir|data_dir>/Agentum/github.json`, mirroring
+  `linear.rs::creds_path`), `read_github_config()` (absent/garbled → Default),
+  `from_env()` = `apply_layers(file, env)` with `AGENTUM_GITHUB_STATUS_{TODO,
+  IN_PROGRESS,READY_TO_TEST,DONE}`, `label_for(phase)`, `labels()`;
+  `github_status_color(phase)` (colors keyed by PHASE, never name).
+- [x] `gh_set_status_label_argv(number, slug, phase, map)` — remove-set = the
+  other configured names, filtered BY NAME (target never in its own remove
+  list), deduped; foreign/stale-map labels never appear in the argv (doc'd).
+- [x] `github_transition_with(program, slug, number, phase, map)` — ensure-loop
+  dedupes names (first phase in canonical order wins the color); Applied/Skipped
+  semantics unchanged. The github arm resolves `GithubStateMap::from_env()`
+  AFTER the URL parse succeeds (no-url skips never touch the config file).
+- [x] Desktop: new `commands/github_labels.rs` — `github_get_state_map()` /
+  `github_set_state_map(todo, in_progress, ready_to_test, done)` (FLAT
+  `Option<String>` args; blank clears the override; both return the effective
+  map with camelCase keys), `STORE_LOCK`ed read-modify-write on `github.json`
+  beside `linear.json`. Registered in `commands/mod.rs` + the
+  `generate_handler![]` list in `src/lib.rs`.
+- [x] UI: new `ui/src/tauri/github-labels.ts` (`githubGetStateMap` /
+  `githubSetStateMap`); `IntegrationsPane.tsx` gains `GithubStatusLabelsEditor`
+  — four inputs mirroring `LinearStateMapEditor`'s load/save flow, rendered
+  **unconditionally** inside the GitHub card (gh is the default tracker).
+- [x] Tests: `github_state_map_defaults_are_canonical`,
+  `github_state_map_precedence_file_then_env` (pure `apply_layers` injection —
+  NO env mutation), `gh_set_status_label_argv_uses_configured_names`,
+  `gh_set_status_label_argv_never_removes_the_target_on_name_collision`, the
+  byte-pin above, `github_transition_with_custom_map_flips_configured_names`
+  (`#[cfg(unix)]` fake-gh, explicit program + explicit map — no env, no lock),
+  plus `github_transition_ensures_duplicate_names_once` (extra, pins the
+  documented ensure-dedup/color-precedence); arity-updated
+  `github_transition_applies_with_fake_gh` and
+  `github_transition_maps_gh_failure_to_skipped`.
 
-Notes for the F5 slice (from this one):
-- `github_slug_and_number_from_issue_url` is now `pub(crate)` (F4) — no further widening needed.
-- The F1-slice Todo assertions can keep using `github_status_label(phase)` as the default-name accessor per §6.
+### F5 deviations
 
-Notes for the F5 slice (from the F1 slice):
-- `ensure_spec_and_plan_fires_todo_at_plan` (routes/harness.rs) asserts the DEFAULT
-  label spelling `status/todo` in the fake-gh argv — when F5 makes names
-  configurable, that assertion stays valid (the test env has no `github.json`/
-  env overrides) but be aware it exercises `GithubStateMap::from_env` defaults.
-- The same test mutates `AGENTUM_GH_BIN` under `crate::TEST_ENV_LOCK` — F5's
-  `AGENTUM_GITHUB_CONFIG` tempdir isolation should take the same lock if it
-  mutates env (prefer the pure `apply_layers` injection per §6).
+1. **`ensure_spec_and_plan_fires_todo_at_plan` hardened, not just left green:**
+   the github arm now calls `GithubStateMap::from_env()`, so a real
+   `<data_dir>/Agentum/github.json` on a dev machine would rename the asserted
+   `status/todo`. The test now also sets `AGENTUM_GITHUB_CONFIG` to an ABSENT
+   tempdir file (defaults apply) under the same `crate::TEST_ENV_LOCK` it
+   already holds for `AGENTUM_GH_BIN` — exactly the isolation the F1-slice
+   note prescribed.
+2. **UI payload keys are camelCase (`inProgress`, `readyToTest`)** — verified
+   against tauri-macros 2.6.2: flat command args are looked up by the
+   camelCase key with NO snake_case fallback, and a missing key deserializes
+   an `Option<String>` as `None`. NOTE (pre-existing, out of scope): the
+   Linear editor's `api.linear.setStateMap({ in_progress, ready_to_test })`
+   sends snake_case keys, so those two fields silently bind as `None` (=
+   "clear override") on every Linear save. Flagged for a follow-up issue.
+3. **Extra test** `github_transition_ensures_duplicate_names_once` (not in the
+   §6 7-item plan) — pins the ensure-dedup + first-phase-color-wins behavior
+   §6 specifies in prose.
+4. **`GithubStatusLabelsEditor` re-renders from the save response** (the
+   effective map), so a blanked input visibly snaps back to its canonical
+   `status/*` default — the Linear editor keeps the local state instead;
+   the returned-effective-map contract §6 specifies is exercised.
+5. **Build-env note (not a code change):** `cargo check -p agentum-desktop`
+   fails at tauri-build's bundle-resource validation unless
+   `target/release/libsherpa-onnx-{c,cxx}-api.dylib` exist in the worktree's
+   own target dir (known sherpa gotcha). Copied from the main checkout's
+   `target/release/` — nothing committed.
 
-## Gate results (this slice)
+Notes carried from earlier slices (resolved here):
+- `github_slug_and_number_from_issue_url` stayed `pub(crate)` (F4) — no
+  further widening was needed.
+- `github_status_label(phase)` stays the default-name accessor; the F1 Todo
+  assertions and back-compat tests are untouched.
+
+## Developer phase COMPLETE — ready for tester
+
+All five features (F1–F5) are implemented on this branch. Gate results for
+slice 3 (F5): `cargo fmt --all` clean · `cargo test -p agentum-server --lib`
+**518 passed / 0 failed / 5 ignored** (~132s) · `cargo check -p agentum-desktop`
+green (~80s warm) · `npm run build --prefix crates/agentum-desktop/ui` green
+(~3m55s, `NODE_OPTIONS=--max-old-space-size=3072`).
+
+Tester must know:
+
+- **Env-locked tests:** `ensure_spec_and_plan_fires_todo_at_plan`
+  (routes/harness.rs) is the ONLY test that mutates env (`AGENTUM_GH_BIN` +
+  `AGENTUM_GITHUB_CONFIG`), under `crate::TEST_ENV_LOCK`. Every other F5 test
+  is pure-injection (`apply_layers` closures) or passes the fake `gh` program
+  + map explicitly. Do not add env-mutating tests without that lock.
+- **Fake-gh pattern:** `write_fake_gh` in task_sink.rs tests (argv-logger
+  script, `#[cfg(unix)]`); custom-map behavior is pinned at both argv level
+  and process level.
+- **Byte-pins to protect:** default-map argv literals in
+  `gh_set_status_label_argv_adds_one_removes_exactly_the_other_three` were
+  captured against pre-F5 code — never regenerate them from the code under
+  test. Same class: F2's `feature_prompt_without_spec_is_byte_identical`,
+  F3's verdict-contract assertions.
+- **NOT GUI-verified:** the Settings → Integrations GitHub labels card, the
+  composer "Start gated run" toggle (F1), the Tasks-page row action, and the
+  end-to-end custom-label flip on a real repo (`qa.sh` flow in §8) — all only
+  build-verified (`vite build` + `cargo check`). No installed-app run.
+- **Known pre-existing bug found (not fixed, out of F5 scope):** Linear
+  state-map saves silently clear `in_progress`/`ready_to_test` (snake_case
+  invoke keys vs camelCase binding — see F5 deviation 2). Worth its own issue.
+- **Freshness contract:** the server re-reads `github.json` on every github
+  transition (`from_env` in the arm), so Settings edits apply on the next
+  transition with no restart. Mid-flight map changes leave stale-named labels
+  behind BY DESIGN (foreign-label protection — see the builder doc comment).
+
+## Gate results (slice 2)
 
 See the developer handoff / final report for exact counts. Gates run:
 `cargo fmt --all` · `cargo test -p agentum-server --lib` ·
