@@ -1,6 +1,6 @@
 # Spec 007 — Issue detail hydration + non-silent composer gates + generated descriptions
 
-Status: In progress
+Status: Done (Reviewer sign-off 2026-07-02; release human-gated)
 Owner: sdd-developer (autonomous /loop run, compressed SDD)
 
 ## Problem

@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 007-issue-detail-and-generated-descriptions
-- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (007 Tester PASS 9/9 ACs 2026-07-02, `verification.md` + handoff 01; all 3 root causes confirmed against base+head; commit `96c98955`. 006 RELEASED v0.54.0)
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (007 **SHIP-READY** — Reviewer SIGN-OFF 2026-07-02, zero Blockers, `review.md`; commit `96c98955`. Releasing per Mateo's standing "make a new release" instruction. Should-fix follow-up: ChatPage repoId:'' degenerate edge → fold into #226. 006 RELEASED v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,18 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Reviewer | **007 SIGN-OFF → SHIP-READY** (`review.md`). All 5
+  focus items pass: fix COMPLETE (grepped every author:null stub — all now
+  carry repoId so hydration fires; header reads hydrated displayWorkItem);
+  never-panic on new gh cmds + LLM endpoint (`.ok()?`, typed 400s, no
+  prompt secret leakage); armed-ineligible double-action = correct
+  degradation; deriveIssueSideEffectGate is the single EXECUTION source.
+  0 Blockers. 1 Should-fix: ChatPage `repoId: filedRepoId ?? ''` degenerate
+  edge (no pinnedRepo AND no workspaceId → silent shell, not #237's path) →
+  #226 or staging-QA. 3 nits (canScaffoldSpec 2nd derivation for RENDER only;
+  "four places" comment lists five; rsplit(['-','r'])). "Disciplined bug-fix
+  landing — root causes real, each fix hits the actual seam." Status → Done.
+  Phase → done. **RELEASE = per standing instruction.**
 - 2026-07-02 | Tester | **007 verdict PASS 9/9 ACs** (`verification.md`).
   Independent re-runs: server 539/0/5, desktop 75/0/4 (+3 gh mapping tests),
   clippy -D warnings green, vite 1m36s, vitest 10/10. All 3 tasks.md root
@@ -114,18 +126,3 @@
   provenance; author-fetch ordering pre-existing). GUI + live C1 label-flip
   = deferred to qa.sh/staging. Handoff `04-tester-to-reviewer.md`. Phase →
   reviewer.
-- 2026-07-02 | Developer | **006 slice 2: F2+F3 GREEN — developer phase
-  COMPLETE** (`358347dc`; 535/0 lib, clippy -D warnings green, vite 2m04s;
-  pins written FIRST, verified green pre-edit). F2 problem/goal extraction +
-  three-section compose (absent = byte-identical pinned) + preview/DraftPlan
-  passthrough; 🔑 DEVIATION 2: the Confirm path REBUILDS the plan client-side
-  (architecture's "spreads verbatim" was wrong) — problem/goal forwarded
-  explicitly, else silently dropped. Mandatory item: fake-gh wire test pins
-  plan→--body (non-empty, summary+checklist); stored-turn restore = NOT
-  REPRODUCIBLE (no path can lose plan fields — draftPlan is ephemeral state,
-  StoredTurn persists content/thinking/filed only). F3 roles inherited:
-  SDD_ROLES_ENABLED_SETTING default TRUE (opposite of QA knob, both pinned),
-  apply_start_work_knobs, GET-full/PUT-patch split, brief deltas verbatim,
-  verdict contract character-pinned, C1 shared_tracker_provenance fix in
-  Decompose (drive.rs diff = that one hunk, sacred fns untouched —
-  orchestrator-verified). Handoff `03-developer-to-tester.md`. Phase → tester.
