@@ -605,6 +605,7 @@ async fn plan_goal_harness(
                 &state.store,
                 p,
                 &id,
+                url.as_deref(),
                 crate::task_sink::TrackerPhase::Todo,
             )
             .await

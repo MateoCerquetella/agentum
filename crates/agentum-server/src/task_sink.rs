@@ -241,6 +241,142 @@ fn board_status_for(phase: TrackerPhase) -> &'static str {
     }
 }
 
+/// Canonical, harness-owned status labels with fixed colors (spec 004 D3).
+/// NOT `.github/labels.sh`'s `status/qa*` set — that is the human-QA lifecycle
+/// (architecture C4); the transition never touches foreign `status/*` labels.
+const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 4] = [
+    (TrackerPhase::Todo, "status/todo", "ededed"),
+    (TrackerPhase::InProgress, "status/in-progress", "1d76db"),
+    (TrackerPhase::ReadyToTest, "status/ready-to-test", "fbca04"),
+    (TrackerPhase::Done, "status/done", "0e8a16"),
+];
+
+/// The canonical GitHub label for a phase.
+fn github_status_label(phase: TrackerPhase) -> &'static str {
+    GITHUB_STATUS_LABELS
+        .iter()
+        .find(|(p, _, _)| *p == phase)
+        .map(|(_, name, _)| *name)
+        .expect("GITHUB_STATUS_LABELS covers every TrackerPhase")
+}
+
+/// Idempotent ensure-create: `--force` updates an existing label's color to
+/// canonical instead of failing. One argv token per value — never a shell.
+fn gh_label_ensure_argv<'a>(name: &'a str, slug: &'a str, color: &'a str) -> [&'a str; 8] {
+    [
+        "label", "create", name, "--repo", slug, "--color", color, "--force",
+    ]
+}
+
+/// Set-one/remove-others in ONE `gh issue edit`: add the target label, then
+/// deterministically remove the other THREE canonical labels (no
+/// read-modify-write; `gh` treats removing an absent label as a no-op). By
+/// construction the argv can only name canonical labels, so foreign `status/*`
+/// labels (e.g. `status/qa*`) are never touched (C4).
+fn gh_set_status_label_argv<'a>(
+    number: &'a str,
+    slug: &'a str,
+    phase: TrackerPhase,
+) -> Vec<&'a str> {
+    let target = github_status_label(phase);
+    let mut argv = vec![
+        "issue",
+        "edit",
+        number,
+        "--repo",
+        slug,
+        "--add-label",
+        target,
+    ];
+    for (p, name, _) in GITHUB_STATUS_LABELS.iter() {
+        if *p != phase {
+            argv.push("--remove-label");
+            argv.push(name);
+        }
+    }
+    argv
+}
+
+/// `https://github.com/{owner}/{repo}/issues/{n}` → `(slug, number)`. Tolerates
+/// a trailing slash and a query/fragment; rejects `/pull/` URLs, non-github
+/// hosts, and non-numeric tails. Pure. Lives here (not `board_sync`) because
+/// `task_sink` is a crate-root seam and must not depend on a route module.
+fn github_slug_and_number_from_issue_url(url: &str) -> Option<(String, String)> {
+    let url = url.trim();
+    let url = url.split(['?', '#']).next().unwrap_or(url);
+    let rest = url.strip_prefix("https://github.com/")?;
+    let mut parts = rest.split('/').filter(|s| !s.is_empty());
+    let owner = parts.next()?;
+    let repo = parts.next()?;
+    let kind = parts.next()?;
+    let number = parts.next()?;
+    if kind != "issues" || parts.next().is_some() {
+        return None;
+    }
+    if !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((format!("{owner}/{repo}"), number.to_string()))
+}
+
+/// `gh` binary override — a real knob (a server with `gh` off PATH), and the
+/// docs hook for tests (which pass the program explicitly; no env mutation).
+fn gh_bin() -> String {
+    std::env::var("AGENTUM_GH_BIN").unwrap_or_else(|_| "gh".into())
+}
+
+/// One `gh` call from `neutral_cwd()` — the same cwd discipline creation uses
+/// (an explicit `--repo` makes the cwd's git remote irrelevant). Ok on exit 0;
+/// Err carries stderr truncated to ~240 chars. Bounded by a 30s timeout so a
+/// hung `gh` (network stall) degrades to a `Skipped`, never a stalled run.
+async fn run_gh(program: &str, args: &[&str]) -> Result<(), String> {
+    let fut = tokio::process::Command::new(program)
+        .args(args)
+        .current_dir(neutral_cwd())
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
+        Err(_) => return Err("gh timed out".into()),
+        Ok(Err(e)) => return Err(format!("failed to run `{program}`: {e}")),
+        Ok(Ok(o)) => o,
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    let mut msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if msg.is_empty() {
+        msg = format!("gh exited with {}", output.status);
+    }
+    if msg.len() > 240 {
+        let mut end = 240;
+        while !msg.is_char_boundary(end) {
+            end -= 1;
+        }
+        msg.truncate(end);
+        msg.push('…');
+    }
+    Err(msg)
+}
+
+/// Ensure the 4 canonical labels exist (each failure NON-fatal — a shared repo
+/// without label-create permission can still add an existing label), then the
+/// single `issue edit` decides: exit 0 → `Applied`; anything else →
+/// `Skipped(reason)`. Never returns `Err` — tracker sync is best-effort (AC 5).
+/// `program` is explicit so tests inject a fake `gh` without env mutation.
+async fn github_transition_with(
+    program: &str,
+    slug: &str,
+    number: &str,
+    phase: TrackerPhase,
+) -> TransitionResult {
+    for (_, name, color) in GITHUB_STATUS_LABELS.iter() {
+        let _ = run_gh(program, &gh_label_ensure_argv(name, slug, color)).await;
+    }
+    match run_gh(program, &gh_set_status_label_argv(number, slug, phase)).await {
+        Ok(()) => TransitionResult::Applied,
+        Err(reason) => TransitionResult::Skipped(reason),
+    }
+}
+
 /// Drive a created feature's tracker item to `phase`, dispatching on the provider
 /// recorded when the feature was created. **Best-effort by contract**: returns
 /// `Ok(Skipped)` for providers/states that don't apply and only `Err` for a real
@@ -248,10 +384,15 @@ fn board_status_for(phase: TrackerPhase) -> &'static str {
 ///
 /// `tracker_id` is the provider's stable handle (board key, Linear identifier,
 /// GitHub issue number) — the same value stored as the harness feature id.
+/// `tracker_url` is the ticket's URL when known (`Feature.tracker_url`); the
+/// GitHub arm parses `owner/repo` AND the issue number from it (spec 004 — a
+/// spec-from-issue backlog derives N features from ONE issue, so `tracker_id`
+/// cannot double as the issue number). Board/Linear ignore it.
 pub async fn apply_tracker_transition(
     store: &Store,
     provider: &str,
     tracker_id: &str,
+    tracker_url: Option<&str>,
     phase: TrackerPhase,
 ) -> anyhow::Result<TransitionResult> {
     match provider {
@@ -285,11 +426,22 @@ pub async fn apply_tracker_transition(
                 .await?;
             Ok(TransitionResult::Applied)
         }
-        // GitHub Issues has no built-in workflow column; a label/comment sync is a
-        // future refinement (spec 012 follow-up). No-op for now, logged by caller.
-        "github" => Ok(TransitionResult::Skipped(
-            "github issue state sync not implemented".into(),
-        )),
+        // GitHub Issues has no workflow column; the phase lives as exactly one
+        // canonical `status/*` label (spec 004 D3). `Done` is label-only — the
+        // issue stays open; closing remains the PR's `Closes #N` job (D1).
+        "github" => {
+            let Some(url) = tracker_url.map(str::trim).filter(|u| !u.is_empty()) else {
+                return Ok(TransitionResult::Skipped(
+                    "feature has no tracker_url; owner/repo unknown".into(),
+                ));
+            };
+            let Some((slug, number)) = github_slug_and_number_from_issue_url(url) else {
+                return Ok(TransitionResult::Skipped(format!(
+                    "cannot parse a GitHub issue from {url}"
+                )));
+            };
+            Ok(github_transition_with(&gh_bin(), &slug, &number, phase).await)
+        }
         other => Ok(TransitionResult::Skipped(format!(
             "unknown tracker provider {other:?}"
         ))),
@@ -523,6 +675,143 @@ mod tests {
     }
 
     #[test]
+    fn github_status_label_covers_all_phases_uniquely() {
+        let labels = [
+            github_status_label(TrackerPhase::Todo),
+            github_status_label(TrackerPhase::InProgress),
+            github_status_label(TrackerPhase::ReadyToTest),
+            github_status_label(TrackerPhase::Done),
+        ];
+        assert_eq!(
+            labels,
+            [
+                "status/todo",
+                "status/in-progress",
+                "status/ready-to-test",
+                "status/done"
+            ]
+        );
+        let unique: std::collections::HashSet<_> = labels.iter().collect();
+        assert_eq!(unique.len(), 4, "labels must be pairwise distinct");
+    }
+
+    /// `--force` makes the ensure-create idempotent (an existing label is
+    /// updated to the canonical color instead of failing the call).
+    #[test]
+    fn gh_label_ensure_argv_is_idempotent_shape() {
+        let argv = gh_label_ensure_argv("status/todo", "owner/repo", "ededed");
+        assert_eq!(
+            argv,
+            [
+                "label",
+                "create",
+                "status/todo",
+                "--repo",
+                "owner/repo",
+                "--color",
+                "ededed",
+                "--force"
+            ]
+        );
+    }
+
+    #[test]
+    fn github_slug_and_number_from_issue_url_parses_and_rejects() {
+        // The canonical URL `gh issue create` prints.
+        assert_eq!(
+            github_slug_and_number_from_issue_url("https://github.com/owner/repo/issues/42"),
+            Some(("owner/repo".into(), "42".into()))
+        );
+        // Tolerated: surrounding whitespace, trailing slash, query, fragment.
+        assert_eq!(
+            github_slug_and_number_from_issue_url(" https://github.com/o/r/issues/7/ "),
+            Some(("o/r".into(), "7".into()))
+        );
+        assert_eq!(
+            github_slug_and_number_from_issue_url("https://github.com/o/r/issues/7?foo=bar"),
+            Some(("o/r".into(), "7".into()))
+        );
+        assert_eq!(
+            github_slug_and_number_from_issue_url("https://github.com/o/r/issues/7#issuecomment-1"),
+            Some(("o/r".into(), "7".into()))
+        );
+        // Rejected: PR links, non-github hosts, non-numeric tails, junk.
+        assert_eq!(
+            github_slug_and_number_from_issue_url("https://github.com/o/r/pull/42"),
+            None
+        );
+        assert_eq!(
+            github_slug_and_number_from_issue_url("https://gitlab.com/o/r/issues/42"),
+            None
+        );
+        assert_eq!(
+            github_slug_and_number_from_issue_url("https://github.com/o/r/issues/abc"),
+            None
+        );
+        assert_eq!(
+            github_slug_and_number_from_issue_url("https://github.com/o/r/issues/42/comments"),
+            None
+        );
+        assert_eq!(github_slug_and_number_from_issue_url("not a url"), None);
+        assert_eq!(github_slug_and_number_from_issue_url(""), None);
+    }
+
+    /// Spec 004 (C4 invariant at argv level): one `gh issue edit` adds the
+    /// target label and removes exactly the OTHER three canonical labels —
+    /// the target is never removed, and no non-canonical name (e.g. this
+    /// repo's own `status/qa*` human-QA labels) ever appears in the argv.
+    #[test]
+    fn gh_set_status_label_argv_adds_one_removes_exactly_the_other_three() {
+        let all_phases = [
+            TrackerPhase::Todo,
+            TrackerPhase::InProgress,
+            TrackerPhase::ReadyToTest,
+            TrackerPhase::Done,
+        ];
+        for phase in all_phases {
+            let target = github_status_label(phase);
+            let argv = gh_set_status_label_argv("42", "owner/repo", phase);
+            // Head: one edit targeting the issue + repo, adding exactly the target.
+            assert_eq!(
+                &argv[..7],
+                &[
+                    "issue",
+                    "edit",
+                    "42",
+                    "--repo",
+                    "owner/repo",
+                    "--add-label",
+                    target
+                ]
+            );
+            // Tail: a `--remove-label <l>` pair for each of the other three.
+            let removed: Vec<&str> = argv[7..]
+                .chunks(2)
+                .map(|pair| {
+                    assert_eq!(pair[0], "--remove-label");
+                    pair[1]
+                })
+                .collect();
+            assert_eq!(removed.len(), 3, "exactly three labels removed");
+            assert!(
+                !removed.contains(&target),
+                "the target label must never be removed"
+            );
+            for r in &removed {
+                assert!(
+                    GITHUB_STATUS_LABELS.iter().any(|(_, name, _)| name == r),
+                    "non-canonical label {r} in the remove set (C4 violation)"
+                );
+            }
+            for (p, name, _) in GITHUB_STATUS_LABELS.iter() {
+                if *p != phase {
+                    assert!(removed.contains(name), "{name} missing from remove set");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn board_status_mapping_covers_all_phases() {
         assert_eq!(board_status_for(TrackerPhase::Todo), "todo");
         assert_eq!(board_status_for(TrackerPhase::InProgress), "doing");
@@ -546,7 +835,7 @@ mod tests {
             .await
             .unwrap();
 
-        let res = apply_tracker_transition(&store, "board", &r.id, TrackerPhase::InProgress)
+        let res = apply_tracker_transition(&store, "board", &r.id, None, TrackerPhase::InProgress)
             .await
             .unwrap();
         assert_eq!(res, TransitionResult::Applied);
@@ -563,19 +852,112 @@ mod tests {
     #[tokio::test]
     async fn board_transition_unknown_key_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_tracker_transition(&store, "board", "AG-9999", TrackerPhase::Done)
+        let res = apply_tracker_transition(&store, "board", "AG-9999", None, TrackerPhase::Done)
             .await
             .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
     }
 
+    /// Spec 004: replaces `github_transition_is_a_logged_noop`. The GitHub arm
+    /// is real now, but stays best-effort: no URL (owner/repo unknown) or an
+    /// unparseable URL → `Ok(Skipped)`, never `Err` (AC 5).
     #[tokio::test]
-    async fn github_transition_is_a_logged_noop() {
+    async fn github_transition_without_url_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_tracker_transition(&store, "github", "42", TrackerPhase::Done)
+        let res = apply_tracker_transition(&store, "github", "42", None, TrackerPhase::Done)
             .await
             .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
+        // Blank and unparseable (a /pull/ link) URLs are skips too.
+        let res = apply_tracker_transition(&store, "github", "42", Some("  "), TrackerPhase::Done)
+            .await
+            .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+        let res = apply_tracker_transition(
+            &store,
+            "github",
+            "42",
+            Some("https://github.com/o/r/pull/42"),
+            TrackerPhase::Done,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+    }
+
+    /// Write an executable fake `gh` into `dir` and return its path. Passed to
+    /// `github_transition_with` as the explicit `program` — no env mutation,
+    /// no lock needed (the AGENTUM_GH_BIN env var is only the production knob).
+    #[cfg(unix)]
+    fn write_fake_gh(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("gh-fake");
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_applies_with_fake_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::InProgress,
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        // 4 ensure-creates then the single issue edit, in that order.
+        assert_eq!(lines.len(), 5, "expected 5 gh invocations, got: {calls}");
+        for line in &lines[..4] {
+            assert!(
+                line.starts_with("label create status/"),
+                "expected an ensure-create, got: {line}"
+            );
+            assert!(line.ends_with("--force"));
+        }
+        assert!(
+            lines[4].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
+            "last call must be the issue edit, got: {}",
+            lines[4]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_maps_gh_failure_to_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_fake_gh(
+            dir.path(),
+            "#!/bin/sh\necho 'boom: label not found' >&2\nexit 1\n",
+        );
+
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::Done,
+        )
+        .await;
+        // Ensure-create failures are non-fatal; the failed edit surfaces its
+        // stderr as the Skipped reason — and it is never an Err (AC 5).
+        match res {
+            TransitionResult::Skipped(reason) => {
+                assert!(reason.contains("boom: label not found"), "got: {reason}")
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
     }
 
     #[tokio::test]

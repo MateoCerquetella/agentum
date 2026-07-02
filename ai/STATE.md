@@ -50,15 +50,15 @@
   keep-existing spec semantics, `plan_from_spec_with_tracker`. ⚠️ 35 develop
   commits merged in AFTER line verification — re-locate lines before editing.
   Handoffs: `01-pm-to-architect.md`, `02-architect-to-developer.md`. Phase →
-  developer (build F1→F4, one gated slice each).
+  developer (build F1→F4, one gated slice each). ✅ **F1+F2 GREEN** (slice 1):
+  486/0 lib tests, fmt+check clean; vite build DEFERRED to the F3/F4 slice
+  (TS diffs are additive). Remaining: F3 composer-create-issue, F4
+  spec-from-issue-scaffold (F4 MUST stamp tracker_url on derived features or
+  F1 transitions skip — see tasks.md).
 
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-01 — Ralph loop fired for 003 ("finish + release"): Mateo's call =
-  FINALIZE THE SPEC ONLY then; **STANDING GATE: releases require Mateo present**
-  (classifier blocks push/tag/self-merge without an explicit `Bash(...)` rule).
-  [004's /sdd-loop arming IS the build re-authorization; release stays gated.]
 - 2026-07-01 — 003 CODE COMPLETE + SHIPPED to develop. `vite build` GREEN (needed
   `--max-old-space-size=6144`). Issue **#198** + PR **#199**. Browser QA at
   STAGING; tagged release Mateo-gated. Board asks = Kanban/status/projects specs.
@@ -81,3 +81,13 @@
   cannot strip labels (PATCH = `{title,body,state}` only). Merged develop
   (+35 commits, incl. 003's `task_sink.rs` labels support) → line cites drift,
   re-locate before editing. Phase → developer.
+- 2026-07-01 — 004 Developer slice 1: **F1+F2 GREEN** (486/0 lib tests, fmt +
+  check clean). F1: `GITHUB_STATUS_LABELS` + pure gh argv builders +
+  `github_slug_and_number_from_issue_url` + `run_gh` (30s timeout) +
+  `github_transition_with` in task_sink; seam widened with `tracker_url`
+  (both callers, one logical line each); every failure → `Ok(Skipped)`, never
+  `Err`. F2: `CreateBody`+3 (`linkedPR` alias), registry persistence,
+  detected-scan emits `linkedPR`, `canonical_meta_key`, NO registry-struct
+  alias; 2 TS layers forward the fields. Vite build deferred to the F3/F4
+  slice. Deviations logged in tasks.md (rustfmt reflow; gh empty-stderr
+  message; URL parser also strips #fragment). RELEASE stays human-gated.

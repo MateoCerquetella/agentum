@@ -21,7 +21,12 @@ export const worktrees = {
       name: args[0]?.name,
       baseBranch: args[0]?.baseBranch,
       branchNameOverride: args[0]?.branchNameOverride,
-      displayName: args[0]?.displayName
+      displayName: args[0]?.displayName,
+      // Linked work-item metadata (spec 004 AC 2): the store slice already
+      // sends these; stripping them here was why the registry never saw them.
+      linkedIssue: args[0]?.linkedIssue,
+      linkedPR: args[0]?.linkedPR,
+      linkedLinearIssue: args[0]?.linkedLinearIssue
     }),
   remove: (...args: any[]) =>
     worktreesRemove({

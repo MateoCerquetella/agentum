@@ -318,8 +318,14 @@ async fn transition_tracker(
         return;
     };
     let engine = &state.harness;
-    match crate::task_sink::apply_tracker_transition(&state.store, provider, &feature.id, phase)
-        .await
+    match crate::task_sink::apply_tracker_transition(
+        &state.store,
+        provider,
+        &feature.id,
+        feature.tracker_url.as_deref(),
+        phase,
+    )
+    .await
     {
         Ok(crate::task_sink::TransitionResult::Applied) => {
             engine.log(harness_id, Some(&feature.id), format!("ticket → {phase:?}"))
