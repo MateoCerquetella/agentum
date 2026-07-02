@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 005-one-shot-issue-loop
-- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 **SHIP-READY** — Reviewer SIGN-OFF 2026-07-02, zero Blockers, `review.md`; commits `197a7bea`/`ae8bf467`/`3b0a00d0` on `.claude/worktrees/finish-the-loop`. RELEASE = Mateo: issue + PR finish-the-loop→develop w/ Closes #N in the commit MESSAGE, staging browser QA per verification.md deferred list, promote + tag. 004 RELEASED v0.49.0)
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 **RELEASED v0.51.0** 2026-07-02, Mateo-authorized: issue #224 CLOSED via Closes-in-commit-message on main, PR #227 MERGED, develop=staging=main=`c970d8db` (all FF; carries v0.50.0 Project Hub which had been sitting unpromoted), tag `v0.51.0` pushed, release CI in flight. Follow-ups: #225 Linear snake_case state-map bug, #226 workdir canonicalization + stale QA docs. Staging browser-QA items (composer toggle, Settings cards, live label flips, agentum_browser verdict run) remain an installed-app spot-check)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
