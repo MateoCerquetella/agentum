@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 006-sdd-native-loop-and-rich-issues
-- **phase:** architect   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 PM phase COMPLETE 2026-07-02 — run INLINE, sdd-pm subagent died on the account SPEND LIMIT; D1–D3 locked, handoff 01 written. Ask: chat should comport with the SDD process, inherited in-app so nothing needs installing + issue #232-style bare issues. Root causes verified: `routes/github.rs:237` hardcodes `labels: Vec::new()`; spec-013 role gates exist but default-OFF/no-UI. 005 **RELEASED v0.51.0** `c970d8db`; tag ci was red on 2 clippy errors, fixed on develop + dispatch-verified green. Follow-ups open: #225, #226)
+- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 Architect COMPLETE 2026-07-02, gate 5/5, C1–C4 — C1 MATERIAL: roles-on would silently kill the status-label trail, fix in F3; handoff 02 incl. Mateo's chat-empty-description report as mandatory F2 item. Worktree `.claude/worktrees/finish-the-loop`)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,19 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Architect | **006 blueprint COMPLETE (`architecture.md`), gate
+  PASS 5/5.** C1 MATERIAL (orchestrator spot-verified): Decompose re-plans
+  tracker-less (`drive.rs:846`) + `transition_tracker` silently no-ops on
+  None provider → roles-on would kill the label trail; fix =
+  `shared_tracker_provenance` + `plan_from_spec_with_tracker` in Decompose.
+  C2 settings wire = GET-full/PUT-patch split (exact-string pin updates). C3
+  Tasks LIST already carries author — F4 is create-response+snapshot only.
+  C4 preview/DraftPlan must pass problem/goal through Confirm or only the
+  no-plan path ships SDD bodies. Brief deltas specified verbatim (PM gate
+  checklist from validate_handoff/write_spec; architect +3 bullets; reviewer
+  +2). NEW Mateo report folded into handoff 02: chat-created issues empty on
+  GitHub — mandatory F2 fake-gh wire test (--body non-empty w/ summary +
+  checklist) + stored-turn/DraftReview restore-path check. Phase → developer.
 - 2026-07-02 | PM | **006 PM phase COMPLETE (INLINE), gate PASS after 5 AC
   edits; D1–D3 locked** (roles setting default ON scoped to start-work
   backlogs only — argued divergence from 005-D3; label picker = new
@@ -118,16 +131,3 @@
   keys that never bind → every Linear save silently clears
   in_progress/ready_to_test overrides — file an issue at ship time. Handoff
   `03-developer-to-tester.md`. Phase → tester.
-- 2026-07-02 | Developer | **005 slice 2: F1 GREEN** (`ae8bf467`; 512/0 lib,
-  vite 1m03s, vitest 10/0). POST /api/harness/start-work + shared
-  `ensure_spec_and_plan` (Todo-at-plan inherited by 004 route, test-pinned
-  never-overwrite 400) + `start_work_lock`/`find_by_workdir` +
-  `update_backlog_knobs`; composer toggle + three-path skip
-  (`planCreatedWorkspaceOpen`) + TaskPage row action. drive_inner + run-route
-  spawn: ZERO diffs (orchestrator-verified drive.rs untouched). 8 deviations
-  in tasks.md (notable: no release_driver needed — nothing fallible after the
-  fresh claim; deleted-run claim Err falls through to fresh registration;
-  fake-gh Todo test under TEST_ENV_LOCK asserts exactly one
-  `--add-label status/todo` edit). NOT GUI-verified (toggle/dropdown/toasts =
-  unit+build pinned; browser QA = qa.sh/staging). Phase stays developer →
-  slice 3 = F5 (GithubStateMap + github.json + Settings card).
