@@ -1199,6 +1199,10 @@ pub async fn append_decision(workdir: &Path, entry: &str) -> anyhow::Result<()> 
         .await?;
     f.write_all(format!("- {}\n", entry.trim()).as_bytes())
         .await?;
+    // Dropping a tokio File does NOT flush — the buffered write lands on the
+    // blocking pool later, so two quick appends can reach the OS out of order
+    // (surfaced as a Windows CI race in decision_log_is_append_only).
+    f.flush().await?;
     Ok(())
 }
 
