@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 005-one-shot-issue-loop
-- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 **RELEASED v0.51.0** 2026-07-02, Mateo-authorized: issue #224 CLOSED via Closes-in-commit-message on main, PR #227 MERGED, develop=staging=main=`c970d8db` (all FF; carries v0.50.0 Project Hub which had been sitting unpromoted), tag `v0.51.0` pushed, release CI in flight. Follow-ups: #225 Linear snake_case state-map bug, #226 workdir canonicalization + stale QA docs. Staging browser-QA items (composer toggle, Settings cards, live label flips, agentum_browser verdict run) remain an installed-app spot-check)
+- **current_spec:** 006-sdd-native-loop-and-rich-issues
+- **phase:** pm          <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 drafted 2026-07-02 from Mateo's ask: chat should comport with the SDD process, inherited in-app so nothing needs installing + issue #232-style bare issues. Root causes verified: `routes/github.rs:237` hardcodes `labels: Vec::new()`; spec-013 role gates exist but default-OFF/no-UI. 005 **RELEASED v0.51.0** `c970d8db`; tag ci was red on 2 clippy errors, fixed on develop + dispatch-verified green. Follow-ups open: #225, #226)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
