@@ -2347,7 +2347,7 @@ export default function TaskPage(): React.JSX.Element {
   }, [activeModal, dialogWorkItem, githubMode, newIssueOpen, newLinearIssueOpen, taskSource])
 
   const openComposerForItem = useCallback(
-    async (item: GitHubWorkItem): Promise<void> => {
+    async (item: GitHubWorkItem, opts?: { startGatedRun?: boolean }): Promise<void> => {
       // Why: a GitHub work item carries no body in memory, so without this the
       // spawned agent would only get the URL — unlike Linear, which already
       // snapshots its description into linkedContext. Fetch the issue body
@@ -2379,6 +2379,8 @@ export default function TaskPage(): React.JSX.Element {
         linkedWorkItem,
         prefilledName: getLinkedWorkItemSuggestedName(item),
         initialRepoId: item.repoId,
+        // Spec 005 F1 (AC 3): pre-fill with the "Start gated run" toggle armed.
+        ...(opts?.startGatedRun ? { startGatedRun: true } : {}),
         telemetrySource: 'sidebar'
       })
     },
@@ -4481,6 +4483,17 @@ export default function TaskPage(): React.JSX.Element {
                                       Start new workspace
                                     </DropdownMenuItem>
                                   ) : null}
+                                  {/* Spec 005 F1 (AC 3): pre-fill the composer
+                                      with the "Start gated run" toggle armed —
+                                      the chat→Tasks→click path into the loop. */}
+                                  <DropdownMenuItem
+                                    onSelect={() =>
+                                      void openComposerForItem(item, { startGatedRun: true })
+                                    }
+                                  >
+                                    <CircleDot className="size-4" />
+                                    Start gated run
+                                  </DropdownMenuItem>
                                   <DropdownMenuItem
                                     onSelect={() => api.shell.openUrl(item.url)}
                                   >

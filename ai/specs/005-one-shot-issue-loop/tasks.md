@@ -1,21 +1,33 @@
 # Spec 005 — tasks (per-feature checklist)
 
 Status legend: `[x]` done in this worktree · `[ ]` not started (later slice).
-Developer slice 1 (iteration 3) scope: **F2, F3, F4 only** — F1/F5 are later
-slices by orchestrator instruction.
+Developer slice 1 (iteration 3) scope: **F2, F3, F4 only**. Developer slice 2
+(iteration 4) scope: **F1 only** — F5 is the next slice.
 
-## F1 — start-work-gated-run (AC 1–5) — NOT STARTED (later slice)
+## F1 — start-work-gated-run (AC 1–5) — DONE (slice 2)
 
-- [ ] `POST /api/harness/start-work` handler + `ensure_spec_and_plan` shared core (Todo-at-plan lives there)
-- [ ] `HarnessEngine.start_work_lock` + `find_by_workdir`
-- [ ] `types.rs::update_backlog_knobs`
-- [ ] UI: `startGatedWork` client, composer toggle + three-skip `gatedRun` flag, TaskPage row action
-- [ ] §2 unit tests + `planCreatedWorkspaceOpen` vitest
+- [x] `ensure_spec_and_plan(store, workdir, number, issue, plan, converge_existing)` shared core refactored out of `spec_from_issue` (routes/harness.rs) — never-overwrite 400 pinned via `converge_existing: false`; converge path re-plans from the existing spec without touching its body; Todo-at-plan fires on any successful plan (§2 verbatim `warn!` shape), so the 004 opt-in route inherits AC 4.
+- [x] `POST /api/harness/start-work` handler + route (static route added beside `/settings`, above the `{id}` captures). The 8-step §2 sequence under `state.harness.start_work_lock` (C5): already-running check FIRST (claim fails → 200 `alreadyRunning` friendly state; claim succeeds on an idle stale run → `engine.stop` + fresh registration; claim `Err` (run vanished concurrently) → fresh registration), fetch, `ensure_spec_and_plan(plan: true, converge: true)`, `update_backlog_knobs` (agent_tool/agent_model only — `spec_id` NOT re-stamped), `engine.start` AFTER the plan, `claim_driver` + `tokio::spawn(drive)` byte-identical to the run route. `StartWorkRequest`/`StartWorkResponse` camelCase per §2.
+- [x] `HarnessEngine.start_work_lock: tokio::sync::Mutex<()>` (`pub(crate)` — routes access it directly per the §2 handler snippet) + `pub async fn find_by_workdir`.
+- [x] `types.rs::update_backlog_knobs(workdir, apply)` — load → mutate → persist via `resolve_harness_dir` (handles legacy `.harness/` like the load path).
+- [x] UI: `startGatedWork` + `StartGatedWorkResult` in `runtime/harness-client.ts` (§2 verbatim shape).
+- [x] UI: `open-created-workspace.ts` — `gatedRun?: boolean` option; pure `planCreatedWorkspaceOpen` extracted and used by the body (gated → all three plain deliveries false; default path pinned unchanged).
+- [x] UI: `useComposerState.ts` — `initialStartGatedRun` option, `startGatedRun` state, `maybeStartGatedRun(worktree, item, agent)` (mirrors `maybeScaffoldSpecFromIssue`'s non-fatal shape; `alreadyRunning` → info toast, failure → error toast, never a rollback), BOTH submit paths derive `submitGatedRun` (armed AND eligible), force issue automation off at the source, skip the D5 scaffold call, pass `gatedRun` + `issueCommand: undefined` to `openCreatedWorkspace`; cardProps expose `canStartGatedRun` (= `canScaffoldSpec`) + `startGatedRun` + `onStartGatedRunChange`.
+- [x] UI: `NewWorkspaceComposerCard.tsx` — "Start gated run" toggle below the D5 toggle, same eligibility gate; armed → the scaffold toggle hides and the §2 undelivered-prompt copy renders.
+- [x] UI: `NewWorkspaceComposerModal.tsx` — `ComposerModalData.startGatedRun?: boolean` threaded to `initialStartGatedRun`.
+- [x] UI: `TaskPage.tsx` — `openComposerForItem(item, opts?)` widened; "Start gated run" entry in the issue-row dropdown (beside "Start new workspace"/"Open in browser") → `openComposerForItem(item, { startGatedRun: true })`.
+- [x] Tests: `ensure_spec_and_plan_writes_and_plans_fresh`, `ensure_spec_and_plan_converges_on_existing_spec` (both 400- and converge-arms), `ensure_spec_and_plan_fires_todo_at_plan` (fake-gh via `AGENTUM_GH_BIN` under `crate::TEST_ENV_LOCK`, asserts one `issue edit … --add-label status/todo`), `find_by_workdir_resolves_registered_run`, `update_backlog_knobs_preserves_features_and_writes_knobs`; `claim_release_driver_round_trips` already covered the claim/release round-trip (unchanged). Vitest: `planCreatedWorkspaceOpen` (7 cases) + a wire-level `openCreatedWorkspace` gated-run case in the EXISTING `lib/open-created-workspace.test.ts`.
 
-Notes for the F1 slice (from this one):
-- `/api/harness/settings` now coexists with `/api/harness/{id}` (static-over-capture) — `start-work` can be added the same way.
-- Do NOT re-stamp `spec_id` in the post-plan knob write — `plan_from_spec_inner` stamps it now (F2, landed here).
-- `routes/harness.rs` now has a `#[cfg(test)] mod tests` — put the `ensure_spec_and_plan` tests there.
+### F1 deviations
+
+1. **`ensure_spec_and_plan`'s `workdir` param is `&std::path::Path` fully qualified** — a top-level `use std::path::Path` collides with the axum `Path` extractor already imported in routes/harness.rs (37 compile errors); the §2 signature is otherwise verbatim.
+2. **Existing-run claim `Err` falls through to a fresh registration** (not an error): the run can vanish between `find_by_workdir` and `claim_driver` via a concurrent `DELETE /api/harness/{id}` — nothing is driving the worktree, so registering fresh is the correct friendly behavior. (§2 only specified the `false`/`true` arms.)
+3. **No `release_driver` call landed**: nothing fallible sits between the fresh claim and `tokio::spawn` (§2's "in practice this is the step-6→7 error path" — step 6 errors happen *before* the claim in the final ordering). The unreachable `!claimed`-on-fresh arm returns 500 without releasing (we don't own the slot when a claim fails).
+4. **Hermetic tracker-arm tests**: the fresh/converge tests use a NON-github-host URL (`https://example.com/...`) so the Todo transition resolves to the URL-parse `Skipped` (no `gh` spawn, no env mutation); only the dedicated Todo-at-plan test wires the fake `gh` (env-locked). Tracker stamps still assert the URL round-trip.
+5. **Vitest extended, not created**: `lib/open-created-workspace.test.ts` already existed (wire-level tests through the real store) — the `planCreatedWorkspaceOpen` cases and a gated-run wire case were added there instead of a new file. It loads fine (no xterm noise).
+6. **`initialStartGatedRun` modal-data threading needed no store change** — `store/slices/ui.ts`'s `modalData` is `Record<string, unknown>`; the typed `ComposerModalData` lives in `NewWorkspaceComposerModal.tsx` (the blueprint's "ui.ts ~:450 modal-data type" doesn't exist as a typed slot in this tree).
+7. **Toggle copy when un-armed**: the §2 copy ("Your typed prompt won't be sent…") renders once ARMED; un-armed the toggle shows a neutral one-liner ("Plan the linked issue into a spec and drive it with verification-gated agents.") so the warning doesn't fire before it applies.
+8. **`maybeStartGatedRun` takes the agent as a param** (`agent: TuiAgent | null`) rather than closing over `tuiAgent` — the quick path's agent is a function argument, not hook state; `TuiAgent` is a plain string union so `agentTool: agent` (no `.id`).
 
 ## F2 — spec-aware-feature-prompt (AC 6) — DONE
 
@@ -79,6 +91,15 @@ Notes for the F1 slice (from this one):
 Notes for the F5 slice (from this one):
 - `github_slug_and_number_from_issue_url` is now `pub(crate)` (F4) — no further widening needed.
 - The F1-slice Todo assertions can keep using `github_status_label(phase)` as the default-name accessor per §6.
+
+Notes for the F5 slice (from the F1 slice):
+- `ensure_spec_and_plan_fires_todo_at_plan` (routes/harness.rs) asserts the DEFAULT
+  label spelling `status/todo` in the fake-gh argv — when F5 makes names
+  configurable, that assertion stays valid (the test env has no `github.json`/
+  env overrides) but be aware it exercises `GithubStateMap::from_env` defaults.
+- The same test mutates `AGENTUM_GH_BIN` under `crate::TEST_ENV_LOCK` — F5's
+  `AGENTUM_GITHUB_CONFIG` tempdir isolation should take the same lock if it
+  mutates env (prefer the pure `apply_layers` injection per §6).
 
 ## Gate results (this slice)
 

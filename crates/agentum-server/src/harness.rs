@@ -21,7 +21,7 @@
 //! [`AppState`].
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -54,6 +54,12 @@ pub(crate) use drive::{inject_prompt, teardown_session, wait_for_settle};
 pub struct HarnessEngine {
     runs: RwLock<HashMap<Uuid, Arc<RwLock<HarnessRun>>>>,
     event_tx: broadcast::Sender<HarnessEvent>,
+    /// Serializes `POST /api/harness/start-work` end-to-end (spec 005 F1, C5):
+    /// the already-running check, the `feature_list.json` rewrite, and the
+    /// fresh register+claim must be atomic per workdir or two retries can
+    /// register two drivers on one worktree (the per-run `claim_driver` can't
+    /// see across registrations).
+    pub(crate) start_work_lock: tokio::sync::Mutex<()>,
 }
 
 impl HarnessEngine {
@@ -62,12 +68,26 @@ impl HarnessEngine {
         Self {
             runs: RwLock::new(HashMap::new()),
             event_tx,
+            start_work_lock: tokio::sync::Mutex::new(()),
         }
     }
 
     /// Subscribe to the harness event stream.
     pub fn subscribe(&self) -> broadcast::Receiver<HarnessEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// The registered run (if any) whose workdir == `workdir`. First match
+    /// wins; start-work keeps the map at ≤1 run per workdir going forward
+    /// (spec 005 F1 — the friendly already-running resolution).
+    pub async fn find_by_workdir(&self, workdir: &Path) -> Option<Uuid> {
+        let runs = self.runs.read().await;
+        for (id, run) in runs.iter() {
+            if run.read().await.workdir == workdir {
+                return Some(*id);
+            }
+        }
+        None
     }
 
     /// Register a new run from a project directory. Loads `.harness/` so a bad
@@ -1212,6 +1232,35 @@ mod tests {
         );
     }
 
+    /// Spec 005 F1: start-work resolves an existing run for the target worktree
+    /// by workdir — before any filesystem mutation (C5). Unknown dirs and
+    /// stopped runs resolve to `None`.
+    #[tokio::test]
+    async fn find_by_workdir_resolves_registered_run() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let engine = HarnessEngine::new();
+        assert_eq!(
+            engine.find_by_workdir(&wd).await,
+            None,
+            "nothing registered yet"
+        );
+
+        let id = engine.start(wd.clone()).await.unwrap();
+        assert_eq!(engine.find_by_workdir(&wd).await, Some(id));
+        assert_eq!(
+            engine
+                .find_by_workdir(Path::new("/nonexistent/elsewhere"))
+                .await,
+            None,
+            "a different workdir must not match"
+        );
+
+        // A stopped (removed) run no longer resolves — stale-idle stop +
+        // re-register is what makes start-work retries converge.
+        engine.stop(id).await.unwrap();
+        assert_eq!(engine.find_by_workdir(&wd).await, None);
+    }
+
     #[tokio::test]
     async fn reset_blocked_features_retries_the_halted_feature() {
         // verify.sh always red → drive feat-1 into Blocked (max_retries = 2).
@@ -1633,6 +1682,53 @@ mod surface_tests {
                 .iter()
                 .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none()),
             "plan_from_spec stamps no tracker provenance"
+        );
+    }
+
+    /// Spec 005 F1 (AC 2): the post-plan knob write persists `agent_tool`/
+    /// `agent_model` while the feature vector, tracker stamps, and the F2
+    /// `spec_id` stamp pass through untouched. Reload from disk proves it.
+    #[tokio::test]
+    async fn update_backlog_knobs_preserves_features_and_writes_knobs() {
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path();
+        let url = "https://github.com/acme/widgets/issues/42";
+        let spec_dir = wd.join(".agentum-harness/specs/s1");
+        std::fs::create_dir_all(&spec_dir).unwrap();
+        std::fs::write(spec_dir.join("spec.md"), "- [ ] A\n- [ ] B\n").unwrap();
+        let planned = plan_from_spec_with_tracker(wd, "s1", "github", url)
+            .await
+            .unwrap();
+        assert_eq!(
+            planned.agent_tool, "claude",
+            "default before the knob write"
+        );
+
+        let saved = update_backlog_knobs(wd, |list| {
+            list.agent_tool = "codex".into();
+            list.agent_model = Some("gpt-5".into());
+        })
+        .await
+        .unwrap();
+        assert_eq!(saved.agent_tool, "codex");
+        assert_eq!(saved.agent_model.as_deref(), Some("gpt-5"));
+
+        // Reload from disk: knobs persisted, everything else untouched.
+        let cfg = HarnessConfig::load(wd).await.unwrap();
+        assert_eq!(cfg.features.agent_tool, "codex");
+        assert_eq!(cfg.features.agent_model.as_deref(), Some("gpt-5"));
+        assert_eq!(
+            cfg.features.spec_id.as_deref(),
+            Some("s1"),
+            "spec_id untouched"
+        );
+        assert_eq!(cfg.features.features.len(), 2, "feature vector untouched");
+        assert!(
+            cfg.features.features.iter().all(|f| {
+                f.tracker_provider.as_deref() == Some("github")
+                    && f.tracker_url.as_deref() == Some(url)
+            }),
+            "tracker stamps untouched"
         );
     }
 

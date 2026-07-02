@@ -149,6 +149,44 @@ export function startHarness(workdir: string): Promise<{ harness_id: string }> {
   return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
 }
 
+/** Wire shape of `POST /api/harness/start-work` (spec 005 F1 — camelCase,
+ *  matching the newer `SpecFromIssueResponse` precedent). */
+export type StartGatedWorkResult = {
+  harnessId: string
+  specId: string
+  specExisted: boolean
+  planned: number
+  runStarted: boolean
+  /** A live run already drives this worktree — a friendly state, not an error. */
+  alreadyRunning: boolean
+}
+
+/**
+ * `POST /api/harness/start-work` — the one-click issue → gated run
+ * orchestration (spec 005 F1): converge-scaffold + plan from the linked issue,
+ * initial Todo transition, agent/model knob write, then register + run the
+ * Harness Engine against the worktree. Server-side so every caller (composer,
+ * Tasks page) shares one failure surface.
+ */
+export function startGatedWork(input: {
+  workdir: string
+  number: number
+  slug?: string
+  agentTool?: string
+  agentModel?: string
+}): Promise<StartGatedWorkResult> {
+  return request('/api/harness/start-work', {
+    method: 'POST',
+    body: JSON.stringify({
+      workdir: input.workdir,
+      number: String(input.number),
+      ...(input.slug ? { slug: input.slug } : {}),
+      ...(input.agentTool ? { agentTool: input.agentTool } : {}),
+      ...(input.agentModel ? { agentModel: input.agentModel } : {})
+    })
+  })
+}
+
 export type PlanGoalHarnessResult = {
   /** Which task manager backed the features: "board" | "github" | "linear". */
   provider: string

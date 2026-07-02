@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Worktree } from '../../../shared/types'
 import { useAppStore } from '@/store'
 import { takePendingSessionPrompt } from '@/lib/pending-session-prompt'
-import { openCreatedWorkspace } from './open-created-workspace'
+import { openCreatedWorkspace, planCreatedWorkspaceOpen } from './open-created-workspace'
 
 const initialAppStoreState = useAppStore.getState()
 
@@ -103,5 +103,89 @@ describe('openCreatedWorkspace', () => {
     // picker renders (no surface) and the prompt is stashed for it to deliver.
     expect(tabs).toHaveLength(0)
     expect(takePendingSessionPrompt(worktree.id)).toBe('implement feature X')
+  })
+
+  it('gated run launches no agent and stashes nothing (spec 005 F1, D2)', () => {
+    const worktree = makeWorktree()
+    seedStore(worktree)
+
+    openCreatedWorkspace({
+      worktreeId: worktree.id,
+      agent: 'codex',
+      prompt: 'implement feature X',
+      gatedRun: true
+    })
+
+    const state = useAppStore.getState()
+    const tabs = state.tabsByWorktree[worktree.id] ?? []
+    // The engine's sessions are the only agents in the worktree: no draft-open…
+    expect(tabs).toHaveLength(0)
+    // …and no prompt stashed for the picker either.
+    expect(takePendingSessionPrompt(worktree.id)).toBeUndefined()
+  })
+})
+
+// Spec 005 F1 (D2): the "suppression flag round-trips" unit pin. A gated
+// engine run must skip ALL THREE plain-delivery paths (draft-open, picker
+// prompt stash, issueCommand automation); the default path stays exactly
+// today's behavior.
+describe('planCreatedWorkspaceOpen', () => {
+  it('gated run suppresses all three plain-delivery paths', () => {
+    expect(
+      planCreatedWorkspaceOpen({
+        gatedRun: true,
+        agent: 'claude',
+        prompt: 'do the thing',
+        hasIssueCommand: true
+      })
+    ).toEqual({ launchAgent: false, stashPrompt: false, runIssueCommand: false })
+  })
+
+  it('gated run suppresses even without an agent or issueCommand', () => {
+    expect(
+      planCreatedWorkspaceOpen({
+        gatedRun: true,
+        agent: null,
+        prompt: 'typed prompt',
+        hasIssueCommand: false
+      })
+    ).toEqual({ launchAgent: false, stashPrompt: false, runIssueCommand: false })
+  })
+
+  it('agent + prompt launches the agent only (prompt rides as a draft)', () => {
+    expect(
+      planCreatedWorkspaceOpen({ agent: 'claude', prompt: 'hello', hasIssueCommand: false })
+    ).toEqual({ launchAgent: true, stashPrompt: false, runIssueCommand: false })
+  })
+
+  it('no agent + prompt stashes the prompt for the picker', () => {
+    expect(
+      planCreatedWorkspaceOpen({ agent: null, prompt: 'hello', hasIssueCommand: false })
+    ).toEqual({ launchAgent: false, stashPrompt: true, runIssueCommand: false })
+  })
+
+  it('no agent + whitespace-only prompt stashes nothing', () => {
+    expect(
+      planCreatedWorkspaceOpen({ agent: null, prompt: '   ', hasIssueCommand: false })
+    ).toEqual({ launchAgent: false, stashPrompt: false, runIssueCommand: false })
+  })
+
+  it('issueCommand automation runs on the default path', () => {
+    expect(planCreatedWorkspaceOpen({ agent: 'claude', hasIssueCommand: true })).toEqual({
+      launchAgent: true,
+      stashPrompt: false,
+      runIssueCommand: true
+    })
+  })
+
+  it('explicit gatedRun: false behaves like the default path', () => {
+    expect(
+      planCreatedWorkspaceOpen({
+        gatedRun: false,
+        agent: null,
+        prompt: 'hello',
+        hasIssueCommand: true
+      })
+    ).toEqual({ launchAgent: false, stashPrompt: true, runIssueCommand: true })
   })
 })

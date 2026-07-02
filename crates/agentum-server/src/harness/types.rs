@@ -960,6 +960,28 @@ async fn plan_from_spec_inner(
     Ok(list)
 }
 
+/// Load → mutate → persist `feature_list.json`; returns the saved list. The
+/// post-plan knob-write seam (spec 005 F1, AC 2): start-work writes the
+/// composer's `agent_tool`/`agent_model` into the freshly planned backlog.
+/// Knob writes only by contract — the `features` vector passes through
+/// untouched (contrast [`FeatureList::copy_knobs_from`], which copies knobs
+/// *onto* a derived feature set). `spec_id` is already stamped by
+/// [`plan_from_spec_inner`]; callers must not re-stamp it here.
+pub async fn update_backlog_knobs(
+    workdir: &Path,
+    apply: impl FnOnce(&mut FeatureList),
+) -> anyhow::Result<FeatureList> {
+    let path = resolve_harness_dir(workdir).join("feature_list.json");
+    let content = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
+    let mut list: FeatureList = serde_json::from_str(&content)
+        .map_err(|e| anyhow::anyhow!("feature_list.json is invalid: {e}"))?;
+    apply(&mut list);
+    tokio::fs::write(&path, serde_json::to_string_pretty(&list)?).await?;
+    Ok(list)
+}
+
 /// Hard cap on the issue body embedded into a generated spec.md (spec 004 F4).
 /// Mirrors the UI's snapshot ethos (`GITHUB_ISSUE_BODY_MAX_CHARS`) at a
 /// file-appropriate scale: a runaway issue body must not produce an unbounded
