@@ -5,17 +5,20 @@
 // the selected workspace (a picker in the toolbar) — that same workspace grounds
 // the interview — so there's no manual owner/repo entry. The reply streams in
 // token-by-token; an optional extended-thinking trace is shown above each answer.
-// Conversations are kept in local history (sidebar), and the workspace + model +
-// thinking are user-pickable. The "Create issues" button is the only mutation
-// here — review and start-task happen on the Board.
-import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+//
+// Conversations and in-flight streams live in the module-level `chat-store` —
+// NOT in this component — so a reply keeps streaming when the page unmounts
+// (view switch, hub tab change) and is intact when the user comes back. This
+// page is a subscriber; the only mutation it owns is the issue preview/file
+// flow ("Preview issues" → review modal → confirm).
+import { type FormEvent, type KeyboardEvent, memo, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
+  ArrowUp,
   ArrowUpRight,
   Brain,
   Check,
   ChevronDown,
   Columns3,
-  Cpu,
   Eye,
   FolderGit2,
   Github,
@@ -23,15 +26,14 @@ import {
   MessagesSquare,
   Plus,
   RefreshCw,
-  Send,
   Square,
   Trash2,
-  User,
   X
 } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
+import { api } from '@/tauri'
 import type { Repo } from '@/shared/types'
 import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import { AgentumMark } from '@/components/icons/AgentumMark'
@@ -45,19 +47,18 @@ import {
   type IssueProvider,
   type IssueSplit,
   previewIssuesFromChat,
-  resolveChatModel,
-  streamChat
+  resolveChatModel
 } from '@/runtime/chat-client'
+import { type Conversation, type FiledResult, type StoredTurn } from '@/runtime/chat-history'
 import {
-  type Conversation,
-  type FiledResult,
-  loadConversations,
-  newConversationId,
-  saveConversations,
-  type StoredTurn,
-  titleFromMessages,
-  upsertConversation
-} from '@/runtime/chat-history'
+  appendAssistantTurn,
+  deleteConversation,
+  dismissStreamError,
+  getChatSnapshot,
+  sendChatMessage,
+  stopStream,
+  subscribeChat
+} from '@/runtime/chat-store'
 
 // Picker defaults persist across restarts so the user doesn't re-pick every time
 // (same client-persistence pattern as the planner tool / profiles).
@@ -98,6 +99,10 @@ const parseIssueNumber = (issue: { id?: string; url: string }): number | null =>
   return m ? Number(m[1]) : null
 }
 
+/** Stable empty transcript so effects keyed on `messages` don't re-fire when no
+ *  conversation is selected. */
+const NO_MESSAGES: StoredTurn[] = []
+
 export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = {}) {
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
@@ -105,10 +110,13 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openProjectHub = useAppStore((s) => s.openProjectHub)
 
-  const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations())
+  // Conversations + stream state come from the module store, so a reply that is
+  // mid-stream when this page unmounts is still streaming when it remounts.
+  const chat = useSyncExternalStore(subscribeChat, getChatSnapshot)
+  const conversations = chat.conversations
+
   const [activeId, setActiveId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -185,12 +193,6 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     [repos, workspaceId, pinnedRepo]
   )
 
-  // The in-flight stream's abort handle, so the Stop button can cancel it.
-  const abortRef = useRef<AbortController | null>(null)
-  // Abort on unmount: hub tab switches unmount this page mid-stream far more
-  // casually than full-page navigation ever did — without this the fetch
-  // keeps streaming server-side into a discarded component.
-  useEffect(() => () => abortRef.current?.abort(), [])
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // Auto-grow the composer with its content. The cap matches the textarea's
@@ -201,13 +203,6 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [draft])
-
-  // Persist history shortly after the last change — coalesces the per-token state
-  // updates of a streaming reply into a single localStorage write.
-  useEffect(() => {
-    const t = setTimeout(() => saveConversations(conversations), 400)
-    return () => clearTimeout(t)
-  }, [conversations])
 
   // The history rail's list. In the Project Hub only threads grounded in the
   // pinned project appear; the global Chat view keeps showing everything
@@ -221,8 +216,13 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     () => conversations.find((c) => c.id === activeId) ?? null,
     [conversations, activeId]
   )
-  const messages = active?.messages ?? []
+  const messages = active?.messages ?? NO_MESSAGES
   const hasAssistantReply = messages.some((m) => m.role === 'assistant' && m.content.trim().length > 0)
+
+  // Busy = THIS conversation is streaming. Other conversations may stream in the
+  // background at the same time (the sidebar shows a spinner on each).
+  const busy = activeId != null && !!chat.streaming[activeId]
+  const streamError = activeId != null ? (chat.errors[activeId] ?? null) : null
 
   // Keep the open transcript inside the pinned project's scope: switching hub
   // projects (or opening the hub while a foreign thread was active) resets to
@@ -233,47 +233,17 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     if (!activeInScope) setActiveId(null)
   }, [pinnedRepo, activeId, visibleConversations])
 
-  // Auto-follow the newest content. Instant while streaming (token follow),
-  // smooth otherwise.
+  // Auto-follow the newest content of the OPEN conversation only — background
+  // streams updating other threads must not yank the scroll. Instant while
+  // streaming (token follow), smooth otherwise.
   const bottomRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: busy ? 'auto' : 'smooth', block: 'end' })
-  }, [conversations, busy])
-
-  // --- conversation state helpers (immutable, no re-sort mid-stream) ---
-
-  const updateLastAssistant = useCallback(
-    (id: string, patch: { content?: string; thinking?: string }) => {
-      setConversations((prev) =>
-        prev.map((c) => {
-          if (c.id !== id) return c
-          const msgs = c.messages.slice()
-          const last = msgs[msgs.length - 1]
-          if (!last || last.role !== 'assistant') return c
-          msgs[msgs.length - 1] = { ...last, ...patch }
-          return { ...c, messages: msgs }
-        })
-      )
-    },
-    []
-  )
-
-  const appendAssistant = useCallback((id: string, content: string, filed?: FiledResult) => {
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              messages: [...c.messages, { role: 'assistant', content, ...(filed ? { filed } : {}) }],
-              updatedAt: Date.now()
-            }
-          : c
-      )
-    )
-  }, [])
+  }, [messages, busy])
 
   const startNewChat = useCallback(() => {
-    abortRef.current?.abort()
+    // Deliberately does NOT stop an in-flight stream — it keeps going in the
+    // background and the sidebar shows its progress.
     setActiveId(null)
     setDraft('')
     setError(null)
@@ -283,119 +253,59 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     textareaRef.current?.focus()
   }, [])
 
-  const selectConversation = useCallback(
-    (c: Conversation) => {
-      if (busy) return
-      setActiveId(c.id)
-      setError(null)
-      setModel(c.model || DEFAULT_CHAT_MODEL)
-      setThinking(!!c.thinking)
-    },
-    [busy]
-  )
-
-  const removeConversation = useCallback((c: Conversation) => {
-    const ok = window.confirm(`Delete "${c.title}"? This can't be undone.`)
-    if (!ok) return
-    setConversations((prev) => prev.filter((x) => x.id !== c.id))
-    setActiveId((cur) => (cur === c.id ? null : cur))
+  const selectConversation = useCallback((c: Conversation) => {
+    // Switching away from a streaming thread is fine — the store keeps it going.
+    setActiveId(c.id)
+    setError(null)
+    setModel(c.model || DEFAULT_CHAT_MODEL)
+    setThinking(!!c.thinking)
   }, [])
 
+  const removeConversation = useCallback(
+    (c: Conversation) => {
+      const ok = window.confirm(`Delete "${c.title}"? This can't be undone.`)
+      if (!ok) return
+      deleteConversation(c.id)
+      setActiveId((cur) => (cur === c.id ? null : cur))
+    },
+    []
+  )
+
+  // Mirrors `activeId` synchronously. A second Enter before React re-renders
+  // would read a stale `activeId` of null and mint a SECOND conversation for
+  // the same prompt; going through the ref makes the store's already-streaming
+  // guard catch the duplicate instead.
+  const activeIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    activeIdRef.current = activeId
+  }, [activeId])
+
   const submit = useCallback(
-    async (e?: FormEvent) => {
+    (e?: FormEvent) => {
       e?.preventDefault()
       const text = draft.trim()
       if (!text || busy) return
       setError(null)
-
-      const convoId = activeId ?? newConversationId()
-      const isNew = activeId == null
-      const now = Date.now()
-      const userTurn: StoredTurn = { role: 'user', content: text }
-
-      // Wire history = prior turns + this user turn (the streamed-into placeholder
-      // is excluded). Computed from current state before the optimistic update.
-      const prior = conversations.find((c) => c.id === convoId)?.messages ?? []
-      const history = [...prior, userTurn]
-
-      // Optimistically render the user turn + an empty assistant turn to stream into.
-      setConversations((prev) => {
-        if (isNew) {
-          const convo: Conversation = {
-            id: convoId,
-            title: titleFromMessages([userTurn]),
-            messages: [userTurn, { role: 'assistant', content: '', thinking: '' }],
-            model,
-            thinking,
-            createdAt: now,
-            updatedAt: now,
-            // Scope the thread to the project that grounded it, so the Project
-            // Hub's per-project history can filter without a migration.
-            repoId: workspace?.id
-          }
-          return upsertConversation(prev, convo)
-        }
-        return prev.map((c) =>
-          c.id === convoId
-            ? {
-                ...c,
-                messages: [...c.messages, userTurn, { role: 'assistant', content: '', thinking: '' }],
-                model,
-                thinking,
-                updatedAt: now
-              }
-            : c
-        )
+      const id = sendChatMessage({
+        conversationId: activeIdRef.current,
+        text,
+        model,
+        thinking,
+        workdir: workspace?.path,
+        // Scope new threads to the project that grounded them, so the Project
+        // Hub's per-project history can filter without a migration.
+        repoId: workspace?.id
       })
-      setActiveId(convoId)
+      activeIdRef.current = id
+      setActiveId(id)
       setDraft('')
-      setBusy(true)
-
-      const ac = new AbortController()
-      abortRef.current = ac
-      let content = ''
-      let reasoning = ''
-      try {
-        await streamChat(history, {
-          workdir: workspace?.path,
-          model,
-          thinking,
-          signal: ac.signal,
-          onDelta: (d) => {
-            if (d.type === 'text') content += d.text
-            else if (d.type === 'thinking') reasoning += d.text
-            updateLastAssistant(convoId, { content, thinking: reasoning })
-          }
-        })
-        // Bump updatedAt so the conversation floats to the top of the history list.
-        setConversations((prev) =>
-          prev.map((c) => (c.id === convoId ? { ...c, updatedAt: Date.now() } : c))
-        )
-      } catch (e2) {
-        // Aborted (Stop) keeps whatever streamed; a real failure surfaces the
-        // server's specific reason. Either way, drop a still-empty assistant turn
-        // so we never leave a blank bubble.
-        if (!ac.signal.aborted) {
-          setError(e2 instanceof Error ? e2.message : String(e2))
-        }
-        setConversations((prev) =>
-          prev.map((c) => {
-            if (c.id !== convoId) return c
-            const msgs = c.messages.slice()
-            const last = msgs[msgs.length - 1]
-            if (last && last.role === 'assistant' && !last.content && !last.thinking) msgs.pop()
-            return { ...c, messages: msgs }
-          })
-        )
-      } finally {
-        if (abortRef.current === ac) abortRef.current = null
-        setBusy(false)
-      }
     },
-    [draft, busy, activeId, conversations, model, thinking, workspace, updateLastAssistant]
+    [draft, busy, model, thinking, workspace]
   )
 
-  const stop = useCallback(() => abortRef.current?.abort(), [])
+  const stop = useCallback(() => {
+    if (activeId != null) stopStream(activeId)
+  }, [activeId])
 
   // Enter submits; Shift+Enter inserts a newline.
   const onKeyDown = useCallback(
@@ -477,8 +387,9 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
       }
       // The markdown lines stay as the turn's `content` (old chats / exports);
       // `filed` is what the transcript actually renders — a card whose rows
-      // click through to the board.
-      appendAssistant(convoId, lines.join('\n'), {
+      // click through to the board. Appended via the store so it lands even if
+      // the user navigated away while the filing ran.
+      appendAssistantTurn(convoId, lines.join('\n'), {
         provider,
         repo: result.repo ?? null,
         issues: result.created,
@@ -490,7 +401,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     } finally {
       setCreating(false)
     }
-  }, [active, draftPlan, creating, messages, workspace, provider, split, labelsInput, appendAssistant])
+  }, [active, draftPlan, creating, messages, workspace, provider, split, labelsInput])
 
   // Draft edit helpers — every edit marks the draft dirty (Regenerate then warns).
   const patchPlan = useCallback((patch: Partial<DraftPlan>) => {
@@ -515,6 +426,18 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   const useExample = useCallback((text: string) => {
     setDraft(text)
     textareaRef.current?.focus()
+  }, [])
+
+  // Markdown links in assistant replies render as `target="_blank"` anchors,
+  // which are dead inside the Tauri webview (no window.open handler) — the
+  // same bug the FiledCard arrow had. Route every http(s) anchor in the
+  // transcript through the native opener instead.
+  const onTranscriptClick = useCallback((e: ReactMouseEvent<HTMLDivElement>) => {
+    const anchor = (e.target as HTMLElement).closest?.('a[href]')
+    const href = anchor?.getAttribute('href') ?? ''
+    if (!/^https?:\/\//i.test(href)) return
+    e.preventDefault()
+    void api.shell.openUrl(href)
   }, [])
 
   // Filed-card row click → the Tasks board. For a GitHub issue with a parsable
@@ -587,20 +510,19 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
             <button
               type="button"
               onClick={startNewChat}
-              className="flex w-full items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-[13px] font-medium transition-colors hover:border-foreground/30 hover:bg-accent"
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium text-foreground/90 transition-colors hover:bg-accent"
             >
               <Plus className="size-3.5" /> New chat
             </button>
           </div>
-          <div className="px-3.5 pb-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-            History
-          </div>
+          <div className="px-3.5 pb-1.5 text-[11px] font-medium text-muted-foreground">Chats</div>
           <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
             {visibleConversations.length === 0 ? (
               <div className="px-3 py-2 text-[12px] text-muted-foreground">No chats yet.</div>
             ) : (
               visibleConversations.map((c) => {
                 const isActive = c.id === activeId
+                const isStreaming = !!chat.streaming[c.id]
                 // Global view: a thread grounded in a project links to that
                 // project's hub chat (ADE prototype "open a thread to scope
                 // it"). Pinned (hub) mode skips the chip — every row is
@@ -628,7 +550,10 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                       )}
                     >
                       <span className="truncate text-[13px]">{c.title}</span>
-                      <span className="flex items-center gap-1.5 truncate font-mono text-[10px] text-muted-foreground">
+                      <span className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+                        {isStreaming ? (
+                          <Loader2 className="size-3 flex-none animate-spin text-primary" aria-label="replying" />
+                        ) : null}
                         {threadRepo ? (
                           <>
                             <button
@@ -638,7 +563,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                                 e.stopPropagation()
                                 openProjectHub(threadRepo.id, 'chat')
                               }}
-                              className="max-w-[9rem] truncate rounded-sm border border-border/70 px-1 py-px text-[9.5px] leading-none hover:border-foreground/40 hover:text-foreground"
+                              className="max-w-[9rem] truncate rounded-sm border border-border/70 px-1 py-px text-[10px] leading-none hover:border-foreground/40 hover:text-foreground"
                             >
                               {threadRepo.displayName}
                             </button>
@@ -671,9 +596,10 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
 
         {/* ---- chat column ---- */}
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* workspace + model + thinking toolbar. Pinned (hub) mode drops the
-              workspace picker — the hub's project IS the workspace. */}
-          <div className="flex h-11 flex-none items-center gap-2 border-b border-border px-4">
+          {/* workspace + model + thinking — quiet ghost controls, ChatGPT-header
+              style. Pinned (hub) mode drops the workspace picker — the hub's
+              project IS the workspace. */}
+          <div className="flex h-12 flex-none items-center gap-1 px-3">
             {pinnedRepo ? null : (
               <WorkspacePicker
                 repos={repos}
@@ -687,13 +613,13 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
           </div>
 
           {/* transcript */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
-            <div className="mx-auto flex max-w-[760px] flex-col gap-5">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4" onClick={onTranscriptClick}>
+            <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-6">
               {messages.length === 0 && !busy ? (
                 <EmptyState onPick={useExample} />
               ) : (
                 messages.map((m, i) => (
-                  <Bubble
+                  <Turn
                     key={i}
                     turn={m}
                     streaming={busy && i === messages.length - 1 && m.role === 'assistant'}
@@ -702,10 +628,12 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                 ))
               )}
 
-              {error ? (
-                <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-400">
-                  {error}
-                </div>
+              {error ? <ErrorBanner text={error} onDismiss={() => setError(null)} /> : null}
+              {streamError ? (
+                <ErrorBanner
+                  text={streamError}
+                  onDismiss={() => activeId != null && dismissStreamError(activeId)}
+                />
               ) : null}
 
               <div ref={bottomRef} />
@@ -713,65 +641,68 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
           </div>
 
           {/* composer */}
-          <form onSubmit={submit} className="flex-none border-t border-border px-5 pb-4.5 pt-3">
-            {hasAssistantReply ? (
-              <div className="mx-auto mb-2.5 flex max-w-[760px] items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/60 py-1.5 pl-3 pr-1.5">
-                <span className="min-w-0 truncate text-[11.5px] text-muted-foreground">
-                  {workspace
-                    ? `Ready to file? Review and edit the draft first — repo inferred from ${workspace.displayName}.`
-                    : 'Pick a workspace above to file issues into.'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void openPreview()}
-                  disabled={busy || previewing || creating || messages.length === 0 || !workspace}
-                  className="inline-flex flex-none items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
-                >
-                  {previewing ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Eye className="size-3.5" />
-                  )}
-                  {previewing ? 'Preparing preview…' : 'Preview issues'}
-                </button>
+          <form onSubmit={submit} className="flex-none px-4 pb-3 pt-1">
+            <div className="mx-auto w-full max-w-[46rem]">
+              {hasAssistantReply ? (
+                <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/50 py-1.5 pl-3.5 pr-1.5">
+                  <span className="min-w-0 truncate text-[12px] text-muted-foreground">
+                    {workspace
+                      ? `Review the drafted issues before anything is filed — repo inferred from ${workspace.displayName}.`
+                      : 'Pick a workspace above to file issues into.'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void openPreview()}
+                    disabled={busy || previewing || creating || messages.length === 0 || !workspace}
+                    className="inline-flex flex-none items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[12.5px] font-medium transition-colors hover:bg-accent disabled:opacity-40"
+                  >
+                    {previewing ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Eye className="size-3.5" />
+                    )}
+                    {/* The interviewer system prompt (routes/chat.rs) names this
+                        button — keep the label and that prompt in sync. */}
+                    {previewing ? 'Preparing preview…' : 'Preview issues'}
+                  </button>
+                </div>
+              ) : null}
+              <div className="flex items-end gap-2 rounded-[26px] border border-border bg-card px-4 py-2 shadow-sm transition-shadow focus-within:border-foreground/25 focus-within:ring-2 focus-within:ring-foreground/10">
+                <textarea
+                  ref={textareaRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  rows={1}
+                  autoFocus
+                  placeholder='Describe a feature — try "Add a CSV export to the board"'
+                  className="max-h-40 flex-1 resize-none overflow-y-auto bg-transparent py-1.5 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none"
+                />
+                {busy ? (
+                  <button
+                    type="button"
+                    onClick={stop}
+                    className="mb-0.5 inline-flex size-8 flex-none items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-85"
+                    aria-label="Stop generating"
+                    title="Stop generating"
+                  >
+                    <Square className="size-3 fill-current" />
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!draft.trim()}
+                    className="mb-0.5 inline-flex size-8 flex-none items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-85 disabled:opacity-30"
+                    aria-label="Send"
+                    title="Send (⏎)"
+                  >
+                    <ArrowUp className="size-4" strokeWidth={2.5} />
+                  </button>
+                )}
               </div>
-            ) : null}
-            <div className="mx-auto flex max-w-[760px] items-end gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 transition-shadow focus-within:border-foreground/30 focus-within:ring-2 focus-within:ring-foreground/10">
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={onKeyDown}
-                rows={1}
-                placeholder='Describe a feature — try "Add a CSV export to the board"'
-                className="max-h-40 flex-1 resize-none overflow-y-auto bg-transparent py-1 text-[14px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
-              />
-              {busy ? (
-                <button
-                  type="button"
-                  onClick={stop}
-                  className="inline-flex size-8 flex-none items-center justify-center rounded-lg border border-border text-foreground hover:bg-accent"
-                  aria-label="Stop generating"
-                  title="Stop generating"
-                >
-                  <Square className="size-3.5 fill-current" />
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={!draft.trim()}
-                  className="inline-flex size-8 flex-none items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity hover:opacity-85 disabled:opacity-40"
-                  aria-label="Send"
-                  title="Send (⏎)"
-                >
-                  <Send className="size-4" />
-                </button>
-              )}
-            </div>
-            <div className="mx-auto mt-1.5 flex max-w-[760px] justify-end">
-              <span className="font-mono text-[10px] text-muted-foreground/70">
-                ⏎ send · ⇧⏎ newline
-              </span>
+              <div className="mt-1.5 text-center text-[11px] text-muted-foreground/60">
+                Enter to send · Shift+Enter for a new line
+              </div>
             </div>
           </form>
         </div>
@@ -1099,8 +1030,8 @@ function SegButtons(props: {
 }
 
 /** The assistant mark — the agentum brand glyph (the stacked-square "A", from
- *  `resources/logo.svg`) in white on a gradient tile, so the chat reads as
- *  agentum rather than a generic AI. */
+ *  `resources/logo.svg`) in white on a gradient tile. Used only in the empty
+ *  state now; transcript turns render flat, ChatGPT-style. */
 function AssistantAvatar({ className }: { className?: string }) {
   return (
     <span
@@ -1147,7 +1078,7 @@ function WorkspacePicker({
         type="button"
         disabled={disabled || repos.length === 0}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-foreground/90 transition-colors hover:bg-accent disabled:opacity-50"
         aria-haspopup="listbox"
         aria-expanded={open}
         title="Workspace the chat is grounded in — and where issues are filed"
@@ -1163,7 +1094,7 @@ function WorkspacePicker({
       {open ? (
         <div
           role="listbox"
-          className="absolute left-0 top-full z-30 mt-1 w-72 rounded-lg border border-border bg-card p-1 shadow-lg"
+          className="absolute left-0 top-full z-30 mt-1 w-72 rounded-xl border border-border bg-card p-1 shadow-lg"
         >
           {repos.length === 0 ? (
             <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
@@ -1236,11 +1167,10 @@ function ModelPicker({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-50"
+        className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-foreground/90 transition-colors hover:bg-accent disabled:opacity-50"
         aria-haspopup="listbox"
         aria-expanded={open}
       >
-        <Cpu className="size-3.5 text-muted-foreground" />
         <span>{current.label}</span>
         <ChevronDown
           className={cn('size-3.5 text-muted-foreground transition-transform', open && 'rotate-180')}
@@ -1249,7 +1179,7 @@ function ModelPicker({
       {open ? (
         <div
           role="listbox"
-          className="absolute left-0 top-full z-30 mt-1 w-64 rounded-lg border border-border bg-card p-1 shadow-lg"
+          className="absolute left-0 top-full z-30 mt-1 w-64 rounded-xl border border-border bg-card p-1 shadow-lg"
         >
           {CHAT_MODELS.map((m) => {
             const sel = m.id === current.id
@@ -1300,10 +1230,8 @@ function ThinkingToggle({
       aria-pressed={on}
       title="Extended thinking — the model reasons before answering (shown above each reply)"
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12.5px] font-medium transition-colors disabled:opacity-50',
-        on
-          ? 'border-primary/40 bg-primary/10 text-primary'
-          : 'border-border text-muted-foreground hover:bg-accent'
+        'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium transition-colors disabled:opacity-50',
+        on ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent'
       )}
     >
       <Brain className="size-3.5" /> Thinking
@@ -1311,25 +1239,25 @@ function ThinkingToggle({
   )
 }
 
-/** Collapsible reasoning trace shown above an assistant answer. Open while the
- *  reply streams, then auto-collapses — unless the user has toggled it. */
+/** Collapsible reasoning trace shown above an assistant answer — a quiet text
+ *  disclosure, ChatGPT's "thought for…" style. Open while the reply streams,
+ *  then auto-collapses — unless the user has toggled it. */
 function Reasoning({ text, streaming }: { text: string; streaming: boolean }) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
   const open = userOpen ?? streaming
   return (
-    <div className="mb-2 overflow-hidden rounded-md border border-border/70 bg-foreground/[0.03]">
+    <div className="mb-2.5">
       <button
         type="button"
         onClick={() => setUserOpen(!open)}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
-        <Brain className="size-3.5 text-primary/80" />
         <span>{streaming && !text ? 'Thinking…' : 'Reasoning'}</span>
         {streaming ? <Loader2 className="size-3 animate-spin" /> : null}
-        <ChevronDown className={cn('ml-auto size-3.5 transition-transform', open && 'rotate-180')} />
+        <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
       </button>
       {open && text ? (
-        <div className="whitespace-pre-wrap border-t border-border/70 px-2.5 py-2 text-[12px] leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+        <div className="mt-2 whitespace-pre-wrap border-l-2 border-border pl-3.5 text-[13px] leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
           {text}
         </div>
       ) : null}
@@ -1337,10 +1265,30 @@ function Reasoning({ text, streaming }: { text: string; streaming: boolean }) {
   )
 }
 
-/** One chat turn. User turns are accent + right-aligned; assistant turns render
- *  markdown — or, for a filing-summary turn, the clickable issues card — with
- *  the optional reasoning trace above and a live indicator while streaming. */
-function Bubble({
+/** A dismissible inline error strip for the transcript. */
+function ErrorBanner({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[12.5px] text-red-400">
+      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{text}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss error"
+        className="flex-none rounded p-0.5 transition-colors hover:bg-red-500/20"
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  )
+}
+
+/** One chat turn, ChatGPT-style: user turns are a right-aligned quiet bubble;
+ *  assistant turns are flat markdown on the page background — no avatar, no
+ *  name eyebrow, no box — with the optional reasoning trace above. A
+ *  filing-summary turn renders the clickable issues card instead. Memoized so
+ *  a streaming reply re-renders only the trailing turn per token, not every
+ *  completed turn's markdown. */
+const Turn = memo(function Turn({
   turn,
   streaming,
   onOpenIssue
@@ -1349,51 +1297,41 @@ function Bubble({
   streaming: boolean
   onOpenIssue: (filed: FiledResult, issue: FiledResult['issues'][number]) => void
 }) {
-  const isUser = turn.role === 'user'
-  return (
-    <div className={cn('flex items-start gap-3', isUser && 'flex-row-reverse')}>
-      {isUser ? (
-        <div className="grid size-7 flex-none place-items-center rounded-full border border-border bg-card text-muted-foreground">
-          <User className="size-3.5" />
+  if (turn.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-3xl rounded-br-lg bg-accent px-4 py-2.5 text-[15px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
+          {turn.content}
         </div>
-      ) : (
-        <AssistantAvatar className="size-7" />
-      )}
-      <div className={cn('flex min-w-0 max-w-[82%] flex-col', isUser && 'items-end')}>
-        <div className="mb-1.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-          {isUser ? 'you' : 'agentum'}
-        </div>
-        {isUser ? (
-          <div className="whitespace-pre-wrap rounded-2xl rounded-tr-sm border border-primary/30 bg-primary/10 px-4 py-3 text-[14px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
-            {turn.content}
-          </div>
-        ) : (
-          <div className="min-w-0">
-            {turn.thinking ? <Reasoning text={turn.thinking} streaming={streaming} /> : null}
-            {turn.filed ? (
-              <FiledCard filed={turn.filed} onOpenIssue={onOpenIssue} />
-            ) : turn.content ? (
-              <CommentMarkdown
-                content={turn.content}
-                variant="compact"
-                className="rounded-2xl rounded-tl-sm border border-border bg-card px-4 py-3 text-[14px] leading-relaxed"
-              />
-            ) : streaming && !turn.thinking ? (
-              <div className="inline-flex items-center gap-2 rounded-2xl rounded-tl-sm border border-border bg-card px-4 py-3 font-mono text-[12px] text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" /> thinking…
-              </div>
-            ) : null}
-          </div>
-        )}
       </div>
+    )
+  }
+  return (
+    <div className="min-w-0">
+      {turn.thinking ? <Reasoning text={turn.thinking} streaming={streaming} /> : null}
+      {turn.filed ? (
+        <FiledCard filed={turn.filed} onOpenIssue={onOpenIssue} />
+      ) : turn.content ? (
+        <CommentMarkdown
+          content={turn.content}
+          variant="compact"
+          className="text-[15px] leading-7 text-foreground"
+        />
+      ) : streaming && !turn.thinking ? (
+        <span
+          className="mt-1 inline-block size-2.5 animate-pulse rounded-full bg-foreground/80"
+          aria-label="Generating…"
+        />
+      ) : null}
     </div>
   )
-}
+})
 
 /** The filing-summary card: what was created, where — and the bridge onward.
  *  Clicking a row opens the Tasks board with that issue's detail; the trailing
- *  arrow opens the tracker in the browser. Failures are listed with their
- *  reasons, never hidden behind a count. */
+ *  arrow opens the tracker in the system browser (via the native opener —
+ *  `target="_blank"` anchors are dead inside the Tauri webview). Failures are
+ *  listed with their reasons, never hidden behind a count. */
 function FiledCard({
   filed,
   onOpenIssue
@@ -1404,17 +1342,17 @@ function FiledCard({
   const n = filed.issues.length
   const destination = filed.repo ?? providerLabel(filed.provider)
   return (
-    <div className="overflow-hidden rounded-2xl rounded-tl-sm border border-border bg-card">
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+    <div className="overflow-hidden rounded-2xl border border-border bg-card/60">
+      <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
         {filed.provider === 'linear' ? (
           <Check className="size-3.5 text-primary" />
         ) : (
           <Github className="size-3.5 text-muted-foreground" />
         )}
-        <span className="min-w-0 truncate text-[12.5px] font-medium">
+        <span className="min-w-0 truncate text-[13px] font-medium">
           {n > 0 ? `Filed to ${destination}` : `Nothing filed to ${destination}`}
         </span>
-        <span className="ml-auto flex-none font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+        <span className="ml-auto flex-none text-[11px] text-muted-foreground">
           {n} issue{n === 1 ? '' : 's'}
         </span>
       </div>
@@ -1435,20 +1373,20 @@ function FiledCard({
                     {ref}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[13px]">{issue.title}</span>
-                  <span className="inline-flex flex-none items-center gap-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                  <span className="inline-flex flex-none items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
                     <Columns3 className="size-3.5" /> board
                   </span>
                 </button>
                 {issue.url ? (
-                  <a
-                    href={issue.url}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => void api.shell.openUrl(issue.url)}
                     title={`Open on ${providerLabel(filed.provider)}`}
+                    aria-label={`Open ${issue.title} on ${providerLabel(filed.provider)}`}
                     className="flex flex-none items-center border-l border-border/60 px-3 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
                   >
                     <ArrowUpRight className="size-3.5" />
-                  </a>
+                  </button>
                 ) : null}
               </li>
             )
@@ -1457,7 +1395,7 @@ function FiledCard({
       ) : null}
       {filed.failed.length > 0 ? (
         <div className="border-t border-border/60 px-4 py-2.5">
-          <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-red-400">
+          <div className="mb-1 text-[11px] font-medium text-red-400">
             {filed.failed.length} not created
           </div>
           <ul className="flex flex-col gap-0.5">
@@ -1473,28 +1411,30 @@ function FiledCard({
   )
 }
 
-/** Empty conversation hero with a few one-click example prompts. */
+/** Empty conversation hero — a centered greeting with example prompt chips. */
 function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   const examples = [
     'Add a CSV export to the board',
-    'Let users star a worktree to pin it to the top of the sidebar',
-    'Add a global command palette shortcut to jump between sessions'
+    'Let users star a worktree to pin it',
+    'Add a shortcut to jump between sessions'
   ]
   return (
-    <div className="mx-auto flex max-w-[560px] flex-col items-center px-4 py-10 text-center">
-      <AssistantAvatar className="size-12" />
-      <h2 className="mt-4 text-lg font-semibold tracking-tight text-foreground">Describe a feature</h2>
-      <p className="mt-1.5 text-[13.5px] leading-relaxed text-muted-foreground">
-        I'll ask a few sharp clarifying questions, then propose a task breakdown you can file as
-        GitHub issues into your selected workspace.
+    <div className="flex flex-col items-center px-4 pb-8 pt-20 text-center">
+      <AssistantAvatar className="size-10" />
+      <h2 className="mt-5 text-[26px] font-semibold tracking-tight text-foreground">
+        What should we build?
+      </h2>
+      <p className="mt-2 max-w-[26rem] text-[14px] leading-relaxed text-muted-foreground">
+        Describe a feature. I'll ask a couple of sharp questions, then draft GitHub issues you can
+        review before anything is filed.
       </p>
-      <div className="mt-5 flex w-full flex-col gap-2">
+      <div className="mt-7 flex flex-wrap justify-center gap-2">
         {examples.map((ex) => (
           <button
             key={ex}
             type="button"
             onClick={() => onPick(ex)}
-            className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-left text-[13px] text-foreground/90 transition-colors hover:border-foreground/30 hover:bg-accent"
+            className="rounded-full border border-border px-4 py-2 text-[13px] text-foreground/85 transition-colors hover:bg-accent"
           >
             {ex}
           </button>
