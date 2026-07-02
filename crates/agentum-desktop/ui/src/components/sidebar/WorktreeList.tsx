@@ -954,6 +954,12 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     (s) => s.reportVisibleGitHubPRRefreshCandidates
   )
   const cardProps = useAppStore((s) => s.worktreeCardProperties)
+  // ADE redesign: project header click opens the per-project hub view; the
+  // header of the hub's current project gets the active tint.
+  const openProjectHub = useAppStore((s) => s.openProjectHub)
+  const projectHubRepoId = useAppStore((s) =>
+    s.activeView === 'project' ? s.activeRepoId : null
+  )
   const rightSidebarShowsPR = useAppStore((s) => rightSidebarShowsPullRequestData(s))
   const keybindings = useAppStore((s) => s.keybindings)
   const sshConnectedGeneration = useAppStore((s) => s.sshConnectedGeneration)
@@ -1824,13 +1830,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
           moveFocusCursorToEdge('end')
           e.preventDefault()
           break
+        // Space opens the highlighted worktree just like Enter (and must NOT
+        // fall through to the browser's default page-scroll).
         case 'Enter':
+        case ' ':
           activateFocusedWorktree()
           e.preventDefault()
           break
         case 'PageUp':
         case 'PageDown':
-        case ' ':
           markDirectScrollInput()
           break
         default:
@@ -2796,7 +2804,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         onWheel={markDirectScrollInput}
         onDragOver={handleWorktreeDragOver}
         onDrop={handleWorktreeDrop}
-        className="worktree-sidebar-scrollbar h-full overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset pt-px"
+        // No focus ring on the listbox itself: the cursor row's background
+        // (data-kbd-focused, main.css) is the only keyboard-focus indicator.
+        className="worktree-sidebar-scrollbar h-full overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek outline-none pt-px"
         style={WORKTREE_SIDEBAR_SCROLL_STYLE}
       >
         <TmuxSessionsModal
@@ -2967,6 +2977,11 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     className={cn(
                       'group flex h-7 w-full items-center gap-1.5 pr-1 text-left transition-all',
                       'cursor-pointer',
+                      // Hub-open indicator: the project currently shown as the
+                      // hub view reads as active, mirroring worktree cards.
+                      row.repo !== undefined &&
+                        projectHubRepoId === row.repo.id &&
+                        'rounded-md bg-sidebar-accent',
                       isProjectSelected &&
                         'rounded-md bg-sidebar-accent ring-1 ring-sidebar-ring/35',
                       isDraggingThis &&
@@ -3027,6 +3042,14 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         event.stopPropagation()
                         return
                       }
+                      // ADE redesign: a project header click OPENS the project
+                      // hub (per-project Chat/Wiki/Tasks/Sessions); collapse
+                      // moved to the chevron. Non-repo headers (status groups,
+                      // pinned, project folders) keep toggle-on-click.
+                      if (row.repo) {
+                        openProjectHub(row.repo.id)
+                        return
+                      }
                       toggleGroupWithScrollAnchor(row.key)
                     }}
                     onContextMenu={(event) => {
@@ -3045,7 +3068,17 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                       setProjectContextMenu(target)
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
+                      // Enter mirrors click (open the hub for repo headers);
+                      // Space stays the keyboard path for collapse/expand so
+                      // both actions remain reachable without a pointer.
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        if (row.repo) {
+                          openProjectHub(row.repo.id)
+                          return
+                        }
+                        toggleGroupWithScrollAnchor(row.key)
+                      } else if (e.key === ' ') {
                         e.preventDefault()
                         toggleGroupWithScrollAnchor(row.key)
                       }
@@ -3098,7 +3131,25 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                       </div>
                     </div>
 
-                    <div className="flex size-4 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100">
+                    <div
+                      role={row.repo ? 'button' : undefined}
+                      aria-label={
+                        row.repo
+                          ? `${isCollapsed ? 'Expand' : 'Collapse'} ${row.label}`
+                          : undefined
+                      }
+                      onClick={
+                        row.repo
+                          ? (event) => {
+                              // The header row now opens the project hub, so the
+                              // chevron must own collapse/expand itself.
+                              event.stopPropagation()
+                              toggleGroupWithScrollAnchor(row.key)
+                            }
+                          : undefined
+                      }
+                      className="flex size-4 shrink-0 cursor-pointer items-center justify-center text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100"
+                    >
                       <ChevronDown
                         className={cn(
                           'size-3.5 cursor-pointer transition-transform [&_path]:cursor-pointer',
@@ -3278,9 +3329,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     // Why: avoid transitioning 'transform' to prevent browser-side lag and flashing
                     // when TanStack Virtual programmatically repositions adjacent rows.
                     'relative transition-[opacity,filter] duration-150 ease-out',
-                    // VS Code-style keyboard focus ring on the cursor row.
-                    keyboardCursorWorktreeId === itemRow.worktree.id &&
-                      'rounded-md ring-1 ring-inset ring-ring',
+                    // Keyboard cursor styling rides the data-kbd-focused
+                    // attribute (main.css) — a hover-like tint, not a ring.
                     worktreeDragState.draggingWorktreeId === itemRow.worktree.id &&
                       // Why: the fixed drag preview is the visible affordance; leaving the
                       // source row translucent lets it bleed through sticky headers/footers.
@@ -3402,8 +3452,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         }
                         className={cn(
                           'relative flex min-w-0 flex-1 cursor-pointer items-start gap-1.5 rounded-md border border-transparent px-2 py-1.5 transition-colors',
-                          // VS Code-style keyboard focus ring on the cursor row.
-                          keyboardCursorWorktreeId === child.worktree.id && 'ring-1 ring-inset ring-ring',
+                          // Keyboard cursor styling rides the data-kbd-focused
+                          // attribute (main.css) — a hover-like tint, not a ring.
                           highlightedRevealWorktreeId === child.worktree.id && [
                             'scroll-to-current-workspace-reveal-highlight',
                             revealHighlightTone === 'ai' &&

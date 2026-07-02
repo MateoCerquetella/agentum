@@ -10,6 +10,7 @@
 // here — review and start-task happen on the Board.
 import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowUpRight,
   Brain,
   Check,
   ChevronDown,
@@ -49,6 +50,7 @@ import {
 } from '@/runtime/chat-client'
 import {
   type Conversation,
+  type FiledResult,
   loadConversations,
   newConversationId,
   saveConversations,
@@ -88,10 +90,20 @@ const parseLabels = (raw: string): string[] =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
 
-export default function ChatPage() {
+/** Issue number of a filed issue: the tracker id when numeric (GitHub), else
+ *  the `/issues/<n>` tail of its URL. Null for Linear ids like `ENG-123`. */
+const parseIssueNumber = (issue: { id?: string; url: string }): number | null => {
+  if (issue.id && /^\d+$/.test(issue.id)) return Number(issue.id)
+  const m = /\/issues\/(\d+)(?:[/?#]|$)/.exec(issue.url)
+  return m ? Number(m[1]) : null
+}
+
+export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = {}) {
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
   const setActiveView = useAppStore((s) => s.setActiveView)
+  const openTaskPage = useAppStore((s) => s.openTaskPage)
+  const openProjectHub = useAppStore((s) => s.openProjectHub)
 
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations())
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -133,7 +145,11 @@ export default function ChatPage() {
   // Which workspace grounds the interview AND receives the issues. The selected
   // project's GitHub repo is the (inferred) issue target — there is no manual
   // owner/repo entry. Seeded from the app's active project; persisted.
+  // When embedded in the Project Hub (`pinnedRepo`), the hub's project IS the
+  // workspace — no picker, no persistence, and the stored global choice is
+  // left untouched.
   const [workspaceId, setWorkspaceId] = useState<string | null>(() => {
+    if (pinnedRepo) return pinnedRepo.id
     try {
       return localStorage.getItem(WORKSPACE_KEY)
     } catch {
@@ -146,26 +162,35 @@ export default function ChatPage() {
   // the user's saved choice. Once hydrated: keep a still-valid selection, else
   // fall back to the active project, then the first one.
   useEffect(() => {
+    if (pinnedRepo) {
+      setWorkspaceId(pinnedRepo.id)
+      return
+    }
     if (repos.length === 0) return
     setWorkspaceId((cur) => {
       if (cur && repos.some((r) => r.id === cur)) return cur
       return activeRepoId ?? repos[0]?.id ?? null
     })
-  }, [repos, activeRepoId])
+  }, [repos, activeRepoId, pinnedRepo])
   useEffect(() => {
+    if (pinnedRepo) return
     try {
       if (workspaceId) localStorage.setItem(WORKSPACE_KEY, workspaceId)
     } catch {
       /* storage may be unavailable — selection still works this session */
     }
-  }, [workspaceId])
+  }, [workspaceId, pinnedRepo])
   const workspace = useMemo(
-    () => repos.find((r) => r.id === workspaceId) ?? null,
-    [repos, workspaceId]
+    () => (pinnedRepo ? pinnedRepo : (repos.find((r) => r.id === workspaceId) ?? null)),
+    [repos, workspaceId, pinnedRepo]
   )
 
   // The in-flight stream's abort handle, so the Stop button can cancel it.
   const abortRef = useRef<AbortController | null>(null)
+  // Abort on unmount: hub tab switches unmount this page mid-stream far more
+  // casually than full-page navigation ever did — without this the fetch
+  // keeps streaming server-side into a discarded component.
+  useEffect(() => () => abortRef.current?.abort(), [])
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // Persist history shortly after the last change — coalesces the per-token state
@@ -175,12 +200,29 @@ export default function ChatPage() {
     return () => clearTimeout(t)
   }, [conversations])
 
+  // The history rail's list. In the Project Hub only threads grounded in the
+  // pinned project appear; the global Chat view keeps showing everything
+  // (including pre-hub conversations that carry no repoId).
+  const visibleConversations = useMemo(
+    () => (pinnedRepo ? conversations.filter((c) => c.repoId === pinnedRepo.id) : conversations),
+    [conversations, pinnedRepo]
+  )
+
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
     [conversations, activeId]
   )
   const messages = active?.messages ?? []
   const hasAssistantReply = messages.some((m) => m.role === 'assistant' && m.content.trim().length > 0)
+
+  // Keep the open transcript inside the pinned project's scope: switching hub
+  // projects (or opening the hub while a foreign thread was active) resets to
+  // the empty state rather than showing another project's conversation.
+  useEffect(() => {
+    if (!pinnedRepo || activeId == null) return
+    const activeInScope = visibleConversations.some((c) => c.id === activeId)
+    if (!activeInScope) setActiveId(null)
+  }, [pinnedRepo, activeId, visibleConversations])
 
   // Auto-follow the newest content. Instant while streaming (token follow),
   // smooth otherwise.
@@ -207,11 +249,15 @@ export default function ChatPage() {
     []
   )
 
-  const appendAssistant = useCallback((id: string, content: string) => {
+  const appendAssistant = useCallback((id: string, content: string, filed?: FiledResult) => {
     setConversations((prev) =>
       prev.map((c) =>
         c.id === id
-          ? { ...c, messages: [...c.messages, { role: 'assistant', content }], updatedAt: Date.now() }
+          ? {
+              ...c,
+              messages: [...c.messages, { role: 'assistant', content, ...(filed ? { filed } : {}) }],
+              updatedAt: Date.now()
+            }
           : c
       )
     )
@@ -273,7 +319,10 @@ export default function ChatPage() {
             model,
             thinking,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            // Scope the thread to the project that grounded it, so the Project
+            // Hub's per-project history can filter without a migration.
+            repoId: workspace?.id
           }
           return upsertConversation(prev, convo)
         }
@@ -417,7 +466,15 @@ export default function ChatPage() {
         lines.push(`${result.failed.length} could not be created:`)
         for (const f of result.failed) lines.push(`- ${f.title} — ${f.error}`)
       }
-      appendAssistant(convoId, lines.join('\n'))
+      // The markdown lines stay as the turn's `content` (old chats / exports);
+      // `filed` is what the transcript actually renders — a card whose rows
+      // click through to the board.
+      appendAssistant(convoId, lines.join('\n'), {
+        provider,
+        repo: result.repo ?? null,
+        issues: result.created,
+        failed: result.failed
+      })
       setDraftPlan(null) // close on success — no double-file
     } catch (e2) {
       setError(e2 instanceof Error ? e2.message : String(e2))
@@ -451,22 +508,61 @@ export default function ChatPage() {
     textareaRef.current?.focus()
   }, [])
 
+  // Filed-card row click → the Tasks board. For a GitHub issue with a parsable
+  // number we land with THAT issue's detail dialog already open (the same
+  // `openGitHubWorkItem` hand-off the sidebar uses); otherwise (Linear, or no
+  // number) we open the board on the right tracker tab and let the fresh list
+  // show it.
+  const openIssueOnBoard = useCallback(
+    (filed: FiledResult, issue: FiledResult['issues'][number]) => {
+      const number = parseIssueNumber(issue)
+      if (filed.provider === 'github' && number != null) {
+        openTaskPage({
+          preselectedRepoId: workspaceId ?? undefined,
+          taskSource: 'github',
+          openGitHubWorkItem: {
+            id: issue.url || String(number),
+            type: 'issue',
+            number,
+            title: issue.title,
+            state: 'open',
+            url: issue.url,
+            labels: [],
+            updatedAt: new Date().toISOString(),
+            author: null
+          },
+          openGitHubInitialTab: 'conversation'
+        })
+        return
+      }
+      openTaskPage({
+        preselectedRepoId: workspaceId ?? undefined,
+        taskSource: filed.provider === 'linear' ? 'linear' : 'github'
+      })
+    },
+    [openTaskPage, workspaceId]
+  )
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <DrillInHeader
-        icon={MessagesSquare}
-        title="Chat"
-        description="Describe a feature — I'll ask a few questions, then propose the tasks to create"
-        actions={
-          <button
-            type="button"
-            onClick={() => setActiveView('tasks')}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent"
-          >
-            <Columns3 className="size-3.5" /> Open Board
-          </button>
-        }
-      />
+      {/* The Project Hub wraps this page in its own header + tab strip, so the
+          full-page chrome only renders standalone. */}
+      {pinnedRepo ? null : (
+        <DrillInHeader
+          icon={MessagesSquare}
+          title="Chat"
+          description="Describe a feature — I'll ask a few questions, then propose the tasks to create"
+          actions={
+            <button
+              type="button"
+              onClick={() => setActiveView('tasks')}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent"
+            >
+              <Columns3 className="size-3.5" /> Open Board
+            </button>
+          }
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* ---- conversation history ---- */}
@@ -484,23 +580,55 @@ export default function ChatPage() {
             History
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
-            {conversations.length === 0 ? (
+            {visibleConversations.length === 0 ? (
               <div className="px-3 py-2 text-[12px] text-muted-foreground">No chats yet.</div>
             ) : (
-              conversations.map((c) => {
+              visibleConversations.map((c) => {
                 const isActive = c.id === activeId
+                // Global view: a thread grounded in a project links to that
+                // project's hub chat (ADE prototype "open a thread to scope
+                // it"). Pinned (hub) mode skips the chip — every row is
+                // already this project.
+                const threadRepo =
+                  !pinnedRepo && c.repoId ? (repos.find((r) => r.id === c.repoId) ?? null) : null
                 return (
                   <div key={c.id} className="group relative">
-                    <button
-                      type="button"
+                    {/* div-with-button-role (not <button>) so the project chip
+                        below can be a real nested button without invalid
+                        interactive nesting — same pattern as sidebar headers. */}
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => selectConversation(c)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          selectConversation(c)
+                        }
+                      }}
                       className={cn(
-                        'flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 pr-8 text-left transition-colors',
+                        'flex w-full cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2 pr-8 text-left transition-colors',
                         isActive ? 'bg-accent' : 'hover:bg-foreground/5'
                       )}
                     >
                       <span className="truncate text-[13px]">{c.title}</span>
                       <span className="flex items-center gap-1.5 truncate font-mono text-[10px] text-muted-foreground">
+                        {threadRepo ? (
+                          <>
+                            <button
+                              type="button"
+                              title={`Open ${threadRepo.displayName} hub`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openProjectHub(threadRepo.id, 'chat')
+                              }}
+                              className="max-w-[9rem] truncate rounded-sm border border-border/70 px-1 py-px text-[9.5px] leading-none hover:border-foreground/40 hover:text-foreground"
+                            >
+                              {threadRepo.displayName}
+                            </button>
+                            <span aria-hidden>·</span>
+                          </>
+                        ) : null}
                         <span>{timeAgo(c.updatedAt)}</span>
                         <span aria-hidden>·</span>
                         <span className="truncate">{shortModel(c.model)}</span>
@@ -508,7 +636,7 @@ export default function ChatPage() {
                           <Brain className="size-3 text-primary/70" aria-label="thinking" />
                         ) : null}
                       </span>
-                    </button>
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeConversation(c)}
@@ -527,14 +655,17 @@ export default function ChatPage() {
 
         {/* ---- chat column ---- */}
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* workspace + model + thinking toolbar */}
+          {/* workspace + model + thinking toolbar. Pinned (hub) mode drops the
+              workspace picker — the hub's project IS the workspace. */}
           <div className="flex h-11 flex-none items-center gap-2 border-b border-border px-4">
-            <WorkspacePicker
-              repos={repos}
-              workspaceId={workspaceId}
-              onChange={setWorkspaceId}
-              disabled={busy}
-            />
+            {pinnedRepo ? null : (
+              <WorkspacePicker
+                repos={repos}
+                workspaceId={workspaceId}
+                onChange={setWorkspaceId}
+                disabled={busy}
+              />
+            )}
             <ModelPicker model={model} onChange={setModel} disabled={busy} />
             <ThinkingToggle on={thinking} onToggle={setThinking} disabled={busy} />
             <span className="ml-auto hidden font-mono text-[11px] text-muted-foreground md:inline">
@@ -553,6 +684,7 @@ export default function ChatPage() {
                     key={i}
                     turn={m}
                     streaming={busy && i === messages.length - 1 && m.role === 'assistant'}
+                    onOpenIssue={openIssueOnBoard}
                   />
                 ))
               )}
@@ -570,27 +702,25 @@ export default function ChatPage() {
           {/* composer */}
           <form onSubmit={submit} className="flex-none border-t border-border px-5 pb-4.5 pt-3">
             {hasAssistantReply ? (
-              <div className="mx-auto mb-2.5 flex max-w-[760px] flex-col gap-1.5">
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void openPreview()}
-                    disabled={busy || previewing || creating || messages.length === 0 || !workspace}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
-                  >
-                    {previewing ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Eye className="size-3.5" />
-                    )}
-                    {previewing ? 'Preparing preview…' : 'Preview issues'}
-                  </button>
-                </div>
-                <div className="text-right text-[11px] text-muted-foreground">
+              <div className="mx-auto mb-2.5 flex max-w-[760px] items-center justify-between gap-3 rounded-lg border border-border/70 bg-card/60 py-1.5 pl-3 pr-1.5">
+                <span className="min-w-0 truncate text-[11.5px] text-muted-foreground">
                   {workspace
-                    ? `Review & edit before filing — GitHub repo inferred from ${workspace.displayName}.`
+                    ? `Ready to file? Review and edit the draft first — repo inferred from ${workspace.displayName}.`
                     : 'Pick a workspace above to file issues into.'}
-                </div>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void openPreview()}
+                  disabled={busy || previewing || creating || messages.length === 0 || !workspace}
+                  className="inline-flex flex-none items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent disabled:opacity-40"
+                >
+                  {previewing ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Eye className="size-3.5" />
+                  )}
+                  {previewing ? 'Preparing preview…' : 'Preview issues'}
+                </button>
               </div>
             ) : null}
             <div className="mx-auto flex max-w-[760px] items-end gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 focus-within:border-foreground/30">
@@ -636,6 +766,7 @@ export default function ChatPage() {
           labelsInput={labelsInput}
           previewing={previewing}
           creating={creating}
+          dirty={draftDirty}
           workspaceName={workspace?.displayName ?? null}
           onPatchPlan={patchPlan}
           onPatchTask={patchTask}
@@ -653,9 +784,24 @@ export default function ChatPage() {
   )
 }
 
-/** Spec 003 — the review modal shown BEFORE any issue is filed. Fully editable
- *  (title / summary / tasks + priority), plus split / provider / labels choices,
- *  with Regenerate (re-extract) and Confirm (file the shown draft verbatim). */
+/** Task-priority accents for the draft review — the rail encodes priority so
+ *  each row reads at a glance without a dropdown. */
+const PRIORITY_RAIL: Record<DraftTask['priority'], string> = {
+  high: 'bg-red-400/80',
+  medium: 'bg-amber-400/70',
+  low: 'bg-border'
+}
+const PRIORITY_ACTIVE: Record<DraftTask['priority'], string> = {
+  high: 'border-red-400/40 bg-red-400/10 text-red-400',
+  medium: 'border-amber-400/40 bg-amber-400/10 text-amber-400',
+  low: 'border-border bg-accent text-foreground'
+}
+
+/** Spec 003 — the review modal shown BEFORE any issue is filed. Reads as a
+ *  document being prepared, not a form: the title/summary/tasks edit in place,
+ *  each task carries a priority rail, the filing choices live in one quiet
+ *  strip, and the confirm button states exactly what will happen. Escape
+ *  cancels (unless a call is in flight); the title is focused on open. */
 function DraftReview(props: {
   plan: DraftPlan
   split: IssueSplit
@@ -663,6 +809,7 @@ function DraftReview(props: {
   labelsInput: string
   previewing: boolean
   creating: boolean
+  dirty: boolean
   workspaceName: string | null
   onPatchPlan: (patch: Partial<DraftPlan>) => void
   onPatchTask: (i: number, patch: Partial<DraftTask>) => void
@@ -675,179 +822,211 @@ function DraftReview(props: {
   onConfirm: () => void
   onCancel: () => void
 }) {
-  const { plan, split, provider, previewing, creating } = props
+  const { plan, split, provider, previewing, creating, onCancel } = props
   const working = previewing || creating
   const issueCount = split === 'per_task' ? plan.tasks.length : 1
   const canConfirm = plan.title.trim().length > 0 && plan.tasks.length > 0 && !working
+
+  const titleRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    titleRef.current?.focus()
+  }, [])
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape' && !working) onCancel()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [working, onCancel])
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
+      aria-label="Review before filing"
     >
-      <div className="flex max-h-[88vh] w-full max-w-[720px] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
-        {/* header */}
-        <div className="flex flex-none items-center justify-between border-b border-border px-4 py-3">
-          <div>
-            <div className="text-[13px] font-semibold">Review before filing</div>
-            <div className="text-[11px] text-muted-foreground">
-              Nothing is created until you confirm · {issueCount} issue
-              {issueCount === 1 ? '' : 's'} → {providerLabel(provider)}
-              {props.workspaceName ? ` · ${props.workspaceName}` : ''}
-            </div>
-          </div>
+      <div className="flex max-h-[88vh] w-full max-w-[680px] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl">
+        {/* header — eyebrow + route: where this draft is going */}
+        <div className="flex flex-none items-center gap-3 border-b border-border px-5 py-3">
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            Review before filing
+          </span>
+          <span className="ml-auto min-w-0 truncate text-right font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            {issueCount} issue{issueCount === 1 ? '' : 's'} → {providerLabel(provider)}
+            {props.workspaceName ? ` · ${props.workspaceName}` : ''}
+          </span>
           <button
             type="button"
-            onClick={props.onCancel}
+            onClick={onCancel}
             disabled={working}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent disabled:opacity-40"
+            className="-mr-1 flex-none rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
             aria-label="Cancel"
           >
             <X className="size-4" />
           </button>
         </div>
 
-        {/* body */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
-            Feature title
-          </label>
+        {/* body — the issue as a document: title, summary, then the task list */}
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4 pt-3.5">
           <input
+            ref={titleRef}
             value={plan.title}
             onChange={(e) => props.onPatchPlan({ title: e.target.value })}
-            className="mb-3 w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] focus:border-foreground/30 focus:outline-none"
+            placeholder="Feature title"
+            aria-label="Feature title"
+            className="w-full bg-transparent text-[16px] font-semibold tracking-tight text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
           />
-
-          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">Summary</label>
           <textarea
             value={plan.summary}
             onChange={(e) => props.onPatchPlan({ summary: e.target.value })}
             rows={2}
-            className="mb-3 w-full resize-y rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] focus:border-foreground/30 focus:outline-none"
+            placeholder="One-paragraph summary — becomes the issue body's opening."
+            aria-label="Summary"
+            className="mt-1.5 w-full resize-y bg-transparent text-[12.5px] leading-relaxed text-muted-foreground placeholder:text-muted-foreground/50 focus:text-foreground focus:outline-none"
           />
 
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[11px] font-medium text-muted-foreground">
-              Tasks ({plan.tasks.length})
+          <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Tasks · {plan.tasks.length}
             </span>
             <button
               type="button"
               onClick={props.onAddTask}
-              className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent"
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Plus className="size-3" /> Add task
             </button>
           </div>
-          <div className="flex flex-col gap-2">
+
+          <ul className="mt-1 flex flex-col">
             {plan.tasks.map((t, i) => (
-              <div key={i} className="rounded-md border border-border bg-background p-2">
+              <li
+                key={i}
+                className="group relative rounded-md py-2 pl-3.5 pr-1 transition-colors hover:bg-foreground/[0.03]"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'absolute inset-y-2 left-0 w-[2px] rounded-full transition-colors',
+                    PRIORITY_RAIL[t.priority]
+                  )}
+                />
                 <div className="flex items-center gap-2">
                   <input
                     value={t.title}
                     onChange={(e) => props.onPatchTask(i, { title: e.target.value })}
                     placeholder="Task title"
-                    className="min-w-0 flex-1 rounded-md border border-border bg-card px-2 py-1 text-[12.5px] focus:border-foreground/30 focus:outline-none"
+                    className="min-w-0 flex-1 bg-transparent text-[13px] font-medium text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
                   />
-                  <select
-                    value={t.priority}
-                    onChange={(e) =>
-                      props.onPatchTask(i, { priority: e.target.value as DraftTask['priority'] })
-                    }
-                    className="flex-none rounded-md border border-border bg-card px-1.5 py-1 text-[12px]"
+                  <div
+                    className="inline-flex flex-none rounded-md border border-transparent"
+                    role="radiogroup"
+                    aria-label="Priority"
                   >
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
-                  </select>
+                    {(['high', 'medium', 'low'] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        role="radio"
+                        aria-checked={t.priority === p}
+                        title={`${p[0].toUpperCase()}${p.slice(1)} priority`}
+                        onClick={() => props.onPatchTask(i, { priority: p })}
+                        className={cn(
+                          'rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase',
+                          t.priority === p
+                            ? PRIORITY_ACTIVE[p]
+                            : 'border-transparent text-muted-foreground/50 hover:text-muted-foreground'
+                        )}
+                      >
+                        {p[0]}
+                      </button>
+                    ))}
+                  </div>
                   <button
                     type="button"
                     onClick={() => props.onRemoveTask(i)}
-                    className="flex-none rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-red-400"
-                    aria-label="Remove task"
+                    className="flex-none rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-red-400 focus-visible:opacity-100 group-hover:opacity-100"
+                    aria-label={`Remove task: ${t.title || 'untitled'}`}
                   >
                     <Trash2 className="size-3.5" />
                   </button>
                 </div>
-                <textarea
+                <input
                   value={t.detail}
                   onChange={(e) => props.onPatchTask(i, { detail: e.target.value })}
-                  rows={1}
-                  placeholder="Detail (optional)"
-                  className="mt-1.5 w-full resize-y rounded-md border border-border bg-card px-2 py-1 text-[12px] focus:border-foreground/30 focus:outline-none"
+                  placeholder="Add detail…"
+                  className="mt-0.5 w-full bg-transparent text-[12px] text-muted-foreground placeholder:text-muted-foreground/40 focus:text-foreground focus:outline-none"
                 />
-              </div>
+              </li>
             ))}
             {plan.tasks.length === 0 ? (
-              <div className="text-[12px] text-muted-foreground">
-                No tasks — add one, or regenerate.
-              </div>
+              <li className="py-2 text-[12px] text-muted-foreground">
+                No tasks — add one, or regenerate the draft.
+              </li>
             ) : null}
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <div className="mb-1 text-[11px] font-medium text-muted-foreground">How to file</div>
-              <SegButtons
-                value={split}
-                onChange={(v) => props.onSplit(v as IssueSplit)}
-                options={[
-                  { v: 'single', label: 'One issue + checklist' },
-                  { v: 'per_task', label: 'One issue per task' }
-                ]}
-              />
-            </div>
-            <div>
-              <div className="mb-1 text-[11px] font-medium text-muted-foreground">Tracker</div>
-              <SegButtons
-                value={provider}
-                onChange={(v) => props.onProvider(v as IssueProvider)}
-                options={[
-                  { v: 'github', label: 'GitHub' },
-                  { v: 'linear', label: 'Linear' }
-                ]}
-              />
-            </div>
-          </div>
-
-          <div className="mt-3">
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
-              Labels (comma-separated)
-            </label>
-            <input
-              value={props.labelsInput}
-              onChange={(e) => props.onLabels(e.target.value)}
-              placeholder="enhancement, area/chat"
-              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] focus:border-foreground/30 focus:outline-none"
-            />
-            {provider === 'linear' ? (
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                Labels are applied to GitHub only for now.
-              </div>
-            ) : null}
-          </div>
+          </ul>
         </div>
 
-        {/* footer */}
-        <div className="flex flex-none items-center justify-between gap-2 border-t border-border px-4 py-3">
-          <button
-            type="button"
-            onClick={props.onRegenerate}
-            disabled={working}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[12.5px] hover:bg-accent disabled:opacity-40"
-          >
-            {previewing ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-            Regenerate
-          </button>
+        {/* filing strip — the choices, one quiet row */}
+        <div className="flex flex-none flex-wrap items-center gap-x-3 gap-y-2 border-t border-border bg-background/60 px-5 py-2.5">
+          <SegButtons
+            value={split}
+            onChange={(v) => props.onSplit(v as IssueSplit)}
+            options={[
+              { v: 'single', label: 'One issue + checklist' },
+              { v: 'per_task', label: 'Per task' }
+            ]}
+          />
+          <SegButtons
+            value={provider}
+            onChange={(v) => props.onProvider(v as IssueProvider)}
+            options={[
+              { v: 'github', label: 'GitHub' },
+              { v: 'linear', label: 'Linear' }
+            ]}
+          />
+          <input
+            value={props.labelsInput}
+            onChange={(e) => props.onLabels(e.target.value)}
+            placeholder={provider === 'linear' ? 'labels — GitHub only for now' : 'labels: enhancement, area/chat'}
+            aria-label="Labels, comma-separated"
+            disabled={provider === 'linear'}
+            className="min-w-[9rem] flex-1 bg-transparent font-mono text-[11.5px] text-foreground placeholder:text-muted-foreground/50 focus:outline-none disabled:opacity-50"
+          />
+        </div>
+
+        {/* footer — the consequence, stated exactly */}
+        <div className="flex flex-none items-center justify-between gap-2 border-t border-border px-5 py-3">
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={props.onCancel}
+              onClick={props.onRegenerate}
               disabled={working}
-              className="rounded-md border border-border px-2.5 py-1 text-[12.5px] hover:bg-accent disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[12.5px] hover:bg-accent disabled:opacity-40"
+            >
+              {previewing ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3.5" />
+              )}
+              Regenerate
+            </button>
+            {props.dirty ? (
+              <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                edited
+              </span>
+            ) : null}
+          </div>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">
+              Nothing is created until you confirm
+            </span>
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={working}
+              className="flex-none rounded-md border border-border px-2.5 py-1 text-[12.5px] hover:bg-accent disabled:opacity-40"
             >
               Cancel
             </button>
@@ -855,7 +1034,7 @@ function DraftReview(props: {
               type="button"
               onClick={props.onConfirm}
               disabled={!canConfirm}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-85 disabled:opacity-40"
+              className="inline-flex flex-none items-center gap-1.5 rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground hover:opacity-85 disabled:opacity-40"
             >
               {creating ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -1140,9 +1319,17 @@ function Reasoning({ text, streaming }: { text: string; streaming: boolean }) {
 }
 
 /** One chat turn. User turns are accent + right-aligned; assistant turns render
- *  markdown, with the optional reasoning trace above and a live indicator while
- *  streaming. */
-function Bubble({ turn, streaming }: { turn: StoredTurn; streaming: boolean }) {
+ *  markdown — or, for a filing-summary turn, the clickable issues card — with
+ *  the optional reasoning trace above and a live indicator while streaming. */
+function Bubble({
+  turn,
+  streaming,
+  onOpenIssue
+}: {
+  turn: StoredTurn
+  streaming: boolean
+  onOpenIssue: (filed: FiledResult, issue: FiledResult['issues'][number]) => void
+}) {
   const isUser = turn.role === 'user'
   return (
     <div className={cn('flex items-start gap-3', isUser && 'flex-row-reverse')}>
@@ -1164,7 +1351,9 @@ function Bubble({ turn, streaming }: { turn: StoredTurn; streaming: boolean }) {
         ) : (
           <div className="min-w-0">
             {turn.thinking ? <Reasoning text={turn.thinking} streaming={streaming} /> : null}
-            {turn.content ? (
+            {turn.filed ? (
+              <FiledCard filed={turn.filed} onOpenIssue={onOpenIssue} />
+            ) : turn.content ? (
               <CommentMarkdown
                 content={turn.content}
                 variant="compact"
@@ -1178,6 +1367,89 @@ function Bubble({ turn, streaming }: { turn: StoredTurn; streaming: boolean }) {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** The filing-summary card: what was created, where — and the bridge onward.
+ *  Clicking a row opens the Tasks board with that issue's detail; the trailing
+ *  arrow opens the tracker in the browser. Failures are listed with their
+ *  reasons, never hidden behind a count. */
+function FiledCard({
+  filed,
+  onOpenIssue
+}: {
+  filed: FiledResult
+  onOpenIssue: (filed: FiledResult, issue: FiledResult['issues'][number]) => void
+}) {
+  const n = filed.issues.length
+  const destination = filed.repo ?? providerLabel(filed.provider)
+  return (
+    <div className="overflow-hidden rounded-2xl rounded-tl-sm border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+        {filed.provider === 'linear' ? (
+          <Check className="size-3.5 text-primary" />
+        ) : (
+          <Github className="size-3.5 text-muted-foreground" />
+        )}
+        <span className="min-w-0 truncate text-[12.5px] font-medium">
+          {n > 0 ? `Filed to ${destination}` : `Nothing filed to ${destination}`}
+        </span>
+        <span className="ml-auto flex-none font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+          {n} issue{n === 1 ? '' : 's'}
+        </span>
+      </div>
+      {n > 0 ? (
+        <ul className="divide-y divide-border/60">
+          {filed.issues.map((issue, i) => {
+            const number = parseIssueNumber(issue)
+            const ref = number != null ? `#${number}` : (issue.id ?? '—')
+            return (
+              <li key={i} className="flex items-stretch">
+                <button
+                  type="button"
+                  onClick={() => onOpenIssue(filed, issue)}
+                  title="Open on the board"
+                  className="group flex min-w-0 flex-1 items-center gap-2.5 px-4 py-2.5 text-left transition-colors hover:bg-accent/60"
+                >
+                  <span className="flex-none font-mono text-[12px] text-muted-foreground">
+                    {ref}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[13px]">{issue.title}</span>
+                  <span className="inline-flex flex-none items-center gap-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                    <Columns3 className="size-3.5" /> board
+                  </span>
+                </button>
+                {issue.url ? (
+                  <a
+                    href={issue.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Open on ${providerLabel(filed.provider)}`}
+                    className="flex flex-none items-center border-l border-border/60 px-3 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                  >
+                    <ArrowUpRight className="size-3.5" />
+                  </a>
+                ) : null}
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
+      {filed.failed.length > 0 ? (
+        <div className="border-t border-border/60 px-4 py-2.5">
+          <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-red-400">
+            {filed.failed.length} not created
+          </div>
+          <ul className="flex flex-col gap-0.5">
+            {filed.failed.map((f, i) => (
+              <li key={i} className="text-[12px] text-muted-foreground">
+                <span className="text-foreground/80">{f.title}</span> — {f.error}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -175,13 +175,32 @@ const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
 
-export default function TaskPage(): React.JSX.Element {
+export default function TaskPage({
+  embedded = false
+}: {
+  /** Project Hub embed: the page renders inside the hub's Tasks tab instead of
+   *  as the routed 'tasks' view. Internal navigation (source switch, detail
+   *  open) must then mutate taskPageData WITHOUT flipping activeView — going
+   *  through openTaskPage would silently swap the hub for the global Board.
+   *  Esc-close and the Close button are also disabled: the hub owns leaving. */
+  embedded?: boolean
+} = {}): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
   const taskResumeState = useAppStore((s) => s.taskResumeState)
   const setTaskResumeState = useAppStore((s) => s.setTaskResumeState)
   const pageData = useAppStore((s) => s.taskPageData)
-  const openTaskPage = useAppStore((s) => s.openTaskPage)
+  const routedOpenTaskPage = useAppStore((s) => s.openTaskPage)
+  const openTaskPage = useMemo(() => {
+    if (!embedded) return routedOpenTaskPage
+    return (data: Parameters<typeof routedOpenTaskPage>[0] = {}) => {
+      useAppStore.setState((s) => ({
+        // Merge (not replace): a detail-open must keep the hub's repo
+        // preselection so closing the detail lands back on the scoped list.
+        taskPageData: { ...s.taskPageData, ...data }
+      }))
+    }
+  }, [embedded, routedOpenTaskPage])
   const closeTaskPage = useAppStore((s) => s.closeTaskPage)
   const activeModal = useAppStore((s) => s.activeModal)
   const repos = useAppStore((s) => s.repos)
@@ -822,7 +841,11 @@ export default function TaskPage(): React.JSX.Element {
   // The Tasks view is a sync source for the Board: map the loaded issues of the
   // active provider into board cards (idempotent upsert keyed on issue URL), so
   // GitHub/Linear issues flow in as cards on the one board.
-  const setActiveBoardView = useAppStore((s) => s.setActiveView)
+  // Why routed (not raw setActiveView): from the embedded hub Tasks tab this
+  // is a real navigation to the full Board page — openTaskPage records
+  // previousViewBeforeTasks ('project') so Esc/X return to the hub instead of
+  // whatever stale view the last Board visit left behind.
+  const routedOpenBoardPage = useAppStore((s) => s.openTaskPage)
   const [syncingToBoard, setSyncingToBoard] = useState(false)
   const syncTasksToBoard = useCallback(async () => {
     let inputs: SyncIssueInput[] = []
@@ -862,14 +885,14 @@ export default function TaskPage(): React.JSX.Element {
       const { synced } = await syncExternalIssues(inputs)
       toast.success(
         `Synced ${synced.length} ${taskSource} issue${synced.length === 1 ? '' : 's'} to the Board.`,
-        { action: { label: 'Open Board', onClick: () => setActiveBoardView('tasks') } }
+        { action: { label: 'Open Board', onClick: () => routedOpenBoardPage() } }
       )
     } catch (e) {
       toast.error(`Sync to Board failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSyncingToBoard(false)
     }
-  }, [taskSource, pages, linearIssues, setActiveBoardView])
+  }, [taskSource, pages, linearIssues, routedOpenBoardPage])
   const [linearDisplayProperties, setLinearDisplayProperties] = useState<
     ReadonlySet<LinearDisplayProperty>
   >(() => new Set(DEFAULT_LINEAR_DISPLAY_PROPERTIES))
@@ -2641,6 +2664,11 @@ export default function TaskPage(): React.JSX.Element {
   const githubTasksBusy = tasksLoading || tasksRefreshing || tasksFiltering
 
   useEffect(() => {
+    // Why: embedded in the Project Hub there is no page to close — Esc would
+    // yank the whole hub view out from under the user.
+    if (embedded) {
+      return
+    }
     // Why: when a modal is open, let it own Esc dismissal.
     if (
       dialogWorkItem ||
@@ -2686,6 +2714,7 @@ export default function TaskPage(): React.JSX.Element {
     activeModal,
     closeTaskPage,
     dialogWorkItem,
+    embedded,
     newIssueOpen,
     newLinearIssueOpen,
     selectedLinearIssue
@@ -3209,23 +3238,27 @@ export default function TaskPage(): React.JSX.Element {
                         source icons so the top chrome is one compact band.
                         Left-aligned keeps it clear of the app sidebar on the
                         right edge. */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7 rounded-full"
-                          onClick={closeTaskPage}
-                          aria-label="Close tasks"
-                        >
-                          <X className="size-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" sideOffset={6}>
-                        Close · Esc
-                      </TooltipContent>
-                    </Tooltip>
-                    <div className="mx-1 h-5 w-px bg-border/50" aria-hidden />
+                    {embedded ? null : (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 rounded-full"
+                              onClick={closeTaskPage}
+                              aria-label="Close tasks"
+                            >
+                              <X className="size-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" sideOffset={6}>
+                            Close · Esc
+                          </TooltipContent>
+                        </Tooltip>
+                        <div className="mx-1 h-5 w-px bg-border/50" aria-hidden />
+                      </>
+                    )}
                     {visibleSourceOptions.map((source) => {
                       const active = taskSource === source.id
                       return (
@@ -3368,26 +3401,33 @@ export default function TaskPage(): React.JSX.Element {
                         something. */}
                     {githubMode !== 'project' && (
                       <>
-                        <div className="min-w-0 max-w-[220px] shrink-0">
-                          <RepoMultiCombobox
-                            repos={eligibleRepos}
-                            selected={repoSelection}
-                            onChange={(next) => {
-                              setRepoSelection(next)
-                              void updateSettings({ defaultRepoSelection: [...next] }).catch(() => {
-                                toast.error('Failed to save project selection.')
-                              })
-                            }}
-                            onSelectAll={() => {
-                              const allIds = new Set(eligibleRepos.map((r) => r.id))
-                              setRepoSelection(allIds)
-                              void updateSettings({ defaultRepoSelection: null }).catch(() => {
-                                toast.error('Failed to save project selection.')
-                              })
-                            }}
-                            triggerClassName="h-8 w-auto max-w-[220px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs font-medium shadow-sm transition hover:bg-muted/50 focus:ring-2 focus:ring-ring/20 focus:outline-none"
-                          />
-                        </div>
+                        {/* Embedded (Project Hub): the repo scope IS the hub's
+                            project — no multi-repo picker, and crucially no
+                            updateSettings writes that would overwrite the
+                            user's global Board repo default from inside a
+                            per-project view. */}
+                        {embedded ? null : (
+                          <div className="min-w-0 max-w-[220px] shrink-0">
+                            <RepoMultiCombobox
+                              repos={eligibleRepos}
+                              selected={repoSelection}
+                              onChange={(next) => {
+                                setRepoSelection(next)
+                                void updateSettings({ defaultRepoSelection: [...next] }).catch(() => {
+                                  toast.error('Failed to save project selection.')
+                                })
+                              }}
+                              onSelectAll={() => {
+                                const allIds = new Set(eligibleRepos.map((r) => r.id))
+                                setRepoSelection(allIds)
+                                void updateSettings({ defaultRepoSelection: null }).catch(() => {
+                                  toast.error('Failed to save project selection.')
+                                })
+                              }}
+                              triggerClassName="h-8 w-auto max-w-[220px] rounded-md border border-border/50 bg-muted/50 px-2 text-xs font-medium shadow-sm transition hover:bg-muted/50 focus:ring-2 focus:ring-ring/20 focus:outline-none"
+                            />
+                          </div>
+                        )}
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
