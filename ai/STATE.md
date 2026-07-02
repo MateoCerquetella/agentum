@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 005-one-shot-issue-loop
-- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 Tester PASS 10/10 ACs 2026-07-02, `verification.md` + handoff 04; commits `197a7bea`/`ae8bf467`/`3b0a00d0` on `.claude/worktrees/finish-the-loop`. 004 **RELEASED v0.49.0**; installed-app spot-check still pending)
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 **SHIP-READY** — Reviewer SIGN-OFF 2026-07-02, zero Blockers, `review.md`; commits `197a7bea`/`ae8bf467`/`3b0a00d0` on `.claude/worktrees/finish-the-loop`. RELEASE = Mateo: issue + PR finish-the-loop→develop w/ Closes #N in the commit MESSAGE, staging browser QA per verification.md deferred list, promote + tag. 004 RELEASED v0.49.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,21 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Reviewer | **005 SIGN-OFF → SHIP-READY** (`review.md`). All 6
+  focus items pass (C5 handler read straight-line incl. all three claim arms;
+  never-Err verified in github arm/Todo branch/report_status_text; all four
+  regression pins are REAL literals; flat-Tauri+camelCase verified end-to-end;
+  UI matches composer/pane patterns). 0 Blockers. Should-fix follow-ups:
+  (1) stale old-QA docs cluster (types.rs/helpers.rs/drive.rs comments) —
+  docs-only pass at ship or fast-follow; (2) file the pre-existing Linear
+  snake_case state-map bug (IntegrationsPane.tsx:83-89 vs linear.rs:482-486);
+  (3) NEW: find_by_workdir exact-PathBuf equality + no canonicalization →
+  symlink-aliased workdir spellings can double-register (pre-existing class,
+  named issue). 5 nits (let _ = list shrug; ""-specId; HarnessCompleted noise;
+  toggle survives unlink; lock held across gh fetch). "The four regression
+  pins are honest literals — the net actually catches drift." spec.md Status
+  → Done. Phase → done. **RELEASE = Mateo** (issue + PR w/ Closes in commit
+  MESSAGE, staging browser QA, promote + tag).
 - 2026-07-02 | Tester | **005 verdict PASS 10/10 ACs** (`verification.md`).
   Independently re-ran everything: 518/0/5 lib (124.4s), scoped
   task_sink 26 / harness 80 / mcp 25, vite 1m54s, vitest 10/0, desktop check
@@ -103,20 +118,6 @@
   `--add-label status/todo` edit). NOT GUI-verified (toggle/dropdown/toasts =
   unit+build pinned; browser QA = qa.sh/staging). Phase stays developer →
   slice 3 = F5 (GithubStateMap + github.json + Settings card).
-- 2026-07-02 | Developer | **005 slice 1: F2+F3+F4 GREEN** (`197a7bea`; 507/0
-  lib tests, fmt clean, vite green). F2 spec_id stamp + prompt widening (two
-  byte-identical pins written against the PRE-change function). F3 pure
-  resolve_qa_mode + `harness.qa.agent_browser.enabled` store setting +
-  GET/PUT /api/harness/settings + IntegrationsPane toggle; QA prompt →
-  agentum_browser (verdict contract character-identical). F4
-  agentum_report_status (ungated, never-Err text mapping, board-card wire
-  test). Deviations logged in tasks.md: skill-name still present in the
-  "Do NOT use" steer (test asserts no *instruction*); toggle is a standalone
-  card (Linear editor renders only when connected); stale
-  qa_mode/qa_agent_tool doc comments flagged for reviewer. Zero structural
-  diffs in drive_inner/spawn (orchestrator-verified). Fresh-worktree gotcha:
-  `bun install` before the vite gate. Phase stays developer → slice 2 = F1
-  (start-work route + engine lock + composer/Tasks UI), slice 3 = F5.
 - 2026-07-02 | Architect | **005 blueprint COMPLETE (`architecture.md`), gate
   PASS 5/5.** Route = `POST /api/harness/start-work` (harness namespace, not
   /api/workflows — YAGNI); shared `ensure_spec_and_plan` core (converge flag)

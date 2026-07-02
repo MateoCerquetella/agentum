@@ -1,7 +1,7 @@
 # Spec 005 — One-shot issue loop (chat → issue → Start work → gated run → Done)
 
 - **Number:** 005
-- **Status:** Architect        <!-- Draft | PM | Architect | In progress | Done -->  (PM-gated 2026-07-02, D1–D4 locked)
+- **Status:** Done             <!-- Draft | PM | Architect | In progress | Done -->  (Reviewer sign-off 2026-07-02; release human-gated)
 - **Surface:** `crates/agentum-server` (routes/harness, task_sink, harness prompts, routes/mcp) + `crates/agentum-desktop/ui` (composer, TaskPage)
 - **Author:** Mateo Cerquetella (drafted with Claude)
 - **Date:** 2026-07-02
