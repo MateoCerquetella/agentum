@@ -42,6 +42,13 @@ describe('resolveTerminalShortcutAction', () => {
     ).toEqual({
       type: 'toggleSearch'
     })
+    // Cmd+K is the terminal's clear chord — the app command palette lives on
+    // Cmd+Shift+P (the palettes merged in #210), so there is no double-bind.
+    expect(
+      resolveTerminalShortcutAction(event({ key: 'k', code: 'KeyK', metaKey: true }), true)
+    ).toEqual({
+      type: 'clearActivePane'
+    })
     expect(
       resolveTerminalShortcutAction(event({ key: 'w', code: 'KeyW', metaKey: true }), true)
     ).toEqual({
@@ -145,6 +152,9 @@ describe('resolveTerminalShortcutAction', () => {
       resolveTerminalShortcutAction(event({ key: 'r', code: 'KeyR', ctrlKey: true }), false)
     ).toBeNull()
     expect(
+      resolveTerminalShortcutAction(event({ key: 'k', code: 'KeyK', ctrlKey: true }), false)
+    ).toEqual({ type: 'clearActivePane' })
+    expect(
       resolveTerminalShortcutAction(event({ key: 'w', code: 'KeyW', ctrlKey: true }), false)
     ).toEqual({ type: 'closeActivePane' })
   })
@@ -189,54 +199,6 @@ describe('resolveTerminalShortcutAction', () => {
     ).toBeNull()
   })
 
-  // Mod+K is double-bound by default: terminal.clear here and the app's nav
-  // command palette (view.commandPalette). Agentum-first hands the chord to
-  // the palette; terminal-first (or rebinding either side) restores clear.
-  describe('Mod+K clear vs command palette double-bind', () => {
-    const cmdK = event({ key: 'k', code: 'KeyK', metaKey: true })
-    const ctrlK = event({ key: 'k', code: 'KeyK', ctrlKey: true })
-
-    it('defers Mod+K to the command palette under the default agentum-first policy', () => {
-      expect(resolveTerminalShortcutAction(cmdK, true)).toBeNull()
-      expect(resolveTerminalShortcutAction(ctrlK, false)).toBeNull()
-    })
-
-    it('clears on Mod+K under terminal-first, where the app palette stands down', () => {
-      expect(
-        resolveTerminalShortcutAction(
-          cmdK,
-          true,
-          'false',
-          0,
-          false,
-          undefined,
-          false,
-          'terminal-first'
-        )
-      ).toEqual({ type: 'clearActivePane' })
-    })
-
-    it('clears on Mod+K when the palette is rebound off the chord', () => {
-      expect(
-        resolveTerminalShortcutAction(cmdK, true, 'false', 0, false, {
-          'view.commandPalette': ['Mod+Shift+O']
-        })
-      ).toEqual({ type: 'clearActivePane' })
-    })
-
-    it('clears on a rebound clear chord the palette does not claim', () => {
-      expect(
-        resolveTerminalShortcutAction(
-          event({ key: 'k', code: 'KeyK', ctrlKey: true, altKey: true }),
-          false,
-          'false',
-          0,
-          false,
-          { 'terminal.clear': ['Ctrl+Alt+K'] }
-        )
-      ).toEqual({ type: 'clearActivePane' })
-    })
-  })
 
   it('resolves equalize pane sizes only when users assign it', () => {
     expect(

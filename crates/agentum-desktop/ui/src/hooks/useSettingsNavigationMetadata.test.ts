@@ -60,7 +60,7 @@ describe('settings navigation metadata', () => {
   })
 
   it('Cmd+J / Cmd+Shift+P settings results exclude Phase-1-removed sections', () => {
-    // Why: SettingsCommandPalette (Cmd+Shift+P) reuses buildCmdJSettingsResults
+    // Why: the command palette (Cmd+Shift+P) reuses buildCmdJSettingsResults
     // over the single navigation registry, so removing a section from the
     // registry must drop it from the palette automatically.
     const sections = buildSettingsNavigationMetadata({

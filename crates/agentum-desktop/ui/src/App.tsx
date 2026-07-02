@@ -231,7 +231,6 @@ const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const CommandPalette = lazy(() => import('./components/CommandPalette'))
 const ThemeCommandPalette = lazy(() => import('./components/ThemeCommandPalette'))
-const SettingsCommandPalette = lazy(() => import('./components/settings/SettingsCommandPalette'))
 const NewWorkspaceComposerModal = lazy(() => import('./components/NewWorkspaceComposerModal'))
 const WorkspaceCleanupDialog = lazy(
   () => import('./components/workspace-cleanup/WorkspaceCleanupDialog')
@@ -1219,25 +1218,13 @@ function App(): React.JSX.Element {
         return
       }
 
-      // Cmd+Shift+P — settings command palette. Mirrors the worktree.palette
-      // toggle above; the proven Cmd+J path drives navigation from here.
+      // Cmd+Shift+P — THE command palette (VS Code muscle memory): view/agent
+      // navigation, the Color Theme picker, and settings search in one surface.
+      // Absorbed the former Cmd+K "Go to" palette (#210) so Cmd+K stays the
+      // terminal's clear-pane chord. Same toggle pattern as Cmd+J.
       if (matchShortcut('settings.commandPalette')) {
         e.preventDefault()
         notifyTerminalCapture('settings.commandPalette')
-        const store = useAppStore.getState()
-        if (store.activeModal === 'settings-command-palette') {
-          store.closeModal()
-        } else {
-          store.openModal('settings-command-palette')
-        }
-        return
-      }
-
-      // Cmd+K — the nav command palette: jump to any view or agent from
-      // anywhere (Phase 1 nav shell, #48). Same toggle pattern as Cmd+J.
-      if (matchShortcut('view.commandPalette')) {
-        e.preventDefault()
-        notifyTerminalCapture('view.commandPalette')
         const store = useAppStore.getState()
         if (store.activeModal === 'command-palette') {
           store.closeModal()
@@ -1861,16 +1848,6 @@ function App(): React.JSX.Element {
                 compact
               >
                 <WorktreeJumpPalette />
-              </RecoverableRenderErrorBoundary>
-            ) : null}
-            {resolvedMountedLazyModalIds.has('settings-command-palette') ? (
-              <RecoverableRenderErrorBoundary
-                boundaryId="modal.settings-command-palette"
-                surface="modal"
-                resetKey={activeModal === 'settings-command-palette'}
-                compact
-              >
-                <SettingsCommandPalette />
               </RecoverableRenderErrorBoundary>
             ) : null}
             {resolvedMountedLazyModalIds.has('command-palette') ? (
