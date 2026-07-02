@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 005-one-shot-issue-loop
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 Developer COMPLETE 2026-07-02 in 3 gated slices — F2+F3+F4 `197a7bea`, F1 `ae8bf467`, F5 `3b0a00d0`; final gate 518/0 lib + desktop check + vite green; handoff 03 written; worktree `.claude/worktrees/finish-the-loop`. 004 **RELEASED v0.49.0**; installed-app spot-check still pending)
+- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 Tester PASS 10/10 ACs 2026-07-02, `verification.md` + handoff 04; commits `197a7bea`/`ae8bf467`/`3b0a00d0` on `.claude/worktrees/finish-the-loop`. 004 **RELEASED v0.49.0**; installed-app spot-check still pending)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,20 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Tester | **005 verdict PASS 10/10 ACs** (`verification.md`).
+  Independently re-ran everything: 518/0/5 lib (124.4s), scoped
+  task_sink 26 / harness 80 / mcp 25, vite 1m54s, vitest 10/0, desktop check
+  green, fmt clean. Read assertion BODIES, not names; all 14 developer
+  deviations audited ACCURATE. Cross-cutting: auth.rs + worktrees.rs diffs
+  EMPTY, drive.rs = blueprint hunks only, mcp.rs insert-only, exactly ONE
+  env-mutating test (locked). 5 Info findings, none blocking: (1) pre-existing
+  Linear snake_case state-map save bug CONFIRMED (file issue at ship);
+  (2) stale qa docs in types.rs + scaffold template; (3) no handler-level
+  start_work e2e test (seam-pinned, 004-accepted class); (4) alreadyRunning
+  specId can be "" for pre-F2 runs; (5) HarnessCompleted{success:false} noise
+  on stale-idle re-registration. GUI + live label flips = deferred to
+  qa.sh/staging by contract. Handoff `04-tester-to-reviewer.md`. Phase →
+  reviewer.
 - 2026-07-02 | Developer | **005 slice 3: F5 GREEN — developer phase
   COMPLETE** (`3b0a00d0`; 518/0 lib, cargo check -p agentum-desktop green,
   vite green). GithubStateMap (defaults→github.json→env via pure
@@ -117,15 +131,3 @@
   pure (capability bit computed at caller). F5 colors key off PHASE not name;
   remove-set filtered by name (collision-safe); old-map labels = foreign,
   never touched. Orchestrator spot-verified seams. Phase → developer.
-- 2026-07-02 | PM | **005 PM phase COMPLETE, gate PASS after 8 edits; D1–D4
-  locked** (server-side start-work route; adoption-not-co-existence with ALL
-  THREE plain-delivery paths skipped incl. issueCommand; QA knob = second
-  opt-in door DEFAULT OFF — overrides draft AC 8 leaning, else non-web runs
-  fail-closed at QA; global github.json state_map). Material findings: AC 6
-  was unfirable (`plan_from_spec_inner` writes `spec_id: None`,
-  `types.rs:895-898` — plan step must stamp it); AC 9 needs `{provider, id,
-  url?, phase}` (Linear/board arms need the handle); AC 1 must converge on
-  existing spec (never-overwrite 400 vs D5-toggle overlap/retries); 3 cites
-  drifted (resolve_qa_mode → drive.rs:407-423; Todo-at-plan →
-  board_goals.rs:604-616; draft-open → open-created-workspace.ts:52-66).
-  Handoff `01-pm-to-architect.md`. Phase → architect.
