@@ -147,8 +147,10 @@ pub async fn capture_pane_visible(target: &str) -> Result<String> {
 /// session per second — continuous, N-scaling CPU for data that fits in one
 /// client invocation. tmux runs the whole sequence against the server in a
 /// single connection, so this cuts the spawn count without changing the data.
-/// Callers gate on [`has_session`] first, so a missing target here (empty /
-/// malformed output) is a genuine error, not "pane gone".
+/// Session existence is folded into this same invocation: targets use tmux's
+/// exact-match form (`=name`, no prefix collisions), so a vanished session
+/// fails every command with a stderr [`tmux_stderr_means_target_gone`]
+/// classifies — callers need no separate `has-session` fork/exec pre-gate.
 ///
 /// The `;` tokens are passed as standalone argv elements (no shell in the
 /// loop), which is how tmux recognises a command separator when exec'd directly.
@@ -158,22 +160,27 @@ pub async fn capture_pane_sample_combined(
     boundary: &str,
 ) -> Result<String> {
     let start = format!("-{lines}");
+    // `=name` alone only parses as an exact match for target-SESSION commands;
+    // these take a target-pane, where a bare `=name` is tried as a pane and
+    // fails ("can't find pane"). The trailing `:` marks the session part, so
+    // `=name:` = exact session, its active window/pane — verified on tmux 3.6.
+    let exact = format!("={target}:");
     let out = Command::new("tmux")
         .args(["display-message", "-p", "-t"])
-        .arg(target)
+        .arg(&exact)
         .arg("#{pane_current_command}")
         .arg(";")
         .args(["display-message", "-p"])
         .arg(boundary)
         .arg(";")
         .args(["capture-pane", "-p", "-S", &start, "-t"])
-        .arg(target)
+        .arg(&exact)
         .arg(";")
         .args(["display-message", "-p"])
         .arg(boundary)
         .arg(";")
         .args(["capture-pane", "-p", "-S", "0", "-t"])
-        .arg(target)
+        .arg(&exact)
         .output()
         .await?;
     check(&out)?;
@@ -544,6 +551,25 @@ fn tmux_stderr_means_no_sessions(stderr: &str) -> bool {
         || (s.contains("error connecting") && s.contains("no such file"))
 }
 
+/// True when tmux's stderr means "this specific target no longer exists" — a
+/// legitimate "session gone" for a targeted command — rather than a real
+/// failure. Superset of [`tmux_stderr_means_no_sessions`] (no server at all ⇒
+/// the target is gone too) plus tmux's named-target misses: current tmux says
+/// "can't find session/window/pane: <t>", pre-2.2 said "session not found".
+/// Lets the watchdog fold session existence into its batched capture instead
+/// of paying a separate `has-session` fork/exec per session per tick. Kept
+/// pure so the gone-vs-error split is unit-testable without a live server.
+pub(crate) fn tmux_stderr_means_target_gone(stderr: &str) -> bool {
+    if tmux_stderr_means_no_sessions(stderr) {
+        return true;
+    }
+    let s = stderr.to_ascii_lowercase();
+    s.contains("can't find session")
+        || s.contains("can't find window")
+        || s.contains("can't find pane")
+        || s.contains("session not found")
+}
+
 /// Basename of the foreground process inside the pane (tmux's
 /// `pane_current_command` format token). Useful for figuring out which
 /// adapter the user is currently running — e.g. tells us "codex" vs
@@ -674,6 +700,38 @@ mod tests {
             "error connecting to /tmp/tmux-501/default (Permission denied)"
         ));
         assert!(!tmux_stderr_means_no_sessions("too many open files"));
+    }
+
+    #[test]
+    fn tmux_stderr_target_gone_classification() {
+        // "Gone" — the watchdog's batched sample must map these to Ok(None),
+        // matching what the old has-session pre-gate would have concluded.
+        // tmux 3.x names a missing exact-match target per command in the
+        // sequence; pre-2.2 used "session not found".
+        assert!(tmux_stderr_means_target_gone(
+            "can't find session: =agentum-alpha"
+        ));
+        assert!(tmux_stderr_means_target_gone("can't find pane: %5"));
+        assert!(tmux_stderr_means_target_gone("can't find window: @2"));
+        assert!(tmux_stderr_means_target_gone("session not found: alpha"));
+        // The whole sequence fails once per command — still classifiable.
+        assert!(tmux_stderr_means_target_gone(
+            "can't find session: =agentum-a\ncan't find session: =agentum-a\ncan't find session: =agentum-a"
+        ));
+        // No server at all ⇒ the target is gone too (superset of no-sessions).
+        assert!(tmux_stderr_means_target_gone(
+            "no server running on /tmp/tmux-501/default"
+        ));
+        // Real failures must still surface as errors, not "gone" — a wrongly
+        // swallowed error would make the watchdog mark a live agent finished.
+        assert!(!tmux_stderr_means_target_gone(""));
+        assert!(!tmux_stderr_means_target_gone(
+            "protocol version mismatch (client 8, server 7)"
+        ));
+        assert!(!tmux_stderr_means_target_gone(
+            "error connecting to /tmp/tmux-501/default (Permission denied)"
+        ));
+        assert!(!tmux_stderr_means_target_gone("too many open files"));
     }
 
     #[test]
@@ -848,5 +906,19 @@ mod tests {
         assert_eq!(sections[2], individual_viewport);
 
         kill_session(target).await.unwrap();
+
+        // With the session gone, the same batched call must fail with a stderr
+        // the target-gone classifier recognises — this is what lets the
+        // watchdog skip the separate has-session fork/exec per tick, so verify
+        // it against the real tmux binary's wording, not just our fixtures.
+        match capture_pane_sample_combined(target, 50, boundary).await {
+            Err(TmuxError::NonZero { stderr, .. }) => {
+                assert!(
+                    tmux_stderr_means_target_gone(&stderr),
+                    "killed session's stderr must classify as gone: {stderr:?}"
+                );
+            }
+            other => panic!("expected NonZero for killed session, got {other:?}"),
+        }
     }
 }

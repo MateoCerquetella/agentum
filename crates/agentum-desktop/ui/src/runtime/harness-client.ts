@@ -4,6 +4,7 @@
 // faithful to `crates/agentum-server/src/harness.rs` (serde snake_case) so there
 // is one source of truth and no silent field drift.
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
+import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 
 export type FeatureState =
   | 'pending'
@@ -260,9 +261,6 @@ export async function openHarnessEventStream(
   let disposed = false
   let attempt = 0
   let timer: ReturnType<typeof setTimeout> | null = null
-
-  const backoffMs = (n: number): number =>
-    Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
 
   const connect = (): void => {
     if (disposed) return

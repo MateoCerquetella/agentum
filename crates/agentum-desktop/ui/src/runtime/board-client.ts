@@ -3,7 +3,8 @@
 // auth, wire shapes faithful to `crates/agentum-server/src/routes/board.rs`
 // and `agentum_core::BoardItem` (serde — snake_case field names) so there is
 // one source of truth and no silent field drift.
-import { apiUrl, getServerEndpoint, wsUrl } from './server-endpoint'
+import { apiUrl, getServerEndpoint } from './server-endpoint'
+import { subscribeServerEvents } from './server-events-bus'
 
 /** A board ticket — `agentum_core::BoardItem`. Goals are items with `lbl: 'goal'`. */
 export type BoardItem = {
@@ -258,56 +259,19 @@ const BOARD_RELEVANT_KINDS = new Set([
 /**
  * Subscribe to the global event bus (`WS /api/events`) and invoke `onChange`
  * whenever a board-relevant lifecycle event arrives — so columns transition
- * live instead of waiting for the next poll. Auto-reconnects with capped
- * backoff (the bus is process-wide, so a dropped socket is recoverable).
+ * live instead of waiting for the next poll. Rides the SHARED events socket
+ * (server-events-bus): one connection + one parse per frame app-wide, with
+ * reconnect/backoff owned by the bus. Kept async for caller compatibility.
  */
 export async function openBoardEventStream(onChange: () => void): Promise<BoardEventStream> {
-  const { token } = await getServerEndpoint()
-  const base = await wsUrl('/api/events')
-  const url = token ? `${base}?token=${encodeURIComponent(token)}` : base
-
-  let ws: WebSocket | null = null
-  let disposed = false
-  let attempt = 0
-  let timer: ReturnType<typeof setTimeout> | null = null
-
-  const backoffMs = (n: number): number =>
-    Math.min(5000, 250 * 2 ** Math.min(n - 1, 5)) + Math.floor(Math.random() * 250)
-
-  const connect = (): void => {
-    if (disposed) return
-    const sock = new WebSocket(url)
-    ws = sock
-    sock.addEventListener('open', () => {
-      attempt = 0
-    })
-    sock.addEventListener('message', (event) => {
-      if (typeof event.data !== 'string') return
-      try {
-        const ev = JSON.parse(event.data) as { kind?: string }
-        if (ev.kind && BOARD_RELEVANT_KINDS.has(ev.kind)) {
-          onChange()
-        }
-      } catch {
-        // Ignore malformed frames rather than tearing the stream down.
+  const unsubscribe = subscribeServerEvents({
+    onEvent: (ev) => {
+      if (typeof ev.kind === 'string' && BOARD_RELEVANT_KINDS.has(ev.kind)) {
+        onChange()
       }
-    })
-    sock.addEventListener('close', () => {
-      if (sock !== ws || disposed) return
-      attempt += 1
-      timer = setTimeout(connect, backoffMs(attempt))
-    })
-  }
-
-  connect()
-
-  return {
-    close: () => {
-      disposed = true
-      if (timer) clearTimeout(timer)
-      ws?.close()
     }
-  }
+  })
+  return { close: unsubscribe }
 }
 
 /**

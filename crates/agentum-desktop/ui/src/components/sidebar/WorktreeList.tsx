@@ -198,6 +198,7 @@ import {
 import { buildImportedWorktreesCardCandidates } from './imported-worktrees-card-candidates'
 import {
   buildWorktreeSectionActivitySummaries,
+  reuseSectionActivitySummariesIfEqual,
   EMPTY_WORKTREE_SECTION_ACTIVITY,
   type WorktreeSectionActivityState,
   type WorktreeSectionActivitySummary
@@ -4191,32 +4192,39 @@ const WorktreeList = React.memo(function WorktreeList({
     sectionActivityRuntimePaneTitlesByTabId,
     sectionActivityTabsByWorktree
   ])
-  const sectionActivityByGroupKey = useMemo(
-    () =>
-      showSectionStatus
-        ? buildWorktreeSectionActivitySummaries({
-            groupBy: effectiveGroupBy,
-            worktrees,
-            repoMap,
-            prCache,
-            workspaceStatuses,
-            projectGroups,
-            settings,
-            state: sectionActivityState
-          })
-        : new Map<string, WorktreeSectionActivitySummary>(),
-    [
-      groupBy,
-      prCache,
-      projectGroups,
-      repoMap,
-      sectionActivityState,
-      settings,
-      showSectionStatus,
-      workspaceStatuses,
-      worktrees
-    ]
+  // Identity-stable across rebuilds: the epoch-driven useMemo re-runs on every
+  // agent transition, but when no section count changed we hand the memoized
+  // VirtualizedWorktreeViewport the PREVIOUS Map so its React.memo holds.
+  const sectionActivityByGroupKeyRef = useRef<Map<string, WorktreeSectionActivitySummary>>(
+    new Map()
   )
+  const sectionActivityByGroupKey = useMemo(() => {
+    const next = showSectionStatus
+      ? buildWorktreeSectionActivitySummaries({
+          groupBy: effectiveGroupBy,
+          worktrees,
+          repoMap,
+          prCache,
+          workspaceStatuses,
+          projectGroups,
+          settings,
+          state: sectionActivityState
+        })
+      : new Map<string, WorktreeSectionActivitySummary>()
+    const reused = reuseSectionActivitySummariesIfEqual(sectionActivityByGroupKeyRef.current, next)
+    sectionActivityByGroupKeyRef.current = reused
+    return reused
+  }, [
+    groupBy,
+    prCache,
+    projectGroups,
+    repoMap,
+    sectionActivityState,
+    settings,
+    showSectionStatus,
+    workspaceStatuses,
+    worktrees
+  ])
 
   // Reactive per-host "open tmux pane" set. Recomputes whenever a pane binds or
   // disposes a tmux session (tmuxByPaneKey) or the tab/worktree/repo topology

@@ -46,6 +46,33 @@ export const EMPTY_WORKTREE_SECTION_ACTIVITY: WorktreeSectionActivitySummary = {
   unreadCount: 0
 }
 
+/**
+ * Return `previous` when `next` carries identical per-group counts, so the
+ * consumer can keep a stable Map identity. The summaries are rebuilt on every
+ * agent-status epoch bump and passed as a prop to the memoized virtualized
+ * viewport — without identity reuse, every agent transition re-rendered the
+ * whole sidebar list even when no section count actually changed.
+ */
+export function reuseSectionActivitySummariesIfEqual(
+  previous: Map<string, WorktreeSectionActivitySummary> | null,
+  next: Map<string, WorktreeSectionActivitySummary>
+): Map<string, WorktreeSectionActivitySummary> {
+  if (!previous || previous.size !== next.size) {
+    return next
+  }
+  for (const [groupKey, summary] of next) {
+    const prev = previous.get(groupKey)
+    if (
+      !prev ||
+      prev.runningCount !== summary.runningCount ||
+      prev.unreadCount !== summary.unreadCount
+    ) {
+      return next
+    }
+  }
+  return previous
+}
+
 export function buildWorktreeSectionActivitySummaries({
   groupBy,
   worktrees,

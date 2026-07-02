@@ -110,6 +110,7 @@ async fn make_state(dir: &std::path::Path) -> AppState {
         api_base_url: None,
         desktop_bridge: None,
         harness: Arc::new(agentum_server::harness::HarnessEngine::new()),
+        events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     }
 }
 

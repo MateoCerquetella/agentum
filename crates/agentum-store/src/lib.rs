@@ -1872,4 +1872,41 @@ mod tests {
             "expected NotFound, got {err:?}"
         );
     }
+
+    /// `prune_events` drops aged history but must never drop a session's
+    /// newest `agent.*` row — that row seeds the cold-start activity overlay
+    /// for clients connecting to /api/events, however old it is.
+    #[tokio::test]
+    async fn prune_events_keeps_latest_agent_row_per_session() {
+        let s = tmp_store().await;
+        let sess = make_session(&s, "prune-events").await;
+
+        let old = |days: i64, kind: &str| agentum_core::Event {
+            kind: kind.into(),
+            session_id: Some(sess.id),
+            session_name: None,
+            payload: serde_json::json!({}),
+            ts: OffsetDateTime::now_utc() - time::Duration::days(days),
+        };
+        // Two aged agent rows: only the NEWER of the two is protected.
+        s.insert_event(&old(40, "agent.working")).await.unwrap();
+        s.insert_event(&old(35, "agent.finished")).await.unwrap();
+        // Aged non-agent history: prunable.
+        s.insert_event(&old(40, "watchdog.compact")).await.unwrap();
+        // Fresh row: inside the window, untouched.
+        s.insert_event(&old(0, "session.started")).await.unwrap();
+
+        let pruned = s.prune_events(30).await.unwrap();
+        assert_eq!(pruned, 2, "the stale agent.working + watchdog rows");
+
+        // The overlay still knows the session's last agent state.
+        let latest = s.latest_agent_event_per_session().await.unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].kind, "agent.finished");
+
+        // The watchdog feed keeps only the fresh row.
+        let feed = s.list_watchdog_events(50).await.unwrap();
+        assert_eq!(feed.len(), 1);
+        assert_eq!(feed[0].kind, "session.started");
+    }
 }

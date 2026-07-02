@@ -27,9 +27,11 @@ import { toPublicPane } from './pane-public-view'
 import { applyTerminalGpuAcceleration } from './pane-terminal-gpu-acceleration'
 import {
   markPaneComplexScriptOutput,
+  restoreHiddenPaneScrollback,
   resumePaneRendering,
   setPaneGpuRenderingState,
-  suspendPaneRendering
+  suspendPaneRendering,
+  trimHiddenPaneScrollback
 } from './pane-rendering-control'
 import type { TerminalLeafId } from '../../../../shared/stable-pane-id'
 import { PaneIdentityRegistry } from './pane-identity-registry'
@@ -247,11 +249,29 @@ export class PaneManager {
   suspendRendering(): void {
     this.renderingSuspended = true
     suspendPaneRendering(this.panes.values())
+    // Hidden panes also drop to a small scrollback so long-running background
+    // agents can't grow tens-of-MB buffers; restored by the show path BEFORE
+    // it drains the hidden-output backlog (see restoreHiddenScrollback).
+    trimHiddenPaneScrollback(this.panes.values())
   }
 
   resumeRendering(): void {
     this.renderingSuspended = false
     resumePaneRendering(this.panes.values())
+    // Defense in depth: the show path already restored via
+    // restoreHiddenScrollback() before draining the backlog, making this a
+    // no-op there — but any OTHER resume path must not leave panes pinned at
+    // the hidden freeze, so the suspend/resume pair enforces the invariant
+    // itself. Idempotent (restore clears the stash).
+    restoreHiddenPaneScrollback(this.panes.values())
+  }
+
+  // Called by the show path BEFORE flushing queued background output into
+  // the terminal, so the drain lands in the full-size buffer —
+  // resumeRendering() runs after that flush by design (WebGL attach wants
+  // the final content) and re-runs the restore as a safety net.
+  restoreHiddenScrollback(): void {
+    restoreHiddenPaneScrollback(this.panes.values())
   }
 
   movePane(sourcePaneId: number, targetPaneId: number, zone: DropZone): void {

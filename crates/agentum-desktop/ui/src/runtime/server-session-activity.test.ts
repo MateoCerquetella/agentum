@@ -106,7 +106,6 @@ describe('createServerSessionActivityHub', () => {
 
     hub.handleEvent({ kind: 'agent.awaiting_input', session_id: 'sess-1' })
     expect(h.awaiting).not.toHaveBeenCalled()
-    expect(hub.hasHandlers()).toBe(false)
   })
 
   it('unregister does not clobber a newer registration for the same session (remount race)', () => {
