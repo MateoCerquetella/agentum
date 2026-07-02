@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 004-workspace-issue-loop
-- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer -->  (004 tested: 7/7 ACs PASS; 002 + 003-chat-issue-preview parked at human-gated release)
+- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (004 SIGNED OFF, SHIP-READY; release human-gated. 002 + 003 parked at human-gated release)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,11 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-01 — 004 PM gate PASSED (autonomous; loop-armed = adopt recommendations).
-  D1 Done=label-only. D2 gh CLI. D3 labels `status/todo|in-progress|ready-to-test|
-  done` (ensure-created, exactly one per issue). D4 build F1=status-transition
-  first. D5 scaffold opt-in/off. AC 4 fixed (thread `tracker_url` through the
-  seam). Mode → auto (/sdd-loop). Phase → architect.
 - 2026-07-01 — 004 architect blueprint COMPLETE (`architecture.md`). Corrections
   C1–C5 (Tasks-page create is a local stub → new `POST /api/github/issues`; UI
   shim strips linked fields → widen 2 TS layers; `linkedPR` wire fix + registry
@@ -101,6 +96,15 @@
   30s-timeout test; the attribution note) — none blocking. GUI behaviors
   (chip, toggle, live label flip) = qa.sh/staging gate. **ADVANCE → reviewer**
   (handoff `04-tester-to-reviewer.md`).
+- 2026-07-01 — 004 Reviewer **SIGN-OFF → SHIP-READY** (`review.md`). All 6
+  focus items pass; invariants hold; "test suite unusually communicative;
+  comment discipline exemplary". 0 Blockers. Follow-ups (non-blocking):
+  narrow the `as unknown as GitHubWorkItem` cast (useComposerState.ts:1448);
+  FILE A GHES ISSUE (transitions skip on non-github.com URLs — by design,
+  name it); nits: debug-log the initial-Todo skip, scaffoldSpec reset-on-unlink.
+  spec.md Status → Done. Phase → done. **Release = Mateo** (/ship: issue + PR
+  fix-wiki→develop w/ Closes #N, staging browser QA — chip, toggle, live
+  label flip ending OPEN with exactly status/done — then promote + tag).
 - 2026-07-01 — 004 Developer slice 1: **F1+F2 GREEN** (486/0 lib tests, fmt +
   check clean). F1: `GITHUB_STATUS_LABELS` + pure gh argv builders +
   `github_slug_and_number_from_issue_url` + `run_gh` (30s timeout) +

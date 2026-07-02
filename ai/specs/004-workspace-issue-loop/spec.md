@@ -1,7 +1,7 @@
 # Spec 004 — Workspace issue loop (issue-first workspaces)
 
 - **Number:** 004
-- **Status:** PM                <!-- Draft | PM | Architect | In progress | Done -->
+- **Status:** Done              <!-- Draft | PM | Architect | In progress | Done -->  (reviewer sign-off 2026-07-01; release human-gated)
 - **Surface:** `crates/agentum-server` (task_sink, routes/worktrees, harness types) + `crates/agentum-desktop/ui` (New Workspace composer)
 - **Author:** Mateo Cerquetella (drafted with Claude)
 - **Date:** 2026-07-01
