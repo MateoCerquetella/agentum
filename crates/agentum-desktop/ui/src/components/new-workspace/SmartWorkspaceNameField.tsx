@@ -99,6 +99,9 @@ export type SmartWorkspaceNameSelection = {
   kind: 'github-pr' | 'github-issue' | 'gitlab-mr' | 'gitlab-issue' | 'branch' | 'linear'
   label: string
   url?: string
+  /** Spec 006 F1 (AC 2): labels applied when the item was created from the
+   *  composer — rendered as a compact row on the selection pill. */
+  labels?: string[]
 }
 
 const SEARCH_DEBOUNCE_MS = 200
@@ -978,6 +981,21 @@ export default function SmartWorkspaceNameField({
                   <span className="min-w-0 flex-1 truncate font-medium leading-none text-foreground">
                     {selectedSource.label}
                   </span>
+                  {/* Spec 006 F1 (AC 2): compact label row on the
+                      created-issue chip. max-w keeps a long label set from
+                      crowding out the title. */}
+                  {selectedSource.labels?.length ? (
+                    <span className="flex max-w-[45%] shrink-0 items-center gap-1 overflow-hidden">
+                      {selectedSource.labels.map((label) => (
+                        <span
+                          key={label}
+                          className="truncate rounded-full border border-border/70 bg-muted/50 px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
                   {selectedSource.url ? (
                     <Tooltip>
                       <TooltipTrigger asChild>

@@ -89,6 +89,11 @@ type NewWorkspaceComposerCardProps = {
   createIssueSubmitting: boolean
   createIssueError: string | null
   onCreateIssueSubmit: () => void
+  /** Spec 006 F1: label picker for the create-issue form. `null` options =
+   *  fetch in flight (the row hides until the names arrive). */
+  createIssueLabels: string[]
+  createIssueLabelOptions: string[] | null
+  onToggleCreateIssueLabel: (label: string) => void
   /** Spec 004 F4 (D5): "Scaffold spec" toggle, shown only for a linked
    *  github.com issue targeting a local git repo. Off by default. */
   canScaffoldSpec: boolean
@@ -283,6 +288,9 @@ export default function NewWorkspaceComposerCard({
   createIssueSubmitting,
   createIssueError,
   onCreateIssueSubmit,
+  createIssueLabels,
+  createIssueLabelOptions,
+  onToggleCreateIssueLabel,
   canScaffoldSpec,
   scaffoldSpec,
   onScaffoldSpecChange,
@@ -613,6 +621,33 @@ export default function NewWorkspaceComposerCard({
                 disabled={createIssueSubmitting}
                 className="w-full min-w-0 resize-none rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
+              {/* Spec 006 F1 (AC 2): toggleable label chips seeded from the
+                  repo's label set (static fallback on fetch error). Hidden
+                  while the fetch is in flight — filing never waits on it. */}
+              {createIssueLabelOptions && createIssueLabelOptions.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {createIssueLabelOptions.map((label) => {
+                    const selected = createIssueLabels.includes(label)
+                    return (
+                      <button
+                        key={label}
+                        type="button"
+                        onClick={() => onToggleCreateIssueLabel(label)}
+                        disabled={createIssueSubmitting}
+                        aria-pressed={selected}
+                        className={cn(
+                          'rounded-full border px-2 py-1 text-[11px] leading-none transition',
+                          selected
+                            ? 'border-foreground/60 bg-foreground text-background'
+                            : 'border-border/70 bg-muted/40 text-muted-foreground hover:text-foreground'
+                        )}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
               {createIssueError ? (
                 <div role="alert" className="text-xs text-destructive">
                   {createIssueError}

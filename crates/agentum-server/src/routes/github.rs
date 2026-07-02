@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/github/issue", get(get_issue))
         .route("/api/github/issues", post(create_issue))
+        .route("/api/github/labels", get(list_labels))
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +174,10 @@ struct CreateIssueBody {
     /// `owner/repo` fast path (skips the origin read when well-formed).
     #[serde(default)]
     slug: Option<String>,
+    /// Spec 006 F1: labels applied at creation via the existing `gh --label`
+    /// plumbing (task_sink.rs). Absent = today's behavior, byte-identical.
+    #[serde(default)]
+    labels: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +187,10 @@ struct CreateIssueResponse {
     number: i64,
     url: String,
     slug: String,
+    /// Spec 006 F4 (D3): the authenticated `gh` login — the creator. Best
+    /// effort: None on any failure, never an error (additive; serializes as
+    /// `"author":null`, which old clients ignore).
+    author: Option<String>,
 }
 
 /// Parse the created issue's number out of `FeatureRef.id`. `parse_gh_issue_url`
@@ -236,7 +245,7 @@ async fn create_issue(
     let feature = NewFeature {
         title: title.to_string(),
         body: body.body.clone().filter(|b| !b.trim().is_empty()),
-        labels: Vec::new(),
+        labels: body.labels.clone(),
     };
     let fref = TaskSink::Github
         .create_feature(
@@ -254,12 +263,135 @@ async fn create_issue(
         .map_err(|e| super::board_goals::map_sink_error(TaskSink::Github, &e))?;
 
     let number = issue_number_from_ref_id(&fref.id)?;
+    // Spec 006 F4: fetched AFTER the successful create — a login failure must
+    // never fail a created issue, and a failed create wastes no `gh` call.
+    let author = authenticated_github_login(&host).await;
     Ok(Json(CreateIssueResponse {
         provider: "github",
         number,
         url: fref.url.unwrap_or_default(),
         slug,
+        author,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LabelsQuery {
+    /// Project dir for the `origin` read when no `slug` hint is supplied.
+    pub workdir: String,
+    /// `owner/repo` fast path (skips the origin read when well-formed).
+    pub slug: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LabelsResponse {
+    pub labels: Vec<String>,
+}
+
+/// Pure: map `gh label list --json name` output (`[{"name": …}, …]`) to names —
+/// skip nameless entries, sort case-insensitively, dedup.
+fn parse_label_names(stdout: &[u8]) -> anyhow::Result<Vec<String>> {
+    let entries: Vec<serde_json::Value> = serde_json::from_slice(stdout)?;
+    let mut names: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| entry["name"].as_str())
+        .map(str::to_string)
+        .collect();
+    // Case-insensitive sort keeps exact duplicates adjacent (stable sort), so
+    // the plain dedup below removes them.
+    names.sort_by_key(|name| name.to_lowercase());
+    names.dedup();
+    Ok(names)
+}
+
+/// `GET /api/github/labels` — the repo's existing label names, for the
+/// composer's label picker (spec 006 F1, D2). Same shape as issue fetch/create:
+/// slug via `resolve_github_slug` (typed 422 `no_github_repo` on miss, so the
+/// UI branches on one code for all three entry points), `gh` from the neutral
+/// cwd. A `gh` failure is a plain 400 — the picker treats ANY error as "use the
+/// static fallback", so no typed envelope is needed there.
+async fn list_labels(
+    State(state): State<AppState>,
+    Query(q): Query<LabelsQuery>,
+) -> Result<Json<LabelsResponse>, ApiError> {
+    let workdir = q.workdir.trim();
+    if workdir.is_empty() {
+        return Err(ApiError::BadRequest("`workdir` is required".into()));
+    }
+
+    let host = state
+        .store
+        .get_host(LOCAL_HOST_ID)
+        .await?
+        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
+
+    let slug = match super::board_goals::resolve_github_slug(&host, workdir, q.slug.as_deref())
+        .await
+    {
+        Ok(slug) => slug,
+        Err(_) => {
+            return Err(ApiError::Custom(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({ "error": { "code": "no_github_repo", "message": "no GitHub repo resolved for this project" } }),
+            ));
+        }
+    };
+
+    let cwd = crate::task_sink::neutral_cwd();
+    let cwd = cwd.to_string_lossy();
+    let out = crate::host_runtime::gh_in_dir(
+        &host,
+        &cwd,
+        &[
+            "label",
+            "list",
+            "--repo",
+            slug.as_str(),
+            "--json",
+            "name",
+            "--limit",
+            "100",
+        ],
+    )
+    .await
+    .map_err(|e| ApiError::Internal(format!("could not run `gh`: {e}")))?;
+
+    if !out.success {
+        tracing::warn!(stderr = %out.stderr, slug = %slug, "gh label list failed");
+        return Err(ApiError::BadRequest("`gh label list` failed".into()));
+    }
+
+    let labels = parse_label_names(&out.stdout)
+        .map_err(|e| ApiError::Internal(format!("could not parse `gh` output: {e}")))?;
+    Ok(Json(LabelsResponse { labels }))
+}
+
+/// Pure: a login is the trimmed, non-empty stdout of `gh api user --jq .login`.
+fn parse_gh_login(stdout: &[u8]) -> Option<String> {
+    let s = String::from_utf8_lossy(stdout);
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// `gh api user --jq .login` from the neutral cwd — best-effort by contract
+/// (spec 006 F4): any failure (offline, unauthenticated, old `gh`) yields
+/// `None`, never an error. No cache — a create is click-frequency, and a cache
+/// would go stale across `gh auth switch`.
+async fn authenticated_github_login(host: &agentum_core::Host) -> Option<String> {
+    let cwd = crate::task_sink::neutral_cwd();
+    let cwd = cwd.to_string_lossy();
+    let out = crate::host_runtime::gh_in_dir(host, &cwd, &["api", "user", "--jq", ".login"])
+        .await
+        .ok()?;
+    if !out.success {
+        tracing::warn!(stderr = %out.stderr, "gh api user failed; issue author omitted");
+        return None;
+    }
+    parse_gh_login(&out.stdout)
 }
 
 #[cfg(test)]
@@ -309,5 +441,68 @@ mod tests {
         assert!(issue_number_from_ref_id("abc").is_err());
         assert!(issue_number_from_ref_id("").is_err());
         assert!(issue_number_from_ref_id("12a").is_err());
+    }
+
+    #[test]
+    fn create_issue_body_labels_default_empty() {
+        // Spec 006 F1 (AC 1): absent labels deserialize to an empty Vec — the
+        // wire stays byte-identical to pre-006 requests (the argv half is
+        // pinned by task_sink's gh_create_argv_* tests).
+        let body: CreateIssueBody = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo"
+        }))
+        .unwrap();
+        assert!(body.labels.is_empty(), "absent labels must default to []");
+
+        let body: CreateIssueBody = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo",
+            "labels": ["type/feat", "priority/p1"]
+        }))
+        .unwrap();
+        assert_eq!(body.labels, vec!["type/feat", "priority/p1"]);
+    }
+
+    #[test]
+    fn parse_label_names_maps_sorts_and_skips_nameless() {
+        let stdout = br#"[{"name":"b"},{"name":"A"},{}]"#;
+        assert_eq!(parse_label_names(stdout).unwrap(), vec!["A", "b"]);
+        // Exact duplicates collapse; junk input errors (the route maps it to 500).
+        let stdout = br#"[{"name":"x"},{"name":"x"}]"#;
+        assert_eq!(parse_label_names(stdout).unwrap(), vec!["x"]);
+        assert!(parse_label_names(b"not json").is_err());
+    }
+
+    #[test]
+    fn create_issue_response_serializes_author_present_and_null() {
+        // Spec 006 F4: the widening is additive — `author` is a plain nullable
+        // field old clients ignore.
+        let with_author = serde_json::to_string(&CreateIssueResponse {
+            provider: "github",
+            number: 232,
+            url: "https://github.com/o/r/issues/232".into(),
+            slug: "o/r".into(),
+            author: Some("mateo".into()),
+        })
+        .unwrap();
+        assert!(with_author.contains(r#""author":"mateo""#));
+
+        let without_author = serde_json::to_string(&CreateIssueResponse {
+            provider: "github",
+            number: 232,
+            url: "https://github.com/o/r/issues/232".into(),
+            slug: "o/r".into(),
+            author: None,
+        })
+        .unwrap();
+        assert!(without_author.contains(r#""author":null"#));
+    }
+
+    #[test]
+    fn parse_gh_login_trims_and_rejects_empty() {
+        assert_eq!(parse_gh_login(b"mateo\n"), Some("mateo".to_string()));
+        assert_eq!(parse_gh_login(b"  \n"), None);
+        assert_eq!(parse_gh_login(b""), None);
     }
 }

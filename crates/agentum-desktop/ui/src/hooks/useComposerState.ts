@@ -52,7 +52,12 @@ import {
   resolveQuickCreateLinkedWorkItemPrompt
 } from '@/lib/linked-work-item-context'
 import { buildGithubIssueContextSnapshot } from '@/lib/github-linked-work-item'
-import { createGithubIssue, scaffoldSpecFromIssue } from '@/runtime/github-issue-client'
+import { composeIssueContextBody, STATIC_FALLBACK_LABELS } from '@/lib/issue-context-body'
+import {
+  createGithubIssue,
+  fetchGithubRepoLabels,
+  scaffoldSpecFromIssue
+} from '@/runtime/github-issue-client'
 import { startGatedWork } from '@/runtime/harness-client'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
@@ -191,6 +196,12 @@ export type ComposerCardProps = {
   createIssueSubmitting: boolean
   createIssueError: string | null
   onCreateIssueSubmit: () => void
+  /** Spec 006 F1: label picker selection for the create-issue form. */
+  createIssueLabels: string[]
+  /** Pickable label names — `null` while the fetch is in flight; the static
+   *  fallback set when the fetch errored. */
+  createIssueLabelOptions: string[] | null
+  onToggleCreateIssueLabel: (label: string) => void
   /** True when the "Scaffold spec" toggle applies: a github.com issue is
    *  linked and the target is a local git repo (spec 004 F4, D5). */
   canScaffoldSpec: boolean
@@ -549,6 +560,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [createIssueBody, setCreateIssueBody] = useState('')
   const [createIssueSubmitting, setCreateIssueSubmitting] = useState(false)
   const [createIssueError, setCreateIssueError] = useState<string | null>(null)
+  // Spec 006 F1: label picker for the create-issue form. Selection resets on
+  // submit-success and on form close; options are `null` while loading and
+  // fall back to the static `type/*`+`priority/*` set when the fetch errors.
+  const [createIssueLabels, setCreateIssueLabels] = useState<string[]>([])
+  const [createIssueLabelOptions, setCreateIssueLabelOptions] = useState<string[] | null>(null)
   // Spec 004 F4 (D5): opt-in, off by default. Not draft-persisted — trust in
   // the deterministic transform is earned per creation, not remembered.
   const [scaffoldSpec, setScaffoldSpec] = useState(false)
@@ -1429,10 +1445,41 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           }
           return name.trim() || (agentPrompt.trim().split('\n')[0]?.trim() ?? '')
         })
+      } else {
+        // Spec 006 F1: a half-picked label set is form state, not draft state.
+        setCreateIssueLabels([])
       }
     },
     [agentPrompt, name]
   )
+
+  // Spec 006 F1 (D2): seed the label picker while the form is open — once per
+  // open, refetched when the selected repo changes mid-form (the effect key).
+  // ANY fetch error falls back to the static set; labels must never block
+  // filing an issue.
+  useEffect(() => {
+    if (!createIssueOpen || !selectedRepoPath) {
+      return
+    }
+    let cancelled = false
+    setCreateIssueLabelOptions(null)
+    fetchGithubRepoLabels({ workdir: selectedRepoPath })
+      .catch(() => [...STATIC_FALLBACK_LABELS])
+      .then((labels) => {
+        if (!cancelled) {
+          setCreateIssueLabelOptions(labels)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [createIssueOpen, selectedRepoPath])
+
+  const handleToggleCreateIssueLabel = useCallback((label: string): void => {
+    setCreateIssueLabels((current) =>
+      current.includes(label) ? current.filter((l) => l !== label) : [...current, label]
+    )
+  }, [])
 
   const handleCreateIssueSubmit = useCallback(async (): Promise<void> => {
     const title = createIssueTitle.trim()
@@ -1451,11 +1498,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     setCreateIssueSubmitting(true)
     setCreateIssueError(null)
     try {
-      const body = createIssueBody.trim()
+      // Spec 006 F1 (AC 3): a blank body auto-fills from the composer's
+      // context already in hand (agent prompt + note, via the existing refs so
+      // this callback's deps don't grow per keystroke). Both blank keeps
+      // today's bodyless create.
+      const body =
+        createIssueBody.trim() ||
+        (composeIssueContextBody(agentPromptRef.current, noteRef.current) ?? '')
+      const labels = createIssueLabels
       const created = await createGithubIssue({
         title,
         ...(body ? { body } : {}),
-        workdir: repoPath
+        workdir: repoPath,
+        ...(labels.length ? { labels } : {})
       })
       // Reuse the standard linked-item application (linkedIssue slot, suggested
       // workspace name), then overwrite linkedWorkItem to attach the typed body
@@ -1465,13 +1520,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         type: 'issue',
         number: created.number,
         title,
-        url: created.url
+        url: created.url,
+        labels,
+        author: created.author ?? null
       } as unknown as GitHubWorkItem)
       const summary: LinkedWorkItemSummary = {
         type: 'issue',
         number: created.number,
         title,
-        url: created.url
+        url: created.url,
+        labels,
+        author: created.author ?? null
       }
       setLinkedWorkItem(
         body
@@ -1493,6 +1552,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setCreateIssueOpen(false)
       setCreateIssueTitle('')
       setCreateIssueBody('')
+      setCreateIssueLabels([])
     } catch (error) {
       // Zero state change on failure — the form stays filled for a retry.
       setCreateIssueError(
@@ -1504,6 +1564,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   }, [
     applyLinkedWorkItem,
     createIssueBody,
+    createIssueLabels,
     createIssueSubmitting,
     createIssueTitle,
     selectedRepo
@@ -2045,7 +2106,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           isLinear || linkedWorkItem.number === 0
             ? linkedWorkItem.title
             : `#${linkedWorkItem.number} ${linkedWorkItem.title}`,
-        url: linkedWorkItem.url
+        url: linkedWorkItem.url,
+        // Spec 006 F1 (AC 2): the created-issue chip renders its applied
+        // labels. Only the composer's create path populates the summary's
+        // labels, so linked pre-existing items are unaffected.
+        ...(linkedWorkItem.labels?.length ? { labels: linkedWorkItem.labels } : {})
       }
     }
     if (baseBranch) {
@@ -2666,6 +2731,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     createIssueSubmitting,
     createIssueError,
     onCreateIssueSubmit: () => void handleCreateIssueSubmit(),
+    createIssueLabels,
+    createIssueLabelOptions,
+    onToggleCreateIssueLabel: handleToggleCreateIssueLabel,
     canScaffoldSpec,
     scaffoldSpec,
     onScaffoldSpecChange: setScaffoldSpec,

@@ -57,6 +57,42 @@ export async function fetchGithubIssueBody(input: {
   }
 }
 
+/**
+ * Fetch the repo's existing GitHub label names via `gh label list` on the
+ * embedded server (spec 006 F1, D2) — seeds the composer's label picker.
+ * Throws on any non-2xx (or timeout); the caller falls back to the static
+ * `type/*`+`priority/*` set, so a label fetch must never block filing.
+ */
+export async function fetchGithubRepoLabels(input: {
+  workdir: string
+  slug?: string
+  /** Abort budget — a slow/hung `gh` must not delay the composer. */
+  timeoutMs?: number
+}): Promise<string[]> {
+  const params = new URLSearchParams({ workdir: input.workdir })
+  if (input.slug) {
+    params.set('slug', input.slug)
+  }
+  const url = await apiUrl(`/api/github/labels?${params.toString()}`)
+
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 6000)
+  try {
+    const res = await fetch(url, {
+      headers: { ...(await authHeaders()) },
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(`github labels ${res.status}${detail ? ` — ${detail}` : ''}`)
+    }
+    const text = await res.text()
+    return (JSON.parse(text) as { labels: string[] }).labels
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
 // Wire shape of `POST /api/github/issues`
 // (crates/agentum-server/src/routes/github.rs::CreateIssueResponse).
 export type CreatedGithubIssue = {
@@ -64,6 +100,9 @@ export type CreatedGithubIssue = {
   number: number
   url: string
   slug: string
+  /** Spec 006 F4: the authenticated `gh` login — null when the best-effort
+   *  lookup failed (the issue itself was still created). */
+  author: string | null
 }
 
 /**
@@ -78,6 +117,8 @@ export async function createGithubIssue(input: {
   body?: string
   workdir: string
   slug?: string
+  /** Spec 006 F1: labels applied at creation (existing repo label names). */
+  labels?: string[]
   /** Abort budget — issue creation shells out to `gh`. */
   timeoutMs?: number
 }): Promise<CreatedGithubIssue> {
@@ -92,7 +133,9 @@ export async function createGithubIssue(input: {
         title: input.title,
         ...(input.body ? { body: input.body } : {}),
         workdir: input.workdir,
-        ...(input.slug ? { slug: input.slug } : {})
+        ...(input.slug ? { slug: input.slug } : {}),
+        // Omitted when empty so the pre-006 wire shape stays byte-identical.
+        ...(input.labels?.length ? { labels: input.labels } : {})
       }),
       signal: controller.signal
     })

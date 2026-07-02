@@ -56,6 +56,12 @@ export type LinkedWorkItemSummary = {
   number: number
   title: string
   url: string
+  /** Labels applied at creation (spec 006 F1) — rendered on the created-issue
+   *  chip. Optional: only the composer's create-issue path populates it. */
+  labels?: string[]
+  /** The creating user's login (spec 006 F4) — null when the server's
+   *  best-effort lookup failed; absent for items not created in-composer. */
+  author?: string | null
   /** Linear identifier (for example ENG-123) when this linked item came from
    *  Linear rather than GitHub. */
   linearIdentifier?: string
