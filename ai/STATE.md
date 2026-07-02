@@ -64,6 +64,20 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Developer | **006 slice 1: F1+F4 GREEN** (`15365352`; 522/0
+  lib, clippy --all-targets -D warnings GREEN, vite 2m17s, vitest 5/0).
+  F1: CreateIssueBody.labels → NewFeature; GET /api/github/labels
+  (parse_label_names, typed 422, gh-fail=400→client static fallback);
+  composer chip picker + composeIssueContextBody blank-body '## Context'
+  auto-fill via existing refs; labels on both snapshots + chip row. F4:
+  CreateIssueResponse.author (gh api user --jq .login, best-effort AFTER
+  create), snapshots populate author; dialog fallback untouched; NO
+  list-side change (C3). 4 deviations logged (sort_by_key for clippy;
+  keyed fetch effect; SmartWorkspaceNameField is the chip site; labels
+  unconditional-empty on snapshots). routes/chat.rs + harness untouched
+  (confirmed). Phase stays developer → slice 2 = F2 (chat SDD shape +
+  Mateo's empty-body wire test + stored-turn check) + F3 (roles inherited
+  + C1 provenance fix).
 - 2026-07-02 | Architect | **006 blueprint COMPLETE (`architecture.md`), gate
   PASS 5/5.** C1 MATERIAL (orchestrator spot-verified): Decompose re-plans
   tracker-less (`drive.rs:846`) + `transition_tracker` silently no-ops on
@@ -119,15 +133,3 @@
   on stale-idle re-registration. GUI + live label flips = deferred to
   qa.sh/staging by contract. Handoff `04-tester-to-reviewer.md`. Phase →
   reviewer.
-- 2026-07-02 | Developer | **005 slice 3: F5 GREEN — developer phase
-  COMPLETE** (`3b0a00d0`; 518/0 lib, cargo check -p agentum-desktop green,
-  vite green). GithubStateMap (defaults→github.json→env via pure
-  `apply_layers`; label_for/labels; phase-keyed `github_status_color`);
-  argv builders widened (name-filtered remove-set, dedup, byte-identical
-  default pin honored pre/post); flat-arg `github_get/set_state_map` Tauri
-  commands + unconditional Settings editor. Todo-at-plan test hardened with
-  `AGENTUM_GITHUB_CONFIG`→absent-file pin (github arm now reads from_env).
-  🐛 PRE-EXISTING found, not fixed: Linear editor sends snake_case invoke
-  keys that never bind → every Linear save silently clears
-  in_progress/ready_to_test overrides — file an issue at ship time. Handoff
-  `03-developer-to-tester.md`. Phase → tester.
