@@ -26,7 +26,6 @@ export type KeybindingActionId =
   | 'worktree.quickOpen'
   | 'worktree.palette'
   | 'settings.commandPalette'
-  | 'view.commandPalette'
   | 'worktree.navigateUp'
   | 'worktree.navigateDown'
   | 'app.settings'
@@ -212,20 +211,27 @@ export const KEYBINDING_DEFINITIONS: readonly KeybindingDefinition[] = [
     }
   },
   {
+    // Why: the id keeps its historical "settings." prefix so existing user
+    // overrides survive — since the palette merge (#210) this opens the ONE
+    // command palette (views, agents, Color Theme, settings search). The old
+    // Mod+K view.commandPalette action is gone; Mod+K belongs to the terminal.
     id: 'settings.commandPalette',
-    title: 'Open Settings Search',
+    title: 'Open Command Palette',
     group: 'Global',
     scope: 'global',
-    searchKeywords: ['shortcut', 'settings', 'search', 'palette', 'preferences'],
+    searchKeywords: [
+      'shortcut',
+      'global',
+      'command',
+      'palette',
+      'settings',
+      'search',
+      'preferences',
+      'go to',
+      'navigate',
+      'view'
+    ],
     defaultBindings: platformBindings(['Mod+Shift+P'])
-  },
-  {
-    id: 'view.commandPalette',
-    title: 'Go to View or Agent',
-    group: 'Global',
-    scope: 'global',
-    searchKeywords: ['shortcut', 'global', 'command', 'palette', 'go to', 'navigate', 'view'],
-    defaultBindings: platformBindings(['Mod+K'])
   },
   {
     id: 'worktree.navigateUp',

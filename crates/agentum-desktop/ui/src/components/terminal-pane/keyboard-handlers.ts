@@ -282,8 +282,7 @@ export function useTerminalKeyboardShortcuts({
         optionKeyLocation,
         isWindows,
         keybindings,
-        paneRunsAgent,
-        terminalShortcutPolicy
+        paneRunsAgent
       )
       if (!action) {
         return
