@@ -175,13 +175,32 @@ const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
 
-export default function TaskPage(): React.JSX.Element {
+export default function TaskPage({
+  embedded = false
+}: {
+  /** Project Hub embed: the page renders inside the hub's Tasks tab instead of
+   *  as the routed 'tasks' view. Internal navigation (source switch, detail
+   *  open) must then mutate taskPageData WITHOUT flipping activeView — going
+   *  through openTaskPage would silently swap the hub for the global Board.
+   *  Esc-close and the Close button are also disabled: the hub owns leaving. */
+  embedded?: boolean
+} = {}): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
   const taskResumeState = useAppStore((s) => s.taskResumeState)
   const setTaskResumeState = useAppStore((s) => s.setTaskResumeState)
   const pageData = useAppStore((s) => s.taskPageData)
-  const openTaskPage = useAppStore((s) => s.openTaskPage)
+  const routedOpenTaskPage = useAppStore((s) => s.openTaskPage)
+  const openTaskPage = useMemo(() => {
+    if (!embedded) return routedOpenTaskPage
+    return (data: Parameters<typeof routedOpenTaskPage>[0] = {}) => {
+      useAppStore.setState((s) => ({
+        // Merge (not replace): a detail-open must keep the hub's repo
+        // preselection so closing the detail lands back on the scoped list.
+        taskPageData: { ...s.taskPageData, ...data }
+      }))
+    }
+  }, [embedded, routedOpenTaskPage])
   const closeTaskPage = useAppStore((s) => s.closeTaskPage)
   const activeModal = useAppStore((s) => s.activeModal)
   const repos = useAppStore((s) => s.repos)
@@ -2639,6 +2658,11 @@ export default function TaskPage(): React.JSX.Element {
   const githubTasksBusy = tasksLoading || tasksRefreshing || tasksFiltering
 
   useEffect(() => {
+    // Why: embedded in the Project Hub there is no page to close — Esc would
+    // yank the whole hub view out from under the user.
+    if (embedded) {
+      return
+    }
     // Why: when a modal is open, let it own Esc dismissal.
     if (
       dialogWorkItem ||
@@ -2684,6 +2708,7 @@ export default function TaskPage(): React.JSX.Element {
     activeModal,
     closeTaskPage,
     dialogWorkItem,
+    embedded,
     newIssueOpen,
     newLinearIssueOpen,
     selectedLinearIssue
@@ -3207,23 +3232,27 @@ export default function TaskPage(): React.JSX.Element {
                         source icons so the top chrome is one compact band.
                         Left-aligned keeps it clear of the app sidebar on the
                         right edge. */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7 rounded-full"
-                          onClick={closeTaskPage}
-                          aria-label="Close tasks"
-                        >
-                          <X className="size-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" sideOffset={6}>
-                        Close · Esc
-                      </TooltipContent>
-                    </Tooltip>
-                    <div className="mx-1 h-5 w-px bg-border/50" aria-hidden />
+                    {embedded ? null : (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7 rounded-full"
+                              onClick={closeTaskPage}
+                              aria-label="Close tasks"
+                            >
+                              <X className="size-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" sideOffset={6}>
+                            Close · Esc
+                          </TooltipContent>
+                        </Tooltip>
+                        <div className="mx-1 h-5 w-px bg-border/50" aria-hidden />
+                      </>
+                    )}
                     {visibleSourceOptions.map((source) => {
                       const active = taskSource === source.id
                       return (

@@ -13,7 +13,10 @@ const RIGHT_SIDEBAR_SUPPRESSED_VIEWS = new Set<ActiveView>([
   // the Explorer/Search/Source-Control strip is noise here, so suppress it the
   // same way the other full-page views do (the strip never mounts and the
   // toggle/shortcuts are guarded off).
-  'harness'
+  'harness',
+  // The Project Hub owns the full content area (its tabs embed Chat/Wiki/
+  // Tasks/Sessions) — same distraction-free contract as the views above.
+  'project'
 ])
 
 export function canShowRightSidebarForView(activeView: ActiveView): boolean {

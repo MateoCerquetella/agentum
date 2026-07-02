@@ -88,7 +88,7 @@ const parseLabels = (raw: string): string[] =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
 
-export default function ChatPage() {
+export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = {}) {
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
   const setActiveView = useAppStore((s) => s.setActiveView)
@@ -133,7 +133,11 @@ export default function ChatPage() {
   // Which workspace grounds the interview AND receives the issues. The selected
   // project's GitHub repo is the (inferred) issue target — there is no manual
   // owner/repo entry. Seeded from the app's active project; persisted.
+  // When embedded in the Project Hub (`pinnedRepo`), the hub's project IS the
+  // workspace — no picker, no persistence, and the stored global choice is
+  // left untouched.
   const [workspaceId, setWorkspaceId] = useState<string | null>(() => {
+    if (pinnedRepo) return pinnedRepo.id
     try {
       return localStorage.getItem(WORKSPACE_KEY)
     } catch {
@@ -146,22 +150,27 @@ export default function ChatPage() {
   // the user's saved choice. Once hydrated: keep a still-valid selection, else
   // fall back to the active project, then the first one.
   useEffect(() => {
+    if (pinnedRepo) {
+      setWorkspaceId(pinnedRepo.id)
+      return
+    }
     if (repos.length === 0) return
     setWorkspaceId((cur) => {
       if (cur && repos.some((r) => r.id === cur)) return cur
       return activeRepoId ?? repos[0]?.id ?? null
     })
-  }, [repos, activeRepoId])
+  }, [repos, activeRepoId, pinnedRepo])
   useEffect(() => {
+    if (pinnedRepo) return
     try {
       if (workspaceId) localStorage.setItem(WORKSPACE_KEY, workspaceId)
     } catch {
       /* storage may be unavailable — selection still works this session */
     }
-  }, [workspaceId])
+  }, [workspaceId, pinnedRepo])
   const workspace = useMemo(
-    () => repos.find((r) => r.id === workspaceId) ?? null,
-    [repos, workspaceId]
+    () => (pinnedRepo ? pinnedRepo : (repos.find((r) => r.id === workspaceId) ?? null)),
+    [repos, workspaceId, pinnedRepo]
   )
 
   // The in-flight stream's abort handle, so the Stop button can cancel it.
@@ -175,12 +184,29 @@ export default function ChatPage() {
     return () => clearTimeout(t)
   }, [conversations])
 
+  // The history rail's list. In the Project Hub only threads grounded in the
+  // pinned project appear; the global Chat view keeps showing everything
+  // (including pre-hub conversations that carry no repoId).
+  const visibleConversations = useMemo(
+    () => (pinnedRepo ? conversations.filter((c) => c.repoId === pinnedRepo.id) : conversations),
+    [conversations, pinnedRepo]
+  )
+
   const active = useMemo(
     () => conversations.find((c) => c.id === activeId) ?? null,
     [conversations, activeId]
   )
   const messages = active?.messages ?? []
   const hasAssistantReply = messages.some((m) => m.role === 'assistant' && m.content.trim().length > 0)
+
+  // Keep the open transcript inside the pinned project's scope: switching hub
+  // projects (or opening the hub while a foreign thread was active) resets to
+  // the empty state rather than showing another project's conversation.
+  useEffect(() => {
+    if (!pinnedRepo || activeId == null) return
+    const activeInScope = visibleConversations.some((c) => c.id === activeId)
+    if (!activeInScope) setActiveId(null)
+  }, [pinnedRepo, activeId, visibleConversations])
 
   // Auto-follow the newest content. Instant while streaming (token follow),
   // smooth otherwise.
@@ -273,7 +299,10 @@ export default function ChatPage() {
             model,
             thinking,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            // Scope the thread to the project that grounded it, so the Project
+            // Hub's per-project history can filter without a migration.
+            repoId: workspace?.id
           }
           return upsertConversation(prev, convo)
         }
@@ -453,20 +482,24 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <DrillInHeader
-        icon={MessagesSquare}
-        title="Chat"
-        description="Describe a feature — I'll ask a few questions, then propose the tasks to create"
-        actions={
-          <button
-            type="button"
-            onClick={() => setActiveView('tasks')}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent"
-          >
-            <Columns3 className="size-3.5" /> Open Board
-          </button>
-        }
-      />
+      {/* The Project Hub wraps this page in its own header + tab strip, so the
+          full-page chrome only renders standalone. */}
+      {pinnedRepo ? null : (
+        <DrillInHeader
+          icon={MessagesSquare}
+          title="Chat"
+          description="Describe a feature — I'll ask a few questions, then propose the tasks to create"
+          actions={
+            <button
+              type="button"
+              onClick={() => setActiveView('tasks')}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent"
+            >
+              <Columns3 className="size-3.5" /> Open Board
+            </button>
+          }
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* ---- conversation history ---- */}
@@ -484,10 +517,10 @@ export default function ChatPage() {
             History
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3">
-            {conversations.length === 0 ? (
+            {visibleConversations.length === 0 ? (
               <div className="px-3 py-2 text-[12px] text-muted-foreground">No chats yet.</div>
             ) : (
-              conversations.map((c) => {
+              visibleConversations.map((c) => {
                 const isActive = c.id === activeId
                 return (
                   <div key={c.id} className="group relative">
@@ -527,14 +560,17 @@ export default function ChatPage() {
 
         {/* ---- chat column ---- */}
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* workspace + model + thinking toolbar */}
+          {/* workspace + model + thinking toolbar. Pinned (hub) mode drops the
+              workspace picker — the hub's project IS the workspace. */}
           <div className="flex h-11 flex-none items-center gap-2 border-b border-border px-4">
-            <WorkspacePicker
-              repos={repos}
-              workspaceId={workspaceId}
-              onChange={setWorkspaceId}
-              disabled={busy}
-            />
+            {pinnedRepo ? null : (
+              <WorkspacePicker
+                repos={repos}
+                workspaceId={workspaceId}
+                onChange={setWorkspaceId}
+                disabled={busy}
+              />
+            )}
             <ModelPicker model={model} onChange={setModel} disabled={busy} />
             <ThinkingToggle on={thinking} onToggle={setThinking} disabled={busy} />
             <span className="ml-auto hidden font-mono text-[11px] text-muted-foreground md:inline">
