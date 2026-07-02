@@ -27,6 +27,20 @@ export function shouldShowAgentsButton(
   return settings?.experimentalActivity === true
 }
 
+// Shared icon color tokens for the primary nav rail. Every icon rests at one
+// muted-monochrome color and only the active destination gets the accent, so the
+// rail reads as a single system instead of scattered per-item opacities (Board and
+// Search used to hardcode /30 while the primary items used /40 — color noise that
+// made colorless entries look broken). Both tokens are backed by theme variables
+// (--sidebar-foreground / --sidebar-accent-foreground), never a hardcoded hex, so
+// contrast holds in light and dark. Driven off the caller's active-view state.
+const NAV_ICON_MUTED = 'text-sidebar-foreground/40'
+const NAV_ICON_ACCENT = 'text-sidebar-accent-foreground'
+
+export function navIconClass(active: boolean): string {
+  return active ? NAV_ICON_ACCENT : NAV_ICON_MUTED
+}
+
 /**
  * A primary workflow rail item (Phase 1 nav shell, #48): icon + plain label + a
  * one-line description, so every destination explains itself instead of relying
@@ -60,7 +74,7 @@ function PrimaryNavItem({
       )}
     >
       <Icon
-        className="mt-0.5 size-4 shrink-0 text-sidebar-foreground/40"
+        className={cn('mt-0.5 size-4 shrink-0', navIconClass(active))}
         strokeWidth={active ? 2.25 : 1.75}
       />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -230,7 +244,7 @@ const SidebarNav = React.memo(function SidebarNav() {
           {/* "Board" = the Tasks view: your GitHub/Linear issues. Chat creates
               issues that show up here. (Tasks renamed to Board, #48 redo.) */}
           <Columns3
-            className="size-4 shrink-0 text-sidebar-foreground/40"
+            className={cn('size-4 shrink-0', navIconClass(tasksActive))}
             strokeWidth={tasksActive ? 2.25 : 1.75}
           />
           <span className="flex-1">Board</span>
@@ -242,7 +256,9 @@ const SidebarNav = React.memo(function SidebarNav() {
         aria-label="Search worktrees and browser tabs"
         className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight text-sidebar-foreground/60 transition-colors hover:bg-sidebar-foreground/8"
       >
-        <Search className="size-4 shrink-0 text-sidebar-foreground/40" strokeWidth={1.75} />
+        {/* Search opens the palette modal, never a persistent view, so it always
+            rests at the muted token — accent is reserved for the active destination. */}
+        <Search className={cn('size-4 shrink-0', navIconClass(false))} strokeWidth={1.75} />
         <span className="flex-1">Search</span>
         <kbd className="hidden rounded border border-border/60 bg-background/40 px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground group-hover:inline-flex items-center">
           {worktreePaletteShortcut}
