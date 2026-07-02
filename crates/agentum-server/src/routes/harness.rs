@@ -584,6 +584,33 @@ async fn events(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl Int
     ws.on_upgrade(move |socket| run_events(socket, rx))
 }
 
+async fn run_events(
+    mut socket: WebSocket,
+    mut rx: tokio::sync::broadcast::Receiver<crate::harness::HarnessEvent>,
+) {
+    loop {
+        tokio::select! {
+            ev = rx.recv() => match ev {
+                Ok(ev) => {
+                    let payload = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".to_string());
+                    if socket.send(Message::Text(payload.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    let s = serde_json::json!({ "type": "lagged", "skipped": skipped }).to_string();
+                    if socket.send(Message::Text(s.into())).await.is_err() { break; }
+                }
+                Err(RecvError::Closed) => break,
+            },
+            msg = socket.recv() => match msg {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                _ => {} // ignore client pings/text
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,6 +713,9 @@ mod tests {
     /// routes the transition through it.
     #[cfg(unix)]
     #[tokio::test]
+    // The awaited call must observe the env vars, so the guard has to span the
+    // await — same accepted pattern as board_sync.rs's env-locked test.
+    #[allow(clippy::await_holding_lock)]
     async fn ensure_spec_and_plan_fires_todo_at_plan() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -781,32 +811,5 @@ mod tests {
         let parsed: HarnessSettings =
             serde_json::from_str(r#"{"browserQaAgentEnabled":false}"#).unwrap();
         assert!(!parsed.browser_qa_agent_enabled);
-    }
-}
-
-async fn run_events(
-    mut socket: WebSocket,
-    mut rx: tokio::sync::broadcast::Receiver<crate::harness::HarnessEvent>,
-) {
-    loop {
-        tokio::select! {
-            ev = rx.recv() => match ev {
-                Ok(ev) => {
-                    let payload = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".to_string());
-                    if socket.send(Message::Text(payload.into())).await.is_err() {
-                        break;
-                    }
-                }
-                Err(RecvError::Lagged(skipped)) => {
-                    let s = serde_json::json!({ "type": "lagged", "skipped": skipped }).to_string();
-                    if socket.send(Message::Text(s.into())).await.is_err() { break; }
-                }
-                Err(RecvError::Closed) => break,
-            },
-            msg = socket.recv() => match msg {
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                _ => {} // ignore client pings/text
-            }
-        }
     }
 }
