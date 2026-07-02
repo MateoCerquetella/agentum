@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 006-sdd-native-loop-and-rich-issues
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 Architect COMPLETE 2026-07-02, gate 5/5, C1–C4 — C1 MATERIAL: roles-on would silently kill the status-label trail, fix in F3; handoff 02 incl. Mateo's chat-empty-description report as mandatory F2 item. Worktree `.claude/worktrees/finish-the-loop`)
+- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (006 Developer COMPLETE 2026-07-02 in 2 slices — F1+F4 `15365352`, F2+F3 `358347dc`; final gate 535/0 lib + clippy -D warnings + vite green; handoff 03. Mateo's empty-description report: NOT reproducible, chain wire-test-pinned)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,21 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Developer | **006 slice 2: F2+F3 GREEN — developer phase
+  COMPLETE** (`358347dc`; 535/0 lib, clippy -D warnings green, vite 2m04s;
+  pins written FIRST, verified green pre-edit). F2 problem/goal extraction +
+  three-section compose (absent = byte-identical pinned) + preview/DraftPlan
+  passthrough; 🔑 DEVIATION 2: the Confirm path REBUILDS the plan client-side
+  (architecture's "spreads verbatim" was wrong) — problem/goal forwarded
+  explicitly, else silently dropped. Mandatory item: fake-gh wire test pins
+  plan→--body (non-empty, summary+checklist); stored-turn restore = NOT
+  REPRODUCIBLE (no path can lose plan fields — draftPlan is ephemeral state,
+  StoredTurn persists content/thinking/filed only). F3 roles inherited:
+  SDD_ROLES_ENABLED_SETTING default TRUE (opposite of QA knob, both pinned),
+  apply_start_work_knobs, GET-full/PUT-patch split, brief deltas verbatim,
+  verdict contract character-pinned, C1 shared_tracker_provenance fix in
+  Decompose (drive.rs diff = that one hunk, sacred fns untouched —
+  orchestrator-verified). Handoff `03-developer-to-tester.md`. Phase → tester.
 - 2026-07-02 | Developer | **006 slice 1: F1+F4 GREEN** (`15365352`; 522/0
   lib, clippy --all-targets -D warnings GREEN, vite 2m17s, vitest 5/0).
   F1: CreateIssueBody.labels → NewFeature; GET /api/github/labels
@@ -119,17 +134,3 @@
   pins are honest literals — the net actually catches drift." spec.md Status
   → Done. Phase → done. **RELEASE = Mateo** (issue + PR w/ Closes in commit
   MESSAGE, staging browser QA, promote + tag).
-- 2026-07-02 | Tester | **005 verdict PASS 10/10 ACs** (`verification.md`).
-  Independently re-ran everything: 518/0/5 lib (124.4s), scoped
-  task_sink 26 / harness 80 / mcp 25, vite 1m54s, vitest 10/0, desktop check
-  green, fmt clean. Read assertion BODIES, not names; all 14 developer
-  deviations audited ACCURATE. Cross-cutting: auth.rs + worktrees.rs diffs
-  EMPTY, drive.rs = blueprint hunks only, mcp.rs insert-only, exactly ONE
-  env-mutating test (locked). 5 Info findings, none blocking: (1) pre-existing
-  Linear snake_case state-map save bug CONFIRMED (file issue at ship);
-  (2) stale qa docs in types.rs + scaffold template; (3) no handler-level
-  start_work e2e test (seam-pinned, 004-accepted class); (4) alreadyRunning
-  specId can be "" for pre-F2 runs; (5) HarnessCompleted{success:false} noise
-  on stale-idle re-registration. GUI + live label flips = deferred to
-  qa.sh/staging by contract. Handoff `04-tester-to-reviewer.md`. Phase →
-  reviewer.
