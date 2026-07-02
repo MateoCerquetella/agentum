@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 007-issue-detail-and-generated-descriptions
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (007 Developer COMPLETE 2026-07-02 `96c98955` — compressed SDD from Mateo's bug report: detail-view hydration stub, silent toggle gates, generated descriptions, .agentum-harness self-gitignore; gate 539/0 server + 75/0 desktop + clippy + vite + vitest 21/21; handoff = tasks.md root causes. 006 RELEASED v0.54.0)
+- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (007 Tester PASS 9/9 ACs 2026-07-02, `verification.md` + handoff 01; all 3 root causes confirmed against base+head; commit `96c98955`. 006 RELEASED v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,6 +64,16 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
+- 2026-07-02 | Tester | **007 verdict PASS 9/9 ACs** (`verification.md`).
+  Independent re-runs: server 539/0/5, desktop 75/0/4 (+3 gh mapping tests),
+  clippy -D warnings green, vite 1m36s, vitest 10/10. All 3 tasks.md root
+  causes CONFIRMED against base `27f29f1c` (read the base None-stubs directly)
+  + head. Sacred surfaces clean (drive/helpers/task_sink diffs EMPTY;
+  harness.rs = only the .gitignore pin; auth.rs empty). 4 deviations accurate.
+  4 Info findings none blocking (degenerate repoId:'' edge if Chat-filed w/o
+  pinnedRepo AND workspaceId — early-returns w/o error surface; comment-id
+  URL-fragment dependence; synthetic gh fixtures; armed-ineligible double
+  action). Handoff `01-tester-to-reviewer.md`. Phase → reviewer.
 - 2026-07-02 | Developer | **007 fixes + feature GREEN** (`96c98955`; compressed
   SDD, spec.md+tasks.md carry the trail). ROOT CAUSES: (1) detail page's ONLY
   data source `gh_work_item_details()` was a STUB returning None (gh.rs:516),
@@ -119,17 +129,3 @@
   verdict contract character-pinned, C1 shared_tracker_provenance fix in
   Decompose (drive.rs diff = that one hunk, sacred fns untouched —
   orchestrator-verified). Handoff `03-developer-to-tester.md`. Phase → tester.
-- 2026-07-02 | Developer | **006 slice 1: F1+F4 GREEN** (`15365352`; 522/0
-  lib, clippy --all-targets -D warnings GREEN, vite 2m17s, vitest 5/0).
-  F1: CreateIssueBody.labels → NewFeature; GET /api/github/labels
-  (parse_label_names, typed 422, gh-fail=400→client static fallback);
-  composer chip picker + composeIssueContextBody blank-body '## Context'
-  auto-fill via existing refs; labels on both snapshots + chip row. F4:
-  CreateIssueResponse.author (gh api user --jq .login, best-effort AFTER
-  create), snapshots populate author; dialog fallback untouched; NO
-  list-side change (C3). 4 deviations logged (sort_by_key for clippy;
-  keyed fetch effect; SmartWorkspaceNameField is the chip site; labels
-  unconditional-empty on snapshots). routes/chat.rs + harness untouched
-  (confirmed). Phase stays developer → slice 2 = F2 (chat SDD shape +
-  Mateo's empty-body wire test + stored-turn check) + F3 (roles inherited
-  + C1 provenance fix).
