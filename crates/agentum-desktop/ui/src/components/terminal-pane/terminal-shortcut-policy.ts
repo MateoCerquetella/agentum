@@ -1,4 +1,9 @@
-import { keybindingMatchesAction, type KeybindingOverrides } from '../../../../shared/keybindings'
+import {
+  keybindingMatchesAction,
+  normalizeTerminalShortcutPolicy,
+  type KeybindingOverrides,
+  type TerminalShortcutPolicy
+} from '../../../../shared/keybindings'
 
 export type TerminalShortcutEvent = {
   key: string
@@ -51,7 +56,8 @@ export function resolveTerminalShortcutAction(
   // standard cursor-key encoding for word motion, not readline's Meta-b/f. The
   // caller resolves this from the pane's live agent status so word-nav matches
   // what the agent gets in every other terminal (iTerm2, Ghostty, …).
-  paneRunsAgent: boolean = false
+  paneRunsAgent: boolean = false,
+  terminalShortcutPolicy: TerminalShortcutPolicy = 'agentum-first'
 ): TerminalShortcutAction | null {
   const platform: NodeJS.Platform = isMac ? 'darwin' : isWindows ? 'win32' : 'linux'
   if (!event.repeat) {
@@ -64,7 +70,17 @@ export function resolveTerminalShortcutAction(
     }
 
     if (keybindingMatchesAction('terminal.clear', event, platform, keybindings)) {
-      return { type: 'clearActivePane' }
+      // Why: Mod+K is double-bound by default — "clear pane" here and the app's
+      // nav command palette (view.commandPalette, App.tsx). Under the default
+      // agentum-first policy the palette must win, otherwise opening it from a
+      // focused terminal also wipes the pane. Terminal-first keeps clear-on-K:
+      // the app-side matcher already stands down for global actions there.
+      const paletteClaimsChord =
+        normalizeTerminalShortcutPolicy(terminalShortcutPolicy) === 'agentum-first' &&
+        keybindingMatchesAction('view.commandPalette', event, platform, keybindings)
+      if (!paletteClaimsChord) {
+        return { type: 'clearActivePane' }
+      }
     }
 
     if (keybindingMatchesAction('terminal.redraw', event, platform, keybindings)) {
