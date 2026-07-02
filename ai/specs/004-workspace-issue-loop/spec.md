@@ -52,9 +52,10 @@ the harness's existing tracker transitions become real on GitHub.
    `Applied`: via the `gh` CLI (D2) it ensure-creates the four canonical labels
    idempotently with fixed colors (D3), then sets the label matching the phase
    (`Todo`→`status/todo`, `InProgress`→`status/in-progress`,
-   `ReadyToTest`→`status/ready-to-test`, `Done`→`status/done`) and removes any
-   other `status/*` label, so the issue carries exactly one after every
-   transition. `Done` is label-only — the issue stays open (D1). The harness
+   `ReadyToTest`→`status/ready-to-test`, `Done`→`status/done`) and removes the
+   other three canonical labels — foreign `status/*` labels (e.g. this repo's
+   own `status/qa*` human-QA set) are never touched (architecture C4) — so the
+   issue carries exactly one canonical label after every transition. `Done` is label-only — the issue stays open (D1). The harness
    drive log records `Applied`, not
    `skipped: github issue state sync not implemented`.
 4. A harness run whose features carry `tracker_provider = "github"` moves the
@@ -218,8 +219,10 @@ the harness's existing tracker transitions become real on GitHub.
    issue; closing stays with the PR's `Closes #N` reaching `main` (this repo's
    own convention). A per-repo "close on Done" toggle is deferred to a
    follow-up spec (out of scope here).
-2. **D2 — Transitions write via the `gh` CLI** (`gh_in_dir`), matching the
-   creation path: every environment that can create issues can also edit them,
+2. **D2 — Transitions write via the `gh` CLI** (direct local `gh` from
+   `neutral_cwd()`, exactly like creation — architecture C5; `gh_in_dir` only
+   if a remote-host harness ever lands), matching the creation path: every
+   environment that can create issues can also edit them,
    and no PAT onboarding exists in the composer flow. `forge_send`/PAT stays
    untouched for `board_sync`.
 3. **D3 — Canonical label set:** `status/todo`, `status/in-progress`,
