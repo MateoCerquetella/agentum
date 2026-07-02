@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 004-workspace-issue-loop
-- **phase:** idle        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (004 **RELEASED v0.49.0** 2026-07-02: PR #213 merged, issue #212 closed, develop=staging=main=`efd4a003`, tag pushed, release CI in flight. 002 + 003 rode along in the release. Installed-app spot-check pending: chip, toggle, live label flip)
+- **current_spec:** 005-one-shot-issue-loop
+- **phase:** architect   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (005 PM phase COMPLETE 2026-07-02, D1–D4 locked, handoff 01 written; worktree `.claude/worktrees/finish-the-loop` on develop tip `1e259604`; 004 **RELEASED v0.49.0**. Installed-app spot-check still pending: chip, toggle, live label flip)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,14 +64,31 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-01 — 004 architect blueprint COMPLETE (`architecture.md`). Corrections
-  C1–C5 (Tasks-page create is a local stub → new `POST /api/github/issues`; UI
-  shim strips linked fields → widen 2 TS layers; `linkedPR` wire fix + registry
-  NO-alias rule (duplicate-field → `read_worktrees` wipes to `[]`); remove only
-  the 3 canonical labels; direct local gh, no Host). Confirmed `board_sync`
-  cannot strip labels (PATCH = `{title,body,state}` only). Merged develop
-  (+35 commits, incl. 003's `task_sink.rs` labels support) → line cites drift,
-  re-locate before editing. Phase → developer.
+- 2026-07-02 | PM | **005 PM phase COMPLETE, gate PASS after 8 edits; D1–D4
+  locked** (server-side start-work route; adoption-not-co-existence with ALL
+  THREE plain-delivery paths skipped incl. issueCommand; QA knob = second
+  opt-in door DEFAULT OFF — overrides draft AC 8 leaning, else non-web runs
+  fail-closed at QA; global github.json state_map). Material findings: AC 6
+  was unfirable (`plan_from_spec_inner` writes `spec_id: None`,
+  `types.rs:895-898` — plan step must stamp it); AC 9 needs `{provider, id,
+  url?, phase}` (Linear/board arms need the handle); AC 1 must converge on
+  existing spec (never-overwrite 400 vs D5-toggle overlap/retries); 3 cites
+  drifted (resolve_qa_mode → drive.rs:407-423; Todo-at-plan →
+  board_goals.rs:604-616; draft-open → open-created-workspace.ts:52-66).
+  Handoff `01-pm-to-architect.md`. Phase → architect.
+- 2026-07-02 — **Spec 005 drafted (one-shot issue loop) + PM gate PASSED** from
+  Mateo's ask (chat → issue → Start work → boards live even w/ custom statuses →
+  spec in worktree → seamless prompt-injected agent loop → agentum_browser QA).
+  Code-verified gap map on develop tip `1e259604`: the pieces all exist but the
+  chain stalls after workspace creation — nothing registers/runs the engine in
+  the new worktree (Harness page is a separate manual hop, `HarnessEngine.tsx:588`);
+  composer opens the agent with a **draft** prompt (never submitted); the engine's
+  feature prompt ignores the scaffolded spec (`harness/helpers.rs:33`); QA prompt
+  steers to Playwright skill not `agentum_browser` (`helpers.rs:141`); no MCP/HTTP
+  status verb for out-of-engine (/sdd-loop) agents; GitHub labels hardcoded (no
+  LinearStateMap parity). Five increments F1–F5; 4 open questions (orchestration
+  home, suppression-vs-adoption, QA default posture, state_map scope) carry
+  recommendations for auto-resolution. Phase → pm→architect next.
 - 2026-07-01 — 004 Developer slice 2: **F3+F4 GREEN**; developer phase
   COMPLETE. F3: `POST /api/github/issues` (blank-title 400, 422
   `no_github_repo`, TaskSink create, id→i64) + composer affordance
@@ -105,13 +122,3 @@
   spec.md Status → Done. Phase → done. **Release = Mateo** (/ship: issue + PR
   fix-wiki→develop w/ Closes #N, staging browser QA — chip, toggle, live
   label flip ending OPEN with exactly status/done — then promote + tag).
-- 2026-07-01 — 004 Developer slice 1: **F1+F2 GREEN** (486/0 lib tests, fmt +
-  check clean). F1: `GITHUB_STATUS_LABELS` + pure gh argv builders +
-  `github_slug_and_number_from_issue_url` + `run_gh` (30s timeout) +
-  `github_transition_with` in task_sink; seam widened with `tracker_url`
-  (both callers, one logical line each); every failure → `Ok(Skipped)`, never
-  `Err`. F2: `CreateBody`+3 (`linkedPR` alias), registry persistence,
-  detected-scan emits `linkedPR`, `canonical_meta_key`, NO registry-struct
-  alias; 2 TS layers forward the fields. Vite build deferred to the F3/F4
-  slice. Deviations logged in tasks.md (rustfmt reflow; gh empty-stderr
-  message; URL parser also strips #fragment). RELEASE stays human-gated.
