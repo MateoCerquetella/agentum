@@ -24,17 +24,62 @@ use crate::AppState;
 use crate::error::ApiError;
 use crate::harness::{HarnessConfig, HarnessFiles, HarnessStatus};
 
+/// Opt-in capability switch for the Auto QA arm (spec 005 F3, D3): when true,
+/// `resolve_qa_mode`'s Auto arm treats agent-QA as capable WITHOUT
+/// AGENTUM_BROWSER_VERIFY. Default OFF — Auto + no qa.sh + no env stays the
+/// Script skip-pass, so non-web projects and headless/CI are byte-identical.
+pub const BROWSER_QA_ENABLED_SETTING: &str = "harness.qa.agent_browser.enabled";
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/harness", get(list).post(start))
         .route("/api/harness/events", get(events))
         .route("/api/harness/spec-from-issue", post(spec_from_issue))
+        // Static-over-capture (matchit): coexists with `/api/harness/{id}` the
+        // same way `/api/harness/events` already does.
+        .route("/api/harness/settings", get(get_settings).put(put_settings))
         .route("/api/harness/{id}", get(status).delete(stop))
         .route("/api/harness/{id}/run", post(run))
         .route("/api/harness/{id}/init", post(init))
         .route("/api/harness/{id}/verify", post(verify))
         .route("/api/harness/{id}/confirm", post(confirm))
         .route("/api/harness/{id}/files", get(files))
+}
+
+/// Wire shape of `/api/harness/settings` — the engine-wide run-behavior knobs
+/// the desktop Settings pane reflects (today just the browser-QA capability).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HarnessSettings {
+    browser_qa_agent_enabled: bool,
+}
+
+/// `GET /api/harness/settings` — is the browser-QA agent capable without the
+/// env flag? (default off, D3). Mirrors `routes/mcp.rs`'s settings route.
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Result<axum::Json<HarnessSettings>, ApiError> {
+    let enabled = state
+        .store
+        .setting_get_bool(BROWSER_QA_ENABLED_SETTING, false)
+        .await?;
+    Ok(axum::Json(HarnessSettings {
+        browser_qa_agent_enabled: enabled,
+    }))
+}
+
+/// `PUT /api/harness/settings` — flip the browser-QA capability switch. Read
+/// per gate decision in `drive_inner`, so it applies to the next QA gate with
+/// no restart.
+async fn put_settings(
+    State(state): State<AppState>,
+    axum::Json(req): axum::Json<HarnessSettings>,
+) -> Result<axum::Json<HarnessSettings>, ApiError> {
+    state
+        .store
+        .setting_set_bool(BROWSER_QA_ENABLED_SETTING, req.browser_qa_agent_enabled)
+        .await?;
+    Ok(axum::Json(req))
 }
 
 #[derive(Debug, Deserialize)]
@@ -308,6 +353,53 @@ async fn stop(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<Sta
 async fn events(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     let rx = state.harness.subscribe();
     ws.on_upgrade(move |socket| run_events(socket, rx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Spec 005 F3 (D3): the browser-QA knob defaults OFF — absence of the
+    /// setting must keep `Auto`'s skip-pass byte-identical — and round-trips
+    /// through the store (mirrors `mcp_master_switch_defaults_on_and_round_trips`).
+    #[tokio::test]
+    async fn harness_qa_setting_defaults_off_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&dir.path().join("t.db"))
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .setting_get_bool(BROWSER_QA_ENABLED_SETTING, false)
+                .await
+                .unwrap(),
+            "default must be OFF (opt-in capability, D3)"
+        );
+        store
+            .setting_set_bool(BROWSER_QA_ENABLED_SETTING, true)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .setting_get_bool(BROWSER_QA_ENABLED_SETTING, false)
+                .await
+                .unwrap()
+        );
+    }
+
+    /// The wire shape is `{"browserQaAgentEnabled": bool}` — camelCase, matching
+    /// the desktop client (`getHarnessSettings`/`setHarnessSettings`).
+    #[test]
+    fn harness_settings_wire_shape_is_camel_case() {
+        let json = serde_json::to_string(&HarnessSettings {
+            browser_qa_agent_enabled: true,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"browserQaAgentEnabled":true}"#);
+        let parsed: HarnessSettings =
+            serde_json::from_str(r#"{"browserQaAgentEnabled":false}"#).unwrap();
+        assert!(!parsed.browser_qa_agent_enabled);
+    }
 }
 
 async fn run_events(

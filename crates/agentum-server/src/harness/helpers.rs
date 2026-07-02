@@ -30,13 +30,32 @@ pub(crate) fn tail(s: &str, max: usize) -> String {
 
 /// Build the prompt handed to the agent for one feature: the harness
 /// instructions (AGENTS.md) + the scoped feature + the gate contract.
-pub(crate) fn build_feature_prompt(instructions: &str, feature: &Feature) -> String {
+///
+/// `spec_rel_path` (spec 005 F2, AC 6): when the backlog was planned from a
+/// spec (`FeatureList.spec_id`) and that spec exists on disk, the prompt names
+/// its path and tells the agent to read it before coding. `None` keeps the
+/// output byte-identical to the pre-005 prompt (pinned by test), and an
+/// explicit per-feature `prompt` override always wins, spec or not.
+pub(crate) fn build_feature_prompt(
+    instructions: &str,
+    feature: &Feature,
+    spec_rel_path: Option<&str>,
+) -> String {
     if let Some(p) = &feature.prompt {
         return p.clone();
     }
+    let spec_section = match spec_rel_path {
+        Some(path) => format!(
+            "=== THE SPEC ===\n\
+             This feature comes from the spec at `{path}` (relative to the project root).\n\
+             Read that file BEFORE coding — it carries the full acceptance criteria and context.\n\n"
+        ),
+        None => String::new(),
+    };
     format!(
         "You are an agent running inside the Agentum Harness Engine.\n\n\
          === HARNESS INSTRUCTIONS (AGENTS.md) ===\n{instructions}\n\n\
+         {spec_section}\
          === YOUR CURRENT TASK — EXACTLY ONE FEATURE ===\n\
          Feature: {name}\n\
          ID: {id}\n\
@@ -135,9 +154,10 @@ pub(crate) fn parse_qa_verdict(json: &str) -> anyhow::Result<(bool, String)> {
     Ok((v.passed, v.summary.unwrap_or_default()))
 }
 
-/// Build the prompt for the QA agent: run the browser-verification-loop for this
-/// one feature, then write the verdict file. The explicit "write this exact file"
-/// contract is what makes the gate deterministic.
+/// Build the prompt for the QA agent: drive the `agentum_browser` MCP tool for
+/// this one feature, then write the verdict file. The explicit "write this exact
+/// file" contract is what makes the gate deterministic (spec 005 F3 changed only
+/// the browser steer — the verdict contract is byte-identical, pinned by test).
 pub(crate) fn build_qa_prompt(
     instructions: &str,
     feature: &Feature,
@@ -151,8 +171,12 @@ pub(crate) fn build_qa_prompt(
          === FEATURE UNDER TEST ===\n\
          Feature: {name}\nID: {id}\n{desc}\n\n\
          === WHAT TO DO ===\n\
-         1. Use the `browser-verification-loop` skill (Chrome/Playwright MCP) to QA \
-         this feature against the running app. Capture a screenshot per check as evidence.\n\
+         1. Use the `agentum_browser` MCP tool to QA this feature against the running \
+         app: start with op `open` and the app URL (add `split:\"right\"` to place the \
+         browser beside you — it is the VISIBLE in-app browser), then drive it with \
+         navigate/click/fill/snapshot, and capture a `screenshot` per check as \
+         evidence. Do NOT use the browser-verification-loop skill, claude-in-chrome, \
+         or Playwright here — `agentum_browser` is the browser surface for this app.\n\
          2. When finished, WRITE your verdict to `{verdict}` (relative to the project \
          root) as exactly this JSON:\n\
          {{\"passed\": true|false, \"summary\": \"one line on what you verified or why it failed\"}}\n\

@@ -219,6 +219,20 @@ pub enum TrackerPhase {
     Done,
 }
 
+/// Parse a wire-format phase string (`todo` / `in_progress` / `ready_to_test` /
+/// `done`) into a [`TrackerPhase`]. Pure; `None` for anything else — the MCP
+/// `agentum_report_status` tool (spec 005 F4) treats that as a caller bug, not
+/// a tracker hiccup.
+pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
+    match s {
+        "todo" => Some(TrackerPhase::Todo),
+        "in_progress" => Some(TrackerPhase::InProgress),
+        "ready_to_test" => Some(TrackerPhase::ReadyToTest),
+        "done" => Some(TrackerPhase::Done),
+        _ => None,
+    }
+}
+
 /// Outcome of a transition, for the harness log. Transitions are a side-channel:
 /// a tracker hiccup must never halt the run, so even failures come back as a
 /// value the caller logs rather than an error that propagates.
@@ -301,7 +315,9 @@ fn gh_set_status_label_argv<'a>(
 /// a trailing slash and a query/fragment; rejects `/pull/` URLs, non-github
 /// hosts, and non-numeric tails. Pure. Lives here (not `board_sync`) because
 /// `task_sink` is a crate-root seam and must not depend on a route module.
-fn github_slug_and_number_from_issue_url(url: &str) -> Option<(String, String)> {
+/// `pub(crate)` so the MCP `agentum_report_status` tool (spec 005 F4) can
+/// derive a missing GitHub `id` from the ticket URL with the same parser.
+pub(crate) fn github_slug_and_number_from_issue_url(url: &str) -> Option<(String, String)> {
     let url = url.trim();
     let url = url.split(['?', '#']).next().unwrap_or(url);
     let rest = url.strip_prefix("https://github.com/")?;
@@ -808,6 +824,25 @@ mod tests {
                     assert!(removed.contains(name), "{name} missing from remove set");
                 }
             }
+        }
+    }
+
+    /// Spec 005 F4: the wire-format phase parser accepts exactly the four
+    /// pipeline phases and rejects everything else (case-sensitive, no aliases).
+    #[test]
+    fn parse_tracker_phase_accepts_the_four_and_rejects_junk() {
+        assert_eq!(parse_tracker_phase("todo"), Some(TrackerPhase::Todo));
+        assert_eq!(
+            parse_tracker_phase("in_progress"),
+            Some(TrackerPhase::InProgress)
+        );
+        assert_eq!(
+            parse_tracker_phase("ready_to_test"),
+            Some(TrackerPhase::ReadyToTest)
+        );
+        assert_eq!(parse_tracker_phase("done"), Some(TrackerPhase::Done));
+        for junk in ["", "Todo", "DONE", "in-progress", "ready to test", "qa"] {
+            assert_eq!(parse_tracker_phase(junk), None, "{junk:?} must be rejected");
         }
     }
 

@@ -868,6 +868,139 @@ mod tests {
         assert!(p.ends_with("qa/AG-12.json"), "got {}", p.display());
     }
 
+    /// Spec 005 F2 regression pin (AC 6): a backlog WITHOUT a `spec_id` must
+    /// produce today's prompt byte-for-byte. The expected string is written out
+    /// in full (no format!) so any drift in the load-bearing prompt is loud.
+    #[test]
+    fn feature_prompt_without_spec_is_byte_identical() {
+        let feature = Feature {
+            id: "F1".into(),
+            name: "Add login".into(),
+            description: "User can log in with email.".into(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            tracker_provider: None,
+            tracker_url: None,
+        };
+        let expected = "You are an agent running inside the Agentum Harness Engine.\n\
+            \n\
+            === HARNESS INSTRUCTIONS (AGENTS.md) ===\n\
+            Build it well.\n\
+            \n\
+            === YOUR CURRENT TASK — EXACTLY ONE FEATURE ===\n\
+            Feature: Add login\n\
+            ID: F1\n\
+            User can log in with email.\n\
+            \n\
+            Work ONLY on this feature. When you believe it is complete, stop and wait. \
+            The harness will then run the verification gate (verify.sh). If verification \
+            fails you will be given the error output and must fix it.";
+        assert_eq!(
+            build_feature_prompt("Build it well.", &feature, None),
+            expected
+        );
+    }
+
+    /// Spec 005 F2 (AC 6): a spec-planned backlog's prompt names the spec's
+    /// relative path and tells the agent to read it first — while the gate
+    /// contract text survives untouched.
+    #[test]
+    fn feature_prompt_with_spec_names_the_path_and_says_read_first() {
+        let feature = Feature {
+            id: "F1".into(),
+            name: "Add login".into(),
+            description: "User can log in with email.".into(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            tracker_provider: None,
+            tracker_url: None,
+        };
+        let rel = ".agentum-harness/specs/42-add-widget/spec.md";
+        let p = build_feature_prompt("Build it well.", &feature, Some(rel));
+        assert!(p.contains("=== THE SPEC ==="));
+        assert!(p.contains(rel), "prompt must name the spec's relative path");
+        assert!(p.contains("BEFORE coding"), "must say read-first");
+        assert!(
+            p.contains("Work ONLY on this feature"),
+            "gate contract text must survive"
+        );
+        assert!(
+            p.contains("verification gate (verify.sh)"),
+            "gate contract text must survive"
+        );
+    }
+
+    /// Spec 005 F2 second byte-identical pin: an explicit per-feature `prompt`
+    /// override wins even when a spec path is supplied (the helpers.rs
+    /// short-circuit stays FIRST and unconditional).
+    #[test]
+    fn feature_prompt_explicit_override_wins_even_with_spec() {
+        let feature = Feature {
+            id: "F1".into(),
+            name: "Add login".into(),
+            description: "ignored".into(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: Some("Do exactly this.".into()),
+            tracker_provider: None,
+            tracker_url: None,
+        };
+        assert_eq!(
+            build_feature_prompt(
+                "Build it well.",
+                &feature,
+                Some(".agentum-harness/specs/s1/spec.md")
+            ),
+            "Do exactly this."
+        );
+    }
+
+    /// Spec 005 F3 (AC 7): the QA prompt steers the agent at the `agentum_browser`
+    /// MCP tool (open + split = the visible in-app browser) and no longer
+    /// INSTRUCTS using the browser-verification-loop skill (it may still name it
+    /// in the "Do NOT use" steer) — while the verdict-file contract stays
+    /// character-for-character (the contract-identical pin).
+    #[test]
+    fn qa_prompt_steers_agentum_browser() {
+        let feature = Feature {
+            id: "F1".into(),
+            name: "Add login".into(),
+            description: "User can log in.".into(),
+            state: FeatureState::ReadyToTest,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            tracker_provider: None,
+            tracker_url: None,
+        };
+        let rel = ".agentum-harness/qa/F1.json";
+        let p = build_qa_prompt("Build it well.", &feature, rel);
+        assert!(p.contains("`agentum_browser`"), "names the tool");
+        assert!(p.contains("op `open`"), "starts with open");
+        assert!(p.contains("split"), "mentions side-by-side placement");
+        assert!(
+            !p.contains("Use the `browser-verification-loop`"),
+            "must no longer instruct the skill"
+        );
+        assert!(
+            p.contains("Do NOT use the browser-verification-loop"),
+            "warns off the old skill path"
+        );
+        // The verdict contract, byte-identical to pre-005:
+        assert!(p.contains(rel), "names the verdict rel path");
+        assert!(p.contains(
+            "as exactly this JSON:\n{\"passed\": true|false, \"summary\": \"one line on what you verified or why it failed\"}"
+        ));
+        assert!(p.contains(
+            "Set passed=false if ANY check fails or you cannot verify. Do not stop until the file is written."
+        ));
+    }
+
     #[test]
     fn qa_mode_serializes_snake_case() {
         assert_eq!(serde_json::to_string(&QaMode::Auto).unwrap(), "\"auto\"");
@@ -881,25 +1014,72 @@ mod tests {
     #[tokio::test]
     async fn resolve_qa_mode_honors_explicit_and_auto() {
         let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
-        // Auto with no qa.sh and (assumed) no browser-verify → Script (skip-pass).
+        // Now that capability is an explicit parameter (spec 005 F3) the old
+        // `Script | Agent` env-leakage tolerance tightens to exact asserts.
+        // Auto with no qa.sh and agent-QA not capable → Script (skip-pass).
         let mut cfg = HarnessConfig::load(&wd).await.unwrap();
         cfg.features.qa_mode = QaMode::Auto;
-        assert!(matches!(
-            resolve_qa_mode(&cfg),
-            QaMode::Script | QaMode::Agent
-        ));
+        assert_eq!(resolve_qa_mode(&cfg, false), QaMode::Script);
 
         // Explicit overrides ignore detection.
         cfg.features.qa_mode = QaMode::Agent;
-        assert_eq!(resolve_qa_mode(&cfg), QaMode::Agent);
+        assert_eq!(resolve_qa_mode(&cfg, false), QaMode::Agent);
         cfg.features.qa_mode = QaMode::Script;
-        assert_eq!(resolve_qa_mode(&cfg), QaMode::Script);
+        assert_eq!(resolve_qa_mode(&cfg, false), QaMode::Script);
 
         // Auto WITH a qa.sh present → Script (an explicit script wins over an agent).
         write_qa(&wd, "#!/bin/bash\nexit 0\n");
         let mut cfg2 = HarnessConfig::load(&wd).await.unwrap();
         cfg2.features.qa_mode = QaMode::Auto;
-        assert_eq!(resolve_qa_mode(&cfg2), QaMode::Script);
+        assert_eq!(resolve_qa_mode(&cfg2, false), QaMode::Script);
+    }
+
+    /// Spec 005 F3 (AC 8): the full mode × qa.sh-present × capable decision
+    /// table — pure, no env mutation. The `capable = false` column IS the D3
+    /// byte-identical pin: before 005, `Auto` + no qa.sh + no
+    /// AGENTUM_BROWSER_VERIFY resolved to `Script` (skip-pass); with the knob
+    /// OFF (its default) that behavior must be reproduced exactly, so non-web
+    /// projects and headless/CI are unchanged.
+    #[tokio::test]
+    async fn resolve_qa_mode_matrix() {
+        // Two configs: qa.sh absent / present.
+        let (_d1, wd_absent) = setup("#!/bin/bash\nexit 0\n").await;
+        let (_d2, wd_present) = setup("#!/bin/bash\nexit 0\n").await;
+        write_qa(&wd_present, "#!/bin/bash\nexit 0\n");
+        let cfg_absent = HarnessConfig::load(&wd_absent).await.unwrap();
+        let cfg_present = HarnessConfig::load(&wd_present).await.unwrap();
+        assert!(cfg_absent.qa_script.is_none());
+        assert!(cfg_present.qa_script.is_some());
+
+        for (mode, qa_sh_present, capable, want) in [
+            // Explicit modes ignore BOTH dimensions.
+            (QaMode::Script, false, false, QaMode::Script),
+            (QaMode::Script, false, true, QaMode::Script),
+            (QaMode::Script, true, false, QaMode::Script),
+            (QaMode::Script, true, true, QaMode::Script),
+            (QaMode::Agent, false, false, QaMode::Agent),
+            (QaMode::Agent, false, true, QaMode::Agent),
+            (QaMode::Agent, true, false, QaMode::Agent),
+            (QaMode::Agent, true, true, QaMode::Agent),
+            // Auto + qa.sh → Script always (an explicit script wins).
+            (QaMode::Auto, true, false, QaMode::Script),
+            (QaMode::Auto, true, true, QaMode::Script),
+            // Auto + no qa.sh → capable decides; not-capable = skip-pass Script.
+            (QaMode::Auto, false, true, QaMode::Agent),
+            (QaMode::Auto, false, false, QaMode::Script),
+        ] {
+            let mut cfg = if qa_sh_present {
+                cfg_present.clone()
+            } else {
+                cfg_absent.clone()
+            };
+            cfg.features.qa_mode = mode;
+            assert_eq!(
+                resolve_qa_mode(&cfg, capable),
+                want,
+                "cell: mode={mode:?} qa.sh={qa_sh_present} capable={capable}"
+            );
+        }
     }
 
     // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
@@ -1413,6 +1593,8 @@ mod surface_tests {
             .await
             .unwrap();
         assert_eq!(list.features.len(), 2);
+        // Spec 005 F2 (AC 6): every spec-planned backlog records its spec.
+        assert_eq!(list.spec_id.as_deref(), Some(spec_id.as_str()));
         // The AC 7 closer: EVERY derived feature carries the issue's provenance
         // (F1's GitHub arm reads slug+number from this URL).
         for f in &list.features {
@@ -1431,8 +1613,10 @@ mod surface_tests {
 
     #[tokio::test]
     async fn plan_from_spec_delegation_unchanged() {
-        // The inner refactor must not change plan_from_spec's behavior: no
-        // tracker stamping, same derive + persist semantics (the MCP tool path).
+        // The inner refactor must not change plan_from_spec's tracker behavior:
+        // no tracker stamping, same derive + persist semantics (the MCP tool
+        // path). Spec 005 F2 (C4) deliberately widened one thing: every planner
+        // -from-spec — including this one — now stamps `spec_id`.
         let dir = TempDir::new().unwrap();
         let wd = dir.path();
         let spec_dir = wd.join(".agentum-harness/specs/s1");
@@ -1442,6 +1626,8 @@ mod surface_tests {
         let list = plan_from_spec(wd, "s1").await.unwrap();
         assert_eq!(list.features.len(), 2);
         assert_eq!(list.features[1].state, FeatureState::Done);
+        assert_eq!(list.spec_id.as_deref(), Some("s1"));
+        assert!(!list.roles, "role gates stay off — spec-013 unaffected");
         assert!(
             list.features
                 .iter()

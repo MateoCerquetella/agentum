@@ -921,9 +921,12 @@ pub async fn plan_from_spec_with_tracker(
     plan_from_spec_inner(workdir, spec_id, Some((provider, url))).await
 }
 
-/// Shared core: derive the backlog from the spec's checkboxes, optionally stamp
-/// tracker provenance, persist `feature_list.json`. The `tracker: None` path is
-/// byte-for-byte the pre-004 `plan_from_spec` (the MCP tool is unchanged).
+/// Shared core: derive the backlog from the spec's checkboxes, stamp the spec's
+/// id, optionally stamp tracker provenance, persist `feature_list.json`. Every
+/// backlog planned from a spec records `spec_id` (spec 005 F2/C4 — deliberately
+/// including the MCP `agentum_harness_plan` path) so the feature prompt can
+/// point the agent at the spec file; the role gates stay off (`roles: false`),
+/// so spec-013's phase machinery is untouched by the stamp.
 async fn plan_from_spec_inner(
     workdir: &Path,
     spec_id: &str,
@@ -935,6 +938,7 @@ async fn plan_from_spec_inner(
         .await
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", spec_md.display()))?;
     let mut list = derive_backlog_from_spec(&content);
+    list.spec_id = Some(spec_id.to_string());
     if list.features.is_empty() {
         anyhow::bail!(
             "no acceptance-criteria checkboxes (`- [ ]`) found in {}",

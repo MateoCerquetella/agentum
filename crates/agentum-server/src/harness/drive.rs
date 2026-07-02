@@ -144,7 +144,21 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         // 4. Hand the agent its scoped task. `inject_prompt` waits for the REPL
         // to be ready first (accepting Claude's workspace-trust dialog and
         // outlasting an MCP-slowed boot), so there's no fixed-delay guesswork.
-        let prompt = build_feature_prompt(&config.agent_instructions, &feature);
+        // Only steer at a spec that actually exists on disk — a stale spec_id
+        // must not send the agent hunting for a missing file. Handles the legacy
+        // `.harness` dir by deriving the dir name from config.harness_dir, not
+        // the HARNESS_DIR const (spec 005 F2).
+        let spec_rel = config.features.spec_id.as_deref().and_then(|sid| {
+            let dir = config
+                .harness_dir
+                .file_name()?
+                .to_string_lossy()
+                .into_owned();
+            let rel = format!("{dir}/specs/{sid}/spec.md");
+            workdir.join(&rel).exists().then_some(rel)
+        });
+        let prompt =
+            build_feature_prompt(&config.agent_instructions, &feature, spec_rel.as_deref());
         inject_prompt(state, &session, &prompt).await?;
         engine.log(harness_id, Some(&feature.id), "agent working…");
         wait_for_settle(&state.bus, session.id, grace, timeout).await;
@@ -188,10 +202,15 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
                 crate::task_sink::TrackerPhase::ReadyToTest,
             )
             .await;
-            // Pick the QA gate: a spawned browser-verification-loop agent (012b)
-            // or the `qa.sh` shell gate. `Auto` prefers qa.sh, else an agent when
-            // browser-verify is on, else the skip-pass script path.
-            let qa_mode = resolve_qa_mode(&config);
+            // Pick the QA gate: a spawned browser QA agent (012b) or the `qa.sh`
+            // shell gate. `Auto` prefers qa.sh, else an agent when agent-QA is
+            // capable, else the skip-pass script path. Capability = the
+            // AGENTUM_BROWSER_VERIFY env flag OR the Settings knob (spec 005 F3,
+            // default OFF) — computed here, where AppState lives, so
+            // `resolve_qa_mode` stays a pure decision table.
+            let agent_qa_capable =
+                crate::playwright_mcp::feature_enabled() || browser_qa_agent_enabled(state).await;
+            let qa_mode = resolve_qa_mode(&config, agent_qa_capable);
             let (qa_ok, qa_out) = match qa_mode {
                 QaMode::Agent => {
                     run_qa_agent_gate(
@@ -402,24 +421,37 @@ async fn spawn_feature_agent(
 }
 
 /// Resolve the configured [`QaMode`] to a concrete gate for this run. `Auto`
-/// prefers an explicit `qa.sh`, else a QA agent when browser-verify is enabled,
-/// else the (skip-pass) script path. Pure-ish (only reads the env flag).
-pub(super) fn resolve_qa_mode(config: &HarnessConfig) -> QaMode {
+/// prefers an explicit `qa.sh`, else a QA agent when `agent_qa_capable`, else
+/// the (skip-pass) script path. Pure — the env/setting reads moved to the
+/// caller (spec 005 F3), so the full mode × qa.sh × capability decision table
+/// is unit-testable without env mutation.
+pub(super) fn resolve_qa_mode(config: &HarnessConfig, agent_qa_capable: bool) -> QaMode {
     match config.features.qa_mode {
         QaMode::Script => QaMode::Script,
         QaMode::Agent => QaMode::Agent,
         QaMode::Auto => {
             if config.qa_script.is_some() {
                 QaMode::Script
-            } else if crate::playwright_mcp::feature_enabled() {
+            } else if agent_qa_capable {
                 QaMode::Agent
             } else {
-                // No qa.sh and no browser-verify → the script path returns a
+                // No qa.sh and agent-QA not capable → the script path returns a
                 // skip-pass, so a non-web project isn't blocked.
                 QaMode::Script
             }
         }
     }
+}
+
+/// Best-effort read of the Settings browser-QA knob (mirrors
+/// `routes/mcp.rs::orchestration_enabled`): a store error falls back to OFF —
+/// never a run failure, and OFF is the D3 default (spec 005 F3).
+async fn browser_qa_agent_enabled(state: &AppState) -> bool {
+    state
+        .store
+        .setting_get_bool(crate::routes::harness::BROWSER_QA_ENABLED_SETTING, false)
+        .await
+        .unwrap_or(false)
 }
 
 /// Spawn a real agent session for the **browser QA gate** (spec 012b). Mirrors
@@ -505,17 +537,25 @@ async fn run_qa_agent_gate(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| verdict_abs.to_string_lossy().into_owned());
 
-    if !crate::playwright_mcp::feature_enabled() {
+    // The QA agent drives `agentum_browser` (wired by default via the agentum
+    // MCP); warn only when the MCP master switch is OFF — then the agent has no
+    // browser tool at all (spec 005 F3 — replaces the stale Playwright warning).
+    if !state
+        .store
+        .setting_get_bool(crate::routes::mcp::MCP_ENABLED_SETTING, true)
+        .await
+        .unwrap_or(true)
+    {
         engine.log(
             harness_id,
             Some(&feature.id),
-            "QA agent: AGENTUM_BROWSER_VERIFY is not set, so no Playwright MCP is wired — the agent may be unable to drive a browser.",
+            "QA agent: the agentum MCP master switch is OFF (Settings → Agent MCP) — the agent has no `agentum_browser` tool and the QA gate will likely fail.",
         );
     }
     engine.log(
         harness_id,
         Some(&feature.id),
-        "unit gate green — spawning browser QA agent (browser-verification-loop)",
+        "unit gate green — spawning browser QA agent (agentum_browser)",
     );
 
     let session = spawn_qa_agent(state, harness_id, workdir, config, feature).await?;

@@ -203,6 +203,27 @@ export function scaffoldHarness(workdir: string): Promise<string> {
   return callMcpTool('agentum_harness_scaffold', { workdir })
 }
 
+/** Wire shape of `/api/harness/settings` (spec 005 F3). */
+export type HarnessSettings = { browserQaAgentEnabled: boolean }
+
+/**
+ * `GET /api/harness/settings` — engine-wide run behavior knobs. Today just the
+ * browser-QA capability switch: when on, the QA gate's `Auto` arm treats a
+ * spawned `agentum_browser` QA agent as capable without `AGENTUM_BROWSER_VERIFY`.
+ * Default OFF (D3) so non-web projects keep the skip-pass.
+ */
+export function getHarnessSettings(): Promise<HarnessSettings> {
+  return request('/api/harness/settings')
+}
+
+/** `PUT /api/harness/settings` — persist the harness run-behavior knobs. */
+export function setHarnessSettings(settings: HarnessSettings): Promise<HarnessSettings> {
+  return request('/api/harness/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings)
+  })
+}
+
 /** `GET /api/harness` — status for every registered run. */
 export function listHarnesses(): Promise<HarnessStatus[]> {
   return request('/api/harness')

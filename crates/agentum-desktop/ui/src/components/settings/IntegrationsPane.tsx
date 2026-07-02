@@ -21,6 +21,7 @@ import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { getHarnessSettings, setHarnessSettings } from '@/runtime/harness-client'
 import { LinearApiKeyDialog } from '@/components/linear-api-key-dialog'
 import {
   getPreflightIntegrationStatuses,
@@ -117,6 +118,72 @@ function LinearStateMapEditor(): React.JSX.Element {
           </span>
         ) : null}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Toggle for the harness browser-QA capability (spec 005 F3, D3 — default OFF).
+ * When on, the QA gate's `Auto` arm spawns an `agentum_browser`-driven QA agent
+ * even without `AGENTUM_BROWSER_VERIFY`; when off, projects with no `qa.sh` keep
+ * today's skip-pass. Mirrors the LinearStateMapEditor load flow + the McpPane
+ * optimistic-write toggle.
+ */
+function BrowserQaGateToggle(): React.JSX.Element {
+  const mounted = useMountedRef()
+  const [enabled, setEnabled] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void getHarnessSettings()
+      .then((s) => {
+        if (mounted.current) setEnabled(s.browserQaAgentEnabled)
+      })
+      .catch(() => {
+        // Leave the default-OFF value; the toggle still works and surfaces a
+        // write error if the server is unreachable.
+      })
+  }, [mounted])
+
+  const toggle = (value: boolean): void => {
+    // Optimistic: flip the UI, write the server flag, revert if it fails.
+    setEnabled(value)
+    setError(null)
+    void setHarnessSettings({ browserQaAgentEnabled: value }).catch((err: unknown) => {
+      if (!mounted.current) return
+      setEnabled(!value)
+      setError(err instanceof Error ? err.message : 'Could not update the browser QA setting.')
+    })
+  }
+
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/30 px-4 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <p className="text-sm font-medium">Harness browser QA agent</p>
+          <p className="text-xs text-muted-foreground">
+            Let gated runs verify features by spawning a QA agent that drives the in-app browser
+            (the <span className="font-mono text-[11px]">agentum_browser</span> tool). Off (the
+            default), projects without a <span className="font-mono text-[11px]">qa.sh</span> skip
+            the browser gate — turn this on for web projects you want QA&apos;d automatically.
+          </p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={enabled}
+          onClick={() => toggle(!enabled)}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors ${
+            enabled ? 'bg-foreground' : 'bg-muted-foreground/30'
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background shadow-sm transition-transform ${
+              enabled ? 'translate-x-4' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </div>
+      {error ? <p className="mt-1.5 text-xs text-destructive">{error}</p> : null}
     </div>
   )
 }
@@ -729,6 +796,10 @@ export function IntegrationsPane(): React.JSX.Element {
           </div>
         )}
       </div>
+
+      {/* Harness pipeline behavior (spec 005 F3) — sits beside the Linear
+          state-map config: both configure how gated runs drive a tracker/QA. */}
+      <BrowserQaGateToggle />
 
       <LinearApiKeyDialog
         open={linearDialogOpen}
