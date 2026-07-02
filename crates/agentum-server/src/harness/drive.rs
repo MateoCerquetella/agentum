@@ -843,7 +843,17 @@ async fn run_pre_feature_phases(
         None,
         format!("decompose: deriving backlog from spec {spec_id}"),
     );
-    let mut derived = plan_from_spec(workdir, &spec_id).await?;
+    // Decompose must not drop tracker provenance (spec 006 C1): the fresh
+    // backlog's features need the issue's provider/url re-stamped, or every
+    // later `transition_tracker` call silently no-ops and the status-label
+    // trail dies the moment roles are on. `copy_knobs_from` below copies only
+    // list-level knobs, never per-feature stamps.
+    let mut derived = match shared_tracker_provenance(&config.features) {
+        Some((provider, url)) => {
+            plan_from_spec_with_tracker(workdir, &spec_id, &provider, &url).await?
+        }
+        None => plan_from_spec(workdir, &spec_id).await?,
+    };
     derived.copy_knobs_from(&config.features);
     config.save_features(&derived).await?;
     engine.reload_features(harness_id).await?;

@@ -289,6 +289,73 @@ function BrowserQaGateToggle(): React.JSX.Element {
   )
 }
 
+/**
+ * Toggle for the SDD role loop on gated runs (spec 006 F3, D1 — default ON).
+ * When on, "Start gated run" backlogs are driven through the PM → Architect →
+ * Build → Review gate loop; off keeps the plain feature loop. Clones
+ * BrowserQaGateToggle's load/optimistic-write shape — note the opposite
+ * initial value (the server default is ON).
+ */
+function SddRoleLoopToggle(): React.JSX.Element {
+  const mounted = useMountedRef()
+  const [enabled, setEnabled] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void getHarnessSettings()
+      .then((s) => {
+        if (mounted.current) setEnabled(s.sddRolesEnabled)
+      })
+      .catch(() => {
+        // Leave the default-ON value; the toggle still works and surfaces a
+        // write error if the server is unreachable.
+      })
+  }, [mounted])
+
+  const toggle = (value: boolean): void => {
+    // Optimistic: flip the UI, write the server flag, revert if it fails. The
+    // PATCH body carries ONLY this knob (spec 006 C2).
+    setEnabled(value)
+    setError(null)
+    void setHarnessSettings({ sddRolesEnabled: value }).catch((err: unknown) => {
+      if (!mounted.current) return
+      setEnabled(!value)
+      setError(err instanceof Error ? err.message : 'Could not update the SDD role loop setting.')
+    })
+  }
+
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/30 px-4 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <p className="text-sm font-medium">SDD role loop on gated runs</p>
+          <p className="text-xs text-muted-foreground">
+            Drive &quot;Start gated run&quot; work through the spec-driven role loop — a PM gate
+            refines the spec, an Architect gate plans it, agents build each feature behind the
+            verification gate, and a Reviewer gate signs off. On by default; turn it off to run the
+            plain feature loop without the role gates.
+          </p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={enabled}
+          onClick={() => toggle(!enabled)}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-colors ${
+            enabled ? 'bg-foreground' : 'bg-muted-foreground/30'
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-background shadow-sm transition-transform ${
+              enabled ? 'translate-x-4' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+      </div>
+      {error ? <p className="mt-1.5 text-xs text-destructive">{error}</p> : null}
+    </div>
+  )
+}
+
 export function IntegrationsPane(): React.JSX.Element {
   const linearStatus = useAppStore((s) => s.linearStatus)
   const preflightStatus = useAppStore((s) => s.preflightStatus)
@@ -902,9 +969,11 @@ export function IntegrationsPane(): React.JSX.Element {
         )}
       </div>
 
-      {/* Harness pipeline behavior (spec 005 F3) — sits beside the Linear
-          state-map config: both configure how gated runs drive a tracker/QA. */}
+      {/* Harness pipeline behavior (spec 005 F3 + 006 F3) — sits beside the
+          Linear state-map config: all configure how gated runs drive a
+          tracker/QA/role loop. */}
       <BrowserQaGateToggle />
+      <SddRoleLoopToggle />
 
       <LinearApiKeyDialog
         open={linearDialogOpen}

@@ -239,6 +239,17 @@ impl FeatureList {
     }
 }
 
+/// The tracker provenance a backlog's features share, if any (spec 006 C1).
+/// All spec-planners stamp provider/url uniformly (one issue per spec), so the
+/// first stamped feature speaks for the backlog. Decompose uses this to
+/// re-plan *with* provenance — re-deriving via the tracker-less planner turned
+/// every later `transition_tracker` call into a silent no-op on roles-on runs.
+pub(crate) fn shared_tracker_provenance(list: &FeatureList) -> Option<(String, String)> {
+    list.features
+        .iter()
+        .find_map(|f| Some((f.tracker_provider.clone()?, f.tracker_url.clone()?)))
+}
+
 /// Overall run state of a harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

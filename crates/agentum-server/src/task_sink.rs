@@ -156,8 +156,12 @@ impl TaskSink {
             TaskSink::Github => {
                 // Non-interactive create: with both --title and --body present,
                 // `gh` skips its editor and prints the new issue URL to stdout.
+                // `gh_bin()` (not a literal "gh") so the create arm honors the
+                // same AGENTUM_GH_BIN knob the transition arm already does —
+                // which is also what lets the spec 006 fake-gh wire test pin
+                // the full plan → argv chain (Mateo's empty-body report).
                 let body = feature.body.clone().unwrap_or_default();
-                let mut cmd = tokio::process::Command::new("gh");
+                let mut cmd = tokio::process::Command::new(gh_bin());
                 match ctx.slug {
                     // Spec 019: an explicit `--repo owner/repo` target makes `gh`
                     // ignore the cwd's git remote, so we run from a neutral,

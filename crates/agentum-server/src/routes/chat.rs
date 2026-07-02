@@ -863,7 +863,7 @@ async fn call_anthropic(
 /// (a parent feature + ordered, prioritised sub-tasks) — not a flat list of
 /// separate issues. Kept byte-exact; the lenient parser ([`extract_feature_plan`])
 /// tolerates a model that still wraps it in prose or fences.
-const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. Order the tasks by priority and logical sequence (most important / earliest first). Output ONLY the raw JSON object, no prose, no markdown code fences.";
+const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Output ONLY the raw JSON object, no prose, no markdown code fences.";
 
 /// The final user turn appended to the transcript for the extraction call. Ends
 /// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
@@ -924,6 +924,14 @@ struct FeaturePlan {
     title: String,
     #[serde(default)]
     summary: String,
+    /// Spec 006 F2: SDD framing. Optional — absent keeps [`compose_issue_body`]
+    /// byte-identical to the pre-006 body (pinned), so a terse model reply, an
+    /// old client's plan, and every existing fixture still parse and render
+    /// exactly as before.
+    #[serde(default)]
+    problem: Option<String>,
+    #[serde(default)]
+    goal: Option<String>,
     tasks: Vec<SubTask>,
 }
 
@@ -970,6 +978,13 @@ fn parse_priority(raw: Option<&str>) -> Priority {
 /// a checklist sorted by priority (High→Low, stable within a priority so the
 /// model's sequence is preserved). This is what turns "5 flat tickets" into one
 /// ticket with ordered, prioritised sub-tasks.
+///
+/// Spec 006 F2: when the plan carries a `problem` and/or `goal`, the body is
+/// SDD-shaped — `## Problem` / `## Goal` sections and the checklist under
+/// `## Acceptance criteria`. The `- [ ]` line rendering is shared between both
+/// shapes, which is what makes the spec_md → backlog round-trip (AC 5) hold by
+/// construction. With both fields absent the output is byte-identical to the
+/// pre-006 body (pinned).
 fn compose_issue_body(plan: &FeaturePlan) -> String {
     let mut tasks: Vec<(usize, &SubTask, Priority)> = plan
         .tasks
@@ -980,13 +995,40 @@ fn compose_issue_body(plan: &FeaturePlan) -> String {
     // Stable sort by priority; equal priorities keep the model's original order.
     tasks.sort_by_key(|(i, _, p)| (p.rank(), *i));
 
+    // Present-but-blank is absent: a model that emits "" must not flip the shape.
+    let problem = plan
+        .problem
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let goal = plan
+        .goal
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let sdd = problem.is_some() || goal.is_some();
+
     let mut body = String::new();
     let summary = plan.summary.trim();
     if !summary.is_empty() {
         body.push_str(summary);
         body.push_str("\n\n");
     }
-    body.push_str("## Sub-tasks (priority order)\n\n");
+    if let Some(p) = problem {
+        body.push_str("## Problem\n\n");
+        body.push_str(p);
+        body.push_str("\n\n");
+    }
+    if let Some(g) = goal {
+        body.push_str("## Goal\n\n");
+        body.push_str(g);
+        body.push_str("\n\n");
+    }
+    body.push_str(if sdd {
+        "## Acceptance criteria\n\n"
+    } else {
+        "## Sub-tasks (priority order)\n\n"
+    });
     for (_, t, p) in &tasks {
         body.push_str(&format!("- [ ] **[{}]** {}", p.label(), t.title.trim()));
         let detail = t.detail.trim();
@@ -1209,6 +1251,11 @@ async fn chat_issues_preview(
     Ok(Json(json!({
         "title": plan.title,
         "summary": plan.summary,
+        // Spec 006 F2 (C4): the SDD fields ride the draft round-trip — this
+        // response IS what the UI stores and posts back on Confirm, so omitting
+        // them here would silently strip the shape from every previewed plan.
+        "problem": plan.problem,
+        "goal": plan.goal,
         "tasks": tasks,
         "body": compose_issue_body(&plan),
     })))
@@ -1624,6 +1671,8 @@ mod tests {
         let plan = FeaturePlan {
             title: "Feature".into(),
             summary: "Does a thing.".into(),
+            problem: None,
+            goal: None,
             tasks: vec![
                 SubTask {
                     title: "C low".into(),
@@ -1656,6 +1705,309 @@ mod tests {
         assert!(
             body.contains("- [ ] **[Medium]** B med\n"),
             "med line: {body}"
+        );
+    }
+
+    /// Spec 006 F2 pin, written BEFORE the SDD-shape change: a plan with no
+    /// `problem`/`goal` must compose the pre-006 body **byte for byte** — the
+    /// full-literal net under the riskiest string edit in this feature.
+    #[test]
+    fn compose_issue_body_without_problem_goal_is_byte_identical() {
+        let plan = FeaturePlan {
+            title: "Feature".into(),
+            summary: "Does a thing.".into(),
+            problem: None,
+            goal: None,
+            tasks: vec![
+                SubTask {
+                    title: "C low".into(),
+                    detail: "cc".into(),
+                    priority: Some("low".into()),
+                },
+                SubTask {
+                    title: "A high".into(),
+                    detail: "aa".into(),
+                    priority: Some("high".into()),
+                },
+                SubTask {
+                    title: "B med".into(),
+                    detail: String::new(),
+                    priority: None,
+                },
+            ],
+        };
+        assert_eq!(
+            compose_issue_body(&plan),
+            "Does a thing.\n\n\
+             ## Sub-tasks (priority order)\n\n\
+             - [ ] **[High]** A high — aa\n\
+             - [ ] **[Medium]** B med\n\
+             - [ ] **[Low]** C low — cc\n\n\
+             _Created from an agentum Chat feature breakdown._"
+        );
+    }
+
+    /// Spec 006 F2: present-but-blank `problem`/`goal` counts as absent — a
+    /// model that emits `""` must not flip the body shape (decision §8).
+    #[test]
+    fn compose_issue_body_blank_problem_goal_falls_back_to_today() {
+        let plan = FeaturePlan {
+            title: "Feature".into(),
+            summary: "Does a thing.".into(),
+            problem: Some("  ".into()),
+            goal: Some(String::new()),
+            tasks: vec![
+                SubTask {
+                    title: "C low".into(),
+                    detail: "cc".into(),
+                    priority: Some("low".into()),
+                },
+                SubTask {
+                    title: "A high".into(),
+                    detail: "aa".into(),
+                    priority: Some("high".into()),
+                },
+                SubTask {
+                    title: "B med".into(),
+                    detail: String::new(),
+                    priority: None,
+                },
+            ],
+        };
+        assert_eq!(
+            compose_issue_body(&plan),
+            "Does a thing.\n\n\
+             ## Sub-tasks (priority order)\n\n\
+             - [ ] **[High]** A high — aa\n\
+             - [ ] **[Medium]** B med\n\
+             - [ ] **[Low]** C low — cc\n\n\
+             _Created from an agentum Chat feature breakdown._",
+            "blank problem/goal must render the pre-006 body byte-identically"
+        );
+    }
+
+    /// Spec 006 F2 (AC 4): both fields present → SDD shape, in order — summary
+    /// lead, `## Problem`, `## Goal`, `## Acceptance criteria` with the SAME
+    /// `- [ ]` task lines, and no legacy heading.
+    #[test]
+    fn compose_issue_body_renders_problem_goal_and_acceptance_criteria() {
+        let plan = FeaturePlan {
+            title: "Feature".into(),
+            summary: "Does a thing.".into(),
+            problem: Some("Users lose their drafts.".into()),
+            goal: Some("Drafts survive a reload.".into()),
+            tasks: vec![
+                SubTask {
+                    title: "A high".into(),
+                    detail: "aa".into(),
+                    priority: Some("high".into()),
+                },
+                SubTask {
+                    title: "B med".into(),
+                    detail: String::new(),
+                    priority: None,
+                },
+            ],
+        };
+        let body = compose_issue_body(&plan);
+        assert!(
+            body.starts_with("Does a thing.\n\n"),
+            "summary leads: {body}"
+        );
+        let p = body.find("## Problem").expect("problem heading");
+        let g = body.find("## Goal").expect("goal heading");
+        let ac = body.find("## Acceptance criteria").expect("AC heading");
+        assert!(p < g && g < ac, "sections in order: {body}");
+        assert!(body.contains("Users lose their drafts."));
+        assert!(body.contains("Drafts survive a reload."));
+        // The checklist rendering is the SHARED code path — identical lines.
+        assert!(body.contains("- [ ] **[High]** A high — aa"));
+        assert!(body.contains("- [ ] **[Medium]** B med\n"));
+        assert!(
+            !body.contains("## Sub-tasks (priority order)"),
+            "SDD shape replaces the legacy heading: {body}"
+        );
+        assert!(body.ends_with("_Created from an agentum Chat feature breakdown._"));
+    }
+
+    /// Spec 006 F2: the new fields are serde-default — an old client's plan and
+    /// a terse model reply (no `problem`/`goal`) still parse.
+    #[test]
+    fn feature_plan_json_defaults_problem_and_goal() {
+        let old: FeaturePlan =
+            serde_json::from_str(r#"{"title":"T","summary":"s","tasks":[{"title":"a"}]}"#).unwrap();
+        assert!(old.problem.is_none());
+        assert!(old.goal.is_none());
+        let new: FeaturePlan = serde_json::from_str(
+            r#"{"title":"T","summary":"s","problem":"P","goal":"G","tasks":[{"title":"a"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(new.problem.as_deref(), Some("P"));
+        assert_eq!(new.goal.as_deref(), Some("G"));
+    }
+
+    /// Spec 006 AC 5: an SDD-shaped issue body round-trips through the harness
+    /// bridge — `spec_md_from_issue` keeps the `- [ ]` lines parseable and
+    /// `derive_backlog_from_spec` yields one feature per task (no fallback).
+    #[test]
+    fn sdd_issue_body_round_trips_through_spec_md_to_backlog() {
+        let plan = FeaturePlan {
+            title: "T".into(),
+            summary: "Sum.".into(),
+            problem: Some("Pain.".into()),
+            goal: Some("Outcome.".into()),
+            tasks: vec![
+                SubTask {
+                    title: "First task".into(),
+                    detail: "d1".into(),
+                    priority: Some("high".into()),
+                },
+                SubTask {
+                    title: "Second task".into(),
+                    detail: String::new(),
+                    priority: None,
+                },
+                SubTask {
+                    title: "Third task".into(),
+                    detail: "d3".into(),
+                    priority: Some("low".into()),
+                },
+            ],
+        };
+        let body = compose_issue_body(&plan);
+        let spec = crate::harness::spec_md_from_issue(
+            "42",
+            "T",
+            &body,
+            "https://github.com/o/r/issues/42",
+        );
+        // The checkboxes were found, so the safety-net `- [ ] T` line (appended
+        // only when the body has none) must be absent.
+        assert!(
+            !spec.contains("- [ ] T\n"),
+            "no fallback checkbox — the composed lines parsed: {spec}"
+        );
+        let backlog = crate::harness::derive_backlog_from_spec(&spec);
+        assert_eq!(backlog.features.len(), 3, "one feature per task: {spec}");
+        for (f, title) in backlog
+            .features
+            .iter()
+            .zip(["First task", "Second task", "Third task"])
+        {
+            assert!(
+                f.name.contains(title),
+                "feature {} carries the task title {title}",
+                f.name
+            );
+        }
+    }
+
+    /// Guard a prompt regression without pinning prose: the extraction prompt
+    /// must name both SDD fields (AC 4).
+    #[test]
+    fn extract_instructions_names_problem_and_goal() {
+        assert!(EXTRACT_INSTRUCTIONS.contains("\"problem\""));
+        assert!(EXTRACT_INSTRUCTIONS.contains("\"goal\""));
+        // The raw-JSON tail is load-bearing for `extract_feature_plan`.
+        assert!(EXTRACT_INSTRUCTIONS.contains("Output ONLY the raw JSON object"));
+    }
+
+    /// Handoff 02 mandatory item (Mateo's empty-description report): pin the
+    /// WHOLE chain plan → `plan_to_features` → `compose_issue_body` →
+    /// `TaskSink::Github` → `gh` argv with a fake `gh`, asserting the `--body`
+    /// value that reaches the process is non-empty and carries the summary plus
+    /// a checklist line — not just the composer fn in isolation.
+    #[cfg(unix)]
+    #[tokio::test]
+    // The awaited create must observe AGENTUM_GH_BIN, so the guard spans the
+    // await — the same accepted pattern as routes::harness's env-locked test.
+    #[allow(clippy::await_holding_lock)]
+    async fn chat_plan_body_reaches_gh_create_argv_non_empty() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&dir.path().join("t.db"))
+            .await
+            .unwrap();
+        // NUL-separated argv log: the body embeds newlines, so a line-based
+        // log could not be split back into arguments unambiguously.
+        let log = dir.path().join("argv.log");
+        let script = dir.path().join("gh-fake");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\0' \"$a\" >> \"{}\"; done\necho \"https://github.com/o/r/issues/123\"\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let plan = FeaturePlan {
+            title: "CSV export".into(),
+            summary: "Export the board as CSV.".into(),
+            problem: None,
+            goal: None,
+            tasks: vec![
+                SubTask {
+                    title: "Add button".into(),
+                    detail: "Toolbar button.".into(),
+                    priority: Some("high".into()),
+                },
+                SubTask {
+                    title: "Serialize rows".into(),
+                    detail: String::new(),
+                    priority: Some("medium".into()),
+                },
+            ],
+        };
+        let features = plan_to_features(&plan, SplitMode::Single, &[]);
+        assert_eq!(features.len(), 1);
+
+        let guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // SAFETY: `set_var` is unsound under concurrent access; the crate-wide
+        // TEST_ENV_LOCK serialises every env-mutating test. Only this create
+        // resolves `gh_bin()` while the var is set.
+        unsafe { std::env::set_var("AGENTUM_GH_BIN", &script) };
+        let res = TaskSink::Github
+            .create_feature(
+                &SinkCtx {
+                    store: &store,
+                    workdir: dir.path(),
+                    parent_goal_id: None,
+                    slug: Some("o/r"),
+                },
+                &features[0],
+            )
+            .await;
+        unsafe { std::env::remove_var("AGENTUM_GH_BIN") };
+        drop(guard);
+        let fref = res.expect("fake gh create succeeds");
+        assert_eq!(fref.id, "123");
+
+        let raw = std::fs::read(&log).expect("the create ran the fake gh");
+        let argv: Vec<String> = String::from_utf8_lossy(&raw)
+            .split('\0')
+            .map(str::to_string)
+            .collect();
+        let body_idx = argv
+            .iter()
+            .position(|a| a == "--body")
+            .expect("--body flag present in the gh argv");
+        let body = argv
+            .get(body_idx + 1)
+            .expect("--body carries a value")
+            .clone();
+        assert!(!body.trim().is_empty(), "--body must not be empty");
+        assert!(
+            body.contains("Export the board as CSV."),
+            "body carries the summary: {body}"
+        );
+        assert!(
+            body.contains("- [ ] **[High]** Add button — Toolbar button."),
+            "body carries the checklist: {body}"
         );
     }
 
@@ -1856,6 +2208,8 @@ mod tests {
         let plan = FeaturePlan {
             title: "Feature X".into(),
             summary: "Sum.".into(),
+            problem: None,
+            goal: None,
             tasks: vec![
                 SubTask {
                     title: "A".into(),
@@ -1883,6 +2237,8 @@ mod tests {
         let plan = FeaturePlan {
             title: "Feature X".into(),
             summary: "Sum.".into(),
+            problem: None,
+            goal: None,
             tasks: vec![
                 SubTask {
                     title: "low one".into(),
@@ -1912,6 +2268,8 @@ mod tests {
         let plan = FeaturePlan {
             title: "F".into(),
             summary: String::new(),
+            problem: None,
+            goal: None,
             tasks: vec![
                 SubTask {
                     title: "t1".into(),

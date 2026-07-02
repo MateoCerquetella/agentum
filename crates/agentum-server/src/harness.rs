@@ -1984,6 +1984,23 @@ mod surface_tests {
         assert!(p.contains("\"passed\""), "states the JSON verdict contract");
     }
 
+    /// Spec 006 F3 pin, written BEFORE the brief refresh (AC 7): the rendered
+    /// verdict-file contract is **character-identical** — the brief deltas may
+    /// change gate checklists, never the wire contract the engine parses.
+    #[test]
+    fn role_prompt_verdict_contract_is_character_identical() {
+        let p = build_role_prompt(RoleKind::Pm, "I", "s", "S", "roles/authoring.json");
+        assert!(
+            p.contains(
+                "=== HOW TO RECORD YOUR VERDICT ===\n\
+                 When finished, WRITE your verdict to `roles/authoring.json` (relative to the project root) as exactly this JSON:\n\
+                 {\"passed\": true|false, \"summary\": \"one line on what passed or the single most important gap\"}\n\
+                 Set passed=false if the gate does not pass. Do not stop until the file is written. Do not ask the human anything."
+            ),
+            "verdict contract drifted:\n{p}"
+        );
+    }
+
     #[test]
     fn role_briefs_are_embedded_and_demand_a_verdict() {
         for role in [RoleKind::Pm, RoleKind::Architect, RoleKind::Reviewer] {
@@ -2108,5 +2125,53 @@ mod surface_tests {
             1,
             "the derived backlog's features are preserved, not overwritten"
         );
+    }
+
+    /// Spec 006 C1: a tracker-stamped backlog (start-work / spec-from-issue)
+    /// yields its shared provenance — the pair Decompose re-stamps through
+    /// `plan_from_spec_with_tracker` so the label trail survives roles-on runs.
+    #[test]
+    fn shared_tracker_provenance_reads_stamped_backlog() {
+        let mut list = FeatureList::default();
+        list.features.push(Feature {
+            id: "F1".into(),
+            name: "f1".into(),
+            description: String::new(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            tracker_provider: Some("github".into()),
+            tracker_url: Some("https://github.com/o/r/issues/42".into()),
+        });
+        assert_eq!(
+            shared_tracker_provenance(&list),
+            Some((
+                "github".to_string(),
+                "https://github.com/o/r/issues/42".to_string()
+            ))
+        );
+    }
+
+    /// Spec 006 C1: an unstamped backlog (manual register / MCP plan) has no
+    /// provenance — Decompose keeps the tracker-less planner, byte-identical.
+    #[test]
+    fn shared_tracker_provenance_none_when_unstamped() {
+        let mut list = FeatureList::default();
+        assert_eq!(shared_tracker_provenance(&list), None);
+        list.features.push(Feature {
+            id: "F1".into(),
+            name: "f1".into(),
+            description: String::new(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            // A provider with no URL is not usable provenance (the GitHub
+            // transition arm parses the issue number out of the URL).
+            tracker_provider: Some("github".into()),
+            tracker_url: None,
+        });
+        assert_eq!(shared_tracker_provenance(&list), None);
     }
 }

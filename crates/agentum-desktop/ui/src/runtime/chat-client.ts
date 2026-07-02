@@ -214,8 +214,19 @@ export type IssueSplit = 'single' | 'per_task'
 export type DraftTask = { title: string; detail: string; priority: 'high' | 'medium' | 'low' }
 
 /** The editable draft the preview endpoint returns BEFORE any issue is filed.
- *  `body` is the composed single-issue markdown — a preview of the default split. */
-export type DraftPlan = { title: string; summary: string; tasks: DraftTask[]; body: string }
+ *  `body` is the composed single-issue markdown — a preview of the default split.
+ *  `problem`/`goal` (spec 006 F2) are the SDD framing — passthrough only (no
+ *  editor; the composed `body` preview shows them rendered): they must survive
+ *  the preview → Confirm round-trip or every previewed plan silently loses the
+ *  SDD shape (C4). */
+export type DraftPlan = {
+  title: string
+  summary: string
+  problem?: string | null
+  goal?: string | null
+  tasks: DraftTask[]
+  body: string
+}
 
 /** Decode the server's typed error envelope — `{error:string}` or
  *  `{error:{message}}` — into a message, falling back to `fallback`. */
@@ -259,6 +270,10 @@ export async function previewIssuesFromChat(
   return {
     title: parsed.title ?? '',
     summary: parsed.summary ?? '',
+    // Spec 006 F2 (C4): keep the SDD fields on the stored draft so Confirm can
+    // post them back — this mapping is where an omission would drop them.
+    problem: parsed.problem ?? null,
+    goal: parsed.goal ?? null,
     tasks: (parsed.tasks ?? []).map((t) => ({
       title: t?.title ?? '',
       detail: t?.detail ?? '',
@@ -339,9 +354,18 @@ export async function createIssuesFromChat(
       repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined,
       provider: opts?.provider,
       // Send the edited plan WITHOUT its `body` (the server re-composes it from
-      // the tasks); its presence tells the server to skip re-extraction.
+      // the tasks); its presence tells the server to skip re-extraction. The
+      // SDD fields (spec 006 F2, C4) ride along — this explicit rebuild is the
+      // one place a previewed `problem`/`goal` could silently drop before the
+      // server composes the filed body.
       plan: opts?.plan
-        ? { title: opts.plan.title, summary: opts.plan.summary, tasks: opts.plan.tasks }
+        ? {
+            title: opts.plan.title,
+            summary: opts.plan.summary,
+            problem: opts.plan.problem ?? undefined,
+            goal: opts.plan.goal ?? undefined,
+            tasks: opts.plan.tasks
+          }
         : undefined,
       split: opts?.split,
       labels: opts?.labels && opts.labels.length > 0 ? opts.labels : undefined

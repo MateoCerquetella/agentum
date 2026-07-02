@@ -14,6 +14,9 @@ emit a verdict.
 - The code is maintainable: clear naming, no dead code, no commented-out blocks.
 - No technical debt beyond what is explicitly documented.
 - No unjustified complexity was introduced.
+- The implementation matches `architecture.md`; any deviation is named and justified
+  in your review note, not silent.
+- Every judgment cites evidence (files, tests, the diff) — never a verdict from memory.
 
 ## Output contract (required)
 

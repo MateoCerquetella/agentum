@@ -30,6 +30,14 @@ use crate::harness::{HarnessConfig, HarnessFiles, HarnessStatus};
 /// Script skip-pass, so non-web projects and headless/CI are byte-identical.
 pub const BROWSER_QA_ENABLED_SETTING: &str = "harness.qa.agent_browser.enabled";
 
+/// Spec 006 F3 (D1): when true, start-work-planned backlogs run the SDD role
+/// loop (PM gate → Architect gate → Decompose → Execute → Review gate).
+/// Default ON — the loop is the product working as designed; this is the
+/// global opt-out. Read EXACTLY ONCE, in start_work's post-plan knob write:
+/// `roles` is a backlog knob stamped into feature_list.json, never a
+/// per-drive-tick read — manually registered runs are untouched.
+pub const SDD_ROLES_ENABLED_SETTING: &str = "harness.sdd.roles.enabled";
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/harness", get(list).post(start))
@@ -47,40 +55,72 @@ pub fn router() -> Router<AppState> {
         .route("/api/harness/{id}/files", get(files))
 }
 
-/// Wire shape of `/api/harness/settings` — the engine-wide run-behavior knobs
-/// the desktop Settings pane reflects (today just the browser-QA capability).
+/// Wire shape of `GET /api/harness/settings` (and the PUT *response*) — the
+/// engine-wide run-behavior knobs the desktop Settings pane reflects. Always
+/// full; declaration order = wire order (pinned).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HarnessSettings {
     browser_qa_agent_enabled: bool,
+    /// Spec 006 F3: run the SDD role loop on start-work-planned backlogs.
+    sdd_roles_enabled: bool,
 }
 
-/// `GET /api/harness/settings` — is the browser-QA agent capable without the
-/// env flag? (default off, D3). Mirrors `routes/mcp.rs`'s settings route.
+/// PUT body: partial by design (spec 006 C2) so a caller flipping one knob
+/// can't clobber the other — and the pre-006 one-field PUT stays valid
+/// (pinned by `harness_settings_patch_accepts_partial_puts`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HarnessSettingsPatch {
+    #[serde(default)]
+    browser_qa_agent_enabled: Option<bool>,
+    #[serde(default)]
+    sdd_roles_enabled: Option<bool>,
+}
+
+/// Read the full effective settings. Note the DIFFERENT defaults: the QA knob
+/// is opt-in (false, D3 of spec 005), the roles knob is opt-out (true, D1 of
+/// spec 006).
+async fn read_settings(store: &agentum_store::Store) -> Result<HarnessSettings, ApiError> {
+    Ok(HarnessSettings {
+        browser_qa_agent_enabled: store
+            .setting_get_bool(BROWSER_QA_ENABLED_SETTING, false)
+            .await?,
+        sdd_roles_enabled: store
+            .setting_get_bool(SDD_ROLES_ENABLED_SETTING, true)
+            .await?,
+    })
+}
+
+/// `GET /api/harness/settings` — the full engine-wide knob set. Mirrors
+/// `routes/mcp.rs`'s settings route.
 async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<axum::Json<HarnessSettings>, ApiError> {
-    let enabled = state
-        .store
-        .setting_get_bool(BROWSER_QA_ENABLED_SETTING, false)
-        .await?;
-    Ok(axum::Json(HarnessSettings {
-        browser_qa_agent_enabled: enabled,
-    }))
+    Ok(axum::Json(read_settings(&state.store).await?))
 }
 
-/// `PUT /api/harness/settings` — flip the browser-QA capability switch. Read
-/// per gate decision in `drive_inner`, so it applies to the next QA gate with
-/// no restart.
+/// `PUT /api/harness/settings` — patch semantics: write only the keys present
+/// in the body, return the full effective settings (C2). The QA knob is read
+/// per gate decision in `drive_inner` (applies to the next gate, no restart);
+/// the roles knob is read once per start-work plan.
 async fn put_settings(
     State(state): State<AppState>,
-    axum::Json(req): axum::Json<HarnessSettings>,
+    axum::Json(req): axum::Json<HarnessSettingsPatch>,
 ) -> Result<axum::Json<HarnessSettings>, ApiError> {
-    state
-        .store
-        .setting_set_bool(BROWSER_QA_ENABLED_SETTING, req.browser_qa_agent_enabled)
-        .await?;
-    Ok(axum::Json(req))
+    if let Some(v) = req.browser_qa_agent_enabled {
+        state
+            .store
+            .setting_set_bool(BROWSER_QA_ENABLED_SETTING, v)
+            .await?;
+    }
+    if let Some(v) = req.sdd_roles_enabled {
+        state
+            .store
+            .setting_set_bool(SDD_ROLES_ENABLED_SETTING, v)
+            .await?;
+    }
+    Ok(axum::Json(read_settings(&state.store).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,6 +464,26 @@ struct StartWorkRequest {
     agent_model: Option<String>,
 }
 
+/// start_work's post-plan knobs in one pure, pinned place (spec 006 F3).
+/// `sdd_roles` only ever SETS roles (the plan resets the list to defaults, so
+/// false is already the resting state — never write `false` explicitly).
+fn apply_start_work_knobs(
+    list: &mut crate::harness::FeatureList,
+    agent_tool: Option<&str>,
+    agent_model: Option<&str>,
+    sdd_roles: bool,
+) {
+    if let Some(t) = agent_tool {
+        list.agent_tool = t.to_string();
+    }
+    if let Some(m) = agent_model {
+        list.agent_model = Some(m.to_string());
+    }
+    if sdd_roles {
+        list.roles = true;
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StartWorkResponse {
@@ -518,13 +578,21 @@ async fn start_work(
     // Post-plan knob write (AC 2 — "the plan itself writes defaults"): the
     // composer's agent/model become the run's knobs. `spec_id` is already
     // stamped by the plan (F2) — do not re-stamp here.
+    //
+    // Spec 006 F3 (D1): the one and only read of the roles knob. A store
+    // hiccup falls back to the default (ON).
+    let sdd_roles = state
+        .store
+        .setting_get_bool(SDD_ROLES_ENABLED_SETTING, true)
+        .await
+        .unwrap_or(true);
     let list = crate::harness::update_backlog_knobs(&workdir, |list| {
-        if let Some(t) = &req.agent_tool {
-            list.agent_tool = t.clone();
-        }
-        if let Some(m) = &req.agent_model {
-            list.agent_model = Some(m.clone());
-        }
+        apply_start_work_knobs(
+            list,
+            req.agent_tool.as_deref(),
+            req.agent_model.as_deref(),
+            sdd_roles,
+        );
     })
     .await
     .map_err(|e| ApiError::Internal(format!("could not write the run knobs: {e}")))?;
@@ -799,17 +867,93 @@ mod tests {
         );
     }
 
-    /// The wire shape is `{"browserQaAgentEnabled": bool}` — camelCase, matching
-    /// the desktop client (`getHarnessSettings`/`setHarnessSettings`).
+    /// The GET/PUT-response wire shape is the full camelCase two-field object
+    /// (spec 006 C2) — exact string so a silent field/rename regression fails
+    /// loudly, matching the desktop client (`getHarnessSettings`).
     #[test]
     fn harness_settings_wire_shape_is_camel_case() {
         let json = serde_json::to_string(&HarnessSettings {
             browser_qa_agent_enabled: true,
+            sdd_roles_enabled: true,
         })
         .unwrap();
-        assert_eq!(json, r#"{"browserQaAgentEnabled":true}"#);
+        assert_eq!(
+            json,
+            r#"{"browserQaAgentEnabled":true,"sddRolesEnabled":true}"#
+        );
         let parsed: HarnessSettings =
-            serde_json::from_str(r#"{"browserQaAgentEnabled":false}"#).unwrap();
+            serde_json::from_str(r#"{"browserQaAgentEnabled":false,"sddRolesEnabled":true}"#)
+                .unwrap();
         assert!(!parsed.browser_qa_agent_enabled);
+        assert!(parsed.sdd_roles_enabled);
+    }
+
+    /// Spec 006 C2: the PUT body is a PATCH — a pre-006 one-field client, an
+    /// empty body, and a roles-only toggle all parse (one knob can never
+    /// clobber the other).
+    #[test]
+    fn harness_settings_patch_accepts_partial_puts() {
+        let old: HarnessSettingsPatch =
+            serde_json::from_str(r#"{"browserQaAgentEnabled":false}"#).unwrap();
+        assert_eq!(old.browser_qa_agent_enabled, Some(false));
+        assert_eq!(old.sdd_roles_enabled, None);
+
+        let empty: HarnessSettingsPatch = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.browser_qa_agent_enabled, None);
+        assert_eq!(empty.sdd_roles_enabled, None);
+
+        let roles_only: HarnessSettingsPatch =
+            serde_json::from_str(r#"{"sddRolesEnabled":false}"#).unwrap();
+        assert_eq!(roles_only.browser_qa_agent_enabled, None);
+        assert_eq!(roles_only.sdd_roles_enabled, Some(false));
+    }
+
+    /// Spec 006 F3 (D1): the roles knob defaults ON — absence of the setting
+    /// means the SDD loop runs (NOTE the default arg differs from the QA
+    /// knob's) — and round-trips through the store.
+    #[tokio::test]
+    async fn sdd_roles_setting_defaults_on_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = fresh_store(&dir).await;
+        assert!(
+            store
+                .setting_get_bool(SDD_ROLES_ENABLED_SETTING, true)
+                .await
+                .unwrap(),
+            "default must be ON (global opt-out, D1)"
+        );
+        store
+            .setting_set_bool(SDD_ROLES_ENABLED_SETTING, false)
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .setting_get_bool(SDD_ROLES_ENABLED_SETTING, true)
+                .await
+                .unwrap()
+        );
+    }
+
+    /// Spec 006 F3: `apply_start_work_knobs` stamps `roles` only when enabled,
+    /// sets agent/model only when `Some`, and never touches spec_id/features.
+    #[test]
+    fn start_work_knobs_stamp_roles_only_when_enabled() {
+        let mut list = crate::harness::FeatureList::default();
+        apply_start_work_knobs(&mut list, Some("codex"), Some("gpt-9"), true);
+        assert!(list.roles, "enabled stamps roles=true");
+        assert_eq!(list.agent_tool, "codex");
+        assert_eq!(list.agent_model.as_deref(), Some("gpt-9"));
+        assert!(list.spec_id.is_none(), "spec_id untouched");
+        assert!(list.features.is_empty(), "features untouched");
+
+        let mut list = crate::harness::FeatureList::default();
+        apply_start_work_knobs(&mut list, None, None, false);
+        assert!(!list.roles, "disabled leaves the plan's resting false");
+        assert_eq!(
+            list.agent_tool,
+            crate::harness::FeatureList::default().agent_tool,
+            "no tool given → default kept"
+        );
+        assert!(list.agent_model.is_none());
     }
 }

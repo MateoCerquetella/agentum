@@ -241,24 +241,34 @@ export function scaffoldHarness(workdir: string): Promise<string> {
   return callMcpTool('agentum_harness_scaffold', { workdir })
 }
 
-/** Wire shape of `/api/harness/settings` (spec 005 F3). */
-export type HarnessSettings = { browserQaAgentEnabled: boolean }
+/** Full wire shape of `GET /api/harness/settings` (spec 005 F3 + 006 F3). */
+export type HarnessSettings = {
+  browserQaAgentEnabled: boolean
+  /** Spec 006 F3: run the SDD role loop (PM → Architect → Build → Review
+   *  gates) on start-work-planned backlogs. Server default ON. */
+  sddRolesEnabled: boolean
+}
 
 /**
- * `GET /api/harness/settings` — engine-wide run behavior knobs. Today just the
- * browser-QA capability switch: when on, the QA gate's `Auto` arm treats a
- * spawned `agentum_browser` QA agent as capable without `AGENTUM_BROWSER_VERIFY`.
- * Default OFF (D3) so non-web projects keep the skip-pass.
+ * `GET /api/harness/settings` — engine-wide run behavior knobs: the browser-QA
+ * capability switch (when on, the QA gate's `Auto` arm treats a spawned
+ * `agentum_browser` QA agent as capable without `AGENTUM_BROWSER_VERIFY`;
+ * default OFF, D3) and the SDD role-loop switch (default ON, spec 006 D1).
  */
 export function getHarnessSettings(): Promise<HarnessSettings> {
   return request('/api/harness/settings')
 }
 
-/** `PUT /api/harness/settings` — persist the harness run-behavior knobs. */
-export function setHarnessSettings(settings: HarnessSettings): Promise<HarnessSettings> {
+/**
+ * `PUT /api/harness/settings` — persist harness run-behavior knobs. PATCH
+ * semantics (spec 006 C2): send only the keys you flip — two independent
+ * Settings toggles can never clobber each other. Returns the full effective
+ * settings.
+ */
+export function setHarnessSettings(patch: Partial<HarnessSettings>): Promise<HarnessSettings> {
   return request('/api/harness/settings', {
     method: 'PUT',
-    body: JSON.stringify(settings)
+    body: JSON.stringify(patch)
   })
 }
 

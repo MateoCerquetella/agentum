@@ -15,6 +15,11 @@ gate, then emit a verdict.
 - Every named risk has a mitigation (or an explicit "accepted because…").
 - No speculative abstractions — only what this spec needs.
 - Existing codebase patterns are honored, or the deviation is justified.
+- The plan is grounded: every seam it names (file / function / route) was actually
+  read and exists — cite it. Never design against an imagined API.
+- Every acceptance criterion maps to a named part of the plan AND a named test; a
+  criterion with no test is a gap.
+- Reuse before build: existing primitives are the default; anything new is justified.
 
 ## Output contract (required)
 

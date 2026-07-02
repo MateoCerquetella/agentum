@@ -58,7 +58,7 @@ import {
   fetchGithubRepoLabels,
   scaffoldSpecFromIssue
 } from '@/runtime/github-issue-client'
-import { startGatedWork } from '@/runtime/harness-client'
+import { getHarnessSettings, startGatedWork } from '@/runtime/harness-client'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
   getFullComposerCreateDisabled,
@@ -216,6 +216,10 @@ export type ComposerCardProps = {
   canStartGatedRun: boolean
   startGatedRun: boolean
   onStartGatedRunChange: (value: boolean) => void
+  /** Spec 006 F3 (AC 8): whether gated runs use the SDD role loop — read from
+   *  the harness settings when the toggle becomes available; optimistic `true`
+   *  on failure (the server default is ON). Drives the armed copy only. */
+  sddRolesEnabled: boolean
   linkPopoverOpen: boolean
   onLinkPopoverOpenChange: (open: boolean) => void
   linkQuery: string
@@ -1581,6 +1585,32 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit && !selectedRepo?.connectionId
   )
 
+  // Spec 006 F3 (AC 8): fetch whether gated runs use the SDD role loop when
+  // the gated-run toggle becomes available. Best-effort with an optimistic
+  // `true` on failure — honest, since the server default is ON. Cancellation
+  // guard so a stale response can't land after the toggle re-hid.
+  const [sddRolesEnabled, setSddRolesEnabled] = useState(true)
+  useEffect(() => {
+    if (!canScaffoldSpec) {
+      return
+    }
+    let cancelled = false
+    void getHarnessSettings()
+      .then((settings) => {
+        if (!cancelled) {
+          setSddRolesEnabled(settings.sddRolesEnabled)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSddRolesEnabled(true)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canScaffoldSpec])
+
   const handleNameValueChange = useCallback(
     (nextName: string): void => {
       // Why: linked GitHub items should keep refreshing the suggested workspace
@@ -2741,6 +2771,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     canStartGatedRun: canScaffoldSpec,
     startGatedRun,
     onStartGatedRunChange: setStartGatedRun,
+    sddRolesEnabled,
     linkPopoverOpen,
     onLinkPopoverOpenChange: handleLinkPopoverChange,
     linkQuery,

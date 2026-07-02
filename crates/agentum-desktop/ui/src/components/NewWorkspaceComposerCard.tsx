@@ -105,6 +105,9 @@ type NewWorkspaceComposerCardProps = {
   canStartGatedRun: boolean
   startGatedRun: boolean
   onStartGatedRunChange: (value: boolean) => void
+  /** Spec 006 F3 (AC 8): whether gated runs use the SDD role loop — switches
+   *  the armed copy to name the PM/Architect/Review gates. */
+  sddRolesEnabled: boolean
   detectedAgentIds: Set<TuiAgent> | null
   onOpenAgentSettings: () => void
   advancedOpen: boolean
@@ -297,6 +300,7 @@ export default function NewWorkspaceComposerCard({
   canStartGatedRun,
   startGatedRun,
   onStartGatedRunChange,
+  sddRolesEnabled,
   detectedAgentIds,
   onOpenAgentSettings,
   advancedOpen,
@@ -716,7 +720,10 @@ export default function NewWorkspaceComposerCard({
                 <span className="block text-xs font-medium text-foreground">Start gated run</span>
                 <span className="mt-0.5 block text-[11px] text-muted-foreground">
                   {startGatedRun
-                    ? "Your typed prompt won't be sent — the linked issue becomes the spec and drives the gated agents. The selected agent runs inside the engine."
+                    ? sddRolesEnabled
+                      ? // Spec 006 F3 (AC 8): the role loop is on — name it.
+                        "Your typed prompt won't be sent — the linked issue becomes the spec and the SDD role loop (PM gate → Architect → Build → Review gate) drives gated agents in the worktree. The selected agent runs inside the engine."
+                      : "Your typed prompt won't be sent — the linked issue becomes the spec and drives the gated agents. The selected agent runs inside the engine."
                     : 'Plan the linked issue into a spec and drive it with verification-gated agents.'}
                 </span>
               </span>
