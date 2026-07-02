@@ -326,6 +326,9 @@ retrieved for the user's latest message — prefer these as ground truth about t
         None => String::new(),
     };
 
+    // "Preview issues" below is the UI button label (ChatPage.tsx composer
+    // strip) — if that button is renamed again, rename it here too, or the
+    // model directs users at a button that doesn't exist.
     format!(
         "You are running inside agentum (a control plane for AI coding agents) as the \
 feature-intake interviewer on the Chat screen.{ctx}{repo_block}{wiki_block}\n\n\
@@ -342,11 +345,12 @@ the user — or the repo context — already answers.\n\
 - When the feature is defined well enough to build, STOP asking questions and propose a \
 breakdown: a one-line feature title, then 3–7 concrete tasks (each an issue-style title \
 plus one sentence of detail), each pointing at the real files/areas it touches. Then tell \
-the user to click the \"Create issues\" button below the chat to file them.\n\
+the user to click the \"Preview issues\" button below the chat to review and file them.\n\
 {access_rule}\n\
-- You do not create the issues yourself, and no other agent will: the \"Create issues\" \
-button files them directly. When the user confirms, point them at that button — never \
-tell them to \"confirm with the system\" or that someone else will take it from there."
+- You do not create the issues yourself, and no other agent will: the \"Preview issues\" \
+button opens a review of the drafted issues, and confirming there files them directly. \
+When the user is ready, point them at that button — never tell them to \"confirm with \
+the system\" or that someone else will take it from there."
     )
 }
 
@@ -867,7 +871,7 @@ const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed f
 
 /// The final user turn appended to the transcript for the extraction call. Ends
 /// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
-/// the v0.33.0 "Create issues" 400) and gives the model a direct last-word
+/// the v0.33.0 issue-filing 400) and gives the model a direct last-word
 /// instruction to emit the JSON now.
 const EXTRACT_USER_PROMPT: &str = "Output the agreed feature plan now as the single JSON object described above — only the raw JSON object, nothing else.";
 
