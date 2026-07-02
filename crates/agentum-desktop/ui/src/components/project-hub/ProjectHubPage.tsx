@@ -10,9 +10,12 @@ import React, { lazy, Suspense, useEffect, useMemo } from 'react'
 import { ChevronLeft } from 'lucide-react'
 
 import { useAppStore } from '@/store'
+import type { AppState } from '@/store/types'
 import { useActiveRepo, useWorktreesForRepo } from '@/store/selectors'
 import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 import { cn } from '@/lib/utils'
+import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { ProjectSessionsList } from './ProjectSessionsList'
 
@@ -23,6 +26,17 @@ const WikiPage = lazy(() => import('@/components/wiki/WikiPage'))
 const TaskPage = lazy(() => import('@/components/TaskPage'))
 
 type HubTab = 'chat' | 'wiki' | 'tasks' | 'sessions'
+
+// The GitHub work-items cache key the Board reads on mount — the exact recipe
+// openTaskPage uses for its warm-up prefetch (resume-state custom query wins,
+// else the resume/default preset). Reading the same key means the hub's Tasks
+// badge always counts what the Tasks tab will actually show.
+function boardWorkItemsQuery(s: AppState): string {
+  const resume = s.taskResumeState
+  return resume?.githubItemsPreset === null
+    ? (resume.githubItemsQuery ?? '').trim()
+    : getTaskPresetQuery(resume?.githubItemsPreset ?? s.settings?.defaultTaskViewPreset ?? 'all')
+}
 
 const TABS: Array<{ id: HubTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
@@ -52,6 +66,25 @@ export default function ProjectHubPage(): React.JSX.Element {
       taskPageData: { ...s.taskPageData, preselectedRepoId: repo.id }
     }))
   }, [repo, tab, taskDataSeeded])
+
+  // Tasks-tab badge (ADE prototype "Tasks <count>"): open-item count from the
+  // work-items cache. Null (no badge) until the key is warm — the prefetch
+  // below usually makes it so by the time the header paints.
+  const taskCount = useAppStore((s) => {
+    if (!repo || !isGitRepoKind(repo)) return null
+    return (
+      s.getCachedWorkItems(repo.id, PER_REPO_FETCH_LIMIT, boardWorkItemsQuery(s))?.length ?? null
+    )
+  })
+  useEffect(() => {
+    if (!repo?.path || !isGitRepoKind(repo)) return
+    const s = useAppStore.getState()
+    // GitHub only — mirroring the rail's prefetch gate; for Linear/GitLab
+    // defaults the badge simply stays absent rather than firing gh for data
+    // the user's Tasks tab doesn't lead with.
+    if ((s.settings?.defaultTaskSource ?? 'github') !== 'github') return
+    s.prefetchWorkItems(repo.id, repo.path, PER_REPO_FETCH_LIMIT, boardWorkItemsQuery(s))
+  }, [repo])
 
   const worktrees = useWorktreesForRepo(repo?.id ?? null)
   const visibleWorktrees = useMemo(() => worktrees.filter((w) => !w.isArchived), [worktrees])
@@ -118,6 +151,11 @@ export default function ProjectHubPage(): React.JSX.Element {
                 )}
               >
                 {label}
+                {id === 'tasks' && taskCount != null ? (
+                  <span className="rounded-full bg-foreground/10 px-1.5 py-px font-mono text-[10px] leading-normal">
+                    {taskCount}
+                  </span>
+                ) : null}
                 {id === 'sessions' ? (
                   <span
                     className={cn(
