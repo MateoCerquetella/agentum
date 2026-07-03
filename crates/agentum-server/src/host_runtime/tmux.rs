@@ -465,18 +465,28 @@ pub fn spawn_remote_input_writer(host: &Host, target: &str) -> Result<tokio::pro
     Ok(cmd.spawn()?)
 }
 
-/// Encode raw keystroke bytes as one space-separated lowercase-hex line
-/// (newline-terminated) for the [`spawn_remote_input_writer`] remote loop.
-pub fn encode_input_hex_line(bytes: &[u8]) -> Vec<u8> {
-    let mut line = Vec::with_capacity(bytes.len() * 3 + 1);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 {
-            line.push(b' ');
+/// Encode raw keystroke bytes as space-separated lowercase-hex lines
+/// (newline-terminated) for the [`spawn_remote_input_writer`] remote loop,
+/// split at 4 KiB of input per line.
+///
+/// The split is load-bearing: each line becomes ONE remote `tmux send-keys`,
+/// and tmux rejects a command whose marshalled form exceeds its ~16 KB
+/// client→server message cap — an error the remote loop deliberately
+/// swallows. A long paste encoded as a single line therefore vanished
+/// silently. 4 KiB of bytes ≈ 12 KiB of hex args, the same per-exec bound
+/// [`send_bytes`] uses.
+pub fn encode_input_hex_lines(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() * 3 + 1);
+    for chunk in bytes.chunks(4096) {
+        for (i, b) in chunk.iter().enumerate() {
+            if i > 0 {
+                out.push(b' ');
+            }
+            out.extend_from_slice(format!("{b:02x}").as_bytes());
         }
-        line.extend_from_slice(format!("{b:02x}").as_bytes());
+        out.push(b'\n');
     }
-    line.push(b'\n');
-    line
+    out
 }
 
 /// Disarm `pipe-pane` on a pane (a bare `tmux pipe-pane` closes the pipe).

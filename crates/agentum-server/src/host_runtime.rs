@@ -582,13 +582,36 @@ mod tests {
     }
 
     #[test]
-    fn encode_input_hex_line_is_space_separated_and_newline_terminated() {
+    fn encode_input_hex_lines_is_space_separated_and_newline_terminated() {
         // "hi" → "68 69\n"; the remote `send-keys -H 68 69` reproduces the bytes.
-        assert_eq!(encode_input_hex_line(b"hi"), b"68 69\n");
+        assert_eq!(encode_input_hex_lines(b"hi"), b"68 69\n");
         // Control bytes (e.g. CR, ESC) encode the same way — raw, lossless.
-        assert_eq!(encode_input_hex_line(b"\r"), b"0d\n");
-        assert_eq!(encode_input_hex_line(&[0x1b, 0x5b, 0x41]), b"1b 5b 41\n");
-        assert_eq!(encode_input_hex_line(b""), b"\n");
+        assert_eq!(encode_input_hex_lines(b"\r"), b"0d\n");
+        assert_eq!(encode_input_hex_lines(&[0x1b, 0x5b, 0x41]), b"1b 5b 41\n");
+        // Nothing to type → nothing written (no no-op remote send-keys).
+        assert_eq!(encode_input_hex_lines(b""), b"");
+    }
+
+    #[test]
+    fn encode_input_hex_lines_splits_long_pastes_at_4k() {
+        // A paste bigger than 4 KiB must span multiple lines: one line is one
+        // remote `tmux send-keys`, and an oversized command trips tmux's
+        // ~16 KB message cap — swallowed remotely, i.e. a silently lost paste.
+        let paste = vec![b'a'; 4096 + 3];
+        let out = encode_input_hex_lines(&paste);
+        let lines: Vec<&[u8]> = out.split(|b| *b == b'\n').collect();
+        // split() yields a trailing empty slice after the final newline.
+        assert_eq!(lines.len(), 3, "expected 2 lines: {}", lines.len() - 1);
+        assert_eq!(lines[0].len(), 4096 * 3 - 1); // "61 61 … 61"
+        assert_eq!(lines[1], b"61 61 61");
+        assert_eq!(lines[2], b"");
+        // Lossless: decoding every hex pair reproduces the paste.
+        let decoded: Vec<u8> = out
+            .split(|b| *b == b'\n' || *b == b' ')
+            .filter(|s| !s.is_empty())
+            .map(|s| u8::from_str_radix(std::str::from_utf8(s).unwrap(), 16).unwrap())
+            .collect();
+        assert_eq!(decoded, paste);
     }
 
     #[test]
