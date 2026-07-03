@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import NewWorkspaceComposerCard from '@/components/NewWorkspaceComposerCard'
+import NewWorkspaceGoalStep from '@/components/NewWorkspaceGoalStep'
 import AgentSettingsDialog from '@/components/agent/AgentSettingsDialog'
 import { useComposerState } from '@/hooks/useComposerState'
 import {
@@ -12,6 +13,13 @@ import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { shouldAllowComposerEnterSubmitTarget } from '@/lib/new-workspace-enter-guard'
 import { isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
 import { initialStartGatedRunProp } from '@/lib/composer-modal-props'
+import {
+  deriveGoalIssueDraft,
+  deriveWorkspaceGoalSeed,
+  initialComposerPhase,
+  type ComposerModalPhase,
+  type WorkspaceGoalSeed
+} from '@/lib/workspace-goal-step'
 import type {
   TuiAgent,
   WorkspaceCreateTelemetrySource,
@@ -73,6 +81,33 @@ function ComposerModalBody({
   onClose: () => void
   onOpenChange: (open: boolean) => void
 }): React.JSX.Element {
+  const repos = useAppStore((s) => s.repos)
+  // Mirror the composer's own eligibility filter (`useComposerState` uses the
+  // same `Boolean(repo.path)`), so the goal step's workdir picker offers exactly
+  // the repos the composer would.
+  const eligibleRepos = useMemo(() => repos.filter((repo) => Boolean(repo.path)), [repos])
+
+  // Spec 008 F3 (AC 9): the goal step is the DEFAULT first screen for a plain
+  // create-workspace open; an opinionated open (Tasks-page gated-run hop, a
+  // create-from item, a prefilled name, a pinned base branch) skips straight to
+  // the mechanics-first composer (D3 — the composer stays reachable, and F1's
+  // Tasks hop is byte-identical).
+  const [phase, setPhase] = useState<ComposerModalPhase>(() => initialComposerPhase(modalData))
+  const [seed, setSeed] = useState<WorkspaceGoalSeed | null>(null)
+  const [seedRepoId, setSeedRepoId] = useState<string | undefined>(undefined)
+
+  const handleContinue = useCallback((goal: string, repoId: string) => {
+    setSeed(deriveWorkspaceGoalSeed(goal))
+    setSeedRepoId(repoId ? repoId : undefined)
+    setPhase('details')
+  }, [])
+  const handleSkip = useCallback(() => {
+    // "Skip to details" (D3): no goal framing — byte-identical to today.
+    setSeed(null)
+    setSeedRepoId(undefined)
+    setPhase('details')
+  }, [])
+
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
@@ -80,17 +115,39 @@ function ComposerModalBody({
         onOpenAutoFocus={(event) => {
           // Why: Radix's FocusScope fires this once the dialog has mounted.
           // preventDefault stops it from focusing whatever first-tabbable it
-          // picks (close button), and we instead focus the repo picker so the
-          // keyboard flow starts at the top of the unified create form.
+          // picks (close button). On the goal step we focus the goal box (the
+          // first thing to capture, AC 9); on the details step, the repo picker
+          // so the keyboard flow starts at the top of the create form.
           event.preventDefault()
           const content = event.currentTarget as HTMLElement
+          const goalInput = content.querySelector<HTMLElement>('#workspace-goal')
+          if (goalInput) {
+            goalInput.focus({ preventScroll: true })
+            return
+          }
           const trigger = content.querySelector<HTMLElement>(
             '[data-repo-combobox-root="true"][role="combobox"]'
           )
           trigger?.focus({ preventScroll: true })
         }}
       >
-        <QuickTabBody modalData={modalData} onClose={onClose} active />
+        {phase === 'goal' ? (
+          <NewWorkspaceGoalStep
+            repos={eligibleRepos}
+            initialRepoId={modalData.initialRepoId}
+            primaryLabel="Create Workspace"
+            onContinue={handleContinue}
+            onSkip={handleSkip}
+          />
+        ) : (
+          <QuickTabBody
+            modalData={modalData}
+            onClose={onClose}
+            active
+            seed={seed}
+            seedRepoId={seedRepoId}
+          />
+        )}
       </DialogContent>
     </Dialog>
   )
@@ -99,11 +156,18 @@ function ComposerModalBody({
 function QuickTabBody({
   modalData,
   onClose,
-  active
+  active,
+  seed,
+  seedRepoId
 }: {
   modalData: ComposerModalData
   onClose: () => void
   active: boolean
+  /** Spec 008 F3: the goal-step seed (name/prompt from the goal) when the user
+   *  came via "Continue"; null/undefined when they opened straight to details
+   *  or chose "Skip to details" (D3 — byte-identical to today). */
+  seed?: WorkspaceGoalSeed | null
+  seedRepoId?: string
 }): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const {
@@ -114,12 +178,17 @@ function QuickTabBody({
     submitQuick,
     createDisabled
   } = useComposerState({
-    initialName: modalData.prefilledName ?? '',
+    // Spec 008 F3 (AC 9): seed the workspace name from the goal when present;
+    // otherwise the prefilled name (Tasks/palette) or blank.
+    initialName: seed ? seed.name : (modalData.prefilledName ?? ''),
     // Why: the modal is quick-create only now, so prompt-prefill state is
-    // intentionally ignored even if older callers still send it.
-    initialPrompt: '',
+    // intentionally ignored on the mechanics-first path even if older callers
+    // still send it. On the goal-first path the goal seeds the prompt.
+    initialPrompt: seed ? seed.prompt : '',
     initialLinkedWorkItem: modalData.linkedWorkItem ?? null,
-    initialRepoId: modalData.initialRepoId,
+    // Spec 008 F3 (D9): the goal step's chosen workdir target wins as the
+    // composer's initial repo; fall back to any modal-provided repo.
+    initialRepoId: seedRepoId ?? modalData.initialRepoId,
     initialWorkspaceStatus: modalData.initialWorkspaceStatus,
     // Spec 008 F1 #1: the Tasks-page pre-armed hop arms the toggle via
     // `modalData.startGatedRun` → `initialStartGatedRun` (pure, unit-pinned).
@@ -131,6 +200,27 @@ function QuickTabBody({
     enableIssueAutomation: false,
     createGateMode: 'quick'
   })
+  // Spec 008 F3 (AC 11): when arriving from the goal step, pre-fill the
+  // composer's EXISTING create-issue form (title + body) from the goal via its
+  // public callbacks — reuse, not rebuild. This lets the tracker step (c) →
+  // scaffold (b) → gated run reach `start_work`'s precondition set without
+  // retyping. One-shot; the form stays closed and fully skippable (AC 10), so
+  // "Skip to details" is untouched (seed is null there).
+  const { onCreateIssueTitleChange, onCreateIssueBodyChange } = cardProps
+  const seededIssueRef = useRef(false)
+  useEffect(() => {
+    if (!seed || seededIssueRef.current) {
+      return
+    }
+    seededIssueRef.current = true
+    const draft = deriveGoalIssueDraft(seed.goal)
+    if (draft.title) {
+      onCreateIssueTitleChange(draft.title)
+    }
+    if (draft.body) {
+      onCreateIssueBodyChange(draft.body)
+    }
+  }, [seed, onCreateIssueTitleChange, onCreateIssueBodyChange])
   // Why: the composer's built-in `onOpenAgentSettings` handler navigates to
   // the settings page and closes the modal. For the quick-create flow we want
   // a less disruptive affordance — a nested dialog layered over the composer

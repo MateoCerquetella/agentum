@@ -470,3 +470,173 @@ both buttons render + route to distinct behaviors (Fast = one prompt; Complex =
 a five-pass interview that reflects the previous answer back); Complex converges
 to the same Preview-issues draft as Fast; no-creds surfaces `NO_CREDS_MSG` visibly
 on Complex's first turn. This is the basis for the F3 iteration.
+
+---
+
+# F3 — goal-first workspace (Create New Workspace, goal-first). AC 9–11.
+
+- **Feature:** **F3** — the create-workspace entry becomes goal-first, fronting
+  the existing composer with a thin goal step. AC 9–11. **Last slice — the spec
+  is code-complete after this.**
+- **Role:** Developer (sdd-developer)
+- **Date:** 2026-07-03
+- **Base:** worktree `finish-the-loop` (tip `3b6dbd33`, F1 + F2 already landed)
+
+> **Scope guardrail:** this iteration implements **F3 only**. F1 and F2 were
+> already landed (above) and **NONE of their surfaces were touched**: no
+> `drive.rs`/`harness.rs`/`task_sink.rs`/`git_fs.rs`, no `chat.rs`/`socratic-intake.ts`/
+> `chat-*.ts`/ChatPage buttons, no `useComposerState` internals, no
+> `harness-client.ts`. Built to architecture §D (D-C thin goal-step component;
+> D3 composer reused via props + reachable via "Skip to details"; D9 goal +
+> workdir the only required inputs).
+
+## The seam (architecture §D): a thin `NewWorkspaceGoalStep` fronting the composer
+
+The goal step owns only its local goal/workdir state and hands captured values up
+via callbacks; `useComposerState` stays the untouched creation engine, revealed
+after "Continue" (seeded) or "Skip to details" (no goal framing). All the pure
+decisions live in a DOM-free lib so they are unit-tested without jsdom.
+
+## Pure logic — `crates/agentum-desktop/ui/src/lib/workspace-goal-step.ts` (NEW)
+
+The three gradeable behaviors, all pure (no React/DOM/xterm), so they run without
+a jsdom the UI package doesn't ship:
+- **`slugifyGoalName(goal, maxWords=6)`** + **`deriveWorkspaceGoalSeed(goal) →
+  {goal,name,prompt}`** — the goal → composer-seed mapping (**AC 9** "seed
+  name/prompt from the goal"): trims the goal, seeds a short kebab name for the
+  workspace-name field, keeps the goal verbatim as the prompt.
+- **`deriveGoalIssueDraft(goal) → {title,body}`** — the tracker-step pre-fill
+  (**AC 11**): first line → issue title (ellipsis-truncated at 72), whole goal →
+  body.
+- **`isGoalStepReady({goal,repoId})`** + **`firstGoalStepBlocker(...)`** — the
+  required-vs-optional predicate (**AC 10**, D9): goal **and** a workdir target
+  (`repoId`) are the only required inputs; the blocker is never silent (names the
+  first unmet input, goal before workdir).
+- **`OPTIONAL_WORKSPACE_STEPS`** — the three SKIPPABLE steps as data (**AC 10**):
+  `worktree`/`scaffold`/`tracker`, each `skippable:true`, each naming the existing
+  primitive it reuses (`createWorktree` / `maybeScaffoldSpecFromIssue` /
+  `createGithubIssue`). Reuse, don't rebuild.
+- **`DEFAULT_COMPOSER_MODAL_PHASE='goal'`**, **`shouldStartAtGoalStep(modalData)`**,
+  **`initialComposerPhase(modalData)`**, **`revealDetails(action) →
+  {phase:'details',seed}`** — the default-first-screen + "Skip to details" reveal
+  decision (**AC 9** / D3), pure/unit-testable state.
+
+**Tests (`workspace-goal-step.test.ts`, NEW, 15):** slug lowercasing/punctuation/
+emoji-drop/clamp; the goal→seed mapping (trim + verbatim prompt + empty-slug
+edge); the issue-draft title/body + truncation; goal+workdir required and the
+first-blocker order (never silent); exactly three skippable steps naming their
+primitives; the default goal-first phase + the opinionated-open skip (protects
+F1's Tasks hop) + Continue-seeds / Skip-null reveal.
+
+## Component — `NewWorkspaceGoalStep.tsx` (NEW)
+
+A thin default-first screen: a **goal textarea** (focused on open — AC 9's "first
+step"; a bare Enter keeps its newline, Cmd/Ctrl+Enter advances), the **workdir
+target** via the composer's existing **`RepoCombobox`** (reused, fed the store's
+eligible repos), a visible "Next, optionally:" list of the three skippable steps
+(so goal-first surfaces the pipeline), and two actions — **Continue** (disabled
+until `isGoalStepReady`, names the blocker otherwise) and **Skip to details**
+(D3). It imports zero composer internals; it only calls `onContinue(goal,repoId)`
+/ `onSkip()`.
+
+## Modal wiring — `NewWorkspaceComposerModal.tsx` (EDITED, F1 wiring kept)
+
+- **`ComposerModalBody`** now holds `phase`/`seed`/`seedRepoId` state (phase lazily
+  initialized from `initialComposerPhase(modalData)`), renders
+  `NewWorkspaceGoalStep` on the `goal` phase and `QuickTabBody` on `details`, and
+  routes Continue/Skip through the pure `deriveWorkspaceGoalSeed` / reveal. The
+  `onOpenAutoFocus` handler now prefers `#workspace-goal` (else the repo picker,
+  as before).
+- **`QuickTabBody`** gains optional `seed`/`seedRepoId` props: `initialName` ⇐
+  `seed.name` else `modalData.prefilledName`; `initialPrompt` ⇐ `seed.prompt` else
+  `''`; `initialRepoId` ⇐ `seedRepoId ?? modalData.initialRepoId`. **F1's
+  `...initialStartGatedRunProp(modalData)` spread is untouched** (goal-path opens
+  carry no `startGatedRun`, so it stays `{}` — the user arms the toggle after
+  filing an issue, exactly as before). A one-shot effect pre-fills the composer's
+  **existing** create-issue form (title+body) from the goal via the public
+  `onCreateIssueTitleChange`/`onCreateIssueBodyChange` callbacks (**AC 11**;
+  seed-gated so "Skip to details" is byte-identical).
+
+## AC coverage (what's wired-and-unit-tested vs qa.sh/human)
+
+- **AC 9** (goal input is the first step; no repo/branch required before the goal):
+  **wired + unit-tested.** Goal textarea is the default first screen and focused
+  on open; `initialComposerPhase({})==='goal'`; the seed mapping + reveal decision
+  are pinned. Typing the goal is never gated by the repo field.
+- **AC 10** (worktree/scaffold/tracker optional & skippable; goal+workdir the only
+  required inputs): **wired + unit-tested.** `isGoalStepReady`/`firstGoalStepBlocker`
+  + `OPTIONAL_WORKSPACE_STEPS` pin it; "Skip to details" reveals the composer with
+  no seed → an existing folder/branch as-is (worktree-creation skipped). None
+  blocks creation.
+- **AC 11** (all-accepted → can run criteria 1–8 without further setup): **the
+  wiring + the pure seed/draft logic are delivered and unit-tested** — the goal
+  seeds name + workdir + the create-issue form, and the composer's existing
+  create-issue → scaffold → "Start gated run" toggles then reach `start_work`'s
+  precondition set (worktree + linked github.com issue + scaffolded spec + backlog)
+  with no retyping. **The full run-it-end-to-end (file issue → scaffold → arm gated
+  run → green gate) is a qa.sh / human browser check**, not something the
+  autonomous gate exercises (it needs the installed app + a real repo).
+
+## Build + test results (observed)
+
+Cargo lives at `~/.cargo/bin`; no Rust was touched, so no cargo run was needed.
+
+| Gate | Command | Result |
+|---|---|---|
+| UI build | `NODE_OPTIONS=--max-old-space-size=3072 npm run build --prefix crates/agentum-desktop/ui` | **built in ~1m19s (vite + tsc typecheck green).** |
+| F3 vitest (new) | `npx vitest run src/lib/workspace-goal-step.test.ts` | **15 passed / 0 failed.** |
+| F3+F1+F2 pure suites | `npx vitest run src/lib/{workspace-goal-step,socratic-intake,start-gated-run-precondition,composer-modal-props,issue-side-effect-gate}.test.ts` | **34 passed / 0 failed (5 files)** — F1 (`start-gated-run-precondition` 4, `composer-modal-props` 2, `issue-side-effect-gate`) + F2 (`socratic-intake`) **stayed green**. |
+| UI vitest (full, diligence) | `npx vitest run` | **5761 passed / 139 failed (43 files).** The 139 failures are the **identical pre-existing baseline** (proven on `51705bf2`/`3b6dbd33`); F3 added **+15 passing** (5746 → 5761), **0 new failures**. Only `workspace-goal-step.test.ts` imports my modules and it passes; no existing test renders the modal/goal step (no jsdom), so there is no regression surface. |
+
+## Deviations from architecture §D (with rationale)
+
+1. **Opinionated-open gate (`shouldStartAtGoalStep`/`initialComposerPhase`).** §D
+   makes the goal step the "default first screen" but didn't spell out when it is
+   NOT the default. I gate it so an opinionated open — F1's Tasks-page gated-run
+   hop (`startGatedRun`), a create-from linked item, a prefilled name, or a pinned
+   base branch — skips straight to `QuickTabBody` (details). This keeps F1's Tasks
+   hop **byte-identical**, honors D3 (the mechanics-first composer stays reachable),
+   and keeps goal-first the default only for the *plain* create entry (AC 9). The
+   gate is a pure, unit-tested predicate.
+2. **"Pre-offer the three optional steps" = a visible list + a seeded create-issue
+   form, not auto-run steps.** §D's diagram says Continue should "pre-offer the
+   three optional steps." I surface them two ways: (a) a visible "Next, optionally:"
+   list in the goal step (from `OPTIONAL_WORKSPACE_STEPS`), and (b) on Continue,
+   pre-fill the composer's *existing* create-issue form from the goal so the tracker
+   step is one-click. I deliberately did **not** auto-open/auto-run the form — the
+   form stays closed and fully skippable (AC 10), the pre-fill is invisible until
+   the user opens the existing affordance. This is the low-risk "wiring" for AC 11;
+   the run-it-through is the qa.sh/human check.
+3. **The goal step's workdir picker reuses `RepoCombobox` fed the store's eligible
+   repos, not the composer's full host-scoping.** §D says "reuse the composer's
+   existing repo picker." I reuse the exact `RepoCombobox` component with the same
+   `Boolean(repo.path)` eligibility filter `useComposerState` uses, rather than
+   instantiating `useComposerState` twice (which D-C/D3 forbid touching). Host
+   scoping remains fully available in the revealed composer; the goal step only
+   captures an initial `repoId`.
+
+## Protected invariants (confirmed untouched)
+
+- **`useComposerState` internals** — reused via props only; **never edited** (D3).
+  The composer stays the creation engine and stays reachable ("Skip to details").
+- **F1's `initialStartGatedRunProp` wiring** in `QuickTabBody` — intact; the
+  goal-first path carries no `startGatedRun`, so it resolves to `{}` as before.
+- **F1 surfaces** (`drive.rs`/`harness.rs`/`task_sink.rs`/`git_fs.rs`,
+  `useComposerState.ts` internals, `harness-client.ts`) and **F2 surfaces**
+  (`chat.rs`/`socratic-intake.ts`/`chat-*.ts`/ChatPage buttons) — **untouched.**
+- **Reuse, don't rebuild** — `createWorktree` / `maybeScaffoldSpecFromIssue` /
+  `createGithubIssue` and `RepoCombobox` are the existing seams the goal step
+  fronts; **no new server surface** (AC 11 is a re-sequencing over existing
+  primitives).
+
+## Handoff (F3)
+
+Ready for **sdd-tester / sdd-reviewer**. The autonomous gate (UI build + tsc
+typecheck + the new + F1 + F2 vitest suites) is green above; the full-suite
+139-failure baseline is pre-existing (proven against `51705bf2`/`3b6dbd33`), and
+F3 added +15 passing with 0 new failures. **This completes spec 008's
+implementation** (F1 + F2 + F3 all landed). QA (`qa.sh`, browser, human/staging):
+goal-first wizard completes with **all optional steps skipped** (workspace opens
+on an existing folder) AND with **all accepted** (worktree + issue + spec present);
+an all-accepted workspace can immediately run criteria 1–8 — the "Start gated run"
+toggle armable with zero further setup (AC 11).

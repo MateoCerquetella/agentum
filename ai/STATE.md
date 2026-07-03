@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 008-finish-the-loop
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **F1+F2 CODE-COMPLETE + GREEN** 2026-07-03. F1 `51705bf2` (never-silent run path). F2 (chat Fast/Complex intake) green: server 552/0/5 (F1's 546 held), vitest 10/0 new, fmt+clippy clean, vite green; two buttons + staged 5-pass Socratic, Fast byte-identical (pinned), converges on unchanged compose_issue_body. **Phase STAYS developer** — **F3 (goal-first workspace) is the LAST slice**; advance to tester once F3 is code-complete. ⚠️ F1 Step3 sacred change still needs the 2 live tests green (HUMAN pre-release). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **CODE-COMPLETE: F1+F2+F3 ALL GREEN** 2026-07-03. F1 `51705bf2` never-silent run path; F2 `3b6dbd33` chat Fast/Complex; F3 (about to commit) goal-first workspace: UI build green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3 pure suites 34/0. Full vitest 139-fail = PROVEN pre-existing baseline (0 new, +34 passing). Handoff `03-developer-to-tester.md`. ⚠️ Tester notes: (1) F1 Step3 sacred change = 2 live tests green is HUMAN pre-release; (2) AC 11 full end-to-end + all browser behaviors = qa.sh/human. 007 RELEASED v0.55.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,18 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Analyst | **008-finish-the-loop drafted + PM-gated** (Socratic
-  five-pass interview with Mateo). Problem: the core loop breaks at the last
-  step — Start gated run on a GitHub issue opens no session / inert agent,
-  silently. Locked: WHO = solo dogfooder (3 pain moments); WHAT = hands-off
-  issue→green + Chat gets ⚡Fast/🧠Complex intake buttons (Complex = staged
-  five-pass Socratic, one pass per turn — today's chat.rs:335 single-prompt
-  "short Socratic" is NOT this) + goal-first workspace with optional steps;
-  WHY = the loop IS the product + blocks demos; DONE = full pipeline demo in
-  the INSTALLED release app (all 12 ACs); RISK#1 = silent regression → new
-  live test for the issue→start-work→prompt-lands leg. Shape: one spec,
-  slices F1→F3 (house style). Gate note: "one slice" checked as one outcome
-  in 3 gateable increments, per Mateo's explicit shape decision. Phase → pm.
 - 2026-07-03 | PM | **008 PM-gated → architect** (`spec.md`, handoff
   `01-pm-to-architect.md`). All 9 gate items PASS after edits; every code
   citation spot-verified. Locked D1–D9: interview state client-side/server
@@ -133,3 +121,16 @@
   (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
   untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
   surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.
+- 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
+  (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
+  `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
+  (deriveWorkspaceGoalSeed/isGoalStepReady/firstGoalStepBlocker/
+  OPTIONAL_WORKSPACE_STEPS/shouldStartAtGoalStep/revealDetails) + thin
+  `NewWorkspaceGoalStep.tsx` (goal textarea + reused RepoCombobox workdir) +
+  modal renders it as default first screen, "Skip to details" → today's composer
+  (D3); goal+workdir required, worktree/scaffold/tracker skippable (D9);
+  `useComposerState` NEVER edited (props only), F1's initialStartGatedRunProp
+  intact. Gates: vite+tsc green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3
+  pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
+  AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
+  code-complete → tester.**
