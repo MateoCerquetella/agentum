@@ -2,6 +2,7 @@
 // (per-machine, no backend/migration) — the same client-side persistence pattern
 // the planner-tool pick and connection profiles already use. One key holds the
 // whole list; chat transcripts are small text, so this stays well within quota.
+import type { IntakeState } from '../lib/socratic-intake'
 import type { ChatTurn } from './chat-client'
 
 const STORAGE_KEY = 'agentum.chat.conversations.v1'
@@ -40,6 +41,11 @@ export type Conversation = {
   createdAt: number
   updatedAt: number
   repoId?: string
+  /** Spec 008 F2: the Fast/Complex intake this thread runs, with the socratic
+   *  pass the NEXT turn will use. Persisted here (D1: no new store table) so a
+   *  reload resumes a Complex interview at the right pass; absent on pre-008
+   *  threads ⇒ Fast (see `normalizeIntake`). */
+  intake?: IntakeState
 }
 
 /** A unique-enough id without a uuid dependency (time + random suffix). */

@@ -103,6 +103,19 @@ struct ChatMessage {
     content: String,
 }
 
+/// Which intake experience the Chat composer picked for THIS turn (spec 008 F2).
+/// Absent ⇒ [`IntakeMode::Fast`], so old clients and the Fast button stay
+/// byte-identical on the wire. `snake_case` ⇒ the wire values are `"fast"` /
+/// `"socratic"`.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+enum IntakeMode {
+    /// Today's single-prompt interviewer — one system prompt, no staging.
+    Fast,
+    /// The staged five-pass Socratic interview (WHO → WHAT → WHY → done → risks).
+    Socratic,
+}
+
 #[derive(Deserialize)]
 struct ChatRequest {
     /// Full turn history, oldest first (user/assistant only — the server owns
@@ -120,6 +133,17 @@ struct ChatRequest {
     /// to the client as `thinking` deltas before the answer.
     #[serde(default)]
     thinking: Option<bool>,
+    /// Spec 008 F2: which intake this turn uses — `"fast"` (default, today's
+    /// single-prompt interviewer) or `"socratic"` (the staged five-pass
+    /// interview). Absent ⇒ Fast, so the Fast path and old clients are unchanged.
+    #[serde(default)]
+    mode: Option<IntakeMode>,
+    /// Spec 008 F2: the Socratic pass (1..=5), clamped server-side. Meaningful
+    /// only when `mode == socratic`; the CLIENT owns advancement (one pass per
+    /// user turn) so the server stays a pure `(mode, stage) → prompt` function
+    /// (D-B/D1) with NO stage state of its own.
+    #[serde(default)]
+    stage: Option<u8>,
 }
 
 #[derive(Serialize)]
@@ -274,17 +298,19 @@ pub(crate) fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// The interviewer instructions (the second `system` block). Kept separate from
-/// the Claude Code identity block so the identity stays byte-exact. When a
-/// `repo_context` snapshot is present the interviewer is told to GROUND
-/// everything in it (agentum's philosophy: agents work with repo context); when
-/// absent (no local workspace) it falls back to honest blind Q&A.
-fn interviewer_instructions(
+/// The grounding blocks BOTH intake modes prepend (spec 008 F2): the
+/// slug/workdir context line, the repo+harness snapshot block with its matching
+/// access rule, and the semantically-retrieved wiki block. Extracted VERBATIM
+/// from `interviewer_instructions` so Fast and every Socratic pass ground
+/// identically — the block strings are byte-for-byte the same in both, which is
+/// what keeps the Fast byte-identical pin (AC 6) honest while Socratic reuses the
+/// same context. Returns `(ctx, repo_block, access_rule, wiki_block)`.
+fn intake_grounding_blocks(
     workdir: Option<&str>,
     repo_slug: Option<&str>,
     repo_context: Option<&str>,
     wiki_context: Option<&str>,
-) -> String {
+) -> (String, String, &'static str, String) {
     let mut ctx = String::new();
     if let Some(slug) = repo_slug {
         ctx.push_str(&format!("\nThe user's GitHub repo is `{slug}`."));
@@ -326,6 +352,27 @@ retrieved for the user's latest message — prefer these as ground truth about t
         None => String::new(),
     };
 
+    (ctx, repo_block, access_rule, wiki_block)
+}
+
+/// The interviewer instructions (the second `system` block). Kept separate from
+/// the Claude Code identity block so the identity stays byte-exact. When a
+/// `repo_context` snapshot is present the interviewer is told to GROUND
+/// everything in it (agentum's philosophy: agents work with repo context); when
+/// absent (no local workspace) it falls back to honest blind Q&A.
+///
+/// Spec 008 F2: this is the **Fast** intake prompt, kept byte-identical (the
+/// grounding assembly moved into [`intake_grounding_blocks`] with no change to
+/// the emitted string — pinned by `build_intake_instructions_fast_*`).
+fn interviewer_instructions(
+    workdir: Option<&str>,
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+    wiki_context: Option<&str>,
+) -> String {
+    let (ctx, repo_block, access_rule, wiki_block) =
+        intake_grounding_blocks(workdir, repo_slug, repo_context, wiki_context);
+
     // "Preview issues" below is the UI button label (ChatPage.tsx composer
     // strip) — if that button is renamed again, rename it here too, or the
     // model directs users at a button that doesn't exist.
@@ -352,6 +399,117 @@ button opens a review of the drafted issues, and confirming there files them dir
 When the user is ready, point them at that button — never tell them to \"confirm with \
 the system\" or that someone else will take it from there."
     )
+}
+
+/// Route the chat intake to the right system prompt (spec 008 F2). `Fast` is
+/// [`interviewer_instructions`] VERBATIM (the byte-identical pin, AC 6 — the
+/// router only delegates); `Socratic` is the per-stage single-topic pass. Both
+/// share the same grounding blocks and both converge on `compose_issue_body` at
+/// "Preview issues" (D8) — the mode changes ONLY the questioning, never the
+/// credential gate (which runs upstream) nor the draft path.
+fn build_intake_instructions(
+    mode: IntakeMode,
+    stage: u8,
+    workdir: Option<&str>,
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+    wiki_context: Option<&str>,
+) -> String {
+    match mode {
+        IntakeMode::Fast => {
+            interviewer_instructions(workdir, repo_slug, repo_context, wiki_context)
+        }
+        IntakeMode::Socratic => {
+            socratic_stage_instructions(stage, workdir, repo_slug, repo_context, wiki_context)
+        }
+    }
+}
+
+/// One Socratic pass (spec 008 F2). Reuses the SAME grounding blocks as
+/// [`interviewer_instructions`] (context line / repo snapshot / access rule /
+/// wiki) but swaps the "job/Rules" body for a SINGLE-topic pass: the model
+/// (a) reflects the user's previous answer back in one sentence, then (b) asks
+/// ONLY this stage's question. Stage 5 stops asking and points the user at
+/// "Preview issues" (the same convergence Fast uses). The server owns NO stage
+/// state — this is a pure `(stage, grounding) → prompt` function; the CLIENT
+/// advances the stage one pass per turn (D-B/D1). `stage` is clamped defensively.
+fn socratic_stage_instructions(
+    stage: u8,
+    workdir: Option<&str>,
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+    wiki_context: Option<&str>,
+) -> String {
+    let (ctx, repo_block, access_rule, wiki_block) =
+        intake_grounding_blocks(workdir, repo_slug, repo_context, wiki_context);
+    let stage = stage.clamp(1, 5);
+    let pass = socratic_pass_body(stage);
+
+    // The frame + Rules are shared across passes; `pass` is the one thing this
+    // turn does. "Preview issues" (in pass 5) is the UI button label — keep it in
+    // sync with the ChatPage composer, same as the Fast prompt above.
+    format!(
+        "You are running inside agentum (a control plane for AI coding agents) as the \
+feature-intake interviewer on the Chat screen, running a STAGED Socratic interview — one \
+focused pass per turn, five passes total (WHO → WHAT → WHY → done-criteria → risks). This is \
+pass {stage} of 5.{ctx}{repo_block}{wiki_block}\n\n\
+Your job THIS TURN, and nothing else:\n\
+{pass}\n\n\
+Rules:\n\
+- Do EXACTLY this one pass. Ask ONE question (two only if tightly related), short and concrete \
+like a sharp staff engineer who knows this codebase — no filler, no \"great question!\".\n\
+- Never re-ask what the user — or the repo context — already answered. Do NOT jump ahead to a \
+later pass, and do NOT draft the task breakdown before the final pass.\n\
+{access_rule}"
+    )
+}
+
+/// The single-topic instruction for one Socratic pass (spec 008 F2). Each pass
+/// (except the first, which has nothing to reflect yet) begins by reflecting the
+/// previous answer back in one sentence, then asks only its own topic. The five:
+/// 1 WHO, 2 WHAT, 3 WHY, 4 done-criteria, 5 risks+scope (then converge on
+/// "Preview issues"). Pinned per-stage by unit test (AC 7). `stage` is already
+/// clamped to 1..=5 by the caller, so the `_` arm is pass 5.
+fn socratic_pass_body(stage: u8) -> &'static str {
+    match stage {
+        1 => {
+            "PASS 1 — WHO. This is the opening pass, so there is nothing to reflect back yet. \
+Open the interview: draw out WHO this feature is for (the specific persona / user) and the \
+concrete problem they hit today. Don't propose a solution yet."
+        }
+        2 => {
+            "PASS 2 — WHAT. First, in ONE sentence, reflect the user's previous answer back (the \
+WHO and their problem) so they know you heard it. Then ask about WHAT: the desired outcome or \
+behavior — what the feature actually does when it works."
+        }
+        3 => {
+            "PASS 3 — WHY. First, in ONE sentence, reflect the previous answer back (the desired \
+WHAT / outcome). Then ask about WHY it matters: the value, why now, and what breaks or stays \
+painful without it."
+        }
+        4 => {
+            "PASS 4 — DONE CRITERIA. First, in ONE sentence, reflect the previous answer back (the \
+WHY / value). Then draw out the acceptance criteria: how we'll know it's done, as concrete, \
+testable, checkbox-shaped statements."
+        }
+        _ => {
+            "PASS 5 — RISKS & SCOPE. First, in ONE sentence, reflect the previous answer back (the \
+acceptance criteria). Then draw out the risks and the scope boundaries / non-goals (what is \
+explicitly OUT). This is the FINAL pass: after the user answers, STOP asking questions and tell \
+them to click the \"Preview issues\" button below the chat to review and file the drafted issues."
+        }
+    }
+}
+
+/// The single credential gate BOTH intake handlers ([`chat`], [`chat_stream`])
+/// run FIRST — before any per-mode/stage prompt is built. Extracted so the spec
+/// 008 F2 invariant is unit-pinnable: Complex (socratic) rides the SAME gate as
+/// Fast (there is no separate Complex endpoint), so the loud both-paths
+/// [`NO_CREDS_MSG`] surfaces on Complex's first turn by construction — never a
+/// silent dead button. Pure: maps a resolved credential (`None` ⇒ the 400),
+/// independent of `{mode, stage}`.
+fn chat_auth_gate(auth: Option<Auth>) -> Result<Auth, ApiError> {
+    auth.ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))
 }
 
 /// Retrieve query-relevant AutoWiki excerpts (spec 003 RAG) for the latest user
@@ -389,13 +547,9 @@ async fn chat(
 
     // Auth: prefer an explicit ANTHROPIC_API_KEY (clean API billing, terms-safe);
     // else reuse the Claude Code OAuth token (user-authorized). Absent → loud,
-    // actionable error naming BOTH paths.
-    let auth = resolve_auth().ok_or_else(|| {
-        ApiError::BadRequest(
-            "No LLM credentials for chat: set ANTHROPIC_API_KEY, or sign in to Claude (run `claude` once) so the chat can use your login."
-                .into(),
-        )
-    })?;
+    // actionable error naming BOTH paths. Shared gate (spec 008 F2) so Fast and
+    // Complex surface the no-creds message identically, upstream of the mode.
+    let auth = chat_auth_gate(resolve_auth())?;
 
     let model = body
         .model
@@ -410,9 +564,15 @@ async fn chat(
         .map(|m| json!({ "role": m.role, "content": m.content }))
         .collect();
 
+    // Spec 008 F2: pick the intake prompt from the request's (mode, stage). Absent
+    // mode ⇒ Fast (byte-identical to today); the client owns stage advancement.
+    let mode = body.mode.unwrap_or(IntakeMode::Fast);
+    let stage = body.stage.unwrap_or(1);
     let repo_context = gather_repo_context(body.workdir.as_deref());
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
-    let instructions = interviewer_instructions(
+    let instructions = build_intake_instructions(
+        mode,
+        stage,
         body.workdir.as_deref(),
         body.repo_slug.as_deref(),
         repo_context.as_deref(),
@@ -489,7 +649,9 @@ async fn chat_stream(
             "chat: messages cannot be empty".into(),
         ));
     }
-    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
+    // Shared credential gate (spec 008 F2): Complex (socratic) rides the SAME gate
+    // as Fast, so NO_CREDS_MSG surfaces on Complex's first turn by construction.
+    let auth = chat_auth_gate(resolve_auth())?;
 
     let model = body
         .model
@@ -514,9 +676,15 @@ async fn chat_stream(
         ));
     }
 
+    // Spec 008 F2: (mode, stage) selects the intake prompt — Fast is byte-identical
+    // to today; Socratic runs the staged pass. The client owns stage advancement.
+    let mode = body.mode.unwrap_or(IntakeMode::Fast);
+    let stage = body.stage.unwrap_or(1);
     let repo_context = gather_repo_context(body.workdir.as_deref());
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
-    let instructions = interviewer_instructions(
+    let instructions = build_intake_instructions(
+        mode,
+        stage,
         body.workdir.as_deref(),
         body.repo_slug.as_deref(),
         repo_context.as_deref(),
@@ -2164,6 +2332,187 @@ mod tests {
             without.contains("no repo snapshot for this chat"),
             "blind access rule"
         );
+    }
+
+    // --- spec 008 F2: Fast / Complex intake modes ---
+
+    /// AC 6 — Fast MUST be byte-identical to today's single-prompt interviewer:
+    /// the router only delegates, and `stage` never leaks into Fast. Guards a
+    /// future refactor from folding Fast into the Socratic path (the pre-006
+    /// body-pin technique).
+    #[test]
+    fn build_intake_instructions_fast_equals_interviewer_verbatim() {
+        let wd = Some("/tmp/proj");
+        let slug = Some("o/r");
+        let repo = Some("## Repo guide (CLAUDE.md)\nThis project uses axum.");
+        let wiki = Some("### Watchdog\nTails panes and emits AgentCrashed.");
+        // Fast ignores stage — assert across the whole clamp range plus junk.
+        for stage in [0u8, 1, 3, 5, 9, 250] {
+            assert_eq!(
+                build_intake_instructions(IntakeMode::Fast, stage, wd, slug, repo, wiki),
+                interviewer_instructions(wd, slug, repo, wiki),
+                "Fast must ignore stage and equal interviewer_instructions verbatim"
+            );
+        }
+        // …and with no grounding at all (the honest-blind Fast prompt).
+        assert_eq!(
+            build_intake_instructions(IntakeMode::Fast, 1, None, None, None, None),
+            interviewer_instructions(None, None, None, None)
+        );
+    }
+
+    /// AC 7 — each Socratic pass covers exactly its one topic and (from pass 2 on)
+    /// instructs reflecting the previous answer back; only the FINAL pass points
+    /// the user at "Preview issues" (the convergence Fast shares).
+    #[test]
+    fn socratic_stage_prompts_cover_one_pass_each_and_converge_at_five() {
+        let p = |stage| socratic_stage_instructions(stage, Some("/p"), Some("o/r"), None, None);
+
+        let p1 = p(1);
+        assert!(p1.contains("PASS 1 — WHO"), "stage 1 is WHO: {p1}");
+        assert!(
+            p1.contains("nothing to reflect back yet"),
+            "stage 1 opens with nothing to reflect: {p1}"
+        );
+        assert!(
+            !p1.contains("Preview issues"),
+            "only pass 5 names Preview issues"
+        );
+
+        let p2 = p(2);
+        assert!(p2.contains("PASS 2 — WHAT"), "stage 2 is WHAT: {p2}");
+        assert!(
+            p2.contains("reflect the user's previous answer back") && p2.contains("WHO"),
+            "stage 2 reflects the WHO back: {p2}"
+        );
+        assert!(!p2.contains("Preview issues"));
+
+        let p3 = p(3);
+        assert!(p3.contains("PASS 3 — WHY"), "stage 3 is WHY: {p3}");
+        assert!(
+            p3.contains("reflect the previous answer back"),
+            "stage 3 reflects: {p3}"
+        );
+        assert!(!p3.contains("Preview issues"));
+
+        let p4 = p(4);
+        assert!(
+            p4.contains("PASS 4 — DONE CRITERIA") && p4.contains("acceptance criteria"),
+            "stage 4 is done-criteria: {p4}"
+        );
+        assert!(
+            p4.contains("reflect the previous answer back"),
+            "stage 4 reflects: {p4}"
+        );
+        assert!(!p4.contains("Preview issues"));
+
+        let p5 = p(5);
+        assert!(
+            p5.contains("PASS 5 — RISKS & SCOPE"),
+            "stage 5 is risks/scope: {p5}"
+        );
+        assert!(
+            p5.contains("reflect the previous answer back"),
+            "stage 5 reflects: {p5}"
+        );
+        assert!(
+            p5.contains("STOP asking questions"),
+            "stage 5 stops asking: {p5}"
+        );
+        assert!(
+            p5.contains("Preview issues"),
+            "stage 5 converges on Preview issues (AC 7): {p5}"
+        );
+    }
+
+    /// The server is defensive about `stage` (the client owns advancement, but a
+    /// stale/edited localStorage value could arrive out of range): clamp into
+    /// 1..=5 — 0 ⇒ pass 1, anything above ⇒ pass 5.
+    #[test]
+    fn socratic_stage_clamps_out_of_range() {
+        assert!(socratic_stage_instructions(0, None, None, None, None).contains("PASS 1 — WHO"));
+        assert!(socratic_stage_instructions(9, None, None, None, None).contains("PASS 5 — RISKS"));
+        assert!(
+            socratic_stage_instructions(250, None, None, None, None).contains("PASS 5 — RISKS")
+        );
+    }
+
+    /// Socratic reuses the SAME grounding blocks as Fast — the repo snapshot +
+    /// grounded access rule when a snapshot is present, the honest-blind rule when
+    /// absent — so the staged interview is just as repo-grounded as today's.
+    #[test]
+    fn socratic_stage_reuses_the_shared_grounding_blocks() {
+        let grounded = socratic_stage_instructions(
+            2,
+            Some("/p"),
+            Some("o/r"),
+            Some("## Repo guide (CLAUDE.md)\nUses axum."),
+            Some("### Watchdog\nTails panes."),
+        );
+        assert!(
+            grounded.contains("REPO & HARNESS CONTEXT"),
+            "repo block present"
+        );
+        assert!(
+            grounded.contains("You HAVE the repo + harness snapshot"),
+            "grounded access rule"
+        );
+        assert!(grounded.contains("Uses axum."), "context body inlined");
+        assert!(grounded.contains("RELEVANT WIKI"), "wiki block present");
+        assert!(grounded.contains("Tails panes."), "wiki excerpt inlined");
+
+        let blind = socratic_stage_instructions(2, None, None, None, None);
+        assert!(
+            !blind.contains("REPO & HARNESS CONTEXT"),
+            "no context block when absent"
+        );
+        assert!(
+            blind.contains("no repo snapshot for this chat"),
+            "blind access rule"
+        );
+    }
+
+    /// The two new fields are serde-default and snake_case: an old client (no
+    /// `mode`/`stage`) parses (⇒ Fast), and `"fast"`/`"socratic"` decode.
+    #[test]
+    fn chat_request_defaults_and_decodes_intake_mode() {
+        let old: ChatRequest = serde_json::from_str(r#"{"messages":[]}"#).unwrap();
+        assert!(
+            old.mode.is_none(),
+            "absent mode ⇒ None (⇒ Fast at the handler)"
+        );
+        assert!(old.stage.is_none());
+
+        let complex: ChatRequest =
+            serde_json::from_str(r#"{"messages":[],"mode":"socratic","stage":3}"#).unwrap();
+        assert_eq!(complex.mode, Some(IntakeMode::Socratic));
+        assert_eq!(complex.stage, Some(3));
+
+        let fast: ChatRequest = serde_json::from_str(r#"{"messages":[],"mode":"fast"}"#).unwrap();
+        assert_eq!(fast.mode, Some(IntakeMode::Fast));
+    }
+
+    /// AC risk — the no-creds gate BOTH intake handlers run FIRST, independent of
+    /// `{mode, stage}`. A hermetic substitute for a live `chat_stream` no-creds
+    /// call: on macOS `resolve_auth()` reads the Claude Keychain (a dev machine
+    /// with `claude` installed can't be forced to "no creds" via env), so the
+    /// invariant is pinned at the shared gate the handler actually calls —
+    /// unauthed ⇒ the loud both-paths `NO_CREDS_MSG` 400; authed ⇒ pass-through.
+    /// Complex rides this SAME gate (no separate endpoint), so its first turn is
+    /// never a silent dead button.
+    #[test]
+    fn chat_auth_gate_surfaces_no_creds_when_unauthed() {
+        // Match only the error (`Auth` deliberately has no Debug — it wraps a
+        // secret; success is asserted via `is_ok`, which needs no formatting).
+        let err = chat_auth_gate(None)
+            .err()
+            .expect("unauthed gate must be an error");
+        match err {
+            ApiError::BadRequest(m) => assert_eq!(m, NO_CREDS_MSG),
+            other => panic!("expected BadRequest(NO_CREDS_MSG), got {other:?}"),
+        }
+        assert!(chat_auth_gate(Some(Auth::ApiKey("sk-ant-test".into()))).is_ok());
+        assert!(chat_auth_gate(Some(Auth::Oauth("sk-ant-oat-test".into()))).is_ok());
     }
 
     #[test]

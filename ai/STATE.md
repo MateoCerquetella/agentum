@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 008-finish-the-loop
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **F1 CODE-COMPLETE + GREEN** 2026-07-03, `tasks.md`; server 546/0/5 + executor 21/0 + vitest 14/0, fmt+clippy clean, 3 live-test binaries compile. Four silences closed: #15 SettleOutcome / #16 status/blocked / #14a readiness-bool (sacred, D5 human-live-test merge gate) / #2 armed-!repoId toast. **Phase STAYS developer** — F2 (chat Fast/Complex) + F3 (goal-first workspace) are the next developer iterations; advance to tester only when all three slices are code-complete. 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **F1+F2 CODE-COMPLETE + GREEN** 2026-07-03. F1 `51705bf2` (never-silent run path). F2 (chat Fast/Complex intake) green: server 552/0/5 (F1's 546 held), vitest 10/0 new, fmt+clippy clean, vite green; two buttons + staged 5-pass Socratic, Fast byte-identical (pinned), converges on unchanged compose_issue_body. **Phase STAYS developer** — **F3 (goal-first workspace) is the LAST slice**; advance to tester once F3 is code-complete. ⚠️ F1 Step3 sacred change still needs the 2 live tests green (HUMAN pre-release). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,18 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-02 | Reviewer | **006 SIGN-OFF → SHIP-READY** (`review.md`). All 6
-  focus items pass (four pins re-verified character-level; deviation-2 fix
-  confirmed COMPLETE — createIssuesFromChat is the only plan-constructing
-  caller; C1 one-hunk discipline + documented first-pair invariant; opposite
-  defaults named in read_settings' doc; brief deltas verbatim). 0 Blockers,
-  0 new Should-fix; 4 nits (stale gh_bin doc contradicted by the two
-  env-locked tests; parse_label_names comment overstates stable-sort dedup;
-  empty-label-repo note for staging QA; refs-not-state rationale lives only
-  in a comment) — Nits 1-2 fold into #226's docs pass. "The riskiest
-  correction (C4) was caught landing at the wrong seam and fixed at the real
-  one with the architecture's error documented rather than papered over."
-  spec.md Status → Done. Phase → done. **RELEASE = Mateo.**
 - 2026-07-03 | Analyst | **008-finish-the-loop drafted + PM-gated** (Socratic
   five-pass interview with Mateo). Problem: the core loop breaks at the last
   step — Start gated run on a GitHub issue opens no session / inert agent,
@@ -131,3 +119,17 @@
   vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
   green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
   developer → F2 next.
+- 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
+  intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
+  Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
+  extracted VERBATIM (Fast byte-identical, pinned); `build_intake_instructions`
+  router; `socratic_stage_instructions`+`socratic_pass_body` (5 passes WHO/WHAT/
+  WHY/done/risks, reflect-back, stage5→"Preview issues"); `chat_auth_gate` shared
+  no-creds gate (Complex surfaces NO_CREDS by construction). Client: pure
+  `lib/socratic-intake.ts` reducer (one pass/turn, cap5, Fast never advances) +
+  localStorage `Conversation.intake` (D1 no new table) + two ChatPage buttons +
+  Enter-stays-Fast. Gates: server 552/0/5 (F1 546 held), vitest 10/0 new, fmt+
+  clippy clean, vite green; full vitest 139-fail = PROVEN pre-existing baseline
+  (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
+  untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
+  surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.

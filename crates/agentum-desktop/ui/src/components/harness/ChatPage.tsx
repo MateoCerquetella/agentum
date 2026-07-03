@@ -28,7 +28,8 @@ import {
   RefreshCw,
   Square,
   Trash2,
-  X
+  X,
+  Zap
 } from 'lucide-react'
 
 import { useAppStore } from '@/store'
@@ -49,6 +50,7 @@ import {
   previewIssuesFromChat,
   resolveChatModel
 } from '@/runtime/chat-client'
+import { clampStage, type IntakeMode, normalizeIntake } from '@/lib/socratic-intake'
 import { type Conversation, type FiledResult, type StoredTurn } from '@/runtime/chat-history'
 import {
   appendAssistantTurn,
@@ -219,6 +221,10 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   const messages = active?.messages ?? NO_MESSAGES
   const hasAssistantReply = messages.some((m) => m.role === 'assistant' && m.content.trim().length > 0)
 
+  // Spec 008 F2: the open thread's intake (Fast/Complex + socratic pass), so the
+  // composer can show a Complex progress indicator; null on the empty state.
+  const activeIntake = useMemo(() => (active ? normalizeIntake(active.intake) : null), [active])
+
   // Busy = THIS conversation is streaming. Other conversations may stream in the
   // background at the same time (the sidebar shows a spinner on each).
   const busy = activeId != null && !!chat.streaming[activeId]
@@ -280,9 +286,11 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     activeIdRef.current = activeId
   }, [activeId])
 
-  const submit = useCallback(
-    (e?: FormEvent) => {
-      e?.preventDefault()
+  // Spec 008 F2: send the draft in a chosen intake mode. For a NEW thread `mode`
+  // picks Fast vs the staged Socratic interview; a CONTINUING thread inherits its
+  // stored mode/stage inside the store (which also advances the socratic pass).
+  const submitWith = useCallback(
+    (mode: IntakeMode) => {
       const text = draft.trim()
       if (!text || busy) return
       setError(null)
@@ -294,13 +302,25 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
         workdir: workspace?.path,
         // Scope new threads to the project that grounded them, so the Project
         // Hub's per-project history can filter without a migration.
-        repoId: workspace?.id
+        repoId: workspace?.id,
+        mode
       })
       activeIdRef.current = id
       setActiveId(id)
       setDraft('')
     },
     [draft, busy, model, thinking, workspace]
+  )
+
+  // Enter / the arrow button — the quick default. A NEW chat goes Fast (the
+  // "Fast must stay fast" invariant: Enter never triggers the five-pass
+  // interview); a continuing thread keeps its stored mode inside the store.
+  const submit = useCallback(
+    (e?: FormEvent) => {
+      e?.preventDefault()
+      submitWith('fast')
+    },
+    [submitWith]
   )
 
   const stop = useCallback(() => {
@@ -665,6 +685,42 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                         button — keep the label and that prompt in sync. */}
                     {previewing ? 'Preparing preview…' : 'Preview issues'}
                   </button>
+                </div>
+              ) : null}
+              {/* Spec 008 F2: Fast / Complex intake entry. On a NEW chat the two
+                  buttons choose the mode for this feature (per-feature, no sticky
+                  preference — D4); a Complex thread then shows its pass progress.
+                  Enter/arrow stays Fast so a small ask stays fast. */}
+              {!active ? (
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => submitWith('fast')}
+                    disabled={!draft.trim() || busy}
+                    title="One prompt — the quick intake (Enter also sends Fast)"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[12.5px] font-medium transition-colors hover:bg-accent disabled:opacity-40"
+                  >
+                    <Zap className="size-3.5" />
+                    Fast feature
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => submitWith('socratic')}
+                    disabled={!draft.trim() || busy}
+                    title="A guided five-pass interview (WHO → WHAT → WHY → done → risks)"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[12.5px] font-medium transition-colors hover:bg-accent disabled:opacity-40"
+                  >
+                    <Brain className="size-3.5" />
+                    Complex feature
+                  </button>
+                  <span className="text-[11px] text-muted-foreground/60">
+                    Fast = one prompt · Complex = a guided 5-pass interview
+                  </span>
+                </div>
+              ) : activeIntake?.mode === 'socratic' ? (
+                <div className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                  <Brain className="size-3" />
+                  Complex feature · pass {clampStage(activeIntake.stage)} of 5
                 </div>
               ) : null}
               <div className="flex items-end gap-2 rounded-[26px] border border-border bg-card px-4 py-2 shadow-sm transition-shadow focus-within:border-foreground/25 focus-within:ring-2 focus-within:ring-foreground/10">

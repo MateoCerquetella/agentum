@@ -281,3 +281,192 @@ cargo test -p agentum-server --test harness_live_agent          -- --ignored --n
 cargo test -p agentum-server --test harness_start_work_live       -- --ignored --nocapture
 cargo test -p agentum-server --test harness_start_work_live_roles -- --ignored --nocapture
 ```
+
+---
+
+# F2 — Fast / Complex intake (Chat embeds real SDD intake). AC 5–8.
+
+- **Feature:** **F2** — the Chat composer's Fast/Complex entry buttons + a staged
+  Socratic interview. AC 5–8.
+- **Role:** Developer (sdd-developer)
+- **Date:** 2026-07-03
+- **Base:** worktree `finish-the-loop` (tip `51705bf2`, F1 already landed)
+
+> **Scope guardrail:** this iteration implements **F2 only**. F1 was already
+> landed (above) and **NONE of its surfaces were touched** (`drive.rs`,
+> `harness.rs`, `task_sink.rs`, `git_fs.rs`, `useComposerState.ts`,
+> `harness-client.ts`, the composer UI). **F3** (goal-first workspace) is a later
+> iteration — `NewWorkspaceComposerModal`/`NewWorkspaceGoalStep`/`useComposerState`
+> internals are untouched. Built to architecture §C (D-B explicit `{mode,stage}`;
+> D1 stateless server + client-owned stage; D2 no forced thinking; D4 no sticky
+> preference; D8 both modes converge on the unchanged `compose_issue_body`).
+
+## The seam (architecture §C): an explicit `{mode, stage}` on `ChatRequest`
+
+Fast stays byte-identical; Socratic is five server-owned per-stage prompts that
+reuse the SAME grounding blocks; both converge on the existing "Preview issues" →
+`compose_issue_body` path. The server owns NO stage state — it's a pure
+`(mode, stage) → system prompt` function; the CLIENT advances the stage.
+
+## Server — `crates/agentum-server/src/routes/chat.rs` (AC 5–8)
+
+**Landed:**
+- **`enum IntakeMode { Fast, Socratic }`** — `#[derive(Deserialize, Clone, Copy,
+  PartialEq, Eq, Debug)] #[serde(rename_all = "snake_case")]` (wire = `"fast"` /
+  `"socratic"`). Deliberately NOT `Debug`-deriving `Auth` (it wraps a secret).
+- **`ChatRequest` gains two `#[serde(default)]` fields:** `mode: Option<IntakeMode>`
+  (None ⇒ Fast) and `stage: Option<u8>` (1..=5, clamped server-side). Old clients
+  and the Fast path stay byte-identical on the wire (AC 6).
+- **`intake_grounding_blocks(workdir, repo_slug, repo_context, wiki_context) ->
+  (String, String, &'static str, String)`** — the ctx / repo_block / access_rule /
+  wiki_block extracted VERBATIM from `interviewer_instructions` so Fast and every
+  Socratic pass ground identically. `interviewer_instructions` now calls it and
+  assembles the SAME format string → **output byte-for-byte unchanged** (the two
+  pre-existing interviewer tests still pass, plus the new byte-identical pin).
+- **`build_intake_instructions(mode, stage, …) -> String`** — the router:
+  `Fast => interviewer_instructions(…)` VERBATIM; `Socratic =>
+  socratic_stage_instructions(stage, …)`. Both `chat` and `chat_stream` now route
+  through it (was a direct `interviewer_instructions` call).
+- **`socratic_stage_instructions(stage, …)`** — reuses `intake_grounding_blocks`,
+  clamps `stage` into 1..=5, swaps the job/Rules body for a single-topic pass via
+  `socratic_pass_body(stage)`. Frame + Rules shared across passes; the pass is the
+  one thing the turn does.
+- **`socratic_pass_body(stage) -> &'static str`** — the five single-topic passes
+  (AC 7): 1 WHO (nothing to reflect yet), 2 WHAT (reflect WHO), 3 WHY (reflect
+  WHAT), 4 DONE CRITERIA (reflect WHY, checkbox-shaped), 5 RISKS & SCOPE (reflect
+  criteria, then STOP asking + point at **"Preview issues"** — the same
+  convergence Fast uses, D8).
+- **`chat_auth_gate(auth: Option<Auth>) -> Result<Auth, ApiError>`** — the single
+  credential gate BOTH intake handlers now run FIRST, before any mode/stage prompt
+  is built. `None ⇒ ApiError::BadRequest(NO_CREDS_MSG)`. Complex rides the SAME
+  gate (no separate endpoint) so `NO_CREDS_MSG` surfaces on its first turn by
+  construction (AC risk). Also unified `chat`'s previously-inline (byte-identical)
+  no-creds literal onto `NO_CREDS_MSG`.
+- **Handlers wired:** `chat` + `chat_stream` parse `mode = body.mode.unwrap_or(Fast)`,
+  `stage = body.stage.unwrap_or(1)`, and call `build_intake_instructions`. Model/
+  config identical for both modes; the existing `thinking` opt-in still applies
+  (D2 — no forced thinking).
+
+**Server stays stateless (D1):** no store tables, no session state — the stage
+travels in each request.
+
+**Tests (`chat.rs` `mod tests`, +6):**
+- `build_intake_instructions_fast_equals_interviewer_verbatim` (**AC 6**) — Fast ==
+  `interviewer_instructions` across a spread of stages (incl. junk) + a no-grounding
+  case; the byte-identical pin guarding a future fold-Fast-into-Socratic refactor.
+- `socratic_stage_prompts_cover_one_pass_each_and_converge_at_five` (**AC 7**) —
+  per-stage: each names its one pass topic + (stages 2–5) the reflect-back
+  instruction; only stage 5 names "Preview issues" + "STOP asking questions".
+- `socratic_stage_clamps_out_of_range` — 0 ⇒ pass 1; 9/250 ⇒ pass 5.
+- `socratic_stage_reuses_the_shared_grounding_blocks` — repo block + grounded
+  access rule + wiki when present; honest-blind rule when absent.
+- `chat_request_defaults_and_decodes_intake_mode` — serde-default (old client ⇒
+  None) + snake_case decode of `"fast"`/`"socratic"`.
+- `chat_auth_gate_surfaces_no_creds_when_unauthed` (**AC risk**) — unauthed ⇒
+  `BadRequest(NO_CREDS_MSG)`; authed (ApiKey/Oauth) ⇒ pass-through. See Deviation 1
+  for why this pins the shared gate rather than a live `chat_stream` call.
+
+## Client — the pure reducer + composer wiring (AC 5, 7)
+
+**Landed:**
+- **New pure `crates/agentum-desktop/ui/src/lib/socratic-intake.ts`** — the
+  client-owned state machine (no React/DOM/xterm): `IntakeMode`, `IntakeState`,
+  `clampStage`, `fastIntake`, `socraticIntake`, `advanceIntake` (one pass/turn,
+  cap 5, Fast never advances — the **AC 7 progression invariant**), `isSocraticComplete`,
+  `normalizeIntake` (absent/legacy ⇒ Fast; clamps a bad stage — the cleared-store
+  clean-restart, D1).
+- `crates/agentum-desktop/ui/src/runtime/chat-history.ts` — `Conversation` gains
+  `intake?: IntakeState` (persisted on the existing localStorage record — D1, **no
+  new store table**; absent on pre-008 threads ⇒ Fast). Tolerant loader unchanged
+  (extra field is a no-op; no migration).
+- `crates/agentum-desktop/ui/src/runtime/chat-client.ts` — `streamChat` (and
+  `sendChat`) opts gain `mode?`/`stage?`, threaded into the POST body (both
+  serde-default, so the Fast/old-client wire is byte-identical).
+- `crates/agentum-desktop/ui/src/runtime/chat-store.ts` — `sendChatMessage` takes
+  `mode?`; computes `intakeNow` (a continuing thread INHERITS its stored intake via
+  `normalizeIntake`; a new thread starts at `{mode ?? 'fast', stage: 1}`), sends
+  `intakeNow` to `streamChat`, and persists `advanceIntake(intakeNow)` on the
+  conversation so the NEXT turn runs the next pass.
+- `crates/agentum-desktop/ui/src/components/harness/ChatPage.tsx` — **two entry
+  buttons** (**AC 5**): **Fast feature** (`Zap`, `submitWith('fast')`) and
+  **Complex feature** (`Brain`, `submitWith('socratic')`), shown on a NEW chat;
+  a "Complex feature · pass N of 5" indicator on a continuing socratic thread.
+  `submit` (Enter/arrow) is the Fast default ("Fast must stay fast" — Enter never
+  triggers the five-pass interview); a continuing thread keeps its stored mode in
+  the store. Per-feature choice, **no sticky preference** (D4).
+
+**Tests (`socratic-intake.test.ts`, +5):** the AC-7 progression reducer — advances
+exactly one pass per user turn `[1,2,3,4,5,5,5]`, caps at 5 + `isSocraticComplete`,
+Fast never advances, `clampStage`, `normalizeIntake` legacy/absent ⇒ Fast.
+
+## Convergence (AC 7/8) — unchanged, by construction
+
+After stage 5 the client stops advancing and requests the **same** Preview-issues
+draft as Fast — `compose_issue_body` / `spec_md_from_issue` are **untouched** (D8).
+Both modes therefore end at identical SDD-shaped issue bodies. The stage-5 prompt
+points the user at the existing "Preview issues" button (already shown once
+`hasAssistantReply`); no new convergence surface.
+
+## Build + test results (observed)
+
+| Gate | Command | Result |
+|---|---|---|
+| Backend lib | `cargo test -p agentum-server --lib` | **552 passed / 0 failed / 5 ignored.** F1's 546 stayed green; +6 F2 chat tests. |
+| Format | `cargo fmt --all` then `--check` | **clean (exit 0).** |
+| Lints | `cargo clippy -p agentum-server --tests` | **0 warnings / 0 errors.** |
+| UI build | `NODE_OPTIONS=--max-old-space-size=3072 npm run build --prefix …/ui` | **built in ~1m23s (vite, tsc typecheck green).** |
+| UI vitest (new) | `npx vitest run src/lib/socratic-intake.test.ts src/runtime/chat-client.test.ts` | **10 passed / 0 failed** (5 new reducer + 5 existing chat-client). |
+| UI vitest (full, diligence) | `npx vitest run` | **5746 passed / 139 failed (43 files).** The 139 failures are a **pre-existing baseline** — a base-commit (`51705bf2`, F1, no F2 changes) run shows the **identical 139 failed / 43 files**; my changes added **+5 passing, 0 new failures**. Failures are in unrelated domains (sidebar color-class drift, git-status, settings, tab-bar, editor, unmocked Tauri `invoke`); only 2 test files import my modules and **both pass**. |
+
+*The desktop **cargo** crate was NOT built (sherpa dylibs); per the task the gate
+is the server lib tests + vite build + vitest, all green.*
+
+## Deviations from architecture §C (with rationale)
+
+1. **The no-creds pin tests the shared `chat_auth_gate` helper, not a live
+   `chat_stream` no-creds call.** Architecture named
+   `chat_stream_returns_no_creds_when_unauthed`. On macOS (this dev machine)
+   `resolve_auth()` falls back to the Claude **Keychain**
+   (`usage.rs::read_macos_keychain_cred`, `security find-generic-password`), so a
+   machine with `claude` installed **cannot be forced to "no creds" via env** — a
+   live-handler no-creds test would be non-hermetic (and would proceed to a real
+   Anthropic call). I extracted the gate BOTH handlers run first into
+   `chat_auth_gate(Option<Auth>)`, wired it in, and pin it hermetically with an
+   explicit `None`/`Some`. This is the honest hermetic equivalent and guards the
+   REAL invariant (Complex has no bypassing endpoint; the gate precedes mode/stage).
+2. **`chat`'s inline no-creds literal unified onto `NO_CREDS_MSG`.** The
+   non-streaming `chat` handler used a byte-identical inline string; routing it
+   through `chat_auth_gate` swaps it for the `NO_CREDS_MSG` const (same bytes) —
+   behavior-preserving cleanup, removes the duplicated literal.
+3. **Grounding extracted into `intake_grounding_blocks` (a refactor of
+   `interviewer_instructions`).** Architecture cited "reuse the SAME grounding
+   blocks (~chat.rs:288–327)"; the cleanest reuse is a shared helper. The emitted
+   Fast string is byte-for-byte unchanged (assembly-only refactor), pinned by
+   `build_intake_instructions_fast_equals_interviewer_verbatim` and the two
+   pre-existing interviewer tests.
+4. **Client `mode`/`stage` also added to `sendChat` (non-streaming), not only
+   `streamChat`.** Symmetry/completeness; the store uses `streamChat`. Both are
+   serde-default server-side so the Fast wire is unchanged.
+
+## Protected invariants (confirmed untouched)
+
+- **`interviewer_instructions` output byte-identical** (Fast = today) — pinned; the
+  refactor is grounding-assembly only.
+- **`compose_issue_body` + `spec_md_from_issue` round-trip untouched** (D8) — their
+  tests are unchanged-green; both modes converge on them.
+- **Server stateless** (D1) — no store tables / session state; stage in the request.
+- **No forced thinking** (D2) — model/config identical for both modes.
+- **No sticky Fast/Complex** (D4) — per-feature at the entry button; nothing stored
+  beyond the per-conversation intake.
+- **F1 surfaces** (`drive.rs`/`harness.rs`/`task_sink.rs`/`git_fs.rs`/composer UI) and
+  **F3 surfaces** (`NewWorkspaceComposerModal`/`useComposerState`) — untouched.
+
+## Handoff (F2)
+
+Ready for **sdd-tester / sdd-reviewer**. The gate (server lib + fmt + clippy + vite
+build + new vitest) is green above; the full-suite 139-failure baseline is
+pre-existing (proven against `51705bf2`). QA (`qa.sh`, browser, human/staging):
+both buttons render + route to distinct behaviors (Fast = one prompt; Complex =
+a five-pass interview that reflects the previous answer back); Complex converges
+to the same Preview-issues draft as Fast; no-creds surfaces `NO_CREDS_MSG` visibly
+on Complex's first turn. This is the basis for the F3 iteration.

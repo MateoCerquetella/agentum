@@ -4,6 +4,7 @@
 // `/api/chat` contract. The endpoint is a Socratic interviewer — it asks
 // clarifying questions, then proposes a task breakdown the user can file into
 // GitHub or Linear. This client is conversation-only; it never creates tasks.
+import type { IntakeMode } from '../lib/socratic-intake'
 import { apiUrl, getServerEndpoint } from './server-endpoint'
 
 /** One conversation turn — matches the server's `{role, content}` message shape. */
@@ -51,7 +52,7 @@ async function authHeaders(): Promise<Record<string, string>> {
  */
 export async function sendChat(
   messages: ChatTurn[],
-  opts?: { workdir?: string; repoSlug?: string }
+  opts?: { workdir?: string; repoSlug?: string; mode?: IntakeMode; stage?: number }
 ): Promise<string> {
   const url = await apiUrl('/api/chat')
   const res = await fetch(url, {
@@ -63,7 +64,11 @@ export async function sendChat(
     body: JSON.stringify({
       messages,
       workdir: opts?.workdir,
-      repo_slug: opts?.repoSlug
+      repo_slug: opts?.repoSlug,
+      // Spec 008 F2: intake mode + socratic pass (both serde-default server-side,
+      // so omitting them is the byte-identical Fast path).
+      mode: opts?.mode,
+      stage: opts?.stage
     })
   })
   const text = await res.text()
@@ -109,6 +114,11 @@ export async function streamChat(
     repoSlug?: string
     model?: string
     thinking?: boolean
+    /** Spec 008 F2: which intake this turn runs — `'fast'` (default) or
+     *  `'socratic'`. Omitting it is the byte-identical Fast path. */
+    mode?: IntakeMode
+    /** Spec 008 F2: the socratic pass (1..=5); ignored by the server for Fast. */
+    stage?: number
     signal?: AbortSignal
     onDelta?: (delta: ChatStreamDelta) => void
   } = {}
@@ -127,7 +137,11 @@ export async function streamChat(
       workdir: opts.workdir,
       repo_slug: opts.repoSlug,
       model: opts.model,
-      thinking: opts.thinking ?? false
+      thinking: opts.thinking ?? false,
+      // Spec 008 F2: drive the server's per-stage prompt. Both are serde-default,
+      // so an old client / the Fast path stays byte-identical on the wire.
+      mode: opts.mode,
+      stage: opts.stage
     }),
     signal: opts.signal
   })
