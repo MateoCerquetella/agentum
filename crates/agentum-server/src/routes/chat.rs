@@ -386,6 +386,10 @@ Rules:\n\
 - Ask ONE focused clarifying question at a time (two only if tightly related). Keep each \
 turn short and concrete, like a sharp staff engineer who knows this codebase — no filler, \
 no \"great question!\".\n\
+- Write like a person, not a product brief: plain sentences, no marketing adjectives, no \
+\"This feature will empower/streamline…\" openers, no bullet lists where a sentence does, \
+no restating the user's words back as filler, and no closing summaries of what you just \
+said. Vary how you phrase things; if a template is creeping in, break it.\n\
 - Cover only what's genuinely unclear: the problem and who it's for, the desired outcome, \
 scope boundaries (in/out), hard constraints, and acceptance criteria. Never re-ask what \
 the user — or the repo context — already answers.\n\
@@ -1037,7 +1041,7 @@ async fn call_anthropic(
 /// (a parent feature + ordered, prioritised sub-tasks) — not a flat list of
 /// separate issues. Kept byte-exact; the lenient parser ([`extract_feature_plan`])
 /// tolerates a model that still wraps it in prose or fences.
-const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. The task COUNT must match the scope actually discussed: a trivial ask is a SINGLE task, a small feature two or three — never pad to a fixed number, and never invent tasks the conversation didn't call for. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Output ONLY the raw JSON object, no prose, no markdown code fences.";
+const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. The task COUNT must match the scope actually discussed: a trivial ask is a SINGLE task, a small feature two or three — never pad to a fixed number, and never invent tasks the conversation didn't call for. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Write every string in a plain engineer's voice: name concrete behaviors, files, and surfaces; no marketing adjectives, no 'This feature will…' openers, no filler like 'improve the user experience', and don't restate the title inside summary/problem/goal. Output ONLY the raw JSON object, no prose, no markdown code fences.";
 
 /// The final user turn appended to the transcript for the extraction call. Ends
 /// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
@@ -1212,7 +1216,6 @@ fn compose_issue_body(plan: &FeaturePlan) -> String {
         }
         body.push('\n');
     }
-    body.push_str("\n_Created from an agentum Chat feature breakdown._");
     body
 }
 
@@ -1286,7 +1289,6 @@ fn compose_task_body(plan: &FeaturePlan, task: &SubTask, priority: Priority) -> 
     if !feature.is_empty() {
         body.push_str(&format!("**Feature:** {feature}\n"));
     }
-    body.push_str("\n_Created from an agentum Chat feature breakdown._");
     body
 }
 
@@ -2012,8 +2014,7 @@ mod tests {
              ## Sub-tasks (priority order)\n\n\
              - [ ] **[High]** A high — aa\n\
              - [ ] **[Medium]** B med\n\
-             - [ ] **[Low]** C low — cc\n\n\
-             _Created from an agentum Chat feature breakdown._"
+             - [ ] **[Low]** C low — cc\n"
         );
     }
 
@@ -2050,8 +2051,7 @@ mod tests {
              ## Sub-tasks (priority order)\n\n\
              - [ ] **[High]** A high — aa\n\
              - [ ] **[Medium]** B med\n\
-             - [ ] **[Low]** C low — cc\n\n\
-             _Created from an agentum Chat feature breakdown._",
+             - [ ] **[Low]** C low — cc\n",
             "blank problem/goal must render the pre-006 body byte-identically"
         );
     }
@@ -2097,7 +2097,11 @@ mod tests {
             !body.contains("## Sub-tasks (priority order)"),
             "SDD shape replaces the legacy heading: {body}"
         );
-        assert!(body.ends_with("_Created from an agentum Chat feature breakdown._"));
+        // #256: no boilerplate footer — the body ends with real content.
+        assert!(
+            !body.contains("_Created from an agentum Chat"),
+            "no templated footer: {body}"
+        );
     }
 
     /// Spec 006 F2: the new fields are serde-default — an old client's plan and
