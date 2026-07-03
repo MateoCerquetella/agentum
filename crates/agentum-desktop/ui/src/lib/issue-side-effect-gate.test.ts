@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { deriveIssueSideEffectGate, describeIssueSideEffectSkip } from './issue-side-effect-gate'
+import {
+  deriveIssueSideEffectGate,
+  describeIssueSideEffectSkip,
+  type IssueSideEffectSkipReason
+} from './issue-side-effect-gate'
 
 describe('deriveIssueSideEffectGate', () => {
   const issue = (url: string) => ({ type: 'issue', url })
@@ -74,5 +78,25 @@ describe('describeIssueSideEffectSkip', () => {
     expect(describeIssueSideEffectSkip('start-gated-run', 'remote-repo')).toBe(
       'Gated run not started: the selected repo is remote (SSH) — this runs locally only.'
     )
+  })
+
+  // Spec 008 F1 #4 (AC 1): EVERY skip reason must produce a distinct, non-empty
+  // toast on the start-gated-run route — no reason may fall through silently.
+  // Enumerated so adding a reason without copy fails this test loudly.
+  it('has a distinct, non-empty message for every skip reason on the start route', () => {
+    const reasons: IssueSideEffectSkipReason[] = [
+      'no-linked-item',
+      'not-an-issue',
+      'not-github-url',
+      'remote-repo'
+    ]
+    const messages = reasons.map((reason) => describeIssueSideEffectSkip('start-gated-run', reason))
+    for (const message of messages) {
+      expect(message.startsWith('Gated run not started: ')).toBe(true)
+      // Non-empty reason copy after the prefix — never a bare label.
+      expect(message.length).toBeGreaterThan('Gated run not started: '.length)
+    }
+    // All four are pairwise distinct (no two reasons collapse to one message).
+    expect(new Set(messages).size).toBe(reasons.length)
   })
 })

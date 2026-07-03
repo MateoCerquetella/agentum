@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 007-issue-detail-and-generated-descriptions
-- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (007 **SHIP-READY** — Reviewer SIGN-OFF 2026-07-02, zero Blockers, `review.md`; commit `96c98955`. Releasing per Mateo's standing "make a new release" instruction. Should-fix follow-up: ChatPage repoId:'' degenerate edge → fold into #226. 006 RELEASED v0.54.0)
+- **current_spec:** 008-finish-the-loop
+- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **F1 CODE-COMPLETE + GREEN** 2026-07-03, `tasks.md`; server 546/0/5 + executor 21/0 + vitest 14/0, fmt+clippy clean, 3 live-test binaries compile. Four silences closed: #15 SettleOutcome / #16 status/blocked / #14a readiness-bool (sacred, D5 human-live-test merge gate) / #2 armed-!repoId toast. **Phase STAYS developer** — F2 (chat Fast/Complex) + F3 (goal-first workspace) are the next developer iterations; advance to tester only when all three slices are code-complete. 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,41 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-02 | Reviewer | **007 SIGN-OFF → SHIP-READY** (`review.md`). All 5
-  focus items pass: fix COMPLETE (grepped every author:null stub — all now
-  carry repoId so hydration fires; header reads hydrated displayWorkItem);
-  never-panic on new gh cmds + LLM endpoint (`.ok()?`, typed 400s, no
-  prompt secret leakage); armed-ineligible double-action = correct
-  degradation; deriveIssueSideEffectGate is the single EXECUTION source.
-  0 Blockers. 1 Should-fix: ChatPage `repoId: filedRepoId ?? ''` degenerate
-  edge (no pinnedRepo AND no workspaceId → silent shell, not #237's path) →
-  #226 or staging-QA. 3 nits (canScaffoldSpec 2nd derivation for RENDER only;
-  "four places" comment lists five; rsplit(['-','r'])). "Disciplined bug-fix
-  landing — root causes real, each fix hits the actual seam." Status → Done.
-  Phase → done. **RELEASE = per standing instruction.**
-- 2026-07-02 | Tester | **007 verdict PASS 9/9 ACs** (`verification.md`).
-  Independent re-runs: server 539/0/5, desktop 75/0/4 (+3 gh mapping tests),
-  clippy -D warnings green, vite 1m36s, vitest 10/10. All 3 tasks.md root
-  causes CONFIRMED against base `27f29f1c` (read the base None-stubs directly)
-  + head. Sacred surfaces clean (drive/helpers/task_sink diffs EMPTY;
-  harness.rs = only the .gitignore pin; auth.rs empty). 4 deviations accurate.
-  4 Info findings none blocking (degenerate repoId:'' edge if Chat-filed w/o
-  pinnedRepo AND workspaceId — early-returns w/o error surface; comment-id
-  URL-fragment dependence; synthetic gh fixtures; armed-ineligible double
-  action). Handoff `01-tester-to-reviewer.md`. Phase → reviewer.
-- 2026-07-02 | Developer | **007 fixes + feature GREEN** (`96c98955`; compressed
-  SDD, spec.md+tasks.md carry the trail). ROOT CAUSES: (1) detail page's ONLY
-  data source `gh_work_item_details()` was a STUB returning None (gh.rs:516),
-  null cached as loaded-success, header read the un-hydrated prop — GitHub had
-  everything, the app showed 'unknown/No description'; (2) toggles: four
-  diverging silent gates + armed state outliving eligibility + ChatPage
-  hand-off missing repoId → armed-but-skipped total no-op. FIXED: real gh view
-  --json hydration + visible errors; pure `deriveIssueSideEffectGate` feeding
-  all paths + skip-reason toasts + disarm on repo-switch/unlink. FEATURE:
-  POST /api/github/issues/draft-body (LLM, chat plumbing, SDD-shaped) +
-  'Generate description' button (fills textarea, never files silently).
-  BONUS: `.agentum-harness/.gitignore` self-ignore (the 'bad inside the
-  worktree' fix). NOT GUI-verified. Phase → tester.
 - 2026-07-02 | Reviewer | **006 SIGN-OFF → SHIP-READY** (`review.md`). All 6
   focus items pass (four pins re-verified character-level; deviation-2 fix
   confirmed COMPLETE — createIssuesFromChat is the only plan-constructing
@@ -111,18 +76,58 @@
   correction (C4) was caught landing at the wrong seam and fixed at the real
   one with the architecture's error documented rather than papered over."
   spec.md Status → Done. Phase → done. **RELEASE = Mateo.**
-- 2026-07-02 | Tester | **006 verdict PASS 9/9 ACs + C1** (`verification.md`).
-  Independent re-runs: 535/0/5 lib (139.3s), clippy -D warnings green, vite
-  2m23s, vitest 15/0, scoped chat 39/harness 86/github 32/task_sink 26. All
-  8 deviations audited ACCURATE — incl. confirming the architecture's
-  "Confirm spreads the plan verbatim" claim was WRONG (base
-  createIssuesFromChat rebuilt {title,summary,tasks}; deviation-2 fix at the
-  rebuild seam is correct). Stored-turn "not reproducible" verdict audited
-  SOUND (draftPlan ephemeral, StoredTurn persists no plan). F2 byte pin
-  traced character-by-character vs the base commit. Sacred surfaces clean
-  (drive.rs = one C1 hunk; helpers.rs untouched; auth/registry diffs empty;
-  exactly TWO env-locked tests). 5 Info findings none blocking (labels-empty
-  repo shows no chips; armed-copy staleness; 422→fallback fold; first-pair
-  provenance; author-fetch ordering pre-existing). GUI + live C1 label-flip
-  = deferred to qa.sh/staging. Handoff `04-tester-to-reviewer.md`. Phase →
-  reviewer.
+- 2026-07-03 | Analyst | **008-finish-the-loop drafted + PM-gated** (Socratic
+  five-pass interview with Mateo). Problem: the core loop breaks at the last
+  step — Start gated run on a GitHub issue opens no session / inert agent,
+  silently. Locked: WHO = solo dogfooder (3 pain moments); WHAT = hands-off
+  issue→green + Chat gets ⚡Fast/🧠Complex intake buttons (Complex = staged
+  five-pass Socratic, one pass per turn — today's chat.rs:335 single-prompt
+  "short Socratic" is NOT this) + goal-first workspace with optional steps;
+  WHY = the loop IS the product + blocks demos; DONE = full pipeline demo in
+  the INSTALLED release app (all 12 ACs); RISK#1 = silent regression → new
+  live test for the issue→start-work→prompt-lands leg. Shape: one spec,
+  slices F1→F3 (house style). Gate note: "one slice" checked as one outcome
+  in 3 gateable increments, per Mateo's explicit shape decision. Phase → pm.
+- 2026-07-03 | PM | **008 PM-gated → architect** (`spec.md`, handoff
+  `01-pm-to-architect.md`). All 9 gate items PASS after edits; every code
+  citation spot-verified. Locked D1–D9: interview state client-side/server
+  stateless (D1); Complex mode same model, no forced thinking (D2); goal-first
+  = parallel default, composer not deleted (D3); Fast/Complex per-feature, no
+  sticky (D4); F1 may instrument drive.rs but the 3 autonomy mechanics change
+  only with BOTH live tests green + no new spawn path (D5); `status/blocked`
+  joins the 004 label canon (D6); AC 1/2 numbers are demo-project pins (D7);
+  "persisted spec" = existing `spec_md_from_issue` round-trip, no chat-time
+  file write (D8); F3 optional-repo = worktree optional, workdir required (D9).
+  Rewrote AC 1/2/7/12 from untestable to observable (2s ack / 15s session /
+  60s pane output / one-pass-per-turn / Mateo-run installed demo w/ label-trail
+  evidence). Key finding: Start-gated-run is a TWO-HOP UI path
+  (TaskPage→pre-armed composer→startGatedWork), not one button — never-silent
+  must span both hops. Phase → architect.
+- 2026-07-03 | Architect | **008 Architect-gated → developer**
+  (`architecture.md`, seams line-verified on `0e6812f8`; handoff
+  `02-architect-to-developer.md`). **A1 framing correction: the start-work path
+  already shipped in spec 005** — F1 is instrumentation + the D6 blocked
+  escalation + a live test, NOT new plumbing. Four real silences to close:
+  #15 `wait_for_settle` 1800s silent hang → `SettleOutcome` (do first, not
+  sacred); #16 blocked gate → no issue escalation → `apply_blocked_transition`
+  (D6); #14a `await_repl_ready` falls through → prompt fires blind (AC 2) →
+  readiness bool (F-FLAG, sacred, gated on BOTH live tests); #2 composer armed
+  `!repoId` guard silent (#226 edge) → toast. Decisions: D-A `status/blocked` =
+  GitHub-only label sibling, `TrackerPhase` stays 4 variants; D-B explicit
+  `{mode,stage}` on ChatRequest (server stateless); D-C thin `NewWorkspaceGoalStep`
+  fronts the composer. New live test `harness_start_work_live.rs` covers the
+  issue→route→session→prompt leg. Phase → developer.
+- 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
+  F2/F3 deferred to next developer iterations). Built in architecture order:
+  Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
+  Step2 `apply_blocked_transition`+`status/blocked` GitHub-only label, TrackerPhase
+  stays 4 (D-A), remove-set widened to 5-minus-target, `record_feature_failure`→
+  (blocked,attempts) (#16); Step4 pure `start-gated-run-precondition`/`composer-modal-props`
+  + armed-!repoId toast + server-error-detail + `subscribeHarnessRunErrors` bridge
+  (#2 #226 edge, #5); Step5 `#[ignore]` `harness_start_work_live{,_roles}.rs` +
+  `gh_in_dir` honors AGENTUM_GH_BIN; Step3 (sacred, LAST) `await_repl_ready→bool`
+  + `inject_prompt→Result<bool>`, send-sequence BYTE-IDENTICAL, loud readiness log
+  ×4 (#14a). Gates: server 546/0/5, executor 21/0, fmt+clippy clean, vite green,
+  vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
+  green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
+  developer → F2 next.

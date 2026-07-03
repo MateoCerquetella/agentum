@@ -11,6 +11,7 @@ import {
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { shouldAllowComposerEnterSubmitTarget } from '@/lib/new-workspace-enter-guard'
 import { isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
+import { initialStartGatedRunProp } from '@/lib/composer-modal-props'
 import type {
   TuiAgent,
   WorkspaceCreateTelemetrySource,
@@ -120,7 +121,9 @@ function QuickTabBody({
     initialLinkedWorkItem: modalData.linkedWorkItem ?? null,
     initialRepoId: modalData.initialRepoId,
     initialWorkspaceStatus: modalData.initialWorkspaceStatus,
-    ...(modalData.startGatedRun ? { initialStartGatedRun: true } : {}),
+    // Spec 008 F1 #1: the Tasks-page pre-armed hop arms the toggle via
+    // `modalData.startGatedRun` → `initialStartGatedRun` (pure, unit-pinned).
+    ...initialStartGatedRunProp(modalData),
     ...(modalData.initialBaseBranch ? { initialBaseBranch: modalData.initialBaseBranch } : {}),
     persistDraft: false,
     onCreated: onClose,

@@ -63,7 +63,12 @@ import {
   deriveIssueSideEffectGate,
   describeIssueSideEffectSkip
 } from '@/lib/issue-side-effect-gate'
-import { getHarnessSettings, startGatedWork } from '@/runtime/harness-client'
+import { firstStartGatedRunBlocker } from '@/lib/start-gated-run-precondition'
+import {
+  getHarnessSettings,
+  startGatedWork,
+  subscribeHarnessRunErrors
+} from '@/runtime/harness-client'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
   getFullComposerCreateDisabled,
@@ -2304,10 +2309,29 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           // The friendly state (C5), not an error: a live run already owns
           // this worktree and was left untouched.
           toast.info('A gated run is already driving this workspace.')
+        } else if (result.harnessId) {
+          // Spec 008 F1 §B.5: the composer navigates to the session view after
+          // a successful start, so a drive-phase failure on the harness event
+          // bus (init.sh, spawn, the readiness/settle timeouts) would otherwise
+          // go unseen. Subscribe filtered by this run and toast the FIRST early
+          // error. Best-effort: self-closes on the first error or a bounded
+          // window, so a healthy run never holds the socket open.
+          void subscribeHarnessRunErrors(result.harnessId, (message) => {
+            toast.error(`Gated run failed: ${message}`)
+          })
         }
       } catch (error) {
         console.error('Failed to start the gated run', error)
-        toast.error('Workspace created, but the gated run could not start.')
+        // Spec 008 F1 #5: surface the server's ApiError detail — request()
+        // already appends `— {detail}` (e.g. "workdir does not exist", "could
+        // not plan from the spec"), which is actionable; the generic string hid
+        // it.
+        const detail = error instanceof Error ? error.message.trim() : ''
+        toast.error(
+          detail
+            ? `Workspace created, but the gated run could not start: ${detail}`
+            : 'Workspace created, but the gated run could not start.'
+        )
       }
     },
     [startGatedRun, selectedRepo]
@@ -2324,6 +2348,24 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       (requiresExplicitSetupChoice && !setupDecision) ||
       sparseError !== null
     ) {
+      // Spec 008 F1 #2: an ARMED gated run that trips a precondition must say
+      // WHY (the #226 chat-origin `repoId: ''` edge) — a bare return was silent.
+      if (startGatedRun) {
+        const blocker = firstStartGatedRunBlocker({
+          repoId,
+          workspaceSeedName,
+          hasSelectedRepo: Boolean(selectedRepo),
+          selectedRepoRequiresConnection,
+          shouldWaitForSetupCheck,
+          shouldWaitForIssueAutomationCheck,
+          requiresExplicitSetupChoice,
+          hasSetupDecision: Boolean(setupDecision),
+          sparseError
+        })
+        if (blocker) {
+          toast.error(blocker)
+        }
+      }
       return
     }
     if (!isTuiAgentEnabled(tuiAgent, disabledTuiAgents)) {
