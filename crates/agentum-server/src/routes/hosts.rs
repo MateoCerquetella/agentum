@@ -428,6 +428,14 @@ fn external_session_name(tmux_name: &str) -> String {
 /// detach; the underlying tmux session is never killed. Idempotent — an
 /// existing record bound to the same (host, tmux session) is re-armed and
 /// returned instead of duplicated.
+///
+/// A tmux session that is already the target of an agentum-MANAGED session
+/// row is never given a second (external) binding — the managed session is
+/// returned instead. A pane has exactly ONE `pipe-pane` slot, so a duplicate
+/// binding can't stream anyway (`pipe-pane -o` no-ops against the managed
+/// session's pipe), and detaching the duplicate used to `unpipe_pane` the
+/// shared pane — silently freezing the real session's stream (no output,
+/// keystrokes never echo) with no self-heal on local hosts.
 async fn attach_tmux_session(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
@@ -439,17 +447,30 @@ async fn attach_tmux_session(
         .await?
         .ok_or_else(|| ApiError::NotFound(host_id.to_string()))?;
 
+    let all_sessions = state.store.list_sessions(None).await?;
+
+    // Redirect: this tmux session already belongs to a managed agentum
+    // session — "attaching" it means opening that session, not duplicating
+    // it. Match the row's resolved target (stored, or derived from the name
+    // the way spawn does) so a stopped row whose target was cleared still
+    // claims its own `agentum-*` pane back instead of gaining a duplicate.
+    if let Some(owned) = all_sessions.iter().find(|s| {
+        s.host_id.unwrap_or(LOCAL_HOST_ID) == host_id
+            && !s.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG)
+            && s.tmux_target
+                .as_deref()
+                .unwrap_or(&agentum_tmux::target_for(&s.name))
+                == name
+    }) {
+        return Ok((StatusCode::OK, Json(owned.clone())));
+    }
+
     // Reuse an existing binding for this exact (host, tmux session).
-    let existing = state
-        .store
-        .list_sessions(None)
-        .await?
-        .into_iter()
-        .find(|s| {
-            s.host_id.unwrap_or(LOCAL_HOST_ID) == host_id
-                && s.tmux_target.as_deref() == Some(name.as_str())
-                && s.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG)
-        });
+    let existing = all_sessions.into_iter().find(|s| {
+        s.host_id.unwrap_or(LOCAL_HOST_ID) == host_id
+            && s.tmux_target.as_deref() == Some(name.as_str())
+            && s.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG)
+    });
 
     // Validate liveness + grab pane metadata in the same round trip.
     // Use list_all so agentum-managed sessions can also be attached for viewing.

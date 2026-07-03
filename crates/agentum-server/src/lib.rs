@@ -41,6 +41,7 @@ pub mod linear;
 mod logging;
 pub mod mcp_provision;
 mod pane_log_reaper;
+mod pane_repair;
 pub mod planner;
 pub mod playwright_mcp;
 mod port_wait;
@@ -477,6 +478,16 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
                 }
             };
             tokio::join!(pane_log_reaper::reap_orphan_pane_logs(store.clone()), prune);
+        });
+    }
+
+    // One-shot pane-pipe repair: remove duplicate external bindings that
+    // hijacked a managed session's pane and re-arm local pipes disarmed by
+    // the pre-#244 bug, so poisoned installs heal on first boot of the fix.
+    {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            pane_repair::repair_pane_bindings(store).await;
         });
     }
 

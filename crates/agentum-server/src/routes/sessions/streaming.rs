@@ -95,6 +95,16 @@ pub(super) async fn stream_session(
         }
     };
 
+    // Self-heal: re-arm the pane→log pipe before tailing. `pipe-pane -o` is a
+    // no-op while a pipe is live, but a pane whose pipe died (or was disarmed
+    // by a stray external-binding detach — the pre-#244 hijack) stops feeding
+    // this log FOREVER: the session looks frozen and keystrokes never echo,
+    // because the echo can only come back through the pipe. The remote path
+    // re-arms on every connect (`capture_pane_with_log_offset`); this is the
+    // local mirror. Best-effort — a dead/foreign target just fails and the
+    // "[no pane log]" path below reports as before.
+    let _ = agentum_tmux::pipe_pane(&target, &log_path).await;
+
     // Wait briefly for pipe-pane to create the file (it appears milliseconds
     // after `agentum up` returns).
     let mut waited = 0;
