@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 008-finish-the-loop
-- **phase:** tester      <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **CODE-COMPLETE: F1+F2+F3 ALL GREEN** 2026-07-03. F1 `51705bf2` never-silent run path; F2 `3b6dbd33` chat Fast/Complex; F3 (about to commit) goal-first workspace: UI build green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3 pure suites 34/0. Full vitest 139-fail = PROVEN pre-existing baseline (0 new, +34 passing). Handoff `03-developer-to-tester.md`. ⚠️ Tester notes: (1) F1 Step3 sacred change = 2 live tests green is HUMAN pre-release; (2) AC 11 full end-to-end + all browser behaviors = qa.sh/human. 007 RELEASED v0.55.0)
+- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **TESTER PASS-WITH-DEFERRALS** 2026-07-03, `verification.md`, HEAD `9423b86f`. All gates independently re-run green (server 552/0/5, executor 21/0, fmt+clippy clean, live binaries compile #[ignore], vite green, spec-008 vitest 34/0); all 11 deviations accurate; sacred surfaces clean; 139-fail baseline corroborated pre-existing (4 methods); NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5); AC 12 PASS(deferred Mateo). Handoff `04-tester-to-reviewer.md`. 1 Info nit: "tsc" = vite-transpile+vitest, not full tsc. 007 RELEASED v0.55.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,21 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | PM | **008 PM-gated → architect** (`spec.md`, handoff
-  `01-pm-to-architect.md`). All 9 gate items PASS after edits; every code
-  citation spot-verified. Locked D1–D9: interview state client-side/server
-  stateless (D1); Complex mode same model, no forced thinking (D2); goal-first
-  = parallel default, composer not deleted (D3); Fast/Complex per-feature, no
-  sticky (D4); F1 may instrument drive.rs but the 3 autonomy mechanics change
-  only with BOTH live tests green + no new spawn path (D5); `status/blocked`
-  joins the 004 label canon (D6); AC 1/2 numbers are demo-project pins (D7);
-  "persisted spec" = existing `spec_md_from_issue` round-trip, no chat-time
-  file write (D8); F3 optional-repo = worktree optional, workdir required (D9).
-  Rewrote AC 1/2/7/12 from untestable to observable (2s ack / 15s session /
-  60s pane output / one-pass-per-turn / Mateo-run installed demo w/ label-trail
-  evidence). Key finding: Start-gated-run is a TWO-HOP UI path
-  (TaskPage→pre-armed composer→startGatedWork), not one button — never-silent
-  must span both hops. Phase → architect.
 - 2026-07-03 | Architect | **008 Architect-gated → developer**
   (`architecture.md`, seams line-verified on `0e6812f8`; handoff
   `02-architect-to-developer.md`). **A1 framing correction: the start-work path
@@ -134,3 +119,15 @@
   pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
   AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
   code-complete → tester.**
+- 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
+  HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
+  every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
+  compile #[ignore], vite green, spec-008 vitest 34/0; full vitest 139-fail
+  baseline corroborated PRE-EXISTING via 4 methods (disjoint set / no-reference
+  grep / diff-scope / failure-kind). All 11 deviations ACCURATE against code;
+  sacred surfaces clean (inject_prompt send-sequence byte-identical, await_repl_ready
+  poll logic unchanged, apply_blocked_transition Ok-Skipped-never-Err, compose_issue_body
+  + useComposerState internals untouched, F1 initialStartGatedRunProp preserved).
+  NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
+  AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
+  +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
