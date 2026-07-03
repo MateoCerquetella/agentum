@@ -118,6 +118,9 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
 
   const [activeId, setActiveId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  // #258: the intake mode for a NEW chat. Null = not chosen yet, and the
+  // composer stays locked until one of the two large cards is picked.
+  const [pendingMode, setPendingMode] = useState<IntakeMode | null>(null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -251,6 +254,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     // background and the sidebar shows its progress.
     setActiveId(null)
     setDraft('')
+    setPendingMode(null)
     setError(null)
     // Default the picker back to the stored preference for a fresh chat.
     setModel(readStoredModel())
@@ -311,15 +315,17 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     [draft, busy, model, thinking, workspace]
   )
 
-  // Enter / the arrow button — the quick default. A NEW chat goes Fast (the
-  // "Fast must stay fast" invariant: Enter never triggers the five-pass
-  // interview); a continuing thread keeps its stored mode inside the store.
+  // #258: a NEW chat requires a deliberately chosen mode — Enter no longer
+  // silently defaults to Fast (the old D4 "Enter stays Fast" invariant is
+  // overridden). A continuing thread keeps its stored mode inside the store,
+  // so the mode passed here is only read for the first message of a thread.
   const submit = useCallback(
     (e?: FormEvent) => {
       e?.preventDefault()
-      submitWith('fast')
+      if (activeIdRef.current == null && pendingMode == null) return
+      submitWith(pendingMode ?? 'fast')
     },
-    [submitWith]
+    [submitWith, pendingMode]
   )
 
   const stop = useCallback(() => {
@@ -691,35 +697,54 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                   </button>
                 </div>
               ) : null}
-              {/* Spec 008 F2: Fast / Complex intake entry. On a NEW chat the two
-                  buttons choose the mode for this feature (per-feature, no sticky
-                  preference — D4); a Complex thread then shows its pass progress.
-                  Enter/arrow stays Fast so a small ask stays fast. */}
+              {/* #258 (supersedes spec 008 F2 pills): on a NEW chat the mode is a
+                  deliberate pre-work choice — two large cards, picked BEFORE the
+                  composer accepts input. No Enter=Fast default; per-feature, no
+                  sticky preference. A Complex thread then shows its pass progress. */}
               {!active ? (
-                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <div className="mb-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                   <button
                     type="button"
-                    onClick={() => submitWith('fast')}
-                    disabled={!draft.trim() || busy}
-                    title="One prompt — the quick intake (Enter also sends Fast)"
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[12.5px] font-medium transition-colors hover:bg-accent disabled:opacity-40"
+                    onClick={() => {
+                      setPendingMode('fast')
+                      textareaRef.current?.focus()
+                    }}
+                    aria-pressed={pendingMode === 'fast'}
+                    className={`flex flex-col items-start gap-1.5 rounded-2xl border p-4 text-left transition-colors ${
+                      pendingMode === 'fast'
+                        ? 'border-foreground/40 bg-accent ring-2 ring-foreground/15'
+                        : 'border-border bg-card hover:border-foreground/25 hover:bg-accent/60'
+                    }`}
                   >
-                    <Zap className="size-3.5" />
-                    Fast feature
+                    <span className="inline-flex items-center gap-2 text-[14.5px] font-semibold">
+                      <Zap className="size-4" />
+                      Fast feature
+                    </span>
+                    <span className="text-[12.5px] leading-relaxed text-muted-foreground">
+                      One prompt, straight to a reviewable draft. Best for small, clear asks.
+                    </span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => submitWith('socratic')}
-                    disabled={!draft.trim() || busy}
-                    title="A guided five-pass interview (WHO → WHAT → WHY → done → risks)"
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[12.5px] font-medium transition-colors hover:bg-accent disabled:opacity-40"
+                    onClick={() => {
+                      setPendingMode('socratic')
+                      textareaRef.current?.focus()
+                    }}
+                    aria-pressed={pendingMode === 'socratic'}
+                    className={`flex flex-col items-start gap-1.5 rounded-2xl border p-4 text-left transition-colors ${
+                      pendingMode === 'socratic'
+                        ? 'border-foreground/40 bg-accent ring-2 ring-foreground/15'
+                        : 'border-border bg-card hover:border-foreground/25 hover:bg-accent/60'
+                    }`}
                   >
-                    <Brain className="size-3.5" />
-                    Complex feature
+                    <span className="inline-flex items-center gap-2 text-[14.5px] font-semibold">
+                      <Brain className="size-4" />
+                      Complex feature
+                    </span>
+                    <span className="text-[12.5px] leading-relaxed text-muted-foreground">
+                      A guided interview that pins down scope first. Best for big or fuzzy work.
+                    </span>
                   </button>
-                  <span className="text-[11px] text-muted-foreground/60">
-                    Fast = one prompt · Complex = a guided 5-pass interview
-                  </span>
                 </div>
               ) : activeIntake?.mode === 'socratic' ? (
                 <div className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
@@ -735,8 +760,13 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                   onKeyDown={onKeyDown}
                   rows={1}
                   autoFocus
-                  placeholder="Describe a feature or fix in your own words"
-                  className="max-h-40 flex-1 resize-none overflow-y-auto bg-transparent py-1.5 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  disabled={!active && pendingMode == null}
+                  placeholder={
+                    !active && pendingMode == null
+                      ? 'Pick Fast or Complex above to start'
+                      : 'Describe a feature or fix in your own words'
+                  }
+                  className="max-h-40 flex-1 resize-none overflow-y-auto bg-transparent py-1.5 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed"
                 />
                 {busy ? (
                   <button
@@ -751,7 +781,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                 ) : (
                   <button
                     type="submit"
-                    disabled={!draft.trim()}
+                    disabled={!draft.trim() || (!active && pendingMode == null)}
                     className="mb-0.5 inline-flex size-8 flex-none items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-85 disabled:opacity-30"
                     aria-label="Send"
                     title="Send (⏎)"
@@ -1485,7 +1515,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
         What should we build?
       </h2>
       <p className="mt-2 max-w-[26rem] text-[14px] leading-relaxed text-muted-foreground">
-        Describe a feature. I'll ask a couple of sharp questions, then draft GitHub issues you can
+        Pick Fast or Complex below, then describe the feature. I'll draft GitHub issues you can
         review before anything is filed.
       </p>
       <div className="mt-7 flex flex-wrap justify-center gap-2">
