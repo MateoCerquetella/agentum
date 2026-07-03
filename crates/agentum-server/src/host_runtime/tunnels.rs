@@ -1,20 +1,85 @@
 //! SSH reverse/forward tunnel management.
 use super::*;
 
-/// Open (or refresh) BOTH pooled SSH masters for `host` with a no-op remote
-/// command. The boot-time/periodic warmer calls this so interactive remote ops
-/// AND the first stream tail find a live master instead of paying the 1-3s
-/// TCP+auth handshake. Warming the streaming master matters most: it means the
-/// first session's `tail -f` multiplexes onto a hot connection instead of
-/// opening a cold one (~2s) and stalling the first live updates. No-op for local
-/// hosts. The streaming warm is best-effort — its failure never fails the call.
+/// How long a muxed health probe waits before declaring a pooled master wedged.
+/// A cold-but-healthy connect pays TCP+auth (~1–3s, ConnectTimeout=8), so 10s
+/// clears a legitimate fresh open; a master whose TCP has silently died answers
+/// neither (its own ServerAlive takes ~15s to notice), so the probe times out
+/// and we evict rather than let the next op attach and hang.
+const MASTER_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Evict a pooled ControlMaster (`ssh -O exit`) — best-effort, bounded. Talks to
+/// the master over its local control socket, so it reaps even a TCP-dead master.
+/// A missing socket just exits non-zero; either way the next `ControlMaster=auto`
+/// op opens a clean master instead of attaching to a wedged/orphaned one.
+pub async fn evict_ssh_master(host: &Host, mux: SshMux) {
+    let Some(mut cmd) = ssh_control_exit_cmd(host, mux) else {
+        return;
+    };
+    // 5s is generous for a local-socket request; bound it so a truly stuck ssh
+    // process can't wedge the warmer/reestablish path that called us.
+    let _ = timeout(Duration::from_secs(5), cmd.output()).await;
+}
+
+/// Probe one pooled master with a bounded, **muxed** no-op and evict it ONLY if
+/// it is genuinely dead. Unlike [`ssh_output`] (which retries unmuxed and so
+/// *masks* a dead master), this rides only the pooled socket.
+///
+/// Eviction is deliberately conservative — a healthy master may be SHARED with a
+/// concurrent agentum instance, and reaping it out from under that instance is
+/// worse than leaving a rare stale one:
+///   * clean success → healthy (or freshly opened by this probe) → keep;
+///   * timeout / spawn error → the far end is gone (wedged TCP) → evict;
+///   * non-zero WITH a mux-transport error (broken pipe / "failed to connect to
+///     new control master") → the master socket is dead → evict;
+///   * any other non-zero (a `MaxSessions` channel refusal on a BUSY master, a
+///     connect timeout to a genuinely-down host with no socket to reap) → leave
+///     it: the master is alive-but-busy, or there is nothing to evict anyway.
+async fn probe_or_evict_master(host: &Host, mux: SshMux) {
+    match timeout(
+        MASTER_PROBE_TIMEOUT,
+        ssh_command_opts(host, "true", mux).output(),
+    )
+    .await
+    {
+        Ok(Ok(out)) if out.status.success() => {}
+        Ok(Ok(out)) => {
+            if is_mux_transport_error(&String::from_utf8_lossy(&out.stderr)) {
+                evict_ssh_master(host, mux).await;
+            }
+        }
+        // Timed out attaching (wedged master) or the ssh process failed to spawn.
+        Ok(Err(_)) | Err(_) => evict_ssh_master(host, mux).await,
+    }
+}
+
+/// Open (or refresh) BOTH pooled SSH masters for `host`, **evicting a wedged one
+/// first**. The boot-time/periodic warmer calls this so interactive remote ops
+/// AND the first stream tail find a *live* master instead of attaching to a dead
+/// pooled socket (an orphan from a prior app instance, or one whose TCP died on
+/// a slept laptop / network change) and hanging — the "SSH never reconnects
+/// after a while or an app reload" freeze.
+///
+/// Each master is first health-probed on its own pooled socket; only a probe
+/// *failure* evicts, so a healthy master (including one shared with a concurrent
+/// agentum instance) is preserved and not churned. After the probe, both are
+/// warmed fresh so a cold or just-evicted host still ends hot. No-op for local
+/// hosts; the streaming leg is best-effort — only interactive failure is fatal.
 pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     if !matches!(host.kind, HostKind::Ssh { .. }) {
         return Ok(());
     }
-    // Establish the streaming master (`cms-`) alongside the interactive one so
-    // both are hot before the user interacts. Run concurrently; the streaming
-    // leg is best-effort.
+    // Reap a wedged interactive/streaming master before warming (only a
+    // genuinely-dead one — see `probe_or_evict_master`). Concurrent: one
+    // master's probe must not gate the other's.
+    tokio::join!(
+        probe_or_evict_master(host, SshMux::Interactive),
+        probe_or_evict_master(host, SshMux::Streaming),
+    );
+    // Warm both fresh: the probe already reopened a healthy master (its `true`
+    // ran over it) or evicted a wedged one that this reopens. Interactive rides
+    // `ssh_output` (unmuxed retry) so a racing reopen still lands; streaming is
+    // best-effort.
     let stream_warm = ssh_command_opts(host, "true", SshMux::Streaming).output();
     let (interactive, _) = tokio::join!(ssh_output(host, "true", SSH_TIMEOUT), stream_warm);
     interactive.map_err(map_ssh_io)?;

@@ -472,6 +472,38 @@ pub fn ssh_control_local_cancel_cmd(host: &Host, mac_port: u16, host_port: u16) 
     Some(cmd)
 }
 
+/// Build `ssh -O exit -o ControlPath=<mux socket> user@host` — tell a pooled
+/// ControlMaster to shut down and remove its socket. Talks to the master over
+/// its LOCAL control socket, not the network, so it reaps even a master whose
+/// TCP has silently died (slept laptop, dropped link, orphaned survivor of a
+/// prior app instance): the master process is still alive to process the exit
+/// request. Used to evict a *wedged* master so the next `ControlMaster=auto`
+/// op opens a clean one instead of attaching to the dead one and hanging.
+///
+/// Returns `None` for a non-SSH host or an un-pooled mux ([`SshMux::Off`] has
+/// no socket to address). Best-effort: a missing socket just exits non-zero.
+pub fn ssh_control_exit_cmd(host: &Host, mux: SshMux) -> Option<Command> {
+    let HostKind::Ssh {
+        user,
+        hostname,
+        port,
+        ..
+    } = &host.kind
+    else {
+        return None;
+    };
+    let control_path = control_path_for(mux)?;
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-o")
+        .arg(format!("ControlPath={control_path}"))
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-O")
+        .arg("exit")
+        .arg(format!("{user}@{hostname}"));
+    Some(cmd)
+}
+
 /// True when ssh's stderr says the *pooled ControlMaster* socket was stale or
 /// racing (the shared master died mid-op), not that the remote command failed.
 /// Such a failure happens at the multiplex layer *before* the script runs, so
@@ -807,6 +839,43 @@ mod tests {
                 "TCPKeepAlive missing (mux={mux:?})"
             );
         }
+    }
+
+    // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn control_exit_cmd_targets_the_selected_master_socket() {
+        // `-O exit` must address a specific pooled master by its ControlPath so
+        // a wedged interactive (cm-) or streaming (cms-) master can be reaped
+        // independently, and carry the host identity the master was opened with.
+        for (mux, leaf) in [(SshMux::Interactive, "/cm-"), (SshMux::Streaming, "/cms-")] {
+            let cmd = ssh_control_exit_cmd(&ssh_host(SshAuth::Agent), mux)
+                .expect("ssh host yields an exit command");
+            assert_eq!(cmd.as_std().get_program().to_string_lossy(), "ssh");
+            let args = arg_strings(&cmd);
+            assert!(args.contains(&"-O".to_string()), "missing -O: {args:?}");
+            assert!(args.contains(&"exit".to_string()), "missing exit: {args:?}");
+            let control_path = args
+                .iter()
+                .find(|a| a.starts_with("ControlPath="))
+                .unwrap_or_else(|| panic!("missing ControlPath=: {args:?}"));
+            assert!(
+                control_path.contains(leaf),
+                "exit targeted the wrong master ({mux:?}): {control_path}"
+            );
+            assert!(
+                args.iter().any(|a| a == "2222"),
+                "host port missing: {args:?}"
+            );
+            assert!(
+                args.iter().any(|a| a == "me@box.local"),
+                "user@host missing: {args:?}"
+            );
+        }
+        // Un-pooled connections have no socket to address.
+        assert!(ssh_control_exit_cmd(&ssh_host(SshAuth::Agent), SshMux::Off).is_none());
+        // No master to exit for a local host.
+        assert!(ssh_control_exit_cmd(&local_host(), SshMux::Interactive).is_none());
     }
 
     #[test]
