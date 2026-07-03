@@ -19,9 +19,13 @@ use base64::Engine as _;
 // ControlMaster socket goes stale, so a flaky master never hard-fails a remote
 // op that never actually ran.
 use agentum_tmux::ssh::{
-    SshMux, ssh_command_opts, ssh_control_cancel_cmd, ssh_control_forward_cmd,
-    ssh_control_local_cancel_cmd, ssh_control_local_forward_cmd, ssh_output,
+    is_mux_transport_error, ssh_command_opts, ssh_control_cancel_cmd, ssh_control_exit_cmd,
+    ssh_control_forward_cmd, ssh_control_local_cancel_cmd, ssh_control_local_forward_cmd,
+    ssh_output,
 };
+// Re-exported (not just `use`d) so `crate::host_runtime::SshMux` names the mux
+// selector for the streaming path (`spawn_remote_pane_tail`'s unmuxed escape).
+pub use agentum_tmux::ssh::SshMux;
 use tokio::process::Command;
 use tokio::time::{sleep, timeout};
 

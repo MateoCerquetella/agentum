@@ -477,8 +477,10 @@ async fn delete(
         Ok(host) => {
             let target = tmux_target(&session);
             let outcome = if is_external(&session) {
-                // Never destroy a user-owned tmux session — just disarm the pipe.
-                crate::host_runtime::unpipe_pane(&host, &target).await
+                // Never destroy a user-owned tmux session — just disarm the
+                // pipe (and only when no sibling row still streams this pane).
+                unpipe_external(&state, &host, &session, &target).await;
+                Ok(())
             } else {
                 crate::host_runtime::kill_session(&host, &target).await
             };
@@ -663,7 +665,7 @@ async fn stop(
     if is_external(&session) {
         // Detach only: the tmux session belongs to the user. Disarm the
         // log pipe and keep the target so a later start can reattach.
-        let _ = crate::host_runtime::unpipe_pane(&host, &target).await;
+        unpipe_external(&state, &host, &session, &target).await;
         state
             .store
             .update_status_and_target(id, Status::Stopped, Some(&target))
@@ -693,7 +695,7 @@ async fn kill(
     if is_external(&session) {
         // Even a kill must not destroy a user-owned tmux session —
         // detach (disarm the pipe) and keep the target for reattach.
-        let _ = crate::host_runtime::unpipe_pane(&host, &target).await;
+        unpipe_external(&state, &host, &session, &target).await;
         state
             .store
             .update_status_and_target(id, Status::Stopped, Some(&target))
@@ -758,6 +760,37 @@ fn tmux_target(session: &Session) -> String {
 /// it — only arm/disarm the stream.
 fn is_external(session: &Session) -> bool {
     session.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG)
+}
+
+/// True when another session row on the same host resolves to the same tmux
+/// target — i.e. the pane's single `pipe-pane` slot belongs to a sibling, not
+/// to `session`. External detach paths must then SKIP `unpipe_pane`: a pane
+/// has exactly one pipe, so disarming it here silently freezes the sibling's
+/// stream (no output, keystrokes never echo) with no self-heal on local hosts.
+/// A store error reads as "shared" — wrongly skipping a disarm just leaves a
+/// log appending, while wrongly disarming kills a live session.
+pub(crate) fn pane_shared_with_sibling(session: &Session, all: &[Session]) -> bool {
+    let target = tmux_target(session);
+    let host = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    all.iter().any(|s| {
+        s.id != session.id && s.host_id.unwrap_or(LOCAL_HOST_ID) == host && tmux_target(s) == target
+    })
+}
+
+/// Disarm the pane→log pipe for an external binding, unless the pane is
+/// shared with another session row (see [`pane_shared_with_sibling`]).
+async fn unpipe_external(state: &AppState, host: &Host, session: &Session, target: &str) {
+    let shared = match state.store.list_sessions(None).await {
+        Ok(all) => pane_shared_with_sibling(session, &all),
+        Err(e) => {
+            tracing::warn!(session = %session.id, error = ?e,
+                "sibling check failed; skipping unpipe to protect a possibly-shared pane");
+            true
+        }
+    };
+    if !shared {
+        let _ = crate::host_runtime::unpipe_pane(host, target).await;
+    }
 }
 
 // ---------- /send ----------
@@ -1152,6 +1185,57 @@ mod tests {
         assert!(!parse_refresh("hello"));
         assert!(!parse_refresh(r#"{"resize":{"cols":80,"rows":24}}"#));
         assert!(!parse_refresh(""));
+    }
+
+    // ---- shared-pane guard (issue #244) ----
+
+    use super::pane_shared_with_sibling;
+    use agentum_core::Session;
+    use uuid::Uuid;
+
+    /// Minimal session for the pure guard; built through serde so the helper
+    /// stays valid as optional fields are added to the struct.
+    fn guard_sess(name: &str, target: Option<&str>, host: Option<&str>) -> Session {
+        serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "name": name,
+            "workdir": "/tmp",
+            "tool": "terminal",
+            "model": null,
+            "flags": [],
+            "status": "running",
+            "tmux_target": target,
+            "host_id": host,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_activity_at": null,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn shared_pane_detected_across_stored_and_derived_targets() {
+        // `alpha`'s derived target (`agentum-alpha`) matches the external
+        // binding's stored one — the pane is shared, so unpipe must be skipped.
+        let owner = guard_sess("alpha", None, None);
+        let ext = guard_sess("agentum-alpha-view", Some("agentum-alpha"), None);
+        let all = vec![owner, ext.clone()];
+        assert!(pane_shared_with_sibling(&ext, &all));
+    }
+
+    #[test]
+    fn unshared_pane_and_cross_host_pane_are_not_flagged() {
+        let owner = guard_sess("alpha", Some("agentum-alpha"), None);
+        let solo = guard_sess("my-tmux", Some("my-tmux"), None);
+        let other_host = guard_sess(
+            "agentum-alpha-remote",
+            Some("agentum-alpha"),
+            Some("4bfb2ccf-cdd0-4a82-8793-5d87906da5e0"),
+        );
+        let all = vec![owner, solo.clone(), other_host.clone()];
+        assert!(!pane_shared_with_sibling(&solo, &all));
+        // Same target string on a different host is a different pane.
+        assert!(!pane_shared_with_sibling(&other_host, &all));
     }
 
     // ---- pane snapshot tests ----

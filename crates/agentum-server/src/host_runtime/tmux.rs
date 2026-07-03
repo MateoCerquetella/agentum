@@ -387,26 +387,24 @@ pub(crate) fn remote_tail_script(out_path: &Path, from_offset: Option<u64>) -> R
 /// SSH channel. The caller reads `child.stdout` for raw pane bytes and kills the
 /// child on disconnect (also guarded by `kill_on_drop`). SSH hosts only — local
 /// sessions tail the on-disk log directly via [`stream_session`].
+///
+/// `mux` selects the connection:
+///   * [`SshMux::Streaming`] (the default connect path) — the shared `cms-`
+///     master. One connection per host no matter how many sessions, so opening
+///     the app can't storm sshd's `MaxStartups`; tails stay off the interactive
+///     master's `MaxSessions` budget so keystrokes/execs aren't starved.
+///   * [`SshMux::Off`] — a fresh, unmultiplexed connection. The reconnect
+///     ([`reestablish_tail`]) escalates to this when the streaming master is
+///     wedged or channel-saturated, so a dead pooled master can't permanently
+///     freeze a session's output (it can't self-heal through the pool).
 pub fn spawn_remote_pane_tail(
     host: &Host,
     out_path: &Path,
     from_offset: Option<u64>,
+    mux: SshMux,
 ) -> Result<tokio::process::Child> {
     let script = remote_tail_script(out_path, from_offset)?;
-    // Tails ride a SEPARATE pooled master ([`SshMux::Streaming`], the `cms-`
-    // socket) — NOT the interactive one. Two reasons:
-    //   * Connection storm: a dedicated connection per tail meant opening the
-    //     app fired one fresh TCP+auth handshake PER remote session at once,
-    //     overrunning sshd's `MaxStartups` (10 concurrent) — surplus connects
-    //     timed out ("ssh: connect … Operation timed out") and the client showed
-    //     "[session stream closed]". One shared streaming master = one connection
-    //     per host no matter how many sessions, so no storm.
-    //   * Channel budget: keeping tails off the interactive master leaves its
-    //     `MaxSessions` channels for keystrokes/title/capture execs. The
-    //     streaming master's own budget (10 channels) caps concurrent tails per
-    //     host; past that a tail's channel is refused and it exits — far rarer
-    //     than the every-session storm the dedicated path caused.
-    let mut cmd = ssh_command_opts(host, &script, SshMux::Streaming);
+    let mut cmd = ssh_command_opts(host, &script, mux);
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         // Piped (not null) so a transport failure that ends the tail — e.g. the

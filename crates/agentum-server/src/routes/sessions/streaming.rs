@@ -95,6 +95,16 @@ pub(super) async fn stream_session(
         }
     };
 
+    // Self-heal: re-arm the pane→log pipe before tailing. `pipe-pane -o` is a
+    // no-op while a pipe is live, but a pane whose pipe died (or was disarmed
+    // by a stray external-binding detach — the pre-#244 hijack) stops feeding
+    // this log FOREVER: the session looks frozen and keystrokes never echo,
+    // because the echo can only come back through the pipe. The remote path
+    // re-arms on every connect (`capture_pane_with_log_offset`); this is the
+    // local mirror. Best-effort — a dead/foreign target just fails and the
+    // "[no pane log]" path below reports as before.
+    let _ = agentum_tmux::pipe_pane(&target, &log_path).await;
+
     // Wait briefly for pipe-pane to create the file (it appears milliseconds
     // after `agentum up` returns).
     let mut waited = 0;
@@ -568,8 +578,9 @@ fn spawn_tail_pump(
     host: &Host,
     log: &std::path::Path,
     offset: Option<u64>,
+    mux: crate::host_runtime::SshMux,
 ) -> Option<(tokio::process::Child, tokio::sync::mpsc::Receiver<Bytes>)> {
-    let mut child = crate::host_runtime::spawn_remote_pane_tail(host, log, offset).ok()?;
+    let mut child = crate::host_runtime::spawn_remote_pane_tail(host, log, offset, mux).ok()?;
     let stdout = child.stdout.take()?;
     if let Some(mut stderr) = child.stderr.take() {
         let label = log
@@ -618,6 +629,38 @@ fn spawn_tail_pump(
 /// truly-gone host can't pin the task respawning forever.
 const TAIL_RESPAWN_ATTEMPTS: u32 = 6;
 
+/// Max time a single keystroke write to the persistent remote input channel may
+/// block before the channel is treated as dead. A healthy write down the already-
+/// open stream is sub-millisecond; only a wedged master (TCP silently gone) stalls
+/// it. 3s tolerates a momentary network hiccup on a live channel while bounding a
+/// true wedge so keystrokes fall back to per-exec instead of freezing the pane.
+const INPUT_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How many reconnect attempts ride the pooled streaming master (`cms-`) before
+/// escalating to a fresh, unmultiplexed connection. A transient blip (a channel
+/// briefly freed, a ControlPersist reap) heals on the pooled path within these;
+/// past them the master is presumed wedged or channel-saturated — a state it
+/// can't recover from through the pool — so we evict it and reconnect unmuxed,
+/// which is what stops a dead `cms-` master from permanently freezing output.
+const TAIL_POOLED_ATTEMPTS: u32 = 3;
+
+/// Which SSH connection the `attempt`-th (0-based) tail reconnect should use, and
+/// whether this is the transition attempt that must first evict the wedged pooled
+/// master. Pure so the escalation boundary is unit-tested without a live host:
+/// attempts `< TAIL_POOLED_ATTEMPTS` ride the pooled streaming master; at exactly
+/// `TAIL_POOLED_ATTEMPTS` we evict it once and switch to a fresh unmultiplexed
+/// connection; beyond that we stay unmuxed (no repeated eviction).
+fn tail_reconnect_plan(attempt: u32) -> (crate::host_runtime::SshMux, bool) {
+    if attempt < TAIL_POOLED_ATTEMPTS {
+        (crate::host_runtime::SshMux::Streaming, false)
+    } else {
+        (
+            crate::host_runtime::SshMux::Off,
+            attempt == TAIL_POOLED_ATTEMPTS,
+        )
+    }
+}
+
 /// Backoff before the `attempt`-th (0-based) tail respawn: 250 ms, 500 ms, 1 s,
 /// 2 s, then capped at 3 s. Exponential so a momentary blip heals fast while a
 /// longer outage doesn't hammer the host; total budget ≈ 10 s across all attempts
@@ -646,6 +689,19 @@ async fn reestablish_tail(
 ) -> Option<(tokio::process::Child, tokio::sync::mpsc::Receiver<Bytes>)> {
     for attempt in 0..TAIL_RESPAWN_ATTEMPTS {
         sleep(tail_respawn_backoff(attempt)).await;
+        // Escalate off the pooled streaming master once the pooled attempts have
+        // failed: a wedged/saturated `cms-` master can't heal through the pool.
+        // At the transition, evict it (so the NEXT fresh connect reopens a clean
+        // pooled master) and reconnect this tail on a fresh unmultiplexed
+        // connection — the escape hatch that unfreezes a session whose streaming
+        // master died. `capture_pane_with_log_offset` rides the interactive
+        // master via `ssh_output`, which already retries unmuxed, so the
+        // re-snapshot below still succeeds even when both masters are wedged.
+        let (mux, evict_first) = tail_reconnect_plan(attempt);
+        if evict_first {
+            crate::host_runtime::evict_ssh_master(host, crate::host_runtime::SshMux::Streaming)
+                .await;
+        }
         // Re-sample the snapshot + log offset together so the resumed tail starts
         // exactly past what we repaint. A capture error means the host is still
         // unreachable — back off and retry rather than give up.
@@ -654,7 +710,7 @@ async fn reestablish_tail(
         else {
             continue;
         };
-        if let Some((child, tail_rx)) = spawn_tail_pump(host, log, Some(offset)) {
+        if let Some((child, tail_rx)) = spawn_tail_pump(host, log, Some(offset), mux) {
             // Repaint only once the tail is live, and the snapshot+offset were
             // sampled together, so the snapshot frame precedes the resumed tail
             // bytes (which buffer in the mpsc until the select loop reads them).
@@ -790,7 +846,12 @@ pub(super) async fn stream_remote_session(
     // sessions open at once), so on failure fall through to the same bounded
     // re-establish the mid-stream drop path uses, rather than bailing to a blank
     // pane.
-    let (mut child, mut tail_rx) = match spawn_tail_pump(&host, &log, log_offset) {
+    let (mut child, mut tail_rx) = match spawn_tail_pump(
+        &host,
+        &log,
+        log_offset,
+        crate::host_runtime::SshMux::Streaming,
+    ) {
         Some(p) => p,
         None => match reestablish_tail(&host, &target, &log, &mut socket).await {
             Some(p) => p,
@@ -848,12 +909,27 @@ pub(super) async fn stream_remote_session(
                     // marshalled command — past that tmux errors, the remote
                     // loop swallows it, and the paste vanished silently.
                     let lines = crate::host_runtime::encode_input_hex_lines(&buf);
-                    if si.write_all(&lines).await.is_ok() && si.flush().await.is_ok() {
+                    // Bound the write. A healthy write down the already-open
+                    // channel is sub-millisecond; it only blocks when the far
+                    // end stops draining — a wedged master whose TCP silently
+                    // died. Without this bound `write_all().await` hangs
+                    // FOREVER, and since every keystroke queues behind it the
+                    // pane goes permanently untypeable ("can't even type").
+                    // A timeout is treated exactly like a broken pipe: drop the
+                    // persistent writer and fall through to per-exec `send_bytes`
+                    // (itself unmuxed-retrying and bounded), so typing degrades
+                    // to slow — never frozen.
+                    let wrote = tokio::time::timeout(INPUT_WRITE_TIMEOUT, async {
+                        si.write_all(&lines).await?;
+                        si.flush().await
+                    })
+                    .await;
+                    if matches!(wrote, Ok(Ok(()))) {
                         delivered = true;
                     } else {
-                        // Persistent channel broke — drop the child (kills the
-                        // dead ssh) and fall back to per-exec for this and every
-                        // subsequent keystroke.
+                        // Persistent channel broke or wedged — drop the child
+                        // (kills the dead ssh) and fall back to per-exec for this
+                        // and every subsequent keystroke until it re-establishes.
                         stdin = None;
                         drop(writer.take());
                     }
@@ -1005,6 +1081,35 @@ mod tests {
         assert_eq!(&out[..], b"onetwothree");
         // Drained everything that was waiting.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn tail_reconnect_escalates_off_the_pooled_master_after_pooled_attempts() {
+        use crate::host_runtime::SshMux;
+        // The pooled-master attempts ride the streaming master and never evict.
+        for a in 0..TAIL_POOLED_ATTEMPTS {
+            assert_eq!(
+                tail_reconnect_plan(a),
+                (SshMux::Streaming, false),
+                "attempt {a} should stay pooled without eviction"
+            );
+        }
+        // The transition attempt evicts the wedged master exactly once, then
+        // switches to a fresh unmultiplexed connection — the escape hatch that
+        // unfreezes a session whose `cms-` master died.
+        assert_eq!(
+            tail_reconnect_plan(TAIL_POOLED_ATTEMPTS),
+            (SshMux::Off, true),
+            "the transition attempt must evict once and go unmuxed"
+        );
+        // Subsequent attempts stay unmuxed and must NOT re-evict (one reap only).
+        for a in (TAIL_POOLED_ATTEMPTS + 1)..(TAIL_RESPAWN_ATTEMPTS + 2) {
+            assert_eq!(
+                tail_reconnect_plan(a),
+                (SshMux::Off, false),
+                "attempt {a} should stay unmuxed without re-evicting"
+            );
+        }
     }
 
     #[test]
