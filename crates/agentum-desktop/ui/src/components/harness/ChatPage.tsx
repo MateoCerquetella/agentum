@@ -108,7 +108,6 @@ const NO_MESSAGES: StoredTurn[] = []
 export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = {}) {
   const repos = useAppStore((s) => s.repos)
   const activeRepoId = useAppStore((s) => s.activeRepoId)
-  const setActiveView = useAppStore((s) => s.setActiveView)
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openProjectHub = useAppStore((s) => s.openProjectHub)
 
@@ -514,7 +513,12 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
           actions={
             <button
               type="button"
-              onClick={() => setActiveView('tasks')}
+              onClick={() =>
+                openTaskPage({
+                  preselectedRepoId: pinnedRepo?.id ?? workspaceId ?? undefined,
+                  taskSource: 'github'
+                })
+              }
               className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent"
             >
               <Columns3 className="size-3.5" /> Open Board
