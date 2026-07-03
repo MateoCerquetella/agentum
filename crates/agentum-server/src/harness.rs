@@ -352,19 +352,25 @@ impl HarnessEngine {
     /// Record a verify failure: bump `attempts`, store the error. Returns
     /// `true` when the feature has now exhausted `max_retries` and is `Blocked`;
     /// otherwise the feature is left `Coding` for another attempt.
+    /// Returns `(blocked, attempts)` — `blocked` is true once the feature has hit
+    /// `max_retries`, and `attempts` is the post-increment failure count (spec
+    /// 008 F1 #16 threads it into the `status/blocked` comment). `attempts` is 0
+    /// only when the feature id isn't found (a no-op — nothing was recorded).
     pub async fn record_feature_failure(
         &self,
         harness_id: Uuid,
         feature_id: &str,
         output: &str,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<(bool, u32)> {
         let run = self.get_run(harness_id).await?;
-        let (blocked, workdir, features_snapshot) = {
+        let (blocked, attempts, workdir, features_snapshot) = {
             let mut r = run.write().await;
             let max_retries = r.features.max_retries;
             let mut blocked = false;
+            let mut attempts = 0;
             if let Some(feature) = r.features.features.iter_mut().find(|f| f.id == feature_id) {
                 feature.attempts += 1;
+                attempts = feature.attempts;
                 feature.last_error = Some(tail(output, 4000));
                 if feature.attempts >= max_retries {
                     feature.state = FeatureState::Blocked;
@@ -373,7 +379,7 @@ impl HarnessEngine {
                     feature.state = FeatureState::Coding;
                 }
             }
-            (blocked, r.workdir.clone(), r.features.clone())
+            (blocked, attempts, r.workdir.clone(), r.features.clone())
         };
 
         // Persist outside the lock-held mutation above.
@@ -390,7 +396,7 @@ impl HarnessEngine {
             feature_id: feature_id.to_string(),
             state: new_state,
         });
-        Ok(blocked)
+        Ok((blocked, attempts))
     }
 
     /// One-shot verify used by the manual `POST /{id}/verify` endpoint: run the
@@ -707,7 +713,7 @@ mod tests {
     use super::*;
     // Types/fns these tests use that the (slimmed) non-test imports no longer
     // pull in, plus the two drive-internal fns under test (now in `drive`).
-    use super::drive::{resolve_qa_mode, wait_for_settle};
+    use super::drive::{SettleOutcome, resolve_qa_mode, wait_for_settle};
     use agentum_core::Event;
     use std::path::Path;
     use std::time::Duration;
@@ -1115,22 +1121,24 @@ mod tests {
         let (ok1, out1) = engine.run_verify_once(id, "feat-1").await.unwrap();
         assert!(!ok1);
         assert!(out1.contains("boom"));
-        let blocked1 = engine
+        let (blocked1, attempts1) = engine
             .record_feature_failure(id, "feat-1", &out1)
             .await
             .unwrap();
         assert!(!blocked1);
+        assert_eq!(attempts1, 1, "the returned attempts count tracks the state");
         let f = engine.status(id).await.unwrap().features.features[0].clone();
         assert_eq!(f.state, FeatureState::Coding);
         assert_eq!(f.attempts, 1);
 
         // Second failure: attempts=2 >= 2 → Blocked.
         let (_ok2, out2) = engine.run_verify_once(id, "feat-1").await.unwrap();
-        let blocked2 = engine
+        let (blocked2, attempts2) = engine
             .record_feature_failure(id, "feat-1", &out2)
             .await
             .unwrap();
         assert!(blocked2);
+        assert_eq!(attempts2, 2, "attempts at the block cap is the retry count");
         let f = engine.status(id).await.unwrap().features.features[0].clone();
         assert_eq!(f.state, FeatureState::Blocked);
         assert!(f.last_error.is_some());
@@ -1330,10 +1338,15 @@ mod tests {
         });
 
         let begin = Instant::now();
-        wait_for_settle(&tx, sid, grace, long_timeout).await;
+        let outcome = wait_for_settle(&tx, sid, grace, long_timeout).await;
         let elapsed = begin.elapsed();
         emitter.await.unwrap();
 
+        assert_eq!(
+            outcome,
+            SettleOutcome::Settled,
+            "an early idle is a Settled outcome, not a timeout"
+        );
         assert!(
             elapsed >= grace,
             "must honor the grace minimum, got {elapsed:?}"
@@ -1360,9 +1373,41 @@ mod tests {
         });
 
         let begin = Instant::now();
-        wait_for_settle(&tx, sid, grace, timeout).await;
+        let outcome = wait_for_settle(&tx, sid, grace, timeout).await;
         // No event for `sid` ever arrives → we fall through at the settle timeout.
+        // Spec 008 F1 #15: that fall-through is now a LOUD `TimedOut`, not a
+        // silent `()`, so the drive loop can warn instead of gating in silence.
+        assert_eq!(
+            outcome,
+            SettleOutcome::TimedOut,
+            "no settle signal must surface as TimedOut"
+        );
         assert!(begin.elapsed() >= timeout, "should wait out the timeout");
+    }
+
+    #[tokio::test]
+    async fn settle_returns_crashed_on_session_stop() {
+        // A session that stops/crashes mid-turn is a distinct outcome from a
+        // clean settle or a timeout — the caller may want to react differently.
+        let (tx, _keepalive) = broadcast::channel::<Event>(16);
+        let sid = Uuid::new_v4();
+        let grace = Duration::from_millis(50);
+        let timeout = Duration::from_secs(60);
+
+        let tx2 = tx.clone();
+        let emitter = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = tx2.send(Event::new("session.stopped").with_session(sid, "s"));
+        });
+
+        let begin = Instant::now();
+        let outcome = wait_for_settle(&tx, sid, grace, timeout).await;
+        emitter.await.unwrap();
+        assert_eq!(outcome, SettleOutcome::Crashed);
+        assert!(
+            begin.elapsed() < Duration::from_secs(5),
+            "a stop must return promptly, not wait out the timeout"
+        );
     }
 }
 

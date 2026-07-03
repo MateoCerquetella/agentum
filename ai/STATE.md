@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 007-issue-detail-and-generated-descriptions
-- **phase:** done        <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (007 **SHIP-READY** — Reviewer SIGN-OFF 2026-07-02, zero Blockers, `review.md`; commit `96c98955`. Releasing per Mateo's standing "make a new release" instruction. Should-fix follow-up: ChatPage repoId:'' degenerate edge → fold into #226. 006 RELEASED v0.54.0)
+- **current_spec:** 008-finish-the-loop
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,65 +64,67 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-02 | Reviewer | **007 SIGN-OFF → SHIP-READY** (`review.md`). All 5
-  focus items pass: fix COMPLETE (grepped every author:null stub — all now
-  carry repoId so hydration fires; header reads hydrated displayWorkItem);
-  never-panic on new gh cmds + LLM endpoint (`.ok()?`, typed 400s, no
-  prompt secret leakage); armed-ineligible double-action = correct
-  degradation; deriveIssueSideEffectGate is the single EXECUTION source.
-  0 Blockers. 1 Should-fix: ChatPage `repoId: filedRepoId ?? ''` degenerate
-  edge (no pinnedRepo AND no workspaceId → silent shell, not #237's path) →
-  #226 or staging-QA. 3 nits (canScaffoldSpec 2nd derivation for RENDER only;
-  "four places" comment lists five; rsplit(['-','r'])). "Disciplined bug-fix
-  landing — root causes real, each fix hits the actual seam." Status → Done.
-  Phase → done. **RELEASE = per standing instruction.**
-- 2026-07-02 | Tester | **007 verdict PASS 9/9 ACs** (`verification.md`).
-  Independent re-runs: server 539/0/5, desktop 75/0/4 (+3 gh mapping tests),
-  clippy -D warnings green, vite 1m36s, vitest 10/10. All 3 tasks.md root
-  causes CONFIRMED against base `27f29f1c` (read the base None-stubs directly)
-  + head. Sacred surfaces clean (drive/helpers/task_sink diffs EMPTY;
-  harness.rs = only the .gitignore pin; auth.rs empty). 4 deviations accurate.
-  4 Info findings none blocking (degenerate repoId:'' edge if Chat-filed w/o
-  pinnedRepo AND workspaceId — early-returns w/o error surface; comment-id
-  URL-fragment dependence; synthetic gh fixtures; armed-ineligible double
-  action). Handoff `01-tester-to-reviewer.md`. Phase → reviewer.
-- 2026-07-02 | Developer | **007 fixes + feature GREEN** (`96c98955`; compressed
-  SDD, spec.md+tasks.md carry the trail). ROOT CAUSES: (1) detail page's ONLY
-  data source `gh_work_item_details()` was a STUB returning None (gh.rs:516),
-  null cached as loaded-success, header read the un-hydrated prop — GitHub had
-  everything, the app showed 'unknown/No description'; (2) toggles: four
-  diverging silent gates + armed state outliving eligibility + ChatPage
-  hand-off missing repoId → armed-but-skipped total no-op. FIXED: real gh view
-  --json hydration + visible errors; pure `deriveIssueSideEffectGate` feeding
-  all paths + skip-reason toasts + disarm on repo-switch/unlink. FEATURE:
-  POST /api/github/issues/draft-body (LLM, chat plumbing, SDD-shaped) +
-  'Generate description' button (fills textarea, never files silently).
-  BONUS: `.agentum-harness/.gitignore` self-ignore (the 'bad inside the
-  worktree' fix). NOT GUI-verified. Phase → tester.
-- 2026-07-02 | Reviewer | **006 SIGN-OFF → SHIP-READY** (`review.md`). All 6
-  focus items pass (four pins re-verified character-level; deviation-2 fix
-  confirmed COMPLETE — createIssuesFromChat is the only plan-constructing
-  caller; C1 one-hunk discipline + documented first-pair invariant; opposite
-  defaults named in read_settings' doc; brief deltas verbatim). 0 Blockers,
-  0 new Should-fix; 4 nits (stale gh_bin doc contradicted by the two
-  env-locked tests; parse_label_names comment overstates stable-sort dedup;
-  empty-label-repo note for staging QA; refs-not-state rationale lives only
-  in a comment) — Nits 1-2 fold into #226's docs pass. "The riskiest
-  correction (C4) was caught landing at the wrong seam and fixed at the real
-  one with the architecture's error documented rather than papered over."
-  spec.md Status → Done. Phase → done. **RELEASE = Mateo.**
-- 2026-07-02 | Tester | **006 verdict PASS 9/9 ACs + C1** (`verification.md`).
-  Independent re-runs: 535/0/5 lib (139.3s), clippy -D warnings green, vite
-  2m23s, vitest 15/0, scoped chat 39/harness 86/github 32/task_sink 26. All
-  8 deviations audited ACCURATE — incl. confirming the architecture's
-  "Confirm spreads the plan verbatim" claim was WRONG (base
-  createIssuesFromChat rebuilt {title,summary,tasks}; deviation-2 fix at the
-  rebuild seam is correct). Stored-turn "not reproducible" verdict audited
-  SOUND (draftPlan ephemeral, StoredTurn persists no plan). F2 byte pin
-  traced character-by-character vs the base commit. Sacred surfaces clean
-  (drive.rs = one C1 hunk; helpers.rs untouched; auth/registry diffs empty;
-  exactly TWO env-locked tests). 5 Info findings none blocking (labels-empty
-  repo shows no chips; armed-copy staleness; 422→fallback fold; first-pair
-  provenance; author-fetch ordering pre-existing). GUI + live C1 label-flip
-  = deferred to qa.sh/staging. Handoff `04-tester-to-reviewer.md`. Phase →
-  reviewer.
+- 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
+  F2/F3 deferred to next developer iterations). Built in architecture order:
+  Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
+  Step2 `apply_blocked_transition`+`status/blocked` GitHub-only label, TrackerPhase
+  stays 4 (D-A), remove-set widened to 5-minus-target, `record_feature_failure`→
+  (blocked,attempts) (#16); Step4 pure `start-gated-run-precondition`/`composer-modal-props`
+  + armed-!repoId toast + server-error-detail + `subscribeHarnessRunErrors` bridge
+  (#2 #226 edge, #5); Step5 `#[ignore]` `harness_start_work_live{,_roles}.rs` +
+  `gh_in_dir` honors AGENTUM_GH_BIN; Step3 (sacred, LAST) `await_repl_ready→bool`
+  + `inject_prompt→Result<bool>`, send-sequence BYTE-IDENTICAL, loud readiness log
+  ×4 (#14a). Gates: server 546/0/5, executor 21/0, fmt+clippy clean, vite green,
+  vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
+  green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
+  developer → F2 next.
+- 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
+  intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
+  Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
+  extracted VERBATIM (Fast byte-identical, pinned); `build_intake_instructions`
+  router; `socratic_stage_instructions`+`socratic_pass_body` (5 passes WHO/WHAT/
+  WHY/done/risks, reflect-back, stage5→"Preview issues"); `chat_auth_gate` shared
+  no-creds gate (Complex surfaces NO_CREDS by construction). Client: pure
+  `lib/socratic-intake.ts` reducer (one pass/turn, cap5, Fast never advances) +
+  localStorage `Conversation.intake` (D1 no new table) + two ChatPage buttons +
+  Enter-stays-Fast. Gates: server 552/0/5 (F1 546 held), vitest 10/0 new, fmt+
+  clippy clean, vite green; full vitest 139-fail = PROVEN pre-existing baseline
+  (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
+  untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
+  surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.
+- 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
+  (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
+  `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
+  (deriveWorkspaceGoalSeed/isGoalStepReady/firstGoalStepBlocker/
+  OPTIONAL_WORKSPACE_STEPS/shouldStartAtGoalStep/revealDetails) + thin
+  `NewWorkspaceGoalStep.tsx` (goal textarea + reused RepoCombobox workdir) +
+  modal renders it as default first screen, "Skip to details" → today's composer
+  (D3); goal+workdir required, worktree/scaffold/tracker skippable (D9);
+  `useComposerState` NEVER edited (props only), F1's initialStartGatedRunProp
+  intact. Gates: vite+tsc green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3
+  pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
+  AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
+  code-complete → tester.**
+- 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
+  HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
+  every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
+  compile #[ignore], vite green, spec-008 vitest 34/0; full vitest 139-fail
+  baseline corroborated PRE-EXISTING via 4 methods (disjoint set / no-reference
+  grep / diff-scope / failure-kind). All 11 deviations ACCURATE against code;
+  sacred surfaces clean (inject_prompt send-sequence byte-identical, await_repl_ready
+  poll logic unchanged, apply_blocked_transition Ok-Skipped-never-Err, compose_issue_body
+  + useComposerState internals untouched, F1 initialStartGatedRunProp preserved).
+  NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
+  AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
+  +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
+- 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
+  `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
+  sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
+  + `await_repl_ready` poll/trust unchanged, only return type); `apply_blocked_transition`
+  never-`Err` + honest 5-name remove-set (board can't lie either direction); no
+  D6 shell injection (argv exec); Fast byte-identical (construction + pin); live
+  test asserts the REAL leg (MARKER in pane = prompt landed, not hollow); F3
+  preserves F1 Tasks hop; no new `is_public` holes; D1–D9 honored. 1 Should-fix
+  = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
+  ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
+  HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).

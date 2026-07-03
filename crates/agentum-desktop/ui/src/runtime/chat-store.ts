@@ -12,6 +12,7 @@
 // preserves the exact `agentum.chat.conversations.v1` storage contract that
 // chat-history owns, and the in-flight streams are imperative async processes
 // holding AbortControllers — not serializable app state.
+import { advanceIntake, type IntakeMode, type IntakeState, normalizeIntake, SOCRATIC_FIRST_STAGE } from '../lib/socratic-intake'
 import { type ChatStreamDelta, streamChat } from './chat-client'
 import {
   type Conversation,
@@ -156,6 +157,11 @@ export function sendChatMessage(opts: {
   thinking: boolean
   workdir?: string
   repoId?: string
+  /** Spec 008 F2: intake mode for a NEW conversation (`'fast'` default). A
+   *  CONTINUING thread inherits its stored mode/stage, so this is ignored for it
+   *  — the mode is chosen once, at the entry button (D4: per-feature, no sticky
+   *  preference is stored elsewhere). */
+  mode?: IntakeMode
 }): string {
   const text = opts.text.trim()
   const convoId = opts.conversationId ?? newConversationId()
@@ -171,9 +177,18 @@ export function sendChatMessage(opts: {
   // is excluded). streamChat strips the UI-only fields itself.
   const history = [...(existing?.messages ?? []), userTurn]
 
+  // Spec 008 F2: a continuing thread inherits its stored intake; a NEW thread
+  // starts in the picked mode at pass 1. The stage SENT this turn is the stored
+  // (or initial) one; we persist the ADVANCED stage below so the next user turn
+  // runs the next pass — the client-owned "one pass per turn, never skips" rule.
+  const intakeNow: IntakeState = existing?.intake
+    ? normalizeIntake(existing.intake)
+    : { mode: opts.mode ?? 'fast', stage: SOCRATIC_FIRST_STAGE }
+  const intakeNext: IntakeState = advanceIntake(intakeNow)
+
   const messages: StoredTurn[] = [...history, { role: 'assistant', content: '', thinking: '' }]
   const convo: Conversation = existing
-    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, updatedAt: now }
+    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, updatedAt: now, intake: intakeNext }
     : {
         id: convoId,
         title: titleFromMessages([userTurn]),
@@ -182,7 +197,8 @@ export function sendChatMessage(opts: {
         thinking: opts.thinking,
         createdAt: now,
         updatedAt: now,
-        repoId: opts.repoId
+        repoId: opts.repoId,
+        intake: intakeNext
       }
 
   const ac = new AbortController()
@@ -203,6 +219,10 @@ export function sendChatMessage(opts: {
     workdir: opts.workdir,
     model: opts.model,
     thinking: opts.thinking,
+    // Spec 008 F2: drive the server's per-stage prompt with THIS turn's intake
+    // (Fast ignores stage). The stored stage was already advanced for next turn.
+    mode: intakeNow.mode,
+    stage: intakeNow.stage,
     signal: ac.signal,
     onDelta: (d: ChatStreamDelta) => {
       if (d.type === 'text') content += d.text

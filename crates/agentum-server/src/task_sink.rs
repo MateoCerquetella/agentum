@@ -269,6 +269,24 @@ const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 4] = [
     (TrackerPhase::Done, "status/done", "0e8a16"),
 ];
 
+/// The escalation label for a feature that exhausted its retries (spec 008 D6).
+/// FIXED (not configurable via [`GithubStateMap`]): it is not a pipeline phase —
+/// Linear/board have no "blocked" column — so it stays out of `TrackerPhase`
+/// (D-A) and lives only on the GitHub-label layer. Red (`b60205`).
+const GITHUB_BLOCKED_LABEL: (&str, &str) = ("status/blocked", "b60205");
+
+/// All FIVE canonical status names for the one-per-issue remove-set (spec 008
+/// D6): the four CONFIGURED pipeline names + the fixed blocked name. Every
+/// pipeline transition removes this whole set (minus its own target), so setting
+/// any pipeline label also clears `status/blocked` — the board can't lie in
+/// either direction (a re-driven blocked feature drops the label at InProgress).
+/// Callers dedupe against the target so a name-collision can't remove the target.
+fn all_status_label_names(map: &GithubStateMap) -> Vec<&str> {
+    let mut names: Vec<&str> = map.labels().to_vec();
+    names.push(GITHUB_BLOCKED_LABEL.0);
+    names
+}
+
 /// The canonical (default) GitHub label for a phase. Stays the default-name
 /// accessor after spec 005 F5 made names configurable: [`GithubStateMap`]'s
 /// `Default` delegates here so the two can never drift.
@@ -464,6 +482,39 @@ fn gh_set_status_label_argv<'a>(
         "--add-label",
         target,
     ];
+    // Remove the OTHER four of the five canonical names (3 pipeline + blocked),
+    // deduped by name (spec 008 D6): removing an absent label is a `gh` no-op, so
+    // a pipeline flip also clears any lingering `status/blocked` for free.
+    let mut removed: Vec<&str> = Vec::new();
+    for name in all_status_label_names(map) {
+        if name != target && !removed.contains(&name) {
+            removed.push(name);
+            argv.push("--remove-label");
+            argv.push(name);
+        }
+    }
+    argv
+}
+
+/// Blocked → `status/blocked`, removing the four configured pipeline names.
+/// The mirror of [`gh_set_status_label_argv`] with the target fixed to the
+/// blocked label (spec 008 D6). Deduped by name; the target (blocked) is never
+/// in `map.labels()` on the happy path, so all four pipeline names are removed.
+fn gh_set_blocked_label_argv<'a>(
+    number: &'a str,
+    slug: &'a str,
+    map: &'a GithubStateMap,
+) -> Vec<&'a str> {
+    let target = GITHUB_BLOCKED_LABEL.0;
+    let mut argv = vec![
+        "issue",
+        "edit",
+        number,
+        "--repo",
+        slug,
+        "--add-label",
+        target,
+    ];
     let mut removed: Vec<&str> = Vec::new();
     for name in map.labels() {
         if name != target && !removed.contains(&name) {
@@ -473,6 +524,28 @@ fn gh_set_status_label_argv<'a>(
         }
     }
     argv
+}
+
+/// `gh issue comment` argv (spec 008 D6). Pure — the body is a single argv token
+/// (`--body <body>`), never shell-interpolated, so a multi-line comment with
+/// backticks/newlines is passed to `gh` verbatim and can't inject a flag.
+fn gh_issue_comment_argv<'a>(number: &'a str, slug: &'a str, body: &'a str) -> [&'a str; 7] {
+    ["issue", "comment", number, "--repo", slug, "--body", body]
+}
+
+/// The AC-4 blocked comment: the retry count + the gate-output tail, wrapped in a
+/// GitHub-collapsible `<details>` so a long tail doesn't dominate the thread.
+fn blocked_comment_body(
+    feature_name: &str,
+    gate_label: &str,
+    attempts: u32,
+    gate_tail: &str,
+) -> String {
+    format!(
+        "⛔ **Blocked** — `{feature_name}` failed the {gate_label} after {attempts} attempt(s).\n\n\
+         <details><summary>Gate output (tail)</summary>\n\n```\n{gate_tail}\n```\n</details>\n\n\
+         _Posted by the agentum Harness Engine._"
+    )
 }
 
 /// `https://github.com/{owner}/{repo}/issues/{n}` → `(slug, number)`. Tolerates
@@ -571,6 +644,40 @@ async fn github_transition_with(
     }
 }
 
+/// GitHub block escalation (spec 008 D6): ensure `status/blocked` exists, one
+/// `issue edit` (add blocked + remove the four pipeline names), then one
+/// best-effort comment (retry count + gate tail). `Applied` iff the LABEL edit
+/// succeeds — the comment is secondary, so its failure is dropped, never a
+/// downgrade to `Skipped`. `program`/`map` are explicit so the fake-`gh` test
+/// injects them without env mutation (mirrors [`github_transition_with`]).
+#[allow(clippy::too_many_arguments)]
+async fn github_mark_blocked_with(
+    program: &str,
+    slug: &str,
+    number: &str,
+    feature_name: &str,
+    gate_label: &str,
+    attempts: u32,
+    gate_tail: &str,
+    map: &GithubStateMap,
+) -> TransitionResult {
+    // Ensure the blocked label exists (non-fatal — a shared repo without
+    // label-create permission can still add an existing label).
+    let _ = run_gh(
+        program,
+        &gh_label_ensure_argv(GITHUB_BLOCKED_LABEL.0, slug, GITHUB_BLOCKED_LABEL.1),
+    )
+    .await;
+    // The label edit decides Applied/Skipped.
+    if let Err(reason) = run_gh(program, &gh_set_blocked_label_argv(number, slug, map)).await {
+        return TransitionResult::Skipped(reason);
+    }
+    // Best-effort comment; a failure here never downgrades the applied label.
+    let body = blocked_comment_body(feature_name, gate_label, attempts, gate_tail);
+    let _ = run_gh(program, &gh_issue_comment_argv(number, slug, &body)).await;
+    TransitionResult::Applied
+}
+
 /// Drive a created feature's tracker item to `phase`, dispatching on the provider
 /// recorded when the feature was created. **Best-effort by contract**: returns
 /// `Ok(Skipped)` for providers/states that don't apply and only `Err` for a real
@@ -640,6 +747,66 @@ pub async fn apply_tracker_transition(
             let map = GithubStateMap::from_env();
             Ok(github_transition_with(&gh_bin(), &slug, &number, phase, &map).await)
         }
+        other => Ok(TransitionResult::Skipped(format!(
+            "unknown tracker provider {other:?}"
+        ))),
+    }
+}
+
+/// The block-path sibling of [`apply_tracker_transition`] (spec 008 D6): when a
+/// feature exhausts its retries, escalate on the ISSUE with a `status/blocked`
+/// label plus a comment carrying the retry count and the gate-output tail.
+/// GitHub-only: board/linear have no blocked column, so they
+/// `Skipped("no blocked state")` (D-A — `TrackerPhase` stays four variants).
+/// **Best-effort by contract**: like its sibling it returns only
+/// `Applied`/`Skipped` and NEVER `Err` for a tracker hiccup, so `drive.rs` logs
+/// the outcome and a blocked issue-update failure can never halt the
+/// (already-halted) run.
+///
+/// `store`/`tracker_id` are accepted for signature-parity with
+/// `apply_tracker_transition` (so `drive.rs` calls both identically) but unused
+/// while blocked is GitHub-only — the GitHub arm derives owner/repo + number from
+/// `tracker_url`, and board/linear need no id to skip.
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_blocked_transition(
+    store: &Store,
+    provider: &str,
+    tracker_id: &str,
+    tracker_url: Option<&str>,
+    feature_name: &str,
+    gate_label: &str,
+    attempts: u32,
+    gate_tail: &str,
+) -> anyhow::Result<TransitionResult> {
+    let _ = (store, tracker_id);
+    match provider {
+        "github" => {
+            let Some(url) = tracker_url.map(str::trim).filter(|u| !u.is_empty()) else {
+                return Ok(TransitionResult::Skipped(
+                    "feature has no tracker_url; owner/repo unknown".into(),
+                ));
+            };
+            let Some((slug, number)) = github_slug_and_number_from_issue_url(url) else {
+                return Ok(TransitionResult::Skipped(format!(
+                    "cannot parse a GitHub issue from {url}"
+                )));
+            };
+            let map = GithubStateMap::from_env();
+            Ok(github_mark_blocked_with(
+                &gh_bin(),
+                &slug,
+                &number,
+                feature_name,
+                gate_label,
+                attempts,
+                gate_tail,
+                &map,
+            )
+            .await)
+        }
+        // Board and Linear model no "blocked" state (D-A); the D6 label lives
+        // only on GitHub. A best-effort no-op, never an error.
+        "board" | "linear" => Ok(TransitionResult::Skipped("no blocked state".into())),
         other => Ok(TransitionResult::Skipped(format!(
             "unknown tracker provider {other:?}"
         ))),
@@ -954,17 +1121,18 @@ mod tests {
         assert_eq!(github_slug_and_number_from_issue_url(""), None);
     }
 
-    /// Spec 004 (C4 invariant at argv level): one `gh issue edit` adds the
-    /// target label and removes exactly the OTHER three canonical labels —
-    /// the target is never removed, and no non-canonical name (e.g. this
-    /// repo's own `status/qa*` human-QA labels) ever appears in the argv.
+    /// Spec 004 (C4 invariant at argv level) + spec 008 D6: one `gh issue edit`
+    /// adds the target label and removes exactly the OTHER FOUR canonical labels
+    /// — the three other pipeline phases AND the fixed `status/blocked` — so a
+    /// pipeline flip also clears a lingering blocked label (the board can't lie
+    /// in either direction). The target is never removed, and no non-canonical
+    /// name (e.g. this repo's own `status/qa*` human-QA labels) appears.
     ///
-    /// Spec 005 F5 regression pin: with the DEFAULT map the argv must stay
-    /// **byte-identical** to what spec 004 shipped — same tokens, same order.
-    /// The `expected` literals below were captured against the pre-F5
-    /// (map-less) builder; do not regenerate them from the code under test.
+    /// The `expected` literals now carry the trailing `--remove-label
+    /// status/blocked` D6 added; the pipeline order/tokens are otherwise the spec
+    /// 004/005 shape. Do not regenerate them from the code under test.
     #[test]
-    fn gh_set_status_label_argv_adds_one_removes_exactly_the_other_three() {
+    fn gh_set_status_label_argv_adds_one_removes_the_three_pipeline_and_blocked() {
         let all_phases = [
             TrackerPhase::Todo,
             TrackerPhase::InProgress,
@@ -990,6 +1158,8 @@ mod tests {
                     "status/ready-to-test",
                     "--remove-label",
                     "status/done",
+                    "--remove-label",
+                    "status/blocked",
                 ],
                 TrackerPhase::InProgress => vec![
                     "issue",
@@ -1005,6 +1175,8 @@ mod tests {
                     "status/ready-to-test",
                     "--remove-label",
                     "status/done",
+                    "--remove-label",
+                    "status/blocked",
                 ],
                 TrackerPhase::ReadyToTest => vec![
                     "issue",
@@ -1020,6 +1192,8 @@ mod tests {
                     "status/in-progress",
                     "--remove-label",
                     "status/done",
+                    "--remove-label",
+                    "status/blocked",
                 ],
                 TrackerPhase::Done => vec![
                     "issue",
@@ -1035,6 +1209,8 @@ mod tests {
                     "status/in-progress",
                     "--remove-label",
                     "status/ready-to-test",
+                    "--remove-label",
+                    "status/blocked",
                 ],
             };
             assert_eq!(argv, expected, "default-map argv drifted for {phase:?}");
@@ -1051,7 +1227,7 @@ mod tests {
                     target
                 ]
             );
-            // Tail: a `--remove-label <l>` pair for each of the other three.
+            // Tail: a `--remove-label <l>` pair for each of the other four.
             let removed: Vec<&str> = argv[7..]
                 .chunks(2)
                 .map(|pair| {
@@ -1059,14 +1235,15 @@ mod tests {
                     pair[1]
                 })
                 .collect();
-            assert_eq!(removed.len(), 3, "exactly three labels removed");
+            assert_eq!(removed.len(), 4, "three pipeline + blocked removed");
             assert!(
                 !removed.contains(&target),
                 "the target label must never be removed"
             );
             for r in &removed {
                 assert!(
-                    GITHUB_STATUS_LABELS.iter().any(|(_, name, _)| name == r),
+                    GITHUB_STATUS_LABELS.iter().any(|(_, name, _)| name == r)
+                        || *r == GITHUB_BLOCKED_LABEL.0,
                     "non-canonical label {r} in the remove set (C4 violation)"
                 );
             }
@@ -1075,6 +1252,10 @@ mod tests {
                     assert!(removed.contains(name), "{name} missing from remove set");
                 }
             }
+            assert!(
+                removed.contains(&GITHUB_BLOCKED_LABEL.0),
+                "every pipeline flip must also clear status/blocked (D6)"
+            );
         }
     }
 
@@ -1164,6 +1345,10 @@ mod tests {
                 "qa-ready",
                 "--remove-label",
                 "shipped",
+                // Spec 008 D6: the fixed blocked label is cleared alongside the
+                // configured pipeline names.
+                "--remove-label",
+                "status/blocked",
             ]
         );
         for (_, canonical, _) in GITHUB_STATUS_LABELS.iter() {
@@ -1197,14 +1382,15 @@ mod tests {
                 .collect();
             assert_eq!(
                 removed,
-                ["status/todo", "status/done"],
+                // …plus the D6 blocked label (spec 008).
+                ["status/todo", "status/done", "status/blocked"],
                 "the shared target must be absent from its own remove list"
             );
         }
-        // Shared name NOT the target → removed once, not twice.
+        // Shared name NOT the target → removed once, not twice (+ blocked, D6).
         let argv = gh_set_status_label_argv("42", "o/r", TrackerPhase::Done, &map);
         let removed: Vec<&str> = argv[7..].chunks(2).map(|pair| pair[1]).collect();
-        assert_eq!(removed, ["status/todo", "active"]);
+        assert_eq!(removed, ["status/todo", "active", "status/blocked"]);
     }
 
     /// Spec 005 F5 (§6 item 6): a fake `gh` logs the full custom-map
@@ -1252,7 +1438,8 @@ mod tests {
         assert_eq!(
             lines[4],
             "issue edit 42 --repo owner/repo --add-label qa-ready \
-             --remove-label triage --remove-label wip --remove-label shipped"
+             --remove-label triage --remove-label wip --remove-label shipped \
+             --remove-label status/blocked"
         );
         for (_, canonical, _) in GITHUB_STATUS_LABELS.iter() {
             assert!(
@@ -1472,6 +1659,207 @@ mod tests {
             }
             other => panic!("expected Skipped, got {other:?}"),
         }
+    }
+
+    // ---- Spec 008 D6: the `status/blocked` escalation ------------------------
+
+    /// The blocked argv adds `status/blocked` and removes the FOUR pipeline
+    /// names (the mirror of `gh_set_status_label_argv` with a fixed target).
+    #[test]
+    fn gh_set_blocked_label_argv_adds_blocked_removes_four_pipeline() {
+        let map = GithubStateMap::default();
+        let argv = gh_set_blocked_label_argv("42", "owner/repo", &map);
+        assert_eq!(
+            argv,
+            vec![
+                "issue",
+                "edit",
+                "42",
+                "--repo",
+                "owner/repo",
+                "--add-label",
+                "status/blocked",
+                "--remove-label",
+                "status/todo",
+                "--remove-label",
+                "status/in-progress",
+                "--remove-label",
+                "status/ready-to-test",
+                "--remove-label",
+                "status/done",
+            ]
+        );
+    }
+
+    /// The comment body is a single argv token — a multi-line body (code fence)
+    /// is never split on newlines, so `gh` receives it verbatim.
+    #[test]
+    fn gh_issue_comment_argv_body_is_a_single_token() {
+        let body = "line one\nline two ```code```";
+        let argv = gh_issue_comment_argv("42", "owner/repo", body);
+        assert_eq!(
+            argv,
+            [
+                "issue",
+                "comment",
+                "42",
+                "--repo",
+                "owner/repo",
+                "--body",
+                body
+            ]
+        );
+        assert_eq!(argv[6], body, "the whole body is one token");
+    }
+
+    /// The AC-4 comment carries the feature name, the retry count, the gate
+    /// label, and the gate-output tail, in a GitHub-collapsible fenced block.
+    #[test]
+    fn blocked_comment_body_carries_attempts_and_gate_tail() {
+        let body = blocked_comment_body(
+            "Login screen",
+            "unit-test gate (verify.sh)",
+            3,
+            "assertion failed: foo != bar",
+        );
+        assert!(body.contains("Login screen"), "names the feature: {body}");
+        assert!(
+            body.contains("unit-test gate (verify.sh)"),
+            "names the gate"
+        );
+        assert!(
+            body.contains("3 attempt"),
+            "carries the retry count: {body}"
+        );
+        assert!(
+            body.contains("assertion failed: foo != bar"),
+            "carries the gate tail: {body}"
+        );
+        assert!(
+            body.contains("<details>"),
+            "the tail is collapsible: {body}"
+        );
+        assert!(body.contains("```"), "the tail is fenced: {body}");
+    }
+
+    /// A fake `gh` proves the three-call escalation shape: ensure `status/blocked`
+    /// → one edit (add blocked + remove the four pipeline names) → one comment.
+    /// Newline-safe: the multi-line comment body is dumped to a file so it never
+    /// smears the single-line call log.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_mark_blocked_with_fake_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let body_file = dir.path().join("comment-body.txt");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"comment\" ]; then\n  \
+                 echo \"issue comment\" >> \"{log}\"\n  printf '%s' \"$7\" > \"{body}\"\nelse\n  \
+                 echo \"$@\" >> \"{log}\"\nfi\nexit 0\n",
+                log = log.display(),
+                body = body_file.display(),
+            ),
+        );
+
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "Login screen",
+            "unit-test gate (verify.sh)",
+            3,
+            "assertion failed: foo != bar",
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(
+            lines.len(),
+            3,
+            "ensure-create + edit + comment, got: {calls}"
+        );
+        assert_eq!(
+            lines[0],
+            "label create status/blocked --repo owner/repo --color b60205 --force"
+        );
+        assert_eq!(
+            lines[1],
+            "issue edit 42 --repo owner/repo --add-label status/blocked \
+             --remove-label status/todo --remove-label status/in-progress \
+             --remove-label status/ready-to-test --remove-label status/done"
+        );
+        assert_eq!(lines[2], "issue comment");
+
+        let body = std::fs::read_to_string(&body_file).unwrap();
+        assert!(
+            body.contains("Login screen"),
+            "comment names the feature: {body}"
+        );
+        assert!(
+            body.contains("3 attempt"),
+            "comment carries the retry count: {body}"
+        );
+        assert!(
+            body.contains("assertion failed: foo != bar"),
+            "comment carries the gate tail: {body}"
+        );
+    }
+
+    /// D-A: board and Linear have no blocked column, so `apply_blocked_transition`
+    /// skips them (never `Err`) — the D6 label is GitHub-only. A github.com URL is
+    /// passed to prove they skip on provider, not on a missing URL.
+    #[tokio::test]
+    async fn apply_blocked_transition_board_and_linear_are_skipped() {
+        let store = fresh_store().await;
+        for provider in ["board", "linear"] {
+            let res = apply_blocked_transition(
+                &store,
+                provider,
+                "AG-1",
+                Some("https://github.com/o/r/issues/1"),
+                "feat",
+                "unit-test gate",
+                2,
+                "boom",
+            )
+            .await
+            .unwrap();
+            match res {
+                TransitionResult::Skipped(why) => {
+                    assert!(why.contains("no blocked state"), "got: {why}")
+                }
+                other => panic!("expected Skipped for {provider}, got {other:?}"),
+            }
+        }
+    }
+
+    /// The GitHub arm stays best-effort: a missing/unparseable URL is a
+    /// `Skipped`, never an `Err`, and touches no `gh` (hermetic).
+    #[tokio::test]
+    async fn apply_blocked_transition_github_without_url_is_skipped() {
+        let store = fresh_store().await;
+        let res = apply_blocked_transition(&store, "github", "42", None, "feat", "gate", 1, "boom")
+            .await
+            .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+        let res = apply_blocked_transition(
+            &store,
+            "github",
+            "42",
+            Some("https://github.com/o/r/pull/9"),
+            "feat",
+            "gate",
+            1,
+            "boom",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
     }
 
     #[tokio::test]

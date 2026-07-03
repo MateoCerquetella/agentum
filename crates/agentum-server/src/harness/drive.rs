@@ -159,9 +159,18 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         });
         let prompt =
             build_feature_prompt(&config.agent_instructions, &feature, spec_rel.as_deref());
-        inject_prompt(state, &session, &prompt).await?;
+        if !inject_prompt(state, &session, &prompt).await? {
+            engine.log(harness_id, Some(&feature.id), repl_not_ready_message());
+        }
         engine.log(harness_id, Some(&feature.id), "agent working…");
-        wait_for_settle(&state.bus, session.id, grace, timeout).await;
+        if wait_for_settle(&state.bus, session.id, grace, timeout).await == SettleOutcome::TimedOut
+        {
+            engine.log(
+                harness_id,
+                Some(&feature.id),
+                settle_timeout_message(timeout),
+            );
+        }
 
         // 5. Two-phase gate with retry (spec 012). First the unit-test gate
         //    (verify.sh), then the browser QA gate (qa.sh / browser-verification-
@@ -293,7 +302,7 @@ async fn handle_gate_failure(
     timeout: Duration,
 ) -> anyhow::Result<bool> {
     let engine = &state.harness;
-    let blocked = engine
+    let (blocked, attempts) = engine
         .record_feature_failure(harness_id, &feature.id, output)
         .await?;
     if blocked {
@@ -303,6 +312,37 @@ async fn handle_gate_failure(
             Some(&feature.id),
             format!("✗ {gate_label} FAILED — retries exhausted, feature BLOCKED. Run halted."),
         );
+        // Spec 008 F1 #16 (D6): the in-app side is already loud — make the ISSUE
+        // loud too. Escalate with a `status/blocked` label + a comment carrying
+        // the retry count and the gate-output tail. Best-effort by contract
+        // (`apply_blocked_transition` never `Err`s for a tracker hiccup): log
+        // both Ok and Err non-fatally — a blocked issue-update never un-halts or
+        // re-halts the already-halted run.
+        if let Some(provider) = feature.tracker_provider.as_deref() {
+            match crate::task_sink::apply_blocked_transition(
+                &state.store,
+                provider,
+                &feature.id,
+                feature.tracker_url.as_deref(),
+                &feature.name,
+                gate_label,
+                attempts,
+                &tail(output, 2000),
+            )
+            .await
+            {
+                Ok(r) => engine.log(
+                    harness_id,
+                    Some(&feature.id),
+                    format!("blocked → issue: {r:?}"),
+                ),
+                Err(e) => engine.log(
+                    harness_id,
+                    Some(&feature.id),
+                    format!("blocked issue update failed (non-fatal): {e}"),
+                ),
+            }
+        }
         // Leave the agent session alive so the user can intervene.
         return Ok(true);
     }
@@ -318,8 +358,16 @@ async fn handle_gate_failure(
         tail(output, 2000),
         feature.name,
     );
-    inject_prompt(state, session, &retry).await?;
-    wait_for_settle(&state.bus, session.id, grace, timeout).await;
+    if !inject_prompt(state, session, &retry).await? {
+        engine.log(harness_id, Some(&feature.id), repl_not_ready_message());
+    }
+    if wait_for_settle(&state.bus, session.id, grace, timeout).await == SettleOutcome::TimedOut {
+        engine.log(
+            harness_id,
+            Some(&feature.id),
+            settle_timeout_message(timeout),
+        );
+    }
     Ok(false)
 }
 
@@ -560,13 +608,21 @@ async fn run_qa_agent_gate(
 
     let session = spawn_qa_agent(state, harness_id, workdir, config, feature).await?;
     let prompt = build_qa_prompt(&config.agent_instructions, feature, &verdict_rel);
-    inject_prompt(state, &session, &prompt).await?;
+    if !inject_prompt(state, &session, &prompt).await? {
+        engine.log(harness_id, Some(&feature.id), repl_not_ready_message());
+    }
     engine.log(
         harness_id,
         Some(&feature.id),
         "QA agent verifying in browser…",
     );
-    wait_for_settle(&state.bus, session.id, grace, timeout).await;
+    if wait_for_settle(&state.bus, session.id, grace, timeout).await == SettleOutcome::TimedOut {
+        engine.log(
+            harness_id,
+            Some(&feature.id),
+            settle_timeout_message(timeout),
+        );
+    }
     teardown_session(state, &session).await;
 
     match tokio::fs::read_to_string(&verdict_abs).await {
@@ -691,13 +747,18 @@ async fn run_role_gate(
             &spec_md,
             &verdict_rel,
         );
-        inject_prompt(state, &session, &prompt).await?;
+        if !inject_prompt(state, &session, &prompt).await? {
+            engine.log(harness_id, None, repl_not_ready_message());
+        }
         engine.log(
             harness_id,
             None,
             format!("{} agent working…", role.as_str()),
         );
-        wait_for_settle(&state.bus, session.id, grace, timeout).await;
+        if wait_for_settle(&state.bus, session.id, grace, timeout).await == SettleOutcome::TimedOut
+        {
+            engine.log(harness_id, None, settle_timeout_message(timeout));
+        }
         teardown_session(state, &session).await;
 
         let (passed, summary) = match tokio::fs::read_to_string(&verdict_abs).await {
@@ -896,19 +957,26 @@ const SUBMIT_DELAY: Duration = Duration::from_millis(600);
 /// So we poll the pane instead: accept the trust dialog the instant it appears,
 /// and return once the idle input footer is visible. Bounded (~56s); a remote
 /// pane or unrecognised tool falls back to a fixed delay so it still gets typed.
-async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) {
+///
+/// Returns `true` when the idle REPL footer was actually seen (ready confirmed)
+/// and `false` when it fell through — a remote fixed-delay fallback, a missing
+/// host, or the ~56 s poll expiring without the footer. `false` means the prompt
+/// is about to fire BLIND; the caller surfaces that loudly (spec 008 F1 #14a).
+/// The poll / trust-accept / fixed-delay logic is otherwise byte-for-byte the
+/// pre-008 behavior — only the return type changed (D5 sacred-mechanic gate).
+async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) -> bool {
     let host = match state
         .store
         .get_host(session.host_id.unwrap_or(LOCAL_HOST_ID))
         .await
     {
         Ok(Some(h)) => h,
-        _ => return,
+        _ => return false,
     };
     // We can only cheaply capture local panes; remote panes get a fixed delay.
     if !matches!(host.kind, HostKind::Local) {
         tokio::time::sleep(AGENT_BOOT_DELAY).await;
-        return;
+        return false;
     }
     let target = session
         .tmux_target
@@ -938,9 +1006,12 @@ async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) {
         {
             // A beat to ensure the input is focused before we type.
             tokio::time::sleep(Duration::from_millis(400)).await;
-            return;
+            return true;
         }
     }
+    // ~56 s elapsed without ever seeing the idle footer — the prompt will be
+    // typed blind. Report it so the caller can warn (spec 008 F1 #14a).
+    false
 }
 
 /// Hand the agent a prompt: wait for the REPL to be ready (accepting the trust
@@ -956,12 +1027,19 @@ async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) {
 /// `pub(crate)` so the board-goals planner/card spawns reuse the exact same
 /// robust delivery (they previously used a one-shot `send_keys(prompt, true)`
 /// that the REPL swallowed — the chat then sat at "Drafting cards…" forever).
+///
+/// Returns whether the REPL was CONFIRMED ready before typing (bubbled from
+/// [`await_repl_ready`]) — `false` means the prompt fired blind. The send
+/// sequence below (`send_bytes` → `SUBMIT_DELAY` → bare Enter) is byte-for-byte
+/// unchanged; only the return type carries the readiness bool through (spec 008
+/// F1 #14a). Callers that don't care (`board_goals`/`sessions`/`wiki`) match on
+/// `Err` and ignore the `Ok(bool)`.
 pub(crate) async fn inject_prompt(
     state: &AppState,
     session: &agentum_core::Session,
     prompt: &str,
-) -> anyhow::Result<()> {
-    await_repl_ready(state, session).await;
+) -> anyhow::Result<bool> {
+    let ready = await_repl_ready(state, session).await;
     let host = state
         .store
         .get_host(session.host_id.unwrap_or(LOCAL_HOST_ID))
@@ -985,7 +1063,7 @@ pub(crate) async fn inject_prompt(
     crate::host_runtime::send_keys(&host, &target, "", true)
         .await
         .map_err(|e| anyhow::anyhow!("submit Enter failed: {e}"))?;
-    Ok(())
+    Ok(ready)
 }
 
 /// Gracefully stop an agent's pane + mark the session stopped. Best-effort.
@@ -1011,15 +1089,53 @@ pub(crate) async fn teardown_session(state: &AppState, session: &agentum_core::S
     }
 }
 
+/// How a [`wait_for_settle`] wait ended. The whole point of returning this (vs.
+/// the old silent `()`) is so the caller can make `TimedOut` LOUD (spec 008 F1
+/// #15): before this, an agent that never signalled idle let the gate run on a
+/// possibly-unchanged tree after up to `settle_timeout_secs` (default 1800 s)
+/// with zero events — a silent hang. `Settled`/`Crashed` are the quiet, normal
+/// endings; only `TimedOut` warrants a warning at the drive call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettleOutcome {
+    /// The agent went idle (`agent.awaiting_input`/`agent.finished`), or the
+    /// event bus closed (shutdown) — proceed to the gate as before.
+    Settled,
+    /// The session crashed or was stopped mid-turn.
+    Crashed,
+    /// The settle window elapsed with no idle signal — the agent may be stuck or
+    /// the prompt never landed. The gate still runs, but loudly.
+    TimedOut,
+}
+
+/// The loud warning the drive loop emits when a settle times out (spec 008 F1
+/// #15). Kept as one builder so every call site phrases the 1800 s silent-hang
+/// closure identically.
+fn settle_timeout_message(timeout: Duration) -> String {
+    format!(
+        "⚠ no settle signal in {}s — the agent may be stuck or the prompt didn't land; running the gate anyway",
+        timeout.as_secs()
+    )
+}
+
+/// The loud warning emitted when [`inject_prompt`] reports the REPL never
+/// signalled ready (spec 008 F1 #14a): the prompt was typed blind, so if the
+/// pane stays empty it may not have landed. One builder so every call site says
+/// it the same way.
+fn repl_not_ready_message() -> &'static str {
+    "⚠ agent REPL never signalled ready in ~56 s — prompt sent anyway; if the pane shows no output the prompt may not have landed"
+}
+
 /// Wait until the agent in `session_id` looks done with its turn — the first
 /// `agent.awaiting_input` / `agent.finished` event after `grace` — or until
 /// `timeout` elapses (then we run the gate anyway). A crash/stop also returns.
+/// Returns [`SettleOutcome`] so the caller can surface a `TimedOut` loudly
+/// instead of gating in silence (spec 008 F1 #15).
 pub(crate) async fn wait_for_settle(
     bus: &broadcast::Sender<Event>,
     session_id: Uuid,
     grace: Duration,
     timeout: Duration,
-) {
+) -> SettleOutcome {
     let mut rx = bus.subscribe();
     let start = Instant::now();
     // Did the agent go idle *inside* the grace window? If so we don't discard
@@ -1028,10 +1144,10 @@ pub(crate) async fn wait_for_settle(
     let mut settled_early = false;
     loop {
         if settled_early && start.elapsed() >= grace {
-            return;
+            return SettleOutcome::Settled;
         }
         let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
-            return; // overall settle timeout — proceed to the gate
+            return SettleOutcome::TimedOut; // overall settle timeout — gate anyway
         };
         // While a settle is pending, cap the wait at the grace boundary so we
         // re-evaluate the early-return condition the moment grace expires.
@@ -1048,7 +1164,7 @@ pub(crate) async fn wait_for_settle(
                 // Either we hit the grace boundary (loop re-checks settled_early)
                 // or the overall settle timeout elapsed.
                 if start.elapsed() >= timeout {
-                    return;
+                    return SettleOutcome::TimedOut;
                 }
                 continue;
             }
@@ -1059,18 +1175,20 @@ pub(crate) async fn wait_for_settle(
                 match ev.kind.as_str() {
                     "agent.awaiting_input" | "agent.finished" => {
                         if start.elapsed() >= grace {
-                            return;
+                            return SettleOutcome::Settled;
                         }
                         // The agent's *initial* idle, before grace — remember it
                         // and return once the grace window closes.
                         settled_early = true;
                     }
-                    "session.crashed" | "session.stopped" => return,
+                    "session.crashed" | "session.stopped" => return SettleOutcome::Crashed,
                     _ => {}
                 }
             }
             Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(broadcast::error::RecvError::Closed)) => return,
+            // The bus closed (shutdown) — not a timeout; proceed quietly as the
+            // old `()` return did, without a spurious loud warning.
+            Ok(Err(broadcast::error::RecvError::Closed)) => return SettleOutcome::Settled,
         }
     }
 }

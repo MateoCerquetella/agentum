@@ -90,7 +90,12 @@ pub async fn git_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCom
 pub async fn gh_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostCommandOutput> {
     match &host.kind {
         HostKind::Local => {
-            let out = Command::new("gh")
+            // Honor `AGENTUM_GH_BIN` (defaults to "gh") — the SAME test seam
+            // `task_sink::gh_bin()` exposes, so a fake `gh` stubs the local issue
+            // fetch in the start-work live test (spec 008 F1 §B.3). Production is
+            // byte-identical: the var is unset, so this is exactly `gh`.
+            let program = std::env::var("AGENTUM_GH_BIN").unwrap_or_else(|_| "gh".into());
+            let out = Command::new(program)
                 .current_dir(cwd)
                 .args(args)
                 .output()

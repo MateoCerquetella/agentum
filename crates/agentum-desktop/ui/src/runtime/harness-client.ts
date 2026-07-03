@@ -363,3 +363,41 @@ export async function openHarnessEventStream(
     }
   }
 }
+
+/**
+ * Spec 008 F1 §B.5: surface a composer-started run's early drive-phase failure.
+ * `start-work` returns fast (the drive loop is a background task) and the
+ * composer navigates to the session view, so an `error` event on
+ * `WS /api/harness/events` would otherwise have no one watching. This subscribes
+ * to the event stream filtered by `harnessId` and invokes `onError` ONCE — on
+ * the first `error` for that run — then self-closes. It also self-closes after
+ * `windowMs` so a healthy run never holds the socket open indefinitely. Returns
+ * a handle so the caller can cancel early. Best-effort: reuses the same
+ * auto-reconnecting events-WS plumbing the Harness page uses.
+ */
+export async function subscribeHarnessRunErrors(
+  harnessId: string,
+  onError: (message: string) => void,
+  windowMs = 120_000
+): Promise<HarnessEventStream> {
+  let fired = false
+  let stream: HarnessEventStream | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const dispose = (): void => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    stream?.close()
+  }
+  stream = await openHarnessEventStream((ev) => {
+    if (fired) return
+    if (ev.type === 'error' && ev.harness_id === harnessId) {
+      fired = true
+      onError(ev.message)
+      dispose()
+    }
+  })
+  timer = setTimeout(dispose, windowMs)
+  return { close: dispose }
+}
