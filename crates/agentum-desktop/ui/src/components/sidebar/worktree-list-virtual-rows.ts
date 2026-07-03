@@ -73,7 +73,7 @@ export function getStickyHeaderIndexes(rows: readonly RenderRow[]): number[] {
   return indexes
 }
 
-export function getActiveStickyHeaderIndex(
+function getActiveStickyHeaderIndex(
   stickyHeaderIndexes: readonly number[],
   rangeStartIndex: number
 ): number | null {
@@ -86,7 +86,7 @@ export function getActiveStickyHeaderIndex(
   return null
 }
 
-export function getPreviousStickyHeaderIndex(
+function getPreviousStickyHeaderIndex(
   stickyHeaderIndexes: readonly number[],
   headerIndex: number
 ): number | null {

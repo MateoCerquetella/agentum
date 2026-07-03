@@ -8,7 +8,7 @@ export type HostedReviewProvider =
   | 'gitea'
   | 'unsupported'
 
-export type HostedReviewState = 'open' | 'closed' | 'merged' | 'draft'
+type HostedReviewState = 'open' | 'closed' | 'merged' | 'draft'
 
 export type HostedReviewInfo = {
   provider: HostedReviewProvider
@@ -27,7 +27,7 @@ export type HostedReviewInfo = {
   conflictSummary?: PRConflictSummary
 }
 
-export type HostedReviewForBranchArgs = {
+type HostedReviewForBranchArgs = {
   repoPath: string
   repoId?: string
   branch: string
@@ -39,7 +39,7 @@ export type HostedReviewForBranchArgs = {
   linkedGiteaPR?: number | null
 }
 
-export type HostedReviewSummary = {
+type HostedReviewSummary = {
   number?: number
   url: string
 }
@@ -55,12 +55,12 @@ export type CreateHostedReviewInput = {
   useTemplate?: boolean
 }
 
-export type CreateHostedReviewArgs = CreateHostedReviewInput & {
+type CreateHostedReviewArgs = CreateHostedReviewInput & {
   repoPath: string
   connectionId?: string | null
 }
 
-export type CreateHostedReviewErrorCode =
+type CreateHostedReviewErrorCode =
   | 'auth_required'
   | 'unsupported_provider'
   | 'already_exists'
@@ -92,7 +92,7 @@ export type HostedReviewCreationBlockedReason =
   | 'existing_review'
   | null
 
-export type HostedReviewCreationNextAction =
+type HostedReviewCreationNextAction =
   | 'commit'
   | 'publish'
   | 'push'
@@ -144,9 +144,9 @@ export type HostedReviewUser = {
   isBot?: boolean
 }
 
-export type HostedReviewDecision = 'approved' | 'changes_requested' | 'review_required' | null
+type HostedReviewDecision = 'approved' | 'changes_requested' | 'review_required' | null
 
-export type HostedReviewThreadSummary = {
+type HostedReviewThreadSummary = {
   unresolvedCount: number | null
   dataCompleteness?: 'full' | 'partial'
 }
@@ -168,7 +168,7 @@ export type HostedReviewQueueSummary = {
   draft?: boolean
 }
 
-export type HostedReviewQueueKey =
+type HostedReviewQueueKey =
   | 'mine'
   | 'requested'
   | 'agent'

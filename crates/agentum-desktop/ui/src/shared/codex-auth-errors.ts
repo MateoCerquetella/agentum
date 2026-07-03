@@ -19,7 +19,7 @@ export function isCodexAuthError(error: string | null | undefined): boolean {
   return CODEX_AUTH_ERROR_PATTERNS.some((pattern) => pattern.test(message))
 }
 
-export function extractCodexAuthError(output: string | null | undefined): string | null {
+function extractCodexAuthError(output: string | null | undefined): string | null {
   const cleanOutput = output?.replace(ANSI_ESCAPE_RE, '').trim()
   if (!cleanOutput) {
     return null

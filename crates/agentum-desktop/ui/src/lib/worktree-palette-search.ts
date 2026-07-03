@@ -3,7 +3,7 @@ import type { Repo, Worktree } from '../../../shared/types'
 
 export type MatchRange = { start: number; end: number }
 
-export type PaletteMatchedField =
+type PaletteMatchedField =
   | 'displayName'
   | 'branch'
   | 'repo'
@@ -12,7 +12,7 @@ export type PaletteMatchedField =
   | 'issue'
   | 'port'
 
-export type PaletteSupportingText = {
+type PaletteSupportingText = {
   label: 'Comment' | 'PR' | 'Issue' | 'Port'
   text: string
   matchRange: MatchRange | null

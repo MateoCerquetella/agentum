@@ -5,13 +5,13 @@
 // debounced settings write on every checkbox toggle.
 import type { GitHubProjectField, GitHubProjectView } from '../../../../shared/github-project-types'
 
-export const TYPE_FIELD_ID = '__type__'
+const TYPE_FIELD_ID = '__type__'
 export const TYPE_FIELD_DATA_TYPE = '__TYPE__'
 
 // Why: synthetic "Type" column derives from row.itemType — there is no
 // matching ProjectV2 field, so we inject it client-side. Inserted right
 // after TITLE so users see issue/PR/draft glyphs adjacent to the title.
-export const TYPE_FIELD: GitHubProjectField = {
+const TYPE_FIELD: GitHubProjectField = {
   kind: 'field',
   id: TYPE_FIELD_ID,
   name: 'Type',

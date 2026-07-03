@@ -1,12 +1,12 @@
 export const WORKSPACE_CLEANUP_CLASSIFIER_VERSION = 2
-export const WORKSPACE_CLEANUP_ARCHIVED_IDLE_MS = 7 * 24 * 60 * 60 * 1000
-export const WORKSPACE_CLEANUP_IDLE_MS = 30 * 24 * 60 * 60 * 1000
+const WORKSPACE_CLEANUP_ARCHIVED_IDLE_MS = 7 * 24 * 60 * 60 * 1000
+const WORKSPACE_CLEANUP_IDLE_MS = 30 * 24 * 60 * 60 * 1000
 
 export type WorkspaceCleanupTier = 'ready' | 'review' | 'protected'
 
-export type WorkspaceCleanupReason = 'archived' | 'idle-clean'
+type WorkspaceCleanupReason = 'archived' | 'idle-clean'
 
-export type WorkspaceCleanupInactivityInput = {
+type WorkspaceCleanupInactivityInput = {
   isArchived: boolean
   lastActivityAt: number
 }
@@ -76,7 +76,7 @@ export type WorkspaceCleanupScanArgs = {
   skipGitWorktreeIds?: string[]
 }
 
-export type WorkspaceCleanupLocalProcessArgs = {
+type WorkspaceCleanupLocalProcessArgs = {
   worktreeId: string
   connectionId?: string | null
   worktreePath?: string
@@ -94,15 +94,15 @@ export type WorkspaceCleanupScanResult = {
   errors: WorkspaceCleanupScanError[]
 }
 
-export type WorkspaceCleanupLocalProcessResult = {
+type WorkspaceCleanupLocalProcessResult = {
   hasKillableProcesses: boolean | null
 }
 
-export type WorkspaceCleanupDismissArgs = {
+type WorkspaceCleanupDismissArgs = {
   dismissals: WorkspaceCleanupDismissal[]
 }
 
-export const WORKSPACE_CLEANUP_HARD_BLOCKERS: ReadonlySet<WorkspaceCleanupBlocker> = new Set([
+const WORKSPACE_CLEANUP_HARD_BLOCKERS: ReadonlySet<WorkspaceCleanupBlocker> = new Set([
   'main-worktree',
   'folder-repo',
   'pinned',
@@ -127,10 +127,10 @@ const WORKSPACE_CLEANUP_QUEUE_BLOCKERS: ReadonlySet<WorkspaceCleanupBlocker> = n
   'dismissed'
 ])
 
-export const WORKSPACE_CLEANUP_FORCE_REMOVE_BLOCKERS: ReadonlySet<WorkspaceCleanupBlocker> =
+const WORKSPACE_CLEANUP_FORCE_REMOVE_BLOCKERS: ReadonlySet<WorkspaceCleanupBlocker> =
   new Set(['dirty-files', 'unpushed-commits', 'unknown-base', 'git-status-error'])
 
-export function isWorkspaceCleanupHardBlocker(blocker: WorkspaceCleanupBlocker): boolean {
+function isWorkspaceCleanupHardBlocker(blocker: WorkspaceCleanupBlocker): boolean {
   return WORKSPACE_CLEANUP_HARD_BLOCKERS.has(blocker)
 }
 
@@ -196,7 +196,7 @@ export function createWorkspaceCleanupFingerprint(args: {
   ].join('|')
 }
 
-export function getWorkspaceCleanupInactivityReasons(
+function getWorkspaceCleanupInactivityReasons(
   workspace: WorkspaceCleanupInactivityInput,
   scannedAt: number
 ): WorkspaceCleanupReason[] {
@@ -213,7 +213,7 @@ export function getWorkspaceCleanupInactivityReasons(
   return reasons
 }
 
-export function isWorkspaceOldForCleanup(
+function isWorkspaceOldForCleanup(
   workspace: WorkspaceCleanupInactivityInput,
   scannedAt: number
 ): boolean {

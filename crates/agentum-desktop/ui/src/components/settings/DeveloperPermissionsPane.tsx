@@ -21,7 +21,7 @@ import type {
   DeveloperPermissionStatus
 } from '../../../../shared/developer-permissions-types'
 import { Button } from '../ui/button'
-export { DEVELOPER_PERMISSIONS_PANE_SEARCH_ENTRIES } from './developer-permissions-search'
+
 
 type PermissionDefinition = {
   id: DeveloperPermissionId

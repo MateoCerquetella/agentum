@@ -16,7 +16,7 @@ import type {
   OpenCodeUsageSummary
 } from '../../../../shared/opencode-usage-types'
 
-export type UsageProviderId = 'claude' | 'codex' | 'opencode'
+type UsageProviderId = 'claude' | 'codex' | 'opencode'
 
 export type UsageProviderOverview = {
   id: UsageProviderId

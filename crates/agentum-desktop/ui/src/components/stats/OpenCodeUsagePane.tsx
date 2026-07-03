@@ -43,7 +43,7 @@ const RANGE_LABELS: Record<OpenCodeUsageRange, string> = {
   all: 'All time'
 }
 
-export function OpenCodeUsagePaneImpl(): React.JSX.Element {
+function OpenCodeUsagePaneImpl(): React.JSX.Element {
   const scanState = useAppStore((state) => state.openCodeUsageScanState)
   const summary = useAppStore((state) => state.openCodeUsageSummary)
   const daily = useAppStore((state) => state.openCodeUsageDaily)

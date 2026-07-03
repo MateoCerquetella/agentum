@@ -1,6 +1,6 @@
 import { LayoutGrid, List } from 'lucide-react'
 import type { LinearCustomViewModel, LinearIssue } from '../../../shared/types'
-import { type LinearDisplayProperty, type LinearGroupBy, type LinearOrderBy } from './task-page/linear-helpers'
+import { type LinearDisplayProperty, type LinearGroupBy, type LinearOrderBy } from './linear-helpers'
 
 export type LinearPresetId = 'assigned' | 'created' | 'all' | 'completed'
 

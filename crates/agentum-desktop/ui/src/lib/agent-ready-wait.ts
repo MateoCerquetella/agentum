@@ -11,7 +11,7 @@ import { inspectRuntimeTerminalProcess } from '@/runtime/runtime-terminal-inspec
 // foreground-process equality (the launched binary is alive and owns the fg
 // job), then finally to the presence of any non-shell child process. A hard
 // timeout prevents the Use-button flow from hanging on a missing binary.
-export type AgentReadyReason = 'title-idle' | 'foreground-match' | 'child-process' | 'timeout'
+type AgentReadyReason = 'title-idle' | 'foreground-match' | 'child-process' | 'timeout'
 
 export type AgentReadyResult = {
   ready: boolean

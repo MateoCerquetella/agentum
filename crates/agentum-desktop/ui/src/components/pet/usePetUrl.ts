@@ -11,7 +11,7 @@ import {
 
 // Re-export so existing callers (the store slice) that point at this module
 // keep working without knowing about the cache module split.
-export { revokeCustomPetBlobUrl } from './pet-blob-cache'
+
 
 export type ResolvedPet = {
   url: string

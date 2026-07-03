@@ -23,7 +23,7 @@ const BUCKETS: BucketMeta[] = [
   { key: 'graphql', label: 'GraphQL', description: 'GraphQL API' }
 ]
 
-export function formatGitHubRateLimitReset(resetAt: number): string {
+function formatGitHubRateLimitReset(resetAt: number): string {
   const deltaSec = Math.max(0, resetAt - Math.floor(Date.now() / 1000))
   if (deltaSec < 60) {
     return `${deltaSec}s`
@@ -32,7 +32,7 @@ export function formatGitHubRateLimitReset(resetAt: number): string {
   return `${mins}m`
 }
 
-export function toneForGitHubBucket(remaining: number, limit: number): 'ok' | 'warn' | 'crit' {
+function toneForGitHubBucket(remaining: number, limit: number): 'ok' | 'warn' | 'crit' {
   if (limit <= 0) {
     return 'ok'
   }
@@ -46,7 +46,7 @@ export function toneForGitHubBucket(remaining: number, limit: number): 'ok' | 'w
   return 'ok'
 }
 
-export function useGitHubRateLimitSnapshot(options?: { autoRefresh?: boolean }): {
+function useGitHubRateLimitSnapshot(options?: { autoRefresh?: boolean }): {
   snapshot: GitHubRateLimitSnapshot | null
   hasError: boolean
   isFetching: boolean

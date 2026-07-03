@@ -109,7 +109,7 @@ function touchWorkItemDetailsCache(key: string, entry: WorkItemDetailsCacheEntry
 // Why: exposed so mutation handlers (in this file and elsewhere) can drop a
 // stale entry after a successful local mutation. Cross-window invalidation
 // arrives via the `gh:workItemMutated` event listener installed below.
-export function invalidateWorkItemDetailsCacheForKey(key: string): void {
+function invalidateWorkItemDetailsCacheForKey(key: string): void {
   // Why: bump generation so an in-flight fetch launched before this exact-key
   // invalidation will not write its stale result back into the cache.
   workItemDetailsCacheGeneration += 1

@@ -31,13 +31,13 @@ import { extractIpcErrorMessage } from '@/lib/ipc-error'
 // Re-export public API so existing consumers keep working.
 export {
   ensurePtyDispatcher,
-  getEagerPtyBufferHandle,
+  
   registerEagerPtyBuffer,
   subscribeToPtyExit,
   unregisterPtyDataHandlers
 } from './pty-dispatcher'
 export type {
-  EagerPtyHandle,
+  
   PtyTransport,
   PtyConnectResult,
   IpcPtyTransportOptions

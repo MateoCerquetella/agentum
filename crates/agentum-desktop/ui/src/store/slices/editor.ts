@@ -53,7 +53,7 @@ import { extractIpcErrorMessage } from '@/lib/ipc-error'
 
 export type { RightSidebarTab } from '../../../../shared/types'
 
-export type DiffSource =
+type DiffSource =
   | 'unstaged'
   | 'staged'
   | 'branch'
@@ -62,14 +62,14 @@ export type DiffSource =
   | 'combined-branch'
   | 'combined-commit'
 
-export type BranchCompareSnapshot = Pick<
+type BranchCompareSnapshot = Pick<
   GitBranchCompareSummary,
   'baseRef' | 'baseOid' | 'compareRef' | 'headOid' | 'mergeBase'
 > & {
   compareVersion: string
 }
 
-export type CommitCompareSnapshot = Pick<
+type CommitCompareSnapshot = Pick<
   GitCommitCompareSummary,
   'commitOid' | 'parentOid' | 'compareRef' | 'baseRef'
 > & {
@@ -96,7 +96,7 @@ type CombinedDiffAlternate = {
   branchCompare?: BranchCompareSnapshot
 }
 
-export type OpenConflictMetadata = {
+type OpenConflictMetadata = {
   kind: 'conflict-editable' | 'conflict-placeholder'
   conflictKind: GitConflictKind
   conflictStatus: GitConflictResolutionStatus
@@ -110,14 +110,14 @@ export type ConflictReviewEntry = {
   conflictKind: GitConflictKind
 }
 
-export type ConflictReviewState = {
+type ConflictReviewState = {
   source: 'live-summary' | 'combined-diff-exclusion'
   snapshotTimestamp: number
   entries: ConflictReviewEntry[]
   selectedFileId?: string
 }
 
-export type CombinedDiffSkippedConflict = {
+type CombinedDiffSkippedConflict = {
   path: string
   conflictKind: GitConflictKind
 }
@@ -195,10 +195,10 @@ export type MarkdownViewMode = 'source' | 'rich' | 'preview'
 // place of the normal editor, without creating a separate tab. The per-tab
 // Tab.contentType stays 'editor' for the whole lifetime; this slice drives
 // what EditorPanel *renders* for that tab. See reviews/changes-view-mode-plan.md.
-export type EditorViewMode = 'edit' | 'changes'
+type EditorViewMode = 'edit' | 'changes'
 
 /** Enough state to restore a tab via `openFile` after `closeFile` (id is always filePath). */
-export type ClosedEditorTabSnapshot = Omit<OpenFile, 'id' | 'isDirty'>
+type ClosedEditorTabSnapshot = Omit<OpenFile, 'id' | 'isDirty'>
 
 const MAX_RECENT_CLOSED_EDITOR_TABS = 10
 

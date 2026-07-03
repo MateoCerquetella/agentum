@@ -100,7 +100,7 @@ export function firstGoalStepBlocker({ goal, repoId }: GoalStepInputs): string |
  * fresh-worktree creation (skip → an existing folder/branch as-is), the spec
  * scaffold, and the tracker binding.
  */
-export type OptionalWorkspaceStepId = 'worktree' | 'scaffold' | 'tracker'
+type OptionalWorkspaceStepId = 'worktree' | 'scaffold' | 'tracker'
 
 export type OptionalWorkspaceStep = {
   id: OptionalWorkspaceStepId

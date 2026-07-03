@@ -6,7 +6,7 @@ import { isRecord } from '@/shared/type-guards'
 
 export type IpynbCellKind = 'code' | 'markdown' | 'raw'
 
-export type IpynbOutput =
+type IpynbOutput =
   | { kind: 'stream'; name: string; text: string }
   | { kind: 'error'; name: string; message: string; traceback: string }
   | { kind: 'display'; outputType: string; executionCount: number | null; items: IpynbOutputItem[] }

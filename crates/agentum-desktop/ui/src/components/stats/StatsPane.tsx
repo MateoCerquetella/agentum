@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
 import { AgentIcon } from '@/lib/agent-catalog'
-export { STATS_PANE_SEARCH_ENTRIES } from './stats-search'
+
 
 function formatDuration(ms: number): string {
   if (ms <= 0) {

@@ -1,6 +1,6 @@
 import type { TuiAgent } from './types'
 
-export type AgentPromptInjectionMode =
+type AgentPromptInjectionMode =
   | 'argv'
   | 'flag-prompt'
   | 'flag-prompt-interactive'

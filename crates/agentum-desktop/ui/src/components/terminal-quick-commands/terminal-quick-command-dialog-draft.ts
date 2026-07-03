@@ -33,7 +33,7 @@ export function createTerminalQuickCommandDialogDraftMemory(
   }
 }
 
-export function rememberTerminalQuickCommandDialogDraft(
+function rememberTerminalQuickCommandDialogDraft(
   memory: TerminalQuickCommandDialogDraftMemory,
   draft: TerminalQuickCommand
 ): TerminalQuickCommandDialogDraftMemory {

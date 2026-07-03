@@ -6,7 +6,7 @@ import { holdPtyResizesForPaneSubtrees } from './pane-pty-resize-hold'
 // ---------------------------------------------------------------------------
 
 /** Total hit area size = visible thickness + invisible padding on each side */
-export function getDividerHitSize(styleOptions: PaneStyleOptions): number {
+function getDividerHitSize(styleOptions: PaneStyleOptions): number {
   const thickness = styleOptions.dividerThicknessPx ?? 4
   const HIT_PADDING = 3
   return thickness + HIT_PADDING * 2

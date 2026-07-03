@@ -19,7 +19,7 @@ import { subscribeServerEvents } from './server-events-bus'
 
 /** The pane-facing activity verdicts, normalized from the server's `agent.*`
  *  event kinds. */
-export type ServerSessionActivityKind = 'awaiting_input' | 'input_resolved' | 'working' | 'finished'
+type ServerSessionActivityKind = 'awaiting_input' | 'input_resolved' | 'working' | 'finished'
 
 export type ServerSessionActivityRecord = {
   kind: ServerSessionActivityKind
@@ -131,7 +131,7 @@ export function createServerSessionActivityHub() {
   }
 }
 
-export type ServerSessionActivityHub = ReturnType<typeof createServerSessionActivityHub>
+type ServerSessionActivityHub = ReturnType<typeof createServerSessionActivityHub>
 
 // ── App-wide singleton + shared-bus wiring ──────────────────────────────────
 const hub = createServerSessionActivityHub()

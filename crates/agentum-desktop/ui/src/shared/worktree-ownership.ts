@@ -221,7 +221,7 @@ export function shouldShowWorktree(args: {
   return effectiveExternalWorktreeVisibility(args.repo, args.isLegacyRepoForVisibility) === 'show'
 }
 
-export function areRuntimePathsEqual(leftPath: string, rightPath: string): boolean {
+function areRuntimePathsEqual(leftPath: string, rightPath: string): boolean {
   return (
     normalizeRuntimePathForComparison(leftPath) === normalizeRuntimePathForComparison(rightPath)
   )
@@ -239,7 +239,7 @@ function hasStrongAgentumMetadata(meta: WorktreeMeta | undefined): boolean {
   )
 }
 
-export function matchesStrongAgentumCreatePath(
+function matchesStrongAgentumCreatePath(
   worktreePath: string,
   knownAgentumLayouts: readonly AgentumWorkspaceLayout[],
   repo: Pick<Repo, 'path'>

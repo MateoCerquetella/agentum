@@ -11,7 +11,7 @@ export type RateLimitWindow = {
 
 export type ProviderRateLimitStatus = 'idle' | 'fetching' | 'ok' | 'error' | 'unavailable'
 
-export type RateLimitBucket = RateLimitWindow & {
+type RateLimitBucket = RateLimitWindow & {
   name: string
 }
 
@@ -37,7 +37,7 @@ export type RateLimitRuntimeTarget = {
   wslDistro: string | null
 }
 
-export type InactiveAccountUsage = {
+type InactiveAccountUsage = {
   accountId: string
   rateLimits: ProviderRateLimits | null
   updatedAt: number

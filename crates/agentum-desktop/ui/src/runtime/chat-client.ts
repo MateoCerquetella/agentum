@@ -50,7 +50,7 @@ async function authHeaders(): Promise<Record<string, string>> {
  * handles BOTH `{ error: string }` (400) and `{ error: { message } }` (502
  * `llm_failed`) shapes, throwing `Error(<server message>)` either way.
  */
-export async function sendChat(
+async function sendChat(
   messages: ChatTurn[],
   opts?: { workdir?: string; repoSlug?: string; mode?: IntakeMode; stage?: number }
 ): Promise<string> {
@@ -300,7 +300,7 @@ export async function previewIssuesFromChat(
 /** One created issue. `url` is the issue link; `id` is the tracker's stable
  *  handle (a GitHub issue number is implicit in the url; Linear sends its
  *  human identifier like `ENG-42`). */
-export type CreatedIssue = { title: string; url: string; id?: string }
+type CreatedIssue = { title: string; url: string; id?: string }
 
 /** Result of `POST /api/chat/issues` — what landed on the tracker, and what
  *  didn't. `repo` is set on the GitHub path only. */

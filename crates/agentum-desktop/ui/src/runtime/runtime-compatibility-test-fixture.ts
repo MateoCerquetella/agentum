@@ -9,7 +9,7 @@ export type RuntimeEnvironmentCallRequest = {
   method: string
 }
 
-export function createCompatibleRuntimeStatusResponse(
+function createCompatibleRuntimeStatusResponse(
   runtimeId = 'remote-runtime'
 ): RuntimeRpcResponse<RuntimeStatus> {
   return {

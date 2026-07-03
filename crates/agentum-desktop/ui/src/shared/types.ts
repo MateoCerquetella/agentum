@@ -26,7 +26,7 @@ import type {
 export type { WorkspaceSource as WorkspaceCreateTelemetrySource } from './workspace-source'
 export type { TaskProvider } from './task-providers'
 export type {
-  GitBranchChangeStatus,
+  
   GitConflictKind,
   GitConflictOperation,
   GitConflictResolutionStatus,
@@ -35,7 +35,7 @@ export type {
   GitStagingArea,
   GitStatusEntry,
   GitStatusResult,
-  GitUncommittedEntry,
+  
   GitUpstreamStatus
 } from './git-status-types'
 
@@ -55,7 +55,7 @@ export type ShellHydrationFailureReason =
 export type PathSource = 'shell_hydrate' | 'sync_seed_only'
 
 // ─── Repo ────────────────────────────────────────────────────────────
-export type RepoKind = 'git' | 'folder'
+type RepoKind = 'git' | 'folder'
 
 /**
  * Per-repo user choice for where issues are fetched and filed.
@@ -132,7 +132,7 @@ export type ProjectGroup = {
   updatedAt: number
 }
 
-export type NestedRepoScanOptions = {
+type NestedRepoScanOptions = {
   maxDepth?: number
   maxRepos?: number
   timeoutMs?: number
@@ -156,7 +156,7 @@ export type NestedRepoScanResult = {
 
 export type ProjectGroupImportMode = 'group' | 'separate'
 
-export type ProjectGroupImportProjectResult = {
+type ProjectGroupImportProjectResult = {
   path: string
   projectId?: string
   status: 'imported' | 'already-known' | 'failed'
@@ -191,7 +191,7 @@ export type HookCommandSourcePolicy = 'shared-only' | 'local-only' | 'run-both'
  * Why `defaultBaseRef` (not `default`): `default` is a reserved word and is
  * awkward to destructure.
  */
-export type BaseRefDefaultResult = {
+type BaseRefDefaultResult = {
   defaultBaseRef: string | null
   remoteCount: number
 }
@@ -333,7 +333,7 @@ export type WorktreeMeta = {
 
 export type WorktreeOwnership = 'agentum-managed' | 'external' | 'unknown-legacy'
 
-export type DetectedWorktreeListSource = 'git' | 'metadata-fallback' | 'session-fallback'
+type DetectedWorktreeListSource = 'git' | 'metadata-fallback' | 'session-fallback'
 
 export type DetectedWorktree = Worktree & {
   ownership: WorktreeOwnership
@@ -348,16 +348,16 @@ export type DetectedWorktreeListResult = {
   worktrees: DetectedWorktree[]
 }
 
-export type WorktreeLineageOrigin = 'orchestration' | 'cli' | 'manual'
-export type WorktreeLineageCaptureConfidence = 'explicit' | 'inferred'
-export type WorktreeLineageCaptureSource =
+type WorktreeLineageOrigin = 'orchestration' | 'cli' | 'manual'
+type WorktreeLineageCaptureConfidence = 'explicit' | 'inferred'
+type WorktreeLineageCaptureSource =
   | 'explicit-cli-flag'
   | 'cwd-context'
   | 'terminal-context'
   | 'orchestration-context'
   | 'manual-action'
 
-export type WorktreeLineageCapture = {
+type WorktreeLineageCapture = {
   source: WorktreeLineageCaptureSource
   confidence: WorktreeLineageCaptureConfidence
 }
@@ -376,7 +376,7 @@ export type WorktreeLineage = {
   createdAt: number
 }
 
-export type WorktreeLineageWarningCode =
+type WorktreeLineageWarningCode =
   | 'LINEAGE_PARENT_CONTEXT_MISSING'
   | 'LINEAGE_PARENT_CONTEXT_CONFLICT'
   | 'LINEAGE_PARENT_INSTANCE_STALE'
@@ -414,7 +414,7 @@ export type DiffComment = {
 }
 
 // ─── Tab Group Layout ───────────────────────────────────────────────
-export type TabGroupSplitDirection = 'horizontal' | 'vertical'
+type TabGroupSplitDirection = 'horizontal' | 'vertical'
 
 export type TabGroupLayoutNode =
   | { type: 'leaf'; groupId: string }
@@ -595,7 +595,7 @@ export type BrowserWorkspace = {
 
 export type BrowserTab = BrowserWorkspace
 
-export type BrowserSessionProfileScope = 'default' | 'isolated' | 'imported'
+type BrowserSessionProfileScope = 'default' | 'isolated' | 'imported'
 
 export type BrowserSessionProfileSource = {
   browserFamily: 'chrome' | 'chromium' | 'arc' | 'edge' | 'firefox' | 'safari' | 'comet' | 'manual'
@@ -725,7 +725,7 @@ export type WorkspaceSessionPatch = Partial<WorkspaceSessionState>
 
 // ─── GitHub ──────────────────────────────────────────────────────────
 export type PRState = 'open' | 'closed' | 'merged' | 'draft'
-export type IssueState = 'open' | 'closed'
+type IssueState = 'open' | 'closed'
 export type CheckStatus = 'pending' | 'success' | 'failure' | 'neutral'
 
 export type PRMergeableState = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
@@ -738,7 +738,7 @@ export type PRConflictSummary = {
   files: string[]
 }
 
-export type GitHubRepositoryIdentity = { owner: string; repo: string }
+type GitHubRepositoryIdentity = { owner: string; repo: string }
 
 export type GitHubPRMergeMethod = 'merge' | 'squash' | 'rebase'
 
@@ -769,7 +769,7 @@ export type PRInfo = {
   conflictSummary?: PRConflictSummary
 }
 
-export type PRRefreshOutcome =
+type PRRefreshOutcome =
   | { kind: 'found'; pr: PRInfo; fetchedAt: number }
   | { kind: 'no-pr'; fetchedAt: number }
   | {
@@ -815,7 +815,7 @@ export type GitHubPRRefreshCandidate = GitHubPRRefreshAlias & {
   cachedMergeStateStatus?: string | null
 }
 
-export type GitHubPRRefreshSkippedReason =
+type GitHubPRRefreshSkippedReason =
   | 'fresh'
   | 'not-git'
   | 'bare'
@@ -874,7 +874,7 @@ export type PRCheckDetail = {
   workflowRunId?: number
 }
 
-export type PRCheckAnnotation = {
+type PRCheckAnnotation = {
   path: string | null
   startLine: number | null
   endLine: number | null
@@ -884,7 +884,7 @@ export type PRCheckAnnotation = {
   rawDetails: string | null
 }
 
-export type PRCheckStep = {
+type PRCheckStep = {
   name: string
   status: string | null
   conclusion: string | null
@@ -892,7 +892,7 @@ export type PRCheckStep = {
   completedAt: string | null
 }
 
-export type PRCheckJob = {
+type PRCheckJob = {
   name: string
   status: string | null
   conclusion: string | null
@@ -917,9 +917,9 @@ export type PRCheckRunDetails = {
   jobs: PRCheckJob[]
 }
 
-export type GitHubRerunPRChecksResult = { ok: true; count: number } | { ok: false; error: string }
+type GitHubRerunPRChecksResult = { ok: true; count: number } | { ok: false; error: string }
 
-export type GitHubReactionContent =
+type GitHubReactionContent =
   | '+1'
   | '-1'
   | 'laugh'
@@ -992,7 +992,7 @@ export type GitHubPRCheckSummary = {
   pending: number
 }
 
-export type GitHubPRReviewSummary = {
+type GitHubPRReviewSummary = {
   login: string
   state?: string | null
   avatarUrl?: string | null
@@ -1062,7 +1062,7 @@ export type GitHubPRFileContents = {
   modifiedIsBinary: boolean
 }
 
-export type GitHubPRReviewCommentInput = {
+type GitHubPRReviewCommentInput = {
   repoPath: string
   prNumber: number
   commitId: string
@@ -1107,8 +1107,8 @@ export type LinearWorkspace = LinearViewer & {
 }
 
 export type LinearWorkspaceSelection = string | 'all'
-export type LinearWorkspaceSelector = LinearWorkspaceSelection | undefined
-export type LinearConcreteWorkspaceId = string
+type LinearWorkspaceSelector = LinearWorkspaceSelection | undefined
+type LinearConcreteWorkspaceId = string
 
 export type LinearWorkspaceError = {
   workspaceId: string
@@ -1202,20 +1202,20 @@ export type LinearProjectSummary = {
   completedIssueCount?: number
 }
 
-export type LinearProjectStatusSummary = {
+type LinearProjectStatusSummary = {
   id: string
   name: string
   type?: string
   color?: string
 }
 
-export type LinearProjectMemberSummary = {
+type LinearProjectMemberSummary = {
   id: string
   displayName: string
   avatarUrl?: string
 }
 
-export type LinearProjectMilestoneSummary = {
+type LinearProjectMilestoneSummary = {
   id: string
   name: string
   status?: string
@@ -1223,14 +1223,14 @@ export type LinearProjectMilestoneSummary = {
   progress?: number | null
 }
 
-export type LinearProjectResourceSummary = {
+type LinearProjectResourceSummary = {
   id: string
   title: string
   url: string
   type?: string
 }
 
-export type LinearProjectUpdateSummary = {
+type LinearProjectUpdateSummary = {
   id: string
   body?: string
   health?: string | null
@@ -1289,7 +1289,7 @@ export type LinearComment = {
 
 // ─── Issue Mutations ────────────────────────────────────────────────
 
-export type GitHubCreateIssueFields = {
+type GitHubCreateIssueFields = {
   labels?: string[]
   assignees?: string[]
 }
@@ -1307,7 +1307,7 @@ export type GitHubIssueUpdate = {
   removeAssignees?: string[]
 }
 
-export type GitHubPullRequestStateUpdate = {
+type GitHubPullRequestStateUpdate = {
   state: 'open' | 'closed'
 }
 
@@ -1346,40 +1346,40 @@ export type GitHubOwnerRepo = GitHubRepositoryIdentity
 // (`from '../shared/types'`) keep working without changes.
 export type {
   GitLabAssignableUser,
-  GitLabAuthDiagnostic,
-  GitLabCommentResult,
+  
+  
   GitLabDiscussionResolveResult,
-  GitLabIssueInfo,
-  GitLabIssueState,
-  GitLabIssueUpdate,
-  GitLabJobTraceResult,
-  GitLabRateLimitBucket,
+  
+  
+  
+  
+  
   GitLabRateLimitSnapshot,
-  GitLabMRApprovalRule,
-  GitLabMRApprovalState,
-  GitLabMRFile,
-  GitLabMRInlineCommentInput,
-  GitLabMRReviewersUpdateResult,
+  
+  
+  
+  
+  
   GitLabMRUpdate,
-  GitLabPagedResult,
+  
   GitLabPipelineJob,
-  GitLabProjectRef,
+  
   GitLabProjectSettings,
-  GitLabRetryJobResult,
-  GitLabReaction,
+  
+  
   GitLabTodo,
-  GitLabTodoTargetType,
-  GitLabViewer,
+  
+  
   GitLabWorkItem,
   GitLabWorkItemDetails,
   GetGitLabRateLimitResult,
-  ListMergeRequestsResult,
-  MRCheckDetail,
+  
+  
   MRComment,
-  MRInfo,
-  MRListState,
-  MRMergeableState,
-  MRState
+  
+  
+  
+  
 } from './gitlab-types'
 
 /**
@@ -1390,7 +1390,7 @@ export type {
  * the buckets this app actually stresses; other buckets (e.g. code_search)
  * are not surfaced because we don't touch them.
  */
-export type GitHubRateLimitBucket = {
+type GitHubRateLimitBucket = {
   remaining: number
   limit: number
   /** Unix epoch seconds when the window resets. */
@@ -1423,7 +1423,7 @@ export type GetRateLimitResult =
  * the issues-side fetch failed, but any PR-side items that succeeded are still
  * present in `items`. Consumers should render `items` alongside the error banner.
  */
-export type ListWorkItemsResult<T> = {
+type ListWorkItemsResult<T> = {
   items: T[]
   sources: {
     issues: GitHubOwnerRepo | null
@@ -1487,7 +1487,7 @@ export type AgentumHooks = {
   defaultTabs?: AgentumDefaultTabTemplate[] // Terminal tabs to create once for a new worktree
 }
 
-export type AgentumDefaultTabTemplate = {
+type AgentumDefaultTabTemplate = {
   title?: string
   color?: string
   command?: string
@@ -1540,7 +1540,7 @@ export type SparsePreset = {
   updatedAt: number
 }
 
-export type CreateWorktreeArgs = {
+type CreateWorktreeArgs = {
   repoId: string
   name: string
   /** Optional user-facing label to persist separately from the git-safe
@@ -1591,7 +1591,7 @@ export type CreateWorktreeResult = {
   localBaseRefRefresh?: LocalBaseRefRefreshResult
 }
 
-export type PreservedWorktreeBranch = {
+type PreservedWorktreeBranch = {
   branchName: string
   head?: string
 }
@@ -1611,7 +1611,7 @@ export type LocalBaseRefRefreshResult = {
   ownerWorktreePath?: string
 }
 
-export type WorktreeBaseStatusKind = 'checking' | 'current' | 'drift' | 'base_changed' | 'unknown'
+type WorktreeBaseStatusKind = 'checking' | 'current' | 'drift' | 'base_changed' | 'unknown'
 
 export type WorktreeBaseStatusEvent = {
   repoId: string
@@ -1636,7 +1636,7 @@ export type WorktreeRemoteBranchConflictEvent = {
 
 // Why: the release object sent to the renderer omits `version` (redundant
 // with the top-level UpdateStatus.version) to keep one source of truth.
-export type ChangelogRelease = {
+type ChangelogRelease = {
   title: string
   description: string
   mediaUrl?: string
@@ -1694,7 +1694,7 @@ export type NotificationSettings = {
   customSoundVolume: number
 }
 
-export type CodexManagedAccount = {
+type CodexManagedAccount = {
   id: string
   email: string
   managedHomePath: string
@@ -1709,7 +1709,7 @@ export type CodexManagedAccount = {
   lastAuthenticatedAt: number
 }
 
-export type CodexManagedAccountSummary = {
+type CodexManagedAccountSummary = {
   id: string
   email: string
   managedHomeRuntime?: 'host' | 'wsl'
@@ -1728,12 +1728,12 @@ export type CodexRateLimitAccountsState = {
   activeAccountIdsByRuntime?: CodexManagedAccountRuntimeSelection
 }
 
-export type CodexManagedAccountRuntimeSelection = {
+type CodexManagedAccountRuntimeSelection = {
   host: string | null
   wsl: Record<string, string | null>
 }
 
-export type ClaudeManagedAccount = {
+type ClaudeManagedAccount = {
   id: string
   email: string
   managedAuthPath: string
@@ -1748,7 +1748,7 @@ export type ClaudeManagedAccount = {
   lastAuthenticatedAt: number
 }
 
-export type ClaudeManagedAccountSummary = {
+type ClaudeManagedAccountSummary = {
   id: string
   email: string
   managedAuthRuntime?: 'host' | 'wsl'
@@ -1767,7 +1767,7 @@ export type ClaudeRateLimitAccountsState = {
   activeAccountIdsByRuntime?: ClaudeManagedAccountRuntimeSelection
 }
 
-export type ClaudeManagedAccountRuntimeSelection = {
+type ClaudeManagedAccountRuntimeSelection = {
   host: string | null
   wsl: Record<string, string | null>
 }
@@ -1857,7 +1857,7 @@ export type TerminalQuickCommandScope =
 
 export type TerminalQuickCommandAction = 'terminal-command' | 'agent-prompt'
 
-export type TerminalQuickCommandBase = {
+type TerminalQuickCommandBase = {
   id: string
   label: string
   scope?: TerminalQuickCommandScope
@@ -1885,7 +1885,7 @@ export type OpenInApplication = {
 
 export type SourceControlViewMode = 'list' | 'tree'
 
-export type FloatingTerminalCwdRequest = {
+type FloatingTerminalCwdRequest = {
   path?: string
   requireTrusted?: boolean
 }
@@ -2317,7 +2317,7 @@ export type GhosttyImportPreview = {
 // schema-vs-renderer enum sync guard.
 export type DiscoveryStatusEmitted = 'found' | 'absent' | 'imported'
 
-export type NotificationEventSource = 'agent-task-complete' | 'terminal-bell' | 'test'
+type NotificationEventSource = 'agent-task-complete' | 'terminal-bell' | 'test'
 
 export type NotificationDispatchRequest = {
   source: NotificationEventSource
@@ -2340,7 +2340,7 @@ export type NotificationDispatchRequest = {
   agentInterrupted?: boolean
 }
 
-export type NotificationDispatchResult = {
+type NotificationDispatchResult = {
   delivered: boolean
   /** Present when delivered is false. Tells the caller why delivery was skipped. */
   reason?:
@@ -2352,7 +2352,7 @@ export type NotificationDispatchResult = {
     | 'not-displayed'
 }
 
-export type NotificationSoundResult = {
+type NotificationSoundResult = {
   played: boolean
   reason?:
     | 'missing-path'
@@ -2364,7 +2364,7 @@ export type NotificationSoundResult = {
     | 'deduped'
 }
 
-export type NotificationSoundDataResult =
+type NotificationSoundDataResult =
   | {
       ok: true
       data: Uint8Array
@@ -2376,11 +2376,11 @@ export type NotificationSoundDataResult =
       reason: Exclude<NotificationSoundResult['reason'], 'playback-failed'>
     }
 
-export type NotificationSoundPathResult =
+type NotificationSoundPathResult =
   | { ok: true; path: string }
   | { ok: false; reason: 'missing-path' | 'invalid-path' | 'unsupported-type' }
 
-export type OnboardingOutcome = 'completed' | 'dismissed'
+type OnboardingOutcome = 'completed' | 'dismissed'
 
 export type OnboardingChecklistState = {
   addedRepo: boolean
@@ -2447,7 +2447,7 @@ export type StatusBarItem =
   | 'ssh'
   | 'ports'
   | 'io'
-export type FloatingTerminalTriggerLocation = 'floating-button' | 'status-bar'
+type FloatingTerminalTriggerLocation = 'floating-button' | 'status-bar'
 
 export type TaskResumeState = {
   githubMode?: 'items' | 'project'
@@ -2677,18 +2677,18 @@ export type CustomPet = {
  *  sheet of distinct poses can map each state to one cell — used by the
  *  bundled agent mascot, whose poses (walk/blink/happy/jump/…) all live in
  *  row 0. */
-export type SpriteAnimation = {
+type SpriteAnimation = {
   row: number
   frames: number
   col?: number
 }
 
-export type PersistedTrustedAgentumHookEntry = {
+type PersistedTrustedAgentumHookEntry = {
   contentHash: string
   approvedAt: number
 }
 
-export type PersistedTrustedAgentumHookRepo = {
+type PersistedTrustedAgentumHookRepo = {
   all?: {
     approvedAt: number
   }
@@ -2699,7 +2699,7 @@ export type PersistedTrustedAgentumHookRepo = {
 
 export type PersistedTrustedAgentumHooks = Record<string, PersistedTrustedAgentumHookRepo>
 
-export type LegacyPaneKeyAliasEntry = {
+type LegacyPaneKeyAliasEntry = {
   ptyId: string
   legacyPaneKey: string
   stablePaneKey: string
@@ -2745,7 +2745,7 @@ export type MarkdownDocument = {
 }
 
 // ─── Filesystem watcher ─────────────────────────────────────
-export type FsChangeEvent = {
+type FsChangeEvent = {
   kind: 'create' | 'update' | 'delete' | 'rename' | 'overflow'
   absolutePath: string
   oldAbsolutePath?: string
@@ -2801,7 +2801,7 @@ export type GitCommitCompareResult = {
   entries: GitBranchChangeEntry[]
 }
 
-export type GitDiffTextResult = {
+type GitDiffTextResult = {
   kind: 'text'
   originalContent: string
   modifiedContent: string
@@ -2809,7 +2809,7 @@ export type GitDiffTextResult = {
   modifiedIsBinary: false
 }
 
-export type GitDiffBinaryResult = {
+type GitDiffBinaryResult = {
   kind: 'binary'
   originalContent: string
   modifiedContent: string
@@ -2875,3 +2875,28 @@ export type StatsSummary = {
 
 // Tabs shown in the GitHub work-item detail dialog / PR page.
 export type ItemDialogTab = 'conversation' | 'checks' | 'files'
+
+// ─── Preflight (integrations check) ─────────────────────────────────
+// Shape of `GET /api/preflight/check` (see agentum-server routes/preflight.rs).
+// The Landing page throws on a missing field — keep in sync with the route.
+
+export type PreflightStatus = {
+  git: { installed: boolean }
+  gh: { installed: boolean; authenticated: boolean }
+  glab: { installed: boolean; authenticated: boolean }
+  bitbucket: { configured: boolean; authenticated: boolean; account: string | null }
+  azureDevOps: {
+    configured: boolean
+    authenticated: boolean
+    account: string | null
+    baseUrl: string | null
+    tokenConfigured: boolean
+  }
+  gitea: {
+    configured: boolean
+    authenticated: boolean
+    account: string | null
+    baseUrl: string | null
+    tokenConfigured: boolean
+  }
+}

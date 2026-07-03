@@ -11,7 +11,7 @@ export type ReviewStep = {
   readonly description: string
 }
 
-export const REVIEW_STEPS: readonly ReviewStep[] = [
+const REVIEW_STEPS: readonly ReviewStep[] = [
   {
     id: 'notes',
     name: 'Notes',

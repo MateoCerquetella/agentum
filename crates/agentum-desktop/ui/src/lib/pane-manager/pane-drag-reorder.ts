@@ -223,7 +223,7 @@ export function handlePaneDrop(
   callbacks.onLayoutChanged?.()
 }
 
-export function showDropOverlay(state: DragReorderState): void {
+function showDropOverlay(state: DragReorderState): void {
   if (!state.dropOverlay) {
     const overlay = document.createElement('div')
     overlay.className = 'pane-drop-overlay'
@@ -233,7 +233,7 @@ export function showDropOverlay(state: DragReorderState): void {
   state.dropOverlay.style.display = 'none'
 }
 
-export function hideDropOverlay(state: DragReorderState): void {
+function hideDropOverlay(state: DragReorderState): void {
   if (state.dropOverlay) {
     state.dropOverlay.remove()
     state.dropOverlay = null

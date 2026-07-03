@@ -2,7 +2,7 @@
  * Shared types for `gh auth status` diagnostics surfaced to the renderer.
  */
 
-export type GhAuthAccount = {
+type GhAuthAccount = {
   host: string
   user: string
   /** True when this is the account gh would use for the next call. */

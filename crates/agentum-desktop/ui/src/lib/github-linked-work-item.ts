@@ -5,7 +5,7 @@ import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 // its own hard cap downstream (`buildContainedLinkedContextBlock`), but trimming
 // here keeps the snapshot self-describing and bounded at the source — mirrors
 // the Linear snapshot's `descriptionChars` cap.
-export const GITHUB_ISSUE_BODY_MAX_CHARS = 8000
+const GITHUB_ISSUE_BODY_MAX_CHARS = 8000
 
 const TRUNCATED_MARKER = '[truncated]'
 

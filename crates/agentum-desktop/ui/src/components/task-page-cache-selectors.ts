@@ -245,7 +245,7 @@ function linearIssueStatusSignature(issue: LinearIssue): string {
   ])
 }
 
-export function shouldReplaceTaskPageLinearIssuesAfterRefresh(
+function shouldReplaceTaskPageLinearIssuesAfterRefresh(
   currentIssues: readonly LinearIssue[],
   refreshedIssues: readonly LinearIssue[]
 ): boolean {
@@ -326,4 +326,3 @@ export function findTaskPageLinearIssue(
   return null
 }
 
-export const findTaskPageLinearDrawerIssue = findTaskPageLinearIssue

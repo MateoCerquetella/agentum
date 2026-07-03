@@ -40,7 +40,7 @@ export const TERMINAL_WINDOWS_POWERSHELL_IMPLEMENTATION_SEARCH_ENTRY: SettingsSe
   }
 ]
 
-export const TERMINAL_WINDOWS_WSL_DISTRO_SEARCH_ENTRY: SettingsSearchEntry[] = [
+const TERMINAL_WINDOWS_WSL_DISTRO_SEARCH_ENTRY: SettingsSearchEntry[] = [
   {
     title: 'WSL Distribution',
     description: 'Choose which WSL distribution new WSL terminals and local agent scans use.',

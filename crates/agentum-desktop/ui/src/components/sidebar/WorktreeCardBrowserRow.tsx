@@ -19,7 +19,7 @@ type Props = {
  * `moveBrowserTabToWorktree`). Chrome matches `WorktreeCardTerminalRow` so the
  * three row types read as one list.
  */
-export const WorktreeCardBrowserRow = React.memo(function WorktreeCardBrowserRow({
+const WorktreeCardBrowserRow = React.memo(function WorktreeCardBrowserRow({
   workspace,
   isActive = false,
   onActivate

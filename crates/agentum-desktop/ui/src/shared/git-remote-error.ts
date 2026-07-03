@@ -26,9 +26,9 @@ function extractTailLine(message: string): string {
   return lines.at(-1) ?? message
 }
 
-export type GitRemoteOperation = 'push' | 'pull' | 'fetch' | 'upstream'
+type GitRemoteOperation = 'push' | 'pull' | 'fetch' | 'upstream'
 
-export function normalizeGitErrorMessage(error: unknown, operation?: GitRemoteOperation): string {
+function normalizeGitErrorMessage(error: unknown, operation?: GitRemoteOperation): string {
   if (!(error instanceof Error)) {
     return 'Git remote operation failed.'
   }

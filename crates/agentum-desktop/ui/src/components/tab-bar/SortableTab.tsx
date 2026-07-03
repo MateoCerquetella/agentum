@@ -46,7 +46,7 @@ type SortableTabProps = {
   dropIndicator?: DropIndicator
 }
 
-export const TAB_COLORS = [
+const TAB_COLORS = [
   { label: 'None', value: null },
   { label: 'Blue', value: '#3b82f6' },
   { label: 'Purple', value: '#a855f7' },

@@ -32,7 +32,7 @@ import {
   getPreflightIntegrationStatuses,
   type PreflightRefreshProvider
 } from './integrations-pane-status'
-export { INTEGRATIONS_PANE_SEARCH_ENTRIES } from './integrations-search'
+
 
 /** Map of pipeline phase → Linear workflow-state name (spec 012). */
 type LinearStateMap = { todo: string; inProgress: string; readyToTest: string; done: string }

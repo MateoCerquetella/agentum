@@ -11,14 +11,14 @@ import type {
   PRComment
 } from './types'
 
-export type GitHubProjectViewLayout = 'TABLE_LAYOUT' | 'BOARD_LAYOUT' | 'ROADMAP_LAYOUT'
+type GitHubProjectViewLayout = 'TABLE_LAYOUT' | 'BOARD_LAYOUT' | 'ROADMAP_LAYOUT'
 export type GitHubProjectOwnerType = 'organization' | 'user'
 
 // Why: anything outside this union must render as an empty cell — the
 // normalizer must never throw on an unknown dataType. The `(string & {})`
 // branch preserves unknown values verbatim for debuggability while still
 // satisfying the distinct field-kind discriminants below.
-export type GitHubProjectFieldDataType =
+type GitHubProjectFieldDataType =
   | 'TITLE'
   | 'ASSIGNEES'
   | 'LABELS'
@@ -37,13 +37,13 @@ export type GitHubProjectFieldDataType =
   | 'SINGLE_SELECT'
   | 'ITERATION'
 
-export type GitHubProjectSingleSelectOption = {
+type GitHubProjectSingleSelectOption = {
   id: string
   name: string
   color: string
 }
 
-export type GitHubProjectIteration = {
+type GitHubProjectIteration = {
   id: string
   title: string
   /** YYYY-MM-DD — GitHub returns a calendar date, not an ISO timestamp. */
@@ -108,7 +108,7 @@ export type GitHubProjectLabel = {
   color: string
 }
 
-export type GitHubProjectParentIssue = {
+type GitHubProjectParentIssue = {
   number: number
   title: string
   url: string
@@ -125,7 +125,7 @@ export type GitHubIssueType = {
   description: string | null
 }
 
-export type GitHubProjectFieldValue =
+type GitHubProjectFieldValue =
   | {
       kind: 'single-select'
       fieldId: string
@@ -147,7 +147,7 @@ export type GitHubProjectFieldValue =
   | { kind: 'labels'; fieldId: string; labels: GitHubProjectLabel[] }
   | { kind: 'users'; fieldId: string; users: GitHubProjectUser[] }
 
-export type GitHubProjectRowItemType = 'ISSUE' | 'PULL_REQUEST' | 'DRAFT_ISSUE' | 'REDACTED'
+type GitHubProjectRowItemType = 'ISSUE' | 'PULL_REQUEST' | 'DRAFT_ISSUE' | 'REDACTED'
 
 export type GitHubProjectRow = {
   id: string
@@ -230,7 +230,7 @@ export type GitHubProjectSettings = {
 
 // ─── Classified errors ─────────────────────────────────────────────────
 
-export type GitHubProjectViewErrorType =
+type GitHubProjectViewErrorType =
   | 'auth_required'
   | 'scope_missing'
   | 'not_found'
@@ -291,7 +291,7 @@ export type ListProjectViewsResult =
   | { ok: true; views: GitHubProjectViewSummary[] }
   | { ok: false; error: GitHubProjectViewError }
 
-export type ProjectWorkItemDetailsBySlugResult =
+type ProjectWorkItemDetailsBySlugResult =
   | { ok: true; details: GitHubWorkItemDetails }
   | { ok: false; error: GitHubProjectViewError }
 
@@ -343,77 +343,77 @@ export type GetProjectViewTableArgs = {
   queryOverride?: string
 }
 
-export type ProjectWorkItemDetailsBySlugArgs = {
+type ProjectWorkItemDetailsBySlugArgs = {
   owner: string
   repo: string
   number: number
   type: 'issue' | 'pr'
 }
 
-export type UpdateProjectItemFieldArgs = {
+type UpdateProjectItemFieldArgs = {
   projectId: string
   itemId: string
   fieldId: string
   value: GitHubProjectFieldMutationValue
 }
 
-export type ClearProjectItemFieldArgs = {
+type ClearProjectItemFieldArgs = {
   projectId: string
   itemId: string
   fieldId: string
 }
 
-export type UpdateIssueBySlugArgs = {
+type UpdateIssueBySlugArgs = {
   owner: string
   repo: string
   number: number
   updates: GitHubIssueUpdate & { body?: string }
 }
 
-export type UpdatePullRequestBySlugArgs = {
+type UpdatePullRequestBySlugArgs = {
   owner: string
   repo: string
   number: number
   updates: { title?: string; body?: string; state?: 'open' | 'closed' }
 }
 
-export type AddIssueCommentBySlugArgs = {
+type AddIssueCommentBySlugArgs = {
   owner: string
   repo: string
   number: number
   body: string
 }
 
-export type UpdateIssueCommentBySlugArgs = {
+type UpdateIssueCommentBySlugArgs = {
   owner: string
   repo: string
   commentId: number
   body: string
 }
 
-export type DeleteIssueCommentBySlugArgs = {
+type DeleteIssueCommentBySlugArgs = {
   owner: string
   repo: string
   commentId: number
 }
 
-export type ListLabelsBySlugArgs = {
+type ListLabelsBySlugArgs = {
   owner: string
   repo: string
 }
 
-export type ListAssignableUsersBySlugArgs = {
+type ListAssignableUsersBySlugArgs = {
   owner: string
   repo: string
   seedLogins?: string[]
 }
 
-export type ListIssueTypesBySlugArgs = {
+type ListIssueTypesBySlugArgs = {
   owner: string
   repo: string
 }
 
-export type UpdateIssueTypeBySlugArgs = {
+type UpdateIssueTypeBySlugArgs = {
   owner: string
   repo: string
   number: number
@@ -421,11 +421,11 @@ export type UpdateIssueTypeBySlugArgs = {
   issueTypeId: string | null
 }
 
-export type ResolveProjectRefArgs = {
+type ResolveProjectRefArgs = {
   input: string
 }
 
-export type ListProjectViewsArgs = {
+type ListProjectViewsArgs = {
   owner: string
   ownerType: GitHubProjectOwnerType
   projectNumber: number

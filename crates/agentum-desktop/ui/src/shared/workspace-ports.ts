@@ -1,13 +1,13 @@
-export type WorkspacePortProbe = {
+type WorkspacePortProbe = {
   id: string
   repoId: string
   displayName: string
   path: string
 }
 
-export type WorkspacePortAttributionConfidence = 'cwd' | 'command' | 'none'
+type WorkspacePortAttributionConfidence = 'cwd' | 'command' | 'none'
 
-export type WorkspacePortOwner = {
+type WorkspacePortOwner = {
   worktreeId: string
   repoId: string
   displayName: string
@@ -45,16 +45,16 @@ export type WorkspacePort =
       kind: 'external'
     })
 
-export type WorkspacePortScanRequest = {
+type WorkspacePortScanRequest = {
   repoId?: string
 }
 
-export type WorkspacePortAdvertisedUrlChangedEvent = {
+type WorkspacePortAdvertisedUrlChangedEvent = {
   worktreeId: string
   port: number
 }
 
-export type WorkspacePortKillRequest = {
+type WorkspacePortKillRequest = {
   repoId?: string
   pid: number
   port: number

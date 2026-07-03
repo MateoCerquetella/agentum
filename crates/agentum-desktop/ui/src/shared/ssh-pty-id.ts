@@ -42,7 +42,7 @@ export function toAppSshPtyId(connectionId: string, relayPtyId: string): string 
   return `${SSH_PTY_ID_PREFIX}${encodeURIComponent(connectionId)}${SSH_PTY_ID_SEPARATOR}${relayPtyId}`
 }
 
-export function toRelaySshPtyId(connectionId: string, ptyId: string): string {
+function toRelaySshPtyId(connectionId: string, ptyId: string): string {
   const parsed = parseAppSshPtyId(ptyId)
   if (!parsed) {
     return ptyId

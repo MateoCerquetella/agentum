@@ -5,7 +5,7 @@ import { ClaudeIcon, GeminiIcon, OpenAIIcon, OpenCodeGoIcon } from './icons'
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-export function formatTimeAgo(ts: number): string {
+function formatTimeAgo(ts: number): string {
   const diff = Date.now() - ts
   if (diff < 60_000) {
     return 'just now'

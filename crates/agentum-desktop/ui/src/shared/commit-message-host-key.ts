@@ -1,6 +1,6 @@
 export const LOCAL_COMMIT_MESSAGE_HOST_KEY = 'local'
-export const UNKNOWN_COMMIT_MESSAGE_HOST_KEY = 'unknown'
-export const RUNTIME_COMMIT_MESSAGE_HOST_KEY_PREFIX = 'runtime:'
+const UNKNOWN_COMMIT_MESSAGE_HOST_KEY = 'unknown'
+const RUNTIME_COMMIT_MESSAGE_HOST_KEY_PREFIX = 'runtime:'
 
 export function getCommitMessageModelDiscoveryHostKey(
   connectionId: string | null | undefined

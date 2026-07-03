@@ -54,7 +54,7 @@ export const REPO_LUCIDE_ICON_OPTIONS: RepoLucideIconOption[] = [
   { name: 'Box', label: 'Box', icon: Box }
 ]
 
-export function getRepoLucideIcon(name: string | null | undefined): LucideIcon {
+function getRepoLucideIcon(name: string | null | undefined): LucideIcon {
   return REPO_LUCIDE_ICON_OPTIONS.find((option) => option.name === name)?.icon ?? Folder
 }
 

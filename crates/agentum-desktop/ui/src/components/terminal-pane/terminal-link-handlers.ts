@@ -88,7 +88,7 @@ export function getTerminalFileOpenHint(): string {
     : 'Ctrl+click to open or Shift+Ctrl+click for default app'
 }
 
-export function getTerminalAgentumFileOpenHint(): string {
+function getTerminalAgentumFileOpenHint(): string {
   return isMacPlatform() ? '⌘+click to open in Agentum' : 'Ctrl+click to open in Agentum'
 }
 

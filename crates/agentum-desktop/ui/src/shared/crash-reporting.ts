@@ -1,5 +1,5 @@
-export type CrashReportStatus = 'pending' | 'sent' | 'dismissed'
-export type CrashReportSource = 'renderer' | 'child'
+type CrashReportStatus = 'pending' | 'sent' | 'dismissed'
+type CrashReportSource = 'renderer' | 'child'
 
 export type CrashReportDetailValue = string | number | boolean | null
 export type CrashReportBreadcrumbData = Record<string, CrashReportDetailValue>
@@ -34,7 +34,7 @@ export type CrashReportRecord = {
   breadcrumbs?: CrashReportBreadcrumb[]
 }
 
-export type CrashReportCreateInput = Omit<
+type CrashReportCreateInput = Omit<
   CrashReportRecord,
   'id' | 'createdAt' | 'status' | 'details' | 'breadcrumbs'
 > & {
@@ -42,7 +42,7 @@ export type CrashReportCreateInput = Omit<
   breadcrumbs?: CrashReportBreadcrumbInput[]
 }
 
-export type ReactErrorBoundarySurface =
+type ReactErrorBoundarySurface =
   | 'app-root'
   | 'web-root'
   | 'workspace-shell'
@@ -68,11 +68,11 @@ export type ReactErrorBoundaryReportArgs = {
   hasActiveWorktree?: boolean
 }
 
-export type ReactErrorBoundaryReportResult =
+type ReactErrorBoundaryReportResult =
   | { ok: true; report: CrashReportRecord | null; deduped: boolean }
   | { ok: false; error: string }
 
-export type CrashReportSubmitArgs = {
+type CrashReportSubmitArgs = {
   reportId?: string
   notes?: string
   submitAnonymously?: boolean
@@ -80,7 +80,7 @@ export type CrashReportSubmitArgs = {
   githubEmail: string | null
 }
 
-export type CrashReportSubmitResult =
+type CrashReportSubmitResult =
   | { ok: true; report: CrashReportRecord }
   | { ok: false; status: number | null; error: string; report?: CrashReportRecord }
 

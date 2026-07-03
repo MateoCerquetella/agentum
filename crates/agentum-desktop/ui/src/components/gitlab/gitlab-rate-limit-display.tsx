@@ -10,7 +10,7 @@ import type { GetGitLabRateLimitResult, GitLabRateLimitSnapshot } from '../../..
 
 const REFRESH_INTERVAL_MS = 60_000
 
-export function formatGitLabRateLimitReset(resetAt: number | null): string {
+function formatGitLabRateLimitReset(resetAt: number | null): string {
   if (resetAt === null) {
     return 'unknown'
   }
@@ -22,7 +22,7 @@ export function formatGitLabRateLimitReset(resetAt: number | null): string {
   return `${mins}m`
 }
 
-export function toneForGitLabBucket(remaining: number, limit: number): 'ok' | 'warn' | 'crit' {
+function toneForGitLabBucket(remaining: number, limit: number): 'ok' | 'warn' | 'crit' {
   if (limit <= 0) {
     return 'ok'
   }
@@ -36,7 +36,7 @@ export function toneForGitLabBucket(remaining: number, limit: number): 'ok' | 'w
   return 'ok'
 }
 
-export function useGitLabRateLimitSnapshot(options?: { autoRefresh?: boolean }): {
+function useGitLabRateLimitSnapshot(options?: { autoRefresh?: boolean }): {
   snapshot: GitLabRateLimitSnapshot | null
   hasError: boolean
   isFetching: boolean

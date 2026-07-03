@@ -18,7 +18,7 @@ import {
 } from './hosted-review-cache-identity'
 import { getGitHubPRCacheKey, getLegacyGitHubPRCacheKey } from './github-cache-key'
 
-export { getHostedReviewCacheKey, linkedReviewHintKey } from './hosted-review-cache-identity'
+export { getHostedReviewCacheKey,  } from './hosted-review-cache-identity'
 
 type CacheEntry<T> = { data: T | null; fetchedAt: number; linkedReviewHintKey?: string }
 type FetchOptions = { force?: boolean; repoId?: string; staleWhileRevalidate?: boolean }

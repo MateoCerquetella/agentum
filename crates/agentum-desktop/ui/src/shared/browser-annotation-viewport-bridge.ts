@@ -1,6 +1,6 @@
 import type { BrowserGrabRect } from './browser-grab-types'
 
-export type BrowserAnnotationViewportBridgeMarker = {
+type BrowserAnnotationViewportBridgeMarker = {
   id: string
   index: number
   rectPage: BrowserGrabRect
@@ -8,7 +8,7 @@ export type BrowserAnnotationViewportBridgeMarker = {
   isFixed: boolean
 }
 
-export type BrowserSetAnnotationViewportBridgeArgs = {
+type BrowserSetAnnotationViewportBridgeArgs = {
   browserPageId: string
   enabled: boolean
   emitViewport: boolean
@@ -16,17 +16,17 @@ export type BrowserSetAnnotationViewportBridgeArgs = {
   token: string
 }
 
-export type BrowserAnnotationViewportBridgeOptions = {
+type BrowserAnnotationViewportBridgeOptions = {
   enabled: boolean
   emitViewport: boolean
   markers: BrowserAnnotationViewportBridgeMarker[]
   token: string
 }
 
-export const BROWSER_ANNOTATION_VIEWPORT_BRIDGE_WORLD_ID = 1207
+const BROWSER_ANNOTATION_VIEWPORT_BRIDGE_WORLD_ID = 1207
 export const BROWSER_ANNOTATION_VIEWPORT_MESSAGE_PREFIX = '__agentum_annotation_viewport__:'
 
-export function isValidBrowserAnnotationViewportBridgeToken(value: unknown): value is string {
+function isValidBrowserAnnotationViewportBridgeToken(value: unknown): value is string {
   return typeof value === 'string' && /^[a-zA-Z0-9_-]{16,80}$/.test(value)
 }
 
@@ -49,7 +49,7 @@ function isValidBrowserGrabRect(value: unknown): value is BrowserGrabRect {
   )
 }
 
-export function isValidBrowserAnnotationViewportBridgeMarkers(
+function isValidBrowserAnnotationViewportBridgeMarkers(
   value: unknown
 ): value is BrowserAnnotationViewportBridgeMarker[] {
   return (
@@ -77,7 +77,7 @@ export function isValidBrowserAnnotationViewportBridgeMarkers(
 
 // Why: persisted badges need to follow guest scroll without a React roundtrip;
 // the bridge mirrors only numeric marker geometry into a closed shadow overlay.
-export function buildBrowserAnnotationViewportBridgeScript({
+function buildBrowserAnnotationViewportBridgeScript({
   emitViewport,
   enabled,
   markers,

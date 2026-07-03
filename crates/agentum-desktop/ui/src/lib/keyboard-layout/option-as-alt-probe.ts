@@ -204,7 +204,7 @@ export function getOptionAsAltProbe(): OptionAsAltProbe {
 }
 
 /** Test-only: reset the singleton. */
-export function _resetOptionAsAltProbeForTests(): void {
+function _resetOptionAsAltProbeForTests(): void {
   _singleton?.dispose()
   _singleton = null
 }

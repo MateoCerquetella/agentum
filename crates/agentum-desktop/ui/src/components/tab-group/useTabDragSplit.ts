@@ -55,7 +55,7 @@ export type TabDragItemData = {
   agent?: TuiAgent | null
 }
 
-export type TabPaneDropData = {
+type TabPaneDropData = {
   kind: 'pane-body'
   worktreeId: string
   groupId: string

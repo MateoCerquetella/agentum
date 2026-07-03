@@ -9,7 +9,7 @@
 // gates it off the moment a title reports working/permission, so the precise
 // title path stays authoritative for them.
 
-export type PaneActivityState = 'idle' | 'working'
+type PaneActivityState = 'idle' | 'working'
 
 export type PaneActivityTrackerOptions = {
   /** Quiet period after the last byte before the pane is treated as idle.

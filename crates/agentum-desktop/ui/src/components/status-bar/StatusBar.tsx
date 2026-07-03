@@ -63,7 +63,7 @@ export type CodexStatusRuntimeTarget = {
 type CodexStatusAccount = CodexRateLimitAccountsState['accounts'][number]
 type ClaudeStatusAccount = ClaudeRateLimitAccountsState['accounts'][number]
 
-export type CodexStatusSwitchTarget = {
+type CodexStatusSwitchTarget = {
   id: string | null
   label: string
   active: boolean
@@ -77,7 +77,7 @@ export type CodexStatusSwitchGroup = {
   targets: CodexStatusSwitchTarget[]
 }
 
-export type ClaudeStatusSwitchTarget = {
+type ClaudeStatusSwitchTarget = {
   id: string | null
   label: string
   active: boolean

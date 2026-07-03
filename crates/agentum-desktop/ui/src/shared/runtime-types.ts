@@ -19,7 +19,7 @@ import type {
 import type { TerminalPaneLayoutNode } from './types'
 import type { RuntimeCapability } from './protocol-version'
 
-export type RuntimeGraphStatus = 'ready' | 'reloading' | 'unavailable'
+type RuntimeGraphStatus = 'ready' | 'reloading' | 'unavailable'
 
 export type RuntimeStatus = {
   runtimeId: string
@@ -40,14 +40,14 @@ export type RuntimeStatus = {
   minCompatibleMobileVersion?: number
 }
 
-export type CliRuntimeState =
+type CliRuntimeState =
   | 'not_running'
   | 'starting'
   | 'ready'
   | 'graph_not_ready'
   | 'stale_bootstrap'
 
-export type CliStatusResult = {
+type CliStatusResult = {
   app: {
     running: boolean
     pid: number | null
@@ -62,7 +62,7 @@ export type CliStatusResult = {
   }
 }
 
-export type RuntimeSyncedTab = {
+type RuntimeSyncedTab = {
   tabId: string
   worktreeId: string
   title: string | null
@@ -70,7 +70,7 @@ export type RuntimeSyncedTab = {
   layout: TerminalPaneLayoutNode | null
 }
 
-export type RuntimeSyncedLeaf = {
+type RuntimeSyncedLeaf = {
   tabId: string
   worktreeId: string
   leafId: string
@@ -86,7 +86,7 @@ export type RuntimeSyncWindowGraph = {
   mobileSessionTabs?: RuntimeMobileSessionTabsSnapshot[]
 }
 
-export type RuntimeMobileSessionTerminalTab = {
+type RuntimeMobileSessionTerminalTab = {
   type: 'terminal'
   id: string
   title: string
@@ -163,7 +163,7 @@ export type RuntimeMobileSessionTerminalClientTab =
       terminal: string
     })
 
-export type RuntimeMobileSessionClientTab =
+type RuntimeMobileSessionClientTab =
   | RuntimeMobileSessionTerminalClientTab
   | RuntimeMobileSessionMarkdownTab
   | RuntimeMobileSessionFileTab
@@ -229,7 +229,7 @@ export type RuntimeMobileSessionCreateTerminalResult = {
   snapshotVersion: number
 }
 
-export type RuntimeMobileSessionTabsRemovedResult = RuntimeMobileSessionTabsResult & {
+type RuntimeMobileSessionTabsRemovedResult = RuntimeMobileSessionTabsResult & {
   removed: true
   activeGroupId: null
   activeTabId: null
@@ -237,13 +237,13 @@ export type RuntimeMobileSessionTabsRemovedResult = RuntimeMobileSessionTabsResu
   tabs: []
 }
 
-export type RuntimeFileListEntry = {
+type RuntimeFileListEntry = {
   relativePath: string
   basename: string
   kind: 'text' | 'binary'
 }
 
-export type RuntimeFileListResult = {
+type RuntimeFileListResult = {
   worktree: string
   rootPath: string
   files: RuntimeFileListEntry[]
@@ -251,7 +251,7 @@ export type RuntimeFileListResult = {
   truncated: boolean
 }
 
-export type RuntimeFileOpenResult = {
+type RuntimeFileOpenResult = {
   worktree: string
   relativePath: string
   kind: 'markdown' | 'text' | 'binary'
@@ -273,7 +273,7 @@ export type RuntimeFilePreviewResult = {
   mimeType?: string
 }
 
-export type RuntimeTerminalSummary = {
+type RuntimeTerminalSummary = {
   handle: string
   worktreeId: string
   worktreePath: string
@@ -293,15 +293,15 @@ export type RuntimeTerminalListResult = {
   truncated: boolean
 }
 
-export type RuntimeTerminalShow = RuntimeTerminalSummary & {
+type RuntimeTerminalShow = RuntimeTerminalSummary & {
   paneRuntimeId: number
   ptyId: string | null
   rendererGraphEpoch: number
 }
 
-export type RuntimeTerminalState = 'running' | 'exited' | 'unknown'
+type RuntimeTerminalState = 'running' | 'exited' | 'unknown'
 
-export type RuntimeTerminalRead = {
+type RuntimeTerminalRead = {
   handle: string
   status: RuntimeTerminalState
   tail: string[]
@@ -313,7 +313,7 @@ export type RuntimeTerminalRead = {
   returnedLineCount?: number
 }
 
-export type RuntimeTerminalRename = {
+type RuntimeTerminalRename = {
   handle: string
   tabId: string
   title: string | null
@@ -338,7 +338,7 @@ export type RuntimeTerminalSplit = {
   paneRuntimeId: number
 }
 
-export type RuntimeTerminalFocus = {
+type RuntimeTerminalFocus = {
   handle: string
   tabId: string
   worktreeId: string
@@ -350,8 +350,8 @@ export type RuntimeTerminalClose = {
   ptyKilled: boolean
 }
 
-export type RuntimeTerminalWaitCondition = 'exit' | 'tui-idle'
-export type RuntimeTerminalWaitBlockedReason =
+type RuntimeTerminalWaitCondition = 'exit' | 'tui-idle'
+type RuntimeTerminalWaitBlockedReason =
   | 'codex-update-prompt'
   | 'codex-trust-workspace'
   | 'codex-cwd-prompt'
@@ -368,7 +368,7 @@ export type RuntimeTerminalWait = {
   blockedReason?: RuntimeTerminalWaitBlockedReason
 }
 
-export type RuntimeWorktreePsSummary = {
+type RuntimeWorktreePsSummary = {
   worktreeId: string
   repoId: string
   repo: string
@@ -388,38 +388,38 @@ export type RuntimeWorktreePsSummary = {
   status: RuntimeWorktreeStatus
 }
 
-export type RuntimeWorktreeStatus = 'active' | 'working' | 'permission' | 'done' | 'inactive'
+type RuntimeWorktreeStatus = 'active' | 'working' | 'permission' | 'done' | 'inactive'
 
-export type RuntimeWorktreeRecord = Worktree & {
+type RuntimeWorktreeRecord = Worktree & {
   parentWorktreeId: string | null
   childWorktreeIds: string[]
   lineage: WorktreeLineage | null
   git: GitWorktreeInfo
 }
 
-export type RuntimeWorktreeCreateResult = {
+type RuntimeWorktreeCreateResult = {
   worktree: RuntimeWorktreeRecord
   lineage: WorktreeLineage | null
   warnings: WorktreeLineageWarning[]
   warning?: string
 }
 
-export type RuntimeWorktreeRemoveResult = RemoveWorktreeResult & {
+type RuntimeWorktreeRemoveResult = RemoveWorktreeResult & {
   removed: boolean
   warning?: string
 }
 
-export type RuntimeWorktreePsResult = {
+type RuntimeWorktreePsResult = {
   worktrees: RuntimeWorktreePsSummary[]
   totalCount: number
   truncated: boolean
 }
 
-export type RuntimeRepoList = {
+type RuntimeRepoList = {
   repos: Repo[]
 }
 
-export type RuntimeRepoSearchRefs = {
+type RuntimeRepoSearchRefs = {
   refs: string[]
   refDetails?: BaseRefSearchResult[]
   truncated: boolean
@@ -433,13 +433,13 @@ export type RuntimeWorktreeListResult = {
 
 // ── Browser automation types ──
 
-export type BrowserSnapshotRef = {
+type BrowserSnapshotRef = {
   ref: string
   role: string
   name: string
 }
 
-export type BrowserSnapshotResult = {
+type BrowserSnapshotResult = {
   browserPageId: string
   snapshot: string
   refs: BrowserSnapshotRef[]
@@ -447,7 +447,7 @@ export type BrowserSnapshotResult = {
   title: string
 }
 
-export type BrowserClickResult = {
+type BrowserClickResult = {
   clicked: string
 }
 
@@ -456,19 +456,19 @@ export type BrowserGotoResult = {
   title: string
 }
 
-export type BrowserFillResult = {
+type BrowserFillResult = {
   filled: string
 }
 
-export type BrowserTypeResult = {
+type BrowserTypeResult = {
   typed: boolean
 }
 
-export type BrowserSelectResult = {
+type BrowserSelectResult = {
   selected: string
 }
 
-export type BrowserScrollResult = {
+type BrowserScrollResult = {
   scrolled: 'up' | 'down'
 }
 
@@ -482,12 +482,12 @@ export type BrowserReloadResult = {
   title: string
 }
 
-export type BrowserScreenshotResult = {
+type BrowserScreenshotResult = {
   data: string
   format: 'png' | 'jpeg'
 }
 
-export type BrowserScreencastReadyResult = {
+type BrowserScreencastReadyResult = {
   type: 'ready'
   subscriptionId: string
   browserPageId: string
@@ -495,22 +495,22 @@ export type BrowserScreencastReadyResult = {
   tab: BrowserTabInfo
 }
 
-export type BrowserScreencastEndResult = {
+type BrowserScreencastEndResult = {
   type: 'end'
   subscriptionId: string
 }
 
-export type BrowserScreencastDialogResult = {
+type BrowserScreencastDialogResult = {
   type: 'dialog'
   dialogType: string
   message: string
 }
 
-export type BrowserScreencastDialogClosedResult = {
+type BrowserScreencastDialogClosedResult = {
   type: 'dialogClosed'
 }
 
-export type BrowserScreencastErrorResult = {
+type BrowserScreencastErrorResult = {
   type: 'error'
   message: string
 }
@@ -522,7 +522,7 @@ export type BrowserScreencastResult =
   | BrowserScreencastDialogClosedResult
   | BrowserScreencastErrorResult
 
-export type BrowserEvalResult = {
+type BrowserEvalResult = {
   result: string
   origin: string
 }
@@ -538,37 +538,37 @@ export type BrowserTabInfo = {
   profileLabel?: string | null
 }
 
-export type BrowserTabListResult = {
+type BrowserTabListResult = {
   tabs: BrowserTabInfo[]
 }
 
-export type BrowserTabSwitchResult = {
+type BrowserTabSwitchResult = {
   switched: number
   browserPageId: string
 }
 
-export type BrowserTabSetProfileResult = {
+type BrowserTabSetProfileResult = {
   browserPageId: string
   profileId: string | null
   profileLabel: string | null
 }
 
-export type BrowserTabShowResult = {
+type BrowserTabShowResult = {
   tab: BrowserTabInfo
 }
 
-export type BrowserTabCurrentResult = {
+type BrowserTabCurrentResult = {
   tab: BrowserTabInfo
 }
 
-export type BrowserTabProfileShowResult = {
+type BrowserTabProfileShowResult = {
   browserPageId: string
   worktreeId: string | null
   profileId: string | null
   profileLabel: string | null
 }
 
-export type BrowserTabProfileCloneResult = {
+type BrowserTabProfileCloneResult = {
   browserPageId: string
   sourceBrowserPageId: string
   profileId: string | null
@@ -588,12 +588,12 @@ export type BrowserProfileDeleteResult = {
   profileId: string
 }
 
-export type BrowserDetectedProfileInfo = {
+type BrowserDetectedProfileInfo = {
   name: string
   directory: string
 }
 
-export type BrowserDetectedInfo = {
+type BrowserDetectedInfo = {
   family: BrowserSessionProfileSource['browserFamily']
   label: string
   profiles: BrowserDetectedProfileInfo[]
@@ -610,49 +610,49 @@ export type BrowserProfileClearDefaultCookiesResult = {
   cleared: boolean
 }
 
-export type BrowserHoverResult = {
+type BrowserHoverResult = {
   hovered: string
 }
 
-export type BrowserDragResult = {
+type BrowserDragResult = {
   dragged: { from: string; to: string }
 }
 
-export type BrowserUploadResult = {
+type BrowserUploadResult = {
   uploaded: number
 }
 
-export type BrowserWaitResult = {
+type BrowserWaitResult = {
   waited: boolean
 }
 
-export type BrowserCheckResult = {
+type BrowserCheckResult = {
   checked: boolean
 }
 
-export type BrowserFocusResult = {
+type BrowserFocusResult = {
   focused: string
 }
 
-export type BrowserClearResult = {
+type BrowserClearResult = {
   cleared: string
 }
 
-export type BrowserSelectAllResult = {
+type BrowserSelectAllResult = {
   selected: string
 }
 
-export type BrowserKeypressResult = {
+type BrowserKeypressResult = {
   pressed: string
 }
 
-export type BrowserPdfResult = {
+type BrowserPdfResult = {
   data: string
 }
 
 // ── Cookie management types ──
 
-export type BrowserCookie = {
+type BrowserCookie = {
   name: string
   value: string
   domain: string
@@ -663,21 +663,21 @@ export type BrowserCookie = {
   sameSite: string
 }
 
-export type BrowserCookieGetResult = {
+type BrowserCookieGetResult = {
   cookies: BrowserCookie[]
 }
 
-export type BrowserCookieSetResult = {
+type BrowserCookieSetResult = {
   success: boolean
 }
 
-export type BrowserCookieDeleteResult = {
+type BrowserCookieDeleteResult = {
   deleted: boolean
 }
 
 // ── Viewport emulation types ──
 
-export type BrowserViewportResult = {
+type BrowserViewportResult = {
   width: number
   height: number
   deviceScaleFactor: number
@@ -686,7 +686,7 @@ export type BrowserViewportResult = {
 
 // ── Geolocation types ──
 
-export type BrowserGeolocationResult = {
+type BrowserGeolocationResult = {
   latitude: number
   longitude: number
   accuracy: number
@@ -694,7 +694,7 @@ export type BrowserGeolocationResult = {
 
 // ── Request interception types ──
 
-export type BrowserInterceptedRequest = {
+type BrowserInterceptedRequest = {
   id: string
   url: string
   method: string
@@ -702,18 +702,18 @@ export type BrowserInterceptedRequest = {
   resourceType: string
 }
 
-export type BrowserInterceptEnableResult = {
+type BrowserInterceptEnableResult = {
   enabled: boolean
   patterns: string[]
 }
 
-export type BrowserInterceptDisableResult = {
+type BrowserInterceptDisableResult = {
   disabled: boolean
 }
 
 // ── Console/network capture types ──
 
-export type BrowserConsoleEntry = {
+type BrowserConsoleEntry = {
   level: string
   text: string
   timestamp: number
@@ -721,12 +721,12 @@ export type BrowserConsoleEntry = {
   line?: number
 }
 
-export type BrowserConsoleResult = {
+type BrowserConsoleResult = {
   entries: BrowserConsoleEntry[]
   truncated: boolean
 }
 
-export type BrowserNetworkEntry = {
+type BrowserNetworkEntry = {
   url: string
   method: string
   status: number
@@ -735,20 +735,20 @@ export type BrowserNetworkEntry = {
   timestamp: number
 }
 
-export type BrowserNetworkLogResult = {
+type BrowserNetworkLogResult = {
   entries: BrowserNetworkEntry[]
   truncated: boolean
 }
 
-export type BrowserCaptureStartResult = {
+type BrowserCaptureStartResult = {
   capturing: boolean
 }
 
-export type BrowserCaptureStopResult = {
+type BrowserCaptureStopResult = {
   stopped: boolean
 }
 
-export type BrowserExecResult = {
+type BrowserExecResult = {
   output: unknown
 }
 
@@ -756,11 +756,11 @@ export type BrowserTabCreateResult = {
   browserPageId: string
 }
 
-export type BrowserTabCloseResult = {
+type BrowserTabCloseResult = {
   closed: boolean
 }
 
-export type BrowserErrorCode =
+type BrowserErrorCode =
   | 'browser_no_tab'
   | 'browser_tab_not_found'
   | 'browser_tab_closed'
@@ -776,7 +776,7 @@ export type BrowserErrorCode =
 
 // Computer-use types (see docs/computer-use/plan.md §4 and §12.6).
 
-export const COMPUTER_ERROR_CODES = {
+const COMPUTER_ERROR_CODES = {
   app_not_found: 'app_not_found',
   app_blocked: 'app_blocked',
   window_not_found: 'window_not_found',
@@ -794,27 +794,27 @@ export const COMPUTER_ERROR_CODES = {
   accessibility_error: 'accessibility_error'
 } as const
 
-export type ComputerErrorCode = keyof typeof COMPUTER_ERROR_CODES
+type ComputerErrorCode = keyof typeof COMPUTER_ERROR_CODES
 
-export type ComputerAppQuery = string
+type ComputerAppQuery = string
 
-export type ComputerSessionTarget = {
+type ComputerSessionTarget = {
   session?: string
   worktree?: string
   app?: ComputerAppQuery
 }
 
-export type ComputerListAppsArgs = {
+type ComputerListAppsArgs = {
   worktree?: string
 }
 
-export type ComputerAppInfo = {
+type ComputerAppInfo = {
   name: string
   bundleId: string | null
   pid: number
 }
 
-export type ComputerWindowInfo = {
+type ComputerWindowInfo = {
   id?: number | null
   title: string
   x?: number | null
@@ -827,7 +827,7 @@ export type ComputerWindowInfo = {
   platform?: Record<string, unknown>
 }
 
-export type ComputerSnapshotData = {
+type ComputerSnapshotData = {
   id: string
   app: ComputerAppInfo
   window: ComputerWindowInfo
@@ -843,7 +843,7 @@ export type ComputerSnapshotData = {
   }
 }
 
-export type ComputerScreenshotData = {
+type ComputerScreenshotData = {
   data?: string
   format: 'png'
   width: number
@@ -854,12 +854,12 @@ export type ComputerScreenshotData = {
   expiresAt?: string
 }
 
-export type ComputerScreenshotMetadata = {
+type ComputerScreenshotMetadata = {
   engine?: 'screenCaptureKit' | 'cgWindowList' | 'unknown'
   windowId?: number | null
 }
 
-export type ComputerScreenshotStatus =
+type ComputerScreenshotStatus =
   | { state: 'captured'; metadata?: ComputerScreenshotMetadata }
   | { state: 'skipped'; reason: 'no_screenshot_flag' }
   | {
@@ -869,7 +869,7 @@ export type ComputerScreenshotStatus =
       metadata?: ComputerScreenshotMetadata
     }
 
-export type ComputerActionMetadata = {
+type ComputerActionMetadata = {
   path: 'accessibility' | 'synthetic' | 'clipboard'
   actionName?: string | null
   fallbackReason?: string | null
@@ -877,7 +877,7 @@ export type ComputerActionMetadata = {
   verification?: ComputerActionVerification
 }
 
-export type ComputerActionVerification =
+type ComputerActionVerification =
   | {
       state: 'verified'
       property: 'focusedText' | 'selection'
@@ -889,17 +889,17 @@ export type ComputerActionVerification =
       reason: 'synthetic_input' | 'clipboard_paste' | 'provider_unavailable' | 'window_changed'
     }
 
-export type ComputerSnapshotResult = {
+type ComputerSnapshotResult = {
   snapshot: ComputerSnapshotData
   screenshot: ComputerScreenshotData | null
   screenshotStatus: ComputerScreenshotStatus
 }
 
-export type ComputerActionResult = ComputerSnapshotResult & {
+type ComputerActionResult = ComputerSnapshotResult & {
   action?: ComputerActionMetadata
 }
 
-export type ComputerProviderCapabilities = {
+type ComputerProviderCapabilities = {
   platform: NodeJS.Platform
   provider: string
   providerVersion: string
@@ -943,18 +943,18 @@ export type ComputerProviderCapabilities = {
   }
 }
 
-export type ComputerWindowListWindow = ComputerWindowInfo & {
+type ComputerWindowListWindow = ComputerWindowInfo & {
   app: ComputerAppInfo
   index: number
   isMain?: boolean | null
 }
 
-export type ComputerListWindowsResult = {
+type ComputerListWindowsResult = {
   app: ComputerAppInfo
   windows: ComputerWindowListWindow[]
 }
 
-export type ComputerListAppsResult = {
+type ComputerListAppsResult = {
   apps: (ComputerAppInfo & {
     isRunning: boolean
     lastUsedAt: string | null

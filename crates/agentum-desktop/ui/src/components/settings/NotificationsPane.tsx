@@ -21,7 +21,7 @@ import { getNotificationSoundOptions } from '@/components/notification-sound-opt
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { useAppStore } from '@/store'
 import { playDesktopNotificationSound } from '@/lib/desktop-notification-sound'
-export { NOTIFICATIONS_PANE_SEARCH_ENTRIES } from './notifications-search'
+
 
 type NotificationsPaneProps = {
   settings: GlobalSettings
@@ -398,7 +398,7 @@ export function NotificationsPane({
   )
 }
 
-export type SettingToggleProps = {
+type SettingToggleProps = {
   label: string
   description: string
   checked: boolean
@@ -407,7 +407,7 @@ export type SettingToggleProps = {
   icon?: ReactNode
 }
 
-export function SettingToggle({
+function SettingToggle({
   label,
   description,
   checked,

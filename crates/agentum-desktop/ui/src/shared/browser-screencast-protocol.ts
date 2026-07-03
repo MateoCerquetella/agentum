@@ -17,7 +17,7 @@ export enum BrowserScreencastOpcode {
   Frame = 1
 }
 
-export type BrowserScreencastFormat = 'jpeg' | 'png'
+type BrowserScreencastFormat = 'jpeg' | 'png'
 
 export type BrowserScreencastFrameMetadata = {
   offsetTop?: number

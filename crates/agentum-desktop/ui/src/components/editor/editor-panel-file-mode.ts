@@ -1,6 +1,6 @@
 import type { OpenFile } from '@/store/slices/editor'
 
-export function isAbsolutePathLike(value: string): boolean {
+function isAbsolutePathLike(value: string): boolean {
   return value.startsWith('/') || value.startsWith('\\\\') || /^[A-Za-z]:[\\/]/.test(value)
 }
 

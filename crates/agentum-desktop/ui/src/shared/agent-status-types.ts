@@ -11,7 +11,7 @@ export type AgentStatusState = (typeof AGENT_STATUS_STATES)[number]
 // regularly and users may run custom agents. Any non-empty string is accepted;
 // well-known names are kept as a convenience union for internal code that
 // wants to pattern-match on common agents.
-export type WellKnownAgentType =
+type WellKnownAgentType =
   | 'claude'
   | 'openclaude'
   | 'codex'
@@ -125,7 +125,7 @@ export type MigrationUnsupportedPtyEntry = {
 // remaining AgentStatusEntry fields (updatedAt, paneKey, etc.) are populated
 // by the renderer when it receives the IPC event.
 
-export type AgentStatusPayload = {
+type AgentStatusPayload = {
   state: AgentStatusState
   prompt?: string
   agentType?: AgentType

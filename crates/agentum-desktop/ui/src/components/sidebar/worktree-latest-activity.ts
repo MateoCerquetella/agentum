@@ -32,7 +32,7 @@ export function latestFromEntries(entries: readonly AgentStatusEntry[]): LatestA
   }
 }
 
-export function selectLatestAgentActivity(
+function selectLatestAgentActivity(
   state: Parameters<typeof selectLiveAgentStatusEntriesForWorktree>[0],
   worktreeId: string
 ): LatestAgentActivity {

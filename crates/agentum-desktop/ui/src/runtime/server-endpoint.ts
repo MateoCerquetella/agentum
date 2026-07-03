@@ -42,7 +42,7 @@ export async function wsUrl(path: string): Promise<string> {
 }
 
 /** One-time connectivity probe; logs the embedded server's health on boot. */
-export async function probeEmbeddedServer(): Promise<boolean> {
+async function probeEmbeddedServer(): Promise<boolean> {
   try {
     const endpoint = await getServerEndpoint()
     const res = await fetch(joinPath(endpoint.url, '/api/health'))

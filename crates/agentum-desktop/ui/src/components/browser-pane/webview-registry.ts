@@ -123,7 +123,7 @@ export function acquireWebviewsDragPassthrough(): () => void {
   }
 }
 
-export function setWebviewsDragPassthrough(passthrough: boolean): void {
+function setWebviewsDragPassthrough(passthrough: boolean): void {
   if (passthrough) {
     if (!nativeDragPassthroughRelease) {
       nativeDragPassthroughRelease = acquireWebviewsDragPassthrough()

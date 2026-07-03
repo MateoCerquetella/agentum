@@ -130,7 +130,7 @@ function sessionTabsFreshnessKey(environmentId: string, worktreeId: string): str
   return `${environmentId}:${worktreeId}`
 }
 
-export function shouldApplyWebSessionTabsSnapshot(
+function shouldApplyWebSessionTabsSnapshot(
   snapshot: RuntimeMobileSessionTabsResult,
   environmentId: string
 ): boolean {
@@ -2014,7 +2014,7 @@ export function applyFreshWebSessionTabsSnapshot(
   return applyWebSessionTabsSnapshot(state, snapshot, environmentId, now)
 }
 
-export function applyFreshWebSessionTabsSnapshots(
+function applyFreshWebSessionTabsSnapshots(
   state: WebSessionTabsSyncState,
   snapshots: readonly RuntimeMobileSessionTabsResult[],
   environmentId: string,

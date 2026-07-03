@@ -56,7 +56,7 @@ export function hasInstalledAgentSkill(
   })
 }
 
-export function notifyInstalledAgentSkillsChanged(): void {
+function notifyInstalledAgentSkillsChanged(): void {
   cachedDiscovery = null
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(INSTALLED_AGENT_SKILLS_CHANGED_EVENT))

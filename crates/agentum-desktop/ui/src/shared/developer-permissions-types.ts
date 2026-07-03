@@ -23,7 +23,7 @@ export type DeveloperPermissionState = {
   status: DeveloperPermissionStatus
 }
 
-export type DeveloperPermissionRequestResult = {
+type DeveloperPermissionRequestResult = {
   id: DeveloperPermissionId
   status: DeveloperPermissionStatus
   openedSystemSettings: boolean

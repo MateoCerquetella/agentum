@@ -6,9 +6,9 @@ import {
 
 export type FeatureTipId = 'voice-dictation' | 'agentum-cli'
 
-export type FeatureTipPriority = 'new' | 'unseen'
+type FeatureTipPriority = 'new' | 'unseen'
 
-export type FeatureTipAction = 'enable-voice' | 'setup-cli'
+type FeatureTipAction = 'enable-voice' | 'setup-cli'
 
 export type FeatureTip = {
   id: FeatureTipId
@@ -53,7 +53,7 @@ export const FEATURE_TIPS = [
   }
 ] as const satisfies readonly FeatureTip[]
 
-export const FEATURE_TIP_IDS = FEATURE_TIPS.map((tip) => tip.id)
+const FEATURE_TIP_IDS = FEATURE_TIPS.map((tip) => tip.id)
 
 export function isFeatureTipId(value: unknown): value is FeatureTipId {
   return typeof value === 'string' && FEATURE_TIP_IDS.includes(value as FeatureTipId)

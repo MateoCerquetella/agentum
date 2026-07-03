@@ -6,7 +6,7 @@ import type { SparsePreset } from '../../../../shared/types'
 
 const ERROR_TOAST_DURATION = 60_000
 
-export type SparsePresetsLoadStatus = 'idle' | 'loading' | 'loaded' | 'error'
+type SparsePresetsLoadStatus = 'idle' | 'loading' | 'loaded' | 'error'
 
 export type SparsePresetsSlice = {
   /** Per-repo preset list. Lazily populated by `fetchSparsePresets`; missing

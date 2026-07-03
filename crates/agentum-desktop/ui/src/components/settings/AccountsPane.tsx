@@ -49,7 +49,7 @@ import {
   type ClaudeLiveLogin
 } from './claude-add-account-flow'
 
-export { ACCOUNTS_PANE_SEARCH_ENTRIES }
+
 
 type AccountsPaneProps = {
   settings: GlobalSettings

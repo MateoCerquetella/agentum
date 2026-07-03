@@ -106,7 +106,7 @@ function EscapedText({ text, className }: { text: string; className?: string }):
 // Confirmation Sheet Component
 // ---------------------------------------------------------------------------
 
-export default function GrabConfirmationSheet({
+function GrabConfirmationSheet({
   payload,
   onCopy,
   onCopyScreenshot,

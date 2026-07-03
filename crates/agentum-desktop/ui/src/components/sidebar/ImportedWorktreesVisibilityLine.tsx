@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { dirname } from '@/lib/path'
 import { cn } from '@/lib/utils'
 
-export type ImportedWorktreesVisibilityPlacement = 'repo-group' | 'pinned-fallback'
+type ImportedWorktreesVisibilityPlacement = 'repo-group' | 'pinned-fallback'
 
 export type ImportedWorktreeVisibilityPreview = {
   id?: string

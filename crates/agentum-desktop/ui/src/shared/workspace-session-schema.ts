@@ -212,7 +212,7 @@ const browserHistoryEntriesSchema = z
 
 // ─── Workspace session ──────────────────────────────────────────────
 
-export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.object({
+const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.object({
   activeRepoId: z.string().nullable(),
   activeWorktreeId: z.string().nullable(),
   activeTabId: z.string().nullable(),

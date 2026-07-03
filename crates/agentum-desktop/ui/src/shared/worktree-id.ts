@@ -7,7 +7,7 @@ export type ParsedWorktreeId = {
   worktreePath: string
 }
 
-export const FOLDER_WORKSPACE_INSTANCE_SEPARATOR = '::workspace:'
+const FOLDER_WORKSPACE_INSTANCE_SEPARATOR = '::workspace:'
 const FOLDER_WORKSPACE_INSTANCE_SUFFIX = new RegExp(
   `${FOLDER_WORKSPACE_INSTANCE_SEPARATOR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[0-9a-f-]{36}$`
 )

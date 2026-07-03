@@ -2,9 +2,9 @@ import { z } from 'zod'
 
 import { base64ToUtf8, utf8ToBase64 } from './base64'
 
-export const PAIRING_OFFER_VERSION = 2
+const PAIRING_OFFER_VERSION = 2
 
-export const PairingOfferSchema = z.object({
+const PairingOfferSchema = z.object({
   v: z.literal(PAIRING_OFFER_VERSION),
   endpoint: z.string().min(1),
   deviceToken: z.string().min(1),

@@ -163,7 +163,7 @@ export function buildEditorSessionData(
   }
 }
 
-export function buildBrowserSessionData(
+function buildBrowserSessionData(
   browserTabsByWorktree: Record<string, BrowserWorkspace[]>,
   browserPagesByWorkspace: Record<string, BrowserPage[]>,
   activeBrowserTabIdByWorktree: Record<string, string | null>

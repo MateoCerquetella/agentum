@@ -23,7 +23,7 @@ export {
   getTabEntryOptions,
   validateNewTabEntryRelativePath,
   type TabEntryActionClassification,
-  type TabEntryClassification,
+  
   type TabEntryOption
 } from './tab-create-entry-classifier'
 

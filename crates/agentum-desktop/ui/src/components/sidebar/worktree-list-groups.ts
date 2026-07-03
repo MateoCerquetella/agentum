@@ -27,7 +27,7 @@ import type { AppState } from '@/store/types'
 import { getGitHubPRCacheKey, getLegacyGitHubPRCacheKey } from '@/store/slices/github-cache-key'
 import { UNGROUPED_PROJECT_GROUP_KEY } from '../../../../shared/project-groups'
 
-export { branchName }
+
 
 export type WorktreeGroupBy = 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
 
@@ -148,7 +148,7 @@ export type GroupHeaderRow = {
   projectGroupDepth?: number
 }
 
-export type WorktreeRow = {
+type WorktreeRow = {
   type: 'item'
   worktree: Worktree
   repo: Repo | undefined
@@ -165,7 +165,7 @@ export type ImportedWorktreesCardCandidate = {
   hiddenWorktrees: DetectedWorktree[]
 }
 
-export type ImportedWorktreesCardRow = {
+type ImportedWorktreesCardRow = {
   type: 'imported-worktrees-card'
   key: string
   repo: Repo
@@ -173,7 +173,7 @@ export type ImportedWorktreesCardRow = {
   placement: 'repo-group' | 'pinned-fallback'
 }
 
-export type HostHeaderRow = {
+type HostHeaderRow = {
   type: 'host-header'
   key: string
   host: SidebarHost
@@ -183,7 +183,7 @@ export type HostHeaderRow = {
 // Trailing row inside each SSH repo group: lists the host's pre-existing tmux
 // sessions (not agentum-managed) so they can be attached from the project they
 // belong to, instead of a detached global sidebar section.
-export type RemoteTmuxCardRow = {
+type RemoteTmuxCardRow = {
   type: 'remote-tmux-card'
   key: string
   repo: Repo
@@ -198,9 +198,9 @@ export type Row =
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
 
-export const PR_GROUP_ORDER: PRGroupKey[] = ['done', 'in-review', 'in-progress', 'closed']
+const PR_GROUP_ORDER: PRGroupKey[] = ['done', 'in-review', 'in-progress', 'closed']
 
-export const PR_GROUP_META: Record<
+const PR_GROUP_META: Record<
   PRGroupKey,
   {
     label: string
@@ -230,7 +230,7 @@ export const PR_GROUP_META: Record<
   }
 }
 
-export const PROJECT_GROUP_META = {
+const PROJECT_GROUP_META = {
   tone: 'text-foreground',
   icon: FolderTree
 } as const
@@ -284,7 +284,7 @@ export function getHostHeaderKey(hostKey: string): string {
 
 export const PINNED_GROUP_KEY = 'pinned'
 
-export const PINNED_GROUP_META = {
+const PINNED_GROUP_META = {
   label: 'Pinned',
   tone: 'text-foreground',
   icon: Pin
@@ -298,7 +298,7 @@ export const ALL_GROUP_META = {
   icon: List
 } as const
 
-export const LINEAGE_GROUP_PREFIX = 'lineage:'
+const LINEAGE_GROUP_PREFIX = 'lineage:'
 
 export function getLineageGroupKey(worktreeId: string): string {
   return `${LINEAGE_GROUP_PREFIX}${worktreeId}`

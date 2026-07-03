@@ -2,7 +2,7 @@ import type { GlobalSettings } from '../../../../shared/types'
 import { Label } from '../ui/label'
 import { SearchableSetting } from './SearchableSetting'
 import { isDefaultPrimarySelectionMiddleClickPasteUserAgent } from '@/hooks/usePrimarySelectionPaste'
-export { INPUT_PANE_SEARCH_ENTRIES } from './input-search'
+
 
 type InputPaneProps = {
   settings: GlobalSettings

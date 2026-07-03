@@ -239,7 +239,7 @@ export function resolveWindowShortcutAction(
   return null
 }
 
-export function getWindowShortcutActionId(action: WindowShortcutAction): KeybindingActionId | null {
+function getWindowShortcutActionId(action: WindowShortcutAction): KeybindingActionId | null {
   switch (action.type) {
     case 'zoom':
       return action.direction === 'in'
@@ -279,7 +279,7 @@ export function getWindowShortcutActionId(action: WindowShortcutAction): Keybind
   }
 }
 
-export function windowShortcutActionCapturesTerminal(action: WindowShortcutAction): boolean {
+function windowShortcutActionCapturesTerminal(action: WindowShortcutAction): boolean {
   if (action.type === 'jumpToWorktreeIndex' || action.type === 'jumpToTabIndex') {
     return true
   }

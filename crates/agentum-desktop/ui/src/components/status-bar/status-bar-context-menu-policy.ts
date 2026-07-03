@@ -1,4 +1,4 @@
-export const STATUS_BAR_CONTEXT_MENU_EXEMPT_ATTR = 'data-status-bar-context-menu-exempt'
+const STATUS_BAR_CONTEXT_MENU_EXEMPT_ATTR = 'data-status-bar-context-menu-exempt'
 export const STATUS_BAR_CONTEXT_MENU_EXEMPT_SELECTOR = `[${STATUS_BAR_CONTEXT_MENU_EXEMPT_ATTR}]`
 export const STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS = {
   [STATUS_BAR_CONTEXT_MENU_EXEMPT_ATTR]: ''

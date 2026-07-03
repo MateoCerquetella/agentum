@@ -77,4 +77,4 @@ export function classifyInputSourceId(id: string | null | undefined): InputSourc
 
 /** Test-only: exported so tests can assert the allowlist without
  *  reimporting the private constant. */
-export const __metaInputSourceIdsForTests: readonly string[] = META_INPUT_SOURCE_IDS
+const __metaInputSourceIdsForTests: readonly string[] = META_INPUT_SOURCE_IDS

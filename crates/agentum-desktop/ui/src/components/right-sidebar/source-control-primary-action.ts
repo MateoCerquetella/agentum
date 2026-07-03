@@ -16,7 +16,7 @@ import { shouldForcePushWithLeaseForUpstream } from '../../../../shared/git-upst
 // `handlePrimaryClick` switch exhaustively over only the kinds the
 // primary can actually emit, and it kills the compound-commit branch in
 // the isRemoteOperationActive tooltip below at compile time.
-export type PrimaryActionKind =
+type PrimaryActionKind =
   | 'commit'
   | 'stage'
   | 'push'

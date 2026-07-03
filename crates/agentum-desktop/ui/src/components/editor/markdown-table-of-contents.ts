@@ -4,7 +4,7 @@ import remarkParse from 'remark-parse'
 import { unified } from 'unified'
 import { MarkdownHeadingSlugger } from './markdown-heading-slug'
 
-export type MarkdownTocLevel = 1 | 2 | 3
+type MarkdownTocLevel = 1 | 2 | 3
 
 export type MarkdownTocItem = {
   children: MarkdownTocItem[]

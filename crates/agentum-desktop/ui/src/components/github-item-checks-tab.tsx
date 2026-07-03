@@ -24,7 +24,7 @@ import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import type { GitHubWorkItem, GitHubWorkItemDetails, PRCheckDetail } from '../../../shared/types'
 
-export function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[]): string {
+function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[]): string {
   const brokenChecks = getBrokenChecks(checks)
   const checkLines =
     brokenChecks.length > 0

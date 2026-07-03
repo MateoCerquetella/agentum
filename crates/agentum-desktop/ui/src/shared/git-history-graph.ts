@@ -65,7 +65,7 @@ function getLabelColorIdentifier(
   return undefined
 }
 
-export function compareGitHistoryRefs(
+function compareGitHistoryRefs(
   ref1: GitHistoryItemRef,
   ref2: GitHistoryItemRef,
   currentRef?: GitHistoryItemRef,

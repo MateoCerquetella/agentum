@@ -33,7 +33,7 @@ export function getRichMarkdownPlaceholder({
     : TOGGLE_TEXT_PLACEHOLDER
 }
 
-export function moveDetailsSummarySelectionToContent(editor: Editor): boolean {
+function moveDetailsSummarySelectionToContent(editor: Editor): boolean {
   const { state, view } = editor
   const { selection } = state
   const { $from, empty } = selection

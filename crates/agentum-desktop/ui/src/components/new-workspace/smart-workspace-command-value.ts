@@ -1,4 +1,4 @@
-export type SmartWorkspaceCommandRowKind =
+type SmartWorkspaceCommandRowKind =
   | 'use-name'
   | 'create-branch'
   | 'github'

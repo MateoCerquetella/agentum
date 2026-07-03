@@ -9,7 +9,7 @@ type Sprite = NonNullable<CustomPet['sprite']>
 // pipeline.
 export const DEFAULT_PET_ID = 'agentum-agent'
 
-export type BundledPetId = typeof DEFAULT_PET_ID
+type BundledPetId = typeof DEFAULT_PET_ID
 
 export type BundledPet = {
   id: BundledPetId

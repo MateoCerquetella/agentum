@@ -29,7 +29,7 @@ export {
   normalizeWorktreeCardProperties
 } from './worktree-card-properties'
 
-export const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 1
 export const DEFAULT_APP_FONT_FAMILY = 'Geist'
 export const DEFAULT_SHOW_SLEEPING_WORKSPACES = true
 export const DEFAULT_HIDE_SLEEPING_WORKSPACES = false
@@ -105,12 +105,12 @@ export const MAX_EDITOR_AUTO_SAVE_DELAY_MS = 10_000
 // the star-on-GitHub notification. Doubles each time the user dismisses
 // without starring — e.g. 35 → 70 → 140 → 280. Past dismissals are encoded
 // in starNagNextThreshold, so this constant is only the first-time seed.
-export const STAR_NAG_INITIAL_THRESHOLD = 35
+const STAR_NAG_INITIAL_THRESHOLD = 35
 
 /** Synthetic worktree id used by the memory collector to bucket PTYs that
  *  are not associated with any worktree. Shared across main and renderer so
  *  the collector and the status-bar popover agree on the sentinel. */
-export const ORPHAN_WORKTREE_ID = '__orphan__'
+const ORPHAN_WORKTREE_ID = '__orphan__'
 
 // Why: the floating workspace is a local synthetic workspace, so persistence
 // pruning must classify it without consulting the repo catalog.
@@ -129,7 +129,7 @@ export const REPO_COLORS = [
 
 export const DEFAULT_REPO_BADGE_COLOR = REPO_COLORS[0]
 
-export function getDefaultNotificationSettings(): NotificationSettings {
+function getDefaultNotificationSettings(): NotificationSettings {
   return {
     enabled: true,
     agentTaskComplete: true,
@@ -366,7 +366,7 @@ export function getDefaultRepoHookSettings(): RepoHookSettings {
   }
 }
 
-export function getDefaultPersistedState(homedir: string): PersistedState {
+function getDefaultPersistedState(homedir: string): PersistedState {
   return {
     schemaVersion: SCHEMA_VERSION,
     repos: [],

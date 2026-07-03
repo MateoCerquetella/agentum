@@ -40,7 +40,7 @@ export function getContextualCopyLineRange(selection: IRange): {
   }
 }
 
-export function getInclusiveEndLine(selection: IRange): number {
+function getInclusiveEndLine(selection: IRange): number {
   if (selection.startLineNumber === selection.endLineNumber) {
     return selection.endLineNumber
   }

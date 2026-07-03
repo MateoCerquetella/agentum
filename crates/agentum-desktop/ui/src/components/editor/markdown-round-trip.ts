@@ -9,7 +9,7 @@ let roundTripExtensions: ReturnType<typeof createRichMarkdownExtensions> | null 
 const roundTripCache = new Map<string, string | null>()
 const MAX_CACHE_ENTRIES = 20
 
-export function canRoundTripRichMarkdown(content: string): boolean {
+function canRoundTripRichMarkdown(content: string): boolean {
   const output = getRichMarkdownRoundTripOutput(content)
   return output !== null && normalizeMarkdown(content) === normalizeMarkdown(output)
 }

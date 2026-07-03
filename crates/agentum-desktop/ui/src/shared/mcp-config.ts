@@ -1,4 +1,4 @@
-export type McpConfigFormat = 'workspace' | 'cursor' | 'claude'
+type McpConfigFormat = 'workspace' | 'cursor' | 'claude'
 
 export type McpConfigCandidate = {
   format: McpConfigFormat
@@ -12,10 +12,10 @@ export type McpConfigDirectoryEntry = {
   isDirectory: boolean
 }
 
-export type McpServerTransport = 'stdio' | 'http' | 'unknown'
-export type McpServerStatus = 'enabled' | 'disabled' | 'invalid'
+type McpServerTransport = 'stdio' | 'http' | 'unknown'
+type McpServerStatus = 'enabled' | 'disabled' | 'invalid'
 
-export type McpServerSummary = {
+type McpServerSummary = {
   name: string
   transport: McpServerTransport
   status: McpServerStatus

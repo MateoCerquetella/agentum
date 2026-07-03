@@ -4,7 +4,7 @@ const EDITOR_FONT_ZOOM_STEP = 1
 
 export type EditorZoomDirection = 'in' | 'out' | 'reset'
 
-export function clampEditorFontZoomLevel(level: number): number {
+function clampEditorFontZoomLevel(level: number): number {
   return Math.max(EDITOR_FONT_ZOOM_MIN, Math.min(EDITOR_FONT_ZOOM_MAX, level))
 }
 

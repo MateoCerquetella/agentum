@@ -19,7 +19,7 @@ import { isWebTerminalSurfaceTabId, toHostSessionTabId } from './web-terminal-su
 export {
   HOST_TERMINAL_SURFACE_SEPARATOR,
   isWebTerminalSurfaceTabId,
-  toHostSessionTabId,
+  
   toWebTerminalSurfaceTabId,
   WEB_TERMINAL_SURFACE_TAB_PREFIX
 } from './web-terminal-surface-id'

@@ -52,7 +52,7 @@ export function clearRepoSlugCacheEntry(repoId: string): void {
 }
 
 /** Clear the entire slug cache. Useful for tests or full repo-list resets. */
-export function clearRepoSlugCache(): void {
+function clearRepoSlugCache(): void {
   slugByRepoId.clear()
 }
 

@@ -10,7 +10,7 @@ export function isPRFileViewed(file: GitHubPRFile): boolean {
   return file.viewerViewedState === 'VIEWED'
 }
 
-export function mapPRFileStatus(status: GitHubPRFile['status']): GitBranchChangeEntry['status'] {
+function mapPRFileStatus(status: GitHubPRFile['status']): GitBranchChangeEntry['status'] {
   switch (status) {
     case 'added':
       return 'added'

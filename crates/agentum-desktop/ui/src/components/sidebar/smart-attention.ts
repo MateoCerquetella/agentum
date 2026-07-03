@@ -36,7 +36,7 @@ export type SmartClass = 1 | 2 | 3 | 4
  *   - `title-heuristic`: no fresh hook entry; runtime pane title classified
  *     as `'permission'` by `detectAgentStatusFromTitle`.
  */
-export type AttentionCause = 'blocked' | 'waiting' | 'title-heuristic'
+type AttentionCause = 'blocked' | 'waiting' | 'title-heuristic'
 
 /**
  * Per-worktree resolution computed once before sorting.
@@ -199,7 +199,7 @@ export function resolveAttention(panes: PaneInput[], now: number): WorktreeAtten
  * `${tabId}:${paneId}`). Doing this once per sort lets each worktree's
  * resolution pay O(T) lookups instead of scanning the full map.
  */
-export function buildExplicitEntriesByTabId(
+function buildExplicitEntriesByTabId(
   agentStatusByPaneKey: Record<string, AgentStatusEntry> | undefined,
   migrationUnsupportedByPtyId?: Record<string, MigrationUnsupportedPtyEntry>
 ): Map<string, AgentStatusEntry[]> {

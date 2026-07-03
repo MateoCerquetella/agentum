@@ -21,7 +21,7 @@ export type RemoteWorkspaceSyncStatus = {
   message?: string
 }
 
-export type SshCredentialRequest = {
+type SshCredentialRequest = {
   requestId: string
   targetId: string
   kind: 'passphrase' | 'password'

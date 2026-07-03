@@ -1,8 +1,8 @@
-export const AGENTUM_SKILLS_REPOSITORY_URL = 'https://github.com/mateocerquetella/agentum'
+const AGENTUM_SKILLS_REPOSITORY_URL = 'https://github.com/mateocerquetella/agentum'
 
 export const AGENTUM_CLI_SKILL_NAME = 'agentum-cli'
-export const COMPUTER_USE_SKILL_NAME = 'computer-use'
-export const ORCHESTRATION_SKILL_NAME = 'orchestration'
+const COMPUTER_USE_SKILL_NAME = 'computer-use'
+const ORCHESTRATION_SKILL_NAME = 'orchestration'
 export const BROWSER_VERIFICATION_LOOP_SKILL_NAME = 'browser-verification-loop'
 
 export function buildAgentFeatureSkillInstallCommand(skillNames: readonly string[]): string {
@@ -16,15 +16,15 @@ export const AGENTUM_CLI_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCo
   AGENTUM_CLI_SKILL_NAME
 ])
 
-export const COMPUTER_USE_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
+const COMPUTER_USE_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
   COMPUTER_USE_SKILL_NAME
 ])
 
-export const ORCHESTRATION_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
+const ORCHESTRATION_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
   ORCHESTRATION_SKILL_NAME
 ])
 
-export const AGENTUM_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
+const AGENTUM_CLI_ORCHESTRATION_SKILL_INSTALL_COMMAND = buildAgentFeatureSkillInstallCommand([
   AGENTUM_CLI_SKILL_NAME,
   ORCHESTRATION_SKILL_NAME
 ])

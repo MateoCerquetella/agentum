@@ -11,7 +11,7 @@ import { AutoRenameBranchFromWorkSetting } from './AutoRenameBranchFromWorkSetti
 import { AUTO_RENAME_BRANCH_SEARCH_ENTRIES } from './auto-rename-branch-search'
 import { GitLabRateLimitPanel } from '../gitlab/gitlab-rate-limit-display'
 
-export { GIT_PANE_SEARCH_ENTRIES }
+
 
 export function shouldShowAutoRenameBranchSetting(
   searchQuery: string,

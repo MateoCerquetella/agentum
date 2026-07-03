@@ -1,6 +1,6 @@
 export type CodexUsageScope = 'agentum' | 'all'
 export type CodexUsageRange = '7d' | '30d' | '90d' | 'all'
-export type CodexUsageBreakdownKind = 'model' | 'project'
+type CodexUsageBreakdownKind = 'model' | 'project'
 
 export type CodexUsageScanState = {
   enabled: boolean

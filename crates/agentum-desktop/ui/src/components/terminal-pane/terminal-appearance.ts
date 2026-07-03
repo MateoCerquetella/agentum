@@ -126,7 +126,7 @@ export function maybePushMode2031Flip(
   return true
 }
 
-export function isHexColor(value: string): boolean {
+function isHexColor(value: string): boolean {
   return HEX_COLOR_RE.test(value)
 }
 

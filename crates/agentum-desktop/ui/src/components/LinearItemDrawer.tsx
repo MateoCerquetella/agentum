@@ -67,7 +67,7 @@ const LINEAR_EDIT_MENU_ITEM_WITH_ICON_CLASS =
 
 const LINEAR_ESTIMATE_PRESETS = [1, 2, 3, 5, 8] as const
 
-export function formatLinearEstimateLabel(estimate: number | null | undefined): string {
+function formatLinearEstimateLabel(estimate: number | null | undefined): string {
   return estimate === null || estimate === undefined ? 'Set estimate' : `Estimate ${estimate}`
 }
 
@@ -1079,7 +1079,7 @@ export function initLinearIssueEditState(issue: LinearIssue): LinearEditState {
   }
 }
 
-export default function LinearItemDrawer({
+function LinearItemDrawer({
   issue,
   onUse,
   onClose

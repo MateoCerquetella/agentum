@@ -105,7 +105,7 @@ export async function removeSafeUntrackedDiscardTarget(
   await removePath(filePath)
 }
 
-export async function removeSafeUntrackedDiscardTargets(
+async function removeSafeUntrackedDiscardTargets(
   worktreePath: string,
   filePaths: readonly string[],
   removePaths: (filePaths: readonly string[]) => Promise<void>,

@@ -53,7 +53,7 @@ const FEATURE_TELEMETRY_IDS: Record<
   orchestration: 'orchestration'
 }
 
-export type OnboardingFeatureSetupWarning = {
+type OnboardingFeatureSetupWarning = {
   featureId: OnboardingFeatureSetupId | 'cli' | 'skills'
   message: string
 }
@@ -87,7 +87,7 @@ export function hasSelectedOnboardingFeatureSetup(
   return ONBOARDING_FEATURE_SETUP_IDS.some((id) => selection[id])
 }
 
-export function selectedOnboardingFeatureSetupIds(
+function selectedOnboardingFeatureSetupIds(
   selection: OnboardingFeatureSetupSelection
 ): OnboardingFeatureSetupId[] {
   return ONBOARDING_FEATURE_SETUP_IDS.filter((id) => selection[id])
@@ -99,7 +99,7 @@ export function buildOnboardingFeatureSetupClipboardText(
   return buildOnboardingFeatureSetupSkillCommand(selection)
 }
 
-export function buildOnboardingFeatureSetupSkillCommand(
+function buildOnboardingFeatureSetupSkillCommand(
   selection: OnboardingFeatureSetupSelection
 ): string | null {
   const skillNames = selectedOnboardingFeatureSetupIds(selection)
@@ -142,7 +142,7 @@ export function onboardingFeatureSetupRunTelemetry(
   }
 }
 
-export function createOnboardingFeatureSetupDeps(): OnboardingFeatureSetupDeps {
+function createOnboardingFeatureSetupDeps(): OnboardingFeatureSetupDeps {
   const e2eDeps = getE2EOnboardingFeatureSetupDeps()
   if (e2eDeps) {
     return e2eDeps

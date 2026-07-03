@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // against stale targets. With pointer events we cache the active set of repo
 // header positions and compute the drop index from the live pointer Y.
 
-export type RepoDragState = {
+type RepoDragState = {
   draggingRepoId: string | null
   // Insertion index in the orderedRepoIds array where the dragged repo would
   // land if released now. null while not dragging.

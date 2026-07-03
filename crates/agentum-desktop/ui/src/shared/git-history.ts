@@ -18,20 +18,20 @@ export type {
   GitHistoryGraphColorId,
   GitHistoryItem,
   GitHistoryItemRef,
-  GitHistoryItemStatistics,
+  
   GitHistoryOptions,
-  GitHistoryRefCategory,
+  
   GitHistoryResult
 } from './git-history-types'
 export {
   GIT_HISTORY_BASE_REF_COLOR,
-  GIT_HISTORY_DEFAULT_LIMIT,
+  
   GIT_HISTORY_LANE_COLORS,
   GIT_HISTORY_MAX_LIMIT,
   GIT_HISTORY_REF_COLOR,
   GIT_HISTORY_REMOTE_REF_COLOR
 } from './git-history-types'
-export { compareGitHistoryItemRefsByCategory, parseGitHistoryLog } from './git-history-log-parser'
+export {  parseGitHistoryLog } from './git-history-log-parser'
 
 function clampHistoryLimit(limit: number | undefined): number {
   if (!Number.isFinite(limit)) {

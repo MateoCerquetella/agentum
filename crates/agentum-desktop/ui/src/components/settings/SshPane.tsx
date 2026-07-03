@@ -22,7 +22,7 @@ import {
   isRelayGracePeriodValid,
   parseRelayGracePeriodSeconds
 } from './ssh-target-draft'
-export { SSH_PANE_SEARCH_ENTRIES } from './ssh-search'
+
 
 type SshPaneProps = Record<string, never>
 

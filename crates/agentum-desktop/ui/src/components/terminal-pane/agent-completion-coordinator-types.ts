@@ -2,7 +2,7 @@ import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-t
 import type { GlobalSettings } from '../../../../shared/types'
 import type { RuntimeTerminalProcessInspection } from '@/runtime/runtime-terminal-inspection'
 
-export type AgentCompletionDispatchMeta = {
+type AgentCompletionDispatchMeta = {
   source: 'hook' | 'title' | 'process-exit'
   quietedHookDone: boolean
 }

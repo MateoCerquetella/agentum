@@ -25,7 +25,7 @@ const subscribers = new Set<() => void>()
 // repo/worktree updates landed before the matching setActiveTab, briefly
 // portaling a different terminal into the activity slot ("flash" of the wrong
 // terminal for a few ms).
-export function setActivityTerminalPortals(targets: ActivityTerminalPortalTarget[]): void {
+function setActivityTerminalPortals(targets: ActivityTerminalPortalTarget[]): void {
   if (currentTargets === targets) {
     return
   }

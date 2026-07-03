@@ -35,7 +35,7 @@ type TerminalMultiplexEvent =
     }
   | { type: string; streamId?: number; [key: string]: unknown }
 
-export type RemoteRuntimeMultiplexedTerminalCallbacks = {
+type RemoteRuntimeMultiplexedTerminalCallbacks = {
   onData: (data: string) => void
   onSnapshot: (data: string) => void
   onSubscribed?: () => void

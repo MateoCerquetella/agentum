@@ -6,7 +6,6 @@ import { api } from '@/tauri'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LoaderCircle, RefreshCw, RotateCw, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
-import type { PtyManagementSession } from '../../../../preload/api-types'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -26,6 +25,18 @@ import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { useDaemonActions, DaemonActionDialog } from '../shared/useDaemonActions'
 
 type ConfirmKind = 'killOne'
+
+// Row shape of `pty_management_list_sessions` (see the desktop crate's
+// commands/pty.rs) — keep in sync with the command's JSON.
+type PtyManagementSession = {
+  id: string
+  sessionId: string
+  cwd: string
+  title: string
+  isAlive: boolean
+  shellState: string
+  state: string
+}
 
 type PendingConfirm = { kind: 'killOne'; session: PtyManagementSession } | null
 

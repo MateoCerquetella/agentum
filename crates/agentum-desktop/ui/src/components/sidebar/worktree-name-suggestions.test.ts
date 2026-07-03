@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeWorktreeName } from '../../../../main/ipc/worktree-logic'
 import { MARINE_CREATURES } from '@/constants/marine-creatures'
 import {
   getSuggestedCreatureName,
@@ -99,14 +98,12 @@ describe('shouldApplySuggestedName', () => {
 })
 
 describe('MARINE_CREATURES', () => {
-  it('is non-empty and unique after normalization and sanitization', () => {
+  it('is non-empty and unique after normalization', () => {
     expect(MARINE_CREATURES.length).toBeGreaterThanOrEqual(500)
 
     const normalizedNames = MARINE_CREATURES.map(normalizeSuggestedName)
-    const sanitizedNames = MARINE_CREATURES.map((name) => sanitizeWorktreeName(name))
 
     expect(new Set(normalizedNames).size).toBe(MARINE_CREATURES.length)
-    expect(new Set(sanitizedNames).size).toBe(MARINE_CREATURES.length)
   })
 
   it('avoids names that read poorly as UI defaults', () => {

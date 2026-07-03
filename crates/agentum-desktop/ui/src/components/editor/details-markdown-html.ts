@@ -1,6 +1,6 @@
 import type { MarkdownToken } from '@tiptap/core'
 
-export const DETAILS_CLOSE_TAG = '</details>'
+const DETAILS_CLOSE_TAG = '</details>'
 
 export type DetailsHtmlToken = MarkdownToken & {
   attributes?: Record<string, unknown>

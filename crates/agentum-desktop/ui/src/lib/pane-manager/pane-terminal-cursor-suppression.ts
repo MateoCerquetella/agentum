@@ -5,7 +5,7 @@ export type TerminalCursorSuppressionTarget = {
 const FOREGROUND_CURSOR_RESTORE_DELAY_MS = 64
 const FOREGROUND_CURSOR_RESTORE_SAFETY_MS = 500
 
-export const FOREGROUND_CURSOR_SUPPRESSED_CLASS = 'terminal-foreground-write-pending'
+const FOREGROUND_CURSOR_SUPPRESSED_CLASS = 'terminal-foreground-write-pending'
 export const FOREGROUND_CURSOR_RESTORE_SAFETY_DELAY_MS = FOREGROUND_CURSOR_RESTORE_SAFETY_MS
 
 const restoreTimerByTerminal = new WeakMap<

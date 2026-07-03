@@ -96,7 +96,7 @@ export type AgentSendPopoverTargetMode = {
   onPromptDelivered?: () => void
 }
 
-export type OpenAgentSendPopoverTargetModeArgs = {
+type OpenAgentSendPopoverTargetModeArgs = {
   id: string
   worktreeId: string
   source: AgentSendPopoverTargetMode['source']

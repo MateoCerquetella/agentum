@@ -32,7 +32,7 @@ import {
 import { TERMINAL_APPEARANCE_SEARCH_ENTRIES } from './terminal-search'
 import { TerminalAppearanceSection } from './TerminalAppearanceSection'
 import type { UseGhosttyImportReturn } from './useGhosttyImport'
-export { APPEARANCE_PANE_SEARCH_ENTRIES }
+
 
 type AppearancePaneProps = {
   settings: GlobalSettings

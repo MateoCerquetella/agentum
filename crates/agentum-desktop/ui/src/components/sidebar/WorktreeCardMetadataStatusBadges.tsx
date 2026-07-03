@@ -72,7 +72,7 @@ export function LinearStateBadge({ stateName }: { stateName: string }): React.JS
   )
 }
 
-export function ReviewStateBadge({
+function ReviewStateBadge({
   state,
   label
 }: {
@@ -126,7 +126,7 @@ export function ReviewStateBadge({
   )
 }
 
-export function ReviewChecksBadge({
+function ReviewChecksBadge({
   status
 }: {
   status: WorktreeCardPrDisplay['status']

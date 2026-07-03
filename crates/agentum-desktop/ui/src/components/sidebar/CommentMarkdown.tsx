@@ -4,8 +4,8 @@ import type { GitHubRepoReference } from './comment-github-references'
 
 // Re-export the pure (react-markdown-free) GitHub autolink plugin so existing
 // importers keep working without pulling the heavy renderer into their graph.
-export { remarkGitHubReferences } from './comment-github-references'
-export type { GitHubRepoReference } from './comment-github-references'
+
+
 
 export type CommentMarkdownProps = React.ComponentPropsWithoutRef<'div'> & {
   content: string

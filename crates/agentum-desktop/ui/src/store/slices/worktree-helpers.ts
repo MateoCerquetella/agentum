@@ -20,7 +20,7 @@ import type {
 import type { TerminalGitHubPRLink } from '@/lib/terminal-github-pr-link-detector'
 export { getRepoIdFromWorktreeId } from '../../../../shared/worktree-id'
 
-export type WorktreeDeleteState = {
+type WorktreeDeleteState = {
   isDeleting: boolean
   error: string | null
   canForceDelete: boolean

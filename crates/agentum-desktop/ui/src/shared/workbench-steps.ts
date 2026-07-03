@@ -14,7 +14,7 @@ export type WorkbenchStep = {
   readonly description: string
 }
 
-export const WORKBENCH_STEPS: readonly WorkbenchStep[] = [
+const WORKBENCH_STEPS: readonly WorkbenchStep[] = [
   {
     id: 'terminal',
     name: 'Terminal',

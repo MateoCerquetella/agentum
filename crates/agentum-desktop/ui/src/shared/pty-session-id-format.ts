@@ -11,7 +11,7 @@
  * can import.
  */
 
-export const PTY_SESSION_ID_SEPARATOR = '@@'
+const PTY_SESSION_ID_SEPARATOR = '@@'
 export const WORKTREE_ID_SEPARATOR = '::'
 
 /**
@@ -24,7 +24,7 @@ export const WORKTREE_ID_SEPARATOR = '::'
  * Returns `{ worktreeId: null }` when the id does not match the minted
  * format.
  */
-export function parsePtySessionId(sessionId: string): { worktreeId: string | null } {
+function parsePtySessionId(sessionId: string): { worktreeId: string | null } {
   const idx = sessionId.lastIndexOf(PTY_SESSION_ID_SEPARATOR)
   if (idx <= 0) {
     return { worktreeId: null }

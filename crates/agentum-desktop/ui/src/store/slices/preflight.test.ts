@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { create } from 'zustand'
-import type { PreflightStatus } from '../../../../preload/api-types'
+import type { PreflightStatus } from '../../shared/types'
 import type { Repo, Worktree } from '../../../../shared/types'
 import type { AppState } from '../types'
 import { createPreflightSlice } from './preflight'

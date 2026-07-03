@@ -1,6 +1,6 @@
 import type { DashboardAgentRow } from './useDashboardData'
 
-export type AgentRowLineagePresentation = {
+type AgentRowLineagePresentation = {
   depth: 0 | 1
   isFirstSibling: boolean
   isLastSibling: boolean

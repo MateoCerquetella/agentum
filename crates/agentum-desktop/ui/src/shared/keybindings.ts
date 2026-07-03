@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Why: the central shortcut registry, parser,
  * formatter, and conflict detector must stay in one shared module so main,
  * renderer, browser guests, and Settings cannot drift apart. */
-export type KeybindingScope =
+type KeybindingScope =
   | 'global'
   | 'tabs'
   | 'terminal'
@@ -92,7 +92,7 @@ export type KeybindingActionId =
 
 export type KeybindingOverrides = Partial<Record<KeybindingActionId, string[]>>
 
-export type KeybindingFileDiagnostic = {
+type KeybindingFileDiagnostic = {
   severity: 'warning' | 'error'
   message: string
   actionId?: string
@@ -795,11 +795,11 @@ function platformBindings(bindings: readonly string[]): PlatformBindings {
   }
 }
 
-export function getKeybindingPlatform(platform: NodeJS.Platform): KeybindingPlatform {
+function getKeybindingPlatform(platform: NodeJS.Platform): KeybindingPlatform {
   return platform === 'darwin' ? 'darwin' : platform === 'win32' ? 'win32' : 'linux'
 }
 
-export function isKeybindingActionId(value: string): value is KeybindingActionId {
+function isKeybindingActionId(value: string): value is KeybindingActionId {
   return DEFINITION_IDS.has(value as KeybindingActionId)
 }
 
@@ -1077,7 +1077,7 @@ export function normalizeKeybindingListForAction(
   return normalizeKeybindingListWithOptions(input, normalizeOptionsForAction(actionId))
 }
 
-export function normalizeKeybindingArrayForAction(
+function normalizeKeybindingArrayForAction(
   actionId: KeybindingActionId,
   input: readonly string[]
 ): KeybindingValidationResult | string[] {

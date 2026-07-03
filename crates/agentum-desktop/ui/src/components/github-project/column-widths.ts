@@ -13,8 +13,8 @@ const STORAGE_KEY = 'agentum.githubProject.columnWidths'
 
 // Default fr weights — TITLE gets the most room; others sit at a
 // comfortable label-width. The numeric values are arbitrary ratios.
-export const DEFAULT_TITLE_WIDTH = 360
-export const DEFAULT_FIELD_WIDTH = 140
+const DEFAULT_TITLE_WIDTH = 360
+const DEFAULT_FIELD_WIDTH = 140
 export const ACTION_COLUMN_WIDTH = 80
 export const MIN_COLUMN_WIDTH = 60
 
@@ -56,7 +56,7 @@ export function saveColumnWidths(scopeKey: string, widths: Record<string, number
   writeMap(map)
 }
 
-export function defaultWidthFor(field: GitHubProjectField): number {
+function defaultWidthFor(field: GitHubProjectField): number {
   return field.dataType === 'TITLE' ? DEFAULT_TITLE_WIDTH : DEFAULT_FIELD_WIDTH
 }
 
@@ -71,7 +71,7 @@ export function resolveWidth(
   return defaultWidthFor(field)
 }
 
-export function buildGridTemplate(
+function buildGridTemplate(
   fields: GitHubProjectField[],
   widths: Readonly<Record<string, number>>
 ): string {

@@ -35,7 +35,7 @@ const Keepalive = z.object({
   _keepalive: z.literal(true)
 })
 
-export const RuntimeRpcEnvelopeSchema = z.union([Success, Failure, Keepalive])
+const RuntimeRpcEnvelopeSchema = z.union([Success, Failure, Keepalive])
 
 export type RuntimeRpcSuccess<TResult> = {
   id: string

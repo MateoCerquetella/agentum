@@ -21,7 +21,7 @@ const GEMINI_PERMISSION = '\u270B' // ✋
 // unsafe under the substring-based detector and would classify ordinary shell
 // titles like "timestamp ready" as agent activity. Product telemetry uses the
 // explicit launch/session facts Agentum owns, not this inference path.
-export const AGENT_NAMES = [
+const AGENT_NAMES = [
   'claude',
   'openclaude',
   'codex',
@@ -75,7 +75,7 @@ const STRONG_WORKING_KEYWORDS = ['working', 'thinking', 'running'] as const
 //
 // Also rejects hyphenated compounds ("is-ready-cap", "re-done") and plain
 // substring false positives ("already"/"redone"/"idleness").
-export const STRONG_IDLE_KEYWORDS_RE = new RegExp(
+const STRONG_IDLE_KEYWORDS_RE = new RegExp(
   `(?<![\\w./\\\\-])(${STRONG_IDLE_KEYWORDS.join('|')})(?![\\w\\-])`,
   'i'
 )
@@ -90,7 +90,7 @@ export const STRONG_IDLE_KEYWORDS_RE = new RegExp(
 // classification is worse than the idle one because it drives active-agent
 // UI (spinners, counts), so word-char- and left-path-separator-aware
 // matching is required here too.
-export const STRONG_WORKING_KEYWORDS_RE = new RegExp(
+const STRONG_WORKING_KEYWORDS_RE = new RegExp(
   `(?<![\\w./\\\\-])(${STRONG_WORKING_KEYWORDS.join('|')})(?![\\w\\-])`,
   'i'
 )
@@ -433,7 +433,7 @@ const CURSOR_NATIVE_TITLE_LOWER = 'cursor agent'
 // and the sidebar dropped the agent row + status mid-session.
 const CURSOR_NATIVE_STATUS_TITLE_RE = /\bagent\s*[-–—]\s*(?:⏳|✅)/iu
 
-export function isCursorNativeStatusTitle(title: string): boolean {
+function isCursorNativeStatusTitle(title: string): boolean {
   return CURSOR_NATIVE_STATUS_TITLE_RE.test(title)
 }
 

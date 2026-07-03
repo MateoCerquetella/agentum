@@ -1,7 +1,7 @@
 import type { GitLabPipelineJob } from './gitlab-types'
 import type { PRCheckDetail } from './types'
 
-export function mapGitLabPipelineJobStatusToCheckStatus(status: string): PRCheckDetail['status'] {
+function mapGitLabPipelineJobStatusToCheckStatus(status: string): PRCheckDetail['status'] {
   const s = status.toLowerCase()
   if (
     s === 'created' ||
@@ -19,7 +19,7 @@ export function mapGitLabPipelineJobStatusToCheckStatus(status: string): PRCheck
   return 'completed'
 }
 
-export function mapGitLabPipelineJobStatusToConclusion(
+function mapGitLabPipelineJobStatusToConclusion(
   status: string
 ): PRCheckDetail['conclusion'] {
   const s = status.toLowerCase()

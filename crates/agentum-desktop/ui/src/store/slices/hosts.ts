@@ -30,7 +30,7 @@ export type HostMeta = {
 /** Discovered (non-agentum) tmux sessions on one SSH host, for the sidebar's
  *  "Remote tmux" section. `sessions` persists across refreshes so the list
  *  doesn't flicker empty while a re-fetch is in flight. */
-export type RemoteTmuxState = {
+type RemoteTmuxState = {
   status: 'loading' | 'ready' | 'error'
   sessions: DiscoveredTmuxSession[]
   error?: string

@@ -98,8 +98,8 @@ export function getRepoMapFromState(state: Pick<AppState, 'repos'>): Map<string,
 }
 
 // ─── Repos ──────────────────────────────────────────────────────────
-export const useRepos = () => useAppStore((s) => s.repos)
-export const useActiveRepoId = () => useAppStore((s) => s.activeRepoId)
+const useRepos = () => useAppStore((s) => s.repos)
+const useActiveRepoId = () => useAppStore((s) => s.activeRepoId)
 export const useActiveRepo = () =>
   useAppStore(useShallow((s) => s.repos.find((r) => r.id === s.activeRepoId) ?? null))
 export const useRepoMap = () => useAppStore((s) => getCachedRepoMap(s.repos))
@@ -107,7 +107,7 @@ export const useRepoById = (repoId: string | null) =>
   useAppStore((s) => (repoId ? (getCachedRepoMap(s.repos).get(repoId) ?? null) : null))
 
 // ─── Worktrees ──────────────────────────────────────────────────────
-export const useActiveWorktreeId = () => useAppStore((s) => s.activeWorktreeId)
+const useActiveWorktreeId = () => useAppStore((s) => s.activeWorktreeId)
 export const useWorktreesForRepo = (repoId: string | null) =>
   useAppStore((s) => (repoId ? (s.worktreesByRepo[repoId] ?? EMPTY_WORKTREES) : EMPTY_WORKTREES))
 export const useAllWorktrees = () => useAppStore((s) => getCachedAllWorktrees(s.worktreesByRepo))
@@ -124,27 +124,27 @@ export const useActiveWorktree = () => {
 }
 
 // ─── Terminals ──────────────────────────────────────────────────────
-export const useActiveTerminalTabs = () =>
+const useActiveTerminalTabs = () =>
   useAppStore((s) =>
     s.activeWorktreeId ? (s.tabsByWorktree[s.activeWorktreeId] ?? EMPTY_TABS) : EMPTY_TABS
   )
-export const useActiveTabId = () => useAppStore((s) => s.activeTabId)
+const useActiveTabId = () => useAppStore((s) => s.activeTabId)
 
 // ─── Settings ───────────────────────────────────────────────────────
-export const useSettings = () => useAppStore((s) => s.settings)
+const useSettings = () => useAppStore((s) => s.settings)
 
 // ─── UI ─────────────────────────────────────────────────────────────
-export const useSidebarOpen = () => useAppStore((s) => s.sidebarOpen)
-export const useSidebarWidth = () => useAppStore((s) => s.sidebarWidth)
-export const useActiveView = () => useAppStore((s) => s.activeView)
-export const useActiveModal = () => useAppStore((s) => s.activeModal)
-export const useModalData = () => useAppStore((s) => s.modalData)
-export const useGroupBy = () => useAppStore((s) => s.groupBy)
-export const useSortBy = () => useAppStore((s) => s.sortBy)
-export const useShowActiveOnly = () => useAppStore((s) => s.showActiveOnly)
-export const useShowSleepingWorkspaces = () => useAppStore((s) => s.showSleepingWorkspaces)
-export const useFilterRepoIds = () => useAppStore((s) => s.filterRepoIds)
+const useSidebarOpen = () => useAppStore((s) => s.sidebarOpen)
+const useSidebarWidth = () => useAppStore((s) => s.sidebarWidth)
+const useActiveView = () => useAppStore((s) => s.activeView)
+const useActiveModal = () => useAppStore((s) => s.activeModal)
+const useModalData = () => useAppStore((s) => s.modalData)
+const useGroupBy = () => useAppStore((s) => s.groupBy)
+const useSortBy = () => useAppStore((s) => s.sortBy)
+const useShowActiveOnly = () => useAppStore((s) => s.showActiveOnly)
+const useShowSleepingWorkspaces = () => useAppStore((s) => s.showSleepingWorkspaces)
+const useFilterRepoIds = () => useAppStore((s) => s.filterRepoIds)
 
 // ─── GitHub ─────────────────────────────────────────────────────────
-export const usePRCache = () => useAppStore((s) => s.prCache)
-export const useIssueCache = () => useAppStore((s) => s.issueCache)
+const usePRCache = () => useAppStore((s) => s.prCache)
+const useIssueCache = () => useAppStore((s) => s.issueCache)

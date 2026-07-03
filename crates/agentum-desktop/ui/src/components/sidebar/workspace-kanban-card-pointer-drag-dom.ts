@@ -20,7 +20,7 @@ export type WorkspaceKanbanCardDropRect = {
   bottom: number
 }
 
-export type WorkspaceKanbanLaneDropRect = {
+type WorkspaceKanbanLaneDropRect = {
   left: number
   top: number
   width: number
@@ -93,7 +93,7 @@ function getStatusDropTargetRects(board: HTMLElement): WorkspaceKanbanStatusDrop
   })
 }
 
-export function getDropTarget(
+function getDropTarget(
   board: HTMLElement,
   x: number,
   y: number

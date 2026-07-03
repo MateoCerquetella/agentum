@@ -47,7 +47,7 @@ export function groupPRComments(comments: PRComment[]): PRCommentGroup[] {
   return groups
 }
 
-export function getPRCommentGroupComments(group: PRCommentGroup): PRComment[] {
+function getPRCommentGroupComments(group: PRCommentGroup): PRComment[] {
   return group.kind === 'thread' ? [group.root, ...group.replies] : [group.comment]
 }
 

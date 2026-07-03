@@ -6,7 +6,7 @@ import {
   getWorkspaceScopedActionAvailability
 } from './quick-action-context'
 
-export type CmdJQuickActionRunResult =
+type CmdJQuickActionRunResult =
   | { status: 'ok' }
   | {
       status: 'unavailable'

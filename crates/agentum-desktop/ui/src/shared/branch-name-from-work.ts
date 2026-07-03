@@ -3,7 +3,7 @@ import { MARINE_CREATURES } from './marine-creatures'
 // Why: the work-derived branch name stays short on purpose — long, sentence-like
 // branches read worse than the creature name they replace. Two-to-four words is
 // the sweet spot the feature targets.
-export const MAX_BRANCH_NAME_WORDS = 4
+const MAX_BRANCH_NAME_WORDS = 4
 const MIN_BRANCH_NAME_WORDS = 2
 
 const CREATURE_NAMES_LOWER = new Set(MARINE_CREATURES.map((name) => name.toLowerCase()))

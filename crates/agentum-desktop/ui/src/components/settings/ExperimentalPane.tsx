@@ -6,7 +6,7 @@ import { matchesSettingsSearch } from './settings-search'
 import { EXPERIMENTAL_PANE_SEARCH_ENTRIES, EXPERIMENTAL_SEARCH_ENTRY } from './experimental-search'
 import { HiddenExperimentalGroup } from './HiddenExperimentalGroup'
 
-export { EXPERIMENTAL_PANE_SEARCH_ENTRIES }
+
 
 type ExperimentalPaneProps = {
   settings: GlobalSettings

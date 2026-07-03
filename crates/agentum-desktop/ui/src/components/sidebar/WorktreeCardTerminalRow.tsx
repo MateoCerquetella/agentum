@@ -17,7 +17,7 @@ type Props = {
  * reuse the agent row component. Visual chrome (hover/active wash, height,
  * indentation) matches the compact agent row so the two read as one list.
  */
-export const WorktreeCardTerminalRow = React.memo(function WorktreeCardTerminalRow({
+const WorktreeCardTerminalRow = React.memo(function WorktreeCardTerminalRow({
   row,
   isActive = false,
   onActivate

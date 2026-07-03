@@ -42,7 +42,7 @@ export function shouldOpenWorkspacePortInAgentumBrowser(
   return settings?.openLinksInApp !== false
 }
 
-export function workspacePortOwnerWorktreeId(port: WorkspacePort): string | null {
+function workspacePortOwnerWorktreeId(port: WorkspacePort): string | null {
   return port.kind === 'workspace' ? port.owner.worktreeId : null
 }
 
@@ -102,7 +102,7 @@ export async function openWorkspacePortInBrowser(args: {
   return { ok: true }
 }
 
-export async function refreshWorkspacePortScanState(args: {
+async function refreshWorkspacePortScanState(args: {
   runtimeTarget: RuntimeClientTarget
   setWorkspacePortScan: WorkspacePortScanSetter
   setWorkspacePortScanRefreshing: WorkspacePortScanRefreshingSetter

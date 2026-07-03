@@ -18,13 +18,13 @@ export const NESTED_REPO_SCAN_RESULTS = [
   'no_nested_repos',
   'scan_failed'
 ] as const
-export type NestedRepoScanTelemetryResult = (typeof NESTED_REPO_SCAN_RESULTS)[number]
+type NestedRepoScanTelemetryResult = (typeof NESTED_REPO_SCAN_RESULTS)[number]
 
 export const NESTED_REPO_IMPORT_ACTIONS = ['import_group', 'import_separate', 'back'] as const
 export type NestedRepoImportTelemetryAction = (typeof NESTED_REPO_IMPORT_ACTIONS)[number]
 
 export const NESTED_REPO_IMPORT_OUTCOMES = ['success', 'partial_failure', 'failed'] as const
-export type NestedRepoImportTelemetryOutcome = (typeof NESTED_REPO_IMPORT_OUTCOMES)[number]
+type NestedRepoImportTelemetryOutcome = (typeof NESTED_REPO_IMPORT_OUTCOMES)[number]
 
 export const NESTED_REPO_COUNT_BUCKETS = ['0', '1', '2-3', '4-7', '8-15', '16+'] as const
 export type NestedRepoCountBucket = (typeof NESTED_REPO_COUNT_BUCKETS)[number]

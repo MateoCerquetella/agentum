@@ -209,7 +209,7 @@ export function clearLinearMetadataCache(): void {
   clearMetadataRequestStore(linearMemberStore)
 }
 
-export function clearGitHubMetadataCache(): void {
+function clearGitHubMetadataCache(): void {
   clearMetadataRequestStore(ghLabelStore)
   clearMetadataRequestStore(ghAssigneeStore)
 }

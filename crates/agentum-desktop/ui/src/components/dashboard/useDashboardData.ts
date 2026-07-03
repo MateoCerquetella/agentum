@@ -35,13 +35,13 @@ export type DashboardAgentRow = {
 // Why: the shape here is deliberately minimal. The per-card rendering pipeline
 // is separate (WorktreeCardAgents + useWorktreeAgentRows read retained entries
 // directly from the store).
-export type DashboardWorktreeCard = {
+type DashboardWorktreeCard = {
   repo: Repo
   worktree: Worktree
   agents: DashboardAgentRow[]
 }
 
-export type DashboardProjectGroup = {
+type DashboardProjectGroup = {
   repo: Repo
   worktrees: DashboardWorktreeCard[]
 }
@@ -162,7 +162,7 @@ function buildDashboardData(
  * Not used to render anything directly — the inline list reads its own
  * worktree-scoped slice via useWorktreeAgentRows.
  */
-export function useDashboardData(): DashboardProjectGroup[] {
+function useDashboardData(): DashboardProjectGroup[] {
   const repos = useAppStore((s) => s.repos)
   const worktreesByRepo = useAppStore((s) => s.worktreesByRepo)
   const tabsByWorktree = useAppStore((s) => s.tabsByWorktree)

@@ -32,7 +32,7 @@ import type {
 } from '../../../shared/types'
 import type { LaunchSource } from '../../../shared/telemetry-events'
 
-export type LaunchableWorkItem = {
+type LaunchableWorkItem = {
   title: string
   url: string
   type: 'issue' | 'pr' | 'mr'

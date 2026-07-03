@@ -86,7 +86,7 @@ export function setOptIn(optedIn: boolean): Promise<void> {
 // closed to `pending_banner` if the bridge is missing (tests, sandbox),
 // which the UI treats like a non-actionable/disabled toggle — safer than
 // pretending the toggle is live when we cannot confirm consent.
-export async function getConsentState(): Promise<TelemetryConsentState> {
+async function getConsentState(): Promise<TelemetryConsentState> {
   try {
     const result = await api?.telemetryGetConsentState?.()
     return isTelemetryConsentState(result) ? result : { effective: 'pending_banner' }

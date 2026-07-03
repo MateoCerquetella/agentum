@@ -27,7 +27,7 @@ export function buildLinearIssueBranchName(issue: LinearIssue): string {
   return titleSlug ? `${key}-${titleSlug}` : key
 }
 
-export function buildLinearIssuePrompt(issue: LinearIssue): string {
+function buildLinearIssuePrompt(issue: LinearIssue): string {
   const lines = [
     `Linear issue: ${issue.identifier} ${issue.title}`,
     `URL: ${issue.url}`,

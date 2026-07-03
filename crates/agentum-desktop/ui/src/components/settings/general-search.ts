@@ -117,7 +117,7 @@ export const GENERAL_CACHE_TIMER_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   }
 ]
 
-export const GENERAL_AGENT_SEARCH_ENTRIES: SettingsSearchEntry[] = [
+const GENERAL_AGENT_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Default Agent',
     description: 'Pre-select an AI coding agent in the new-workspace composer.',

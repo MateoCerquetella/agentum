@@ -10,7 +10,7 @@ export const LINKED_CONTEXT_BLOCK_MAX_CHARS = 12000
 const LINKED_CONTEXT_TRUNCATION_MARKER = '[linked context truncated]'
 const LINKED_CONTEXT_LINE_SPLIT_PATTERN = /\r\n|\r|\n|\u2028|\u2029/
 
-export function getUsableLinkedContext(
+function getUsableLinkedContext(
   linkedContext: LinkedWorkItemContext | null | undefined
 ): LinkedWorkItemContext | null {
   if (!linkedContext || linkedContext.version !== 1 || !linkedContext.renderedText.trim()) {

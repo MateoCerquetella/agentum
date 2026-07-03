@@ -21,7 +21,7 @@ export const RUNTIME_PROTOCOL_VERSION = 3
 export const MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION = 2
 export const MIN_COMPATIBLE_RUNTIME_SERVER_VERSION = 2
 
-export const RUNTIME_CAPABILITIES = [
+const RUNTIME_CAPABILITIES = [
   'runtime.status.compat.v1',
   'runtime.environments.v1',
   'browser.screencast.v1',
@@ -35,5 +35,7 @@ export type RuntimeCapability = (typeof RUNTIME_CAPABILITIES)[number] | (string 
 
 // COMPAT(mobileProtocolAliases): added 2026-05-15 for mobile builds that
 // still read desktop/mobile names; remove once mobile reads runtime names.
+/** @alias */
 export const DESKTOP_PROTOCOL_VERSION = RUNTIME_PROTOCOL_VERSION
+/** @alias */
 export const MIN_COMPATIBLE_MOBILE_VERSION = MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION

@@ -9,12 +9,12 @@ export type TaskQueryPreset = {
 }
 export type GitHubTaskKind = 'issues' | 'prs'
 
-export const ISSUE_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
+const ISSUE_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
   { id: 'issues', label: 'Open', query: getTaskPresetQuery('issues') },
   { id: 'my-issues', label: 'Assigned to me', query: getTaskPresetQuery('my-issues') }
 ]
 
-export const PR_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
+const PR_TASK_QUERY_PRESETS: TaskQueryPreset[] = [
   { id: 'prs', label: 'Open', query: getTaskPresetQuery('prs') },
   { id: 'my-prs', label: 'Mine', query: getTaskPresetQuery('my-prs') },
   { id: 'review', label: 'Needs review', query: getTaskPresetQuery('review') }
@@ -32,7 +32,7 @@ export const GITHUB_MODE_BUTTONS: GitHubModeButton[] = [
   { id: 'project', label: 'Projects' }
 ]
 
-export function isPRFocusedTaskView(preset: TaskViewPresetId | null, query: string): boolean {
+function isPRFocusedTaskView(preset: TaskViewPresetId | null, query: string): boolean {
   if (preset === 'prs' || preset === 'my-prs' || preset === 'review') {
     return true
   }

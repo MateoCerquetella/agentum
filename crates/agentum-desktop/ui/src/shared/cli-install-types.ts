@@ -1,11 +1,11 @@
-export type CliInstallState = 'installed' | 'not_installed' | 'stale' | 'conflict' | 'unsupported'
+type CliInstallState = 'installed' | 'not_installed' | 'stale' | 'conflict' | 'unsupported'
 
-export type CliInstallUnsupportedReason =
+type CliInstallUnsupportedReason =
   | 'platform_not_supported'
   | 'launcher_missing'
   | 'launch_mode_unavailable'
 
-export type CliInstallMethod = 'symlink' | 'wrapper'
+type CliInstallMethod = 'symlink' | 'wrapper'
 
 export type CliInstallStatus = {
   platform: NodeJS.Platform

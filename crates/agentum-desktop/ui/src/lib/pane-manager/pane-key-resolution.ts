@@ -5,7 +5,7 @@ import {
 } from '../../../../shared/stable-pane-id'
 import type { ManagedPane } from './pane-manager-types'
 
-export type PaneKeyUnresolvedReason = 'confirmed-missing' | 'ownership-mismatch' | 'invalid'
+type PaneKeyUnresolvedReason = 'confirmed-missing' | 'ownership-mismatch' | 'invalid'
 
 export type PaneKeyResolution =
   | {

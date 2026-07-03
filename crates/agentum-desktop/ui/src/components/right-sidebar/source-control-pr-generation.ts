@@ -16,7 +16,7 @@ export type PullRequestGenerationContext = {
   branch: string
 }
 
-export type PullRequestGenerationStatus = 'idle' | 'running' | 'canceled' | 'failed' | 'succeeded'
+type PullRequestGenerationStatus = 'idle' | 'running' | 'canceled' | 'failed' | 'succeeded'
 
 export type PullRequestGenerationRecord = {
   context: PullRequestGenerationContext

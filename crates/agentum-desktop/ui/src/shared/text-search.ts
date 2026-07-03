@@ -41,9 +41,9 @@ export function normalizeRelativePath(path: string): string {
 
 // ─── Constants shared by both callers ────────────────────────────────
 
-export const MAX_MATCHES_PER_FILE = 100
-export const DEFAULT_SEARCH_MAX_RESULTS = 2000
-export const SEARCH_TIMEOUT_MS = 15_000
+const MAX_MATCHES_PER_FILE = 100
+const DEFAULT_SEARCH_MAX_RESULTS = 2000
+const SEARCH_TIMEOUT_MS = 15_000
 
 // Why: search should stay cheaper than opening a file in the editor. The
 // editor read path has a larger cap and relies on Monaco large-file handling.

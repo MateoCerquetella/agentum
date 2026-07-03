@@ -3,7 +3,7 @@
 export const MIN_SSH_RELAY_GRACE_PERIOD_SECONDS = 60
 export const MAX_SSH_RELAY_GRACE_PERIOD_SECONDS = 7 * 24 * 60 * 60
 export const DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS = 3 * 60 * 60
-export const SSH_RELAY_CONFIGURE_GRACE_TIME_METHOD = 'relay.configureGraceTime'
+const SSH_RELAY_CONFIGURE_GRACE_TIME_METHOD = 'relay.configureGraceTime'
 
 export type SshTarget = {
   id: string
@@ -42,7 +42,7 @@ export type SshTarget = {
   portForwards?: SavedPortForward[]
 }
 
-export type SavedPortForward = {
+type SavedPortForward = {
   localPort: number
   remoteHost: string
   remotePort: number
@@ -67,7 +67,7 @@ export type SshConnectionState = {
   reconnectAttempt: number
 }
 
-export type SshRemotePtyLeaseState = 'attached' | 'detached' | 'terminated' | 'expired'
+type SshRemotePtyLeaseState = 'attached' | 'detached' | 'terminated' | 'expired'
 
 export type SshRemotePtyLease = {
   targetId: string
@@ -103,7 +103,7 @@ export type PortForwardEntry = {
 /** A listening port detected on the remote host via /proc/net/tcp scanning.
  *  Keep in sync with src/relay/port-scan-handler.ts — DetectedPort.
  *  The relay is deployed as a standalone bundle and cannot import from shared. */
-export type DetectedPort = {
+type DetectedPort = {
   port: number
   host: string
   pid?: number

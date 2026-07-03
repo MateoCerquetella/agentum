@@ -103,7 +103,7 @@ export async function runWorktreeDeletesInParallel(
  * concerns into the store slice while still preventing the two delete
  * entry points from drifting apart.
  */
-export function runWorktreeDeleteWithToast(
+function runWorktreeDeleteWithToast(
   worktreeId: string,
   worktreeName: string,
   options: WorktreeDeleteWithToastOptions = {}

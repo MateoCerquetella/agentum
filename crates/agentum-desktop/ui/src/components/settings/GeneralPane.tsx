@@ -77,7 +77,7 @@ export function getDesktopPlatformFromUserAgent(userAgent: string): 'darwin' | '
   return 'other'
 }
 
-export { GENERAL_PANE_SEARCH_ENTRIES }
+
 
 export type AutoSaveDelayDraftState = {
   sourceDelayMs: number

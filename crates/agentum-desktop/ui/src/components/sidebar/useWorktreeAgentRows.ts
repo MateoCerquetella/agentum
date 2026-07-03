@@ -17,12 +17,8 @@ import {
   selectTerminalLayoutsForWorktree
 } from './worktree-agent-row-selectors'
 
-export { buildWorktreeAgentRows } from './worktree-agent-rows'
-export {
-  selectLiveAgentStatusEntriesForWorktree,
-  selectMigrationUnsupportedEntriesForWorktree,
-  selectRetainedAgentEntriesForWorktree
-} from './worktree-agent-row-selectors'
+
+
 
 /**
  * Narrow per-worktree agent row hook used by the WorktreeCard inline agents

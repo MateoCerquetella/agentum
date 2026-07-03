@@ -58,7 +58,7 @@ export async function inspectSetupScriptPromptState({
   }
 }
 
-export function hasEffectiveSetupCommand(repo: Repo, hooksResult: HookCheckResult): boolean {
+function hasEffectiveSetupCommand(repo: Repo, hooksResult: HookCheckResult): boolean {
   const localSetup = repo.hookSettings?.scripts?.setup?.trim()
   const sharedSetup = hooksResult.hooks?.scripts?.setup?.trim()
   const rawPolicy = repo.hookSettings?.commandSourcePolicy

@@ -4,7 +4,7 @@ export const TASK_PROVIDERS: readonly TaskProvider[] = ['github', 'gitlab', 'lin
 
 const TASK_PROVIDER_SET = new Set<TaskProvider>(TASK_PROVIDERS)
 
-export function isTaskProvider(value: unknown): value is TaskProvider {
+function isTaskProvider(value: unknown): value is TaskProvider {
   return TASK_PROVIDER_SET.has(value as TaskProvider)
 }
 

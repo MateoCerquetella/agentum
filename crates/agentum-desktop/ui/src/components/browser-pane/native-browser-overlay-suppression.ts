@@ -47,7 +47,7 @@ function getServerSnapshot(): number {
  * exactly once when the overlay closes/unmounts. The native browser webview is
  * hidden while the count is > 0.
  */
-export function acquireNativeBrowserOverlay(): () => void {
+function acquireNativeBrowserOverlay(): () => void {
   openOverlayCount += 1
   if (openOverlayCount === 1) {
     emitChange()

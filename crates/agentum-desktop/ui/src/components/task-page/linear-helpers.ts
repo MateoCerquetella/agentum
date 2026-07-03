@@ -2,7 +2,7 @@ import type { LinearIssue, LinearWorkflowState } from '@/shared/types'
 
 // Why: Linear encodes priority as an integer (0–4). Map to human-readable
 // labels so the table column is scannable without memorising the scale.
-export const LINEAR_PRIORITY_LABELS: Record<number, string> = {
+const LINEAR_PRIORITY_LABELS: Record<number, string> = {
   0: 'None',
   1: 'Urgent',
   2: 'High',
@@ -24,11 +24,11 @@ export function getLinearPriorityLabel(priority: number): string {
   return LINEAR_PRIORITY_LABELS[priority] ?? `P${priority}`
 }
 
-export function getLinearPriorityRank(priority: number): number {
+function getLinearPriorityRank(priority: number): number {
   return priority === 0 ? 5 : priority
 }
 
-export function compareLinearIssues(a: LinearIssue, b: LinearIssue, orderBy: LinearOrderBy): number {
+function compareLinearIssues(a: LinearIssue, b: LinearIssue, orderBy: LinearOrderBy): number {
   if (orderBy === 'updated') {
     return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   }
@@ -43,7 +43,7 @@ export function compareLinearIssues(a: LinearIssue, b: LinearIssue, orderBy: Lin
   return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
 }
 
-export function getLinearIssueGroup(
+function getLinearIssueGroup(
   issue: LinearIssue,
   groupBy: LinearGroupBy
 ): { key: string; label: string } {

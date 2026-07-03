@@ -1,6 +1,6 @@
-export const TERMINAL_SESSION_STATE_SAVE_FAILED_CODE = 'AGENTUM_TERMINAL_SESSION_STATE_SAVE_FAILED'
+const TERMINAL_SESSION_STATE_SAVE_FAILED_CODE = 'AGENTUM_TERMINAL_SESSION_STATE_SAVE_FAILED'
 
-export const TERMINAL_SESSION_STATE_SAVE_FAILED_MESSAGE =
+const TERMINAL_SESSION_STATE_SAVE_FAILED_MESSAGE =
   'Agentum could not save this terminal session because local storage is unavailable.'
 
 export function createTerminalSessionStateSaveFailureMessage(): string {

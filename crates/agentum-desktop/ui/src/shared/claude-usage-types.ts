@@ -1,6 +1,6 @@
 export type ClaudeUsageScope = 'agentum' | 'all'
 export type ClaudeUsageRange = '7d' | '30d' | '90d' | 'all'
-export type ClaudeUsageBreakdownKind = 'model' | 'project'
+type ClaudeUsageBreakdownKind = 'model' | 'project'
 
 export type ClaudeUsageScanState = {
   enabled: boolean

@@ -22,4 +22,4 @@ export type RichMarkdownContextMenuCommandPayload = {
   y: number
 }
 
-export const richMarkdownContextMenuCommandChannel = 'rich-markdown:context-command'
+const richMarkdownContextMenuCommandChannel = 'rich-markdown:context-command'

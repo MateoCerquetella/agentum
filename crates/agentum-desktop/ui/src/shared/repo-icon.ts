@@ -1,12 +1,12 @@
-export type RepoIconImageSource = 'upload' | 'file' | 'favicon' | 'github'
+type RepoIconImageSource = 'upload' | 'file' | 'favicon' | 'github'
 
 export type RepoIcon =
   | { type: 'lucide'; name: string }
   | { type: 'emoji'; emoji: string }
   | { type: 'image'; src: string; source: RepoIconImageSource; label?: string }
 
-export const MAX_REPO_ICON_UPLOAD_BYTES = 256 * 1024
-export const MAX_REPO_ICON_DATA_URL_LENGTH = 400 * 1024
+const MAX_REPO_ICON_UPLOAD_BYTES = 256 * 1024
+const MAX_REPO_ICON_DATA_URL_LENGTH = 400 * 1024
 
 const LUCIDE_ICON_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/
 const isRepoIconImageSource = (value: string): value is RepoIconImageSource =>

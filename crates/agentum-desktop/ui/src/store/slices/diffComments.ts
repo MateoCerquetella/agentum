@@ -27,7 +27,7 @@ export type DiffCommentsSlice = {
   clearDiffCommentsForFile: (worktreeId: string, filePath: string) => Promise<boolean>
 }
 
-export type DiffCommentDeliverySnapshot = Pick<
+type DiffCommentDeliverySnapshot = Pick<
   DiffComment,
   'body' | 'filePath' | 'id' | 'lineNumber' | 'selectedText' | 'source' | 'startLine'
 >

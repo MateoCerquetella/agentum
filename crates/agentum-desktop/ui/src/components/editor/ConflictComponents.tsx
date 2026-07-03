@@ -16,7 +16,7 @@ import type { ConflictReviewEntry, OpenFile } from '@/store/slices/editor'
 import type { GitConflictKind, GitStatusEntry } from '../../../../shared/types'
 import { ConflictReviewFileTree } from './ConflictReviewFileTree'
 
-export const CONFLICT_KIND_LABELS: Record<GitConflictKind, string> = {
+const CONFLICT_KIND_LABELS: Record<GitConflictKind, string> = {
   both_modified: 'Both modified',
   both_added: 'Both added',
   deleted_by_us: 'Deleted by us',
@@ -26,7 +26,7 @@ export const CONFLICT_KIND_LABELS: Record<GitConflictKind, string> = {
   both_deleted: 'Both deleted'
 }
 
-export const CONFLICT_HINT_MAP: Record<GitConflictKind, string> = {
+const CONFLICT_HINT_MAP: Record<GitConflictKind, string> = {
   both_modified: 'Resolve the conflict markers',
   both_added: 'Choose which version to keep, or combine them',
   deleted_by_us: 'Decide whether to restore the file',

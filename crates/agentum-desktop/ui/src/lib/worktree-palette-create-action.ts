@@ -32,7 +32,7 @@ type WorktreePaletteSelectableEntryType =
   | 'quick-action'
   | 'browser-page'
 
-export function isSelectableWorktreePaletteEntry(
+function isSelectableWorktreePaletteEntry(
   entry: WorktreePaletteSelectionCandidateEntry
 ): entry is WorktreePaletteSelectionCandidateEntry & {
   type: WorktreePaletteSelectableEntryType

@@ -22,7 +22,7 @@ type Args = {
 
 export type TerminalTargetShell = 'posix' | 'windows'
 
-export function getTerminalTargetShellForWorktreePath(worktreePath: string): TerminalTargetShell {
+function getTerminalTargetShellForWorktreePath(worktreePath: string): TerminalTargetShell {
   return isWindowsPathLike(worktreePath) ? 'windows' : 'posix'
 }
 

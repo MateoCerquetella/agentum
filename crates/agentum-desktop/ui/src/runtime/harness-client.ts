@@ -6,7 +6,7 @@
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
 import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 
-export type FeatureState =
+type FeatureState =
   | 'pending'
   | 'coding'
   | 'verifying'
@@ -15,7 +15,7 @@ export type FeatureState =
   | 'done'
   | 'blocked'
 
-export type HarnessState =
+type HarnessState =
   | 'idle'
   | 'init_verifying'
   | 'running'
@@ -26,7 +26,7 @@ export type HarnessState =
   | 'failed'
 
 /** SDD phase a run is in, layered above the feature backlog (spec 013). */
-export type SpecPhase =
+type SpecPhase =
   | 'authoring'
   | 'architecture'
   | 'decompose'
@@ -37,9 +37,9 @@ export type SpecPhase =
   | 'awaiting_confirm'
 
 /** The SDD role behind an agent-played gate (spec 013). */
-export type RoleKind = 'pm' | 'architect' | 'reviewer'
+type RoleKind = 'pm' | 'architect' | 'reviewer'
 
-export type Feature = {
+type Feature = {
   id: string
   name: string
   description: string
@@ -53,7 +53,7 @@ export type Feature = {
   tracker_url?: string | null
 }
 
-export type FeatureList = {
+type FeatureList = {
   features: Feature[]
   max_retries: number
   agent_tool: string
@@ -74,7 +74,7 @@ export type FeatureList = {
   hitl_on_block?: boolean
 }
 
-export type HarnessStatus = {
+type HarnessStatus = {
   id: string
   workdir: string
   state: HarnessState
@@ -89,7 +89,7 @@ export type HarnessStatus = {
   phase_attempts?: number
 }
 
-export type HarnessFiles = {
+type HarnessFiles = {
   agents_md?: string | null
   feature_list_json?: string | null
   init_sh?: string | null
@@ -98,7 +98,7 @@ export type HarnessFiles = {
 }
 
 // `HarnessEvent` is a serde-tagged enum: `{ "type": "...", ...fields }`.
-export type HarnessEvent =
+type HarnessEvent =
   | { type: 'state_changed'; harness_id: string; state: HarnessState }
   | { type: 'feature_state_changed'; harness_id: string; feature_id: string; state: FeatureState }
   | { type: 'init_started'; harness_id: string }
@@ -145,7 +145,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** `POST /api/harness` — register a run from a project dir containing `.harness/`. */
-export function startHarness(workdir: string): Promise<{ harness_id: string }> {
+function startHarness(workdir: string): Promise<{ harness_id: string }> {
   return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
 }
 
@@ -187,7 +187,7 @@ export function startGatedWork(input: {
   })
 }
 
-export type PlanGoalHarnessResult = {
+type PlanGoalHarnessResult = {
   /** Which task manager backed the features: "board" | "github" | "linear". */
   provider: string
   workdir: string
@@ -203,14 +203,14 @@ export type PlanGoalHarnessResult = {
  * configured (GitHub/Linear) the cards are mirrored there and `provider`
  * reflects it; otherwise the internal board is the source of truth.
  */
-export function planGoalHarness(goalId: number): Promise<PlanGoalHarnessResult> {
+function planGoalHarness(goalId: number): Promise<PlanGoalHarnessResult> {
   return request(`/api/board/goals/${goalId}/harness-plan`, { method: 'POST' })
 }
 
 /** Call one of agentum's MCP tools over JSON-RPC at `POST /mcp`. Returns the
  *  tool's text payload. Used for the spec-010 surface tools that have no REST
  *  route (scaffold/plan/board/…). */
-export async function callMcpTool(
+async function callMcpTool(
   name: string,
   args: Record<string, unknown>
 ): Promise<string> {
@@ -237,7 +237,7 @@ export async function callMcpTool(
 }
 
 /** Scaffold the unified `.agentum-harness/` surface into `workdir` (spec 010a). */
-export function scaffoldHarness(workdir: string): Promise<string> {
+function scaffoldHarness(workdir: string): Promise<string> {
   return callMcpTool('agentum_harness_scaffold', { workdir })
 }
 
@@ -273,27 +273,27 @@ export function setHarnessSettings(patch: Partial<HarnessSettings>): Promise<Har
 }
 
 /** `GET /api/harness` — status for every registered run. */
-export function listHarnesses(): Promise<HarnessStatus[]> {
+function listHarnesses(): Promise<HarnessStatus[]> {
   return request('/api/harness')
 }
 
 /** `GET /api/harness/{id}` — one run's status snapshot. */
-export function getHarnessStatus(id: string): Promise<HarnessStatus> {
+function getHarnessStatus(id: string): Promise<HarnessStatus> {
   return request(`/api/harness/${id}`)
 }
 
 /** `POST /api/harness/{id}/run` — kick off the end-to-end drive loop. */
-export function runHarness(id: string): Promise<void> {
+function runHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}/run`, { method: 'POST' })
 }
 
 /** `POST /api/harness/{id}/init` — run init.sh only (manual env check). */
-export function initHarness(id: string): Promise<boolean> {
+function initHarness(id: string): Promise<boolean> {
   return request(`/api/harness/${id}/init`, { method: 'POST' })
 }
 
 /** `POST /api/harness/{id}/verify` — run the gate for one feature (manual). */
-export function verifyFeature(id: string, featureId: string): Promise<boolean> {
+function verifyFeature(id: string, featureId: string): Promise<boolean> {
   return request(`/api/harness/${id}/verify`, {
     method: 'POST',
     body: JSON.stringify({ feature_id: featureId })
@@ -301,17 +301,17 @@ export function verifyFeature(id: string, featureId: string): Promise<boolean> {
 }
 
 /** `GET /api/harness/{id}/files` — current `.harness/` file contents. */
-export function getHarnessFiles(id: string): Promise<HarnessFiles> {
+function getHarnessFiles(id: string): Promise<HarnessFiles> {
   return request(`/api/harness/${id}/files`)
 }
 
 /** `DELETE /api/harness/{id}` — drop the run from the engine. */
-export function stopHarness(id: string): Promise<void> {
+function stopHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}`, { method: 'DELETE' })
 }
 
 /** Handle for the live harness event stream. */
-export type HarnessEventStream = { close: () => void }
+type HarnessEventStream = { close: () => void }
 
 /**
  * Open `WS /api/harness/events` and forward each parsed `HarnessEvent`. Auto-
@@ -319,7 +319,7 @@ export type HarnessEventStream = { close: () => void }
  * is always recoverable). The token rides in `?token=` because browsers can't
  * set headers on a WS upgrade.
  */
-export async function openHarnessEventStream(
+async function openHarnessEventStream(
   onEvent: (ev: HarnessEvent) => void
 ): Promise<HarnessEventStream> {
   const { token } = await getServerEndpoint()

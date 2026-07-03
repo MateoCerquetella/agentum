@@ -17,7 +17,7 @@ export type GitHubPRMergeStateInput = {
   mergeQueueRequired?: boolean | null
 }
 
-export type GitHubPRAutoMergeAction = {
+type GitHubPRAutoMergeAction = {
   kind: 'enable' | 'disable'
   label: string
   tooltip: string

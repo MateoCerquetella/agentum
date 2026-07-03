@@ -1,4 +1,4 @@
-export type LinearApiKeyDialogConnectState = 'idle' | 'connecting' | 'error'
+type LinearApiKeyDialogConnectState = 'idle' | 'connecting' | 'error'
 
 export type LinearApiKeyDialogState = {
   apiKeyDraft: string

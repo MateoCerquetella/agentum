@@ -26,7 +26,7 @@ export function useShortcutLabel(actionId: KeybindingActionId): string {
   return formatShortcutLabel(actionId, keybindings)
 }
 
-export function formatShortcutKeys(
+function formatShortcutKeys(
   actionId: KeybindingActionId,
   overrides?: KeybindingOverrides
 ): string[] {
@@ -40,7 +40,7 @@ export function useShortcutKeys(actionId: KeybindingActionId): string[] {
   return formatShortcutKeys(actionId, keybindings)
 }
 
-export function formatShortcutKeyCombos(
+function formatShortcutKeyCombos(
   actionId: KeybindingActionId,
   overrides?: KeybindingOverrides
 ): string[][] {

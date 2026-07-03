@@ -152,7 +152,7 @@ export type UseComposerStateOptions = {
   createGateMode?: 'full' | 'quick'
 }
 
-export type ComposerCardProps = {
+type ComposerCardProps = {
   eligibleRepos: ReturnType<typeof useAppStore.getState>['repos']
   /** Host selector (spec 006): local + each configured SSH host with repos.
    *  Empty when driven by `repoIdOverride` (TaskPage/JumpPalette), which keeps

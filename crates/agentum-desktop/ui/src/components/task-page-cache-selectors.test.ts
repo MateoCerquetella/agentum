@@ -7,7 +7,7 @@ import {
   buildTaskPageRepoSourceState,
   deriveTaskPageGitHubWorkItemsFetchOptions,
   findTaskPageDialogWorkItem,
-  findTaskPageLinearDrawerIssue,
+  findTaskPageLinearIssue,
   reconcileTaskPageItemsAfterLandingRefresh,
   reconcileTaskPageLinearIssuesAfterLandingRefresh,
   reconcileTaskPagePagesAfterLandingRefresh,
@@ -250,8 +250,8 @@ describe('task page cache selectors', () => {
       assigned: entry<LinearIssue[]>([searchIssue])
     }
 
-    expect(findTaskPageLinearDrawerIssue(issueCache, searchCache, null)).toBeNull()
-    expect(findTaskPageLinearDrawerIssue(issueCache, searchCache, 'LIN-1')).toBe(issue)
-    expect(findTaskPageLinearDrawerIssue({}, searchCache, 'LIN-2')).toBe(searchIssue)
+    expect(findTaskPageLinearIssue(issueCache, searchCache, null)).toBeNull()
+    expect(findTaskPageLinearIssue(issueCache, searchCache, 'LIN-1')).toBe(issue)
+    expect(findTaskPageLinearIssue({}, searchCache, 'LIN-2')).toBe(searchIssue)
   })
 })

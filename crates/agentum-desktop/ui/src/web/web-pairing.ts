@@ -24,7 +24,7 @@ export function parseWebPairingInput(input: string): WebPairingOffer | null {
   }
 }
 
-export function readPairingInputFromLocation(location: Location): string | null {
+function readPairingInputFromLocation(location: Location): string | null {
   const search = new URLSearchParams(location.search)
   for (const key of ['pairing', 'pair', 'code', 'token']) {
     const value = search.get(key)
@@ -50,7 +50,7 @@ export function readPairingInputFromLocation(location: Location): string | null 
   return hash
 }
 
-export function clearPairingInputFromAddressBar(): void {
+function clearPairingInputFromAddressBar(): void {
   if (!window.location.hash && !window.location.search) {
     return
   }

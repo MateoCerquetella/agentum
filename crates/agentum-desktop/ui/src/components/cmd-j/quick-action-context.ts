@@ -74,7 +74,7 @@ export function captureCmdJActiveGroupSnapshot(
   }
 }
 
-export function getActiveWorktreeSshStatus(
+function getActiveWorktreeSshStatus(
   state: Pick<AppState, 'repos' | 'sshConnectionStates' | 'worktreesByRepo'>,
   activeWorktree: Worktree | null
 ): SshConnectionStatus | null {

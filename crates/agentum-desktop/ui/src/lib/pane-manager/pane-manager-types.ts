@@ -18,12 +18,12 @@ import type { TerminalLeafId } from '../../../../shared/stable-pane-id'
  *  Carries one-shot PTY spawn/adoption data for the new pane.
  *  Kept as a separate parameter (rather than extending ManagedPane) so the
  *  hint is scoped to pane creation and does not live on the pane afterwards. */
-export type PaneSpawnHints = {
+type PaneSpawnHints = {
   cwd?: string
   ptyId?: string
 }
 
-export type ClosedPaneInfo = {
+type ClosedPaneInfo = {
   paneId: number
   leafId: TerminalLeafId
 }

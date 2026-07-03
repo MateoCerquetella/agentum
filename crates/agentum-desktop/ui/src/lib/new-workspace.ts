@@ -39,14 +39,14 @@ export function getTaskPresetQuery(presetId: TaskViewPresetId | null): string {
   }
 }
 
-export const IS_MAC = navigator.userAgent.includes('Mac')
+const IS_MAC = navigator.userAgent.includes('Mac')
 export const CLIENT_PLATFORM: NodeJS.Platform = navigator.userAgent.includes('Windows')
   ? 'win32'
   : IS_MAC
     ? 'darwin'
     : 'linux'
 
-export type { LinkedWorkItemContext } from '@/lib/linked-work-item-context'
+
 
 export type LinkedWorkItemSummary = {
   /** 'mr' is the GitLab analogue of 'pr'. The shape is otherwise

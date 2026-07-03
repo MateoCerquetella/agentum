@@ -20,7 +20,7 @@ function getReviewNoteStartLine(comment: Pick<DiffComment, 'lineNumber' | 'start
   return comment.startLine ?? comment.lineNumber
 }
 
-export function compareRichMarkdownReviewNotePositions(
+function compareRichMarkdownReviewNotePositions(
   left: RichMarkdownReviewNotePosition,
   right: RichMarkdownReviewNotePosition
 ): number {

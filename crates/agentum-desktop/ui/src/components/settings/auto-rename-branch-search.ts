@@ -1,6 +1,6 @@
 import type { SettingsSearchEntry } from './settings-search'
 
-export const AUTO_RENAME_BRANCH_PARENT_SEARCH_ENTRY: SettingsSearchEntry = {
+const AUTO_RENAME_BRANCH_PARENT_SEARCH_ENTRY: SettingsSearchEntry = {
   title: 'Auto-Rename Branch',
   description: 'Rename the auto-generated branch based on the work once an agent starts.',
   keywords: [

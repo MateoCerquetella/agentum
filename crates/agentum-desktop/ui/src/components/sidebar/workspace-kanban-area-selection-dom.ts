@@ -37,9 +37,9 @@ type AreaSelectionCardIdOptions = {
 }
 
 const AREA_SELECTED_ATTR = 'data-workspace-board-card-area-selected'
-export const AREA_SELECTION_SCROLL_CONTAINER_SELECTOR = '[data-workspace-board-lane-scroll]'
-export const AREA_SELECTION_AUTO_SCROLL_EDGE_SIZE = 48
-export const AREA_SELECTION_AUTO_SCROLL_MAX_DELTA = 22
+const AREA_SELECTION_SCROLL_CONTAINER_SELECTOR = '[data-workspace-board-lane-scroll]'
+const AREA_SELECTION_AUTO_SCROLL_EDGE_SIZE = 48
+const AREA_SELECTION_AUTO_SCROLL_MAX_DELTA = 22
 
 export function getAreaSelectionRect(
   startX: number,

@@ -438,7 +438,7 @@ function PinnedPetOverlay({
   )
 }
 
-export function PetOverlay(): React.JSX.Element {
+function PetOverlay(): React.JSX.Element {
   const { url, sprite, detected, behavior } = usePetUrl()
   // The bundled agent mascot roams the whole window (walks, hops, trips) via
   // AgentRoamer; every other pet is the pinned, draggable overlay.

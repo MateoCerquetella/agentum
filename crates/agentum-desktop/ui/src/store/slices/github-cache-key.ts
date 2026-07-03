@@ -18,7 +18,7 @@ export function getGitHubRepoCacheKey(
   return sshConnectionId ? `ssh:${sshConnectionId}::${owner}::${suffix}` : `${owner}::${suffix}`
 }
 
-export function getLegacyGitHubRepoCacheKey(
+function getLegacyGitHubRepoCacheKey(
   repoPath: string,
   repoId: string | undefined,
   suffix: string

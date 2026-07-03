@@ -16,7 +16,7 @@ export type NativeDropResolution =
   | { target: typeof NATIVE_FILE_DROP_TARGET.projectSidebar }
   | { target: 'rejected' }
 
-export type NativeFileDropPayload =
+type NativeFileDropPayload =
   | { paths: string[]; target: typeof NATIVE_FILE_DROP_TARGET.editor }
   | { paths: string[]; target: typeof NATIVE_FILE_DROP_TARGET.terminal; tabId?: string }
   | { paths: string[]; target: typeof NATIVE_FILE_DROP_TARGET.composer }

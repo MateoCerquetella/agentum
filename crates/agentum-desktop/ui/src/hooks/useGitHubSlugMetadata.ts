@@ -28,7 +28,7 @@ type MetadataState<T> = {
 const slugLabelStore = createMetadataRequestStore<string[]>()
 const slugAssigneeStore = createMetadataRequestStore<GitHubAssignableUser[]>()
 
-export function clearGitHubSlugMetadataCache(): void {
+function clearGitHubSlugMetadataCache(): void {
   clearMetadataRequestStore(slugLabelStore)
   clearMetadataRequestStore(slugAssigneeStore)
 }

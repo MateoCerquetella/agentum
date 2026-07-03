@@ -23,7 +23,7 @@ export const GIT_HISTORY_LANE_COLORS: readonly GitHistoryGraphColorId[] = [
 export const GIT_HISTORY_DEFAULT_LIMIT = 50
 export const GIT_HISTORY_MAX_LIMIT = 200
 
-export type GitHistoryRefCategory = 'branches' | 'remote branches' | 'tags' | 'commits'
+type GitHistoryRefCategory = 'branches' | 'remote branches' | 'tags' | 'commits'
 
 export type GitHistoryItemRef = {
   id: string
@@ -34,7 +34,7 @@ export type GitHistoryItemRef = {
   color?: GitHistoryGraphColorId
 }
 
-export type GitHistoryItemStatistics = {
+type GitHistoryItemStatistics = {
   files: number
   insertions: number
   deletions: number

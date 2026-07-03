@@ -221,4 +221,3 @@ export function AgentRoamer({ url, sprite }: { url: string; sprite: Sprite }): R
   )
 }
 
-export default AgentRoamer

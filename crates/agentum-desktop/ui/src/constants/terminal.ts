@@ -16,7 +16,7 @@ export const BACKGROUND_MOUNT_TERMINAL_WORKTREE_EVENT = 'agentum-background-moun
 // per-pane ResizeObserver path instead.
 export const SYNC_FIT_PANES_EVENT = 'agentum-sync-fit-panes'
 
-export type ToggleTerminalPaneExpandDetail = {
+type ToggleTerminalPaneExpandDetail = {
   tabId: string
 }
 

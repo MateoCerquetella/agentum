@@ -1,4 +1,4 @@
-export type FeatureWallTileId =
+type FeatureWallTileId =
   | 'tile-01'
   | 'tile-02'
   | 'tile-03'
@@ -31,7 +31,7 @@ export type FeatureWallTile =
       kind: 'agent-status-mockup'
     })
 
-export const FEATURE_WALL_MEDIA_TILE_IDS = [
+const FEATURE_WALL_MEDIA_TILE_IDS = [
   'tile-01',
   'tile-02',
   'tile-03',

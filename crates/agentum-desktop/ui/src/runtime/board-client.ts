@@ -45,7 +45,7 @@ export type SyncIssueInput = {
 }
 
 /** `GET /api/board` response — items grouped by status column. */
-export type GroupedBoard = {
+type GroupedBoard = {
   columns: Record<string, BoardItem[]>
   column_order: string[]
   comment_counts: Record<number, number>
@@ -54,7 +54,7 @@ export type GroupedBoard = {
 /** Where a created feature landed — `crate::task_sink::FeatureRef` (serde). The
  *  GitHub issue / Linear ticket / board card the server created on Chat submit
  *  (spec 018). `url` is absent for board cards (and may be for Linear). */
-export type FeatureRef = {
+type FeatureRef = {
   /** `github` | `linear` | `board` — drives the link + the "created on …" copy. */
   provider: string
   /** Provider-stable handle: a GitHub issue number, a Linear id, or a board key. */
@@ -64,7 +64,7 @@ export type FeatureRef = {
 
 /** `POST /api/board/goals` response (spec 018) — the goal tracking row plus the
  *  created feature (issue/card). Replaces the old `planner_session_id`. */
-export type CreateGoalResult = {
+type CreateGoalResult = {
   goal: BoardItem
   feature: FeatureRef
 }
@@ -73,7 +73,7 @@ export type CreateGoalResult = {
  *  Thrown by `createGoal` so the Chat UI can show the *specific* reason (e.g.
  *  "Connect GitHub / not a GitHub repo") and branch on `code` — never a silent
  *  indefinite "planning…". */
-export class CreateGoalError extends Error {
+class CreateGoalError extends Error {
   readonly code: string
   readonly provider: string | null
   readonly status: number
@@ -87,7 +87,7 @@ export class CreateGoalError extends Error {
 }
 
 /** A goal together with the feature cards the planner produced under it. */
-export type GoalWithChildren = {
+type GoalWithChildren = {
   goal: BoardItem
   children: BoardItem[]
 }
@@ -116,7 +116,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** `GET /api/board` — the whole board, grouped by status column. */
-export function listBoard(): Promise<GroupedBoard> {
+function listBoard(): Promise<GroupedBoard> {
   return request('/api/board')
 }
 
@@ -132,7 +132,7 @@ export function listBoard(): Promise<GroupedBoard> {
  * Has its own fetch path (not the string-flattening `request`) precisely so the
  * AC-3 error envelope survives as structured fields.
  */
-export async function createGoal(input: {
+async function createGoal(input: {
   title: string
   body?: string
   workdir?: string
@@ -189,7 +189,7 @@ export async function createGoal(input: {
  * a per-card worktree and spawns the agent into it, returning the card with
  * its now-bound `session_id`. Other status moves just update the column.
  */
-export function moveCard(id: number, status: string): Promise<BoardItem> {
+function moveCard(id: number, status: string): Promise<BoardItem> {
   return request(`/api/board/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ status })
@@ -201,7 +201,7 @@ export function moveCard(id: number, status: string): Promise<BoardItem> {
  * worktree + shared launch path). Returns the card with `session_id` set so
  * the caller can immediately open the live agent workspace.
  */
-export function startCard(id: number): Promise<BoardItem> {
+function startCard(id: number): Promise<BoardItem> {
   return moveCard(id, 'doing')
 }
 
@@ -211,7 +211,7 @@ export function startCard(id: number): Promise<BoardItem> {
  * has children would orphan them; callers that want the whole chat gone must
  * delete the children first (see `deleteGoalWithChildren`).
  */
-export function deleteBoardItem(id: number): Promise<void> {
+function deleteBoardItem(id: number): Promise<void> {
   return request(`/api/board/${id}`, { method: 'DELETE' })
 }
 
@@ -220,7 +220,7 @@ export function deleteBoardItem(id: number): Promise<void> {
  * first so no card is left pointing at a missing parent. Used by Chat's
  * "delete chat" action (and to clear orphaned "planning…" goals).
  */
-export async function deleteGoalWithChildren(
+async function deleteGoalWithChildren(
   goal: GoalWithChildren
 ): Promise<void> {
   for (const child of goal.children) {
@@ -240,7 +240,7 @@ export function syncExternalIssues(items: SyncIssueInput[]): Promise<{ synced: B
 }
 
 /** Handle for the live board event subscription. */
-export type BoardEventStream = { close: () => void }
+type BoardEventStream = { close: () => void }
 
 /**
  * The global-bus event `kind`s that move a card between columns: a card-start
@@ -263,7 +263,7 @@ const BOARD_RELEVANT_KINDS = new Set([
  * (server-events-bus): one connection + one parse per frame app-wide, with
  * reconnect/backoff owned by the bus. Kept async for caller compatibility.
  */
-export async function openBoardEventStream(onChange: () => void): Promise<BoardEventStream> {
+async function openBoardEventStream(onChange: () => void): Promise<BoardEventStream> {
   const unsubscribe = subscribeServerEvents({
     onEvent: (ev) => {
       if (typeof ev.kind === 'string' && BOARD_RELEVANT_KINDS.has(ev.kind)) {
@@ -279,7 +279,7 @@ export async function openBoardEventStream(onChange: () => void): Promise<BoardE
  * child cards (`parent_goal_id === goal.id`). Pure — no IO — so it's trivial
  * to unit-test and to reuse across renders.
  */
-export function selectGoalsWithChildren(board: GroupedBoard): GoalWithChildren[] {
+function selectGoalsWithChildren(board: GroupedBoard): GoalWithChildren[] {
   const all = Object.values(board.columns).flat()
   const goals = all.filter((i) => i.lbl === 'goal')
   return goals.map((goal) => ({

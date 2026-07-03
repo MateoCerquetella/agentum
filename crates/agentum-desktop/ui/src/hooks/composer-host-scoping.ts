@@ -6,7 +6,7 @@ import type { Repo } from '../../../shared/types'
 import type { HostKey, HostMeta } from '@/store/slices/hosts'
 import { LOCAL_HOST_KEY, hostKeyForRepo } from '@/components/sidebar/worktree-list-groups'
 
-export { LOCAL_HOST_KEY, hostKeyForRepo }
+
 
 /** A host option in the composer's host selector. */
 export type ComposerHostOption = {

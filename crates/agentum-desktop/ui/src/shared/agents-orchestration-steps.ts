@@ -16,7 +16,7 @@ export type AgentsStep = {
   readonly optional?: boolean
 }
 
-export const AGENTS_STEPS: readonly AgentsStep[] = [
+const AGENTS_STEPS: readonly AgentsStep[] = [
   {
     id: 'statuses',
     name: 'Visibility',

@@ -17,7 +17,7 @@ export type DiscoveredSkill = {
   updatedAt: number | null
 }
 
-export type SkillDiscoverySource = {
+type SkillDiscoverySource = {
   id: string
   label: string
   path: string

@@ -67,7 +67,7 @@ export function createNewTerminalTab(
   state.setTabBarOrder(activeWorktreeId, order)
 }
 
-export function closeTerminalTab(tabId: string): void {
+function closeTerminalTab(tabId: string): void {
   const state = useAppStore.getState()
   const owningWorktreeEntry = Object.entries(state.tabsByWorktree).find(([, worktreeTabs]) =>
     worktreeTabs.some((tab) => tab.id === tabId)
@@ -221,7 +221,7 @@ export function activateTerminalTab(tabId: string): void {
   s.setActiveTabType('terminal')
 }
 
-export function toggleTerminalPaneExpand(tabId: string): void {
+function toggleTerminalPaneExpand(tabId: string): void {
   useAppStore.getState().setActiveTab(tabId)
   requestAnimationFrame(() => {
     window.dispatchEvent(

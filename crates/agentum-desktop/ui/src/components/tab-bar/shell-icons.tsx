@@ -1,7 +1,7 @@
 import React from 'react'
 import { WINDOWS_GIT_BASH_SHELL } from '../../../../shared/windows-terminal-shell'
 
-export type WindowsShell = 'powershell.exe' | 'cmd.exe' | 'wsl.exe' | typeof WINDOWS_GIT_BASH_SHELL
+type WindowsShell = 'powershell.exe' | 'cmd.exe' | 'wsl.exe' | typeof WINDOWS_GIT_BASH_SHELL
 
 // Why: the "+" dropdown and per-tab tab strip both need a visual distinction
 // between PowerShell, CMD, Git Bash, and WSL sessions. Stock lucide glyphs don't

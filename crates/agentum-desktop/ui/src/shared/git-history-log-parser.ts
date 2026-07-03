@@ -66,7 +66,7 @@ function parseGitDecorationRefs(raw: string, revision: string): GitHistoryItemRe
   return refs.sort(compareGitHistoryItemRefsByCategory)
 }
 
-export function compareGitHistoryItemRefsByCategory(
+function compareGitHistoryItemRefsByCategory(
   ref1: GitHistoryItemRef,
   ref2: GitHistoryItemRef
 ): number {

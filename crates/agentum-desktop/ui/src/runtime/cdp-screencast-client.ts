@@ -11,7 +11,7 @@
 // on `127.0.0.1`).
 import { apiUrl, getServerEndpoint, wsUrl } from './server-endpoint'
 
-export type CdpScreencastFormat = 'jpeg' | 'png'
+type CdpScreencastFormat = 'jpeg' | 'png'
 
 /** Screencast knobs, forwarded to the server as query params. All optional. */
 export type CdpScreencastOptions = {

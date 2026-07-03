@@ -24,14 +24,14 @@ export type RemoteWorkspaceSnapshot = {
   session: RemoteWorkspaceSession
 }
 
-export type RemoteWorkspaceConnectedClient = {
+type RemoteWorkspaceConnectedClient = {
   clientId: string
   name: string
   lastSeenAt: number
   isCurrent?: boolean
 }
 
-export type RemoteWorkspacePatch = {
+type RemoteWorkspacePatch = {
   kind: 'replace-session'
   session: RemoteWorkspaceSession
 }
@@ -48,7 +48,7 @@ export type RemoteWorkspacePatchResult =
       message?: string
     }
 
-export type RemoteWorkspaceChangedEvent = {
+type RemoteWorkspaceChangedEvent = {
   targetId: string
   snapshot: RemoteWorkspaceSnapshot
   sourceClientId?: string

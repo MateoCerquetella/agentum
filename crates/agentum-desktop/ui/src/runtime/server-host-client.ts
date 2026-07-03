@@ -71,7 +71,7 @@ export async function detectRemoteAgentsViaServer(connectionId: string): Promise
  * or when the daemon predates the field, so the sidebar header degrades to a
  * kind-only label rather than throwing.
  */
-export async function getServerHostReadinessUname(hostId: string): Promise<string | null> {
+async function getServerHostReadinessUname(hostId: string): Promise<string | null> {
   return (await getServerHostReadinessInfo(hostId)).uname
 }
 
@@ -108,7 +108,7 @@ export async function resolveServerHostIdForHostKey(hostKey: string): Promise<st
 }
 
 /** One pane of a discovered (non-agentum) tmux session on a host. */
-export type DiscoveredTmuxPane = { command: string; cwd: string }
+type DiscoveredTmuxPane = { command: string; cwd: string }
 
 /** A tmux session running on a host that agentum does not manage, as returned
  *  by `GET /api/hosts/{id}/tmux-sessions`. `related` is true when any pane's

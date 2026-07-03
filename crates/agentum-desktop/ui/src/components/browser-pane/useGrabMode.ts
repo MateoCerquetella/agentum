@@ -11,7 +11,7 @@ import { isEditableKeyboardTarget } from './browser-keyboard'
 // Grab mode state machine
 // ---------------------------------------------------------------------------
 
-export type GrabModeState = 'idle' | 'armed' | 'awaiting' | 'confirming' | 'error'
+type GrabModeState = 'idle' | 'armed' | 'awaiting' | 'confirming' | 'error'
 
 export type GrabModeHook = {
   state: GrabModeState

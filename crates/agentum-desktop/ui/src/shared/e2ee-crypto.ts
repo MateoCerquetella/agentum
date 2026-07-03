@@ -13,7 +13,7 @@ export function deriveSharedKey(ourSecretKey: Uint8Array, peerPublicKey: Uint8Ar
   return nacl.box.before(peerPublicKey, ourSecretKey)
 }
 
-export function publicKeyFromBase64(b64: string): Uint8Array {
+function publicKeyFromBase64(b64: string): Uint8Array {
   const key = base64ToBytes(b64)
   if (key.length !== 32) {
     throw new Error(`Invalid public key: expected 32 bytes, got ${key.length}`)
@@ -50,7 +50,7 @@ export function encryptBytes(
   return bundle
 }
 
-export function decryptBytes(bundle: Uint8Array, sharedKey: Uint8Array): Uint8Array | null {
+function decryptBytes(bundle: Uint8Array, sharedKey: Uint8Array): Uint8Array | null {
   if (bundle.length < nacl.box.nonceLength + nacl.box.overheadLength) {
     return null
   }

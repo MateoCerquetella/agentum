@@ -262,7 +262,7 @@ export function WorktreeCardPortsDetails({
   )
 }
 
-export function WorktreeCardPorts({ ports }: WorktreeCardPortsProps): React.JSX.Element | null {
+function WorktreeCardPorts({ ports }: WorktreeCardPortsProps): React.JSX.Element | null {
   if (ports.length === 0) {
     return null
   }

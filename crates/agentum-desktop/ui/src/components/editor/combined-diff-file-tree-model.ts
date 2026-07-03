@@ -5,7 +5,7 @@ export type CombinedDiffFileTreeMode = 'uncommitted' | 'branch' | 'commit'
 export type CombinedDiffFileTreeEntry = GitStatusEntry | GitBranchChangeEntry
 export type CombinedDiffBranchTreeArea = 'combined-branch' | 'combined-commit'
 
-export const NO_EXTENSION_KEY = '(no extension)'
+const NO_EXTENSION_KEY = '(no extension)'
 
 export function getCombinedDiffFileTreeSectionKey(
   mode: CombinedDiffFileTreeMode,

@@ -48,10 +48,10 @@ import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-cl
 import { buildOnboardingFolderAgentStartup } from '@/lib/onboarding-folder-agent-startup'
 import { resolveOnboardingSettingsHydration } from './onboarding-settings-hydration'
 
-export { STEPS } from './use-onboarding-flow-types'
-export type { StepId, StepNumber } from './use-onboarding-flow-types'
 
-export type OnboardingFlowController = ReturnType<typeof useOnboardingFlow>
+
+
+type OnboardingFlowController = ReturnType<typeof useOnboardingFlow>
 
 type TaskSourcesSnapshotProps = EventProps<'onboarding_task_sources_snapshot'>
 type TaskSourcesGithubStatus = TaskSourcesSnapshotProps['github_status']

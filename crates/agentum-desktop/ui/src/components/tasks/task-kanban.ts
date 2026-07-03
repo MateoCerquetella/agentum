@@ -10,7 +10,7 @@ export type KanbanColumnKey = 'todo' | 'in_progress' | 'done'
 export type KanbanColumn = { key: KanbanColumnKey; label: string }
 
 /** The full 3-column model (Linear has all three; GitHub/GitLab use two). */
-export const KANBAN_COLUMNS: readonly KanbanColumn[] = [
+const KANBAN_COLUMNS: readonly KanbanColumn[] = [
   { key: 'todo', label: 'To Do' },
   { key: 'in_progress', label: 'In Progress' },
   { key: 'done', label: 'Done' }
@@ -28,7 +28,7 @@ export function githubColumn(state: string): KanbanColumnKey {
 }
 
 /** GitLab `state` → column. */
-export function gitlabColumn(state: string): KanbanColumnKey {
+function gitlabColumn(state: string): KanbanColumnKey {
   return state === 'closed' || state === 'merged' || state === 'locked' ? 'done' : 'todo'
 }
 
@@ -38,7 +38,7 @@ export function gitlabColumn(state: string): KanbanColumnKey {
  * is user-configurable — group on the type so columns are consistent across
  * teams. `started` is the only "in progress" signal.
  */
-export function linearColumn(stateType: string): KanbanColumnKey {
+function linearColumn(stateType: string): KanbanColumnKey {
   switch (stateType) {
     case 'started':
       return 'in_progress'

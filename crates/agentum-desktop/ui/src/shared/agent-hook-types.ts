@@ -17,11 +17,11 @@ export const AGENT_HOOK_TARGETS = [
   'copilot',
   'hermes'
 ] as const
-export type AgentHookTarget = (typeof AGENT_HOOK_TARGETS)[number]
+type AgentHookTarget = (typeof AGENT_HOOK_TARGETS)[number]
 
-export type AgentHookInstallState = 'installed' | 'not_installed' | 'partial' | 'error'
+type AgentHookInstallState = 'installed' | 'not_installed' | 'partial' | 'error'
 
-export type AgentHookInstallStatus = {
+type AgentHookInstallStatus = {
   agent: AgentHookTarget
   state: AgentHookInstallState
   configPath: string
@@ -39,4 +39,4 @@ export type AgentHookInstallStatus = {
 // first launch but no v1 fleet ever shipped, and Cursor's managed script is
 // rewritten on every install() call so there is no durable on-disk v1 script
 // to inherit. Reserve the next bump for a real wire change.
-export const AGENTUM_HOOK_PROTOCOL_VERSION = '1' as const
+const AGENTUM_HOOK_PROTOCOL_VERSION = '1' as const

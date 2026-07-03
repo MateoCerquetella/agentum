@@ -39,7 +39,7 @@ import { toast } from 'sonner'
 import { requestVirtualizedScrollAnchorRecord } from '@/hooks/requestVirtualizedScrollAnchorRecord'
 import { branchName } from '@/lib/git-utils'
 import { basename } from '@/lib/path'
-export type { WorktreeSlice, WorktreeDeleteState } from './worktree-helpers'
+export type { WorktreeSlice,  } from './worktree-helpers'
 
 // Why: old runtime servers only have `worktree.list`; preserve the large-list
 // UI hydration parity this slice used before `worktree.detectedList` existed.

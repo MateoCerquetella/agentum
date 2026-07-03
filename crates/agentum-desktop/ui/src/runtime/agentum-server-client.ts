@@ -7,7 +7,7 @@ import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
 import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 import { record as recordHostIo, LOCAL_HOST_KEY, type HostKey } from './io-meter'
 
-export type SessionStatus = 'idle' | 'running' | 'stopped' | 'crashed'
+type SessionStatus = 'idle' | 'running' | 'stopped' | 'crashed'
 
 // Wire shape of agentum_core::Session (serde snake_case). Kept faithful to the
 // server JSON so there is one source of truth and no silent field drift.
@@ -35,7 +35,7 @@ export type Session = {
 }
 
 // Wire shape of /api/agents (AgentInfo).
-export type AgentInfo = {
+type AgentInfo = {
   name: string
   binary: string
   available: boolean
@@ -128,7 +128,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** `GET /api/agents` — which first-class agent binaries are installed. */
-export function listAgents(): Promise<AgentInfo[]> {
+function listAgents(): Promise<AgentInfo[]> {
   return request<AgentInfo[]>('/api/agents')
 }
 
@@ -249,17 +249,17 @@ export function startSession(id: string): Promise<Session & { spawned?: boolean 
 }
 
 /** `POST /api/sessions/{id}/stop` — graceful stop (pane survives). */
-export function stopSession(id: string): Promise<void> {
+function stopSession(id: string): Promise<void> {
   return request<void>(`/api/sessions/${id}/stop`, { method: 'POST' })
 }
 
 /** `POST /api/sessions/{id}/kill` — kill the tmux pane. */
-export function killSession(id: string): Promise<void> {
+function killSession(id: string): Promise<void> {
   return request<void>(`/api/sessions/${id}/kill`, { method: 'POST' })
 }
 
 /** `POST /api/sessions/{id}/send` — inject text and/or a raw tmux key spec. */
-export function sendToSession(
+function sendToSession(
   id: string,
   payload: { text?: string; keys?: string }
 ): Promise<void> {
@@ -282,7 +282,7 @@ export function submitPromptToSession(id: string, text: string): Promise<void> {
 }
 
 /** `PATCH /api/sessions/{id}` — rename (pure metadata; allowed while running). */
-export function renameSession(id: string, name: string): Promise<Session> {
+function renameSession(id: string, name: string): Promise<Session> {
   return request<Session>(`/api/sessions/${id}`, {
     method: 'PATCH',
     body: JSON.stringify({ name })
@@ -290,7 +290,7 @@ export function renameSession(id: string, name: string): Promise<Session> {
 }
 
 /** `DELETE /api/sessions/{id}` — remove; `force` also kills a running pane. */
-export function deleteSession(id: string, force = false): Promise<void> {
+function deleteSession(id: string, force = false): Promise<void> {
   return request<void>(`/api/sessions/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' })
 }
 

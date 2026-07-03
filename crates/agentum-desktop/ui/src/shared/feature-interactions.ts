@@ -39,7 +39,7 @@ export type FeatureInteractionDefinition = {
   interaction: string
 }
 
-export type FeatureInteractionRecord = {
+type FeatureInteractionRecord = {
   /** Unix timestamp in milliseconds for the first local interaction. */
   firstInteractedAt: number
   /** Number of local interactions recorded for this feature. */
@@ -187,9 +187,9 @@ export const FEATURE_INTERACTIONS = [
   }
 ] as const satisfies readonly FeatureInteractionDefinition[]
 
-export const FEATURE_INTERACTION_IDS = FEATURE_INTERACTIONS.map((feature) => feature.id)
+const FEATURE_INTERACTION_IDS = FEATURE_INTERACTIONS.map((feature) => feature.id)
 
-export function isFeatureInteractionId(value: unknown): value is FeatureInteractionId {
+function isFeatureInteractionId(value: unknown): value is FeatureInteractionId {
   return (
     typeof value === 'string' && FEATURE_INTERACTION_IDS.includes(value as FeatureInteractionId)
   )

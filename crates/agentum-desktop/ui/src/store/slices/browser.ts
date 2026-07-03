@@ -90,7 +90,7 @@ function sanitizeBrowserPageAnnotation(annotation: BrowserPageAnnotation): Brows
   }
 }
 
-export type RemoteBrowserPageHandle = {
+type RemoteBrowserPageHandle = {
   environmentId: string
   remotePageId: string
 }

@@ -120,7 +120,7 @@ export function buildFontFamily(fontFamily: string | null | undefined): string {
   return parts.join(', ')
 }
 
-export function getLayoutChildNodes(split: HTMLElement): HTMLElement[] {
+function getLayoutChildNodes(split: HTMLElement): HTMLElement[] {
   return Array.from(split.children).filter(
     (child): child is HTMLElement =>
       child instanceof HTMLElement &&

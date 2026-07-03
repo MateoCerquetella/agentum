@@ -27,7 +27,7 @@ import {
 } from './browser-home-page-draft-state'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { isMacUserAgent } from '@/components/terminal-pane/pane-helpers'
-export { BROWSER_PANE_SEARCH_ENTRIES }
+
 
 type BrowserPaneProps = {
   settings: GlobalSettings

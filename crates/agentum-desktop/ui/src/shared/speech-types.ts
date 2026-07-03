@@ -1,6 +1,6 @@
-export type SpeechModelType = 'transducer' | 'paraformer' | 'whisper'
+type SpeechModelType = 'transducer' | 'paraformer' | 'whisper'
 
-export type ModelingUnit = 'bpe' | 'cjkchar' | 'cjkchar+bpe'
+type ModelingUnit = 'bpe' | 'cjkchar' | 'cjkchar+bpe'
 
 export type SpeechModelManifest = {
   id: string
@@ -19,7 +19,7 @@ export type SpeechModelManifest = {
   recommended?: boolean
 }
 
-export type SpeechModelStatus = 'not-downloaded' | 'downloading' | 'extracting' | 'ready' | 'error'
+type SpeechModelStatus = 'not-downloaded' | 'downloading' | 'extracting' | 'ready' | 'error'
 
 export type SpeechModelState = {
   id: string
@@ -28,30 +28,30 @@ export type SpeechModelState = {
   error?: string
 }
 
-export type SpeechTranscriptEvent = {
+type SpeechTranscriptEvent = {
   text: string
   sessionId: string
 }
 
-export type SpeechLifecycleEvent = {
+type SpeechLifecycleEvent = {
   sessionId: string
 }
 
-export type SpeechErrorEvent = {
+type SpeechErrorEvent = {
   error: string
   sessionId: string
 }
 
 export type DictationState = 'idle' | 'starting' | 'listening' | 'stopping' | 'error'
 
-export type UserModelConfig = {
+type UserModelConfig = {
   id: string
   type: SpeechModelType
   dir: string
   sampleRate?: number
 }
 
-export type DictationMode = 'toggle' | 'hold'
+type DictationMode = 'toggle' | 'hold'
 
 export type VoiceSettings = {
   enabled: boolean

@@ -64,11 +64,11 @@ export type SlashCommandId =
   | 'math-block'
   | 'emoji'
 
-export type SlashCommandIcon =
+type SlashCommandIcon =
   | { kind: 'component'; component: React.ComponentType<{ className?: string }> }
   | { kind: 'text'; value: string }
 
-export type SlashCommandGroup = 'Headings' | 'Basic blocks' | 'Advanced' | 'Media' | 'Others'
+type SlashCommandGroup = 'Headings' | 'Basic blocks' | 'Advanced' | 'Media' | 'Others'
 
 export type SlashCommand = {
   id: SlashCommandId
@@ -446,7 +446,7 @@ const DOC_LINK_TRIGGER_REGEX = /(^|[\s(])\[\[([^[\]|\r\n]*)$/
  * auto-convert plugin) keeps undo to a single step and avoids a one-tick
  * flicker where the inline preview decoration would also run.
  */
-export function runDocLinkCommand(
+function runDocLinkCommand(
   editor: Editor,
   menu: { from: number; to: number },
   document: MarkdownDocument

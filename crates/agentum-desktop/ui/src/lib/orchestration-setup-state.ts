@@ -18,11 +18,11 @@ export function isOrchestrationSetupEnabled(): boolean {
   return localStorage.getItem(ORCHESTRATION_ENABLED_STORAGE_KEY) === '1'
 }
 
-export function hasOrchestrationSetupMarker(): boolean {
+function hasOrchestrationSetupMarker(): boolean {
   return localStorage.getItem(ORCHESTRATION_ENABLED_STORAGE_KEY) !== null
 }
 
-export function isOrchestrationSetupDismissed(): boolean {
+function isOrchestrationSetupDismissed(): boolean {
   return localStorage.getItem(ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY) === '1'
 }
 

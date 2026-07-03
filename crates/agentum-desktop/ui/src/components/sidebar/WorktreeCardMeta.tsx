@@ -30,7 +30,7 @@ export type WorktreeCardIssueDisplay =
       labels?: string[]
     }
 
-export type WorktreeCardLinearIssueDisplay = {
+type WorktreeCardLinearIssueDisplay = {
   identifier: string
   title: string
   url?: string

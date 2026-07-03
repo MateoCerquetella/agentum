@@ -21,7 +21,7 @@ export type NotificationSoundOption = {
   icon: LucideIcon
 }
 
-export const BUILT_IN_NOTIFICATION_SOUND_OPTIONS: readonly NotificationSoundOption[] = [
+const BUILT_IN_NOTIFICATION_SOUND_OPTIONS: readonly NotificationSoundOption[] = [
   {
     id: 'system',
     title: 'System Default',

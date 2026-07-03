@@ -54,7 +54,7 @@ export function replayIntoTerminal(
   })
 }
 
-export function replayIntoTerminalAsync(
+function replayIntoTerminalAsync(
   pane: ManagedPane,
   replayingPanesRef: ReplayingPanesRef,
   data: string

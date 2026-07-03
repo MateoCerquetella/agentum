@@ -6,12 +6,12 @@ import { api } from '@/tauri'
 
 import type { IDisposable } from '@xterm/xterm'
 
-export type SerializeOpts = {
+type SerializeOpts = {
   scrollbackRows?: number
   altScreenForcesZeroRows?: boolean
 }
 
-export type SerializedBuffer = {
+type SerializedBuffer = {
   data: string
   cols: number
   rows: number
@@ -111,7 +111,7 @@ export function registerPtyTitleSource(
   }
 }
 
-export function hasPtySerializer(ptyId: string): boolean {
+function hasPtySerializer(ptyId: string): boolean {
   return serializersByPtyId.has(ptyId)
 }
 

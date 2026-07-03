@@ -20,7 +20,7 @@ import type { GitHubWorkItem } from '../../../shared/types'
 // simplest reliable source — the URL is already present on every work item
 // and survives the main-process → IPC boundary. Non-GitHub hosts return null,
 // which matches the indicator's suppression rule.
-export function getGitHubRepositoryLabelsUrl(itemUrl: string): string | null {
+function getGitHubRepositoryLabelsUrl(itemUrl: string): string | null {
   try {
     const parsed = new URL(itemUrl)
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
@@ -41,7 +41,7 @@ export function getGitHubRepositoryLabelsUrl(itemUrl: string): string | null {
   }
 }
 
-export function GitHubLabelsSettingsLink({
+function GitHubLabelsSettingsLink({
   url,
   separated,
   onOpen

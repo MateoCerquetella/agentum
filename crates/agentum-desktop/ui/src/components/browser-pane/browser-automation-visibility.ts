@@ -52,7 +52,7 @@ export function isBrowserAutomationVisible(browserPageId: string): boolean {
   return (leaseCountsByPageId.get(browserPageId) ?? 0) > 0
 }
 
-export function useBrowserAutomationVisibility(browserPageId: string | null | undefined): boolean {
+function useBrowserAutomationVisibility(browserPageId: string | null | undefined): boolean {
   useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
   return Boolean(browserPageId && isBrowserAutomationVisible(browserPageId))
 }
@@ -64,7 +64,7 @@ export function useBrowserAutomationVisibilityForAny(
   return browserPageIds.some((pageId) => Boolean(pageId && isBrowserAutomationVisible(pageId)))
 }
 
-export function getBrowserAutomationVisiblePageIds(browserPageIds: readonly string[]): Set<string> {
+function getBrowserAutomationVisiblePageIds(browserPageIds: readonly string[]): Set<string> {
   const visible = new Set<string>()
   for (const pageId of browserPageIds) {
     if (isBrowserAutomationVisible(pageId)) {
@@ -114,7 +114,7 @@ async function acquireForMainProcess(browserPageId: string): Promise<string | nu
   return acquireBrowserAutomationVisibility(browserPageId)
 }
 
-export function installBrowserAutomationVisibilityBridge(): void {
+function installBrowserAutomationVisibilityBridge(): void {
   if (typeof window === 'undefined') {
     return
   }

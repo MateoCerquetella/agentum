@@ -19,7 +19,7 @@ import { getNotificationSoundOptions } from '@/components/notification-sound-opt
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { playDesktopNotificationSound } from '@/lib/desktop-notification-sound'
 
-export type NotificationDraft = {
+type NotificationDraft = {
   agentTaskComplete: boolean
   terminalBell: boolean
   notifyWhenFocused: boolean

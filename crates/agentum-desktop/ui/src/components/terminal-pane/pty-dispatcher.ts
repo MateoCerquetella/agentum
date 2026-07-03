@@ -26,7 +26,7 @@ export const ptyDataHandlers = new Map<string, (data: string, meta?: PtyDataMeta
  *  enable). Sidecars are invoked AFTER the primary handler so xterm rendering
  *  is never delayed by a side-effect-only watcher. Each Set entry is one
  *  active subscription; removal is by Set.delete inside the unsubscribe fn. */
-export const ptyDataSidecars = new Map<string, Set<(data: string) => void>>()
+const ptyDataSidecars = new Map<string, Set<(data: string) => void>>()
 
 /** Register a side-channel data watcher for a PTY without taking ownership
  *  of the primary handler. Returns an unsubscribe fn. ensurePtyDispatcher()

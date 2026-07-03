@@ -9,7 +9,7 @@ export type HostIoRate = {
 }
 
 /** A cumulative byte total tagged with the time it was read. */
-export type IoSample = { bytes: number; at: number }
+type IoSample = { bytes: number; at: number }
 
 export type HostIoSamplerState = {
   prevIn: IoSample | null

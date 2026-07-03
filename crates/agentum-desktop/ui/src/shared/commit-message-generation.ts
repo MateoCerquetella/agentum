@@ -1,7 +1,7 @@
 import { cleanGeneratedCommitMessage, truncateDiffForPrompt } from './commit-message-prompt'
 import type { TuiAgent } from './types'
 
-export type CommitMessageDraftAgent = TuiAgent | 'custom'
+type CommitMessageDraftAgent = TuiAgent | 'custom'
 
 export type CommitMessageDraftContext = {
   branch: string | null
@@ -9,7 +9,7 @@ export type CommitMessageDraftContext = {
   stagedPatch: string
 }
 
-export type CommitMessageDraftOptions = {
+type CommitMessageDraftOptions = {
   agentId: CommitMessageDraftAgent
   model: string
   thinkingLevel?: string

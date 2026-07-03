@@ -256,7 +256,7 @@ export function openTerminal(pane: ManagedPaneInternal): void {
   })
 }
 
-export function disposeLigatures(pane: ManagedPaneInternal): void {
+function disposeLigatures(pane: ManagedPaneInternal): void {
   if (pane.ligaturesAddon) {
     try {
       pane.ligaturesAddon.dispose()
@@ -267,7 +267,7 @@ export function disposeLigatures(pane: ManagedPaneInternal): void {
   }
 }
 
-export function attachLigatures(pane: ManagedPaneInternal): void {
+function attachLigatures(pane: ManagedPaneInternal): void {
   if (pane.ligaturesAddon) {
     return
   }

@@ -17,7 +17,7 @@ import type {
 import { useAppStore } from '@/store'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
-export { COMPUTER_USE_PANE_SEARCH_ENTRIES } from './computer-use-search'
+
 
 type PermissionDefinition = {
   id: ComputerUsePermissionId

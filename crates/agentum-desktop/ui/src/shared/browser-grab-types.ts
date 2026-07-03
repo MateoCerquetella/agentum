@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 /** Page-level metadata captured at selection time. */
-export type BrowserGrabPageContext = {
+type BrowserGrabPageContext = {
   sanitizedUrl: string
   title: string
   viewportWidth: number
@@ -19,7 +19,7 @@ export type BrowserGrabPageContext = {
 }
 
 /** Accessibility metadata for the selected element. */
-export type BrowserGrabAccessibility = {
+type BrowserGrabAccessibility = {
   role: string | null
   accessibleName: string | null
   ariaLabel: string | null
@@ -55,7 +55,7 @@ export type BrowserGrabRect = {
 }
 
 /** The selected element's extracted data. */
-export type BrowserGrabTarget = {
+type BrowserGrabTarget = {
   tagName: string
   selector: string
   elementPath?: string
@@ -102,10 +102,10 @@ export type BrowserAnnotationPayload = Omit<BrowserGrabPayload, 'screenshot'> & 
 // ---------------------------------------------------------------------------
 
 /** Why a grab operation was cancelled before the user selected an element. */
-export type BrowserGrabCancelReason = 'user' | 'tab-inactive' | 'navigation' | 'evicted' | 'timeout'
+type BrowserGrabCancelReason = 'user' | 'tab-inactive' | 'navigation' | 'evicted' | 'timeout'
 
 /** Discriminated union for the result of a single grab operation. */
-export type BrowserGrabResult =
+type BrowserGrabResult =
   | { opId: string; kind: 'selected'; payload: BrowserGrabPayload }
   | { opId: string; kind: 'context-selected'; payload: BrowserGrabPayload }
   | { opId: string; kind: 'cancelled'; reason: BrowserGrabCancelReason }
@@ -115,39 +115,39 @@ export type BrowserGrabResult =
 // IPC argument and result types
 // ---------------------------------------------------------------------------
 
-export type BrowserSetGrabModeArgs = {
+type BrowserSetGrabModeArgs = {
   browserPageId: string
   enabled: boolean
 }
 
 /** Why a grab IPC call was rejected before the operation could start. */
-export type BrowserGrabRejectReason = 'not-ready' | 'not-authorized' | 'already-active'
+type BrowserGrabRejectReason = 'not-ready' | 'not-authorized' | 'already-active'
 
-export type BrowserSetGrabModeResult = { ok: true } | { ok: false; reason: BrowserGrabRejectReason }
+type BrowserSetGrabModeResult = { ok: true } | { ok: false; reason: BrowserGrabRejectReason }
 
-export type BrowserAwaitGrabSelectionArgs = {
+type BrowserAwaitGrabSelectionArgs = {
   browserPageId: string
   opId: string
 }
 
-export type BrowserCancelGrabArgs = {
+type BrowserCancelGrabArgs = {
   browserPageId: string
 }
 
-export type BrowserCaptureSelectionScreenshotArgs = {
+type BrowserCaptureSelectionScreenshotArgs = {
   browserPageId: string
   rect: BrowserGrabRect
 }
 
-export type BrowserCaptureSelectionScreenshotResult =
+type BrowserCaptureSelectionScreenshotResult =
   | { ok: true; screenshot: BrowserGrabScreenshot }
   | { ok: false; reason: string }
 
-export type BrowserExtractHoverArgs = {
+type BrowserExtractHoverArgs = {
   browserPageId: string
 }
 
-export type BrowserExtractHoverResult =
+type BrowserExtractHoverResult =
   | { ok: true; payload: BrowserGrabPayload }
   | { ok: false; reason: string }
 

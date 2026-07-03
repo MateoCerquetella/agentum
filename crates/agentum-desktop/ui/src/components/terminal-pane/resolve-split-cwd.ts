@@ -6,7 +6,7 @@ import { api } from '@/tauri'
 // helper always finishes by returning the caller's worktree-root fallback.
 import { isRemoteRuntimePtyId } from '@/runtime/runtime-terminal-inspection'
 
-export type PaneCwdEntry = { cwd: string; confirmed: boolean }
+type PaneCwdEntry = { cwd: string; confirmed: boolean }
 
 export type PaneCwdMap = Map<number, PaneCwdEntry>
 

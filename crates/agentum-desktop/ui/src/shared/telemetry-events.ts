@@ -101,10 +101,10 @@ export type AgentKind = z.infer<typeof agentKindSchema>
 // Adding a new value is additive-safe; do it when the call site lands, not in
 // anticipation.
 export const errorClassSchema = z.enum(['binary_not_found', 'paste_readiness_timeout', 'unknown'])
-export type ErrorClass = z.infer<typeof errorClassSchema>
+type ErrorClass = z.infer<typeof errorClassSchema>
 
-export const repoMethodSchema = z.enum(['folder_picker', 'clone_url', 'drag_drop'])
-export type RepoMethod = z.infer<typeof repoMethodSchema>
+const repoMethodSchema = z.enum(['folder_picker', 'clone_url', 'drag_drop'])
+type RepoMethod = z.infer<typeof repoMethodSchema>
 
 // Setup-step affordances the user can pick after `repo_added` fires (see
 // AddRepoSetupStep). One enum because every value lives on the same screen and
@@ -120,7 +120,7 @@ export const addRepoSetupStepActionSchema = z.enum([
 ])
 export type AddRepoSetupStepAction = z.infer<typeof addRepoSetupStepActionSchema>
 
-export const addRepoExistingWorkspaceSourceSchema = z.enum([
+const addRepoExistingWorkspaceSourceSchema = z.enum([
   'local_folder_picker',
   'runtime_server_path',
   'ssh_remote_path',
@@ -130,26 +130,26 @@ export const addRepoExistingWorkspaceSourceSchema = z.enum([
 export type AddRepoExistingWorkspaceSource = z.infer<typeof addRepoExistingWorkspaceSourceSchema>
 
 export const setupScriptImportProviderSchema = z.enum(SETUP_SCRIPT_IMPORT_PROVIDERS)
-export type SetupScriptImportProviderTelemetry = z.infer<typeof setupScriptImportProviderSchema>
+type SetupScriptImportProviderTelemetry = z.infer<typeof setupScriptImportProviderSchema>
 
 // Deliberately a separate enum from `errorClassSchema` (PTY-spawn taxonomy):
 // different domain — this one buckets git/filesystem failures thrown by
 // `createLocalWorktree` / `createRemoteWorktree`. Merging the two would lock
 // both domains to the union forever, which the schema-evolution comment
 // below warns against.
-export const workspaceCreateErrorClassSchema = z.enum([
+const workspaceCreateErrorClassSchema = z.enum([
   'git_failed',
   'path_collision',
   'permission_denied',
   'base_ref_missing',
   'unknown'
 ])
-export type WorkspaceCreateErrorClass = z.infer<typeof workspaceCreateErrorClassSchema>
+type WorkspaceCreateErrorClass = z.infer<typeof workspaceCreateErrorClassSchema>
 
-export const workspaceSourceSchema = z.enum(WORKSPACE_SOURCE_VALUES)
-export type { WorkspaceSource }
+const workspaceSourceSchema = z.enum(WORKSPACE_SOURCE_VALUES)
 
-export const launchSourceSchema = z.enum([
+
+const launchSourceSchema = z.enum([
   'command_palette',
   'sidebar',
   'quick_command',
@@ -168,8 +168,8 @@ export const launchSourceSchema = z.enum([
 ])
 export type LaunchSource = z.infer<typeof launchSourceSchema>
 
-export const requestKindSchema = z.enum(['new', 'resume', 'followup'])
-export type RequestKind = z.infer<typeof requestKindSchema>
+const requestKindSchema = z.enum(['new', 'resume', 'followup'])
+type RequestKind = z.infer<typeof requestKindSchema>
 
 export const featureWallTileIdSchema = z.enum([
   'tile-01',
@@ -185,25 +185,25 @@ export const featureWallTileIdSchema = z.enum([
   'tile-11',
   'tile-12'
 ])
-export type FeatureWallTileIdTelemetry = z.infer<typeof featureWallTileIdSchema>
+type FeatureWallTileIdTelemetry = z.infer<typeof featureWallTileIdSchema>
 
-export const featureWallOpenSourceSchema = z.enum(['help_menu', 'popup', 'onboarding', 'unknown'])
+const featureWallOpenSourceSchema = z.enum(['help_menu', 'popup', 'onboarding', 'unknown'])
 export type FeatureWallOpenSourceTelemetry = z.infer<typeof featureWallOpenSourceSchema>
 
-export const featureWallWorkflowIdSchema = z.enum([
+const featureWallWorkflowIdSchema = z.enum([
   'tasks',
   'workspaces',
   'agents-orchestration',
   'workbench',
   'review'
 ])
-export type FeatureWallWorkflowIdTelemetry = z.infer<typeof featureWallWorkflowIdSchema>
+type FeatureWallWorkflowIdTelemetry = z.infer<typeof featureWallWorkflowIdSchema>
 
-export const featureWallTourDepthStepSchema = z.enum(FEATURE_WALL_TOUR_DEPTH_STEPS)
-export type FeatureWallTourDepthStepTelemetry = z.infer<typeof featureWallTourDepthStepSchema>
+const featureWallTourDepthStepSchema = z.enum(FEATURE_WALL_TOUR_DEPTH_STEPS)
+type FeatureWallTourDepthStepTelemetry = z.infer<typeof featureWallTourDepthStepSchema>
 
-export const featureWallExitActionSchema = z.enum(FEATURE_WALL_EXIT_ACTIONS)
-export type FeatureWallExitActionTelemetry = z.infer<typeof featureWallExitActionSchema>
+const featureWallExitActionSchema = z.enum(FEATURE_WALL_EXIT_ACTIONS)
+type FeatureWallExitActionTelemetry = z.infer<typeof featureWallExitActionSchema>
 
 // `env_var` is deliberately absent — env-var and CI paths override consent at
 // runtime only (see consent.ts); they never mutate `optedIn` and therefore
@@ -215,8 +215,8 @@ export type FeatureWallExitActionTelemetry = z.infer<typeof featureWallExitActio
 // the new-user cohort has no first-launch surface (see telemetry-plan.md
 // §First-launch experience). Opt-outs from new users come through
 // `via: 'settings'`.
-export const optInViaSchema = z.enum(['first_launch_banner', 'settings'])
-export type OptInVia = z.infer<typeof optInViaSchema>
+const optInViaSchema = z.enum(['first_launch_banner', 'settings'])
+type OptInVia = z.infer<typeof optInViaSchema>
 
 // Whitelist of settings whose `setting_key` may be emitted on
 // `settings_changed`. If a setting isn't in this list, we do not emit.
@@ -247,7 +247,7 @@ export const SETTINGS_CHANGED_WHITELIST = [
   'geminiCliOAuthEnabled'
 ] as const satisfies readonly BooleanGlobalSettingsKey[]
 export const settingsChangedKeySchema = z.enum(SETTINGS_CHANGED_WHITELIST)
-export type SettingsChangedKey = z.infer<typeof settingsChangedKeySchema>
+type SettingsChangedKey = z.infer<typeof settingsChangedKeySchema>
 
 // ── Per-event schemas ───────────────────────────────────────────────────
 //
@@ -543,8 +543,8 @@ const setupScriptPromptActionSchema = z
 // product taxonomy. Sourced from `AGENT_HOOK_TARGETS` so the wire enum and
 // the IPC `AgentHookTarget` type cannot drift as new hook-install agents
 // are added.
-export const hookInstallAgentSchema = z.enum(AGENT_HOOK_TARGETS)
-export type HookInstallAgent = z.infer<typeof hookInstallAgentSchema>
+const hookInstallAgentSchema = z.enum(AGENT_HOOK_TARGETS)
+type HookInstallAgent = z.infer<typeof hookInstallAgentSchema>
 
 // Why: install failures are config-file-shape errors (malformed JSON, missing
 // keys, ACL denials on `~/.claude` etc.) — not user content. The 200-char
@@ -1155,7 +1155,7 @@ export const eventSchemas = {
   smart_to_recent_switch: smartToRecentSwitchSchema
 } as const
 
-export type EventMap = { [N in keyof typeof eventSchemas]: z.infer<(typeof eventSchemas)[N]> }
+type EventMap = { [N in keyof typeof eventSchemas]: z.infer<(typeof eventSchemas)[N]> }
 export type EventName = keyof EventMap
 export type EventProps<N extends EventName> = EventMap[N]
 
@@ -1185,7 +1185,7 @@ function eventsWithShapeKey(key: string): ReadonlySet<EventName> {
 //   add `nth_repo_added: nthRepoAddedSchema` to the event's schema above.
 //   That is the *only* step — this set updates automatically.
 const COHORT_EXTENDED_SET = eventsWithShapeKey('nth_repo_added')
-export const COHORT_EXTENDED: readonly EventName[] = Array.from(COHORT_EXTENDED_SET)
+const COHORT_EXTENDED: readonly EventName[] = Array.from(COHORT_EXTENDED_SET)
 
 // Compile-time roster of events that must declare `nth_repo_added`. Same
 // rationale as `_OnboardingCohortRosterSync` below — guards the runtime
@@ -1224,7 +1224,7 @@ type _CohortExtendedRosterSync = _CohortExtendedRoster extends _DerivedCohortExt
 const _cohortExtendedRosterSyncCheck: _CohortExtendedRosterSync = true
 void _cohortExtendedRosterSyncCheck
 
-export function isCohortExtendedEvent(name: EventName): boolean {
+function isCohortExtendedEvent(name: EventName): boolean {
   return COHORT_EXTENDED_SET.has(name)
 }
 
@@ -1239,7 +1239,7 @@ export function isCohortExtendedEvent(name: EventName): boolean {
 // schema. This set updates automatically.
 const ONBOARDING_COHORT_SET = eventsWithShapeKey('cohort')
 // `NonNullable` strips `undefined` introduced by `cohortSchema`'s `.optional()`.
-export type OnboardingCohort = NonNullable<z.infer<typeof cohortSchema>>
+type OnboardingCohort = NonNullable<z.infer<typeof cohortSchema>>
 
 // Compile-time roster of events that must declare `cohort`. If a schema
 // refactor drops the field from one of these, this fails tsc rather than
@@ -1278,7 +1278,7 @@ type _OnboardingCohortRosterSync = _OnboardingCohortRoster extends _DerivedOnboa
 const _onboardingCohortRosterSyncCheck: _OnboardingCohortRosterSync = true
 void _onboardingCohortRosterSyncCheck
 
-export function isOnboardingEvent(name: EventName): boolean {
+function isOnboardingEvent(name: EventName): boolean {
   return ONBOARDING_COHORT_SET.has(name)
 }
 
@@ -1311,4 +1311,4 @@ export const commonPropsSchema = z
     agentum_channel: z.enum(['stable', 'rc'])
   })
   .strict()
-export type CommonProps = z.infer<typeof commonPropsSchema>
+type CommonProps = z.infer<typeof commonPropsSchema>

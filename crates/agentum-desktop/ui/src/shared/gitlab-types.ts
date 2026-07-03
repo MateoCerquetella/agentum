@@ -13,7 +13,7 @@ import type { CheckStatus, ClassifiedError, PRConflictSummary } from './types'
 // (b) self-hosted instances live on hostnames other than gitlab.com so the
 // host has to travel with the path for URL construction and glab host
 // targeting. Aliased as `ProjectRef` in `src/main/gitlab/gl-utils.ts`.
-export type GitLabProjectRef = { host: string; path: string }
+type GitLabProjectRef = { host: string; path: string }
 
 // ── GitLab MR / issue / work-item shapes ────────────────────────────
 // Why: parallel to the GitHub PR/Issue/WorkItem types above. Native
@@ -21,18 +21,18 @@ export type GitLabProjectRef = { host: string; path: string }
 // have to remember whether a value has been mapped — every GitLab-side
 // type uses the API's own vocabulary.
 
-export type MRState = 'opened' | 'closed' | 'merged' | 'locked' | 'draft'
-export type GitLabIssueState = 'opened' | 'closed'
+type MRState = 'opened' | 'closed' | 'merged' | 'locked' | 'draft'
+type GitLabIssueState = 'opened' | 'closed'
 // Why: glab does not surface a structured "mergeable" field equivalent to
 // GitHub's GraphQL `mergeable`; we project the available signals
 // (`detailed_merge_status`, `has_conflicts`) onto the same three-value
 // shape used by GitHub's PRMergeableState so the UI can stay simple.
-export type MRMergeableState = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
+type MRMergeableState = 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
 
 // Why: GitLab pipeline jobs and GitHub check-runs map onto the same
 // three-state lifecycle. Keep the field names identical to PRCheckDetail
 // so the rendering layer can share a row component.
-export type MRCheckDetail = {
+type MRCheckDetail = {
   name: string
   status: 'queued' | 'in_progress' | 'completed'
   conclusion:
@@ -47,7 +47,7 @@ export type MRCheckDetail = {
   url: string | null
 }
 
-export type MRInfo = {
+type MRInfo = {
   number: number
   title: string
   state: MRState
@@ -69,7 +69,7 @@ export type MRInfo = {
 // Why: GitLab "emoji awards" are a richer set than GitHub's eight
 // reactions; rather than enumerate all of them, carry the raw award name
 // and let the renderer decide what to surface.
-export type GitLabReaction = {
+type GitLabReaction = {
   name: string
   count: number
 }
@@ -96,16 +96,16 @@ export type MRComment = {
   isBot?: boolean
 }
 
-export type GitLabCommentResult = { ok: true; comment: MRComment } | { ok: false; error: string }
+type GitLabCommentResult = { ok: true; comment: MRComment } | { ok: false; error: string }
 export type GitLabDiscussionResolveResult = { ok: true } | { ok: false; error: string }
 
-export type GitLabJobTraceResult = { ok: true; trace: string } | { ok: false; error: string }
+type GitLabJobTraceResult = { ok: true; trace: string } | { ok: false; error: string }
 
-export type GitLabRetryJobResult =
+type GitLabRetryJobResult =
   | { ok: true; job?: GitLabPipelineJob }
   | { ok: false; error: string }
 
-export type GitLabIssueInfo = {
+type GitLabIssueInfo = {
   number: number
   title: string
   state: GitLabIssueState
@@ -122,12 +122,12 @@ export type GitLabIssueInfo = {
   authorAvatarUrl?: string | null
 }
 
-export type GitLabViewer = {
+type GitLabViewer = {
   username: string
   email: string | null
 }
 
-export type GitLabAuthDiagnostic = {
+type GitLabAuthDiagnostic = {
   glabAvailable: boolean
   authenticated: boolean
   hosts: string[]
@@ -136,7 +136,7 @@ export type GitLabAuthDiagnostic = {
   error: string | null
 }
 
-export type GitLabRateLimitBucket = {
+type GitLabRateLimitBucket = {
   limit: number
   remaining: number
   resetAt: number | null
@@ -160,21 +160,21 @@ export type GitLabAssignableUser = {
   state?: string | null
 }
 
-export type GitLabMRApprovalRule = {
+type GitLabMRApprovalRule = {
   id: number
   name: string
   approvalsRequired: number
   approved: boolean
 }
 
-export type GitLabMRApprovalState = {
+type GitLabMRApprovalState = {
   approvalsRequired: number | null
   approvalsLeft: number | null
   approvedBy: GitLabAssignableUser[]
   rules: GitLabMRApprovalRule[]
 }
 
-export type GitLabMRReviewersUpdateResult =
+type GitLabMRReviewersUpdateResult =
   | { ok: true; reviewers: GitLabAssignableUser[] }
   | { ok: false; error: string }
 
@@ -203,7 +203,7 @@ export type GitLabWorkItem = {
   projectRef?: GitLabProjectRef
 }
 
-export type GitLabMRFile = {
+type GitLabMRFile = {
   path: string
   oldPath?: string
   status: 'added' | 'modified' | 'removed' | 'renamed' | 'copied' | 'changed' | 'unchanged'
@@ -214,7 +214,7 @@ export type GitLabMRFile = {
   diff?: string
 }
 
-export type GitLabMRInlineCommentInput = {
+type GitLabMRInlineCommentInput = {
   body: string
   path: string
   oldPath?: string
@@ -242,7 +242,7 @@ export type GitLabProjectSettings = {
 // target_type narrows to the four shapes Agentum renders meaningfully —
 // other values (DesignManagement::Design, AlertManagement::Alert)
 // fall back to a generic "open URL" treatment in the UI.
-export type GitLabTodoTargetType = 'MergeRequest' | 'Issue' | 'Commit' | 'Note'
+type GitLabTodoTargetType = 'MergeRequest' | 'Issue' | 'Commit' | 'Note'
 
 export type GitLabTodo = {
   id: number
@@ -314,7 +314,7 @@ export type GitLabWorkItemDetails = {
   assignees?: string[]
 }
 
-export type GitLabIssueUpdate = {
+type GitLabIssueUpdate = {
   state?: 'opened' | 'closed'
   title?: string
   /** Why: `glab issue update` handles title/labels/assignees, while body edits
@@ -336,12 +336,12 @@ export type GitLabMRUpdate = {
 // Why: GitLab-native MR list filter — Open / Merged / Closed / All —
 // replaces GitHub's search-DSL on the GitLab tab per the agreed scope.
 // 'all' maps to no state filter (any state).
-export type MRListState = 'opened' | 'merged' | 'closed' | 'all'
+type MRListState = 'opened' | 'merged' | 'closed' | 'all'
 
 // Why: paginated list result for both MRs and combined work-items.
 // totalCount / totalPages come from X-Total / X-Total-Pages response
 // headers via `glab api -i`, so the renderer can show "Page X of Y".
-export type GitLabPagedResult<T> = {
+type GitLabPagedResult<T> = {
   items: T[]
   page: number
   perPage: number
@@ -350,4 +350,4 @@ export type GitLabPagedResult<T> = {
   error?: ClassifiedError
 }
 
-export type ListMergeRequestsResult = GitLabPagedResult<GitLabWorkItem>
+type ListMergeRequestsResult = GitLabPagedResult<GitLabWorkItem>

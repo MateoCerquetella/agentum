@@ -16,7 +16,7 @@ export function endProgrammaticContentSync(filePath: string): void {
   programmaticContentSyncDepthByFilePath.set(filePath, depth - 1)
 }
 
-export function isProgrammaticContentSyncInFlight(filePath: string): boolean {
+function isProgrammaticContentSyncInFlight(filePath: string): boolean {
   return (programmaticContentSyncDepthByFilePath.get(filePath) ?? 0) > 0
 }
 

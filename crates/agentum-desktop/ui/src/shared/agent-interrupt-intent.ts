@@ -14,6 +14,6 @@ export type AgentInterruptInferenceRequest = {
   inputCount?: number
 }
 
-export function isAgentInterruptInputIntent(intent: unknown): intent is AgentInterruptInputIntent {
+function isAgentInterruptInputIntent(intent: unknown): intent is AgentInterruptInputIntent {
   return intent === 'plain-escape' || intent === 'ctrl-c'
 }

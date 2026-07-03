@@ -8,7 +8,7 @@ import {
 } from '../../../../shared/browser-url'
 import type { BrowserHistoryEntry } from '../../../../shared/types'
 
-export const MAX_BROWSER_ADDRESS_BAR_SUGGESTIONS = 8
+const MAX_BROWSER_ADDRESS_BAR_SUGGESTIONS = 8
 
 export type BrowserAddressBarSuggestion = {
   url: string

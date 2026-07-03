@@ -5,7 +5,7 @@ export type FeatureWallUsageProviderConnection = {
   label: string
 }
 
-export function hasFeatureWallProviderUsageTracking(provider: ProviderRateLimits | null): boolean {
+function hasFeatureWallProviderUsageTracking(provider: ProviderRateLimits | null): boolean {
   if (!provider) {
     return false
   }

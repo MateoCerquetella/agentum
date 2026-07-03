@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PreflightStatus } from '../../../../preload/api-types'
+import type { PreflightStatus } from '../../shared/types'
 import {
   getPreflightIntegrationStatuses,
   giteaStatusFromPreflight,

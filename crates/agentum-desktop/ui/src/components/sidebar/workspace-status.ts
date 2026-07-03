@@ -31,16 +31,16 @@ import {
 } from './workspace-status-icons'
 
 export {
-  DEFAULT_WORKSPACE_STATUS_COLOR_ID,
-  DEFAULT_WORKSPACE_STATUS_ICON_ID,
-  DEFAULT_WORKSPACE_STATUS_ID,
-  DEFAULT_WORKSPACE_STATUSES,
-  WORKSPACE_STATUS_COLOR_IDS,
-  WORKSPACE_STATUS_ICON_IDS,
+  
+  
+  
+  
+  
+  
   getWorkspaceStatus,
   getWorkspaceStatusFromGroupKey,
   getWorkspaceStatusGroupKey,
-  isWorkspaceStatusId
+  
 }
 
 export const WORKSPACE_STATUS_DRAG_TYPE = 'application/x-agentum-worktree-id'
@@ -49,7 +49,7 @@ export const WORKSPACE_STATUS_DRAG_IDS_TYPE = 'application/x-agentum-worktree-id
 /** Drag type for a browser tab dragged (by its workspace id) onto a worktree
  *  card to MOVE it there. Distinct from the worktree-reorder types above so a
  *  card can tell "move this tab here" apart from "reorder this worktree". */
-export const BROWSER_TAB_DRAG_TYPE = 'application/x-agentum-browser-tab'
+const BROWSER_TAB_DRAG_TYPE = 'application/x-agentum-browser-tab'
 
 type WorkspaceStatusColorOption = {
   id: string

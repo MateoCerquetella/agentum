@@ -1,10 +1,10 @@
-import type { PreflightStatus } from '../../../../preload/api-types'
+import type { PreflightStatus } from '../../shared/types'
 
-export type GhStatus = 'checking' | 'connected' | 'not-installed' | 'not-authenticated'
+type GhStatus = 'checking' | 'connected' | 'not-installed' | 'not-authenticated'
 // Why: parallel to GhStatus — GitLab uses glab and the same three failure
 // modes (probe in-flight / installed-but-unauth / missing entirely).
-export type GlabStatus = GhStatus
-export type BitbucketStatus = 'checking' | 'connected' | 'not-configured' | 'not-authenticated'
+type GlabStatus = GhStatus
+type BitbucketStatus = 'checking' | 'connected' | 'not-configured' | 'not-authenticated'
 export type AzureDevOpsStatus = 'checking' | 'configured' | 'not-configured' | 'not-authenticated'
 export type GiteaStatus = 'checking' | 'configured' | 'not-configured' | 'not-authenticated'
 export type PreflightRefreshProvider = 'gh' | 'glab' | 'bitbucket' | 'azureDevOps' | 'gitea'

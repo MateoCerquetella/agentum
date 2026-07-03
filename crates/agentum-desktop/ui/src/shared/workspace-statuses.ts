@@ -281,7 +281,7 @@ export function isWorkspaceStatusId(
   return statuses.some((status) => status.id === value)
 }
 
-export function getDefaultWorkspaceStatusId(
+function getDefaultWorkspaceStatusId(
   statuses: readonly WorkspaceStatusDefinition[]
 ): WorkspaceStatus {
   return statuses.some((status) => status.id === DEFAULT_WORKSPACE_STATUS_ID)

@@ -62,4 +62,3 @@ export function DrillInHeader({
   )
 }
 
-export default DrillInHeader

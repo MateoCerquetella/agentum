@@ -1,6 +1,6 @@
 import type { GitUpstreamStatus } from './git-status-types'
 
-export function upstreamOnlyCommitsArePatchEquivalent(cherryMarkOutput: string): boolean {
+function upstreamOnlyCommitsArePatchEquivalent(cherryMarkOutput: string): boolean {
   const lines = cherryMarkOutput
     .split(/\r?\n/)
     .map((line) => line.trim())

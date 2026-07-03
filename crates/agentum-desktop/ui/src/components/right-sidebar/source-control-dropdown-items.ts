@@ -27,7 +27,7 @@ export type DropdownActionKind =
   | 'fetch'
   | 'publish'
 
-export type DropdownItem = {
+type DropdownItem = {
   kind: DropdownActionKind
   label: string
   title: string
@@ -36,7 +36,7 @@ export type DropdownItem = {
   variant?: 'default' | 'destructive'
 }
 
-export type DropdownSeparator = { kind: 'separator' }
+type DropdownSeparator = { kind: 'separator' }
 
 export type DropdownEntry = DropdownItem | DropdownSeparator
 

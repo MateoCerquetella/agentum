@@ -38,7 +38,7 @@ export type BrowserDownloadFinishedEvent = {
   error: string | null
 }
 
-export type BrowserContextMenuRequestedEvent = {
+type BrowserContextMenuRequestedEvent = {
   browserPageId: string
   x: number
   y: number
@@ -50,6 +50,6 @@ export type BrowserContextMenuRequestedEvent = {
   canGoForward: boolean
 }
 
-export type BrowserContextMenuDismissedEvent = {
+type BrowserContextMenuDismissedEvent = {
   browserPageId: string
 }

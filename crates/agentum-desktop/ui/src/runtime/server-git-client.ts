@@ -21,7 +21,7 @@ export type GitFile = {
 
 export type GitCommitResult = { sha: string }
 
-export function gitStatus(sessionId: string): Promise<GitStatus> {
+function gitStatus(sessionId: string): Promise<GitStatus> {
   return getJson<GitStatus>(`/api/sessions/${sessionId}/git/status`)
 }
 
@@ -40,7 +40,7 @@ export function gitStatusEntries(sessionId: string): Promise<GitStatusEntry[]> {
 }
 
 /** Unified diff (text/plain). `staged` → `git diff --cached`, else worktree vs index. */
-export function gitDiff(sessionId: string, path: string, staged = false): Promise<string> {
+function gitDiff(sessionId: string, path: string, staged = false): Promise<string> {
   return getText(`/api/sessions/${sessionId}/git/diff${qs({ path, staged })}`)
 }
 
@@ -63,7 +63,7 @@ export function gitStage(
 }
 
 /** Commit the given paths with `message`; returns the new commit SHA. */
-export function gitCommit(
+function gitCommit(
   sessionId: string,
   message: string,
   paths: string[]
@@ -83,7 +83,7 @@ export type GitBranches = {
   branches: string[]
 }
 
-export type GitLogEntry = {
+type GitLogEntry = {
   sha: string
   subject: string
   author: string
@@ -97,7 +97,7 @@ export function gitBranches(sessionId: string): Promise<GitBranches> {
 }
 
 /** Recent commits (default 50, max 500). */
-export function gitLog(sessionId: string, limit?: number): Promise<GitLogEntry[]> {
+function gitLog(sessionId: string, limit?: number): Promise<GitLogEntry[]> {
   return getJson<GitLogEntry[]>(`/api/sessions/${sessionId}/git/log${qs({ limit })}`)
 }
 
@@ -156,9 +156,9 @@ export function gitAbortRebase(sessionId: string): Promise<void> {
   return postJson<void>(`/api/sessions/${sessionId}/git/abort-rebase`)
 }
 
-export type GitChangeStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied'
+type GitChangeStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied'
 
-export type GitBranchChangeEntry = {
+type GitBranchChangeEntry = {
   path: string
   status: GitChangeStatus
   oldPath?: string
@@ -166,7 +166,7 @@ export type GitBranchChangeEntry = {
   removed?: number
 }
 
-export type GitBranchCompareSummary = {
+type GitBranchCompareSummary = {
   baseRef: string
   baseOid: string | null
   compareRef: string
@@ -189,7 +189,7 @@ export function gitBranchCompare(sessionId: string, baseRef: string): Promise<Gi
   )
 }
 
-export type GitCommitCompareSummary = {
+type GitCommitCompareSummary = {
   commitOid: string
   parentOid: string | null
   compareRef: string
@@ -244,7 +244,7 @@ export function gitBlob(sessionId: string, path: string, commit: string): Promis
   return getJson<GitBlob>(`/api/sessions/${sessionId}/git/blob${qs({ path, commit })}`)
 }
 
-export type GitHistoryEntry = {
+type GitHistoryEntry = {
   id: string
   parentIds: string[]
   subject: string

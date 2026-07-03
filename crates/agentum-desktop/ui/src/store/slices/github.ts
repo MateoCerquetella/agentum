@@ -48,13 +48,13 @@ import { isMacAppDataPath } from '@/lib/passive-macos-app-data-access'
 // Why: declared separately from CacheEntry<T> (not a generified E parameter)
 // because project-view has a single GraphQL source — no issue/PR-source
 // fallback — and the error union is distinct. Shared structural shape only.
-export type ProjectViewCacheEntry<T> = {
+type ProjectViewCacheEntry<T> = {
   data: T | null
   fetchedAt: number
   error?: GitHubProjectViewError
 }
 
-export type ProjectRowContentUpdate = {
+type ProjectRowContentUpdate = {
   title?: string
   body?: string
   addLabels?: string[]
@@ -69,7 +69,7 @@ export type ProjectRowContentUpdate = {
  *  `addLabels`/`removeLabels` deltas with full `labels`/`assignees` arrays
  *  matches what the dialog's local state already tracks (`localLabels`,
  *  `localAssignees`) and avoids redundant set-merge logic at the call site. */
-export type ProjectRowContentPatch = {
+type ProjectRowContentPatch = {
   title?: string
   body?: string
   /** Why: accept the renderer's lowercase work-item state vocabulary

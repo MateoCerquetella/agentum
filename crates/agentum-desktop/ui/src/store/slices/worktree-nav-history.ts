@@ -15,7 +15,7 @@ const MAX_HISTORY = 50
 // across ~20 sites would churn for no behavior win. View entries are
 // always live (never skipped by findPrev/NextLiveWorktreeHistoryIndex).
 export type WorktreeNavHistorySimpleViewEntry = 'tasks'
-export type WorktreeNavHistoryTaskDetailEntry =
+type WorktreeNavHistoryTaskDetailEntry =
   | {
       kind: 'task-detail'
       source: 'github'
@@ -23,10 +23,10 @@ export type WorktreeNavHistoryTaskDetailEntry =
       initialTab?: 'conversation' | 'checks' | 'files'
     }
   | { kind: 'task-detail'; source: 'linear'; issue: LinearIssue }
-export type WorktreeNavHistoryViewEntry =
+type WorktreeNavHistoryViewEntry =
   | WorktreeNavHistorySimpleViewEntry
   | WorktreeNavHistoryTaskDetailEntry
-export type WorktreeNavHistoryEntry = string | WorktreeNavHistoryViewEntry
+type WorktreeNavHistoryEntry = string | WorktreeNavHistoryViewEntry
 
 export type WorktreeNavHistorySlice = {
   // Linear history, oldest -> newest.
@@ -145,7 +145,7 @@ export function findPrevLiveNonTaskStackHistoryIndex(state: AppState): number | 
   return null
 }
 
-export function findNextLiveWorktreeHistoryIndex(state: AppState): number | null {
+function findNextLiveWorktreeHistoryIndex(state: AppState): number | null {
   for (let i = state.worktreeNavHistoryIndex + 1; i < state.worktreeNavHistory.length; i++) {
     if (isLiveEntry(state.worktreeNavHistory[i], state)) {
       return i

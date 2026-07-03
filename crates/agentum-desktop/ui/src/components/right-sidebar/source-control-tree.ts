@@ -10,7 +10,7 @@ export type SourceControlTreeEntry = {
   path: string
 }
 
-export type SourceControlTreeFileNode<
+type SourceControlTreeFileNode<
   Entry extends SourceControlTreeEntry = GitStatusEntry,
   Area extends string = SourceControlTreeArea
 > = {
@@ -23,7 +23,7 @@ export type SourceControlTreeFileNode<
   depth: number
 }
 
-export type SourceControlTreeDirectoryNode<
+type SourceControlTreeDirectoryNode<
   Entry extends SourceControlTreeEntry = GitStatusEntry,
   Area extends string = SourceControlTreeArea
 > = {

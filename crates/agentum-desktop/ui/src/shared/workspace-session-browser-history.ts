@@ -49,7 +49,7 @@ export function normalizeBrowserHistoryEntries(
   return normalizedEntries
 }
 
-export function pruneWorkspaceSessionBrowserHistory(
+function pruneWorkspaceSessionBrowserHistory(
   session: WorkspaceSessionState
 ): WorkspaceSessionState {
   if (!session.browserUrlHistory) {

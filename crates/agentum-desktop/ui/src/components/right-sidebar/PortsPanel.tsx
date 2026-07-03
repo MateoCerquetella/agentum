@@ -56,11 +56,7 @@ import {
 import type { PortForwardEntry, EnrichedDetectedPort } from '../../../../shared/ssh-types'
 import type { WorkspacePort } from '../../../../shared/workspace-ports'
 
-export {
-  killWorkspacePortForTarget,
-  openWorkspacePortInBrowser,
-  scanWorkspacePortsForTarget
-} from '@/lib/workspace-port-actions'
+
 
 export function getLocalWorkspacePortSections(
   scan: { ports: WorkspacePort[] } | null | undefined,

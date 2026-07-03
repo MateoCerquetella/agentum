@@ -8,7 +8,7 @@ import { isTuiAgentEnabled } from './tui-agent-selection'
 // `tui-agent-config.ts`, which describes interactive PTY launching — mixing
 // the two confuses both code paths.
 
-export type ThinkingLevel = { id: string; label: string }
+type ThinkingLevel = { id: string; label: string }
 
 export type CommitMessageModel = {
   /** Value passed to the agent CLI's --model flag. */

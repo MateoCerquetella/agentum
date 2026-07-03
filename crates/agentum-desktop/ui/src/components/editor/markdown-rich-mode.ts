@@ -1,7 +1,7 @@
 import { getRichMarkdownRoundTripOutput } from './markdown-round-trip'
 import { extractFrontMatter } from './markdown-frontmatter'
 
-export type MarkdownRichModeUnsupportedReason =
+type MarkdownRichModeUnsupportedReason =
   | 'html-or-jsx'
   | 'reference-links'
   | 'footnotes'

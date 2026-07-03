@@ -20,7 +20,7 @@ export type CommitMessagePlanInput = {
   agentCommandOverride?: string
 }
 
-export type CommitMessagePlan = {
+type CommitMessagePlan = {
   binary: string
   args: string[]
   /** Non-null when the prompt should be piped via stdin. */
@@ -33,7 +33,7 @@ export type CommitMessagePlanResult =
   | { ok: true; plan: CommitMessagePlan }
   | { ok: false; error: string }
 
-export function planAgentBinary(
+function planAgentBinary(
   defaultBinary: string,
   commandOverride: string | undefined
 ): { ok: true; binary: string; prefixArgs: string[] } | { ok: false; error: string } {

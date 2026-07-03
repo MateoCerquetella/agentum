@@ -24,7 +24,7 @@ export type GitConflictOperation = 'merge' | 'rebase' | 'cherry-pick' | 'unknown
 //
 // `conflictStatusSource` is never set by the main process. The renderer stamps
 // 'git' for live u-records and 'session' for Resolved locally state.
-export type GitUncommittedEntry = {
+type GitUncommittedEntry = {
   path: string
   status: GitFileStatus
   area: GitStagingArea

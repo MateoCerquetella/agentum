@@ -119,7 +119,7 @@ export function installHttpLinkClickFallback(
   }
 }
 
-export function openHttpLinkAtBufferPosition(
+function openHttpLinkAtBufferPosition(
   buffer: { getLine(y: number): IBufferLine | undefined },
   position: { x: number; y: number },
   terminalColumns: number,

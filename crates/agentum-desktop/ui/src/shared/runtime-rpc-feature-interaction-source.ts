@@ -14,7 +14,7 @@ export function withBrowserPaneUiRuntimeRpcSource(value: unknown): unknown {
   }
 }
 
-export function isBrowserPaneUiRuntimeRpcParams(value: unknown): boolean {
+function isBrowserPaneUiRuntimeRpcParams(value: unknown): boolean {
   return (
     value !== null &&
     typeof value === 'object' &&

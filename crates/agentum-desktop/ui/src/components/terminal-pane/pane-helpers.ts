@@ -10,7 +10,7 @@ export function fitPanes(manager: PaneManager): void {
  * Used by the epoch-based deduplication in use-terminal-pane-global-effects
  * to allow legitimate resize fits while suppressing redundant ones.
  */
-export function hasDimensionsChanged(manager: PaneManager): boolean {
+function hasDimensionsChanged(manager: PaneManager): boolean {
   for (const pane of manager.getPanes()) {
     try {
       const dims = pane.fitAddon.proposeDimensions()
@@ -27,7 +27,7 @@ export function hasDimensionsChanged(manager: PaneManager): boolean {
   return false
 }
 
-export function focusActivePane(manager: PaneManager): void {
+function focusActivePane(manager: PaneManager): void {
   // Why: tab rename focuses the input on the next frame. A queued terminal
   // layout focus can land in between mount and focus, blurring rename closed.
   if (typeof document !== 'undefined' && document.querySelector('[data-tab-rename-input="true"]')) {

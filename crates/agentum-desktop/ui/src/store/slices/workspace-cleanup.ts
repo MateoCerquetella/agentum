@@ -21,13 +21,13 @@ import {
 } from '../../../../shared/workspace-cleanup'
 import { detectAgentStatusFromTitle, isExplicitAgentStatusFresh } from '@/lib/agent-status'
 
-export type WorkspaceCleanupFailure = {
+type WorkspaceCleanupFailure = {
   worktreeId: string
   displayName: string
   message: string
 }
 
-export type WorkspaceCleanupRemoveResult = {
+type WorkspaceCleanupRemoveResult = {
   removedIds: string[]
   failures: WorkspaceCleanupFailure[]
 }

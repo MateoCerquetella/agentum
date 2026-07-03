@@ -1,6 +1,6 @@
 import type { Repo } from './types'
 
-export function getRepoKind(repo: Pick<Repo, 'kind'>): 'git' | 'folder' {
+function getRepoKind(repo: Pick<Repo, 'kind'>): 'git' | 'folder' {
   return repo.kind === 'folder' ? 'folder' : 'git'
 }
 

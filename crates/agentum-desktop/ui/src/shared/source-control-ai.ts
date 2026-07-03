@@ -33,7 +33,7 @@ export const DEFAULT_SOURCE_CONTROL_AI_PR_CREATION_DEFAULTS: Required<SourceCont
     openAfterCreate: false
   }
 
-export type ResolvedSourceControlAiGenerationParams = {
+type ResolvedSourceControlAiGenerationParams = {
   agentId: TuiAgent | 'custom'
   model: string
   thinkingLevel?: string
@@ -42,7 +42,7 @@ export type ResolvedSourceControlAiGenerationParams = {
   agentCommandOverride?: string
 }
 
-export type ResolvedSourceControlAiOperation = {
+type ResolvedSourceControlAiOperation = {
   enabled: boolean
   params: ResolvedSourceControlAiGenerationParams
   prCreationDefaults: Required<SourceControlAiPrCreationDefaults>
@@ -671,7 +671,7 @@ function readRepoInstructionOverride(
   return typeof instruction === 'string' ? instruction : undefined
 }
 
-export function resolveSourceControlAiInstructions(args: {
+function resolveSourceControlAiInstructions(args: {
   settings: Pick<GlobalSettings, 'sourceControlAi' | 'commitMessageAi'>
   repo?: Pick<Repo, 'sourceControlAi'> | null
   operation: SourceControlAiOperation

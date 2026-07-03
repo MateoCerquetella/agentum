@@ -1,6 +1,6 @@
 import type { GitHubPRMergeMethod, GitHubPRMergeMethodSettings } from './types'
 
-export const GITHUB_PR_MERGE_METHODS = ['squash', 'merge', 'rebase'] as const
+const GITHUB_PR_MERGE_METHODS = ['squash', 'merge', 'rebase'] as const
 
 export const GITHUB_PR_MERGE_METHOD_LABELS: Record<GitHubPRMergeMethod, string> = {
   squash: 'Squash and merge',
@@ -8,7 +8,7 @@ export const GITHUB_PR_MERGE_METHOD_LABELS: Record<GitHubPRMergeMethod, string> 
   rebase: 'Rebase and merge'
 }
 
-export type GitHubPRMergeMethodOption = {
+type GitHubPRMergeMethodOption = {
   method: GitHubPRMergeMethod
   label: string
 }
@@ -27,7 +27,7 @@ function allMethodsAllowed(): Record<GitHubPRMergeMethod, boolean> {
   }
 }
 
-export function mapGitHubDefaultMergeMethod(value: unknown): GitHubPRMergeMethod | null {
+function mapGitHubDefaultMergeMethod(value: unknown): GitHubPRMergeMethod | null {
   switch (typeof value === 'string' ? value.toUpperCase() : '') {
     case 'MERGE':
       return 'merge'
