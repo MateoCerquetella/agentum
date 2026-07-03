@@ -10,7 +10,6 @@ import {
 } from '../../../../shared/feature-tips'
 
 export function getFeatureTipForModal(args: {
-  cliInstalled: boolean
   modalData: Record<string, unknown>
   seenTipIds: readonly FeatureTipId[]
   featureInteractions: FeatureInteractionState
@@ -24,7 +23,6 @@ export function getFeatureTipForModal(args: {
   const pendingTips = getOrderedUnseenFeatureTips({
     seenTipIds: new Set(args.seenTipIds),
     completedTipIds: getCompletedFeatureTipIds({
-      cliInstalled: args.cliInstalled,
       voiceDictationEnabled: args.settings?.voice?.enabled === true,
       featureInteractions: args.featureInteractions
     })

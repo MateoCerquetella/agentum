@@ -10,7 +10,6 @@ import { Label } from '../ui/label'
 import { Separator } from '../ui/separator'
 import { Download, FolderOpen, Loader2, RefreshCw, Star, Timer } from 'lucide-react'
 import { useAppStore } from '../../store'
-import { CliSection } from './CliSection'
 import { toast } from 'sonner'
 import {
   DEFAULT_EDITOR_AUTO_SAVE_DELAY_MS,
@@ -21,7 +20,6 @@ import { OPEN_IN_APPLICATIONS_MAX } from '../../../../shared/open-in-application
 import { clampNumber } from '@/lib/terminal-theme'
 import {
   GENERAL_CACHE_TIMER_SEARCH_ENTRIES,
-  GENERAL_CLI_SEARCH_ENTRIES,
   GENERAL_EDITOR_SEARCH_ENTRIES,
   GENERAL_NAVIGATION_SEARCH_ENTRIES,
   GENERAL_NETWORK_SEARCH_ENTRIES,
@@ -67,15 +65,6 @@ export function shouldCommitOpenInApplicationsDraft(applications: OpenInApplicat
   })
 }
 
-export function getDesktopPlatformFromUserAgent(userAgent: string): 'darwin' | 'win32' | 'other' {
-  if (userAgent.includes('Mac')) {
-    return 'darwin'
-  }
-  if (userAgent.includes('Windows')) {
-    return 'win32'
-  }
-  return 'other'
-}
 
 
 
@@ -778,12 +767,6 @@ export function GeneralPane({ settings, updateSettings }: GeneralPaneProps): Rea
           />
         </SearchableSetting>
       </section>
-    ) : null,
-    matchesSettingsSearch(searchQuery, GENERAL_CLI_SEARCH_ENTRIES) ? (
-      <CliSection
-        key="cli"
-        currentPlatform={getDesktopPlatformFromUserAgent(navigator.userAgent)}
-      />
     ) : null,
     matchesSettingsSearch(searchQuery, GENERAL_CACHE_TIMER_SEARCH_ENTRIES) ? (
       <section key="cache-timer" className="space-y-4">

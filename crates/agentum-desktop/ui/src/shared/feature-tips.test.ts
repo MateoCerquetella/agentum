@@ -8,15 +8,15 @@ import {
 } from './feature-tips'
 
 describe('feature tips', () => {
-  it('orders new unseen tips before older unseen tips', () => {
+  it('surfaces unseen tips', () => {
     const tips = getOrderedUnseenFeatureTips({ seenTipIds: new Set<FeatureTipId>() })
 
-    expect(tips.map((tip) => tip.id)).toEqual(['agentum-cli', 'voice-dictation'])
+    expect(tips.map((tip) => tip.id)).toEqual(['voice-dictation'])
   })
 
   it('skips tips the user has already seen', () => {
     const tips = getOrderedUnseenFeatureTips({
-      seenTipIds: new Set<FeatureTipId>(['voice-dictation', 'agentum-cli'])
+      seenTipIds: new Set<FeatureTipId>(['voice-dictation'])
     })
 
     expect(tips.map((tip) => tip.id)).toEqual([])
@@ -26,20 +26,7 @@ describe('feature tips', () => {
     const tips = getOrderedUnseenFeatureTips({
       seenTipIds: new Set<FeatureTipId>(),
       completedTipIds: getCompletedFeatureTipIds({
-        cliInstalled: true,
         voiceDictationEnabled: true
-      })
-    })
-
-    expect(tips.map((tip) => tip.id)).toEqual([])
-  })
-
-  it('skips the CLI tip when the CLI is already installed', () => {
-    const tips = getOrderedUnseenFeatureTips({
-      seenTipIds: new Set<FeatureTipId>(['voice-dictation']),
-      completedTipIds: getCompletedFeatureTipIds({
-        cliInstalled: true,
-        voiceDictationEnabled: false
       })
     })
 
@@ -50,7 +37,6 @@ describe('feature tips', () => {
     const tips = getOrderedUnseenFeatureTips({
       seenTipIds: new Set<FeatureTipId>(),
       completedTipIds: getCompletedFeatureTipIds({
-        cliInstalled: false,
         voiceDictationEnabled: false,
         featureInteractions: {
           'voice-dictation': { firstInteractedAt: 100, interactionCount: 1 }
@@ -58,25 +44,13 @@ describe('feature tips', () => {
       })
     })
 
-    expect(tips.map((tip) => tip.id)).toEqual(['agentum-cli'])
+    expect(tips.map((tip) => tip.id)).toEqual([])
   })
 
-  it('normalizes persisted tip ids', () => {
+  it('normalizes persisted tip ids (dropping the removed agentum-cli tip)', () => {
     expect(
       normalizeFeatureTipIds(['feature-tour', 'agentum-cli', 'bogus', 'voice-dictation'])
-    ).toEqual(['agentum-cli', 'voice-dictation'])
-  })
-
-  it('describes the CLI tip as an install action with concrete workflows', () => {
-    const cliTip = FEATURE_TIPS.find((tip) => tip.id === 'agentum-cli')
-
-    expect(cliTip).toMatchObject({
-      action: 'setup-cli',
-      title: 'Let agents drive Agentum with the Agentum CLI',
-      ctaLabel: 'Install CLI & Skills'
-    })
-    expect(cliTip?.description).toContain('coordinate child worktrees')
-    expect(cliTip?.description).toContain('communicate between worktrees')
+    ).toEqual(['voice-dictation'])
   })
 
   it('does not label the voice dictation tip as new', () => {
