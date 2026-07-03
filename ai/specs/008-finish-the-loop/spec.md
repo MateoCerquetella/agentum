@@ -1,7 +1,7 @@
 # Spec 008 — Finish the Loop
 
 - **Number:** 008
-- **Status:** Architect
+- **Status:** Done
 - **Surface:** `crates/agentum-server` (harness, chat routes) + `crates/agentum-desktop/ui` (Chat, composer, workspace creation)
 - **Author:** Mateo (Socratic interview, 5 passes, 2026-07-03)
 - **Date:** 2026-07-03

@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 008-finish-the-loop
-- **phase:** reviewer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **TESTER PASS-WITH-DEFERRALS** 2026-07-03, `verification.md`, HEAD `9423b86f`. All gates independently re-run green (server 552/0/5, executor 21/0, fmt+clippy clean, live binaries compile #[ignore], vite green, spec-008 vitest 34/0); all 11 deviations accurate; sacred surfaces clean; 139-fail baseline corroborated pre-existing (4 methods); NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5); AC 12 PASS(deferred Mateo). Handoff `04-tester-to-reviewer.md`. 1 Info nit: "tsc" = vite-transpile+vitest, not full tsc. 007 RELEASED v0.55.0)
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,20 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Architect | **008 Architect-gated → developer**
-  (`architecture.md`, seams line-verified on `0e6812f8`; handoff
-  `02-architect-to-developer.md`). **A1 framing correction: the start-work path
-  already shipped in spec 005** — F1 is instrumentation + the D6 blocked
-  escalation + a live test, NOT new plumbing. Four real silences to close:
-  #15 `wait_for_settle` 1800s silent hang → `SettleOutcome` (do first, not
-  sacred); #16 blocked gate → no issue escalation → `apply_blocked_transition`
-  (D6); #14a `await_repl_ready` falls through → prompt fires blind (AC 2) →
-  readiness bool (F-FLAG, sacred, gated on BOTH live tests); #2 composer armed
-  `!repoId` guard silent (#226 edge) → toast. Decisions: D-A `status/blocked` =
-  GitHub-only label sibling, `TrackerPhase` stays 4 variants; D-B explicit
-  `{mode,stage}` on ChatRequest (server stateless); D-C thin `NewWorkspaceGoalStep`
-  fronts the composer. New live test `harness_start_work_live.rs` covers the
-  issue→route→session→prompt leg. Phase → developer.
 - 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
   F2/F3 deferred to next developer iterations). Built in architecture order:
   Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
@@ -131,3 +117,14 @@
   NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
   AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
   +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
+- 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
+  `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
+  sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
+  + `await_repl_ready` poll/trust unchanged, only return type); `apply_blocked_transition`
+  never-`Err` + honest 5-name remove-set (board can't lie either direction); no
+  D6 shell injection (argv exec); Fast byte-identical (construction + pin); live
+  test asserts the REAL leg (MARKER in pane = prompt landed, not hollow); F3
+  preserves F1 Tasks hop; no new `is_public` holes; D1–D9 honored. 1 Should-fix
+  = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
+  ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
+  HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
