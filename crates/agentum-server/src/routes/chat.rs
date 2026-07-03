@@ -390,8 +390,10 @@ no \"great question!\".\n\
 scope boundaries (in/out), hard constraints, and acceptance criteria. Never re-ask what \
 the user — or the repo context — already answers.\n\
 - When the feature is defined well enough to build, STOP asking questions and propose a \
-breakdown: a one-line feature title, then 3–7 concrete tasks (each an issue-style title \
-plus one sentence of detail), each pointing at the real files/areas it touches. Then tell \
+breakdown: a one-line feature title, then exactly as many concrete tasks as the scope \
+needs — a trivial fix is ONE task, a small feature two or three, and only a genuinely \
+broad feature more. Never pad to a fixed count. Each task is an issue-style title plus \
+one sentence of detail, pointing at the real files/areas it touches. Then tell \
 the user to click the \"Preview issues\" button below the chat to review and file them.\n\
 {access_rule}\n\
 - You do not create the issues yourself, and no other agent will: the \"Preview issues\" \
@@ -1035,7 +1037,7 @@ async fn call_anthropic(
 /// (a parent feature + ordered, prioritised sub-tasks) — not a flat list of
 /// separate issues. Kept byte-exact; the lenient parser ([`extract_feature_plan`])
 /// tolerates a model that still wraps it in prose or fences.
-const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Output ONLY the raw JSON object, no prose, no markdown code fences.";
+const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. The task COUNT must match the scope actually discussed: a trivial ask is a SINGLE task, a small feature two or three — never pad to a fixed number, and never invent tasks the conversation didn't call for. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Output ONLY the raw JSON object, no prose, no markdown code fences.";
 
 /// The final user turn appended to the transcript for the extraction call. Ends
 /// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
