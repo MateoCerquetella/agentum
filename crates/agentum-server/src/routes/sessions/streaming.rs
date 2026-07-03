@@ -820,8 +820,9 @@ pub(super) async fn stream_remote_session(
             let mut stdin = writer.as_mut().and_then(|c| c.stdin.take());
             while let Some(first) = input_rx.recv().await {
                 let mut buf = first;
-                // Drain whatever queued while the previous write was in flight,
-                // up to the send-keys 4 KB chunk size.
+                // Drain whatever queued while the previous write was in flight;
+                // 4 KB just bounds the batch — the encoder re-splits into
+                // send-keys-sized lines regardless.
                 while buf.len() < 4096 {
                     match input_rx.try_recv() {
                         Ok(more) => buf.extend_from_slice(&more),
@@ -841,8 +842,13 @@ pub(super) async fn stream_remote_session(
                 }
                 let mut delivered = false;
                 if let Some(si) = stdin.as_mut() {
-                    let line = crate::host_runtime::encode_input_hex_line(&buf);
-                    if si.write_all(&line).await.is_ok() && si.flush().await.is_ok() {
+                    // A paste arrives as ONE frame of arbitrary size; the
+                    // encoder splits it into 4 KiB-of-input lines because each
+                    // line is one remote `tmux send-keys`, capped at ~16 KB of
+                    // marshalled command — past that tmux errors, the remote
+                    // loop swallows it, and the paste vanished silently.
+                    let lines = crate::host_runtime::encode_input_hex_lines(&buf);
+                    if si.write_all(&lines).await.is_ok() && si.flush().await.is_ok() {
                         delivered = true;
                     } else {
                         // Persistent channel broke — drop the child (kills the
