@@ -2455,8 +2455,7 @@ mod tests {
             );
         }
         assert!(
-            p5.contains("end with [[socratic:done]]")
-                && p5.contains("end with [[socratic:stay]]"),
+            p5.contains("end with [[socratic:done]]") && p5.contains("end with [[socratic:stay]]"),
             "stage 5's body gates convergence on done-vs-stay: {p5}"
         );
         assert!(

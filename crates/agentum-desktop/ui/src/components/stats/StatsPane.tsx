@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BarChart3, Bot, Check, ChevronDown, Clock, GitPullRequest } from 'lucide-react'
 import { useAppStore } from '../../store'
+import { HostLoadCards } from './HostLoadCards'
 import { StatCard } from './StatCard'
 import { ClaudeUsagePane } from './ClaudeUsagePane'
 import { CodexUsagePane } from './CodexUsagePane'
@@ -108,6 +109,10 @@ export function StatsPane(): React.JSX.Element {
           )}
         </div>
       ) : null}
+
+      {/* #262: live host CPU/RAM — rendered here (the shared pane) so Settings
+          and Mission Control stay reconciled by construction. */}
+      <HostLoadCards />
 
       <div className="space-y-4">
         <div className="flex items-center justify-between gap-3">
