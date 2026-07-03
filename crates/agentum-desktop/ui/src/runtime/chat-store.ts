@@ -12,7 +12,14 @@
 // preserves the exact `agentum.chat.conversations.v1` storage contract that
 // chat-history owns, and the in-flight streams are imperative async processes
 // holding AbortControllers — not serializable app state.
-import { advanceIntake, type IntakeMode, type IntakeState, normalizeIntake, SOCRATIC_FIRST_STAGE } from '../lib/socratic-intake'
+import {
+  type IntakeMode,
+  type IntakeState,
+  normalizeIntake,
+  resolveIntakeAfterReply,
+  SOCRATIC_FIRST_STAGE,
+  stripSocraticControl
+} from '../lib/socratic-intake'
 import { type ChatStreamDelta, streamChat } from './chat-client'
 import {
   type Conversation,
@@ -177,18 +184,19 @@ export function sendChatMessage(opts: {
   // is excluded). streamChat strips the UI-only fields itself.
   const history = [...(existing?.messages ?? []), userTurn]
 
-  // Spec 008 F2: a continuing thread inherits its stored intake; a NEW thread
-  // starts in the picked mode at pass 1. The stage SENT this turn is the stored
-  // (or initial) one; we persist the ADVANCED stage below so the next user turn
-  // runs the next pass — the client-owned "one pass per turn, never skips" rule.
+  // Spec 008 F2 + #257: a continuing thread inherits its stored intake; a NEW
+  // thread starts in the picked mode at pass 1. The stage SENT this turn is the
+  // stored (or initial) one. The NEXT stage is no longer advanced eagerly here —
+  // it's resolved from the model's trailing control marker when the reply
+  // finishes (advance/stay/done), so a vague answer re-runs its pass and the
+  // interview converges only when the model says the spec is defined.
   const intakeNow: IntakeState = existing?.intake
     ? normalizeIntake(existing.intake)
     : { mode: opts.mode ?? 'fast', stage: SOCRATIC_FIRST_STAGE }
-  const intakeNext: IntakeState = advanceIntake(intakeNow)
 
   const messages: StoredTurn[] = [...history, { role: 'assistant', content: '', thinking: '' }]
   const convo: Conversation = existing
-    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, updatedAt: now, intake: intakeNext }
+    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, updatedAt: now, intake: intakeNow }
     : {
         id: convoId,
         title: titleFromMessages([userTurn]),
@@ -198,7 +206,7 @@ export function sendChatMessage(opts: {
         createdAt: now,
         updatedAt: now,
         repoId: opts.repoId,
-        intake: intakeNext
+        intake: intakeNow
       }
 
   const ac = new AbortController()
@@ -232,8 +240,25 @@ export function sendChatMessage(opts: {
     }
   })
     .then(() => {
-      // Bump updatedAt so the finished conversation floats to the top.
-      patchConversation(convoId, (c) => ({ ...c, updatedAt: Date.now() }))
+      // #257: the finished reply's trailing control marker moves the Socratic
+      // stage machine (advance / stay / done — resolveIntakeAfterReply falls
+      // back to the legacy one-pass advance when no marker is present), and is
+      // stripped so the transcript never shows the machine channel. An aborted
+      // stream skips this, so the same pass re-runs on the next turn. Also
+      // bumps updatedAt so the finished conversation floats to the top.
+      const intakeAfter = resolveIntakeAfterReply(intakeNow, content)
+      const stripped = stripSocraticControl(content)
+      patchConversation(convoId, (c) => {
+        let msgs = c.messages
+        if (stripped !== content) {
+          msgs = msgs.slice()
+          const last = msgs[msgs.length - 1]
+          if (last && last.role === 'assistant') {
+            msgs[msgs.length - 1] = { ...last, content: stripped }
+          }
+        }
+        return { ...c, messages: msgs, intake: intakeAfter, updatedAt: Date.now() }
+      })
     })
     .catch((e: unknown) => {
       // Aborted (Stop) keeps whatever streamed; a real failure surfaces the

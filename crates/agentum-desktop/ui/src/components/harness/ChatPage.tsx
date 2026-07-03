@@ -749,7 +749,9 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
               ) : activeIntake?.mode === 'socratic' ? (
                 <div className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
                   <Brain className="size-3" />
-                  Complex feature · pass {clampStage(activeIntake.stage)} of 5
+                  {activeIntake.converged
+                    ? 'Complex feature · spec defined — review with "Preview issues"'
+                    : `Complex feature · pass ${clampStage(activeIntake.stage)} of 5 (adaptive)`}
                 </div>
               ) : null}
               <div className="flex items-end gap-2 rounded-[26px] border border-border bg-card px-4 py-2 shadow-sm transition-shadow focus-within:border-foreground/25 focus-within:ring-2 focus-within:ring-foreground/10">
