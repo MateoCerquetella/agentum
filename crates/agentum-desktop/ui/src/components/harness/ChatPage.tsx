@@ -731,7 +731,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                   onKeyDown={onKeyDown}
                   rows={1}
                   autoFocus
-                  placeholder='Describe a feature — try "Add a CSV export to the board"'
+                  placeholder="Describe a feature or fix in your own words"
                   className="max-h-40 flex-1 resize-none overflow-y-auto bg-transparent py-1.5 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus:outline-none"
                 />
                 {busy ? (
@@ -1470,7 +1470,7 @@ function FiledCard({
 /** Empty conversation hero — a centered greeting with example prompt chips. */
 function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   const examples = [
-    'Add a CSV export to the board',
+    'Fix the session list losing scroll position',
     'Let users star a worktree to pin it',
     'Add a shortcut to jump between sessions'
   ]
