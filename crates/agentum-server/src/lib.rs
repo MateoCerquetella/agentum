@@ -86,6 +86,14 @@ pub struct StreamCheckpoint {
 /// at.
 const EVENT_BUS_CAPACITY: usize = 1024;
 
+/// The composite key for [`AppState::wiki_keys`]: `(repo_id, path, host_id)` —
+/// `host_id` is `LOCAL_HOST_ID` (the nil UUID) for local repos. A change to any
+/// component (repo re-added, moved, re-homed to another host) builds a
+/// *different* key → cache miss → re-resolve; that lookup-time
+/// self-invalidation is the whole staleness story (spec 009 D-A3), no
+/// mutation hooks.
+pub type WikiKeyCacheKey = (String, String, uuid::Uuid);
+
 /// Login + register attempts per remote IP per window.
 const AUTH_RATE_LIMIT_ATTEMPTS: usize = 8;
 const AUTH_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(5 * 60);
@@ -123,6 +131,18 @@ pub struct AppState {
     /// a full snapshot.
     pub stream_positions:
         Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, StreamCheckpoint>>>,
+    /// repo→wiki-key cache (spec 009 D-A3): a hit skips the per-call
+    /// `git remote get-url` subprocess in `routes::wiki::resolve_target` — the
+    /// macOS TCC-prompt trigger (and, over SSH, a network round trip). Keyed by
+    /// `(repo_id, path, host_id)` (`LOCAL_HOST_ID` = the nil UUID for local
+    /// repos) so a moved or re-homed repo builds a *different* key and
+    /// self-invalidates on lookup — no repo-mutation hook needed. Positive-only:
+    /// only a successful, non-empty remote resolution (a `git__…` key) is ever
+    /// cached; the `path__<hash>` fallback never is (over SSH a transport
+    /// failure is indistinguishable from "no origin", and caching it would pin
+    /// the repo to the wrong wiki until restart). `std::sync::Mutex` like
+    /// `stream_positions`: never held across an `.await`.
+    pub wiki_keys: Arc<std::sync::Mutex<std::collections::HashMap<WikiKeyCacheKey, String>>>,
     /// Short hostname of the box this daemon runs on. Cached once at
     /// boot so the `/api/health` reads are zero-cost. Clients use it to
     /// label the "this server" row with a meaningful identity (e.g.
@@ -221,6 +241,7 @@ impl AppState {
             cert_fingerprint: Arc::new(cert_fingerprint),
             transcripts,
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: detect_short_hostname(),
             no_auth: false,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),

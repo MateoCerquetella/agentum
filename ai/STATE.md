@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** architect         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, RENUMBERED from 009 at PM handoff — `ai/specs/009-wiki-project-scoped` ships on sibling branch `wiki-remove-it-fomr-the-side`, don't repeat the 003 pair. PM-gated 2026-07-06, D1–D8 locked in spec §Decisions, handoff `01-pm-to-architect.md`; architect owns the D2 persistence mechanism under the Settings-save-must-never-destroy-a-binding constraint. 008 RELEASED v0.57.0 `64053d4c`; 007 v0.55.0; 006 v0.54.0.)
+- **phase:** architect         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, RENUMBERED from 009 at PM handoff — 009 = `009-wiki-project-scoped`, now MERGED + RELEASED v0.59.0 `b62a9171`, so the rename dodged a real collision. PM-gated 2026-07-06, D1–D8 locked in spec §Decisions, handoff `01-pm-to-architect.md`; architect owns the D2 persistence mechanism under the Settings-save-must-never-destroy-a-binding constraint. 008 RELEASED v0.57.0; 007 v0.55.0.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,42 +64,14 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
-  (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
-  `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
-  (deriveWorkspaceGoalSeed/isGoalStepReady/firstGoalStepBlocker/
-  OPTIONAL_WORKSPACE_STEPS/shouldStartAtGoalStep/revealDetails) + thin
-  `NewWorkspaceGoalStep.tsx` (goal textarea + reused RepoCombobox workdir) +
-  modal renders it as default first screen, "Skip to details" → today's composer
-  (D3); goal+workdir required, worktree/scaffold/tracker skippable (D9);
-  `useComposerState` NEVER edited (props only), F1's initialStartGatedRunProp
-  intact. Gates: vite+tsc green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3
-  pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
-  AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
-  code-complete → tester.**
-- 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
-  HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
-  every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
-  compile #[ignore], vite green, spec-008 vitest 34/0; full vitest 139-fail
-  baseline corroborated PRE-EXISTING via 4 methods (disjoint set / no-reference
-  grep / diff-scope / failure-kind). All 11 deviations ACCURATE against code;
-  sacred surfaces clean (inject_prompt send-sequence byte-identical, await_repl_ready
-  poll logic unchanged, apply_blocked_transition Ok-Skipped-never-Err, compose_issue_body
-  + useComposerState internals untouched, F1 initialStartGatedRunProp preserved).
-  NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
-  AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
-  +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
 - 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
-  sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
-  + `await_repl_ready` poll/trust unchanged, only return type); `apply_blocked_transition`
-  never-`Err` + honest 5-name remove-set (board can't lie either direction); no
-  D6 shell injection (argv exec); Fast byte-identical (construction + pin); live
-  test asserts the REAL leg (MARKER in pane = prompt landed, not hollow); F3
-  preserves F1 Tasks hop; no new `is_public` holes; D1–D9 honored. 1 Should-fix
-  = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
-  ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
-  HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
+  `9d9be973`, 0 blockers; since RELEASED v0.57.0 `64053d4c`). All 18 focus
+  items PASS w/ quoted evidence; 1 Should-fix = project-wide CI typecheck
+  follow-up; 3 leave-as-is nits. (Full text in git history.)
+- 2026-07-06 | Reviewer | **009-wiki SIGN-OFF → SHIP-READY** (their flow, on
+  `wiki-remove-it-fomr-the-side`; since MERGED + RELEASED v0.59.0 `b62a9171`,
+  PR #273, issue #272 closed). 2 Should-fix follow-ups live in #272.
+  (Merged into this STATE at the 010 develop-merge; full text in git history.)
 - 2026-07-06 | Spec | **010 (né 009) DRAFTED via /sdd-spec from Mateo's PRD
   "End-to-End Autonomous Flow (Chat → Issue → Work → QA)"**
   (`ai/specs/010-end-to-end-autonomous-flow/spec.md`; worktree FF'd to v0.58.3
@@ -109,17 +81,14 @@
   budget); the real delta = **GitHub Projects v2 mirror + workspace
   provisioning**. Slices: F1 bind (one `gh api graphql` Status-field discovery
   → phase→optionId mapping, never-unmapped fallback) / F2 drive (projects arm
-  INSIDE `apply_tracker_transition`+`apply_blocked_transition` — all 5 call
+  INSIDE `apply_tracker_transition`+`apply_blocked_transition` — all call
   sites free, incl. MCP `agentum_report_status`; `done_closes_issue` knob) /
   F3 provision (repo-from-template + label pre-ensure + board create/bind +
   scaffold commit, run-twice idempotent). Desktop `gh_projects` READ commands
   reused by the wizard; board WRITES live server-side (desktop write stubs
   stay dead — spec-007 lesson). OUT: inbound webhooks/echo (none exist,
   board_sync.rs:14), `.agentum/result.json` (settle+gate IS the completion
-  contract), GitHub App auth (Phase 2). ⚠️ PM must lock: (1) close-on-Done
-  supersedes 004-D1 on bound workspaces, (2) binding home = `github.json`
-  projects map (recommended) vs in-repo. PM gate PASS (one-slice = judgment
-  call, 008 three-slice precedent). Phase → pm.
+  contract), GitHub App auth (Phase 2). PM gate PASS. Phase → pm.
 - 2026-07-06 | PM | **010 PM GATE PASS → phase architect** (D1–D8 locked in
   spec §Decisions; handoff `01-pm-to-architect.md`; RENUMBERED 009→010
   mid-phase — sibling branch `wiki-remove-it-fomr-the-side` carries
