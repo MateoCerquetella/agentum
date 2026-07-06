@@ -23,13 +23,13 @@ use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::AppState;
 use crate::error::ApiError;
 use crate::routes::util::{expand_workdir, now_millis};
 use crate::wiki::{
     WikiPageMeta, build_wiki_prompt, is_valid_slug, parse_wiki_index, wiki_dir, wiki_key,
     wiki_store_dir,
 };
+use crate::{AppState, WikiKeyCacheKey};
 
 /// Let the generation agent boot, write the wiki, and go idle. `wait_for_settle`
 /// returns on the first idle event after `GRACE`, or at `TIMEOUT` regardless.
@@ -128,6 +128,38 @@ struct WikiTarget {
     is_remote: bool,
 }
 
+/// Positive-only cache policy (spec 009 D-A3): cache the resolved wiki key ONLY
+/// when it came from a successful, non-empty `git remote get-url` resolution
+/// (a `git__…` key). The `path__<hash>` fallback is NEVER cached — over SSH a
+/// transport failure is indistinguishable from "no origin" after the
+/// `.ok().filter(success)` folding, and caching it would pin the repo to the
+/// wrong wiki until restart. Remoteless local repos just re-run one cheap local
+/// subprocess per call.
+fn should_cache_wiki_key(remote: Option<&str>) -> bool {
+    remote.is_some_and(|r| !r.trim().is_empty())
+}
+
+/// Cache read: lock → get → drop. The mutex is never held across an `.await`
+/// (the `stream_positions` precedent).
+fn cached_wiki_key(
+    cache: &std::sync::Mutex<std::collections::HashMap<WikiKeyCacheKey, String>>,
+    key: &WikiKeyCacheKey,
+) -> Option<String> {
+    cache.lock().ok().and_then(|map| map.get(key).cloned())
+}
+
+/// Cache insert: lock → insert → drop (see [`cached_wiki_key`]). Two concurrent
+/// misses both resolve and insert the same value — benign.
+fn insert_wiki_key(
+    cache: &std::sync::Mutex<std::collections::HashMap<WikiKeyCacheKey, String>>,
+    key: WikiKeyCacheKey,
+    value: String,
+) {
+    if let Ok(mut map) = cache.lock() {
+        map.insert(key, value);
+    }
+}
+
 /// Resolve a repo id → its central wiki store dir, keyed by the repo's git remote
 /// (host-aware, so an SSH repo resolves its identity over the connection) with a
 /// path fallback when there's no remote.
@@ -135,14 +167,30 @@ async fn resolve_target(state: &AppState, repo_id: &str) -> Result<WikiTarget, A
     let path = crate::routes::repos::resolve_repo_path(repo_id)?;
     let host = crate::routes::repos::load_host_for_repo(state, repo_id).await?;
     let is_remote = host.id != LOCAL_HOST_ID;
-    let remote = crate::host_runtime::git_in_dir(&host, &path, &["remote", "get-url", "origin"])
-        .await
-        .ok()
-        .filter(|o| o.success)
-        .map(|o| o.stdout_string().trim().to_string())
-        .filter(|s| !s.is_empty());
-    let dir = wiki_store_dir(&wiki_key(remote.as_deref(), &path))
-        .map_err(|e| ApiError::Internal(format!("resolve wiki dir: {e}")))?;
+    // Consult the repo→wiki-key cache first (spec 009 AC-5): a hit skips the
+    // per-call `git remote get-url` subprocess — the macOS TCC-prompt trigger
+    // and, over SSH, a network round trip. The composite key self-invalidates
+    // (see [`WikiKeyCacheKey`]).
+    let cache_key: WikiKeyCacheKey = (repo_id.to_string(), path.clone(), host.id);
+    let key = match cached_wiki_key(&state.wiki_keys, &cache_key) {
+        Some(hit) => hit,
+        None => {
+            let remote =
+                crate::host_runtime::git_in_dir(&host, &path, &["remote", "get-url", "origin"])
+                    .await
+                    .ok()
+                    .filter(|o| o.success)
+                    .map(|o| o.stdout_string().trim().to_string())
+                    .filter(|s| !s.is_empty());
+            let key = wiki_key(remote.as_deref(), &path);
+            if should_cache_wiki_key(remote.as_deref()) {
+                insert_wiki_key(&state.wiki_keys, cache_key, key.clone());
+            }
+            key
+        }
+    };
+    let dir =
+        wiki_store_dir(&key).map_err(|e| ApiError::Internal(format!("resolve wiki dir: {e}")))?;
     Ok(WikiTarget {
         dir,
         path,
@@ -754,6 +802,78 @@ mod tests {
         );
         std::fs::remove_dir_all(&src).ok();
         std::fs::remove_dir_all(&dst).ok();
+    }
+
+    // ── repo→wiki-key cache (spec 009 AC-5 / D-A3) — pure helpers, no git ────
+
+    #[test]
+    fn wiki_key_cache_hit_skips_resolution() {
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let key: WikiKeyCacheKey = ("repo-1".into(), "/Users/me/proj".into(), Uuid::nil());
+        // The resolve_target flow over the pure helpers, with the git shell
+        // replaced by a counter: only a cache miss may resolve.
+        let mut resolutions = 0u32;
+        let mut lookup = |k: &WikiKeyCacheKey| match cached_wiki_key(&cache, k) {
+            Some(hit) => hit,
+            None => {
+                resolutions += 1;
+                let remote = Some("https://github.com/owner/repo.git");
+                let resolved = wiki_key(remote, &k.1);
+                if should_cache_wiki_key(remote) {
+                    insert_wiki_key(&cache, k.clone(), resolved.clone());
+                }
+                resolved
+            }
+        };
+        let first = lookup(&key);
+        let second = lookup(&key);
+        assert_eq!(first, second);
+        assert!(first.starts_with("git__"));
+        assert_eq!(resolutions, 1, "the second call must hit the cache");
+    }
+
+    #[test]
+    fn wiki_key_cache_self_invalidates_on_path_or_host_change() {
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let original: WikiKeyCacheKey = ("repo-1".into(), "/old/path".into(), Uuid::nil());
+        insert_wiki_key(
+            &cache,
+            original.clone(),
+            "git__github.com_owner_repo".into(),
+        );
+        assert_eq!(
+            cached_wiki_key(&cache, &original).as_deref(),
+            Some("git__github.com_owner_repo")
+        );
+        // A moved repo (path change) or a re-homed one (host change) builds a
+        // DIFFERENT composite key → miss → re-resolve. The stale entry becomes
+        // unreachable; no invalidation callback exists or is needed.
+        let moved: WikiKeyCacheKey = ("repo-1".into(), "/new/path".into(), Uuid::nil());
+        assert_eq!(cached_wiki_key(&cache, &moved), None);
+        let rehomed: WikiKeyCacheKey = ("repo-1".into(), "/old/path".into(), Uuid::new_v4());
+        assert_eq!(cached_wiki_key(&cache, &rehomed), None);
+    }
+
+    #[test]
+    fn wiki_key_cache_never_caches_path_fallback() {
+        // No / empty / whitespace remote = the resolution fell back (or the SSH
+        // transport failed — indistinguishable). Must not be cached.
+        assert!(!should_cache_wiki_key(None));
+        assert!(!should_cache_wiki_key(Some("")));
+        assert!(!should_cache_wiki_key(Some("   ")));
+        // A real remote IS cached.
+        assert!(should_cache_wiki_key(Some("git@github.com:owner/repo.git")));
+        // Driven through the flow: a fallback resolution leaves the map empty,
+        // so the next call re-resolves instead of pinning `path__<hash>`.
+        let cache = std::sync::Mutex::new(std::collections::HashMap::new());
+        let key: WikiKeyCacheKey = ("repo-1".into(), "/plain/folder".into(), Uuid::nil());
+        let remote: Option<&str> = None;
+        let resolved = wiki_key(remote, &key.1);
+        assert!(resolved.starts_with("path__"));
+        if should_cache_wiki_key(remote) {
+            insert_wiki_key(&cache, key.clone(), resolved);
+        }
+        assert_eq!(cached_wiki_key(&cache, &key), None);
     }
 
     #[tokio::test]

@@ -47,6 +47,7 @@ import {
   type WikiIndexResponse,
   type WikiPageMeta
 } from '@/runtime/wiki-client'
+import { wikiProbePlan } from './wiki-probe'
 
 /** Poll cadence while a generation run is in flight. */
 const RUNNING_POLL_MS = 3000
@@ -63,10 +64,6 @@ function readStored(key: string, fallback: string): string {
     return fallback
   }
 }
-
-/** The one-word wiki status per repo (rail dots died with the standalone hub;
- *  the state + this type go entirely in F2 with the sweep). */
-type RepoWikiStatus = WikiIndexResponse['state'] | 'error' | 'loading'
 
 /** `<workdir>/.agentum/wiki/<slug>.md` — a stable synthetic path for
  *  MarkdownPreview's link base + scroll anchor (content itself comes from the
@@ -150,29 +147,6 @@ export default function WikiPage({
   }, [detectedAgentIds])
   const modelOptions = tool === 'claude' ? CHAT_MODELS : []
 
-  // Pinned-repo-only status probe. The every-repo sweep arm died with the
-  // standalone hub (spec 009 F1); the whole probe + repoStatuses state go in
-  // F2 (AC-4) — nothing reads them anymore, they only keep this slice's diff
-  // aligned with its AC.
-  const [repoStatuses, setRepoStatuses] = useState<Record<string, RepoWikiStatus>>({})
-  const sweep = useCallback(async (): Promise<void> => {
-    const targets = repos.filter((r) => r.id === pinnedRepoId)
-    const entries = await Promise.all(
-      targets.map(async (r): Promise<[string, RepoWikiStatus]> => {
-        try {
-          const res = await getWiki(r.id)
-          return [r.id, res.state]
-        } catch {
-          return [r.id, 'error']
-        }
-      })
-    )
-    setRepoStatuses(Object.fromEntries(entries))
-  }, [repos, pinnedRepoId])
-  useEffect(() => {
-    void sweep()
-  }, [sweep])
-
   // ---- the selected project's wiki ----
   const [index, setIndex] = useState<WikiIndexResponse | null>(null)
   const [indexError, setIndexError] = useState<string | null>(null)
@@ -199,7 +173,6 @@ export default function WikiPage({
         const next = await getWiki(id)
         if (token !== reqToken.current) return
         setIndex(next)
-        setRepoStatuses((prev) => ({ ...prev, [id]: next.state }))
       } catch (err) {
         if (token !== reqToken.current) return
         setIndex(null)
@@ -212,7 +185,9 @@ export default function WikiPage({
   )
 
   // Reload whenever the selected project changes; reset page selection + cache so
-  // nothing leaks across projects.
+  // nothing leaks across projects. The probe plan is exactly the pinned repo
+  // (spec 009 AC-4 — `wiki-probe.ts` makes the one-repo-only contract explicit
+  // and unit-tested), so a mount issues exactly ONE `GET /api/wiki`.
   useEffect(() => {
     setActiveSlug(null)
     setPageCache({})
@@ -225,7 +200,7 @@ export default function WikiPage({
       setLoadingIndex(false)
       return
     }
-    void refreshIndex(repoId)
+    for (const id of wikiProbePlan(repoId)) void refreshIndex(id)
   }, [repoId, refreshIndex])
 
   // Poll while a run is in flight for the selected project.
@@ -282,7 +257,6 @@ export default function WikiPage({
         model: model || undefined
       })
       setIndex({ state: 'running', sessionId })
-      setRepoStatuses((prev) => ({ ...prev, [repoId]: 'running' }))
     } catch (err) {
       setIndexError(err instanceof Error ? err.message : String(err))
     } finally {

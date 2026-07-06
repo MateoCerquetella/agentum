@@ -94,7 +94,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
-  const setActiveView = useAppStore((s) => s.setActiveView)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
   const repos = useAppStore((s) => s.repos)
