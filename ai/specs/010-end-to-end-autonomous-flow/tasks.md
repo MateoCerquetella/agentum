@@ -1,20 +1,21 @@
-# Spec 010 — Developer tasks (F1 board bind + F2 board drive)
+# Spec 010 — Developer tasks (F1 board bind + F2 board drive + F3 provision)
 
 - **Spec:** 010-end-to-end-autonomous-flow
 - **Features:** **F1** — bind (AC 1–3, committed `474cfd12`); **F2** — drive
-  (AC 4–8, this iteration).
+  (AC 4–8, committed `0b03eb9e`); **F3** — provision (AC 9–10, this
+  iteration; AC 11 = the human/qa.sh demo, not a build item).
 - **Role:** Developer (sdd-developer)
 - **Date:** 2026-07-06
 - **Base:** worktree `prd-agentum-end-to-end-autonomous` (F1 on tip `07ea5f53`
   / origin/develop v0.59.0; F2 on tip `e271d833`, origin/develop v0.59.1
-  merged)
+  merged; F3 on tip `2dbc63cf`)
 
-> **Scope guardrail:** two gated slices so far — F1 (below, committed) then
-> **F2 only** in this iteration. **F3** (repo-from-template + `provision_repo`
-> + wizard provision step) is **deferred to a later, separate developer
-> iteration** — no F3 code was written. F2 is server-only: zero UI files
-> touched, zero seam-call-site files touched (`harness/drive.rs`,
-> `routes/board_goals.rs`, `routes/harness.rs`, `routes/mcp.rs` unmodified).
+> **Scope guardrail:** three gated slices — F1 and F2 (below, committed), then
+> **F3 only** in this iteration: repo-from-template + the ONE injectable
+> idempotent `provision_repo` ensure + the wizard provision phase. F3 touches
+> zero seam-call-site files, zero F2 seam code (`github_projects.rs` itself is
+> UNTOUCHED by F3 — the provision core got its own runner), and only the two
+> allowed `pub(crate)` widenings in `task_sink.rs`.
 
 F1 was built in the architecture's §8 order: **types+persistence → the pure
 mapper (tests first) → discovery+classifier → routes → UI**.
@@ -315,9 +316,223 @@ the established global-state pattern).
 | Clippy | `cargo clippy --workspace` | 0 warnings |
 | UI | — | not required (no UI files touched) |
 
-## F3 — provision (PENDING)
+## F3 — what was built (this iteration; AC 9–10)
 
-Not started. After F2: template-create argv + `provision_repo` (run-twice
-test FIRST, before the commit step) → routes → wizard provision step
-(`OPTIONAL_WORKSPACE_STEPS` 4th entry + modal `'provision'` phase;
-`useComposerState` untouched).
+Built in the architecture's §8 F3 order: **argv pins + template mode
+(test-first) → `provision_repo` core (the run-twice test was written and RUN
+RED against a stubbed commit step — 2 failures on the stub — BEFORE the
+commit step was implemented; the handoff's test-first discipline, provable
+from the session) → routes + `lib.rs` merge → UI (pure module → goal-step
+template mode → provision step + modal phase → client fns)**.
+
+### Step 1 — `crates/agentum-server/src/provision.rs` (NEW, domain core)
+
+Home decision (the prompt left it open): a **new crate-root `provision.rs`**,
+NOT inside `github_projects.rs` — provisioning spans labels (task_sink),
+boards (github_projects), the harness scaffold and git, so it is its own
+domain; the `linear.rs`/`github_projects.rs` precedent (domain at crate root,
+routes thin) applies, and `github_projects.rs` (1.8k lines of F1/F2 seam
+code) stays byte-untouched.
+
+- **Argv pins (pure):** `gh_repo_create_from_template_argv`
+  (`["repo","create",slug,"--template",tpl,"--private"|"--public","--clone"]`),
+  `gh_repo_clone_argv`, `gh_repo_view_argv` (the existence probe),
+  `gh_project_create_argv`
+  (`["project","create","--owner",owner,"--title",title,"--format","json"]`).
+- **`parse_project_create_output`:** JSON → the created project's `number`
+  (the one field discovery needs). The `--format json` field names were
+  **verified against the REAL local gh 2.92.0** (`gh project list --format
+  json`, read-only — same per-project serialization as create) and frozen in
+  the fixture: `{closed,fields,id,items,number,owner,public,readme,
+  shortDescription,title,url}`. Garbage/missing number → an `Err` quoting the
+  output (never a panic).
+- **`create_repo_from_template(program, owner, name, template, directory,
+  private)`** per §5.1: `target/.git` exists ⇒ `created:false`; `gh repo
+  view` probe exists ⇒ clone; missing ⇒ create `--clone`; cwd = directory;
+  post-condition check that the clone landed. gh stderr surfaces VERBATIM
+  (bounded at 400 chars) — the "template not marked template" case reads
+  unedited.
+- **`ProvisionCtx { program, bindings_path, workdir, slug, project:
+  Option<ProjectChoice>, status_mapping, done_closes_issue, commit_scaffold,
+  state_map }` → `provision_repo` → `ProvisionReport { labels, project,
+  binding, scaffold, commit }`**, each step independent + best-effort:
+  1. **labels** — provision's OWN 5-ensure loop (4 configured via the
+     `pub(crate)`-widened `gh_label_ensure_argv` + `github_status_color`, +
+     the fixed blocked label) — `github_transition_with`'s pinned ensure
+     sequence untouched (AC 8). `--force` ⇒ re-runs converge; `changed` is
+     structurally `false` (gh doesn't report created-vs-updated).
+  2. **project link-or-create GUARDED by `binding_for_slug_at`** — an
+     existing binding ⇒ both steps `changed:false "already bound"`, create
+     AND discovery skipped entirely (THE AC-10 "no second project" rule).
+     Else Link ⇒ F1 `discover_status_field`; Create ⇒ project-create →
+     parse number → discovery; `status_mapping` override wins else
+     `resolve_status_mapping` (fallbacks OK — a fresh board's default
+     Todo/In Progress/Done resolves with the two locked fallbacks);
+     constructor + `upsert_binding_at`. Discovery/mapper failures carry the
+     classified message (incl. the `gh auth refresh -s project` remedy)
+     into the step detail.
+  3. **scaffold** — `scaffold_harness(workdir)` UNTOUCHED (wrapped);
+     `changed` mirrors its written list.
+  4. **commit (only when `commit_scaffold`)** — rewrite
+     `.agentum-harness/.gitignore` from the blanket `*` to the STATE-ONLY
+     ignore (`feature_list.json`, `handoff.md`, `qa/` stay ignored — §6.8),
+     write-if-different; `git add` the exact 5 contract paths
+     (`COMMIT_PATHS`, the server twin of the UI's
+     `provisionCommitFileList()`); porcelain-empty ⇒ `committed:false`, NO
+     commit (the AC-10 unchanged-count mechanism) and no push; else
+     `git commit -m "chore: provision agentum harness scaffold"` (no
+     AI-attribution trailer) + `git push origin HEAD` plain, never
+     `--force`; red push ⇒ `pushed:false` + error, NON-fatal; branch =
+     `rev-parse --abbrev-ref HEAD` reported. Consent OFF keeps the blanket
+     `*` untouched.
+- Registered `pub mod provision;` in `lib.rs`.
+
+### Step 2 — `crates/agentum-server/src/routes/provision.rs` (NEW, thin routes)
+
+- `POST /api/github/repo-from-template` `{owner, name, templateRepo,
+  directory, visibility?}` → `{slug, path, created}`. Pure validators
+  (tested): repo name = one path segment (traversal unrepresentable), owner =
+  bare login, template = `owner/repo`, visibility ∈ {private (default),
+  public}. `expand_workdir` + `is_dir` guard on directory. A gh failure = 400
+  with gh's stderr verbatim.
+- `POST /api/workspace/provision` `{workdir, slug?, project?: link|create,
+  statusMapping?, doneClosesIssue?, commitScaffold}` → `ProvisionReport`
+  (single-word fields ⇒ camelCase = the derived serde output; no rename
+  layer needed). `expand_workdir` + `is_dir`; slug via a local `resolve_slug`
+  following the F1 route's approach (`board_goals::resolve_github_slug` +
+  the typed `no_github_repo` 422); `project` disambiguated by a pure
+  `project_choice` (create needs title, link needs number — named 400s); a
+  PRESENT-but-partial statusMapping = named 400. Absent `doneClosesIssue` →
+  ON via `github_projects::default_true` (the one D1 definition site).
+  Local-host only; all authed; NO `is_public` changes.
+- One `.merge(routes::provision::router())` in `lib.rs`; `pub mod provision;`
+  in `routes/mod.rs`.
+
+### Step 3 — UI
+
+- **`ui/src/lib/workspace-provision-step.ts`** (NEW, pure):
+  `DEFAULT_TEMPLATE_REPO` (`goempirical/empirical-sdd-ddd-starter`, D4 UI
+  constant), `provisionCommitFileList()` (the exact 5 paths, branch-agnostic),
+  `deriveTemplateRepoName` (= `slugifyGoalName`), `isTemplateModeReady` /
+  `firstTemplateModeBlocker` (never-silent gating), the `ProvisionReport`
+  wire types, `summarizeProvisionReport` (5 lines; red push = warning naming
+  the error + "push manually").
+- **`ui/src/lib/workspace-goal-step.ts`**: `OptionalWorkspaceStepId` widened
+  with `'provision'`; the 4th `OPTIONAL_WORKSPACE_STEPS` entry appended
+  (`{id:'provision', …, skippable:true, primitive:'provisionWorkspace'}`).
+  `isGoalStepReady` / `GoalStepInputs` / `initialComposerPhase` /
+  `ComposerModalPhase` UNTOUCHED (diff-verified: only the doc comment, the
+  type widening, and the appended entry).
+- **`ui/src/runtime/github-projects-client.ts`**: +`createRepoFromTemplate`
+  and `provisionWorkspace` (same `apiUrl`+`authHeaders`+AbortController
+  pattern; 180 s defaults — create/clone/push ride the network); report
+  types imported from the pure lib.
+- **`NewWorkspaceGoalStep.tsx`**: workdir-target mode toggle — "Existing
+  project" (today's combobox JSX preserved) | "New repo from template"
+  (owner / name live-seeded from the goal until hand-edited / template
+  default-editable / directory + Browse via `api.repos.pickFolder` / private-
+  public). Template Continue: `createRepoFromTemplate` (spinner; inline
+  verbatim error) → register the clone via the store's **`addRepoPath`** —
+  traced from the add-repo dialog's submit (`AddRepoDialog.tsx:356
+  → store/slices/repos.ts:398`), the SAME action, no parallel registration —
+  → `onContinue(goal, repo.id)`.
+- **`NewWorkspaceComposerModal.tsx`**: phase state widened modal-LOCALLY to
+  `ComposerModalPhase | 'provision'`; goal-first Continue → `'provision'` →
+  details; "Skip to details" and opinionated opens (`initialComposerPhase`
+  untouched) never see it; `provisionWorkdir` = the chosen repo's ROOT path
+  (worktree creation happens later in the composer). `QuickTabBody` and every
+  `useComposerState` prop byte-identical.
+- **`NewWorkspaceProvisionStep.tsx`** (NEW): mounts the SHARED
+  `ProjectBindingEditor` (D7's second mount) for link mode; a create-board
+  form (owner/ownerType/title, prefilled from the resolved slug) for D5's
+  create mode; the D8 consent checklist — commit toggle default ON naming
+  the target branch ("the project's current branch"; the authoritative
+  branch name renders in the post-run report) + the exact 5-path file list;
+  "Provision & continue" runs the ensure and renders the per-step report
+  inline (failures = amber warnings, "creation continues"); "Skip" always
+  available; a repo with no GitHub origin gets a visible skip-able notice,
+  never a dead end.
+
+### Step 4 — tests (17 new: 12 Rust + 5 vitest describe-blocks)
+
+`provision.rs` (9): `gh_repo_create_from_template_argv_shape`,
+`gh_repo_clone_argv_shape` (incl. the probe argv),
+`gh_project_create_argv_shape`, `parse_project_create_output_frozen_fixture`,
+`provision_run_twice_changes_nothing` (the AC-10 pin: temp git repo + bare
+origin + logging fake gh + injected bindings path; run 2 = no `project
+create`, no graphql, binding file byte-identical, scaffold `changed:false`,
+`rev-list --count` equal), `provision_skips_commit_when_consent_off` (+ the
+§6.8 blanket-`*`-intact assert), `provision_red_push_is_nonfatal_and_reported`,
+`provision_with_existing_binding_never_creates_a_project`,
+`gitignore_rewrite_is_write_if_different_and_keeps_state_ignored` (REAL
+`git check-ignore` proves state ignored + contract files trackable).
+`routes/provision.rs` (3): `project_choice_parses_link_and_create_and_rejects_malformed`,
+`repo_name_and_visibility_validation`,
+`provision_request_wire_shape_and_partial_mapping_rejected`.
+Vitest `workspace-provision-step.test.ts` (15 tests): the exact-5-paths pin
+(+ never lists engine state), `deriveTemplateRepoName`, template gating
+(order, traversal/template rejection, D4 constant), `summarizeProvisionReport`
+(green names the branch; red push = warning + error + "push manually"; failed
+step keeps detail; consent-off/no-change = "no new commit").
+
+## Deviations from architecture.md (F3)
+
+1. **Domain home = new crate-root `provision.rs`** (§5.1's header put the
+   core inside `routes/provision.rs`; the developer prompt made it my call).
+   Routes stay thin per the repo's `linear.rs` precedent; `github_projects.rs`
+   stays untouched. Risk: none.
+2. **`ProvisionCtx.project` is `Option<ProjectChoice>`** (blueprint: required
+   `Link|Create`). `None` = "no board requested" (`ok:true, changed:false`,
+   pointing at the Settings mount) — needed because link mode binds through
+   the SHARED editor (the binding then already exists server-side), so the
+   provision call must be expressible WITHOUT fabricating a Link from
+   possibly-absent stored metadata; also gives non-board repos a labels+
+   scaffold+commit path. The AC-10 guard is unchanged (run-twice passes
+   `Some(Create)` both runs and pins no-second-project). Risk: none
+   (strictly widens; the required-shape requests behave per blueprint).
+3. **`ProvisionCtx.state_map` added** (injected `GithubStateMap`; route =
+   `from_env()`, tests = `Default`) — without it the labels step would read
+   the USER's real `github.json` inside tests, violating the handoff's
+   hermeticity rule; mirrors F2's seam-`map` injection. Risk: none.
+4. **`BLOCKED_LABEL` tuple duplicated** into provision.rs
+   (`task_sink::GITHUB_BLOCKED_LABEL` is private; only the two fn widenings
+   were allowed there) — the F1 `gh_bin()` duplication precedent, cross-link
+   comment both ways not needed since task_sink is boundary-frozen; comment
+   in provision.rs says "keep in sync". Risk: drift, mitigated by comment.
+5. **Test name `parse_project_create_output_frozen_fixture`** (§8 named it
+   `parse_project_create_output`) — a test fn cannot share the imported fn's
+   name in the same module (E0255); the F1 naming-deviation precedent.
+   Risk: none.
+6. **Own `run_in` runner** (program+args+cwd, 120 s, 400-char verbatim
+   stderr) instead of reusing `github_projects::run_gh_capture` — that one is
+   private, pinned to `neutral_cwd()` and 30 s; template create/clone need a
+   caller cwd and a network-sized bound, and widening it would touch F2 seam
+   code. Risk: none (discovery still rides the ONE F1/F2 graphql runner).
+7. **Labels `changed` is always `false`** — `gh label create --force` is a
+   converging ensure with no created-vs-updated signal; reporting
+   `changed:true` on run 1 would be a guess. Detail says "ensured". Risk:
+   none (the run-twice pin doesn't key off it).
+8. **`resolve_slug` copied** into routes/provision.rs (private in the F1
+   route file, which F3 must not touch) with a keep-in-sync comment — the
+   prompt's "reuse the approach". Risk: drift; ~20 lines.
+9. **Pre-run consent names the branch generically** ("the project's current
+   branch") — the repo store carries no branch field and adding a
+   branch-read would grow scope; the AUTHORITATIVE branch name is reported
+   post-run from `CommitReport.branch` (displayed in the inline report).
+   The file list is exact per D8. Risk: cosmetic.
+10. **Goal-step header copy updated** ("…file a tracker issue, and provision
+    the repo next — all optional") to match the now-four optional steps the
+    list below it renders. Risk: none (copy only).
+
+## Gate results (F3)
+
+| Gate | Command | Result |
+|---|---|---|
+| Unit | `cargo test -p agentum-server --lib` | **616 passed, 0 failed, 5 ignored** (604 baseline + 12 new; re-run green after fmt) |
+| Test-first proof | run-twice + red-push run RED against the stubbed commit step (2 failures), then green after implementing it | honored |
+| Deletion audit | `git diff -U0` over task_sink.rs/lib.rs/routes/mod.rs | exactly 2 deleted lines = the two fn signatures replaced by their `pub(crate)` versions; **zero test edits, zero other Rust files touched** (`github_projects.rs`, `harness/types.rs`, seam call sites all clean in `git status`) |
+| Fmt | `cargo fmt --all` then `--check` | clean |
+| Clippy | `cargo clippy --workspace` | 0 warnings, exit 0 |
+| UI build | `NODE_OPTIONS=--max-old-space-size=3072 npm run build --prefix crates/agentum-desktop/ui` | green (3m 26s; chunk-size warning pre-existing) |
+| Vitest | `npx vitest run src/lib/workspace-provision-step.test.ts src/lib/workspace-goal-step.test.ts src/lib/github-projects-binding.test.ts` | **37 passed** (15 new + 12 goal-step with ONLY the steps pin updated three→four + 10 F1 binding held) |
+| tsc parity | `npx tsc --noEmit` | 1642 errors = the recorded pre-F3 baseline exactly; the only F3-file hits are the pre-existing `shared/types` bare-tsc resolution misses (import lines renumbered, same category) — **zero new** |

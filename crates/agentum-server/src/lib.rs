@@ -46,6 +46,7 @@ mod pane_repair;
 pub mod planner;
 pub mod playwright_mcp;
 mod port_wait;
+pub mod provision;
 pub mod ratelimit;
 mod routes;
 mod rules;
@@ -330,6 +331,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::github::router())
         // Spec 010 F1: Projects v2 board bindings (discover/bind/read/unbind).
         .merge(routes::github_projects::router())
+        // Spec 010 F3: workspace provisioning (repo-from-template + the ensure).
+        .merge(routes::provision::router())
         .merge(routes::usage::router())
         .merge(routes::harness::router())
         .layer(axum_mw::from_fn_with_state(

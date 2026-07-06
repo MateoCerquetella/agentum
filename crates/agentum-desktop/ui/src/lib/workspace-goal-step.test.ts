@@ -89,15 +89,23 @@ describe('required vs optional inputs (AC 10, D9)', () => {
     expect(firstGoalStepBlocker({ goal: 'build a thing', repoId: 'repo-1' })).toBeNull()
   })
 
-  it('offers exactly the three skippable steps — none blocks creation', () => {
-    expect(OPTIONAL_WORKSPACE_STEPS.map((s) => s.id)).toEqual(['worktree', 'scaffold', 'tracker'])
-    // AC 10: every one of the three is skippable.
+  it('offers exactly the four skippable steps — none blocks creation', () => {
+    // Spec 010 F3 appended `provision` as the FOURTH entry (the typed data
+    // table is the designed extension seam); everything else is 008's pin.
+    expect(OPTIONAL_WORKSPACE_STEPS.map((s) => s.id)).toEqual([
+      'worktree',
+      'scaffold',
+      'tracker',
+      'provision'
+    ])
+    // AC 10: every one of the four is skippable.
     expect(OPTIONAL_WORKSPACE_STEPS.every((s) => s.skippable === true)).toBe(true)
     // Reuse, don't rebuild: each names an existing primitive.
     expect(OPTIONAL_WORKSPACE_STEPS.map((s) => s.primitive)).toEqual([
       'createWorktree',
       'maybeScaffoldSpecFromIssue',
-      'createGithubIssue'
+      'createGithubIssue',
+      'provisionWorkspace'
     ])
   })
 })

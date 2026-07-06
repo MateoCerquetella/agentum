@@ -30,6 +30,7 @@ pub mod orchestration;
 pub mod preferences;
 pub mod preflight;
 pub mod profiles;
+pub mod provision;
 pub mod repos;
 pub mod sessions;
 pub mod uploads;

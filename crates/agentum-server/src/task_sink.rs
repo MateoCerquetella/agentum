@@ -305,7 +305,10 @@ fn github_status_label(phase: TrackerPhase) -> &'static str {
 /// never the label name (spec 005 F5): a custom-named label inherits its
 /// phase's canonical color via the same `--force` ensure-create, so a renamed
 /// pipeline still reads at a glance and a manually recolored label self-heals.
-fn github_status_color(phase: TrackerPhase) -> &'static str {
+/// `pub(crate)` for spec 010 F3: provisioning runs its OWN label-ensure loop
+/// over this builder pair (never a refactor of the transition's pinned
+/// ensure sequence).
+pub(crate) fn github_status_color(phase: TrackerPhase) -> &'static str {
     GITHUB_STATUS_LABELS
         .iter()
         .find(|(p, _, _)| *p == phase)
@@ -452,7 +455,12 @@ impl GithubStateMap {
 
 /// Idempotent ensure-create: `--force` updates an existing label's color to
 /// canonical instead of failing. One argv token per value — never a shell.
-fn gh_label_ensure_argv<'a>(name: &'a str, slug: &'a str, color: &'a str) -> [&'a str; 8] {
+/// `pub(crate)` for spec 010 F3 (see [`github_status_color`]).
+pub(crate) fn gh_label_ensure_argv<'a>(
+    name: &'a str,
+    slug: &'a str,
+    color: &'a str,
+) -> [&'a str; 8] {
     [
         "label", "create", name, "--repo", slug, "--color", color, "--force",
     ]

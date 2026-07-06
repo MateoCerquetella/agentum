@@ -94,13 +94,15 @@ export function firstGoalStepBlocker({ goal, repoId }: GoalStepInputs): string |
 }
 
 /**
- * The three SKIPPABLE steps offered after the goal (AC 10). Held as data so the
- * "each is optional / none blocks creation" invariant is unit-pinned, and each
- * names the EXISTING composer primitive it reuses (reuse, don't rebuild): the
- * fresh-worktree creation (skip → an existing folder/branch as-is), the spec
- * scaffold, and the tracker binding.
+ * The four SKIPPABLE steps offered after the goal (AC 10; spec 010 F3 appended
+ * `provision`). Held as data so the "each is optional / none blocks creation"
+ * invariant is unit-pinned, and each names the EXISTING composer/server
+ * primitive it reuses (reuse, don't rebuild): the fresh-worktree creation
+ * (skip → an existing folder/branch as-is), the spec scaffold, the tracker
+ * binding, and the repo provisioning ensure (labels + board + harness
+ * scaffold — the modal's `'provision'` phase).
  */
-type OptionalWorkspaceStepId = 'worktree' | 'scaffold' | 'tracker'
+type OptionalWorkspaceStepId = 'worktree' | 'scaffold' | 'tracker' | 'provision'
 
 export type OptionalWorkspaceStep = {
   id: OptionalWorkspaceStepId
@@ -129,6 +131,12 @@ export const OPTIONAL_WORKSPACE_STEPS: readonly OptionalWorkspaceStep[] = [
     label: 'File or link a tracker issue',
     skippable: true,
     primitive: 'createGithubIssue'
+  },
+  {
+    id: 'provision',
+    label: 'Provision the repo (labels, board, scaffold)',
+    skippable: true,
+    primitive: 'provisionWorkspace'
   }
 ] as const
 

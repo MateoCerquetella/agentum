@@ -3,6 +3,7 @@
 // loopback endpoint + bearer auth. Wire shapes are faithful to
 // `crates/agentum-server/src/routes/github_projects.rs`.
 import type { ResolvedMappingDto } from '../lib/github-projects-binding'
+import type { ProvisionReport } from '../lib/workspace-provision-step'
 import { apiUrl, getServerEndpoint } from './server-endpoint'
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -189,6 +190,95 @@ export async function putProjectBinding(input: {
       await throwClassified(res, 'could not save the project binding')
     }
     return (await res.json()) as { slug: string; binding: ProjectBindingDto }
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+/**
+ * `POST /api/github/repo-from-template` — spec 010 F3 template mode: create a
+ * repo from a template (or adopt an existing one) and clone it under
+ * `directory`. Idempotent server-side; a `gh` failure (e.g. the template repo
+ * isn't marked "Template repository" on GitHub) surfaces gh's stderr verbatim
+ * as the thrown message — render it, never rephrase it.
+ */
+export async function createRepoFromTemplate(input: {
+  owner: string
+  name: string
+  templateRepo: string
+  directory: string
+  visibility?: 'private' | 'public'
+  /** Create + network clone ride this — wider than the API-call defaults. */
+  timeoutMs?: number
+}): Promise<{ slug: string; path: string; created: boolean }> {
+  const url = await apiUrl('/api/github/repo-from-template')
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 180000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+      body: JSON.stringify({
+        owner: input.owner,
+        name: input.name,
+        templateRepo: input.templateRepo,
+        directory: input.directory,
+        ...(input.visibility ? { visibility: input.visibility } : {})
+      }),
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      await throwClassified(res, 'could not create the repo from the template')
+    }
+    return (await res.json()) as { slug: string; path: string; created: boolean }
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+/** Link an existing board or create one first (spec 010 F3 / D5). */
+export type ProvisionProjectChoice =
+  | { owner: string; ownerType: 'user' | 'organization'; number: number }
+  | { create: true; owner: string; ownerType: 'user' | 'organization'; title: string }
+
+/**
+ * `POST /api/workspace/provision` — the ONE idempotent provisioning ensure
+ * (labels, board link-or-create + bind, `.agentum-harness/` scaffold,
+ * consent-gated commit+push). Returns the per-step `ProvisionReport`; step
+ * failures live INSIDE the report and render as warnings, never blockers.
+ * `commitScaffold` is the explicit D8 consent (the UI toggle defaults it ON).
+ */
+export async function provisionWorkspace(input: {
+  workdir: string
+  slug?: string
+  project?: ProvisionProjectChoice
+  statusMapping?: StatusMappingWire
+  doneClosesIssue?: boolean
+  commitScaffold: boolean
+  /** Several bounded `gh`/git calls run in sequence — allow the sum. */
+  timeoutMs?: number
+}): Promise<ProvisionReport> {
+  const url = await apiUrl('/api/workspace/provision')
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 180000)
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+      body: JSON.stringify({
+        workdir: input.workdir,
+        ...(input.slug ? { slug: input.slug } : {}),
+        ...(input.project ? { project: input.project } : {}),
+        ...(input.statusMapping ? { statusMapping: input.statusMapping } : {}),
+        ...(input.doneClosesIssue !== undefined ? { doneClosesIssue: input.doneClosesIssue } : {}),
+        commitScaffold: input.commitScaffold
+      }),
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      await throwClassified(res, 'provisioning failed')
+    }
+    return (await res.json()) as ProvisionReport
   } finally {
     window.clearTimeout(timeout)
   }
