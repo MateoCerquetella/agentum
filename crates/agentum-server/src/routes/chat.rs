@@ -355,15 +355,101 @@ retrieved for the user's latest message — prefer these as ground truth about t
     (ctx, repo_block, access_rule, wiki_block)
 }
 
+/// One pass of the shared feature-intake interview — the SINGLE SOURCE OF TRUTH
+/// both the Fast prompt and the staged Socratic passes derive from, so the two
+/// modes can never drift (issue #257). Ported from the SDD `write_spec_socratic`
+/// skill: each pass carries its reflect-back opener, the concrete probes, and —
+/// crucially — the ANTI-PATTERN that makes the interview sharp instead of a
+/// checklist (reject "everyone", reject solution-shaped answers, reject vague
+/// verbs, …). Sharpen a pass here and BOTH modes inherit it.
+struct InterviewPass {
+    /// Uppercase topic marker rendered in the pass header (test-pinned).
+    topic: &'static str,
+    /// The one-sentence reflect-back opener for this pass. Pass 1 has nothing to
+    /// reflect yet; the exact "reflect … back" phrasing is test-pinned.
+    reflect: &'static str,
+    /// What the pass draws out + the concrete probes to actually ask.
+    probe: &'static str,
+    /// The known weak answer and how to push past it — the skill's edge.
+    anti_pattern: &'static str,
+}
+
+/// The five interview passes (WHO → WHAT → WHY → done-criteria → risks/scope),
+/// each with the skill's probes + anti-patterns. Fast flattens the coverage +
+/// anti-patterns into its single prompt; Socratic emits one entry per turn.
+const INTERVIEW_PASSES: [InterviewPass; 5] = [
+    InterviewPass {
+        topic: "WHO",
+        reflect: "This is the opening pass, so there is nothing to reflect back yet.",
+        probe: "Open the interview: draw out WHO this feature is for — the specific persona or \
+role — and the concrete problem they hit TODAY, and how often (daily? once a quarter?). Don't \
+propose a solution yet.",
+        anti_pattern: "If they say \"everyone\" or \"all users\", push back and make them name a \
+specific role. If they answer with a solution (\"I want a button that…\"), redirect to the \
+underlying pain: what would that relieve, and for whom?",
+    },
+    InterviewPass {
+        topic: "WHAT",
+        reflect: "First, in ONE sentence, reflect the user's previous answer back (the WHO and \
+their problem) so they know you heard it.",
+        probe: "Then draw out WHAT: the smallest observable change that would mean the problem is \
+solved — what the user would DO differently once it works, and the smallest version still worth \
+shipping.",
+        anti_pattern: "Flag scope creep (\"…and also it should…\"): park the extras in a separate \
+\"future ideas\" note and bring focus back to the smallest useful slice.",
+    },
+    InterviewPass {
+        topic: "WHY",
+        reflect: "First, in ONE sentence, reflect the previous answer back (the desired WHAT / \
+outcome).",
+        probe: "Then draw out WHY it matters: why now, what changed, and the cost of NOT solving \
+it this iteration — and whose measure of success this moves.",
+        anti_pattern: "If the only reason is \"someone asked for it\", probe one level deeper: \
+what outcome are they actually trying to drive?",
+    },
+    InterviewPass {
+        topic: "DONE CRITERIA",
+        reflect: "First, in ONE sentence, reflect the previous answer back (the WHY / value).",
+        probe: "Then draw out the acceptance criteria: concrete, testable, checkbox-shaped \
+conditions — how we'll KNOW the user can now do the thing, and the manual or automated test that \
+proves each one.",
+        anti_pattern: "Reject vague verbs (improve, enhance, support, handle) — force concrete, \
+observable ones: create, save, return, display, reject, log.",
+    },
+    InterviewPass {
+        topic: "RISKS & SCOPE",
+        reflect: "First, in ONE sentence, reflect the previous answer back (the acceptance \
+criteria).",
+        probe: "Then draw out the risks and scope: the most fragile part of the idea, what it \
+depends on that we don't control, the untested assumption, and what is explicitly OUT of scope \
+(the non-goals).",
+        anti_pattern: "If they say \"nothing\" or \"should be straightforward\", press once: if a \
+developer asked what's HARD about this, what would you say?",
+    },
+];
+
+/// The convergence bar BOTH modes must clear before proposing the breakdown —
+/// the skill's self-check, distilled. Fast folds it into "converge only when…";
+/// Socratic's final pass runs it before pointing at "Preview issues". This is
+/// what makes the interview converge on a WELL-DEFINED feature instead of a
+/// fixed number of turns (issue #257, AC "converges only when well-defined").
+const CONVERGENCE_SELFCHECK: &str = "the feature names a concrete USER ACTION (not just a \
+feature label), every acceptance criterion is observable/testable, at least one real risk is \
+named, there are NO vague verbs (improve/enhance/support) left in the criteria, and what's OUT \
+of scope is explicit";
+
 /// The interviewer instructions (the second `system` block). Kept separate from
 /// the Claude Code identity block so the identity stays byte-exact. When a
 /// `repo_context` snapshot is present the interviewer is told to GROUND
 /// everything in it (agentum's philosophy: agents work with repo context); when
 /// absent (no local workspace) it falls back to honest blind Q&A.
 ///
-/// Spec 008 F2: this is the **Fast** intake prompt, kept byte-identical (the
-/// grounding assembly moved into [`intake_grounding_blocks`] with no change to
-/// the emitted string — pinned by `build_intake_instructions_fast_*`).
+/// Spec 008 F2 / #257: this is the **Fast** intake prompt. It shares the same
+/// interview discipline as Socratic — the [`INTERVIEW_PASSES`] anti-patterns and
+/// the [`CONVERGENCE_SELFCHECK`] — folded into ONE single-turn prompt (no
+/// staging), so Fast stays fast but no longer reads as a shallow checklist. The
+/// Fast/router equality is still pinned by `build_intake_instructions_fast_*`
+/// (delegation, not byte-content).
 fn interviewer_instructions(
     workdir: Option<&str>,
     repo_slug: Option<&str>,
@@ -372,6 +458,15 @@ fn interviewer_instructions(
 ) -> String {
     let (ctx, repo_block, access_rule, wiki_block) =
         intake_grounding_blocks(workdir, repo_slug, repo_context, wiki_context);
+
+    // Single-source the interview discipline: Fast carries the SAME anti-patterns
+    // as the staged Socratic passes, flattened into one turn (issue #257). Built
+    // from INTERVIEW_PASSES so the two modes can't drift.
+    let anti_patterns = INTERVIEW_PASSES
+        .iter()
+        .map(|p| p.anti_pattern)
+        .collect::<Vec<_>>()
+        .join(" ");
 
     // "Preview issues" below is the UI button label (ChatPage.tsx composer
     // strip) — if that button is renamed again, rename it here too, or the
@@ -390,20 +485,26 @@ no \"great question!\".\n\
 \"This feature will empower/streamline…\" openers, no bullet lists where a sentence does, \
 no restating the user's words back as filler, and no closing summaries of what you just \
 said. Vary how you phrase things; if a template is creeping in, break it.\n\
-- Cover only what's genuinely unclear: the problem and who it's for, the desired outcome, \
-scope boundaries (in/out), hard constraints, and acceptance criteria. Never re-ask what \
-the user — or the repo context — already answers.\n\
-- When the feature is defined well enough to build, STOP asking questions and propose a \
-breakdown: a one-line feature title, then exactly as many concrete tasks as the scope \
-needs — a trivial fix is ONE task, a small feature two or three, and only a genuinely \
-broad feature more. Never pad to a fixed count. Each task is an issue-style title plus \
-one sentence of detail, pointing at the real files/areas it touches. Then tell \
-the user to click the \"Preview issues\" button below the chat to review and file them.\n\
+- Cover only what's genuinely unclear, in roughly this order: WHO it's for and the problem \
+they hit today, WHAT the smallest useful change is, WHY it matters now, the acceptance \
+criteria, and the risks + what's OUT of scope. Never re-ask what the user — or the repo \
+context — already answers.\n\
+- Reject weak answers instead of banking them — this is what keeps the interview sharp \
+rather than a checklist: {anti_patterns}\n\
+- Converge only when the feature is genuinely well-defined: {selfcheck}. If any of those is \
+still fuzzy, ask ONE more sharpening question on just that gap first. Once it clears that \
+bar, STOP asking questions and propose a breakdown: a one-line feature title, then exactly \
+as many concrete tasks as the scope needs — a trivial fix is ONE task, a small feature two \
+or three, and only a genuinely broad feature more; never pad to a fixed count. Each task is \
+an issue-style title plus one sentence of detail, pointing at the real files/areas it \
+touches. Then tell the user to click the \"Preview issues\" button below the chat to review \
+and file them.\n\
 {access_rule}\n\
 - You do not create the issues yourself, and no other agent will: the \"Preview issues\" \
 button opens a review of the drafted issues, and confirming there files them directly. \
 When the user is ready, point them at that button — never tell them to \"confirm with \
-the system\" or that someone else will take it from there."
+the system\" or that someone else will take it from there.",
+        selfcheck = CONVERGENCE_SELFCHECK,
     )
 }
 
@@ -486,42 +587,38 @@ mention or explain it."
     )
 }
 
-/// The single-topic instruction for one Socratic pass (spec 008 F2). Each pass
-/// (except the first, which has nothing to reflect yet) begins by reflecting the
-/// previous answer back in one sentence, then asks only its own topic. The five:
-/// 1 WHO, 2 WHAT, 3 WHY, 4 done-criteria, 5 risks+scope (then converge on
-/// "Preview issues"). Pinned per-stage by unit test (AC 7). `stage` is already
-/// clamped to 1..=5 by the caller, so the `_` arm is pass 5.
-fn socratic_pass_body(stage: u8) -> &'static str {
-    match stage {
-        1 => {
-            "PASS 1 — WHO. This is the opening pass, so there is nothing to reflect back yet. \
-Open the interview: draw out WHO this feature is for (the specific persona / user) and the \
-concrete problem they hit today. Don't propose a solution yet."
-        }
-        2 => {
-            "PASS 2 — WHAT. First, in ONE sentence, reflect the user's previous answer back (the \
-WHO and their problem) so they know you heard it. Then ask about WHAT: the desired outcome or \
-behavior — what the feature actually does when it works."
-        }
-        3 => {
-            "PASS 3 — WHY. First, in ONE sentence, reflect the previous answer back (the desired \
-WHAT / outcome). Then ask about WHY it matters: the value, why now, and what breaks or stays \
-painful without it."
-        }
-        4 => {
-            "PASS 4 — DONE CRITERIA. First, in ONE sentence, reflect the previous answer back (the \
-WHY / value). Then draw out the acceptance criteria: how we'll know it's done, as concrete, \
-testable, checkbox-shaped statements."
-        }
-        _ => {
-            "PASS 5 — RISKS & SCOPE. First, in ONE sentence, reflect the previous answer back (the \
-acceptance criteria). Then draw out the risks and the scope boundaries / non-goals (what is \
-explicitly OUT). This is the FINAL pass, and it is GATED: when — and only when — the problem, \
-outcome, acceptance criteria, and scope are all concrete, STOP asking questions, tell the user \
-to click the \"Preview issues\" button below the chat to review and file the drafted issues, and \
-end with [[socratic:done]]. If real gaps remain, keep clarifying and end with [[socratic:stay]]."
-        }
+/// The single-topic instruction for one Socratic pass, built from the shared
+/// [`INTERVIEW_PASSES`] source of truth (spec 008 F2; enriched for #257 with the
+/// skill's probes + anti-patterns). Each pass reflects the previous answer back
+/// (pass 1 has nothing to reflect yet), draws out its one topic, and names the
+/// weak answer to push past. The FINAL pass runs the [`CONVERGENCE_SELFCHECK`]
+/// before stopping and pointing at "Preview issues" — so it converges only when
+/// the feature is actually well-defined, not just because it's turn five.
+/// `stage` is clamped 1..=5 by the caller; clamped again here so indexing is safe.
+fn socratic_pass_body(stage: u8) -> String {
+    let stage = stage.clamp(1, 5);
+    let p = &INTERVIEW_PASSES[(stage - 1) as usize];
+    if stage == 5 {
+        format!(
+            "PASS 5 — {topic}. {reflect} {probe} {anti_pattern}\n\
+Then CONVERGE — but only if the feature is genuinely well-defined: {selfcheck}. If any of \
+those is still fuzzy, ask ONE more sharpening question on just that gap instead of finishing. \
+Otherwise this is the FINAL pass: STOP asking questions and tell the user to click the \
+\"Preview issues\" button below the chat to review and file the drafted issues.",
+            topic = p.topic,
+            reflect = p.reflect,
+            probe = p.probe,
+            anti_pattern = p.anti_pattern,
+            selfcheck = CONVERGENCE_SELFCHECK,
+        )
+    } else {
+        format!(
+            "PASS {stage} — {topic}. {reflect} {probe} {anti_pattern}",
+            topic = p.topic,
+            reflect = p.reflect,
+            probe = p.probe,
+            anti_pattern = p.anti_pattern,
+        )
     }
 }
 
@@ -2455,7 +2552,7 @@ mod tests {
             );
         }
         assert!(
-            p5.contains("end with [[socratic:done]]") && p5.contains("end with [[socratic:stay]]"),
+            p5.contains("[[socratic:done]]") && p5.contains("[[socratic:stay]]"),
             "stage 5's body gates convergence on done-vs-stay: {p5}"
         );
         assert!(
@@ -2465,6 +2562,21 @@ mod tests {
         assert!(
             p5.contains("Preview issues"),
             "stage 5 converges on Preview issues (AC 7): {p5}"
+        );
+
+        // #257: each pass now carries the skill's anti-pattern, and the final
+        // pass gates convergence on the self-check (not just "it's turn five").
+        assert!(
+            p1.contains("everyone"),
+            "pass 1 rejects the \"everyone\" answer: {p1}"
+        );
+        assert!(
+            p4.contains("vague verbs"),
+            "pass 4 rejects vague verbs: {p4}"
+        );
+        assert!(
+            p5.contains("well-defined") && p5.contains("USER ACTION"),
+            "pass 5 gates convergence on the self-check: {p5}"
         );
     }
 
@@ -2512,6 +2624,40 @@ mod tests {
         assert!(
             blind.contains("no repo snapshot for this chat"),
             "blind access rule"
+        );
+    }
+
+    /// #257: Fast and Socratic draw their sharpness from the SAME
+    /// [`INTERVIEW_PASSES`] table, so the two modes can't drift. Fast flattens
+    /// every pass's anti-pattern into its single prompt and folds in the
+    /// convergence self-check; Socratic emits the same anti-patterns one pass at
+    /// a time and runs the same self-check on the final pass.
+    #[test]
+    fn intake_quality_is_single_sourced_across_fast_and_socratic() {
+        let fast = interviewer_instructions(Some("/p"), Some("o/r"), None, None);
+        for pass in INTERVIEW_PASSES.iter() {
+            assert!(
+                fast.contains(pass.anti_pattern),
+                "Fast must carry the {} anti-pattern verbatim (single source)",
+                pass.topic
+            );
+            let stage = 1 + INTERVIEW_PASSES
+                .iter()
+                .position(|p| p.topic == pass.topic)
+                .unwrap();
+            let body = socratic_stage_instructions(stage as u8, None, None, None, None);
+            assert!(
+                body.contains(pass.anti_pattern),
+                "Socratic pass {stage} carries its anti-pattern"
+            );
+        }
+        assert!(
+            fast.contains(CONVERGENCE_SELFCHECK),
+            "Fast folds in the convergence self-check"
+        );
+        assert!(
+            socratic_stage_instructions(5, None, None, None, None).contains(CONVERGENCE_SELFCHECK),
+            "Socratic pass 5 runs the convergence self-check"
         );
     }
 
