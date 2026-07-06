@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** architect         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, RENUMBERED from 009 at PM handoff — 009 = `009-wiki-project-scoped`, now MERGED + RELEASED v0.59.0 `b62a9171`, so the rename dodged a real collision. PM-gated 2026-07-06, D1–D8 locked in spec §Decisions, handoff `01-pm-to-architect.md`; architect owns the D2 persistence mechanism under the Settings-save-must-never-destroy-a-binding constraint. 008 RELEASED v0.57.0; 007 v0.55.0.)
+- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, renumbered from 009 — 009 = wiki, RELEASED v0.59.0. PM-gated D1–D8; **Architect DONE 2026-07-06** — `architecture.md`, 9 calls resolved (D2 → sibling `github_projects.json`; probe-then-act close/reopen; id cache ships; new `routes/github_projects.rs` + `routes/provision.rs` + crate-root `github_projects.rs`; F2 = two arm hooks with ZERO seam-call-site edits), handoff `02-architect-to-developer.md`. Worktree merged origin/develop v0.59.0 mid-phase (`664ee365`); seam anchors re-verified. Developer: build F1 bind → F2 drive → F3 provision, one gated slice each; FF develop first.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -111,3 +111,26 @@
   Architect calls named: D2 mechanism, fuzzy internals, id cache,
   probe-vs-blind reopen, route home, template-mode repoId flow, knob default
   home. Next artifact: `architecture.md`.
+- 2026-07-06 | Architect | **010 ARCHITECT GATE PASS → phase developer**
+  (`architecture.md`; handoff `02-architect-to-developer.md`; mid-phase the
+  worktree MERGED origin/develop v0.59.0 — STATE.md conflict resolved for
+  active-spec-010, base now `664ee365`, all four seam anchors re-verified
+  unchanged). Nine calls resolved: D2 → **(a2) sibling `github_projects.json`**
+  (a1 github.json rejected on the verified clobber hazard + two-writer race;
+  a3 TrackerBinding rejected on verified board_sync coupling — reuse would
+  make Projects bindings pull-able); fuzzy = strip-to-alnum + disjoint
+  exact-match synonym tables, NO substring, refusal names phases+options;
+  id cache SHIPS in F2 (9 warm calls ≤ ceiling vs ~14 cold) w/
+  invalidate-retry-once (correctness cache-free); close/reopen =
+  probe-then-act BOTH directions, knob-gated (knob-OFF never probes —
+  human-closed issues respected); routes = new `routes/github_projects.rs` +
+  `routes/provision.rs`, domain in crate-root `github_projects.rs`
+  (linear.rs precedent — keeps the F2 arm a two-line hook); template repoId
+  produced inside goal-step Continue (isGoalStepReady untouched);
+  `done_closes_issue` default lives on BoardBinding serde-default (one site);
+  provision = 4th OPTIONAL_WORKSPACE_STEPS entry + modal `'provision'` phase;
+  board-failure visibility = fold into existing `Skipped(reason)` +
+  tracing::warn (zero call-site edits, rides drive.rs engine.log). F2 arm
+  hook builds LAST after fake-gh suite green; AC 8 = zero test-file diffs.
+  Two spec-constrained additions only (id cache; state-only .gitignore
+  rewrite for the F3 commit). Developer: F1 → F2 → F3, one gated slice each.
