@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 009-wiki-project-scoped
-- **phase:** tester       <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 Developer COMPLETE 2026-07-06: F1 `b325c176` + F2 `8f1b663c` + F3 `fdfec986`, all gates green; handoff `03-developer-to-tester.md` incl. the AC-4 two-GET ruling the tester must make. 008 RELEASED v0.57.0 `64053d4c`, #250 closed)
+- **phase:** reviewer     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 Tester PASS-WITH-DEFERRALS 2026-07-06, `verification.md`, HEAD `2c3dc89d`; AC-4 ruled PASS-with-note + qa.sh wording amended in spec.md; handoff `04-tester-to-reviewer.md`. 008 RELEASED v0.57.0 `64053d4c`, #250 closed)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,20 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | PM | **009 gate PASS → architect** (fresh sdd-pm subagent;
-  handoff `01-pm-to-architect.md`). All 9 items pass ("one slice" =
-  pass-with-note: 3 increments, one root cause, precedent 004/005/008); ~15
-  citations line-verified at `388eaa66`; `Event.kind` = open dotted String
-  (`agentum-core/src/lib.rs:429–437`) so `wiki.updated` needs no enum change.
-  **D1–D4 LOCKED**: D1 delete standalone wiki view entirely (openWikiPage
-  single caller, closeWikiPage zero); D2 Projects = separate always-visible
-  rail section (groupBy is toggleable); D3 AC-6 expected as regression guard
-  (PM audit: no other automatic protected-dir read; PR must state audit
-  result); D4 one `wiki.updated` event `{repo_id,status,pages?}`. 6 mechanical
-  spec edits applied by orchestrator (AC-1/3/4/7 tightened, qa.sh scoped per
-  feature, Status→PM). Architect notes: self-invalidating cache key
-  `(repo_id,path,connection_id)`; page-write detection = architect's pick;
-  progressive TOC never flips the discriminator. Phase → architect.
 - 2026-07-06 | Architect | **009 gate PASS → developer** (`architecture.md`
   D-A1–D-A8; handoff `02-architect-to-developer.md`; all citations re-verified,
   4 drifts corrected — resolve-zoom-target is in hooks/, FOUR write_status
@@ -135,3 +121,18 @@
   fmt/clippy clean, vite green, vitest wiki 14/14, all grep pins zero-hit.
   ⚠️ TESTER MUST RULE: mount = up to TWO same-repo GETs (probe + onOpen
   refetch) — one-REPO-only holds; F2 qa.sh wording says "exactly one read".
+- 2026-07-06 | Tester | **009 verdict PASS-WITH-DEFERRALS → reviewer**
+  (`verification.md`, HEAD `2c3dc89d`; handoff `04-tester-to-reviewer.md`).
+  Independently re-ran EVERY gate: cargo 571/0/5 (AC-9 fns proven unmodified
+  via diff-hunk analysis — pure-addition tests-mod hunk only), fmt clean,
+  clippy 0, vite green, vitest 610 pass w/ 31-fail baseline corroborated vs
+  pristine extract (same 7 files). All 9 ACs PASS (4 visual/live aspects
+  deferred to qa.sh w/ repro steps, 008 precedent). **AC-4 RULED
+  PASS-with-note**: worst case 2 same-repo GETs on mount (probe + onOpen
+  refetch); intent holds (one-repo-only, cache absorbs the 2nd read); dedupe
+  REJECTED (would risk the reconnect-heal refetch that justifies no-fallback);
+  qa.sh wording AMENDED in spec.md; PR body must carry the deviation note +
+  StrictMode dev-build caveat (prod = 2, dev = up to 4). 4 deviations audited
+  ACCURATE (D4 not violated — event stays snake_case). Sacred surfaces all
+  untouched (route list byte-identical). 0 blocking defects; 1 cosmetic
+  (double-"Projects" heading, D2-locked) for reviewer. Phase → reviewer.

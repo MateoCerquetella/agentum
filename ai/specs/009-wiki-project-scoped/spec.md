@@ -211,8 +211,12 @@ generated.
   - `projects-sidebar-wiki-off-rail`: sidebar shows no Wiki rail item; a
     Projects group lists repos; clicking one opens the Project Hub; the Wiki
     tab renders the pinned repo's wiki.
-  - `wiki-quiet-probing`: with devtools network open, hub open issues exactly
-    one `/api/wiki` read (no sweep, no other repo probed).
+  - `wiki-quiet-probing`: with devtools network open, opening the hub Wiki
+    tab issues `/api/wiki?repoId=<pinned>` reads **only for the pinned repo**
+    (at most two on mount: the probe + the events-socket onOpen refetch) and
+    **zero** reads for any other repo. Production build (dev StrictMode
+    double-invokes effects). [Amended per tester ruling 2026-07-06 —
+    `verification.md` §C; original wording said "exactly one read".]
   - `wiki-push-status-progressive`: Generate → pages appear progressively
     under a "generating…" banner → final `ready` renders the full TOC.
   Screenshot evidence per `browser-verification-loop`.
