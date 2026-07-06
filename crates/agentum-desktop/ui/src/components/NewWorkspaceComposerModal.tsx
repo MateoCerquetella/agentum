@@ -3,6 +3,7 @@ import { useAppStore } from '@/store'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import NewWorkspaceComposerCard from '@/components/NewWorkspaceComposerCard'
 import NewWorkspaceGoalStep from '@/components/NewWorkspaceGoalStep'
+import NewWorkspaceProvisionStep from '@/components/NewWorkspaceProvisionStep'
 import AgentSettingsDialog from '@/components/agent/AgentSettingsDialog'
 import { useComposerState } from '@/hooks/useComposerState'
 import {
@@ -91,15 +92,21 @@ function ComposerModalBody({
   // create-workspace open; an opinionated open (Tasks-page gated-run hop, a
   // create-from item, a prefilled name, a pinned base branch) skips straight to
   // the mechanics-first composer (D3 — the composer stays reachable, and F1's
-  // Tasks hop is byte-identical).
-  const [phase, setPhase] = useState<ComposerModalPhase>(() => initialComposerPhase(modalData))
+  // Tasks hop is byte-identical). Spec 010 F3 widens the phase with a
+  // modal-LOCAL `'provision'` between goal and details — offered only on the
+  // goal-first Continue path (opinionated opens and "Skip to details" never
+  // see it; `initialComposerPhase` stays untouched).
+  const [phase, setPhase] = useState<ComposerModalPhase | 'provision'>(() =>
+    initialComposerPhase(modalData)
+  )
   const [seed, setSeed] = useState<WorkspaceGoalSeed | null>(null)
   const [seedRepoId, setSeedRepoId] = useState<string | undefined>(undefined)
 
   const handleContinue = useCallback((goal: string, repoId: string) => {
     setSeed(deriveWorkspaceGoalSeed(goal))
     setSeedRepoId(repoId ? repoId : undefined)
-    setPhase('details')
+    // Goal-first Continue → the provision step (skippable) → details.
+    setPhase('provision')
   }, [])
   const handleSkip = useCallback(() => {
     // "Skip to details" (D3): no goal framing — byte-identical to today.
@@ -107,6 +114,14 @@ function ComposerModalBody({
     setSeedRepoId(undefined)
     setPhase('details')
   }, [])
+
+  // Spec 010 F3: provisioning runs against the chosen project's ROOT path
+  // (worktree creation happens later, in the composer submit). A missing path
+  // simply skips the provision phase — never a dead end.
+  const provisionWorkdir = useMemo(
+    () => (seedRepoId ? (eligibleRepos.find((repo) => repo.id === seedRepoId)?.path ?? '') : ''),
+    [eligibleRepos, seedRepoId]
+  )
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -138,6 +153,12 @@ function ComposerModalBody({
             primaryLabel="Create Workspace"
             onContinue={handleContinue}
             onSkip={handleSkip}
+          />
+        ) : phase === 'provision' && provisionWorkdir ? (
+          <NewWorkspaceProvisionStep
+            workdir={provisionWorkdir}
+            onContinue={() => setPhase('details')}
+            onSkip={() => setPhase('details')}
           />
         ) : (
           <QuickTabBody

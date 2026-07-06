@@ -33,6 +33,7 @@ pub mod cdp_screencast;
 pub mod endpoint;
 mod error;
 pub mod git;
+pub mod github_projects;
 pub mod harness;
 mod headers;
 pub mod host_install_hints;
@@ -45,6 +46,7 @@ mod pane_repair;
 pub mod planner;
 pub mod playwright_mcp;
 mod port_wait;
+pub mod provision;
 pub mod ratelimit;
 mod routes;
 mod rules;
@@ -327,6 +329,10 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::worktrees::router())
         .merge(routes::forge::router())
         .merge(routes::github::router())
+        // Spec 010 F1: Projects v2 board bindings (discover/bind/read/unbind).
+        .merge(routes::github_projects::router())
+        // Spec 010 F3: workspace provisioning (repo-from-template + the ensure).
+        .merge(routes::provision::router())
         .merge(routes::usage::router())
         .merge(routes::harness::router())
         .layer(axum_mw::from_fn_with_state(

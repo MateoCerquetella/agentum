@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 009-wiki-project-scoped
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 **SHIP-READY — Reviewer SIGN-OFF 2026-07-06**, `review.md`, 0 blockers. Branch `wiki-remove-it-fomr-the-side`, commits F1 `b325c176` / F2 `8f1b663c` / F3 `fdfec986` + tester `673c6ecf`. **RELEASE = HUMAN**: open PR → develop w/ Closes-in-commit-MESSAGE + AC-4 deviation note + D3 audit statement + StrictMode caveat; qa.sh 6 live probes at staging (incl. TCC quiet-open); 2 should-fix follow-up tickets (Regenerate pageCache clear; 001 quiet-Empty edge). 008 RELEASED v0.57.0)
+- **current_spec:** 010-end-to-end-autonomous-flow
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 **SHIP-READY — Reviewer SIGN-OFF 2026-07-06**, `review.md`, 0 blockers, HEAD `8aa8a2d2`. All 20 focus items PASS w/ quoted evidence: 3 dup-drift risks acceptable (ONE consolidation follow-up ticket: resolve_slug→routes/util.rs, gh_bin single owner, BLOCKED_LABEL pin-test); D2 residual honest; Skipped-fold self-describing; D1–D8 all honored; no injection/leak/is_public holes; option IDs never names; Ok-never-Err everywhere. 5 leave-as-is nits. Commits: F1 `474cfd12` F2 `0b03eb9e` F3 `26b1e022` + docs. **RELEASE = HUMAN**: PR → develop, promote, AND the AC-11 live custom-column board demo (runner Mateo; evidence = issue timeline + a demo-pass line here). Follow-up ticket = the consolidation chore.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,78 +64,100 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Developer | **009 F1 CODE-COMPLETE + COMMITTED `b325c176`**
-  (projects-sidebar-wiki-off-rail, AC 1–3; F2/F3 remain → phase STAYS
-  developer). NEW `SidebarProjectsNav.tsx` + pure `projects-nav-rows.ts`
-  (+5 vitest, hidden when repos empty) mounted in sidebar/index; D1 deletion
-  inventory complete (rail item, 'wiki' unions, openWikiPage/closeWikiPage,
-  App arm+lazy import, zoom-target, test list); WikiPage embed-only
-  (`pinnedRepoId` REQUIRED, RepoRail/statusDot/standalone chrome deleted;
-  sweep reduced to pinned-only — full deletion+repoStatuses = F2;
-  RUNNING_POLL_MS = F3). Gates: vite green, vitest 12/12 new (31 dir fails
-  PROVEN pre-existing vs pristine origin/develop baseline), cargo 565/0/5,
-  D1 sweep clean (only hub-tab hit). 2 deviations documented (dead standalone
-  empty state deleted; dead-at-base setActiveView left). ⚠️ for reviewer:
-  possible double-"Projects" heading (SidebarHeader when groupBy='repo');
-  verify.sh grep pins not yet wired into a .harness scaffold.
-- 2026-07-06 | Developer | **009 F2 CODE-COMPLETE + COMMITTED `8f1b663c`**
-  (wiki-quiet-probing, AC 4–6; F3 remains → phase STAYS developer). Sweep +
-  `repoStatuses`/`RepoWikiStatus` deleted; pure `wiki-probe.ts` pins
-  one-repo-only probing (+test); `AppState.wiki_keys` positive-only cache
-  keyed `(repo_id,path,host_id)` — local = nil UUID (exact: LOCAL_HOST_ID
-  already nil), `should_cache_wiki_key` decides on the REMOTE resolution
-  (decoupled from key format), path-fallback never cached, lock never across
-  `.await`; fs.rs `is_click_to_open_dir` + `ListQuery.prefetch` seam DORMANT
-  (D3 audit recorded in tasks.md: no automatic protected-dir read at base —
-  PR body must state it). 8 test-mod `fresh_state()` literals mechanically
-  gained the field (compile-mandated). Gates: cargo 569/0/5 (+4 new), fmt
-  clean own-files-only, clippy 0 warnings (type_complexity fixed via lib.rs
-  alias), vite green, vitest wiki 2/2, AC-4 sweeps zero hits. F3 note:
-  RUNNING_POLL_MS still present BY DESIGN (F3 deletes it, no fallback);
-  `wiki-view-state.ts` absorbs `wiki-probe.ts`.
-- 2026-07-06 | Developer | **009 F3 CODE-COMPLETE `fdfec986` → DEVELOPER
-  PHASE DONE, phase → tester** (handoff `03-developer-to-tester.md`).
-  `emit_wiki_updated` at all 4 write_status transitions (ready BEFORE
-  embeddings) + run-scoped 2s `scan_pages_loop` in `select!` w/ settle
-  (growth-only via pure `scan_grew`); Running GET carries `pages`; UI:
-  `wiki-view-state.ts` reducer (absorbed wiki-probe; ready/failed events =
-  REFETCH commands, never a flip — discriminator pin tested), poll DELETED
-  no fallback, progressive TOC + banner, pageCache cleared running→ready.
-  4 deviations, notably `rename_all_fields=camelCase` on WikiIndexResponse
-  (variant fields were silently snake_case on the wire — real fix, wire-shape
-  test pins it). Gates: cargo 571/0/5 (AC-9 tests UNMODIFIED 13/13 wiki),
-  fmt/clippy clean, vite green, vitest wiki 14/14, all grep pins zero-hit.
-  ⚠️ TESTER MUST RULE: mount = up to TWO same-repo GETs (probe + onOpen
-  refetch) — one-REPO-only holds; F2 qa.sh wording says "exactly one read".
-- 2026-07-06 | Tester | **009 verdict PASS-WITH-DEFERRALS → reviewer**
-  (`verification.md`, HEAD `2c3dc89d`; handoff `04-tester-to-reviewer.md`).
-  Independently re-ran EVERY gate: cargo 571/0/5 (AC-9 fns proven unmodified
-  via diff-hunk analysis — pure-addition tests-mod hunk only), fmt clean,
-  clippy 0, vite green, vitest 610 pass w/ 31-fail baseline corroborated vs
-  pristine extract (same 7 files). All 9 ACs PASS (4 visual/live aspects
-  deferred to qa.sh w/ repro steps, 008 precedent). **AC-4 RULED
-  PASS-with-note**: worst case 2 same-repo GETs on mount (probe + onOpen
-  refetch); intent holds (one-repo-only, cache absorbs the 2nd read); dedupe
-  REJECTED (would risk the reconnect-heal refetch that justifies no-fallback);
-  qa.sh wording AMENDED in spec.md; PR body must carry the deviation note +
-  StrictMode dev-build caveat (prod = 2, dev = up to 4). 4 deviations audited
-  ACCURATE (D4 not violated — event stays snake_case). Sacred surfaces all
-  untouched (route list byte-identical). 0 blocking defects; 1 cosmetic
-  (double-"Projects" heading, D2-locked) for reviewer. Phase → reviewer.
-- 2026-07-06 | Reviewer | **009 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `673c6ecf`, 0 blockers). All 8 focus items PASS w/ quoted evidence:
-  discriminator honest end-to-end (no path builds Ready from an event; the
-  one non-GET applyIndex builds Running from the POST response — allowed);
-  cache knife-edge clean under 6 adversarial sequences (re-add mints a new
-  UUID; poison → permanent miss; residual = ONLY origin-repointed-in-place,
-  restart-bounded); scanner cannot leak (inject-fail precedes the select!;
-  settle arm always wins); AC-4 ruling UPHELD (onOpen fires synchronously
-  when socket open — verified; dedupe rightly rejected); D1 deletion complete
-  under adversarial sweep (no computed view strings, nothing persisted);
-  D1–D4 + non-negotiables all held. Double-"Projects" heading = LEAVE-AS-IS
-  (fix is a PM decision on SidebarHeader). 2 Should-fix follow-ups: (1)
-  Regenerate keeps old pageCache until Ready (one-liner: clear on entering
-  running); (2) pre-existing 001 quiet-Empty edge (status removed on
-  parse-valid index w/o all_pages_present). spec.md Status → Done. Phase →
-  done. **RELEASE = HUMAN** (PR w/ 3 required statements + qa.sh 6 probes
-  incl. TCC quiet-open).
+- 2026-07-06 | Developer | **010 F2 CODE-COMPLETE + GREEN + COMMITTED
+  `0b03eb9e`** (drive, AC 4–8; tasks.md F2 section; F3 pending → phase STAYS
+  developer). `github_projects.rs` +711: `run_gh_graphql_argv` (ONE
+  runner/classifier for bind-time AND mid-run — scope miss carries the remedy
+  everywhere), pure builders (3 single-line GraphQL consts + argv fns;
+  `singleSelectOptionId` var = PRD AC-6 pin), `run_gh_capture`,
+  `ID_CACHE` LazyLock keyed (slug,number)→(node_id,item_id) (~9 vs ~14
+  calls/run), `board_write_with` (cold resolve → add-item ensure+fetch →
+  option write → stale-invalidate-retry-once → knob-gated probe-then-act
+  close/reopen; Blocked never closes). `task_sink.rs` +339:
+  `github_transition_with_board` + `github_mark_blocked_with_board` (private;
+  label fns BYTE-IDENTICAL; board Err → tracing::warn + fold into
+  Skipped("status label applied; Projects board write failed: …") — loud via
+  existing drive.rs/MCP plumbing); both arm hooks read binding only AFTER the
+  URL parse (hermeticity held — no-url skip tests never touch config). Gates:
+  cargo 604/0/5 (591+13), fmt clean, clippy 0; deletion audit = 7 lines, all
+  intended (2-line runner refactor, docstring, 2 comments, 2 callers) — ZERO
+  test edits; four seam call-site files untouched. 5 deviations documented
+  (2nd private fn = blocked-arm testability; act-failure loud per
+  never-silent; LazyLock over once_cell). ⚠️ ID_CACHE process-global: new
+  tests must use fresh slugs. **Next slice: F3 provision** (run-twice test
+  FIRST).
+- 2026-07-06 | Developer | **010 F3 CODE-COMPLETE + GREEN + COMMITTED
+  `26b1e022` → DEVELOPER PHASE DONE, phase → tester** (provision, AC 9–10;
+  tasks.md F3; handoff `03-developer-to-tester.md`). NEW crate-root
+  `provision.rs` (~1050 ln: template argv pins + `parse_project_create_output`
+  frozen from REAL gh 2.92.0; `create_repo_from_template` probe⇒clone /
+  missing⇒create --clone; `provision_repo` 4-step injectable ensure — own
+  5-label loop over the two pub(crate)-widened builders, project
+  link-or-create GUARDED by binding-exists, `scaffold_harness` wrapped,
+  consent-gated commit w/ STATE-ONLY .gitignore rewrite + porcelain-empty
+  no-commit + plain push red-nonfatal) + NEW `routes/provision.rs`
+  (repo-from-template + workspace/provision, traversal-proof validators).
+  UI: pure `workspace-provision-step.ts` (+15 vitest), 4th
+  OPTIONAL_WORKSPACE_STEPS entry, goal-step template mode (registers via the
+  TRACED existing `addRepoPath` action), modal-local 'provision' phase
+  mounting the SHARED ProjectBindingEditor + D8 consent (exact 5-path list);
+  `useComposerState`/`isGoalStepReady`/`initialComposerPhase` untouched.
+  Gates: cargo 616/0/5 (604+12; run-twice AC-10 pin written test-first,
+  proven RED first), deletion audit = exactly the 2 widening signatures,
+  fmt+clippy clean, vite green, vitest 37/0 (only the 4-entry steps pin
+  updated), tsc baseline 1642 EXACTLY held. 10 deviations documented (top:
+  Option<ProjectChoice>; state_map injection = hermeticity; resolve_slug +
+  BLOCKED_LABEL keep-in-sync dups). **All three slices green: F1 `474cfd12`
+  F2 `0b03eb9e` F3 `26b1e022` → tester re-runs everything independently.**
+- 2026-07-06 | Tester | **010 verdict PASS-WITH-DEFERRALS, 0 defects → phase
+  reviewer** (`verification.md`, HEAD `bc4a7310`; handoff
+  `04-tester-to-reviewer.md`). Independently reproduced ALL six gates: cargo
+  616/0/5 (93.6s), FMT-CLEAN, clippy 0 warnings, vite 1m48s, vitest 37/37
+  no-flake, bare-tsc EXACTLY 1642 (baseline held). ACs 1–10 PASS on READ
+  evidence (test bodies inspected); AC 11 PASS(deferred: live custom-column
+  board demo, qa.sh/human, runner Mateo — 008 precedent). Sacred surfaces
+  PROVEN: label fns byte-identical base→HEAD (extracted + string-compared);
+  empty diffs on all 4 seam call sites + useComposerState + harness/types +
+  auth.rs + desktop gh/gh_projects/github_labels; task_sink's 7 deletions all
+  accounted; TrackerPhase 4 variants; TransitionResult no new variant. 25/25
+  deviations ACCURATE. 5 adversarial spot-checks clean (AC-7 fold, run-twice
+  isolation incl. real rev-list equality, real git check-ignore, seam
+  hermeticity — binding read strictly after the two early-return guards,
+  unbound 5-invocation byte-identity). 5 Info nits (top: tasks.md F3 vitest
+  per-file counts SWAPPED 12/15 not 15/12; 03-handoff github_labels.rs path
+  missing `commands/` — tester re-proved at the real path; test-first RED
+  narrative session-internal, not in git). Reviewer focus: 3 accepted
+  dup-drift risks (gh_bin / BLOCKED_LABEL / resolve_slug), D2 residual
+  honesty, Skipped-semantics legibility.
+- 2026-07-06 | Reviewer | **010 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
+  `8aa8a2d2`, 0 blockers). All 20 focus items PASS w/ quoted evidence: the 3
+  accepted dup-drift risks rule sufficient-for-now (ONE consolidation
+  follow-up: resolve_slug→routes/util.rs per repo convention; gh_bin single
+  owner; BLOCKED_LABEL pub(crate) import or pin-test); D2 two-process RMW
+  residual documented HONESTLY (WRITE_LOCK is process-local, all writers
+  server-side, TUI has no bind surface, lost write re-bindable); Skipped-fold
+  strings name what landed + what failed + the remedy (AC-7 pin carries
+  `gh auth refresh -s project` into the run log); D1 knob-gated close/reopen
+  w/ ONE default site + unbound byte-identity; D3 zero echo/poll machinery;
+  D5 no option mutation (only ADD_ITEM + UPDATE_STATUS mutations exist);
+  D7 one component two mounts + refusal→manual-selects; D8 consent commit,
+  plain push, no AI trailer; no shell injection (argv-exec everywhere,
+  owner_node closed literal set, login always $var); traversal
+  unrepresentable; no token leakage (constructed scope message, 240/400-char
+  stderr bounds); no new is_public; option IDs never names at write; Err
+  cannot escape either github arm; id-cache correctness-independent.
+  1 Should-fix = the consolidation chore ticket (post-freeze). 5 leave-as-is
+  nits (stale "three skippable" doc word; validate_owner leading '-';
+  WRITE_LOCK comment x-ref; close-act fold phrasing; tasks.md count swap —
+  recorded in verification.md). spec.md Status → Done. Phase → done.
+  **RELEASE = HUMAN** (PR → develop + promote + AC-11 live board demo,
+  runner Mateo).
+- 2026-07-06 | Release | **010 SHIPPING → v0.60.0** (Mateo: "ship it";
+  AC-11 live board demo remains PENDING and human-run — shipped ahead of it
+  per Mateo's call, 008 precedent). Issue **#276** (feature, closes via the
+  release commit's `Closes` on main) + **#277** (reviewer Should-fix:
+  consolidate resolve_slug/gh_bin/BLOCKED_LABEL keep-in-sync dups). Flow:
+  version bump 0.59.1→0.60.0 (Cargo.toml+lock+tauri.conf.json only) → PR →
+  develop → staging → main (pushed separately) → tag v0.60.0 (fires
+  release.yml). Evidence contract for AC-11 stays: issue timeline
+  project-status + close events + a demo-pass line HERE.
