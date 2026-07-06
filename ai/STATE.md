@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, renumbered from 009 — 009 = wiki, RELEASED v0.59.0. PM D1–D8 + Architect done (`architecture.md`, 9 calls resolved). **F1 board-bind GREEN + COMMITTED `474cfd12`** — `github_projects.rs` + routes + ProjectBindingEditor/Settings mount; cargo 591/0, task_sink.rs ZERO lines. Developer continues: **F2 drive next** (pure builders → `board_write_with` + id cache + probe-gated close/reopen → the two task_sink arm hooks LAST; AC 8 = existing label tests UNMODIFIED), then F3 provision. Check develop freshness before each slice.)
+- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, renumbered from 009 — 009 = wiki, RELEASED v0.59.0/.1. PM D1–D8 + Architect done. **F1 bind GREEN `474cfd12`** (binding store + discovery + mapper + editor UI) · **F2 drive GREEN `0b03eb9e`** (board writes inside the seam, zero call-site edits, close/reopen knob, cargo 604/0). Developer continues: **F3 provision LAST** (template-create argv → `provision_repo` core w/ run-twice test FIRST → routes → wizard provision step; `OPTIONAL_WORKSPACE_STEPS` 4th entry + modal 'provision' phase; `useComposerState` untouched). Check develop freshness before the slice.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,10 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Reviewer | **009-wiki SIGN-OFF → SHIP-READY** (their flow, on
-  `wiki-remove-it-fomr-the-side`; since MERGED + RELEASED v0.59.0 `b62a9171`,
-  PR #273, issue #272 closed). 2 Should-fix follow-ups live in #272.
-  (Merged into this STATE at the 010 develop-merge; full text in git history.)
 - 2026-07-06 | Spec | **010 (né 009) DRAFTED via /sdd-spec from Mateo's PRD
   "End-to-End Autonomous Flow (Chat → Issue → Work → QA)"**
   (`ai/specs/010-end-to-end-autonomous-flow/spec.md`; worktree FF'd to v0.58.3
@@ -149,3 +145,25 @@
   (nothing written), retry clean; worktree clippy needed sherpa/onnx dylibs
   copied into target/release (known gap). **Next slice: F2 drive** (arm
   hooks LAST, AC 8 = label tests unmodified).
+- 2026-07-06 | Developer | **010 F2 CODE-COMPLETE + GREEN + COMMITTED
+  `0b03eb9e`** (drive, AC 4–8; tasks.md F2 section; F3 pending → phase STAYS
+  developer). `github_projects.rs` +711: `run_gh_graphql_argv` (ONE
+  runner/classifier for bind-time AND mid-run — scope miss carries the remedy
+  everywhere), pure builders (3 single-line GraphQL consts + argv fns;
+  `singleSelectOptionId` var = PRD AC-6 pin), `run_gh_capture`,
+  `ID_CACHE` LazyLock keyed (slug,number)→(node_id,item_id) (~9 vs ~14
+  calls/run), `board_write_with` (cold resolve → add-item ensure+fetch →
+  option write → stale-invalidate-retry-once → knob-gated probe-then-act
+  close/reopen; Blocked never closes). `task_sink.rs` +339:
+  `github_transition_with_board` + `github_mark_blocked_with_board` (private;
+  label fns BYTE-IDENTICAL; board Err → tracing::warn + fold into
+  Skipped("status label applied; Projects board write failed: …") — loud via
+  existing drive.rs/MCP plumbing); both arm hooks read binding only AFTER the
+  URL parse (hermeticity held — no-url skip tests never touch config). Gates:
+  cargo 604/0/5 (591+13), fmt clean, clippy 0; deletion audit = 7 lines, all
+  intended (2-line runner refactor, docstring, 2 comments, 2 callers) — ZERO
+  test edits; four seam call-site files untouched. 5 deviations documented
+  (2nd private fn = blocked-arm testability; act-failure loud per
+  never-silent; LazyLock over once_cell). ⚠️ ID_CACHE process-global: new
+  tests must use fresh slugs. **Next slice: F3 provision** (run-twice test
+  FIRST).
