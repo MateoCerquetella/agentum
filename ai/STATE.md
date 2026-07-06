@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 009-wiki-project-scoped
-- **phase:** developer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 Architect PASS 2026-07-06, `architecture.md` D-A1–D-A8, handoff `02-architect-to-developer.md`; build F1→F2→F3 one gated slice each; grounded at `388eaa66` v0.58.3. 008 RELEASED v0.57.0 `64053d4c`, #250 closed)
+- **phase:** tester       <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 Developer COMPLETE 2026-07-06: F1 `b325c176` + F2 `8f1b663c` + F3 `fdfec986`, all gates green; handoff `03-developer-to-tester.md` incl. the AC-4 two-GET ruling the tester must make. 008 RELEASED v0.57.0 `64053d4c`, #250 closed)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,19 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Spec | **009 drafted + PM-gated** (`009-wiki-project-scoped`,
-  Mateo's ask): Wiki OFF the nav rail → new sidebar **Projects** group →
-  hub-only access (`ProjectHubPage.tsx:181` embed is the survivor). Root cause
-  of the "aggressive scanning / permission storm": the standalone hub's
-  every-repo sweep (`WikiPage.tsx:175–189`, N × `git remote get-url` under
-  ~/Documents etc.; recurrence across updates = unsigned app #230, OUT of
-  scope). F1 rail swap, F2 quiet probing (sweep deleted + `resolve_target`
-  key cache + fs-guard widened for automatic reads only), F3 `wiki.updated`
-  on /api/events replacing the 3s poll + progressive page render (loud-failure
-  001-AC-9 preserved). ⚠️ One-slice gate = pass-with-note (3 increments, one
-  root cause, repo precedent 004/008). Open Qs: standalone view fate, Projects
-  group shape vs groupBy='repo', which automatic reads remain, event naming.
-  Phase → pm.
 - 2026-07-06 | PM | **009 gate PASS → architect** (fresh sdd-pm subagent;
   handoff `01-pm-to-architect.md`). All 9 items pass ("one slice" =
   pass-with-note: 3 increments, one root cause, precedent 004/005/008); ~15
@@ -134,3 +121,17 @@
   alias), vite green, vitest wiki 2/2, AC-4 sweeps zero hits. F3 note:
   RUNNING_POLL_MS still present BY DESIGN (F3 deletes it, no fallback);
   `wiki-view-state.ts` absorbs `wiki-probe.ts`.
+- 2026-07-06 | Developer | **009 F3 CODE-COMPLETE `fdfec986` → DEVELOPER
+  PHASE DONE, phase → tester** (handoff `03-developer-to-tester.md`).
+  `emit_wiki_updated` at all 4 write_status transitions (ready BEFORE
+  embeddings) + run-scoped 2s `scan_pages_loop` in `select!` w/ settle
+  (growth-only via pure `scan_grew`); Running GET carries `pages`; UI:
+  `wiki-view-state.ts` reducer (absorbed wiki-probe; ready/failed events =
+  REFETCH commands, never a flip — discriminator pin tested), poll DELETED
+  no fallback, progressive TOC + banner, pageCache cleared running→ready.
+  4 deviations, notably `rename_all_fields=camelCase` on WikiIndexResponse
+  (variant fields were silently snake_case on the wire — real fix, wire-shape
+  test pins it). Gates: cargo 571/0/5 (AC-9 tests UNMODIFIED 13/13 wiki),
+  fmt/clippy clean, vite green, vitest wiki 14/14, all grep pins zero-hit.
+  ⚠️ TESTER MUST RULE: mount = up to TWO same-repo GETs (probe + onOpen
+  refetch) — one-REPO-only holds; F2 qa.sh wording says "exactly one read".
