@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** reviewer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec. **TESTER VERDICT: PASS-WITH-DEFERRALS, 0 defects** (`verification.md`, HEAD `bc4a7310`) — all 6 gates reproduced exactly (cargo 616/0/5, fmt, clippy 0, vite, vitest 37/0, tsc 1642), ACs 1–10 PASS on read evidence, 25/25 deviations accurate, sacred surfaces byte-proven, 5 adversarial spot-checks clean. Deferral = AC 11 only (live board demo, Mateo). Handoff `04-tester-to-reviewer.md` — reviewer focus: the 3 accepted dup-drift risks, D2 residual honesty, Skipped-semantics legibility. Sign-off = spec Status → Done + phase → done; RELEASE stays HUMAN.)
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 **SHIP-READY — Reviewer SIGN-OFF 2026-07-06**, `review.md`, 0 blockers, HEAD `8aa8a2d2`. All 20 focus items PASS w/ quoted evidence: 3 dup-drift risks acceptable (ONE consolidation follow-up ticket: resolve_slug→routes/util.rs, gh_bin single owner, BLOCKED_LABEL pin-test); D2 residual honest; Skipped-fold self-describing; D1–D8 all honored; no injection/leak/is_public holes; option IDs never names; Ok-never-Err everywhere. 5 leave-as-is nits. Commits: F1 `474cfd12` F2 `0b03eb9e` F3 `26b1e022` + docs. **RELEASE = HUMAN**: PR → develop, promote, AND the AC-11 live custom-column board demo (runner Mateo; evidence = issue timeline + a demo-pass line here). Follow-up ticket = the consolidation chore.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -171,3 +171,26 @@
   narrative session-internal, not in git). Reviewer focus: 3 accepted
   dup-drift risks (gh_bin / BLOCKED_LABEL / resolve_slug), D2 residual
   honesty, Skipped-semantics legibility.
+- 2026-07-06 | Reviewer | **010 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
+  `8aa8a2d2`, 0 blockers). All 20 focus items PASS w/ quoted evidence: the 3
+  accepted dup-drift risks rule sufficient-for-now (ONE consolidation
+  follow-up: resolve_slug→routes/util.rs per repo convention; gh_bin single
+  owner; BLOCKED_LABEL pub(crate) import or pin-test); D2 two-process RMW
+  residual documented HONESTLY (WRITE_LOCK is process-local, all writers
+  server-side, TUI has no bind surface, lost write re-bindable); Skipped-fold
+  strings name what landed + what failed + the remedy (AC-7 pin carries
+  `gh auth refresh -s project` into the run log); D1 knob-gated close/reopen
+  w/ ONE default site + unbound byte-identity; D3 zero echo/poll machinery;
+  D5 no option mutation (only ADD_ITEM + UPDATE_STATUS mutations exist);
+  D7 one component two mounts + refusal→manual-selects; D8 consent commit,
+  plain push, no AI trailer; no shell injection (argv-exec everywhere,
+  owner_node closed literal set, login always $var); traversal
+  unrepresentable; no token leakage (constructed scope message, 240/400-char
+  stderr bounds); no new is_public; option IDs never names at write; Err
+  cannot escape either github arm; id-cache correctness-independent.
+  1 Should-fix = the consolidation chore ticket (post-freeze). 5 leave-as-is
+  nits (stale "three skippable" doc word; validate_owner leading '-';
+  WRITE_LOCK comment x-ref; close-act fold phrasing; tasks.md count swap —
+  recorded in verification.md). spec.md Status → Done. Phase → done.
+  **RELEASE = HUMAN** (PR → develop + promote + AC-11 live board demo,
+  runner Mateo).

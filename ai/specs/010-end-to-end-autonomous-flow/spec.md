@@ -1,7 +1,7 @@
 # Spec 010 — End-to-End Autonomous Flow (Projects v2 board mirror + workspace provisioning)
 
 - **Number:** 010  <!-- renumbered from 009 (2026-07-06): ai/specs/009-wiki-project-scoped ships on branch wiki-remove-it-fomr-the-side -->
-- **Status:** Architect
+- **Status:** Done  <!-- Reviewer SIGN-OFF 2026-07-06 (review.md, 0 blockers); release + AC-11 demo HUMAN-GATED -->
 - **Surface:** `crates/agentum-server` (task_sink, routes/github, harness scaffold) + `crates/agentum-desktop` (workspace wizard UI; existing `gh_projects` read commands)
 - **Author:** Mateo (PRD "Agentum: End-to-End Autonomous Flow" → `/sdd-spec` direct draft)
 - **Date:** 2026-07-06
