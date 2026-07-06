@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 008-finish-the-loop
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **current_spec:** 009-wiki-project-scoped
+- **phase:** developer    <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 Architect PASS 2026-07-06, `architecture.md` D-A1–D-A8, handoff `02-architect-to-developer.md`; build F1→F2→F3 one gated slice each; grounded at `388eaa66` v0.58.3. 008 RELEASED v0.57.0 `64053d4c`, #250 closed)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,47 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
-  F2/F3 deferred to next developer iterations). Built in architecture order:
-  Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
-  Step2 `apply_blocked_transition`+`status/blocked` GitHub-only label, TrackerPhase
-  stays 4 (D-A), remove-set widened to 5-minus-target, `record_feature_failure`→
-  (blocked,attempts) (#16); Step4 pure `start-gated-run-precondition`/`composer-modal-props`
-  + armed-!repoId toast + server-error-detail + `subscribeHarnessRunErrors` bridge
-  (#2 #226 edge, #5); Step5 `#[ignore]` `harness_start_work_live{,_roles}.rs` +
-  `gh_in_dir` honors AGENTUM_GH_BIN; Step3 (sacred, LAST) `await_repl_ready→bool`
-  + `inject_prompt→Result<bool>`, send-sequence BYTE-IDENTICAL, loud readiness log
-  ×4 (#14a). Gates: server 546/0/5, executor 21/0, fmt+clippy clean, vite green,
-  vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
-  green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
-  developer → F2 next.
-- 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
-  intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
-  Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
-  extracted VERBATIM (Fast byte-identical, pinned); `build_intake_instructions`
-  router; `socratic_stage_instructions`+`socratic_pass_body` (5 passes WHO/WHAT/
-  WHY/done/risks, reflect-back, stage5→"Preview issues"); `chat_auth_gate` shared
-  no-creds gate (Complex surfaces NO_CREDS by construction). Client: pure
-  `lib/socratic-intake.ts` reducer (one pass/turn, cap5, Fast never advances) +
-  localStorage `Conversation.intake` (D1 no new table) + two ChatPage buttons +
-  Enter-stays-Fast. Gates: server 552/0/5 (F1 546 held), vitest 10/0 new, fmt+
-  clippy clean, vite green; full vitest 139-fail = PROVEN pre-existing baseline
-  (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
-  untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
-  surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.
-- 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
-  (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
-  `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
-  (deriveWorkspaceGoalSeed/isGoalStepReady/firstGoalStepBlocker/
-  OPTIONAL_WORKSPACE_STEPS/shouldStartAtGoalStep/revealDetails) + thin
-  `NewWorkspaceGoalStep.tsx` (goal textarea + reused RepoCombobox workdir) +
-  modal renders it as default first screen, "Skip to details" → today's composer
-  (D3); goal+workdir required, worktree/scaffold/tracker skippable (D9);
-  `useComposerState` NEVER edited (props only), F1's initialStartGatedRunProp
-  intact. Gates: vite+tsc green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3
-  pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
-  AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
-  code-complete → tester.**
 - 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
   HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
   every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
@@ -128,3 +87,44 @@
   = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
   ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
   HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
+- 2026-07-06 | Spec | **009 drafted + PM-gated** (`009-wiki-project-scoped`,
+  Mateo's ask): Wiki OFF the nav rail → new sidebar **Projects** group →
+  hub-only access (`ProjectHubPage.tsx:181` embed is the survivor). Root cause
+  of the "aggressive scanning / permission storm": the standalone hub's
+  every-repo sweep (`WikiPage.tsx:175–189`, N × `git remote get-url` under
+  ~/Documents etc.; recurrence across updates = unsigned app #230, OUT of
+  scope). F1 rail swap, F2 quiet probing (sweep deleted + `resolve_target`
+  key cache + fs-guard widened for automatic reads only), F3 `wiki.updated`
+  on /api/events replacing the 3s poll + progressive page render (loud-failure
+  001-AC-9 preserved). ⚠️ One-slice gate = pass-with-note (3 increments, one
+  root cause, repo precedent 004/008). Open Qs: standalone view fate, Projects
+  group shape vs groupBy='repo', which automatic reads remain, event naming.
+  Phase → pm.
+- 2026-07-06 | PM | **009 gate PASS → architect** (fresh sdd-pm subagent;
+  handoff `01-pm-to-architect.md`). All 9 items pass ("one slice" =
+  pass-with-note: 3 increments, one root cause, precedent 004/005/008); ~15
+  citations line-verified at `388eaa66`; `Event.kind` = open dotted String
+  (`agentum-core/src/lib.rs:429–437`) so `wiki.updated` needs no enum change.
+  **D1–D4 LOCKED**: D1 delete standalone wiki view entirely (openWikiPage
+  single caller, closeWikiPage zero); D2 Projects = separate always-visible
+  rail section (groupBy is toggleable); D3 AC-6 expected as regression guard
+  (PM audit: no other automatic protected-dir read; PR must state audit
+  result); D4 one `wiki.updated` event `{repo_id,status,pages?}`. 6 mechanical
+  spec edits applied by orchestrator (AC-1/3/4/7 tightened, qa.sh scoped per
+  feature, Status→PM). Architect notes: self-invalidating cache key
+  `(repo_id,path,connection_id)`; page-write detection = architect's pick;
+  progressive TOC never flips the discriminator. Phase → architect.
+- 2026-07-06 | Architect | **009 gate PASS → developer** (`architecture.md`
+  D-A1–D-A8; handoff `02-architect-to-developer.md`; all citations re-verified,
+  4 drifts corrected — resolve-zoom-target is in hooks/, FOUR write_status
+  emission sites, fs test :631, **vite build does NOT typecheck** → D1 deletion
+  + poll removal need verify.sh grep pins). Key designs: NEW sibling
+  `SidebarProjectsNav.tsx` + pure `projects-nav-rows.ts` (ignores
+  filterRepoIds, D-A8); WikiPage → embed-only w/ REQUIRED `pinnedRepoId`;
+  `wiki_keys` composite-key cache `(repo_id,path,host_id)` positive-only
+  (never cache path-fallback); `wiki.updated` via `state.bus.send` at 4 sites
+  + run-scoped 2s `scan_pages_loop` in `select!` w/ settle (fs-notify REJECTED:
+  remove_dir_all race); poll deleted with NO fallback (loopback: socket-down ⇒
+  HTTP-down); Running GET gains `pages`; ready flips ONLY via validated GET
+  (event = refetch command); fs.rs dormant `prefetch` seam. `activeView` NOT
+  persisted (rehydration risk cleared). Phase → developer (F1 first).

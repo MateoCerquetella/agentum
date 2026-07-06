@@ -1,12 +1,5 @@
 import React from 'react'
-import {
-  BookText,
-  Columns3,
-  MessagesSquare,
-  Radar,
-  Search,
-  type LucideIcon
-} from 'lucide-react'
+import { Columns3, MessagesSquare, Radar, Search, type LucideIcon } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -101,7 +94,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
-  const openWikiPage = useAppStore((s) => s.openWikiPage)
   const setActiveView = useAppStore((s) => s.setActiveView)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
@@ -192,7 +184,6 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
-  const wikiActive = activeView === 'wiki'
   // Why: Mission Control is now the always-on home, so its "needs you" badge is
   // always tracked (no longer gated behind the old experimental Agents button).
   const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
@@ -216,7 +207,9 @@ const SidebarNav = React.memo(function SidebarNav() {
         active={harnessActive}
         onClick={openHarnessPage}
       />
-      <PrimaryNavItem icon={BookText} label="Wiki" active={wikiActive} onClick={openWikiPage} />
+      {/* The global Wiki rail item is gone (spec 009 D1): a wiki belongs to one
+          project, so it now lives on the Project Hub's Wiki tab, reached via
+          the Projects group (SidebarProjectsNav) below this rail. */}
 
       {/* Secondary utilities: external task trackers, the goals pipeline, and
           fuzzy search. Tasks + Goals fold into Board in Phase 2/3. */}
