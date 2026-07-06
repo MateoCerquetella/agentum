@@ -64,17 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
-  sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
-  + `await_repl_ready` poll/trust unchanged, only return type); `apply_blocked_transition`
-  never-`Err` + honest 5-name remove-set (board can't lie either direction); no
-  D6 shell injection (argv exec); Fast byte-identical (construction + pin); live
-  test asserts the REAL leg (MARKER in pane = prompt landed, not hollow); F3
-  preserves F1 Tasks hop; no new `is_public` holes; D1–D9 honored. 1 Should-fix
-  = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
-  ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
-  HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
 - 2026-07-06 | Spec | **009 drafted + PM-gated** (`009-wiki-project-scoped`,
   Mateo's ask): Wiki OFF the nav rail → new sidebar **Projects** group →
   hub-only access (`ProjectHubPage.tsx:181` embed is the survivor). Root cause
@@ -130,3 +119,18 @@
   empty state deleted; dead-at-base setActiveView left). ⚠️ for reviewer:
   possible double-"Projects" heading (SidebarHeader when groupBy='repo');
   verify.sh grep pins not yet wired into a .harness scaffold.
+- 2026-07-06 | Developer | **009 F2 CODE-COMPLETE + COMMITTED `8f1b663c`**
+  (wiki-quiet-probing, AC 4–6; F3 remains → phase STAYS developer). Sweep +
+  `repoStatuses`/`RepoWikiStatus` deleted; pure `wiki-probe.ts` pins
+  one-repo-only probing (+test); `AppState.wiki_keys` positive-only cache
+  keyed `(repo_id,path,host_id)` — local = nil UUID (exact: LOCAL_HOST_ID
+  already nil), `should_cache_wiki_key` decides on the REMOTE resolution
+  (decoupled from key format), path-fallback never cached, lock never across
+  `.await`; fs.rs `is_click_to_open_dir` + `ListQuery.prefetch` seam DORMANT
+  (D3 audit recorded in tasks.md: no automatic protected-dir read at base —
+  PR body must state it). 8 test-mod `fresh_state()` literals mechanically
+  gained the field (compile-mandated). Gates: cargo 569/0/5 (+4 new), fmt
+  clean own-files-only, clippy 0 warnings (type_complexity fixed via lib.rs
+  alias), vite green, vitest wiki 2/2, AC-4 sweeps zero hits. F3 note:
+  RUNNING_POLL_MS still present BY DESIGN (F3 deletes it, no fallback);
+  `wiki-view-state.ts` absorbs `wiki-probe.ts`.
