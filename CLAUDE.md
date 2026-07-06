@@ -494,6 +494,16 @@ Test) → browser QA gate green → ticket Done. The pieces:
 - **Cargo.lock drift**: `Cargo.lock` gets updated whenever a dep
   changes. Commit it; we ship binaries from CI and reproducibility
   matters.
+- **Boot revival vs watchdog ordering**: an OS reboot kills the local
+  tmux server while the store still says `running`. At boot,
+  `routes::sessions::boot_revive_dead_sessions` respawns those local
+  panes through `spawn_agent_into_pane` (Claude resumes its
+  conversation — the adapter swaps `--session-id` for `--resume` when
+  the transcript exists). It runs on the SAME tokio task as the
+  watchdog, strictly before it (`lib.rs::spawn_background_workers`) —
+  start the watchdog earlier and it marks the not-yet-revived rows
+  crashed. Non-resumable tools (codex/cursor/gemini) are deliberately
+  NOT revived: a silently-fresh instance would hide the context loss.
 - **Session streaming is push-based, never poll**: both local and
   remote `/stream` WS feed the client raw incremental pane bytes from
   a `tmux pipe-pane` log (RIS + one `capture-pane` snapshot on connect,

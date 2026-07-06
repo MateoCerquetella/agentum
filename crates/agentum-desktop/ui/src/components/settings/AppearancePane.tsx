@@ -20,6 +20,7 @@ import { DEFAULT_APP_FONT_FAMILY } from '../../../../shared/constants'
 import { useAvailableStatusBarToggles } from '../status-bar/use-available-status-bar-toggles'
 import {
   APPEARANCE_PANE_SEARCH_ENTRIES,
+  COLOR_THEME_ENTRIES,
   LAYOUT_ENTRIES,
   SIDEBAR_ENTRIES,
   STATUS_BAR_ENTRIES,
@@ -29,6 +30,7 @@ import {
   TYPOGRAPHY_ENTRIES,
   ZOOM_ENTRIES
 } from './appearance-search'
+import { AppColorThemeGallery } from './AppColorThemeGallery'
 import { TERMINAL_APPEARANCE_SEARCH_ENTRIES } from './terminal-search'
 import { TerminalAppearanceSection } from './TerminalAppearanceSection'
 import type { UseGhosttyImportReturn } from './useGhosttyImport'
@@ -82,6 +84,7 @@ export function AppearancePane({
 
   const visibleSections = [
     matchesSettingsSearch(searchQuery, THEME_ENTRIES) ||
+    matchesSettingsSearch(searchQuery, COLOR_THEME_ENTRIES) ||
     matchesSettingsSearch(searchQuery, ZOOM_ENTRIES) ||
     matchesSettingsSearch(searchQuery, TYPOGRAPHY_ENTRIES) ? (
       <section key="interface" className="divide-y divide-border/40">
@@ -104,6 +107,30 @@ export function AppearancePane({
                   updateSettings({ theme: option })
                   applyTheme(option)
                 }}
+              />
+            </div>
+          </SearchableSetting>
+        ) : null}
+
+        {matchesSettingsSearch(searchQuery, COLOR_THEME_ENTRIES) ? (
+          <SearchableSetting
+            title="Color Theme"
+            description="Recolor the whole app with a color theme (Dracula, Catppuccin, …)."
+            keywords={['color theme', 'palette', 'dracula', 'catppuccin', 'gruvbox', 'accent']}
+          >
+            <div className="space-y-2.5 py-2">
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium">Color Theme</div>
+                <p className="text-xs text-muted-foreground">
+                  Paint the whole app — chrome and terminal — in one palette. Live previews;
+                  &ldquo;Built-in&rdquo; returns to the plain theme above. Also available from the
+                  command palette as &ldquo;Color Theme…&rdquo;.
+                </p>
+              </div>
+              <AppColorThemeGallery
+                settings={settings}
+                updateSettings={updateSettings}
+                applyTheme={applyTheme}
               />
             </div>
           </SearchableSetting>

@@ -481,6 +481,10 @@ Rules:\n\
 - Ask ONE focused clarifying question at a time (two only if tightly related). Keep each \
 turn short and concrete, like a sharp staff engineer who knows this codebase — no filler, \
 no \"great question!\".\n\
+- Write like a person, not a product brief: plain sentences, no marketing adjectives, no \
+\"This feature will empower/streamline…\" openers, no bullet lists where a sentence does, \
+no restating the user's words back as filler, and no closing summaries of what you just \
+said. Vary how you phrase things; if a template is creeping in, break it.\n\
 - Cover only what's genuinely unclear, in roughly this order: WHO it's for and the problem \
 they hit today, WHAT the smallest useful change is, WHY it matters now, the acceptance \
 criteria, and the risks + what's OUT of scope. Never re-ask what the user — or the repo \
@@ -489,10 +493,12 @@ context — already answers.\n\
 rather than a checklist: {anti_patterns}\n\
 - Converge only when the feature is genuinely well-defined: {selfcheck}. If any of those is \
 still fuzzy, ask ONE more sharpening question on just that gap first. Once it clears that \
-bar, STOP asking questions and propose a breakdown: a one-line feature title, then 3–7 \
-concrete tasks (each an issue-style title plus one sentence of detail), each pointing at the \
-real files/areas it touches. Then tell the user to click the \"Preview issues\" button below \
-the chat to review and file them.\n\
+bar, STOP asking questions and propose a breakdown: a one-line feature title, then exactly \
+as many concrete tasks as the scope needs — a trivial fix is ONE task, a small feature two \
+or three, and only a genuinely broad feature more; never pad to a fixed count. Each task is \
+an issue-style title plus one sentence of detail, pointing at the real files/areas it \
+touches. Then tell the user to click the \"Preview issues\" button below the chat to review \
+and file them.\n\
 {access_rule}\n\
 - You do not create the issues yourself, and no other agent will: the \"Preview issues\" \
 button opens a review of the drafted issues, and confirming there files them directly. \
@@ -526,14 +532,18 @@ fn build_intake_instructions(
     }
 }
 
-/// One Socratic pass (spec 008 F2). Reuses the SAME grounding blocks as
-/// [`interviewer_instructions`] (context line / repo snapshot / access rule /
-/// wiki) but swaps the "job/Rules" body for a SINGLE-topic pass: the model
-/// (a) reflects the user's previous answer back in one sentence, then (b) asks
-/// ONLY this stage's question. Stage 5 stops asking and points the user at
-/// "Preview issues" (the same convergence Fast uses). The server owns NO stage
-/// state — this is a pure `(stage, grounding) → prompt` function; the CLIENT
-/// advances the stage one pass per turn (D-B/D1). `stage` is clamped defensively.
+/// One Socratic pass (spec 008 F2, made adaptive by #257). Reuses the SAME
+/// grounding blocks as [`interviewer_instructions`] (context line / repo
+/// snapshot / access rule / wiki) but swaps the "job/Rules" body for a
+/// SINGLE-topic pass: the model (a) validates the user's previous answer
+/// against the pass topic (re-asking when it was vague — depth adapts to
+/// answer quality), then (b) asks ONLY this stage's question. Every reply ends
+/// with a machine-read control marker (`[[socratic:advance|stay|done]]`) the
+/// CLIENT moves the stage machine on; `done` is gated on the spec actually
+/// being well-defined (the convergence gate), and only stage 5 may emit it and
+/// point the user at "Preview issues" (the same convergence Fast uses). The
+/// server owns NO stage state — this is a pure `(stage, grounding) → prompt`
+/// function (D-B/D1). `stage` is clamped defensively.
 fn socratic_stage_instructions(
     stage: u8,
     workdir: Option<&str>,
@@ -548,20 +558,32 @@ fn socratic_stage_instructions(
 
     // The frame + Rules are shared across passes; `pass` is the one thing this
     // turn does. "Preview issues" (in pass 5) is the UI button label — keep it in
-    // sync with the ChatPage composer, same as the Fast prompt above.
+    // sync with the ChatPage composer, same as the Fast prompt above. The
+    // control-marker spelling is parsed by the client's socratic-intake.ts —
+    // keep the two in sync.
     format!(
         "You are running inside agentum (a control plane for AI coding agents) as the \
-feature-intake interviewer on the Chat screen, running a STAGED Socratic interview — one \
-focused pass per turn, five passes total (WHO → WHAT → WHY → done-criteria → risks). This is \
+feature-intake interviewer on the Chat screen, running an ADAPTIVE Socratic interview — one \
+focused pass per turn across five topics (WHO → WHAT → WHY → done-criteria → risks). This is \
 pass {stage} of 5.{ctx}{repo_block}{wiki_block}\n\n\
 Your job THIS TURN, and nothing else:\n\
 {pass}\n\n\
 Rules:\n\
-- Do EXACTLY this one pass. Ask ONE question (two only if tightly related), short and concrete \
+- First judge whether the user's previous answer actually covered THIS pass's topic. If it \
+was vague, contradictory, or missing, re-ask this topic more concretely (offer a sharp \
+candidate answer to react to) instead of moving on — depth adapts to answer quality, not a \
+fixed script.\n\
+- Ask ONE question (two only if tightly related), short and concrete \
 like a sharp staff engineer who knows this codebase — no filler, no \"great question!\".\n\
 - Never re-ask what the user — or the repo context — already answered. Do NOT jump ahead to a \
-later pass, and do NOT draft the task breakdown before the final pass.\n\
-{access_rule}"
+later pass, and do NOT draft the task breakdown before the interview converges.\n\
+{access_rule}\n\
+- End EVERY reply with exactly one control line, alone on the final line with nothing after \
+it: [[socratic:advance]] when this pass's topic is now well covered, [[socratic:stay]] when \
+it still needs another round, or [[socratic:done]] ONLY on the final pass AND only when the \
+problem, outcome, acceptance criteria, and scope boundaries are all concrete enough to draft \
+from — that is the convergence gate. The line is machine-read and stripped from the UI; never \
+mention or explain it."
     )
 }
 
@@ -1134,7 +1156,7 @@ async fn call_anthropic(
 /// (a parent feature + ordered, prioritised sub-tasks) — not a flat list of
 /// separate issues. Kept byte-exact; the lenient parser ([`extract_feature_plan`])
 /// tolerates a model that still wraps it in prose or fences.
-const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Output ONLY the raw JSON object, no prose, no markdown code fences.";
+const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. The task COUNT must match the scope actually discussed: a trivial ask is a SINGLE task, a small feature two or three — never pad to a fixed number, and never invent tasks the conversation didn't call for. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Write every string in a plain engineer's voice: name concrete behaviors, files, and surfaces; no marketing adjectives, no 'This feature will…' openers, no filler like 'improve the user experience', and don't restate the title inside summary/problem/goal. Output ONLY the raw JSON object, no prose, no markdown code fences.";
 
 /// The final user turn appended to the transcript for the extraction call. Ends
 /// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
@@ -1309,7 +1331,6 @@ fn compose_issue_body(plan: &FeaturePlan) -> String {
         }
         body.push('\n');
     }
-    body.push_str("\n_Created from an agentum Chat feature breakdown._");
     body
 }
 
@@ -1383,7 +1404,6 @@ fn compose_task_body(plan: &FeaturePlan, task: &SubTask, priority: Priority) -> 
     if !feature.is_empty() {
         body.push_str(&format!("**Feature:** {feature}\n"));
     }
-    body.push_str("\n_Created from an agentum Chat feature breakdown._");
     body
 }
 
@@ -2109,8 +2129,7 @@ mod tests {
              ## Sub-tasks (priority order)\n\n\
              - [ ] **[High]** A high — aa\n\
              - [ ] **[Medium]** B med\n\
-             - [ ] **[Low]** C low — cc\n\n\
-             _Created from an agentum Chat feature breakdown._"
+             - [ ] **[Low]** C low — cc\n"
         );
     }
 
@@ -2147,8 +2166,7 @@ mod tests {
              ## Sub-tasks (priority order)\n\n\
              - [ ] **[High]** A high — aa\n\
              - [ ] **[Medium]** B med\n\
-             - [ ] **[Low]** C low — cc\n\n\
-             _Created from an agentum Chat feature breakdown._",
+             - [ ] **[Low]** C low — cc\n",
             "blank problem/goal must render the pre-006 body byte-identically"
         );
     }
@@ -2194,7 +2212,11 @@ mod tests {
             !body.contains("## Sub-tasks (priority order)"),
             "SDD shape replaces the legacy heading: {body}"
         );
-        assert!(body.ends_with("_Created from an agentum Chat feature breakdown._"));
+        // #256: no boilerplate footer — the body ends with real content.
+        assert!(
+            !body.contains("_Created from an agentum Chat"),
+            "no templated footer: {body}"
+        );
     }
 
     /// Spec 006 F2: the new fields are serde-default — an old client's plan and
@@ -2513,6 +2535,25 @@ mod tests {
         assert!(
             p5.contains("reflect the previous answer back"),
             "stage 5 reflects: {p5}"
+        );
+        // #257 — the adaptive protocol: every pass carries the control-marker
+        // rules (validate-then-re-ask + the three markers), and only pass 5's
+        // BODY may gate on `done` (the convergence gate).
+        for (stage, prompt) in [(1u8, &p1), (2, &p2), (3, &p3), (4, &p4)] {
+            assert!(
+                prompt.contains("[[socratic:advance]]")
+                    && prompt.contains("[[socratic:stay]]")
+                    && prompt.contains("[[socratic:done]]"),
+                "stage {stage} carries the control-marker protocol"
+            );
+            assert!(
+                prompt.contains("re-ask this topic"),
+                "stage {stage} validates the previous answer adaptively"
+            );
+        }
+        assert!(
+            p5.contains("[[socratic:done]]") && p5.contains("[[socratic:stay]]"),
+            "stage 5's body gates convergence on done-vs-stay: {p5}"
         );
         assert!(
             p5.contains("STOP asking questions"),
