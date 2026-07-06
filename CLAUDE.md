@@ -513,7 +513,17 @@ Test) → browser QA gate green → ticket Done. The pieces:
   Do **not** reintroduce the old `capture-pane`-every-N-ms full-snapshot
   poll for remote — it lagged ~700 ms and flickered (full-screen RIS
   repaint each tick). `pipe_pane` is armed at session start and re-armed
-  idempotently (`-o`) on each connect.
+  on each connect.
+- **`tmux pipe-pane -o` TOGGLES — it is NOT an idempotent arm** (issue
+  #270). tmux always closes an existing pipe first; `-o` merely skips
+  opening the replacement — so calling it against a live pipe DISARMS
+  the stream. That blind re-arm blanked every new agent session at
+  first connect and disarmed healthy sessions on app restart (the
+  `pane_repair` sweep). Every arm path must probe `#{pane_pipe}` first
+  and skip when live (`agentum_tmux::pipe_pane`, `remote_pipe_script`,
+  `snapshot_with_offset_script` all do); when actually arming, use
+  plain `pipe-pane` without `-o` so a lost race still ends armed.
+  Never call `tmux pipe-pane -o` directly.
 
 ---
 
