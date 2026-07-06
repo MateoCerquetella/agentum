@@ -39,7 +39,7 @@ use streaming::{stream_remote_session, stream_session};
 mod provision;
 use super::util::parse_uuid;
 use provision::{Reprovision, reprovision_session};
-pub(crate) use provision::{boot_drift_rescan, spawn_agent_into_pane};
+pub(crate) use provision::{boot_drift_rescan, boot_revive_dead_sessions, spawn_agent_into_pane};
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -602,7 +602,20 @@ async fn start(
     // All launch conventions (YOLO translation, loopback env, Claude hook, MCP
     // wiring, pipe-pane, status flip) live in the shared spawn helper so the
     // harness-engine driver goes through the exact same path.
-    spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await?;
+    if let Err(e) = spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await {
+        // Lost a spawn race: the boot revival sweep (or a concurrent /start)
+        // can create this pane between the has_session probe above and our
+        // spawn, which tmux rejects as a duplicate name. If the pane exists
+        // NOW the session is running — report a reattach rather than a 500
+        // the client would surface as a dead tab.
+        if crate::host_runtime::has_session(&host, &target)
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(Json(session_with_spawned(load(&state, id).await?, false)));
+        }
+        return Err(e);
+    }
     Ok(Json(session_with_spawned(load(&state, id).await?, true)))
 }
 

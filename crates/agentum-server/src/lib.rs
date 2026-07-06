@@ -429,8 +429,22 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         }
     });
 
-    let watchdog = agentum_watchdog::Watchdog::new(bus.clone(), state.store.clone());
-    tokio::spawn(watchdog.run());
+    // Boot revival, then the watchdog — strictly in that order, on one task.
+    // An OS reboot kills the local tmux server while the store still says
+    // `running`; the sweep respawns those panes (Claude resumes its
+    // conversation via the transcript-aware adapter). It must finish before
+    // the watchdog's first reconcile, which samples every running session's
+    // pane and would mark the not-yet-revived ones crashed (issue #267).
+    {
+        let state = state.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            routes::sessions::boot_revive_dead_sessions(&state).await;
+            agentum_watchdog::Watchdog::new(bus, state.store.clone())
+                .run()
+                .await;
+        });
+    }
 
     // Goal-status auto-progression reconciler: enforces `goal.status = max(child
     // statuses)` and fires the planner auto-stop on first child arrival.
