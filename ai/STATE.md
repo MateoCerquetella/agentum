@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, renumbered from 009 — 009 = wiki, RELEASED v0.59.0/.1. PM D1–D8 + Architect done. **F1 bind GREEN `474cfd12`** (binding store + discovery + mapper + editor UI) · **F2 drive GREEN `0b03eb9e`** (board writes inside the seam, zero call-site edits, close/reopen knob, cargo 604/0). Developer continues: **F3 provision LAST** (template-create argv → `provision_repo` core w/ run-twice test FIRST → routes → wizard provision step; `OPTIONAL_WORKSPACE_STEPS` 4th entry + modal 'provision' phase; `useComposerState` untouched). Check develop freshness before the slice.)
+- **phase:** tester         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec. PM D1–D8 + Architect done. **DEVELOPER COMPLETE — all three slices GREEN:** F1 bind `474cfd12` · F2 drive `0b03eb9e` · F3 provision `26b1e022`; cargo 616/0/5 (571 pre-spec + 45 new), vitest 37/0, fmt+clippy clean, tsc baseline 1642 held. Handoff `03-developer-to-tester.md` — tester independently re-runs every gate, rules AC 1–10 w/ repro steps, audits the 25 documented deviations for accuracy, sweeps sacred surfaces. AC 11 = qa.sh/human demo (Mateo), NOT a tester item.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,23 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Spec | **010 (né 009) DRAFTED via /sdd-spec from Mateo's PRD
-  "End-to-End Autonomous Flow (Chat → Issue → Work → QA)"**
-  (`ai/specs/010-end-to-end-autonomous-flow/spec.md`; worktree FF'd to v0.58.3
-  `388eaa66` first so line refs are current). Scoping finding: the PRD's §1
-  canonical flow already SHIPPED (004/005/006/008/012 — issue create,
-  start-work, spec materialization, spawn, settle, two-phase gate, retry
-  budget); the real delta = **GitHub Projects v2 mirror + workspace
-  provisioning**. Slices: F1 bind (one `gh api graphql` Status-field discovery
-  → phase→optionId mapping, never-unmapped fallback) / F2 drive (projects arm
-  INSIDE `apply_tracker_transition`+`apply_blocked_transition` — all call
-  sites free, incl. MCP `agentum_report_status`; `done_closes_issue` knob) /
-  F3 provision (repo-from-template + label pre-ensure + board create/bind +
-  scaffold commit, run-twice idempotent). Desktop `gh_projects` READ commands
-  reused by the wizard; board WRITES live server-side (desktop write stubs
-  stay dead — spec-007 lesson). OUT: inbound webhooks/echo (none exist,
-  board_sync.rs:14), `.agentum/result.json` (settle+gate IS the completion
-  contract), GitHub App auth (Phase 2). PM gate PASS. Phase → pm.
 - 2026-07-06 | PM | **010 PM GATE PASS → phase architect** (D1–D8 locked in
   spec §Decisions; handoff `01-pm-to-architect.md`; RENUMBERED 009→010
   mid-phase — sibling branch `wiki-remove-it-fomr-the-side` carries
@@ -167,3 +150,26 @@
   never-silent; LazyLock over once_cell). ⚠️ ID_CACHE process-global: new
   tests must use fresh slugs. **Next slice: F3 provision** (run-twice test
   FIRST).
+- 2026-07-06 | Developer | **010 F3 CODE-COMPLETE + GREEN + COMMITTED
+  `26b1e022` → DEVELOPER PHASE DONE, phase → tester** (provision, AC 9–10;
+  tasks.md F3; handoff `03-developer-to-tester.md`). NEW crate-root
+  `provision.rs` (~1050 ln: template argv pins + `parse_project_create_output`
+  frozen from REAL gh 2.92.0; `create_repo_from_template` probe⇒clone /
+  missing⇒create --clone; `provision_repo` 4-step injectable ensure — own
+  5-label loop over the two pub(crate)-widened builders, project
+  link-or-create GUARDED by binding-exists, `scaffold_harness` wrapped,
+  consent-gated commit w/ STATE-ONLY .gitignore rewrite + porcelain-empty
+  no-commit + plain push red-nonfatal) + NEW `routes/provision.rs`
+  (repo-from-template + workspace/provision, traversal-proof validators).
+  UI: pure `workspace-provision-step.ts` (+15 vitest), 4th
+  OPTIONAL_WORKSPACE_STEPS entry, goal-step template mode (registers via the
+  TRACED existing `addRepoPath` action), modal-local 'provision' phase
+  mounting the SHARED ProjectBindingEditor + D8 consent (exact 5-path list);
+  `useComposerState`/`isGoalStepReady`/`initialComposerPhase` untouched.
+  Gates: cargo 616/0/5 (604+12; run-twice AC-10 pin written test-first,
+  proven RED first), deletion audit = exactly the 2 widening signatures,
+  fmt+clippy clean, vite green, vitest 37/0 (only the 4-entry steps pin
+  updated), tsc baseline 1642 EXACTLY held. 10 deviations documented (top:
+  Option<ProjectChoice>; state_map injection = hermeticity; resolve_slug +
+  BLOCKED_LABEL keep-in-sync dups). **All three slices green: F1 `474cfd12`
+  F2 `0b03eb9e` F3 `26b1e022` → tester re-runs everything independently.**
