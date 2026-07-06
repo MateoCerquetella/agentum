@@ -15,12 +15,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use agentum_core::{LOCAL_HOST_ID, NewSession};
+use agentum_core::{Event, LOCAL_HOST_ID, NewSession};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -35,6 +37,12 @@ use crate::{AppState, WikiKeyCacheKey};
 /// returns on the first idle event after `GRACE`, or at `TIMEOUT` regardless.
 const WIKI_SETTLE_GRACE: Duration = Duration::from_secs(10);
 const WIKI_SETTLE_TIMEOUT: Duration = Duration::from_secs(1200);
+
+/// How often the run-scoped page scanner re-lists the wiki dir while a
+/// generation is in flight (spec 009 D-A4). A 2 s lag on a page that took the
+/// agent tens of seconds to write is invisible; the growth-only gate caps the
+/// event volume by construction.
+const WIKI_SCAN_EVERY: Duration = Duration::from_secs(2);
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -88,14 +96,25 @@ struct PageContent {
 }
 
 /// The browse-time state of a workdir's wiki. Internally tagged on `state` so the
-/// desktop switches on one discriminator.
+/// desktop switches on one discriminator. `rename_all_fields` keeps the variant
+/// FIELDS camelCase on the wire too (enum-level `rename_all` only renames the
+/// variants) — the TS `WikiIndexResponse` declares `sessionId`/`pages` etc.
 #[derive(Debug, Serialize)]
-#[serde(tag = "state", rename_all = "camelCase")]
+#[serde(
+    tag = "state",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum WikiIndexResponse {
     /// Never generated.
     Empty,
     /// A generation run is in flight; stream `session_id`'s pane to watch it.
-    Running { session_id: Uuid },
+    Running {
+        session_id: Uuid,
+        /// Slugs of the pages already written to the wiki dir — the progressive
+        /// TOC (spec 009 AC-8). Slugs only; validated titles arrive with Ready.
+        pages: Vec<String>,
+    },
     /// The last run failed (or wrote no/garbled index) — never a half-empty wiki.
     Failed { error: String },
     /// A wiki is present.
@@ -289,6 +308,55 @@ async fn build_embeddings_sidecar(dir: &Path) {
     .await;
 }
 
+/// Broadcast a `wiki.updated` frame (spec 009 D4): payload
+/// `{ repo_id, status: "running"|"ready"|"failed", pages?: [slugs] }`, keys
+/// snake_case like every other bus event. Broadcast-only — never persisted,
+/// never in the connect replay; late subscribers get current state from the
+/// `GET /api/wiki` they issue on mount/onOpen.
+fn emit_wiki_updated(
+    bus: &broadcast::Sender<Event>,
+    repo_id: &str,
+    status: &str,
+    pages: Option<&[String]>,
+) {
+    let mut payload = json!({ "repo_id": repo_id, "status": status });
+    if let Some(pages) = pages {
+        payload["pages"] = json!(pages);
+    }
+    let _ = bus.send(Event::new("wiki.updated").with_payload(payload));
+}
+
+/// The scanner's growth gate: emit only when `listed` contains a slug `known`
+/// doesn't. Equality is silence (no redundant frames), and a shrink (a page
+/// deleted/renamed mid-run) is silence too — the TOC never contracts out from
+/// under a reader; the validated Ready set corrects it at the end.
+fn scan_grew(known: &std::collections::HashSet<String>, listed: &[String]) -> bool {
+    listed.iter().any(|slug| !known.contains(slug))
+}
+
+/// Run-scoped page scanner (spec 009 D-A4): while a generation is in flight,
+/// re-list the wiki dir's `*.md` slugs every `every` and re-emit
+/// `wiki.updated{running, pages}` ONLY on growth ([`scan_grew`]). Raced against
+/// the settle wait via `tokio::select!` so its lifetime is exactly the run's —
+/// no watcher lifecycle (the dir is deleted + recreated at generate start, a
+/// classic fs-notify race). Never returns; the `select!` drops it.
+async fn scan_pages_loop(
+    bus: &broadcast::Sender<Event>,
+    dir: &Path,
+    repo_id: &str,
+    every: Duration,
+) {
+    let mut known = std::collections::HashSet::new();
+    loop {
+        tokio::time::sleep(every).await;
+        let listed = list_page_slugs(dir).await;
+        if scan_grew(&known, &listed) {
+            emit_wiki_updated(bus, repo_id, "running", Some(&listed));
+            known = listed.into_iter().collect();
+        }
+    }
+}
+
 async fn generate(
     State(state): State<AppState>,
     Json(req): Json<GenerateRequest>,
@@ -362,6 +430,9 @@ async fn generate(
     crate::routes::sessions::spawn_agent_into_pane(&state, &session, &host, &tmux_target, &workdir)
         .await?;
     write_status(&dir, "running", sid, None).await;
+    // Push the transition (spec 009 AC-7): subscribers flip to "generating…"
+    // without a poll. No pages yet — the dir was just recreated.
+    emit_wiki_updated(&state.bus, &req.repo_id, "running", Some(&[]));
 
     // Ground the prompt with the repo-context seed; the agent reads on disk for
     // more. It READS `wd_str` and WRITES the wiki into `out_dir` (the central store).
@@ -373,6 +444,7 @@ async fn generate(
     // Drive to completion off-request: inject → settle → teardown → read back.
     let st = state.clone();
     let dir_bg = dir.clone();
+    let repo_id = req.repo_id.clone();
     tokio::spawn(async move {
         if let Err(e) = crate::harness::inject_prompt(&st, &session, &prompt).await {
             write_status(
@@ -382,26 +454,38 @@ async fn generate(
                 Some(format!("failed to start the wiki agent: {e}")),
             )
             .await;
+            emit_wiki_updated(&st.bus, &repo_id, "failed", None);
             crate::harness::teardown_session(&st, &session).await;
             return;
         }
-        crate::harness::wait_for_settle(
-            &st.bus,
-            session.id,
-            WIKI_SETTLE_GRACE,
-            WIKI_SETTLE_TIMEOUT,
-        )
-        .await;
+        // Race the settle wait against the page scanner: the scanner pushes
+        // `{running, pages}` as files land and dies with the run (it never
+        // completes on its own — the settle arm always wins the select).
+        tokio::select! {
+            _ = crate::harness::wait_for_settle(
+                &st.bus,
+                session.id,
+                WIKI_SETTLE_GRACE,
+                WIKI_SETTLE_TIMEOUT,
+            ) => {}
+            _ = scan_pages_loop(&st.bus, &dir_bg, &repo_id, WIKI_SCAN_EVERY) => {}
+        }
         crate::harness::teardown_session(&st, &session).await;
 
         // AC-9: a valid index ⇒ success (drop the sidecar so GET reports Ready);
         // a missing/garbled index ⇒ failure recorded for the browse view.
         match tokio::fs::read_to_string(dir_bg.join("index.json")).await {
             Ok(raw) => match parse_wiki_index(&raw) {
-                Ok(_) => {
+                Ok(index) => {
                     tokio::fs::remove_file(dir_bg.join(".status.json"))
                         .await
                         .ok();
+                    // Emit `ready` BEFORE the embeddings build: the sidecar is
+                    // best-effort and irrelevant to browsing, and the GET this
+                    // event triggers already reports Ready at this point. The
+                    // slugs come from the VALIDATED index, not a dir listing.
+                    let slugs: Vec<String> = index.pages.iter().map(|p| p.slug.clone()).collect();
+                    emit_wiki_updated(&st.bus, &repo_id, "ready", Some(&slugs));
                     // Build the RAG embedding sidecar (spec 003) so Chat can
                     // retrieve from this wiki. Best-effort: the wiki is fully
                     // usable without it; a failure just means no RAG grounding.
@@ -415,6 +499,7 @@ async fn generate(
                         Some(format!("the wiki agent wrote an invalid index.json: {e}")),
                     )
                     .await;
+                    emit_wiki_updated(&st.bus, &repo_id, "failed", None);
                 }
             },
             Err(_) => {
@@ -425,6 +510,7 @@ async fn generate(
                     Some("the wiki agent wrote no index.json (inconclusive)".into()),
                 )
                 .await;
+                emit_wiki_updated(&st.bus, &repo_id, "failed", None);
             }
         }
     });
@@ -534,6 +620,36 @@ async fn unignore_wiki(workdir: &Path) {
 
 // ---- testable helpers (no AppState) -----------------------------------------
 
+/// The `<slug>.md` page slugs currently on disk, sorted. Skips dotfiles, which
+/// covers the sidecars (`.status.json`, `.embeddings.json`) — and `index.json`
+/// has no `.md` suffix. Shared by the run-scoped scanner and the progressive
+/// Running arm of [`load_index_response`].
+async fn list_page_slugs(dir: &Path) -> Vec<String> {
+    let mut slugs = Vec::new();
+    if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Some(stem) = name.strip_suffix(".md") else {
+                continue;
+            };
+            if entry
+                .file_type()
+                .await
+                .map(|t| t.is_file())
+                .unwrap_or(false)
+            {
+                slugs.push(stem.to_string());
+            }
+        }
+    }
+    slugs.sort();
+    slugs
+}
+
 async fn load_index_response(dir: &Path) -> WikiIndexResponse {
     let index_path = dir.join("index.json");
     if let Ok(raw) = tokio::fs::read_to_string(&index_path).await {
@@ -559,8 +675,12 @@ async fn load_index_response(dir: &Path) -> WikiIndexResponse {
     if let Ok(raw) = tokio::fs::read_to_string(dir.join(".status.json")).await {
         if let Ok(st) = serde_json::from_str::<WikiStatus>(&raw) {
             return match st.state.as_str() {
+                // Progressive render (spec 009 AC-8): a mid-run GET lists the
+                // pages already written, so hub-open-mid-run shows the partial
+                // TOC immediately instead of waiting for the next page event.
                 "running" => WikiIndexResponse::Running {
                     session_id: st.session_id.unwrap_or_default(),
+                    pages: list_page_slugs(dir).await,
                 },
                 _ => WikiIndexResponse::Failed {
                     error: st.error.unwrap_or_else(|| "wiki generation failed".into()),
@@ -874,6 +994,71 @@ mod tests {
             insert_wiki_key(&cache, key.clone(), resolved);
         }
         assert_eq!(cached_wiki_key(&cache, &key), None);
+    }
+
+    // ── pushed status + progressive render (spec 009 AC 7–8) ─────────────────
+
+    #[tokio::test]
+    async fn running_response_lists_partial_pages() {
+        // A mid-run GET must carry the pages already on disk (progressive TOC),
+        // sorted, skipping the dotfile sidecars — and stay Running (the
+        // discriminator only flips to Ready via the validated index path).
+        let d = temp_dir();
+        tokio::fs::write(
+            d.join(".status.json"),
+            r#"{"state":"running","sessionId":"00000000-0000-0000-0000-000000000000"}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(d.join("overview.md"), "# Overview")
+            .await
+            .unwrap();
+        tokio::fs::write(d.join("getting-started.md"), "# Getting started")
+            .await
+            .unwrap();
+        tokio::fs::write(d.join(".embeddings.json"), "{}")
+            .await
+            .unwrap();
+        let resp = load_index_response(&d).await;
+        match &resp {
+            WikiIndexResponse::Running { pages, .. } => {
+                assert_eq!(pages, &["getting-started", "overview"]);
+            }
+            other => panic!("expected Running, got {other:?}"),
+        }
+        // Wire-shape pin: variant FIELDS are camelCase (rename_all_fields) —
+        // the TS client declares `sessionId`/`pages`.
+        let wire = serde_json::to_value(&resp).unwrap();
+        assert_eq!(wire["state"], "running");
+        assert!(wire["sessionId"].is_string(), "wire: {wire}");
+        assert_eq!(wire["pages"][0], "getting-started");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn scan_diff_emits_only_on_growth() {
+        let known: std::collections::HashSet<String> =
+            ["overview".to_string(), "architecture".to_string()].into();
+        // Same set (any order) → silence.
+        assert!(!scan_grew(
+            &known,
+            &["architecture".into(), "overview".into()]
+        ));
+        // A shrink (page deleted/renamed mid-run) → silence, never a contraction.
+        assert!(!scan_grew(&known, &["overview".into()]));
+        assert!(!scan_grew(&known, &[]));
+        // Growth → emit.
+        assert!(scan_grew(
+            &known,
+            &["overview".into(), "architecture".into(), "modules".into()]
+        ));
+        // First page against an empty baseline → emit.
+        assert!(scan_grew(
+            &std::collections::HashSet::new(),
+            &["overview".into()]
+        ));
+        // Empty against empty → silence (no frame before the first page lands).
+        assert!(!scan_grew(&std::collections::HashSet::new(), &[]));
     }
 
     #[tokio::test]

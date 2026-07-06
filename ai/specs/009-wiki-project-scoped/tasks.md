@@ -89,16 +89,59 @@ hub-tab hit at `ProjectHubPage.tsx:181`).
 (`getWiki(` only inside `refreshIndex`; `repoStatuses`/`RepoWikiStatus` →
 zero hits) — see the developer handoff for outputs.
 
-## F3 — `wiki-push-status-progressive` (AC 7–8) — PENDING
+## F3 — `wiki-push-status-progressive` (AC 7–8) — DONE (this slice)
 
-- `emit_wiki_updated` at the four `write_status` sites (`ready` emitted
-  BEFORE `build_embeddings_sidecar`); run-scoped `scan_pages_loop` in a
-  `tokio::select!` with `wait_for_settle`; `Running` GET gains `pages`.
-- NEW `wiki-view-state.ts` reducer (absorbs `wiki-probe.ts`); WikiPage
-  subscribes via `subscribeServerEvents` (`onOpen` → refetch); the 3 s
-  `RUNNING_POLL_MS` poll deleted with NO fallback (D-A5).
-- Discriminator honesty: `ready` only from a validated GET; a
-  `wiki.updated{ready}` event is a refetch command — pinned by
-  `wiki-view-state.test.ts`.
-- Verify pins: `! grep -n RUNNING_POLL_MS …/WikiPage.tsx`; 001 AC-9 Rust
-  tests untouched and green.
+**What was done (developer, 2026-07-06):**
+
+- `routes/wiki.rs`: route-local `emit_wiki_updated(&bus, repo_id, status,
+  pages)` — `let _ = bus.send(Event::new("wiki.updated").with_payload(json!(…)))`
+  (the `host.metrics` pattern), snake_case D4 payload
+  `{ repo_id, status, pages? }`. Emitted at all four transition points:
+  generate request path after the running `write_status` (`{running, pages:[]}`),
+  inject-failure arm (`{failed}`), valid-index arm (`{ready, pages}` — slugs
+  from the VALIDATED index, emitted BEFORE `build_embeddings_sidecar`),
+  invalid/missing-index arms (`{failed}`). Broadcast-only, never persisted.
+- Run-scoped `scan_pages_loop(bus, dir, repo_id, 2s)` raced against
+  `wait_for_settle` in a `tokio::select!` (lifetime = the run's; the loop never
+  returns). Growth gate extracted as pure `scan_grew(known, listed)` — emits
+  only when a NEW slug appears (equality/shrink = silence).
+- `list_page_slugs(dir)` (sorted `.md` stems, dotfiles skipped) shared by the
+  scanner and the Running arm of `load_index_response` — `Running` gained
+  `pages: Vec<String>` so a mid-run GET is progressive immediately. Added
+  `rename_all_fields = "camelCase"` to `WikiIndexResponse`: enum-level
+  `rename_all` only renames VARIANTS, so the variant fields (`session_id`,
+  `schema_version`, `generated_at`) were silently snake_case on the wire —
+  latent drift vs the TS type; now pinned camelCase by a wire-shape assertion
+  in `running_response_lists_partial_pages`.
+- `.status.json` semantics untouched; Ready still only via the validated index
+  path (`parse_wiki_index` + `all_pages_present`). All five 001 AC-9
+  loud-failure tests pass UNMODIFIED.
+- NEW `ui/src/components/wiki/wiki-view-state.ts` (absorbs `wiki-probe.ts` —
+  file + test deleted): `applyWikiEvent` can only merge pages into an EXISTING
+  running state (monotone union — an early `pages:[]` frame can't contract the
+  TOC) or command a `refetch`; `ready`/`failed` events NEVER flip state
+  (D-A6). A `running` event when the view isn't running → refetch (the GET
+  carries the authoritative `sessionId`). Plus `wikiProbePlan`, `prettifySlug`
+  (kebab/underscore → Title Case), `commandForSocketOpen() → 'refetch'`.
+- `WikiPage.tsx`: subscribes via `subscribeServerEvents` (`onEvent` reduces
+  through `applyWikiEvent` over an `indexRef` mirror; `onOpen` → refetch per
+  the bus contract); `RUNNING_POLL_MS` + the poll effect DELETED, no fallback
+  (D-A5). `applyIndex` is the one owner of index transitions and clears the
+  page cache on running→ready (mid-run partial fetches can't go stale-sticky).
+  Progressive TOC: running-with-pages renders the two-pane layout behind a
+  visible role="status" "Generating wiki…" banner, prettified-slug titles,
+  pages clickable (page fetch allowed while running); running-with-zero-pages
+  keeps the centered indicator.
+- `runtime/wiki-client.ts`: Running variant gains `pages?: string[]`.
+- NEW `wiki-view-state.test.ts` (14 cases): the discriminator pin
+  (ready event ⇒ refetch, NOT a flip — reference-equal state), failed ⇒
+  refetch, progressive merge + monotonicity + reference-equal silence,
+  other-repo/other-kind/malformed frames inert, socket-reopen ⇒ refetch,
+  probe-plan one-repo-only (folded), prettify.
+
+**Gates run:** `cargo test -p agentum-server --lib` (571 = 569 base + 2 new,
+0 failed; AC-9 tests listed green unmodified), `cargo fmt --all --check`
+clean, `cargo clippy -p agentum-server --lib` no warnings,
+`npm run build --prefix crates/agentum-desktop/ui` green,
+`npx vitest run src/components/wiki` 14/14, pins: `RUNNING_POLL_MS` zero hits,
+`wiki-probe` zero hits, `wiki-probe.ts` deleted — see the developer handoff.
