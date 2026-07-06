@@ -1,18 +1,20 @@
-# Spec 010 — Developer tasks (F1 ONLY: board bind)
+# Spec 010 — Developer tasks (F1 board bind + F2 board drive)
 
 - **Spec:** 010-end-to-end-autonomous-flow
-- **Feature:** **F1** — bind: discover a board, resolve the mapping. AC 1–3.
+- **Features:** **F1** — bind (AC 1–3, committed `474cfd12`); **F2** — drive
+  (AC 4–8, this iteration).
 - **Role:** Developer (sdd-developer)
 - **Date:** 2026-07-06
-- **Base:** worktree `prd-agentum-end-to-end-autonomous` (tip `07ea5f53`,
-  origin/develop v0.59.0 merged)
+- **Base:** worktree `prd-agentum-end-to-end-autonomous` (F1 on tip `07ea5f53`
+  / origin/develop v0.59.0; F2 on tip `e271d833`, origin/develop v0.59.1
+  merged)
 
-> **Scope guardrail:** this iteration implements **F1 only**. **F2** (the
-> `github_transition_with_board` seam arm + board writes + id cache) and **F3**
-> (repo-from-template + `provision_repo` + wizard provision step) are
-> **deferred to later, separate developer iterations** — no F2/F3 code was
-> written. `task_sink.rs` is byte-identical (zero lines changed — the allowed
-> `neutral_cwd` widening wasn't even needed; it was already `pub(crate)`).
+> **Scope guardrail:** two gated slices so far — F1 (below, committed) then
+> **F2 only** in this iteration. **F3** (repo-from-template + `provision_repo`
+> + wizard provision step) is **deferred to a later, separate developer
+> iteration** — no F3 code was written. F2 is server-only: zero UI files
+> touched, zero seam-call-site files touched (`harness/drive.rs`,
+> `routes/board_goals.rs`, `routes/harness.rs`, `routes/mcp.rs` unmodified).
 
 F1 was built in the architecture's §8 order: **types+persistence → the pure
 mapper (tests first) → discovery+classifier → routes → UI**.
@@ -194,13 +196,124 @@ full list is in the developer handoff; every §8-named F1 test exists.
 
 ---
 
-## F2 — drive (PENDING)
+## F2 — what was built (this iteration; AC 4–8)
 
-Not started (per the one-slice ruling, D6). Next developer iteration:
-pure builders + `run_gh_capture` + close/reopen/state argv (test-first) →
-`board_write_with` + id cache + invalidate-retry + probe-gated close/reopen
-(fake-gh suite) → `github_transition_with_board` + the two task_sink arm
-hooks LAST (AC 8: existing label tests stay green **unmodified**).
+Built in the architecture's §8 F2 order: **pure builders + runner (test-first)
+→ `board_write_with` + id cache + probe-gated close/reopen (fake-gh suite) →
+the two seam fns → the two arm hooks LAST**, with the full suite green before
+the hooks landed.
+
+### Step 1 — `crates/agentum-server/src/github_projects.rs` (the write machinery)
+
+- **Pure builders (argv-pinned):** `issue_node_id_query_args(owner, name,
+  number)`, `add_item_mutation_args(project_id, content_id)` (idempotent
+  ensure-AND-fetch — also AC 11's "chat-filed issue lands in Todo" lazy
+  ensure), `update_status_mutation_args(project_id, item_id, field_id,
+  option_id)` (`singleSelectOptionId` rides a `String!` var — **option IDs,
+  never names**, PRD AC 6); `gh_issue_state_argv` (probe:
+  `issue view N --repo slug --json state --jq .state` → bare `OPEN`/`CLOSED`),
+  `gh_issue_close_argv`, `gh_issue_reopen_argv`. The three GraphQL operations
+  are single-line consts so fake-gh call logs stay one line per invocation.
+- **Runners:** `run_gh_capture(program, args)` — the stdout-carrying sibling
+  of `task_sink::run_gh` (untouched), same 30 s timeout + neutral cwd +
+  ~240-char stderr truncation. `run_gh_graphql` refactored into a thin wrapper
+  over a new argv-level `run_gh_graphql_argv` so F1 discovery and every F2
+  write ride **ONE runner + ONE classifier** (§4.2 step 2) — a mid-run scope
+  miss classifies to the same actionable `gh auth refresh -s project` message
+  bind-time gets.
+- **The id cache (§7.3):** `static ID_CACHE: LazyLock<Mutex<IdCacheMap>>`,
+  process-lifetime, keyed `(lowercase slug, number)` → `(issue_node_id,
+  item_id)`, populated only on success (`ensure_item_cold`). No TTL; a dead
+  item id heals via invalidate-and-retry-once. Keeps a bound feature run at
+  ~9 gh calls (vs ~14 cold) — inside the spec's ≤ ~10 ceiling.
+- **`board_write_with(program, binding, slug, number, phase)`** implementing
+  §4.2 steps 1–6: cache lookup → cold resolve (node-id query →
+  `addProjectV2ItemById`) → the option write every call → stale-cache
+  self-heal (option-write failure on a CACHED id ⇒ invalidate + retry ONCE
+  cold) → knob-gated `close_or_reopen_for`. Returns `Ok(())` or a reason
+  string; never panics, never propagates past the string.
+- **`close_or_reopen_for` (§7.4):** probe-then-act BOTH directions, only for
+  `Done`/`InProgress` (Blocked and the rest are structural no-ops); knob OFF
+  never probes (a human-closed issue on a knob-off binding is respected);
+  probe failure = `tracing::warn` + skip; act failure = the returned reason.
+
+### Step 2 — `crates/agentum-server/src/task_sink.rs` (the seam)
+
+- **`github_transition_with_board`** (private) — §4.1's sketch verbatim in
+  behavior: the byte-identical `github_transition_with` label path first;
+  `binding: None` returns its result untouched; a board `Err(reason)` folds
+  into `Skipped("status label applied; Projects board write failed: …")` /
+  `Skipped("{why}; Projects board write failed: …")` + `tracing::warn` — loud
+  through `drive.rs::transition_tracker`'s existing log line and the MCP
+  tool's `skipped:` text with **zero call-site edits** (§7.9).
+- **`github_mark_blocked_with_board`** (private) — the blocked sibling:
+  `github_mark_blocked_with` (byte-identical) + `board_write_with(…,
+  BoardPhase::Blocked)`, identical fold. No close/reopen on Blocked.
+- **The two arm hooks (LAST):** both github arms read
+  `github_projects::binding_for_slug(&slug)` **only after the URL parse**
+  (the same hermeticity discipline as `GithubStateMap::from_env()` — the
+  no-url/unparseable skip tests never touch the config files) and call the
+  `_with_board` fns. The 004-D1 comment above the pipeline arm now notes the
+  010-D1 supersession for bound repos.
+- **Doc-only:** `TransitionResult::Skipped`'s docstring widened to "not fully
+  applied — the reason names what did and didn't land". No new variant; no new
+  pub API; `TrackerPhase` stays 4 variants.
+
+### Step 3 — tests (13 new; every §8-named F2 test exists)
+
+In `github_projects.rs` (10): `issue_node_id_query_args_shape`,
+`add_item_mutation_args_shape`, `update_status_mutation_uses_option_id`,
+`gh_issue_close_reopen_state_argv_shapes`,
+`board_write_with_fake_gh_cold_is_three_graphql_calls`,
+`board_write_second_call_hits_cache_one_call`,
+`board_write_invalidates_stale_item_and_retries_once_cold`,
+`done_closes_open_issue_and_skips_closed`, `in_progress_reopens_closed_only`,
+`knob_off_never_probes_closes_or_reopens`. In `task_sink.rs` (3):
+`github_transition_with_board_unbound_is_byte_identical` (the exact
+5-invocation log + no GraphQL), 
+`github_transition_with_board_board_failure_is_skipped_note_still_ok` (the
+AC-7 pin, with the scope remedy in the reason),
+`blocked_arm_moves_card_to_blocked_option_with_fake_gh`. The board fake-gh
+switches on query content for canned JSON per operation and answers the
+`issue view` probe; bindings/programs inject explicitly — no env mutation.
+**Cache isolation:** `ID_CACHE` is process-global and the test binary is one
+process, so every F2 test uses its OWN slug (no `#[cfg(test)]` clear helper —
+the established global-state pattern).
+
+## Deviations from architecture.md (F2)
+
+1. **Two private seam fns instead of the boundary table's "one"**
+   (`github_mark_blocked_with_board` mirrors `github_transition_with_board`):
+   §4.1 says the blocked arm "gets the same pattern", and the named test
+   `blocked_arm_moves_card_to_blocked_option_with_fake_gh` must inject the
+   binding explicitly (the hermeticity rule forbids env mutation) — an
+   inlined combine in `apply_blocked_transition` would be untestable without
+   it. Zero new pub API either way. Risk: none (both private, same fold).
+2. **`run_gh_graphql` internally refactored** into `run_gh_graphql_argv` +
+   a 2-line wrapper so the pure builders and the ONE-runner rule compose;
+   discovery behavior unchanged (all F1 tests green unmodified). Risk: none.
+3. **Probe argv carries `--jq .state`** (architecture §4.2 step 6's exact
+   probe shape) so stdout is the bare state token; parsing is
+   `trim().trim_matches('"')` + uppercase, defensive against a quoted token.
+   Risk: none.
+4. **Close/reopen ACT failure returns `Err(reason)`** (folds into the Skipped
+   note); only the PROBE failure is the architecture's "skip with a warn".
+   The act-failure side wasn't pinned; surfacing it follows the 008
+   never-silent doctrine and stays best-effort (the card move already
+   landed). Risk: none (loud-but-Ok either way).
+5. **`LazyLock` (std) instead of the sketch's `once_cell::Lazy`** — the
+   crate's existing precedent (`usage.rs`); once_cell isn't a dependency.
+   Risk: none.
+
+## Gate results (F2)
+
+| Gate | Command | Result |
+|---|---|---|
+| Unit | `cargo test -p agentum-server --lib` | **604 passed, 0 failed, 5 ignored** (591 baseline + 13 new; re-run green after fmt) |
+| AC 8 proof | `git diff --stat` / deleted-lines audit | only `github_projects.rs` + `task_sink.rs` changed; the 7 deleted lines = the 2-line runner refactor, the `Skipped` docstring, 2 arm comment lines, the 2 arm caller lines — **zero test edits**, `github_transition_with`/`github_mark_blocked_with` byte-identical |
+| Fmt | `cargo fmt --all` then `cargo fmt --all --check` | clean |
+| Clippy | `cargo clippy --workspace` | 0 warnings |
+| UI | — | not required (no UI files touched) |
 
 ## F3 — provision (PENDING)
 

@@ -13,7 +13,9 @@
 //! that DROPS unknown keys, so bindings live in their own single-writer file —
 //! clobber-immune by construction.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -509,9 +511,16 @@ async fn run_gh_graphql(
     str_vars: &[(&str, &str)],
     int_vars: &[(&str, i64)],
 ) -> Result<Value, ProjectsError> {
-    let argv = gh_graphql_argv(query, str_vars, int_vars);
+    run_gh_graphql_argv(program, &gh_graphql_argv(query, str_vars, int_vars)).await
+}
+
+/// The argv-level GraphQL runner + classifier — F1 discovery and every F2
+/// board write ride THIS one path (§4.2: ONE runner + ONE classifier serve
+/// every call), so a scope/auth/network miss classifies identically at bind
+/// time and mid-run.
+async fn run_gh_graphql_argv(program: &str, argv: &[String]) -> Result<Value, ProjectsError> {
     let fut = tokio::process::Command::new(program)
-        .args(&argv)
+        .args(argv)
         .current_dir(crate::task_sink::neutral_cwd())
         .output();
     let output = match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
@@ -643,6 +652,298 @@ pub async fn discover_status_field(
     );
     let data = run_gh_graphql(program, &query, &[("owner", owner)], &[("number", number)]).await?;
     parse_discovery(&data)
+}
+
+// ─── F2: the board writes (drive) ───────────────────────────────────────────
+//
+// One transition's whole board side: ensure the issue is a project item
+// (cached), write the mapped Status OPTION ID, then the knob-gated
+// probe-then-act close/reopen. Called from `task_sink`'s github arms via
+// `github_transition_with_board` / `github_mark_blocked_with_board` — the
+// caller folds a returned reason into the transition report, so nothing here
+// Err-propagates past that string or panics (the best-effort contract, AC 7).
+
+// The three GraphQL operations, single-line (no newlines) so a fake-gh call
+// log stays one line per invocation — the same property the discovery query
+// relies on. All GA-stable since 2022 (§6.2).
+const ISSUE_NODE_ID_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
+     repository(owner: $owner, name: $name) { issue(number: $number) { id } } }";
+const ADD_ITEM_MUTATION: &str = "mutation($project: ID!, $content: ID!) { \
+     addProjectV2ItemById(input: {projectId: $project, contentId: $content}) { item { id } } }";
+const UPDATE_STATUS_MUTATION: &str = "mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) { \
+     updateProjectV2ItemFieldValue(input: {projectId: $project, itemId: $item, \
+     fieldId: $field, value: {singleSelectOptionId: $option}}) { projectV2Item { id } } }";
+
+/// Pure argv: resolve an issue's GraphQL node id (§4.2 step 2). GraphQL, not
+/// REST, so the one runner + one classifier above serve this call too.
+fn issue_node_id_query_args(owner: &str, name: &str, number: i64) -> Vec<String> {
+    gh_graphql_argv(
+        ISSUE_NODE_ID_QUERY,
+        &[("owner", owner), ("name", name)],
+        &[("number", number)],
+    )
+}
+
+/// Pure argv: ensure-on-board + item id in ONE call (§4.2 step 3) —
+/// `addProjectV2ItemById` is idempotent by API contract (re-adding returns the
+/// existing item's id), so this is both the ensure AND the fetch. It is also
+/// what makes a chat-filed issue land in the Todo column (AC 11): the Todo
+/// transition's lazy ensure.
+fn add_item_mutation_args(project_id: &str, content_id: &str) -> Vec<String> {
+    gh_graphql_argv(
+        ADD_ITEM_MUTATION,
+        &[("project", project_id), ("content", content_id)],
+        &[],
+    )
+}
+
+/// Pure argv: the option write (§4.2 step 4). `option_id` is the STORED
+/// single-select option id — option IDs, never names, at write time (PRD
+/// AC 6): column renames after bind still land.
+fn update_status_mutation_args(
+    project_id: &str,
+    item_id: &str,
+    field_id: &str,
+    option_id: &str,
+) -> Vec<String> {
+    gh_graphql_argv(
+        UPDATE_STATUS_MUTATION,
+        &[
+            ("project", project_id),
+            ("item", item_id),
+            ("field", field_id),
+            ("option", option_id),
+        ],
+        &[],
+    )
+}
+
+/// Probe argv (§4.2 step 6): `--jq .state` makes stdout the bare
+/// `OPEN`/`CLOSED` token, so probe-then-act needs no JSON parse.
+fn gh_issue_state_argv<'a>(number: &'a str, slug: &'a str) -> [&'a str; 9] {
+    [
+        "issue", "view", number, "--repo", slug, "--json", "state", "--jq", ".state",
+    ]
+}
+
+fn gh_issue_close_argv<'a>(number: &'a str, slug: &'a str) -> [&'a str; 5] {
+    ["issue", "close", number, "--repo", slug]
+}
+
+fn gh_issue_reopen_argv<'a>(number: &'a str, slug: &'a str) -> [&'a str; 5] {
+    ["issue", "reopen", number, "--repo", slug]
+}
+
+/// One plain (non-GraphQL) `gh` call from the neutral cwd, RETURNING stdout —
+/// the stdout-carrying sibling of `task_sink::run_gh` (which discards stdout
+/// and stays untouched). Same 30s bound and ~240-char stderr truncation so a
+/// hung or failing `gh` degrades to a reason string, never a stalled
+/// transition.
+async fn run_gh_capture(program: &str, args: &[&str]) -> Result<String, String> {
+    let fut = tokio::process::Command::new(program)
+        .args(args)
+        .current_dir(crate::task_sink::neutral_cwd())
+        .output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
+        Err(_) => return Err("gh timed out".into()),
+        Ok(Err(e)) => return Err(format!("failed to run `{program}`: {e}")),
+        Ok(Ok(o)) => o,
+    };
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    let mut msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if msg.is_empty() {
+        msg = format!("gh exited with {}", output.status);
+    }
+    if msg.len() > 240 {
+        let mut end = 240;
+        while !msg.is_char_boundary(end) {
+            end -= 1;
+        }
+        msg.truncate(end);
+        msg.push('…');
+    }
+    Err(msg)
+}
+
+/// `(lowercase slug, issue number)` → `(issue node id, project item id)`.
+type IdCacheMap = HashMap<(String, String), (String, String)>;
+
+/// Process-lifetime id cache (§7.3). No TTL: issue node ids are immutable and
+/// item ids die only when a card is removed from the board, which the
+/// invalidate-and-retry-once path in [`board_write_with`] heals. The cache is
+/// what keeps a bound feature run inside the spec's ≤ ~10-gh-calls ceiling
+/// (9 warm vs ~14 cold); correctness NEVER depends on it.
+static ID_CACHE: LazyLock<Mutex<IdCacheMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cache_key(slug: &str, number: &str) -> (String, String) {
+    (slug.trim().to_lowercase(), number.trim().to_string())
+}
+
+/// The cold path (§4.2 steps 2–3): issue node id → `addProjectV2ItemById`.
+/// Populates the cache on success ONLY, so a failed resolve can never poison
+/// it. Returns `(issue_node_id, item_id)`.
+async fn ensure_item_cold(
+    program: &str,
+    binding: &BoardBinding,
+    slug: &str,
+    number: &str,
+) -> Result<(String, String), String> {
+    let (owner, name) = slug
+        .split_once('/')
+        .ok_or_else(|| format!("malformed repo slug {slug:?}"))?;
+    let number_int: i64 = number
+        .trim()
+        .parse()
+        .map_err(|_| format!("issue number {number:?} is not numeric"))?;
+    let data = run_gh_graphql_argv(program, &issue_node_id_query_args(owner, name, number_int))
+        .await
+        .map_err(|e| e.message)?;
+    let node_id = data
+        .pointer("/repository/issue/id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("GitHub returned no node id for issue #{number} in {slug}"))?
+        .to_string();
+    let data = run_gh_graphql_argv(
+        program,
+        &add_item_mutation_args(&binding.project_id, &node_id),
+    )
+    .await
+    .map_err(|e| e.message)?;
+    let item_id = data
+        .pointer("/addProjectV2ItemById/item/id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "addProjectV2ItemById returned no item id".to_string())?
+        .to_string();
+    ID_CACHE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(cache_key(slug, number), (node_id.clone(), item_id.clone()));
+    Ok((node_id, item_id))
+}
+
+/// One transition's whole board side (spec 010 F2, §4.2). Best-effort:
+/// `Ok(())` or a reason string the caller folds into `TransitionResult` —
+/// never Err-propagates beyond that string, never panics.
+///
+/// Steps: cached ids (cold ⇒ resolve + ensure-on-board) → the option write
+/// (every call; IDs, never names) → on an option-write failure against a
+/// CACHED item id, invalidate and retry ONCE cold → the knob-gated
+/// probe-then-act close/reopen (Done/InProgress only — Blocked and the rest
+/// never touch issue state).
+pub async fn board_write_with(
+    program: &str,
+    binding: &BoardBinding,
+    slug: &str,
+    number: &str,
+    phase: BoardPhase,
+) -> Result<(), String> {
+    let key = cache_key(slug, number);
+    let cached = ID_CACHE
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&key)
+        .cloned();
+    let (item_id, from_cache) = match cached {
+        Some((_node_id, item_id)) => (item_id, true),
+        None => (
+            ensure_item_cold(program, binding, slug, number).await?.1,
+            false,
+        ),
+    };
+    let option_id = binding.status_mapping.option_id(phase);
+    let update = run_gh_graphql_argv(
+        program,
+        &update_status_mutation_args(
+            &binding.project_id,
+            &item_id,
+            &binding.status_field_id,
+            option_id,
+        ),
+    )
+    .await;
+    if let Err(e) = update {
+        if !from_cache {
+            return Err(e.message);
+        }
+        // Stale-cache self-heal (§7.3): a card removed from the board kills
+        // its item id. Invalidate and retry ONCE cold — correctness never
+        // depends on the cache.
+        tracing::warn!(
+            slug,
+            number,
+            reason = %e.message,
+            "Projects option write failed on a cached item id; retrying cold once"
+        );
+        ID_CACHE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&key);
+        let (_node_id, item_id) = ensure_item_cold(program, binding, slug, number).await?;
+        run_gh_graphql_argv(
+            program,
+            &update_status_mutation_args(
+                &binding.project_id,
+                &item_id,
+                &binding.status_field_id,
+                option_id,
+            ),
+        )
+        .await
+        .map_err(|e| e.message)?;
+    }
+    // D1/AC 6: close at Done, reopen at InProgress — only when the binding's
+    // knob is ON. Knob OFF never probes, so a human-closed issue is respected.
+    if binding.done_closes_issue {
+        close_or_reopen_for(program, slug, number, phase).await?;
+    }
+    Ok(())
+}
+
+/// §4.2 step 6 — probe-then-act for BOTH directions (§7.4): one
+/// `gh issue view --json state` probe kills the exit-nonzero noise a blind
+/// close/reopen would produce on every ordinary transition. Only Done and
+/// InProgress act; every other phase (including Blocked) is a no-op. A probe
+/// failure skips the act with a warn (best-effort); an act failure surfaces
+/// as the returned reason so the run log stays loud.
+async fn close_or_reopen_for(
+    program: &str,
+    slug: &str,
+    number: &str,
+    phase: BoardPhase,
+) -> Result<(), String> {
+    if !matches!(phase, BoardPhase::Done | BoardPhase::InProgress) {
+        return Ok(());
+    }
+    let state = match run_gh_capture(program, &gh_issue_state_argv(number, slug)).await {
+        // `--jq .state` prints the bare token; trim + strip quotes defensively.
+        Ok(out) => out.trim().trim_matches('"').to_ascii_uppercase(),
+        Err(reason) => {
+            tracing::warn!(
+                slug,
+                number,
+                %reason,
+                "issue state probe failed; skipping close/reopen (best-effort)"
+            );
+            return Ok(());
+        }
+    };
+    match phase {
+        BoardPhase::Done if state == "OPEN" => {
+            run_gh_capture(program, &gh_issue_close_argv(number, slug))
+                .await
+                .map(drop)
+                .map_err(|r| format!("issue close failed: {r}"))
+        }
+        BoardPhase::InProgress if state == "CLOSED" => {
+            run_gh_capture(program, &gh_issue_reopen_argv(number, slug))
+                .await
+                .map(drop)
+                .map_err(|r| format!("issue reopen failed: {r}"))
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -1109,5 +1410,439 @@ mod tests {
         assert_eq!(m.option_id(BoardPhase::ReadyToTest), "r");
         assert_eq!(m.option_id(BoardPhase::Done), "d");
         assert_eq!(m.option_id(BoardPhase::Blocked), "b");
+    }
+
+    // ─── F2: pure builders (argv pins) ─────────────────────────────────────
+
+    #[test]
+    fn issue_node_id_query_args_shape() {
+        let argv = issue_node_id_query_args("acme", "widgets", 42);
+        assert_eq!(argv[..3], ["api", "graphql", "-f"]);
+        assert!(argv[3].starts_with("query=query($owner: String!, $name: String!, $number: Int!)"));
+        assert!(argv[3].contains("repository(owner: $owner, name: $name)"));
+        assert!(argv[3].contains("issue(number: $number) { id }"));
+        assert_eq!(
+            argv[4..],
+            ["-f", "owner=acme", "-f", "name=widgets", "-F", "number=42"]
+        );
+    }
+
+    #[test]
+    fn add_item_mutation_args_shape() {
+        let argv = add_item_mutation_args("PVT_1", "I_node");
+        assert_eq!(argv[..3], ["api", "graphql", "-f"]);
+        assert!(
+            argv[3].contains(
+                "addProjectV2ItemById(input: {projectId: $project, contentId: $content})"
+            ),
+        );
+        assert!(
+            argv[3].contains("item { id }"),
+            "returns the item id — the ensure AND the fetch: {}",
+            argv[3]
+        );
+        assert_eq!(argv[4..], ["-f", "project=PVT_1", "-f", "content=I_node"]);
+    }
+
+    /// PRD AC 6: the write carries the OPTION ID — a `String!` var bound to
+    /// `singleSelectOptionId` — never a name.
+    #[test]
+    fn update_status_mutation_uses_option_id() {
+        let argv = update_status_mutation_args("PVT_1", "PVTI_9", "PVTSSF_1", "98236657");
+        assert_eq!(argv[..3], ["api", "graphql", "-f"]);
+        assert!(argv[3].contains("updateProjectV2ItemFieldValue"));
+        assert!(argv[3].contains("value: {singleSelectOptionId: $option}"));
+        assert_eq!(
+            argv[4..],
+            [
+                "-f",
+                "project=PVT_1",
+                "-f",
+                "item=PVTI_9",
+                "-f",
+                "field=PVTSSF_1",
+                "-f",
+                "option=98236657"
+            ]
+        );
+    }
+
+    #[test]
+    fn gh_issue_close_reopen_state_argv_shapes() {
+        assert_eq!(
+            gh_issue_state_argv("42", "acme/widgets"),
+            [
+                "issue",
+                "view",
+                "42",
+                "--repo",
+                "acme/widgets",
+                "--json",
+                "state",
+                "--jq",
+                ".state"
+            ]
+        );
+        assert_eq!(
+            gh_issue_close_argv("42", "acme/widgets"),
+            ["issue", "close", "42", "--repo", "acme/widgets"]
+        );
+        assert_eq!(
+            gh_issue_reopen_argv("42", "acme/widgets"),
+            ["issue", "reopen", "42", "--repo", "acme/widgets"]
+        );
+    }
+
+    // ─── F2: board_write_with (fake gh) ────────────────────────────────────
+    //
+    // ID_CACHE is process-global and the test binary is one process, so every
+    // test below uses its OWN slug/number — the established pattern for
+    // global-state tests (no #[cfg(test)] clear helper, no cross-talk).
+
+    /// A binding whose option ids are self-describing (`opt-<phase>`), so a
+    /// fake-gh call log pins WHICH phase's option rode the write.
+    #[cfg(unix)]
+    fn board_binding(done_closes_issue: bool) -> BoardBinding {
+        BoardBinding {
+            project_id: "PVT_1".into(),
+            status_field_id: "PVTSSF_1".into(),
+            status_mapping: StatusMapping {
+                todo: "opt-todo".into(),
+                in_progress: "opt-inprogress".into(),
+                ready_to_test: "opt-rtt".into(),
+                done: "opt-done".into(),
+                blocked: "opt-blocked".into(),
+            },
+            done_closes_issue,
+            project_title: None,
+            project_owner: None,
+            project_owner_type: None,
+            project_number: None,
+            option_names: None,
+        }
+    }
+
+    /// Fake `gh` for the board writes: logs every argv line, answers each
+    /// GraphQL operation with canned JSON (switching on the query content),
+    /// and answers the `issue view` probe with `state`. When `stale_item` is
+    /// set, the option write FAILS for that item id — the stale-cache fixture.
+    #[cfg(unix)]
+    fn write_board_fake_gh(
+        dir: &Path,
+        log: &Path,
+        state: &str,
+        item_id: &str,
+        stale_item: Option<&str>,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let node_body = json!({"data": {"repository": {"issue": {"id": "I_node"}}}}).to_string();
+        let add_body =
+            json!({"data": {"addProjectV2ItemById": {"item": {"id": item_id}}}}).to_string();
+        let update_body =
+            json!({"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": item_id}}}})
+                .to_string();
+        let stale_case = stale_item
+            .map(|stale| {
+                let stale_body =
+                    json!({"errors": [{"type": "NOT_FOUND", "message": "item was removed"}]})
+                        .to_string();
+                format!("  *\"item={stale}\"*) printf '%s\\n' '{stale_body}'; exit 1 ;;\n")
+            })
+            .unwrap_or_default();
+        let script = dir.join("gh-fake");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 echo \"$@\" >> \"{log}\"\n\
+                 if [ \"$1\" = \"issue\" ]; then\n\
+                 \x20 if [ \"$2\" = \"view\" ]; then printf '%s\\n' '{state}'; fi\n\
+                 \x20 exit 0\n\
+                 fi\n\
+                 case \"$*\" in\n\
+                 {stale_case}\
+                 \x20 *updateProjectV2ItemFieldValue*) printf '%s\\n' '{update_body}' ;;\n\
+                 \x20 *addProjectV2ItemById*) printf '%s\\n' '{add_body}' ;;\n\
+                 \x20 *repository*) printf '%s\\n' '{node_body}' ;;\n\
+                 esac\n\
+                 exit 0\n",
+                log = log.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    /// §4.2 cold path: node-id query → addItem → option write, in that order,
+    /// with the mapped OPTION ID riding the update. RTT never probes issue
+    /// state, so the log is pure GraphQL.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn board_write_with_fake_gh_cold_is_three_graphql_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let gh = write_board_fake_gh(dir.path(), &log, "OPEN", "PVTI_1", None);
+        board_write_with(
+            gh.to_str().unwrap(),
+            &board_binding(true),
+            "acme/cold",
+            "7",
+            BoardPhase::ReadyToTest,
+        )
+        .await
+        .unwrap();
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 3, "cold = node-id, addItem, update: {calls}");
+        assert!(
+            lines[0].contains("repository(owner: $owner"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains("-f owner=acme")
+                && lines[0].contains("-f name=cold")
+                && lines[0].contains("-F number=7"),
+            "slug/number become query vars: {}",
+            lines[0]
+        );
+        assert!(lines[1].contains("addProjectV2ItemById"), "{}", lines[1]);
+        assert!(
+            lines[1].contains("-f content=I_node"),
+            "feeds the resolved node id: {}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("updateProjectV2ItemFieldValue"),
+            "{}",
+            lines[2]
+        );
+        assert!(
+            lines[2].contains("-f item=PVTI_1"),
+            "feeds the returned item id: {}",
+            lines[2]
+        );
+        assert!(
+            lines[2].contains("-f option=opt-rtt"),
+            "the OPTION ID rides the write: {}",
+            lines[2]
+        );
+    }
+
+    /// §7.3: the second transition for an issue reuses the cached ids — ONE
+    /// update call, no re-resolve (4 gh calls total across two writes; the
+    /// ≤ ~10-per-run ceiling depends on this).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn board_write_second_call_hits_cache_one_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let gh = write_board_fake_gh(dir.path(), &log, "OPEN", "PVTI_2", None);
+        let binding = board_binding(true);
+        let program = gh.to_str().unwrap();
+        board_write_with(program, &binding, "acme/warm", "8", BoardPhase::Todo)
+            .await
+            .unwrap();
+        board_write_with(program, &binding, "acme/warm", "8", BoardPhase::ReadyToTest)
+            .await
+            .unwrap();
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 4, "3 cold + 1 warm: {calls}");
+        assert!(
+            lines[3].contains("updateProjectV2ItemFieldValue")
+                && lines[3].contains("-f option=opt-rtt"),
+            "warm write is the update only: {}",
+            lines[3]
+        );
+    }
+
+    /// §4.2 step 5: an option-write failure against a CACHED item id (card
+    /// removed from the board) invalidates the entry and retries ONCE cold —
+    /// correctness never depends on the cache.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn board_write_invalidates_stale_item_and_retries_once_cold() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let gh = write_board_fake_gh(dir.path(), &log, "OPEN", "PVTI_fresh", Some("PVTI_stale"));
+        // Seed the cache with a dead item id.
+        ID_CACHE.lock().unwrap().insert(
+            cache_key("acme/stale", "9"),
+            ("I_node".into(), "PVTI_stale".into()),
+        );
+        board_write_with(
+            gh.to_str().unwrap(),
+            &board_binding(false),
+            "acme/stale",
+            "9",
+            BoardPhase::Todo,
+        )
+        .await
+        .unwrap();
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(
+            lines.len(),
+            4,
+            "stale update → node-id → addItem → fresh update: {calls}"
+        );
+        assert!(
+            lines[0].contains("updateProjectV2ItemFieldValue")
+                && lines[0].contains("-f item=PVTI_stale"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("repository(owner: $owner"),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[2].contains("addProjectV2ItemById"), "{}", lines[2]);
+        assert!(
+            lines[3].contains("updateProjectV2ItemFieldValue")
+                && lines[3].contains("-f item=PVTI_fresh"),
+            "{}",
+            lines[3]
+        );
+        // The heal re-populated the cache with the fresh item id.
+        assert_eq!(
+            ID_CACHE
+                .lock()
+                .unwrap()
+                .get(&cache_key("acme/stale", "9"))
+                .map(|(_, item)| item.clone()),
+            Some("PVTI_fresh".to_string())
+        );
+    }
+
+    /// D1/AC 6 close half: Done + knob ON probes state and closes an OPEN
+    /// issue; an already-CLOSED issue is probed but never re-closed (the
+    /// symmetric probe silences that exit-nonzero noise, §7.4).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn done_closes_open_issue_and_skips_closed() {
+        // OPEN → probe + close.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let gh = write_board_fake_gh(dir.path(), &log, "OPEN", "PVTI_3", None);
+        board_write_with(
+            gh.to_str().unwrap(),
+            &board_binding(true),
+            "acme/close-open",
+            "10",
+            BoardPhase::Done,
+        )
+        .await
+        .unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 5, "3 GraphQL + probe + close: {calls}");
+        assert_eq!(
+            lines[3],
+            "issue view 10 --repo acme/close-open --json state --jq .state"
+        );
+        assert_eq!(lines[4], "issue close 10 --repo acme/close-open");
+
+        // CLOSED → probe only, no close.
+        let dir2 = tempfile::tempdir().unwrap();
+        let log2 = dir2.path().join("calls.log");
+        let gh2 = write_board_fake_gh(dir2.path(), &log2, "CLOSED", "PVTI_4", None);
+        board_write_with(
+            gh2.to_str().unwrap(),
+            &board_binding(true),
+            "acme/close-closed",
+            "11",
+            BoardPhase::Done,
+        )
+        .await
+        .unwrap();
+        let calls = std::fs::read_to_string(&log2).unwrap();
+        assert_eq!(calls.lines().count(), 4, "3 GraphQL + probe: {calls}");
+        assert!(!calls.contains("issue close"), "already closed: {calls}");
+    }
+
+    /// D1/AC 6 reopen half: InProgress + knob ON reopens a CLOSED issue only —
+    /// an ordinary open-issue InProgress probes and does nothing (a blind
+    /// reopen would exit non-zero on every one of those).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn in_progress_reopens_closed_only() {
+        // CLOSED → probe + reopen.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let gh = write_board_fake_gh(dir.path(), &log, "CLOSED", "PVTI_5", None);
+        board_write_with(
+            gh.to_str().unwrap(),
+            &board_binding(true),
+            "acme/reopen-closed",
+            "12",
+            BoardPhase::InProgress,
+        )
+        .await
+        .unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 5, "3 GraphQL + probe + reopen: {calls}");
+        assert_eq!(lines[4], "issue reopen 12 --repo acme/reopen-closed");
+
+        // OPEN → probe only, no reopen.
+        let dir2 = tempfile::tempdir().unwrap();
+        let log2 = dir2.path().join("calls.log");
+        let gh2 = write_board_fake_gh(dir2.path(), &log2, "OPEN", "PVTI_6", None);
+        board_write_with(
+            gh2.to_str().unwrap(),
+            &board_binding(true),
+            "acme/reopen-open",
+            "13",
+            BoardPhase::InProgress,
+        )
+        .await
+        .unwrap();
+        let calls = std::fs::read_to_string(&log2).unwrap();
+        assert_eq!(calls.lines().count(), 4, "3 GraphQL + probe: {calls}");
+        assert!(!calls.contains("issue reopen"), "already open: {calls}");
+    }
+
+    /// D1's OFF side: with `done_closes_issue: false` NEITHER direction even
+    /// probes — we never closed, so we never reopen; a human-closed issue on a
+    /// knob-off binding is respected.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn knob_off_never_probes_closes_or_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let gh = write_board_fake_gh(dir.path(), &log, "OPEN", "PVTI_7", None);
+        let binding = board_binding(false);
+        let program = gh.to_str().unwrap();
+        board_write_with(program, &binding, "acme/knob-off", "14", BoardPhase::Done)
+            .await
+            .unwrap();
+        board_write_with(
+            program,
+            &binding,
+            "acme/knob-off",
+            "14",
+            BoardPhase::InProgress,
+        )
+        .await
+        .unwrap();
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls.lines().count(),
+            4,
+            "3 cold + 1 warm, pure GraphQL: {calls}"
+        );
+        assert!(
+            !calls.contains("issue view")
+                && !calls.contains("issue close")
+                && !calls.contains("issue reopen"),
+            "knob OFF must never probe/close/reopen: {calls}"
+        );
     }
 }

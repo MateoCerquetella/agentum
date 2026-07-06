@@ -244,7 +244,10 @@ pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
 pub enum TransitionResult {
     /// The tracker state was changed.
     Applied,
-    /// Nothing to do (provider has no such concept, or no external tracker).
+    /// Not fully applied — the reason names what did and didn't land. Covers
+    /// both "nothing to do" (provider has no such concept, or no external
+    /// tracker) and, since spec 010 F2, a partial write on a board-bound repo
+    /// (e.g. "status label applied; Projects board write failed: …").
     Skipped(String),
 }
 
@@ -644,6 +647,40 @@ async fn github_transition_with(
     }
 }
 
+/// Label transition + (when bound) the ADDITIVE Projects-board write (spec 010
+/// F2). The label path is the byte-identical [`github_transition_with`]
+/// (AC 8); unbound (`binding: None`) returns its result untouched — today's
+/// behavior byte-for-byte. A board failure can only append to the report,
+/// never alter label behavior, and NEVER becomes an `Err` (AC 7): it folds
+/// into the existing `Skipped(reason)` so `drive.rs`'s `transition_tracker`
+/// log line and the MCP tool's `skipped:` text carry it with zero call-site
+/// edits — loud through today's plumbing (§7.9).
+async fn github_transition_with_board(
+    program: &str,
+    slug: &str,
+    number: &str,
+    phase: TrackerPhase,
+    map: &GithubStateMap,
+    binding: Option<&crate::github_projects::BoardBinding>,
+) -> TransitionResult {
+    let label = github_transition_with(program, slug, number, phase, map).await;
+    let Some(b) = binding else { return label };
+    match crate::github_projects::board_write_with(program, b, slug, number, phase.into()).await {
+        Ok(()) => label,
+        Err(reason) => {
+            tracing::warn!(slug, number, ?phase, %reason, "Projects board write failed (non-fatal)");
+            match label {
+                TransitionResult::Applied => TransitionResult::Skipped(format!(
+                    "status label applied; Projects board write failed: {reason}"
+                )),
+                TransitionResult::Skipped(why) => TransitionResult::Skipped(format!(
+                    "{why}; Projects board write failed: {reason}"
+                )),
+            }
+        }
+    }
+}
+
 /// GitHub block escalation (spec 008 D6): ensure `status/blocked` exists, one
 /// `issue edit` (add blocked + remove the four pipeline names), then one
 /// best-effort comment (retry count + gate tail). `Applied` iff the LABEL edit
@@ -676,6 +713,62 @@ async fn github_mark_blocked_with(
     let body = blocked_comment_body(feature_name, gate_label, attempts, gate_tail);
     let _ = run_gh(program, &gh_issue_comment_argv(number, slug, &body)).await;
     TransitionResult::Applied
+}
+
+/// The blocked-path sibling of [`github_transition_with_board`] (spec 010
+/// AC 5): today's label+comment escalation ([`github_mark_blocked_with`],
+/// byte-identical) plus, when bound, the ADDITIVE card move to the
+/// Blocked-mapped option. `board_write_with` never probes/closes/reopens for
+/// `BoardPhase::Blocked` (that is Done/InProgress-only), and a board failure
+/// folds into the returned reason exactly like the pipeline seam — never an
+/// `Err`, never a change to label behavior.
+#[allow(clippy::too_many_arguments)]
+async fn github_mark_blocked_with_board(
+    program: &str,
+    slug: &str,
+    number: &str,
+    feature_name: &str,
+    gate_label: &str,
+    attempts: u32,
+    gate_tail: &str,
+    map: &GithubStateMap,
+    binding: Option<&crate::github_projects::BoardBinding>,
+) -> TransitionResult {
+    let label = github_mark_blocked_with(
+        program,
+        slug,
+        number,
+        feature_name,
+        gate_label,
+        attempts,
+        gate_tail,
+        map,
+    )
+    .await;
+    let Some(b) = binding else { return label };
+    match crate::github_projects::board_write_with(
+        program,
+        b,
+        slug,
+        number,
+        crate::github_projects::BoardPhase::Blocked,
+    )
+    .await
+    {
+        Ok(()) => label,
+        // The identical fold — see `github_transition_with_board`.
+        Err(reason) => {
+            tracing::warn!(slug, number, %reason, "Projects board write failed (non-fatal)");
+            match label {
+                TransitionResult::Applied => TransitionResult::Skipped(format!(
+                    "status label applied; Projects board write failed: {reason}"
+                )),
+                TransitionResult::Skipped(why) => TransitionResult::Skipped(format!(
+                    "{why}; Projects board write failed: {reason}"
+                )),
+            }
+        }
+    }
 }
 
 /// Drive a created feature's tracker item to `phase`, dispatching on the provider
@@ -728,8 +821,11 @@ pub async fn apply_tracker_transition(
             Ok(TransitionResult::Applied)
         }
         // GitHub Issues has no workflow column; the phase lives as exactly one
-        // canonical `status/*` label (spec 004 D3). `Done` is label-only — the
-        // issue stays open; closing remains the PR's `Closes #N` job (D1).
+        // canonical `status/*` label (spec 004 D3). Unbound, `Done` is
+        // label-only — the issue stays open; closing remains the PR's
+        // `Closes #N` job (004 D1). On a board-BOUND repo the additive
+        // Projects arm also moves the card and may close/reopen at
+        // Done/InProgress (spec 010 D1 supersedes 004 D1 for bound repos only).
         "github" => {
             let Some(url) = tracker_url.map(str::trim).filter(|u| !u.is_empty()) else {
                 return Ok(TransitionResult::Skipped(
@@ -745,7 +841,19 @@ pub async fn apply_tracker_transition(
             // AFTER the URL parse succeeds so the no-url/unparseable skips
             // never touch the config file (keeps those tests hermetic).
             let map = GithubStateMap::from_env();
-            Ok(github_transition_with(&gh_bin(), &slug, &number, phase, &map).await)
+            // Spec 010 F2: the binding read follows the SAME hermeticity
+            // discipline — only after the parse, so the no-url/unparseable
+            // skip tests never touch the config files.
+            let binding = crate::github_projects::binding_for_slug(&slug);
+            Ok(github_transition_with_board(
+                &gh_bin(),
+                &slug,
+                &number,
+                phase,
+                &map,
+                binding.as_ref(),
+            )
+            .await)
         }
         other => Ok(TransitionResult::Skipped(format!(
             "unknown tracker provider {other:?}"
@@ -792,7 +900,10 @@ pub async fn apply_blocked_transition(
                 )));
             };
             let map = GithubStateMap::from_env();
-            Ok(github_mark_blocked_with(
+            // Spec 010 F2: binding read only AFTER the parse (the hermeticity
+            // discipline — see the pipeline arm above).
+            let binding = crate::github_projects::binding_for_slug(&slug);
+            Ok(github_mark_blocked_with_board(
                 &gh_bin(),
                 &slug,
                 &number,
@@ -801,6 +912,7 @@ pub async fn apply_blocked_transition(
                 attempts,
                 gate_tail,
                 &map,
+                binding.as_ref(),
             )
             .await)
         }
@@ -1860,6 +1972,226 @@ mod tests {
         .await
         .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
+    }
+
+    // ---- Spec 010 F2: the additive Projects-board arm -------------------------
+    //
+    // The binding rides in EXPLICITLY (like `program`/`map`) — never via the
+    // config file or env. github_projects' ID_CACHE is process-global, so each
+    // test uses its own slug (the established global-state pattern).
+
+    /// A five-phase binding with self-describing option ids for the seam tests.
+    #[cfg(unix)]
+    fn seam_board_binding() -> crate::github_projects::BoardBinding {
+        crate::github_projects::BoardBinding {
+            project_id: "PVT_seam".into(),
+            status_field_id: "PVTSSF_seam".into(),
+            status_mapping: crate::github_projects::StatusMapping {
+                todo: "opt-todo".into(),
+                in_progress: "opt-inprogress".into(),
+                ready_to_test: "opt-rtt".into(),
+                done: "opt-done".into(),
+                blocked: "opt-blocked".into(),
+            },
+            done_closes_issue: false,
+            project_title: None,
+            project_owner: None,
+            project_owner_type: None,
+            project_number: None,
+            option_names: None,
+        }
+    }
+
+    /// AC 8 at the seam: with NO binding, `github_transition_with_board` IS
+    /// today's label path byte-for-byte — the exact 5-invocation log
+    /// `github_transition_applies_with_fake_gh` pins, and no GraphQL at all.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_with_board_unbound_is_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+
+        let res = github_transition_with_board(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::InProgress,
+            &GithubStateMap::default(),
+            None,
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 5, "expected 5 gh invocations, got: {calls}");
+        for line in &lines[..4] {
+            assert!(
+                line.starts_with("label create status/"),
+                "expected an ensure-create, got: {line}"
+            );
+            assert!(line.ends_with("--force"));
+        }
+        assert!(
+            lines[4].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
+            "last call must be the issue edit, got: {}",
+            lines[4]
+        );
+        assert!(
+            !calls.contains("api graphql"),
+            "unbound must never touch GraphQL: {calls}"
+        );
+    }
+
+    /// THE AC-7 pin: the label edit succeeds but every GraphQL call fails →
+    /// the transition comes back `Skipped("status label applied; Projects
+    /// board write failed: …")` — a `TransitionResult` the github arm wraps in
+    /// `Ok`, so the failure is loud through existing plumbing yet never an
+    /// `Err`. The classified scope message keeps its remedy mid-run.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_with_board_board_failure_is_skipped_note_still_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\necho \"$@\" >> \"{log}\"\n\
+                 if [ \"$1\" = \"api\" ]; then\n  \
+                 echo 'your token has not been granted the required scopes [read:project]' >&2\n  \
+                 exit 1\nfi\nexit 0\n",
+                log = log.display()
+            ),
+        );
+
+        let binding = seam_board_binding();
+        let res = github_transition_with_board(
+            script.to_str().unwrap(),
+            "acme/seam-fail",
+            "42",
+            TrackerPhase::InProgress,
+            &GithubStateMap::default(),
+            Some(&binding),
+        )
+        .await;
+        match res {
+            TransitionResult::Skipped(reason) => {
+                assert!(
+                    reason.starts_with("status label applied; Projects board write failed:"),
+                    "got: {reason}"
+                );
+                assert!(
+                    reason.contains("gh auth refresh -s project"),
+                    "the scope remedy rides into the run log: {reason}"
+                );
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+        // The whole label path ran (and succeeded) before the board write.
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|l| l.starts_with("label create status/"))
+                .count(),
+            4,
+            "label ensures untouched: {calls}"
+        );
+        assert!(calls.contains("issue edit 42"), "label edit ran: {calls}");
+    }
+
+    /// AC 5: the blocked escalation on a BOUND repo adds the card move to the
+    /// Blocked-mapped OPTION ID after today's label+comment path — and never
+    /// probes/closes/reopens (knob ON notwithstanding: no close/reopen on
+    /// Blocked).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_arm_moves_card_to_blocked_option_with_fake_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let body_file = dir.path().join("comment-body.txt");
+        let node_body =
+            serde_json::json!({"data": {"repository": {"issue": {"id": "I_b"}}}}).to_string();
+        let add_body =
+            serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_b"}}}})
+                .to_string();
+        let update_body = serde_json::json!(
+            {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_b"}}}}
+        )
+        .to_string();
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"issue\" ] && [ \"$2\" = \"comment\" ]; then\n  \
+                 echo \"issue comment\" >> \"{log}\"\n  printf '%s' \"$7\" > \"{body}\"\n  exit 0\nfi\n\
+                 echo \"$@\" >> \"{log}\"\n\
+                 case \"$*\" in\n  \
+                 *updateProjectV2ItemFieldValue*) printf '%s\\n' '{update_body}' ;;\n  \
+                 *addProjectV2ItemById*) printf '%s\\n' '{add_body}' ;;\n  \
+                 *repository*) printf '%s\\n' '{node_body}' ;;\n\
+                 esac\nexit 0\n",
+                log = log.display(),
+                body = body_file.display(),
+            ),
+        );
+
+        let mut binding = seam_board_binding();
+        binding.done_closes_issue = true; // knob ON must still not act on Blocked
+        let res = github_mark_blocked_with_board(
+            script.to_str().unwrap(),
+            "acme/seam-blocked",
+            "42",
+            "Login screen",
+            "unit-test gate (verify.sh)",
+            3,
+            "assertion failed: foo != bar",
+            &GithubStateMap::default(),
+            Some(&binding),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(
+            lines.len(),
+            6,
+            "label ensure + edit + comment, then 3 GraphQL: {calls}"
+        );
+        assert_eq!(
+            lines[0],
+            "label create status/blocked --repo acme/seam-blocked --color b60205 --force"
+        );
+        assert!(
+            lines[1]
+                .starts_with("issue edit 42 --repo acme/seam-blocked --add-label status/blocked"),
+            "got: {}",
+            lines[1]
+        );
+        assert_eq!(lines[2], "issue comment");
+        assert!(
+            lines[3].contains("repository(owner: $owner"),
+            "{}",
+            lines[3]
+        );
+        assert!(lines[4].contains("addProjectV2ItemById"), "{}", lines[4]);
+        assert!(
+            lines[5].contains("updateProjectV2ItemFieldValue")
+                && lines[5].contains("-f option=opt-blocked"),
+            "the Blocked-mapped OPTION ID rides the write: {}",
+            lines[5]
+        );
+        assert!(
+            !calls.contains("issue view")
+                && !calls.contains("issue close")
+                && !calls.contains("issue reopen"),
+            "no close/reopen on Blocked: {calls}"
+        );
     }
 
     #[tokio::test]
