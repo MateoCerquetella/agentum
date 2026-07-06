@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 009-wiki-project-scoped
-- **phase:** reviewer     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 Tester PASS-WITH-DEFERRALS 2026-07-06, `verification.md`, HEAD `2c3dc89d`; AC-4 ruled PASS-with-note + qa.sh wording amended in spec.md; handoff `04-tester-to-reviewer.md`. 008 RELEASED v0.57.0 `64053d4c`, #250 closed)
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 **SHIP-READY — Reviewer SIGN-OFF 2026-07-06**, `review.md`, 0 blockers. Branch `wiki-remove-it-fomr-the-side`, commits F1 `b325c176` / F2 `8f1b663c` / F3 `fdfec986` + tester `673c6ecf`. **RELEASE = HUMAN**: open PR → develop w/ Closes-in-commit-MESSAGE + AC-4 deviation note + D3 audit statement + StrictMode caveat; qa.sh 6 live probes at staging (incl. TCC quiet-open); 2 should-fix follow-up tickets (Regenerate pageCache clear; 001 quiet-Empty edge). 008 RELEASED v0.57.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,20 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Architect | **009 gate PASS → developer** (`architecture.md`
-  D-A1–D-A8; handoff `02-architect-to-developer.md`; all citations re-verified,
-  4 drifts corrected — resolve-zoom-target is in hooks/, FOUR write_status
-  emission sites, fs test :631, **vite build does NOT typecheck** → D1 deletion
-  + poll removal need verify.sh grep pins). Key designs: NEW sibling
-  `SidebarProjectsNav.tsx` + pure `projects-nav-rows.ts` (ignores
-  filterRepoIds, D-A8); WikiPage → embed-only w/ REQUIRED `pinnedRepoId`;
-  `wiki_keys` composite-key cache `(repo_id,path,host_id)` positive-only
-  (never cache path-fallback); `wiki.updated` via `state.bus.send` at 4 sites
-  + run-scoped 2s `scan_pages_loop` in `select!` w/ settle (fs-notify REJECTED:
-  remove_dir_all race); poll deleted with NO fallback (loopback: socket-down ⇒
-  HTTP-down); Running GET gains `pages`; ready flips ONLY via validated GET
-  (event = refetch command); fs.rs dormant `prefetch` seam. `activeView` NOT
-  persisted (rehydration risk cleared). Phase → developer (F1 first).
 - 2026-07-06 | Developer | **009 F1 CODE-COMPLETE + COMMITTED `b325c176`**
   (projects-sidebar-wiki-off-rail, AC 1–3; F2/F3 remain → phase STAYS
   developer). NEW `SidebarProjectsNav.tsx` + pure `projects-nav-rows.ts`
@@ -136,3 +122,20 @@
   ACCURATE (D4 not violated — event stays snake_case). Sacred surfaces all
   untouched (route list byte-identical). 0 blocking defects; 1 cosmetic
   (double-"Projects" heading, D2-locked) for reviewer. Phase → reviewer.
+- 2026-07-06 | Reviewer | **009 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
+  `673c6ecf`, 0 blockers). All 8 focus items PASS w/ quoted evidence:
+  discriminator honest end-to-end (no path builds Ready from an event; the
+  one non-GET applyIndex builds Running from the POST response — allowed);
+  cache knife-edge clean under 6 adversarial sequences (re-add mints a new
+  UUID; poison → permanent miss; residual = ONLY origin-repointed-in-place,
+  restart-bounded); scanner cannot leak (inject-fail precedes the select!;
+  settle arm always wins); AC-4 ruling UPHELD (onOpen fires synchronously
+  when socket open — verified; dedupe rightly rejected); D1 deletion complete
+  under adversarial sweep (no computed view strings, nothing persisted);
+  D1–D4 + non-negotiables all held. Double-"Projects" heading = LEAVE-AS-IS
+  (fix is a PM decision on SidebarHeader). 2 Should-fix follow-ups: (1)
+  Regenerate keeps old pageCache until Ready (one-liner: clear on entering
+  running); (2) pre-existing 001 quiet-Empty edge (status removed on
+  parse-valid index w/o all_pages_present). spec.md Status → Done. Phase →
+  done. **RELEASE = HUMAN** (PR w/ 3 required statements + qa.sh 6 probes
+  incl. TCC quiet-open).

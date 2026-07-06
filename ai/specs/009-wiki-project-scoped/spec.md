@@ -1,7 +1,7 @@
 # Spec 009 — Project-scoped Wiki (quiet, pushed, progressive)
 
 - **Number:** 009
-- **Status:** In progress       <!-- Draft | PM | Architect | In progress | Done -->
+- **Status:** Done              <!-- Draft | PM | Architect | In progress | Done -->
 - **Surface:** `crates/agentum-desktop/ui` (sidebar, WikiPage, ProjectHub) + `crates/agentum-server` (`routes/wiki.rs`, `routes/fs.rs`, events)
 - **Author:** Mateo Cerquetella (drafted with Claude)
 - **Date:** 2026-07-06
