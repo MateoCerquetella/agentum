@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, renumbered from 009 — 009 = wiki, RELEASED v0.59.0. PM-gated D1–D8; **Architect DONE 2026-07-06** — `architecture.md`, 9 calls resolved (D2 → sibling `github_projects.json`; probe-then-act close/reopen; id cache ships; new `routes/github_projects.rs` + `routes/provision.rs` + crate-root `github_projects.rs`; F2 = two arm hooks with ZERO seam-call-site edits), handoff `02-architect-to-developer.md`. Worktree merged origin/develop v0.59.0 mid-phase (`664ee365`); seam anchors re-verified. Developer: build F1 bind → F2 drive → F3 provision, one gated slice each; FF develop first.)
+- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, renumbered from 009 — 009 = wiki, RELEASED v0.59.0. PM D1–D8 + Architect done (`architecture.md`, 9 calls resolved). **F1 board-bind GREEN + COMMITTED `474cfd12`** — `github_projects.rs` + routes + ProjectBindingEditor/Settings mount; cargo 591/0, task_sink.rs ZERO lines. Developer continues: **F2 drive next** (pure builders → `board_write_with` + id cache + probe-gated close/reopen → the two task_sink arm hooks LAST; AC 8 = existing label tests UNMODIFIED), then F3 provision. Check develop freshness before each slice.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,10 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `9d9be973`, 0 blockers; since RELEASED v0.57.0 `64053d4c`). All 18 focus
-  items PASS w/ quoted evidence; 1 Should-fix = project-wide CI typecheck
-  follow-up; 3 leave-as-is nits. (Full text in git history.)
 - 2026-07-06 | Reviewer | **009-wiki SIGN-OFF → SHIP-READY** (their flow, on
   `wiki-remove-it-fomr-the-side`; since MERGED + RELEASED v0.59.0 `b62a9171`,
   PR #273, issue #272 closed). 2 Should-fix follow-ups live in #272.
@@ -110,7 +106,7 @@
   BEFORE the F3 wizard; D8 consent-gated plain push, no attribution trailer.
   Architect calls named: D2 mechanism, fuzzy internals, id cache,
   probe-vs-blind reopen, route home, template-mode repoId flow, knob default
-  home. Next artifact: `architecture.md`.
+  home. Next artifact: `architecture.md`. (PM full text in git history.)
 - 2026-07-06 | Architect | **010 ARCHITECT GATE PASS → phase developer**
   (`architecture.md`; handoff `02-architect-to-developer.md`; mid-phase the
   worktree MERGED origin/develop v0.59.0 — STATE.md conflict resolved for
@@ -134,3 +130,22 @@
   hook builds LAST after fake-gh suite green; AC 8 = zero test-file diffs.
   Two spec-constrained additions only (id cache; state-only .gitignore
   rewrite for the F3 commit). Developer: F1 → F2 → F3, one gated slice each.
+- 2026-07-06 | Developer | **010 F1 CODE-COMPLETE + GREEN + COMMITTED
+  `474cfd12`** (board bind, AC 1–3; tasks.md F1 section; F2/F3 pending →
+  phase STAYS developer). NEW `github_projects.rs` (1113 ln: BoardPhase/
+  StatusMapping/BoardBinding w/ serde-default-ON `done_closes_issue`;
+  sibling-file persistence + WRITE_LOCK + `_at` injection cores; pure mapper
+  w/ verbatim §3.4 synonym tables, 2 fallbacks, refusal-names-phases;
+  one-call discovery + scope_missing classifier carrying `gh auth refresh -s
+  project`) + NEW `routes/github_projects.rs` (discover/GET/PUT/DELETE,
+  camelCase DTOs, typed 422 scope envelope) + UI (client, pure lib,
+  ProjectBindingEditor w/ GhAuthErrorHelp + desktop READ-command pick,
+  IntegrationsPane "Projects v2 board" section). Gates: cargo 591/0/5 (571
+  baseline held + 20 new; ZERO existing tests touched; task_sink.rs ZERO
+  lines), fmt+clippy clean, vite 1m21s, vitest 10/10 (+9 neighbors). 10
+  deviations documented (top: 3-line gh_bin dup — boundary forbids task_sink
+  edits; paired-positive-guards for strict:false narrowing, tsc 1646→1642).
+  Env notes: attempt 1 died on API monthly-spend-limit mid-exploration
+  (nothing written), retry clean; worktree clippy needed sherpa/onnx dylibs
+  copied into target/release (known gap). **Next slice: F2 drive** (arm
+  hooks LAST, AC 8 = label tests unmodified).
