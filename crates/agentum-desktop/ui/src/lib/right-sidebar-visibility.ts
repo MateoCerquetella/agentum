@@ -16,7 +16,9 @@ const RIGHT_SIDEBAR_SUPPRESSED_VIEWS = new Set<ActiveView>([
   'harness',
   // The Project Hub owns the full content area (its tabs embed Chat/Wiki/
   // Tasks/Sessions) — same distraction-free contract as the views above.
-  'project'
+  'project',
+  // The Projects page (the card-grid picker, #274) is a full-page surface too.
+  'projects'
 ])
 
 export function canShowRightSidebarForView(activeView: ActiveView): boolean {
