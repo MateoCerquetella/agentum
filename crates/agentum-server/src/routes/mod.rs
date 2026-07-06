@@ -19,6 +19,7 @@ pub mod forge;
 pub mod fs;
 pub mod git;
 pub mod github;
+pub mod github_projects;
 pub mod harness;
 pub mod health;
 pub mod host;
