@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** tester         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec. PM D1–D8 + Architect done. **DEVELOPER COMPLETE — all three slices GREEN:** F1 bind `474cfd12` · F2 drive `0b03eb9e` · F3 provision `26b1e022`; cargo 616/0/5 (571 pre-spec + 45 new), vitest 37/0, fmt+clippy clean, tsc baseline 1642 held. Handoff `03-developer-to-tester.md` — tester independently re-runs every gate, rules AC 1–10 w/ repro steps, audits the 25 documented deviations for accuracy, sweeps sacred surfaces. AC 11 = qa.sh/human demo (Mateo), NOT a tester item.)
+- **phase:** reviewer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec. **TESTER VERDICT: PASS-WITH-DEFERRALS, 0 defects** (`verification.md`, HEAD `bc4a7310`) — all 6 gates reproduced exactly (cargo 616/0/5, fmt, clippy 0, vite, vitest 37/0, tsc 1642), ACs 1–10 PASS on read evidence, 25/25 deviations accurate, sacred surfaces byte-proven, 5 adversarial spot-checks clean. Deferral = AC 11 only (live board demo, Mateo). Handoff `04-tester-to-reviewer.md` — reviewer focus: the 3 accepted dup-drift risks, D2 residual honesty, Skipped-semantics legibility. Sign-off = spec Status → Done + phase → done; RELEASE stays HUMAN.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,28 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | PM | **010 PM GATE PASS → phase architect** (D1–D8 locked in
-  spec §Decisions; handoff `01-pm-to-architect.md`; RENUMBERED 009→010
-  mid-phase — sibling branch `wiki-remove-it-fomr-the-side` carries
-  ship-ready `ai/specs/009-wiki-project-scoped`, loop driver + STATE + spec
-  retargeted). All 9 gate items green; 30+ citations spot-verified at
-  `388eaa66`; two drifts fixed (`create_feature` = task_sink.rs:124; seam =
-  4 direct call sites / 6 transition points, not "five"). Locked: D1
-  close-on-Done BOUND-only via `done_closes_issue` default-ON (supersedes
-  004-D1 there; deliberate narrowing of the PRD's unconditional close —
-  PR-driven repos keep `Closes #N`); D2 binding DAEMON-SIDE, mechanism =
-  architect (github.json+passthrough / sibling file / store table à la
-  `agentum_core::TrackerBinding` — seam already has `&Store`) under the
-  HARD constraint that a Settings label save must never destroy a binding
-  (found: `github_labels.rs::update_config` DROPS unknown github.json keys
-  — clobber hazard); D3 drags overwritten Phase-1, no echo machinery; D4
-  template default = goempirical starter, configurable; D5 board create
-  ships, fallbacks VISIBLE, no option mutation; D6 one-slice = 3 increments,
-  F1+F2 self-sufficient; D7 bind UI = one shared component, settings mount
-  BEFORE the F3 wizard; D8 consent-gated plain push, no attribution trailer.
-  Architect calls named: D2 mechanism, fuzzy internals, id cache,
-  probe-vs-blind reopen, route home, template-mode repoId flow, knob default
-  home. Next artifact: `architecture.md`. (PM full text in git history.)
 - 2026-07-06 | Architect | **010 ARCHITECT GATE PASS → phase developer**
   (`architecture.md`; handoff `02-architect-to-developer.md`; mid-phase the
   worktree MERGED origin/develop v0.59.0 — STATE.md conflict resolved for
@@ -173,3 +151,23 @@
   Option<ProjectChoice>; state_map injection = hermeticity; resolve_slug +
   BLOCKED_LABEL keep-in-sync dups). **All three slices green: F1 `474cfd12`
   F2 `0b03eb9e` F3 `26b1e022` → tester re-runs everything independently.**
+- 2026-07-06 | Tester | **010 verdict PASS-WITH-DEFERRALS, 0 defects → phase
+  reviewer** (`verification.md`, HEAD `bc4a7310`; handoff
+  `04-tester-to-reviewer.md`). Independently reproduced ALL six gates: cargo
+  616/0/5 (93.6s), FMT-CLEAN, clippy 0 warnings, vite 1m48s, vitest 37/37
+  no-flake, bare-tsc EXACTLY 1642 (baseline held). ACs 1–10 PASS on READ
+  evidence (test bodies inspected); AC 11 PASS(deferred: live custom-column
+  board demo, qa.sh/human, runner Mateo — 008 precedent). Sacred surfaces
+  PROVEN: label fns byte-identical base→HEAD (extracted + string-compared);
+  empty diffs on all 4 seam call sites + useComposerState + harness/types +
+  auth.rs + desktop gh/gh_projects/github_labels; task_sink's 7 deletions all
+  accounted; TrackerPhase 4 variants; TransitionResult no new variant. 25/25
+  deviations ACCURATE. 5 adversarial spot-checks clean (AC-7 fold, run-twice
+  isolation incl. real rev-list equality, real git check-ignore, seam
+  hermeticity — binding read strictly after the two early-return guards,
+  unbound 5-invocation byte-identity). 5 Info nits (top: tasks.md F3 vitest
+  per-file counts SWAPPED 12/15 not 15/12; 03-handoff github_labels.rs path
+  missing `commands/` — tester re-proved at the real path; test-first RED
+  narrative session-internal, not in git). Reviewer focus: 3 accepted
+  dup-drift risks (gh_bin / BLOCKED_LABEL / resolve_slug), D2 residual
+  honesty, Skipped-semantics legibility.
