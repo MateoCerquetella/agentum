@@ -229,6 +229,7 @@ const MissionControlPage = lazy(() => import('./components/mission-control/Missi
 // opened by clicking a project header in the sidebar. The Wiki lives ONLY here
 // now (spec 009 D1) — the standalone wiki view was deleted.
 const ProjectHubPage = lazy(() => import('./components/project-hub/ProjectHubPage'))
+const ProjectsPage = lazy(() => import('./components/projects/ProjectsPage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
@@ -1750,6 +1751,7 @@ function App(): React.JSX.Element {
                           {activeView === 'activity' ? <MissionControlPage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
                           {activeView === 'project' ? <ProjectHubPage /> : null}
+                          {activeView === 'projects' ? <ProjectsPage /> : null}
                           {/* No workspace selected on the terminal view → fall back to
                               Mission Control (Landing.tsx removed; the dashboard needs no
                               workspace) so the user is never stranded on a blank pane. */}

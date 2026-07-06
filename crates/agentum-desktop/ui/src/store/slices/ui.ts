@@ -437,13 +437,66 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'project'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'project'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'project'
-  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'project'
-  previousViewBeforeProject: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness'
+  activeView:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeTasks:
+    | 'terminal'
+    | 'settings'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeSettings:
+    | 'terminal'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeActivity:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeSkills:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeHarness:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'project'
+    | 'projects'
+  /** Where the hub returns on close — 'projects' when it was opened from the
+   *  Projects page, so back-navigation lands on the picker, not a terminal. */
+  previousViewBeforeProject:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'projects'
+  previousViewBeforeProjects: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
   /** Which tab the Project Hub shows (ADE redesign: a project opens as a hub
    *  with per-project Chat / Wiki / Tasks / Sessions). Survives tab switches
    *  within a session; the repo itself is `activeRepoId`. */
@@ -504,6 +557,9 @@ export type UISlice = {
   closeSkillsPage: () => void
   openHarnessPage: () => void
   closeHarnessPage: () => void
+  /** Open the Projects page (the card-grid picker; per Mateo the sidebar
+   *  never lists repos — projects are chosen inside this page, then the hub). */
+  openProjectsPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -867,6 +923,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeSkills: 'terminal',
   previousViewBeforeHarness: 'terminal',
   previousViewBeforeProject: 'terminal',
+  previousViewBeforeProjects: 'terminal',
   projectHubTab: 'chat',
   setProjectHubTab: (tab) => set({ projectHubTab: tab }),
   openProjectHub: (repoId, tab) => {
@@ -1071,6 +1128,14 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   closeHarnessPage: () =>
     set((state) => ({
       activeView: state.previousViewBeforeHarness
+    })),
+  openProjectsPage: () =>
+    set((state) => ({
+      activeView: 'projects',
+      previousViewBeforeProjects:
+        state.activeView === 'projects' || state.activeView === 'project'
+          ? state.previousViewBeforeProjects
+          : state.activeView
     })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),
