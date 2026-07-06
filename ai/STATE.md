@@ -64,18 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
-  HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
-  every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
-  compile #[ignore], vite green, spec-008 vitest 34/0; full vitest 139-fail
-  baseline corroborated PRE-EXISTING via 4 methods (disjoint set / no-reference
-  grep / diff-scope / failure-kind). All 11 deviations ACCURATE against code;
-  sacred surfaces clean (inject_prompt send-sequence byte-identical, await_repl_ready
-  poll logic unchanged, apply_blocked_transition Ok-Skipped-never-Err, compose_issue_body
-  + useComposerState internals untouched, F1 initialStartGatedRunProp preserved).
-  NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
-  AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
-  +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
 - 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
   `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
   sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
@@ -128,3 +116,17 @@
   HTTP-down); Running GET gains `pages`; ready flips ONLY via validated GET
   (event = refetch command); fs.rs dormant `prefetch` seam. `activeView` NOT
   persisted (rehydration risk cleared). Phase → developer (F1 first).
+- 2026-07-06 | Developer | **009 F1 CODE-COMPLETE + COMMITTED `b325c176`**
+  (projects-sidebar-wiki-off-rail, AC 1–3; F2/F3 remain → phase STAYS
+  developer). NEW `SidebarProjectsNav.tsx` + pure `projects-nav-rows.ts`
+  (+5 vitest, hidden when repos empty) mounted in sidebar/index; D1 deletion
+  inventory complete (rail item, 'wiki' unions, openWikiPage/closeWikiPage,
+  App arm+lazy import, zoom-target, test list); WikiPage embed-only
+  (`pinnedRepoId` REQUIRED, RepoRail/statusDot/standalone chrome deleted;
+  sweep reduced to pinned-only — full deletion+repoStatuses = F2;
+  RUNNING_POLL_MS = F3). Gates: vite green, vitest 12/12 new (31 dir fails
+  PROVEN pre-existing vs pristine origin/develop baseline), cargo 565/0/5,
+  D1 sweep clean (only hub-tab hit). 2 deviations documented (dead standalone
+  empty state deleted; dead-at-base setActiveView left). ⚠️ for reviewer:
+  possible double-"Projects" heading (SidebarHeader when groupBy='repo');
+  verify.sh grep pins not yet wired into a .harness scaffold.
