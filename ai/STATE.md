@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 008-finish-the-loop
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **current_spec:** 010-end-to-end-autonomous-flow
+- **phase:** architect         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 = the PRD spec, RENUMBERED from 009 at PM handoff — `ai/specs/009-wiki-project-scoped` ships on sibling branch `wiki-remove-it-fomr-the-side`, don't repeat the 003 pair. PM-gated 2026-07-06, D1–D8 locked in spec §Decisions, handoff `01-pm-to-architect.md`; architect owns the D2 persistence mechanism under the Settings-save-must-never-destroy-a-binding constraint. 008 RELEASED v0.57.0 `64053d4c`; 007 v0.55.0; 006 v0.54.0.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,34 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
-  F2/F3 deferred to next developer iterations). Built in architecture order:
-  Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
-  Step2 `apply_blocked_transition`+`status/blocked` GitHub-only label, TrackerPhase
-  stays 4 (D-A), remove-set widened to 5-minus-target, `record_feature_failure`→
-  (blocked,attempts) (#16); Step4 pure `start-gated-run-precondition`/`composer-modal-props`
-  + armed-!repoId toast + server-error-detail + `subscribeHarnessRunErrors` bridge
-  (#2 #226 edge, #5); Step5 `#[ignore]` `harness_start_work_live{,_roles}.rs` +
-  `gh_in_dir` honors AGENTUM_GH_BIN; Step3 (sacred, LAST) `await_repl_ready→bool`
-  + `inject_prompt→Result<bool>`, send-sequence BYTE-IDENTICAL, loud readiness log
-  ×4 (#14a). Gates: server 546/0/5, executor 21/0, fmt+clippy clean, vite green,
-  vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
-  green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
-  developer → F2 next.
-- 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
-  intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
-  Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
-  extracted VERBATIM (Fast byte-identical, pinned); `build_intake_instructions`
-  router; `socratic_stage_instructions`+`socratic_pass_body` (5 passes WHO/WHAT/
-  WHY/done/risks, reflect-back, stage5→"Preview issues"); `chat_auth_gate` shared
-  no-creds gate (Complex surfaces NO_CREDS by construction). Client: pure
-  `lib/socratic-intake.ts` reducer (one pass/turn, cap5, Fast never advances) +
-  localStorage `Conversation.intake` (D1 no new table) + two ChatPage buttons +
-  Enter-stays-Fast. Gates: server 552/0/5 (F1 546 held), vitest 10/0 new, fmt+
-  clippy clean, vite green; full vitest 139-fail = PROVEN pre-existing baseline
-  (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
-  untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
-  surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.
 - 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
   (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
   `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
@@ -128,3 +100,45 @@
   = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
   ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
   HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
+- 2026-07-06 | Spec | **010 (né 009) DRAFTED via /sdd-spec from Mateo's PRD
+  "End-to-End Autonomous Flow (Chat → Issue → Work → QA)"**
+  (`ai/specs/010-end-to-end-autonomous-flow/spec.md`; worktree FF'd to v0.58.3
+  `388eaa66` first so line refs are current). Scoping finding: the PRD's §1
+  canonical flow already SHIPPED (004/005/006/008/012 — issue create,
+  start-work, spec materialization, spawn, settle, two-phase gate, retry
+  budget); the real delta = **GitHub Projects v2 mirror + workspace
+  provisioning**. Slices: F1 bind (one `gh api graphql` Status-field discovery
+  → phase→optionId mapping, never-unmapped fallback) / F2 drive (projects arm
+  INSIDE `apply_tracker_transition`+`apply_blocked_transition` — all 5 call
+  sites free, incl. MCP `agentum_report_status`; `done_closes_issue` knob) /
+  F3 provision (repo-from-template + label pre-ensure + board create/bind +
+  scaffold commit, run-twice idempotent). Desktop `gh_projects` READ commands
+  reused by the wizard; board WRITES live server-side (desktop write stubs
+  stay dead — spec-007 lesson). OUT: inbound webhooks/echo (none exist,
+  board_sync.rs:14), `.agentum/result.json` (settle+gate IS the completion
+  contract), GitHub App auth (Phase 2). ⚠️ PM must lock: (1) close-on-Done
+  supersedes 004-D1 on bound workspaces, (2) binding home = `github.json`
+  projects map (recommended) vs in-repo. PM gate PASS (one-slice = judgment
+  call, 008 three-slice precedent). Phase → pm.
+- 2026-07-06 | PM | **010 PM GATE PASS → phase architect** (D1–D8 locked in
+  spec §Decisions; handoff `01-pm-to-architect.md`; RENUMBERED 009→010
+  mid-phase — sibling branch `wiki-remove-it-fomr-the-side` carries
+  ship-ready `ai/specs/009-wiki-project-scoped`, loop driver + STATE + spec
+  retargeted). All 9 gate items green; 30+ citations spot-verified at
+  `388eaa66`; two drifts fixed (`create_feature` = task_sink.rs:124; seam =
+  4 direct call sites / 6 transition points, not "five"). Locked: D1
+  close-on-Done BOUND-only via `done_closes_issue` default-ON (supersedes
+  004-D1 there; deliberate narrowing of the PRD's unconditional close —
+  PR-driven repos keep `Closes #N`); D2 binding DAEMON-SIDE, mechanism =
+  architect (github.json+passthrough / sibling file / store table à la
+  `agentum_core::TrackerBinding` — seam already has `&Store`) under the
+  HARD constraint that a Settings label save must never destroy a binding
+  (found: `github_labels.rs::update_config` DROPS unknown github.json keys
+  — clobber hazard); D3 drags overwritten Phase-1, no echo machinery; D4
+  template default = goempirical starter, configurable; D5 board create
+  ships, fallbacks VISIBLE, no option mutation; D6 one-slice = 3 increments,
+  F1+F2 self-sufficient; D7 bind UI = one shared component, settings mount
+  BEFORE the F3 wizard; D8 consent-gated plain push, no attribution trailer.
+  Architect calls named: D2 mechanism, fuzzy internals, id cache,
+  probe-vs-blind reopen, route home, template-mode repoId flow, knob default
+  home. Next artifact: `architecture.md`.
