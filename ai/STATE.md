@@ -64,48 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Architect | **010 ARCHITECT GATE PASS → phase developer**
-  (`architecture.md`; handoff `02-architect-to-developer.md`; mid-phase the
-  worktree MERGED origin/develop v0.59.0 — STATE.md conflict resolved for
-  active-spec-010, base now `664ee365`, all four seam anchors re-verified
-  unchanged). Nine calls resolved: D2 → **(a2) sibling `github_projects.json`**
-  (a1 github.json rejected on the verified clobber hazard + two-writer race;
-  a3 TrackerBinding rejected on verified board_sync coupling — reuse would
-  make Projects bindings pull-able); fuzzy = strip-to-alnum + disjoint
-  exact-match synonym tables, NO substring, refusal names phases+options;
-  id cache SHIPS in F2 (9 warm calls ≤ ceiling vs ~14 cold) w/
-  invalidate-retry-once (correctness cache-free); close/reopen =
-  probe-then-act BOTH directions, knob-gated (knob-OFF never probes —
-  human-closed issues respected); routes = new `routes/github_projects.rs` +
-  `routes/provision.rs`, domain in crate-root `github_projects.rs`
-  (linear.rs precedent — keeps the F2 arm a two-line hook); template repoId
-  produced inside goal-step Continue (isGoalStepReady untouched);
-  `done_closes_issue` default lives on BoardBinding serde-default (one site);
-  provision = 4th OPTIONAL_WORKSPACE_STEPS entry + modal `'provision'` phase;
-  board-failure visibility = fold into existing `Skipped(reason)` +
-  tracing::warn (zero call-site edits, rides drive.rs engine.log). F2 arm
-  hook builds LAST after fake-gh suite green; AC 8 = zero test-file diffs.
-  Two spec-constrained additions only (id cache; state-only .gitignore
-  rewrite for the F3 commit). Developer: F1 → F2 → F3, one gated slice each.
-- 2026-07-06 | Developer | **010 F1 CODE-COMPLETE + GREEN + COMMITTED
-  `474cfd12`** (board bind, AC 1–3; tasks.md F1 section; F2/F3 pending →
-  phase STAYS developer). NEW `github_projects.rs` (1113 ln: BoardPhase/
-  StatusMapping/BoardBinding w/ serde-default-ON `done_closes_issue`;
-  sibling-file persistence + WRITE_LOCK + `_at` injection cores; pure mapper
-  w/ verbatim §3.4 synonym tables, 2 fallbacks, refusal-names-phases;
-  one-call discovery + scope_missing classifier carrying `gh auth refresh -s
-  project`) + NEW `routes/github_projects.rs` (discover/GET/PUT/DELETE,
-  camelCase DTOs, typed 422 scope envelope) + UI (client, pure lib,
-  ProjectBindingEditor w/ GhAuthErrorHelp + desktop READ-command pick,
-  IntegrationsPane "Projects v2 board" section). Gates: cargo 591/0/5 (571
-  baseline held + 20 new; ZERO existing tests touched; task_sink.rs ZERO
-  lines), fmt+clippy clean, vite 1m21s, vitest 10/10 (+9 neighbors). 10
-  deviations documented (top: 3-line gh_bin dup — boundary forbids task_sink
-  edits; paired-positive-guards for strict:false narrowing, tsc 1646→1642).
-  Env notes: attempt 1 died on API monthly-spend-limit mid-exploration
-  (nothing written), retry clean; worktree clippy needed sherpa/onnx dylibs
-  copied into target/release (known gap). **Next slice: F2 drive** (arm
-  hooks LAST, AC 8 = label tests unmodified).
 - 2026-07-06 | Developer | **010 F2 CODE-COMPLETE + GREEN + COMMITTED
   `0b03eb9e`** (drive, AC 4–8; tasks.md F2 section; F3 pending → phase STAYS
   developer). `github_projects.rs` +711: `run_gh_graphql_argv` (ONE
@@ -194,3 +152,12 @@
   recorded in verification.md). spec.md Status → Done. Phase → done.
   **RELEASE = HUMAN** (PR → develop + promote + AC-11 live board demo,
   runner Mateo).
+- 2026-07-06 | Release | **010 SHIPPING → v0.60.0** (Mateo: "ship it";
+  AC-11 live board demo remains PENDING and human-run — shipped ahead of it
+  per Mateo's call, 008 precedent). Issue **#276** (feature, closes via the
+  release commit's `Closes` on main) + **#277** (reviewer Should-fix:
+  consolidate resolve_slug/gh_bin/BLOCKED_LABEL keep-in-sync dups). Flow:
+  version bump 0.59.1→0.60.0 (Cargo.toml+lock+tauri.conf.json only) → PR →
+  develop → staging → main (pushed separately) → tag v0.60.0 (fires
+  release.yml). Evidence contract for AC-11 stays: issue timeline
+  project-status + close events + a demo-pass line HERE.
