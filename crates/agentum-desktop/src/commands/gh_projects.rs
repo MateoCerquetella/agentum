@@ -492,9 +492,11 @@ fn map_row(item: &Value, position: usize) -> Value {
     })
 }
 
-// A ProjectV2View → the renderer's GitHubProjectView. groupBy/sortBy are not
-// queried in this read-only pass (board grouping is a later refinement); the
-// renderer requires the arrays to exist, so they're emitted empty.
+// A ProjectV2View → the renderer's GitHubProjectView. `groupByFields` drives the
+// Board (Kanban) layout's columns and any Table view's group headers, so it is
+// queried and mapped. `sortByFields` stays empty on purpose: leaving it unset
+// makes rows fall back to item `position` (GitHub's manual board order, which is
+// exactly right within a board column) and avoids changing Table view ordering.
 fn map_view(node: &Value) -> Value {
     json!({
         "id": str_at(node, "id"),
@@ -503,7 +505,7 @@ fn map_view(node: &Value) -> Value {
         "layout": node.get("layout").and_then(Value::as_str).unwrap_or("TABLE_LAYOUT"),
         "filter": node.get("filter").and_then(Value::as_str).unwrap_or(""),
         "fields": nodes_map(node.get("fields"), map_field),
-        "groupByFields": [],
+        "groupByFields": nodes_map(node.get("groupByFields"), map_field),
         "sortByFields": [],
     })
 }
@@ -782,6 +784,7 @@ pub async fn gh_get_project_view_table(
                 nodes {{
                   id number name layout filter
                   fields(first: 50) {{ nodes {{ {FIELD_SELECTION} }} }}
+                  groupByFields(first: 20) {{ nodes {{ {FIELD_SELECTION} }} }}
                 }}
               }}
             }}
