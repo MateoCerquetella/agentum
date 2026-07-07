@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import NewWorkspaceComposerCard from '@/components/NewWorkspaceComposerCard'
 import NewWorkspaceGoalStep from '@/components/NewWorkspaceGoalStep'
 import NewWorkspaceProvisionStep from '@/components/NewWorkspaceProvisionStep'
+import CreateWorkspaceWizard from '@/components/new-workspace/CreateWorkspaceWizard'
 import AgentSettingsDialog from '@/components/agent/AgentSettingsDialog'
 import { useComposerState } from '@/hooks/useComposerState'
 import {
@@ -88,16 +89,15 @@ function ComposerModalBody({
   // the repos the composer would.
   const eligibleRepos = useMemo(() => repos.filter((repo) => Boolean(repo.path)), [repos])
 
-  // Spec 008 F3 (AC 9): the goal step is the DEFAULT first screen for a plain
+  // The "Create Workspace" 3-step wizard is the DEFAULT front door for a plain
   // create-workspace open; an opinionated open (Tasks-page gated-run hop, a
-  // create-from item, a prefilled name, a pinned base branch) skips straight to
-  // the mechanics-first composer (D3 — the composer stays reachable, and F1's
-  // Tasks hop is byte-identical). Spec 010 F3 widens the phase with a
-  // modal-LOCAL `'provision'` between goal and details — offered only on the
-  // goal-first Continue path (opinionated opens and "Skip to details" never
-  // see it; `initialComposerPhase` stays untouched).
-  const [phase, setPhase] = useState<ComposerModalPhase | 'provision'>(() =>
-    initialComposerPhase(modalData)
+  // create-from item, a prefilled name, a pinned base branch) skips it for the
+  // mechanics-first composer card — exactly as it skipped the goal step before
+  // (`initialComposerPhase`). The wizard keeps the goal-first step (spec 008,
+  // with its spec-010 F3 `'provision'` hop between goal and details) and the
+  // full composer both one click away, so no capability is lost.
+  const [phase, setPhase] = useState<'wizard' | ComposerModalPhase | 'provision'>(() =>
+    initialComposerPhase(modalData) === 'details' ? 'details' : 'wizard'
   )
   const [seed, setSeed] = useState<WorkspaceGoalSeed | null>(null)
   const [seedRepoId, setSeedRepoId] = useState<string | undefined>(undefined)
@@ -122,6 +122,18 @@ function ComposerModalBody({
     () => (seedRepoId ? (eligibleRepos.find((repo) => repo.id === seedRepoId)?.path ?? '') : ''),
     [eligibleRepos, seedRepoId]
   )
+
+  if (phase === 'wizard') {
+    return (
+      <CreateWorkspaceWizard
+        modalData={modalData}
+        onClose={onClose}
+        onOpenChange={onOpenChange}
+        onAdvanced={() => setPhase('details')}
+        onUseGoal={() => setPhase('goal')}
+      />
+    )
+  }
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
