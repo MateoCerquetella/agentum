@@ -244,25 +244,29 @@ export default function NewWorkspaceProvisionStep({
           ) : null}
         </div>
 
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
-
-        {summary ? (
-          <div className="space-y-1 rounded-md border border-border/70 px-3 py-2">
-            <p className="text-[11px] font-medium text-muted-foreground">Provision report</p>
-            {summary.map((line) => (
-              <p
-                key={line.id}
-                className={`text-[11px] ${
-                  line.ok ? 'text-muted-foreground' : 'text-amber-700 dark:text-amber-300'
-                }`}
-              >
-                <span className="font-medium">{line.label}:</span> {line.text}
-                {!line.ok ? ' (warning — creation continues)' : ''}
-              </p>
-            ))}
-          </div>
-        ) : null}
       </div>
+
+      {/* Outcome stays OUTSIDE the scroll area (#280): after the click, the
+          report or error must be visible without scrolling — never a
+          silent-looking no-op. */}
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+      {summary ? (
+        <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border/70 px-3 py-2">
+          <p className="text-[11px] font-medium text-muted-foreground">Provision report</p>
+          {summary.map((line) => (
+            <p
+              key={line.id}
+              className={`text-[11px] ${
+                line.ok ? 'text-muted-foreground' : 'text-amber-700 dark:text-amber-300'
+              }`}
+            >
+              <span className="font-medium">{line.label}:</span> {line.text}
+              {!line.ok ? ' (warning — creation continues)' : ''}
+            </p>
+          ))}
+        </div>
+      ) : null}
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onSkip} disabled={running}>
@@ -284,6 +288,13 @@ export default function NewWorkspaceProvisionStep({
               <>
                 <LoaderCircle className="size-3.5 animate-spin" />
                 Provisioning…
+              </>
+            ) : slug === null && slugError === null ? (
+              // #280: a disabled button must say WHY — the slug lookup is
+              // in flight, not dead.
+              <>
+                <LoaderCircle className="size-3.5 animate-spin" />
+                Resolving repository…
               </>
             ) : (
               <>

@@ -230,6 +230,15 @@ export default function NewWorkspaceGoalStep({
             </button>
           ))}
         </div>
+        {/* #280: template mode needs a plain-words explanation — it is the
+            uncommon path and read as noise without one. */}
+        {mode === 'template' ? (
+          <p className="text-[11px] text-muted-foreground">
+            Creates a brand-new GitHub repository from a starter template (the SDD skeleton),
+            clones it into the folder you pick, and uses it as this workspace's project. Working
+            on a repo you already have? Choose "Existing project".
+          </p>
+        ) : null}
 
         {mode === 'existing' ? (
           <div className="space-y-1">
