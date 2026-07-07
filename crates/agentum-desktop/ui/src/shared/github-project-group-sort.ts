@@ -3,6 +3,7 @@
 // in a pure shared module lets desktop and mobile render Project views the same.
 import type {
   GitHubProjectField,
+  GitHubProjectFieldMutationValue,
   GitHubProjectRow,
   GitHubProjectSort,
   GitHubProjectTable
@@ -136,6 +137,123 @@ export function groupRows(
     iteration: v.iteration,
     rows: v.rows
   }))
+}
+
+// ─── Board (Kanban) layout ─────────────────────────────────────────────
+
+export type ProjectBoardColumn = {
+  /** Stable key: single-select option id / iteration id / EMPTY_GROUP_KEY / 'all'. */
+  key: string
+  label: string
+  /** Single-select option color (a GitHub color name, e.g. 'YELLOW') for a
+   *  header swatch; null for columns without one. */
+  color: string | null
+  rows: GitHubProjectRow[]
+  /** True when a card may be dropped here, i.e. the drop maps to a concrete
+   *  field write. False for read-only columns (non-editable group-by, or an
+   *  orphaned bucket whose option/iteration no longer exists). */
+  droppable: boolean
+  /** The field mutation applied on drop. `null` clears the field (the
+   *  "No <field>" column). Only meaningful when `droppable`. */
+  moveValue: GitHubProjectFieldMutationValue | null
+}
+
+export type ProjectBoard = {
+  /** The group-by field driving the columns, or null when the view has none. */
+  field: GitHubProjectField | null
+  columns: ProjectBoardColumn[]
+}
+
+// Turn a Board-layout view into ordered Kanban columns. Reuses the exact
+// bucketing that `groupRows` applies (so a card's column matches its Table
+// group header), but — unlike `groupRows` — enumerates the group-by field's
+// full option/iteration set so empty columns exist as valid drop targets, and
+// appends a trailing "No <field>" column so unset items are visible and the
+// field can be cleared by dragging there.
+export function boardColumns(table: GitHubProjectTable): ProjectBoard {
+  const field = table.selectedView.groupByFields[0] ?? null
+  const sorted = sortRows(table, table.rows)
+  if (!field) {
+    return {
+      field: null,
+      columns: [
+        { key: 'all', label: 'All', color: null, rows: sorted, droppable: false, moveValue: null }
+      ]
+    }
+  }
+
+  // Reuse groupRows' bucketing (and its computed labels) so a card's column
+  // matches its Table group header exactly. Buckets are keyed by option id /
+  // iteration id / EMPTY_GROUP_KEY.
+  const groups = groupRows(table, sorted)
+  const byKey = new Map(groups.map((g) => [g.key, g]))
+  const rowsFor = (key: string): GitHubProjectRow[] => byKey.get(key)?.rows ?? []
+  const consumed = new Set<string>([EMPTY_GROUP_KEY])
+  const emptyColumn: ProjectBoardColumn = {
+    key: EMPTY_GROUP_KEY,
+    label: labelForEmpty(field),
+    color: null,
+    rows: rowsFor(EMPTY_GROUP_KEY),
+    droppable: true,
+    moveValue: null
+  }
+  // Buckets whose key isn't one of the field's current options/iterations (a
+  // deleted option still referenced by a row) — surfaced read-only so those
+  // rows are never silently dropped from the board.
+  const orphanColumns = (): ProjectBoardColumn[] =>
+    groups
+      .filter((g) => !consumed.has(g.key))
+      .map((g) => ({
+        key: g.key,
+        label: g.label,
+        color: null,
+        rows: g.rows,
+        droppable: false,
+        moveValue: null
+      }))
+
+  if (field.kind === 'single-select') {
+    const columns = field.options.map<ProjectBoardColumn>((o) => {
+      consumed.add(o.id)
+      return {
+        key: o.id,
+        label: o.name,
+        color: o.color,
+        rows: rowsFor(o.id),
+        droppable: true,
+        moveValue: { kind: 'single-select', optionId: o.id }
+      }
+    })
+    return { field, columns: [...columns, emptyColumn, ...orphanColumns()] }
+  }
+
+  if (field.kind === 'iteration') {
+    const columns = field.iterations.map<ProjectBoardColumn>((it) => {
+      consumed.add(it.id)
+      return {
+        key: it.id,
+        label: it.title,
+        color: null,
+        rows: rowsFor(it.id),
+        droppable: true,
+        moveValue: { kind: 'iteration', iterationId: it.id }
+      }
+    })
+    return { field, columns: [...columns, emptyColumn, ...orphanColumns()] }
+  }
+
+  // Any other group-by kind (assignees, labels, text, …): we have no
+  // single-write mutation to move a card, so render the populated buckets
+  // read-only in their grouped order.
+  const columns = groups.map<ProjectBoardColumn>((g) => ({
+    key: g.key,
+    label: g.label || labelForEmpty(field),
+    color: null,
+    rows: g.rows,
+    droppable: false,
+    moveValue: null
+  }))
+  return { field, columns }
 }
 
 function compareSort(a: GitHubProjectRow, b: GitHubProjectRow, sort: GitHubProjectSort): number {

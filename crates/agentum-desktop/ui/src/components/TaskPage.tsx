@@ -404,7 +404,12 @@ export default function TaskPage({
   // the user is on the GitHub task source — actual entry into Project mode is
   // gated on a non-null `activeProject` once they pick one.
   const projectModeVisible = taskSource === 'github'
-  const [githubMode, setGithubMode] = useState<'items' | 'project'>('items')
+  // Default the Board to the GitHub Projects (Projects v2) view rather than the
+  // Issues list. A user's explicit switch to Issues persists via
+  // `taskResumeState.githubMode` (see the resume effect below), so this only
+  // sets the first-open default; when no project is linked, Project mode shows
+  // its "Choose a project" prompt.
+  const [githubMode, setGithubMode] = useState<'items' | 'project'>('project')
   // Tasks-as-Kanban (#2): the GitHub issues view can render as a board where
   // dragging a card between Open/Done pushes the new state back to GitHub.
   const [taskViewMode, setTaskViewMode] = useState<'list' | 'kanban'>('list')
@@ -1041,7 +1046,7 @@ export default function TaskPage({
     )
     setRepoSelection(resolvedInitialSelection)
 
-    const nextGithubMode = taskResumeState?.githubMode ?? 'items'
+    const nextGithubMode = taskResumeState?.githubMode ?? 'project'
     setGithubMode(nextGithubMode)
 
     const preset = taskResumeState?.githubItemsPreset

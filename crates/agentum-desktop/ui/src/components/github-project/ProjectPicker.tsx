@@ -656,7 +656,8 @@ function ViewPickStep({
           <div className="px-2 py-2 text-xs text-muted-foreground">No views found.</div>
         ) : (
           views.map((v) => {
-            const supported = v.layout === 'TABLE_LAYOUT'
+            // Table and Board (Kanban) both render in-app; Roadmap does not.
+            const supported = v.layout === 'TABLE_LAYOUT' || v.layout === 'BOARD_LAYOUT'
             return (
               <button
                 key={v.id}
@@ -673,7 +674,7 @@ function ViewPickStep({
                   {v.layout === 'TABLE_LAYOUT'
                     ? 'Table'
                     : v.layout === 'BOARD_LAYOUT'
-                      ? 'Board (unsupported)'
+                      ? 'Board'
                       : 'Roadmap (unsupported)'}
                 </span>
               </button>
