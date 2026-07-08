@@ -52,6 +52,7 @@ mod routes;
 mod rules;
 pub mod task_sink;
 pub mod tls;
+pub mod tracker_sync;
 mod transcript_store;
 pub mod usage;
 pub(crate) mod wiki;
@@ -490,6 +491,29 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         let bus = bus.clone();
         tokio::spawn(async move {
             agentum_watchdog::run_session_comment_bridge(store, bus).await;
+        });
+    }
+
+    // Spec 012 F2: session-start → tracker InProgress. A bus subscriber (never
+    // inline in the launch path — invariant #2) that, on `session.started` in a
+    // bound worktree, drives the linked item to In Progress via the one existing
+    // write seam. Best-effort/monotonic — an unbound or already-advanced
+    // worktree is a no-op.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            tracker_sync::run_session_start_reactor(store, bus).await;
+        });
+    }
+
+    // Spec 012 F3/F4: the PR/merge poller. No inbound webhooks on a self-hosted
+    // daemon (invariant #6) → a bounded, backed-off `gh` loop drives InReview on
+    // the first non-draft PR and Done on merge for each bound github worktree.
+    {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            tracker_sync::run_pr_merge_poller(store).await;
         });
     }
 

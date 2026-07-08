@@ -35,6 +35,7 @@ pub(crate) fn default_true() -> bool {
 pub enum BoardPhase {
     Todo,
     InProgress,
+    InReview,
     ReadyToTest,
     Done,
     Blocked,
@@ -46,6 +47,7 @@ impl From<crate::task_sink::TrackerPhase> for BoardPhase {
         match phase {
             Todo => BoardPhase::Todo,
             InProgress => BoardPhase::InProgress,
+            InReview => BoardPhase::InReview,
             ReadyToTest => BoardPhase::ReadyToTest,
             Done => BoardPhase::Done,
         }
@@ -72,6 +74,13 @@ impl StatusMapping {
         match phase {
             BoardPhase::Todo => &self.todo,
             BoardPhase::InProgress => &self.in_progress,
+            // Spec 012 F3: InReview folds onto the InProgress option — 010's
+            // nearest-earlier-phase fallback, applied at the write accessor.
+            // A stored binding carries no separate in-review option (backward
+            // compatible with every 010 binding); a distinct "In Review"
+            // Project column is the documented carry-forward (needs the
+            // discovery→persist path to populate it).
+            BoardPhase::InReview => &self.in_progress,
             BoardPhase::ReadyToTest => &self.ready_to_test,
             BoardPhase::Done => &self.done,
             BoardPhase::Blocked => &self.blocked,
@@ -1388,12 +1397,16 @@ mod tests {
     }
 
     #[test]
-    fn board_phase_from_tracker_phase_covers_four() {
+    fn board_phase_from_tracker_phase_covers_five() {
         use crate::task_sink::TrackerPhase;
         assert_eq!(BoardPhase::from(TrackerPhase::Todo), BoardPhase::Todo);
         assert_eq!(
             BoardPhase::from(TrackerPhase::InProgress),
             BoardPhase::InProgress
+        );
+        assert_eq!(
+            BoardPhase::from(TrackerPhase::InReview),
+            BoardPhase::InReview
         );
         assert_eq!(
             BoardPhase::from(TrackerPhase::ReadyToTest),
@@ -1407,6 +1420,9 @@ mod tests {
         let m = sample_binding().status_mapping;
         assert_eq!(m.option_id(BoardPhase::Todo), "t");
         assert_eq!(m.option_id(BoardPhase::InProgress), "i");
+        // Spec 012 F3: InReview folds onto the InProgress option (nearest-earlier
+        // fallback — no separate stored option, backward-compatible with 010).
+        assert_eq!(m.option_id(BoardPhase::InReview), "i");
         assert_eq!(m.option_id(BoardPhase::ReadyToTest), "r");
         assert_eq!(m.option_id(BoardPhase::Done), "d");
         assert_eq!(m.option_id(BoardPhase::Blocked), "b");
