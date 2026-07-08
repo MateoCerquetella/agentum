@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
 import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
+import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 import { ProjectSessionsList } from './ProjectSessionsList'
 
 // Lazy like App.tsx's page mounts: the hub chunk stays small and each surface
@@ -25,7 +26,7 @@ const ChatPage = lazy(() => import('@/components/harness/ChatPage'))
 const WikiPage = lazy(() => import('@/components/wiki/WikiPage'))
 const TaskPage = lazy(() => import('@/components/TaskPage'))
 
-type HubTab = 'chat' | 'wiki' | 'tasks' | 'sessions'
+type HubTab = 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
 
 // The GitHub work-items cache key the Board reads on mount — the exact recipe
 // openTaskPage uses for its warm-up prefetch (resume-state custom query wins,
@@ -42,6 +43,9 @@ const TABS: Array<{ id: HubTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'wiki', label: 'Wiki' },
   { id: 'tasks', label: 'Tasks' },
+  // Where this project configures which GitHub Project (+ status mapping) tracks
+  // its issues — sits next to Tasks since it decides what Tasks reads from.
+  { id: 'tracker', label: 'Tracker' },
   { id: 'sessions', label: 'Sessions' }
 ]
 
@@ -180,8 +184,42 @@ export default function ProjectHubPage(): React.JSX.Element {
           {tab === 'chat' ? <ChatPage key={repo.id} pinnedRepo={repo} /> : null}
           {tab === 'wiki' ? <WikiPage key={repo.id} pinnedRepoId={repo.id} /> : null}
           {tab === 'tasks' && taskDataSeeded ? <TaskPage key={repo.id} embedded /> : null}
+          {tab === 'tracker' ? <ProjectTrackerConfig key={repo.id} path={repo.path} /> : null}
           {tab === 'sessions' ? <ProjectSessionsList repoId={repo.id} /> : null}
         </Suspense>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The hub's Tracker tab (spec 011 F1): mounts the SAME `ProjectBindingEditor`
+ * that Settings → Integrations and the provision step use, pinned to this
+ * project's workdir — so no repo `<select>` is needed. This is where a project
+ * configures which GitHub Project (+ status mapping) tracks its issues; the
+ * wizard's issue picker then reads that per-repo binding.
+ */
+function ProjectTrackerConfig({ path }: { path: string | undefined }): React.JSX.Element {
+  return (
+    <div className="mx-auto h-full max-w-2xl overflow-y-auto px-6 py-6">
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-[14px] font-semibold tracking-tight text-foreground">Tracker</h2>
+        <p className="mt-0.5 text-[12px] text-muted-foreground">
+          Bind this project to a GitHub Projects v2 board. Gated runs move its cards by column as
+          features code, verify, and finish — and the New Workspace picker lists this Project&apos;s
+          open issues.
+        </p>
+        <div className="mt-3">
+          {path ? (
+            <ProjectBindingEditor workdir={path} />
+          ) : (
+            // A project with no resolvable workdir (a remote/unmapped repo)
+            // can't bind a board here — bindings resolve through the local `gh`.
+            <p className="text-xs text-muted-foreground">
+              This project has no local workdir, so a board can&apos;t be bound here.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   )
