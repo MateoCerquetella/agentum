@@ -7,7 +7,8 @@ import {
   buildBindPayload,
   deriveIssueOptions,
   deriveTrackerBindCoords,
-  isPickableIssueRow
+  isPickableIssueRow,
+  resolvePickerProject
 } from './work-item-picker-model'
 
 // A minimal Project row builder — only the fields the picker reads matter; the
@@ -174,6 +175,80 @@ describe('buildBindPayload', () => {
       title: 'Add OAuth',
       url: 'https://github.com/o/r/issues/42'
     })
+  })
+})
+
+describe('resolvePickerProject', () => {
+  const active = { owner: 'globalorg', ownerType: 'organization' as const, number: 7 }
+  // A per-repo binding identity (spec 010's BoardBinding wire shape); extra
+  // fields the real DTO carries are irrelevant to resolution.
+  function binding(overrides: {
+    owner?: string | null
+    ownerType?: string | null
+    number?: number | null
+  }) {
+    return {
+      projectOwner: overrides.owner === undefined ? 'repoorg' : overrides.owner,
+      projectOwnerType: overrides.ownerType === undefined ? 'organization' : overrides.ownerType,
+      projectNumber: overrides.number === undefined ? 3 : overrides.number
+    }
+  }
+
+  it('prefers the per-repo binding over the global activeProject', () => {
+    expect(resolvePickerProject({ binding: binding({}), activeProject: active })).toEqual({
+      owner: 'repoorg',
+      ownerType: 'organization',
+      number: 3
+    })
+  })
+
+  it('falls back to activeProject when there is no binding (spec 012, no regression)', () => {
+    expect(resolvePickerProject({ binding: null, activeProject: active })).toEqual(active)
+    expect(resolvePickerProject({ binding: undefined, activeProject: active })).toEqual(active)
+  })
+
+  it('falls back to activeProject when the binding is partial (missing owner or number)', () => {
+    expect(
+      resolvePickerProject({ binding: binding({ owner: null }), activeProject: active })
+    ).toEqual(active)
+    expect(
+      resolvePickerProject({ binding: binding({ number: null }), activeProject: active })
+    ).toEqual(active)
+  })
+
+  it('returns null with neither a binding nor an activeProject (honest empty state)', () => {
+    expect(resolvePickerProject({ binding: null, activeProject: null })).toBeNull()
+    expect(
+      resolvePickerProject({ binding: binding({ owner: null }), activeProject: null })
+    ).toBeNull()
+  })
+
+  it('normalizes the binding ownerType: only an exact "organization" stays org, else user', () => {
+    expect(
+      resolvePickerProject({ binding: binding({ ownerType: 'organization' }), activeProject: null })
+        ?.ownerType
+    ).toBe('organization')
+    expect(
+      resolvePickerProject({ binding: binding({ ownerType: 'user' }), activeProject: null })
+        ?.ownerType
+    ).toBe('user')
+    // A legacy/garbled ownerType collapses to user rather than leaking a bad value.
+    expect(
+      resolvePickerProject({ binding: binding({ ownerType: 'USER' }), activeProject: null })
+        ?.ownerType
+    ).toBe('user')
+    expect(
+      resolvePickerProject({ binding: binding({ ownerType: null }), activeProject: null })
+        ?.ownerType
+    ).toBe('user')
+  })
+
+  it('handles a binding with number 0 as a complete identity (not a falsy miss)', () => {
+    // projectNumber 0 is unusual but valid — the guard checks `!= null`, not
+    // truthiness, so a #0 board still wins over the fallback.
+    expect(
+      resolvePickerProject({ binding: binding({ number: 0 }), activeProject: active })
+    ).toEqual({ owner: 'repoorg', ownerType: 'organization', number: 0 })
   })
 })
 

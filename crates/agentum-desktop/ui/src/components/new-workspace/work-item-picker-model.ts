@@ -8,6 +8,7 @@
 // "launch" reverse-entry) share `buildBindPayload`, so a board-launched
 // workspace drives status exactly like a wizard-picked one.
 import type {
+  GitHubProjectOwnerType,
   GitHubProjectRow,
   GitHubProjectTable
 } from '../../shared/github-project-types'
@@ -84,6 +85,55 @@ export function deriveIssueOptions(
     })
   }
   return out
+}
+
+/** The minimal Project identity the issue picker needs to list issues: owner +
+ *  ownerType + number. Both the per-repo binding and the global `activeProject`
+ *  collapse to this shape (`fetchProjectViewTable` reads exactly these). */
+export type PickerProjectRef = {
+  owner: string
+  ownerType: GitHubProjectOwnerType
+  number: number
+}
+
+/** The identity fields the wizard reads off a per-repo Projects binding (spec
+ *  010's `BoardBinding` / `ProjectBindingDto`). `projectOwnerType` is a free
+ *  string on the wire (older writers), narrowed at resolution time. */
+export type PickerBindingIdentity = {
+  projectOwner: string | null
+  projectOwnerType: string | null
+  projectNumber: number | null
+}
+
+/**
+ * Resolve which GitHub Project the New Workspace issue picker lists from (spec
+ * 011 F2). Precedence, fail-closed:
+ *  1. the selected repo's **per-repo binding** wins (each project configures its
+ *     own tracker) — but only when it carries a complete identity (owner +
+ *     number); a partial/legacy binding is ignored, never half-resolved;
+ *  2. else the globally-active Project (spec 012 behavior — zero regression);
+ *  3. else `null` — the picker's honest empty state.
+ * Pure so it's unit-testable without mounting the wizard. `ownerType` is
+ * normalized to `organization` only for an exact match (mirrors
+ * `ProjectBindingEditor`'s re-discover normalization), else `user`.
+ */
+export function resolvePickerProject(input: {
+  binding: PickerBindingIdentity | null | undefined
+  activeProject: PickerProjectRef | null | undefined
+}): PickerProjectRef | null {
+  const b = input.binding
+  if (b && b.projectOwner && b.projectNumber != null) {
+    return {
+      owner: b.projectOwner,
+      ownerType: b.projectOwnerType === 'organization' ? 'organization' : 'user',
+      number: b.projectNumber
+    }
+  }
+  const active = input.activeProject
+  if (active) {
+    return { owner: active.owner, ownerType: active.ownerType, number: active.number }
+  }
+  return null
 }
 
 /**
