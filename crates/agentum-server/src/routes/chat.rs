@@ -633,16 +633,18 @@ fn chat_auth_gate(auth: Option<Auth>) -> Result<Auth, ApiError> {
     auth.ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))
 }
 
-/// Retrieve query-relevant AutoWiki excerpts (spec 003 RAG) for the latest user
-/// turn, off the async runtime (`retrieve_context` is blocking fs + CPU math).
-/// Best-effort by contract: no user turn / no wiki / no sidecar / a model
-/// mismatch → `None`, and the interview grounds on the static snapshot alone.
-async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Option<String> {
-    let query = messages
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .map(|m| m.content.clone())?;
+/// Retrieve query-relevant AutoWiki excerpts (spec 003 RAG) for a free-text
+/// query, off the async runtime (`retrieve_context` is blocking fs + CPU math).
+/// Best-effort by contract (spec 013 inv. 6): a blank query / no wiki / no
+/// sidecar / a model mismatch → `None`; the caller grounds on whatever else it
+/// has and never wedges. Shared by `retrieve_wiki` (the chat interview's last
+/// user turn) and `draft_issue_body` (the issue title).
+async fn retrieve_wiki_for_query(workdir: Option<&str>, query: &str) -> Option<String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let query = query.to_string();
     let workdir = workdir.map(str::to_string);
     tokio::task::spawn_blocking(move || {
         crate::wiki_rag::retrieve_context(
@@ -654,6 +656,14 @@ async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Optio
     .await
     .ok()
     .flatten()
+}
+
+/// Retrieve query-relevant AutoWiki excerpts for the latest user turn. Extracts
+/// the query (the last user message) and delegates to `retrieve_wiki_for_query`
+/// — zero behavior change for `chat()`. No user turn → `None`.
+async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Option<String> {
+    let query = messages.iter().rev().find(|m| m.role == "user")?.content.clone();
+    retrieve_wiki_for_query(workdir, &query).await
 }
 
 async fn chat(
@@ -1803,11 +1813,18 @@ fn draft_body_user_message(title: &str) -> String {
 }
 
 /// Assemble the drafting system instructions: the pinned section contract plus
-/// the repo snapshot (when a local workdir is available) and the slug hint.
-fn draft_body_instructions(repo_slug: Option<&str>, repo_context: Option<&str>) -> String {
+/// the repo snapshot (when a local workdir is available), the slug hint, and the
+/// repo's AutoWiki excerpts (spec 013 F2, when a wiki retrieval succeeds).
+/// Best-effort (inv. 6): a `None` wiki appends nothing — the drafter still
+/// grounds on the repo context — and never throws.
+fn draft_body_instructions(
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+    wiki: Option<&str>,
+) -> String {
     let mut out = String::from(DRAFT_BODY_INSTRUCTIONS);
     if let Some(slug) = repo_slug {
-        out.push_str(&format!("\n\nThe GitHub repository is `{slug}`."));
+        out.push_str(&format!("\n\nThe repository is `{slug}`."));
     }
     match repo_context {
         Some(ctx) => out.push_str(&format!(
@@ -1816,6 +1833,11 @@ fn draft_body_instructions(repo_slug: Option<&str>, repo_context: Option<&str>) 
         None => out.push_str(
             "\n\nNo repo snapshot is available; keep the body honest and generic — do not invent project details.",
         ),
+    }
+    if let Some(wiki) = wiki {
+        out.push_str(&format!(
+            "\n\n=== WIKI CONTEXT (project knowledge base excerpts — prefer these for domain facts) ===\n{wiki}\n=== END WIKI ===",
+        ));
     }
     out
 }
@@ -1855,7 +1877,12 @@ pub(crate) async fn draft_issue_body(
     let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
 
     let repo_context = gather_repo_context(workdir);
-    let instructions = draft_body_instructions(repo_slug, repo_context.as_deref());
+    // Spec 013 F2 (inv. 6): ground the body in the repo's AutoWiki too. This is
+    // best-effort — a wiki miss (no sidecar, model mismatch, blank title) yields
+    // `None` and the draft still proceeds from the repo snapshot alone.
+    let wiki = retrieve_wiki_for_query(workdir, title).await;
+    let instructions =
+        draft_body_instructions(repo_slug, repo_context.as_deref(), wiki.as_deref());
     let system = build_system(&auth, &instructions);
     let messages = vec![json!({ "role": "user", "content": draft_body_user_message(title) })];
 
@@ -2938,7 +2965,7 @@ mod tests {
         let user = draft_body_user_message("Fix the sidebar flicker");
         assert!(user.contains("Fix the sidebar flicker"));
 
-        let instructions = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"));
+        let instructions = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"), None);
         assert!(instructions.contains("## Problem"));
         assert!(instructions.contains("## Goal"));
         assert!(instructions.contains("## Acceptance criteria"));
@@ -2947,8 +2974,50 @@ mod tests {
         assert!(instructions.contains("## Repo guide\nstuff"));
 
         // Without a snapshot the prompt says so instead of inviting invention.
-        let blind = draft_body_instructions(None, None);
+        let blind = draft_body_instructions(None, None, None);
         assert!(blind.contains("No repo snapshot is available"));
+    }
+
+    // ── Spec 013 F2: wiki-grounded issue drafting ────────────────────────
+
+    #[test]
+    fn draft_body_instructions_includes_wiki_block_when_present() {
+        // With a wiki retrieval, the drafting system prompt gains a WIKI block
+        // (in addition to the repo context) so the body grounds on both.
+        let with_wiki = draft_body_instructions(
+            Some("o/r"),
+            Some("## Repo guide\nstuff"),
+            Some("Domain fact: sessions are (name, workdir, tool)."),
+        );
+        assert!(with_wiki.contains("=== WIKI CONTEXT"));
+        assert!(with_wiki.contains("Domain fact: sessions are (name, workdir, tool)."));
+        assert!(with_wiki.contains("=== END WIKI ==="));
+        // The repo context still rides alongside it (both groundings present).
+        assert!(with_wiki.contains("## Repo guide\nstuff"));
+
+        // Best-effort (inv. 6): a `None` wiki appends NO wiki block, yet the
+        // body still drafts from the repo context — never wedges on a miss.
+        let no_wiki = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"), None);
+        assert!(!no_wiki.contains("WIKI CONTEXT"));
+        assert!(no_wiki.contains("## Repo guide\nstuff"));
+    }
+
+    #[test]
+    fn draft_body_instructions_is_provider_neutral() {
+        // Open question 1: the body is provider-agnostic (reused for Linear), so
+        // the drafting instructions must not hard-code "GitHub".
+        let instructions =
+            draft_body_instructions(Some("o/r"), Some("ctx"), Some("wiki"));
+        assert!(instructions.contains("The repository is `o/r`."));
+        assert!(!instructions.contains("GitHub repository"));
+    }
+
+    #[tokio::test]
+    async fn retrieve_wiki_for_query_is_none_without_a_workdir() {
+        // Non-fatal by contract: no workdir (and a blank query) yield `None`,
+        // never a panic — the drafter proceeds from repo context alone.
+        assert!(retrieve_wiki_for_query(None, "anything").await.is_none());
+        assert!(retrieve_wiki_for_query(Some("/nonexistent/path"), "   ").await.is_none());
     }
 
     #[test]

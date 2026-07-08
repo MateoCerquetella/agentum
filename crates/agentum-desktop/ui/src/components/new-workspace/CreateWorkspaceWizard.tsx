@@ -9,7 +9,9 @@ import {
   Laptop,
   Loader2,
   PlugZap,
+  Plus,
   Server,
+  Sparkles,
   X
 } from 'lucide-react'
 import {
@@ -56,6 +58,12 @@ import {
   resolvePickerProject,
   type WorkItemOption
 } from '@/components/new-workspace/work-item-picker-model'
+import {
+  canDraftIssue,
+  canFileIssue,
+  deriveCreateIssueIntentPhase,
+  deriveIntentTitle
+} from '@/components/new-workspace/create-issue-intent-model'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 import {
   getProjectBinding,
@@ -147,7 +155,19 @@ export default function CreateWorkspaceWizard({
     selectedRepoConnectInProgress,
     onConnectSelectedRepo,
     applyLinkedWorkItem,
-    linkedWorkItem
+    linkedWorkItem,
+    // Spec 013 F2: the composer's EXISTING create-issue seams — the wizard
+    // shares the hook, so it renders them rather than rebuilding the flow.
+    canCreateGithubIssue,
+    createIssueTitle,
+    onCreateIssueTitleChange,
+    createIssueBody,
+    onCreateIssueBodyChange,
+    createIssueGenerating,
+    onGenerateIssueBody,
+    createIssueSubmitting,
+    createIssueError,
+    onCreateIssueSubmit
   } = cardProps
 
   // Quick-agent selection mirrors the composer modal's `QuickTabBody`: the
@@ -371,6 +391,18 @@ export default function CreateWorkspaceWizard({
               fetchProjectViewTable={fetchProjectViewTable}
               linkedWorkItem={linkedWorkItem}
               onPickWorkItem={onPickWorkItem}
+              createIssue={{
+                canCreate: canCreateGithubIssue,
+                title: createIssueTitle,
+                onTitleChange: onCreateIssueTitleChange,
+                body: createIssueBody,
+                onBodyChange: onCreateIssueBodyChange,
+                generating: createIssueGenerating,
+                onGenerate: onGenerateIssueBody,
+                submitting: createIssueSubmitting,
+                error: createIssueError,
+                onSubmit: onCreateIssueSubmit
+              }}
             />
           ) : null}
         </div>
@@ -875,6 +907,23 @@ function BaseBranchCombobox({
 
 // ---------- Step 3: Agent & tracker ----------
 
+/** The composer's create-issue seams, bundled for threading into the tracker
+ *  section (spec 013 F2). Every field maps 1:1 onto a `useComposerState`
+ *  `cardProps` entry — no new state, no rebuilt flow. */
+type CreateIssueSeams = {
+  /** True when "Create issue" applies: nothing linked yet + a local git repo. */
+  canCreate: boolean
+  title: string
+  onTitleChange: (value: string) => void
+  body: string
+  onBodyChange: (value: string) => void
+  generating: boolean
+  onGenerate: () => void
+  submitting: boolean
+  error: string | null
+  onSubmit: () => void
+}
+
 function AgentStep({
   agents,
   detectedAgentIds,
@@ -884,7 +933,8 @@ function AgentStep({
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
-  onPickWorkItem
+  onPickWorkItem,
+  createIssue
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
@@ -895,6 +945,7 @@ function AgentStep({
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
+  createIssue: CreateIssueSeams
 }): React.JSX.Element {
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
@@ -952,6 +1003,7 @@ function AgentStep({
         fetchProjectViewTable={fetchProjectViewTable}
         linkedWorkItem={linkedWorkItem}
         onPickWorkItem={onPickWorkItem}
+        createIssue={createIssue}
       />
     </div>
   )
@@ -982,7 +1034,8 @@ function TrackerSection({
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
-  onPickWorkItem
+  onPickWorkItem,
+  createIssue
 }: {
   /** The selected repo's local workdir — present only for a LOCAL git repo,
    *  which is the only kind that can carry/configure a per-repo binding. The
@@ -992,6 +1045,7 @@ function TrackerSection({
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
+  createIssue: CreateIssueSeams
 }): React.JSX.Element {
   const [binding, setBinding] = useState<ProjectBindingDto | null>(null)
   const [table, setTable] = useState<GitHubProjectTable | null>(null)
@@ -1136,10 +1190,137 @@ function TrackerSection({
         </div>
       ) : null}
 
+      {/* Spec 013 F2: create an issue from a short intent, then bind it. Only
+          when nothing is linked yet and the repo is a local git repo. */}
+      {createIssue.canCreate ? <CreateIssuePanel createIssue={createIssue} /> : null}
+
       {linkedWorkItem ? (
         <span className="text-[11px] text-emerald-500">
           Linked · #{linkedWorkItem.number} {linkedWorkItem.title}
         </span>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Spec 013 F2: "Create issue from intent" — a thin surface over the composer's
+ * EXISTING create-issue seams. The operator types "what do you want to do?",
+ * Draft calls `onGenerateIssueBody` (wiki+codebase-grounded server-side), then
+ * Create files via `onCreateIssueSubmit` (→ `createGithubIssue` →
+ * `applyLinkedWorkItem`). Errors render inline; the wizard's Create workspace
+ * primary is never gated on this panel (inv. 7).
+ */
+function CreateIssuePanel({ createIssue }: { createIssue: CreateIssueSeams }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [intent, setIntent] = useState('')
+
+  const busy = createIssue.generating || createIssue.submitting
+  const phase = deriveCreateIssueIntentPhase({
+    generating: createIssue.generating,
+    submitting: createIssue.submitting,
+    error: createIssue.error,
+    hasBody: createIssue.body.trim().length > 0
+  })
+
+  const handleDraft = useCallback(() => {
+    if (!canDraftIssue(intent, busy)) {
+      return
+    }
+    // Seed the title from the intent (reuse), then draft the body server-side.
+    createIssue.onTitleChange(deriveIntentTitle(intent))
+    createIssue.onGenerate()
+  }, [busy, createIssue, intent])
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1.5 self-start rounded-md border border-dashed border-border px-2.5 py-1.5 text-[11.5px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
+      >
+        <Plus className="size-3.5" />
+        Create an issue for this work
+      </button>
+    )
+  }
+
+  const hasDraft = createIssue.body.trim().length > 0 || createIssue.title.trim().length > 0
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[12px] font-medium text-foreground">Create an issue</span>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          aria-label="Cancel"
+          className="inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-[11px] text-muted-foreground">What do you want to do?</span>
+        <textarea
+          value={intent}
+          onChange={(event) => setIntent(event.target.value)}
+          rows={2}
+          placeholder="Describe the work — a title and an SDD-shaped body get drafted from it."
+          className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+        />
+      </label>
+
+      <button
+        type="button"
+        onClick={handleDraft}
+        disabled={!canDraftIssue(intent, busy)}
+        className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-[11.5px] text-foreground transition-colors hover:border-muted-foreground/40 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {phase === 'drafting' ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <Sparkles className="size-3.5" />
+        )}
+        {phase === 'drafting' ? 'Drafting…' : hasDraft ? 'Redraft from intent' : 'Draft issue'}
+      </button>
+
+      {hasDraft ? (
+        <>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-muted-foreground">Title</span>
+            <input
+              value={createIssue.title}
+              onChange={(event) => createIssue.onTitleChange(event.target.value)}
+              placeholder="Issue title"
+              className="h-[34px] rounded-md border border-input bg-secondary px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-muted-foreground">Description</span>
+            <textarea
+              value={createIssue.body}
+              onChange={(event) => createIssue.onBodyChange(event.target.value)}
+              rows={6}
+              placeholder="Drafted description — review and edit before filing."
+              className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={createIssue.onSubmit}
+            disabled={!canFileIssue(createIssue.title, busy)}
+            className="inline-flex items-center gap-1.5 self-start rounded-full bg-primary px-3.5 py-1.5 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {phase === 'filing' ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {phase === 'filing' ? 'Creating…' : 'Create issue'}
+          </button>
+        </>
+      ) : null}
+
+      {createIssue.error ? (
+        <span className="text-[11px] text-destructive">{createIssue.error}</span>
       ) : null}
     </div>
   )
