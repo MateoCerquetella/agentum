@@ -99,7 +99,13 @@ export type WorktreeSlice = {
     workspaceStatus?: WorkspaceStatus,
     linkedGitLabMR?: number,
     linkedGitLabIssue?: number,
-    startup?: WorktreeStartupLaunch
+    startup?: WorktreeStartupLaunch,
+    /** Spec 012 tracker-sync bind coords. `trackerProvider` (`github`/`linear`)
+     *  + `trackerUrl` (the picked issue's canonical URL, or the Linear
+     *  identifier) are persisted on the worktree so the session-start reactor
+     *  and PR/merge poller can drive the item's status. Omitted → unbound. */
+    trackerProvider?: string,
+    trackerUrl?: string
   ) => Promise<CreateWorktreeResult>
   removeWorktree: (
     worktreeId: string,

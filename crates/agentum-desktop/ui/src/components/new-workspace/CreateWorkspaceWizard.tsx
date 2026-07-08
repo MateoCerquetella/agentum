@@ -50,7 +50,23 @@ import {
   type WizardStep,
   type WizardTracker
 } from '@/components/new-workspace/create-workspace-wizard-model'
-import type { Repo, TuiAgent, WorkspaceCreateTelemetrySource } from '../../../../shared/types'
+import {
+  buildBindPayload,
+  deriveIssueOptions,
+  type WorkItemOption
+} from '@/components/new-workspace/work-item-picker-model'
+import type {
+  GetProjectViewTableArgs,
+  GetProjectViewTableResult,
+  GitHubProjectSettings,
+  GitHubProjectTable
+} from '@/shared/github-project-types'
+import type {
+  GitHubWorkItem,
+  Repo,
+  TuiAgent,
+  WorkspaceCreateTelemetrySource
+} from '../../../../shared/types'
 
 /** The modal-data slice the wizard honors. A superset lives on the composer
  *  modal; the wizard only reads the plain-open fields (opinionated opens route
@@ -86,6 +102,10 @@ export default function CreateWorkspaceWizard({
   const repos = useAppStore((s) => s.repos)
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
+  const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
+  // Spec 012: the New Workspace issue picker is scoped to the globally-active
+  // GitHub Project (settings.githubProjects.activeProject) — never per-repo.
+  const activeProject = settings?.githubProjects?.activeProject ?? null
 
   const { cardProps, submitQuick, nameInputRef } = useComposerState({
     initialName: modalData.prefilledName ?? '',
@@ -117,7 +137,9 @@ export default function CreateWorkspaceWizard({
     createDisabled,
     selectedRepoRequiresConnection,
     selectedRepoConnectInProgress,
-    onConnectSelectedRepo
+    onConnectSelectedRepo,
+    applyLinkedWorkItem,
+    linkedWorkItem
   } = cardProps
 
   // Quick-agent selection mirrors the composer modal's `QuickTabBody`: the
@@ -172,6 +194,29 @@ export default function CreateWorkspaceWizard({
     repoId,
     requiresConnection: selectedRepoRequiresConnection
   })
+
+  // Spec 012 F1: binding a picked issue routes through the composer's one
+  // attach seam (`applyLinkedWorkItem`) so `submitQuick` persists the tracker
+  // bind on create. Widen the picked option to a GitHubWorkItem — the seam
+  // ignores the inert fields (precedent: TaskPage / WorktreeCard stubs).
+  const onPickWorkItem = useCallback(
+    (option: WorkItemOption) => {
+      const { summary } = buildBindPayload(option)
+      const item: GitHubWorkItem = {
+        id: option.itemId,
+        type: 'issue',
+        number: summary.number,
+        title: summary.title,
+        state: 'open',
+        url: summary.url,
+        labels: [],
+        updatedAt: new Date().toISOString(),
+        author: null
+      }
+      applyLinkedWorkItem(item)
+    },
+    [applyLinkedWorkItem]
+  )
 
   const goNext = useCallback(() => {
     setStep((prev) => (prev < 3 ? ((prev + 1) as WizardStep) : prev))
@@ -318,6 +363,10 @@ export default function CreateWorkspaceWizard({
               onPick={setQuickAgentOverride}
               tracker={tracker}
               repoDisplayName={selectedRepo?.displayName}
+              activeProject={activeProject}
+              fetchProjectViewTable={fetchProjectViewTable}
+              linkedWorkItem={linkedWorkItem}
+              onPickWorkItem={onPickWorkItem}
             />
           ) : null}
         </div>
@@ -828,7 +877,11 @@ function AgentStep({
   quickAgent,
   onPick,
   tracker,
-  repoDisplayName
+  repoDisplayName,
+  activeProject,
+  fetchProjectViewTable,
+  linkedWorkItem,
+  onPickWorkItem
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
@@ -836,6 +889,10 @@ function AgentStep({
   onPick: (agent: TuiAgent) => void
   tracker: WizardTracker
   repoDisplayName?: string
+  activeProject: GitHubProjectSettings['activeProject']
+  fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
+  linkedWorkItem: LinkedWorkItemSummary | null
+  onPickWorkItem: (option: WorkItemOption) => void
 }): React.JSX.Element {
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
@@ -926,7 +983,137 @@ function AgentStep({
             No tracker — link one later from the Tasks view (optional).
           </div>
         )}
+        <WorkItemPicker
+          activeProject={activeProject}
+          fetchProjectViewTable={fetchProjectViewTable}
+          linkedWorkItem={linkedWorkItem}
+          onPickWorkItem={onPickWorkItem}
+        />
       </div>
+    </div>
+  )
+}
+
+/**
+ * Spec 012 F1: the New Workspace issue picker. Lists the globally-active GitHub
+ * Project's OPEN issues (PRs/closed excluded, via `deriveIssueOptions`) so the
+ * operator binds the card they're about to work. Picking is OPTIONAL and
+ * non-fatal (AC 3): no active Project / an unreachable fetch shows an honest
+ * empty state and never blocks the step. Binding flows through the composer's
+ * `applyLinkedWorkItem` seam (via `onPickWorkItem`), so the workspace persists
+ * its tracker coords on create.
+ */
+function WorkItemPicker({
+  activeProject,
+  fetchProjectViewTable,
+  linkedWorkItem,
+  onPickWorkItem
+}: {
+  activeProject: GitHubProjectSettings['activeProject']
+  fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
+  linkedWorkItem: LinkedWorkItemSummary | null
+  onPickWorkItem: (option: WorkItemOption) => void
+}): React.JSX.Element | null {
+  const [table, setTable] = useState<GitHubProjectTable | null>(null)
+  const [status, setStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+
+  useEffect(() => {
+    if (!activeProject) {
+      setTable(null)
+      setStatus('idle')
+      return
+    }
+    let cancelled = false
+    setStatus('loading')
+    void fetchProjectViewTable({
+      owner: activeProject.owner,
+      ownerType: activeProject.ownerType,
+      projectNumber: activeProject.number
+    })
+      .then((res) => {
+        if (cancelled) return
+        if (res.ok) {
+          setTable(res.data)
+          setStatus('idle')
+        } else {
+          setTable(null)
+          setStatus('failed')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTable(null)
+          setStatus('failed')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeProject, fetchProjectViewTable])
+
+  const options = useMemo(() => deriveIssueOptions(table), [table])
+  const selectedUrl = linkedWorkItem?.type === 'issue' ? linkedWorkItem.url : null
+
+  // No active Project — the honest empty state (never a fabricated tracker).
+  if (!activeProject) {
+    return (
+      <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+        Pick a work item: open a Project in the Board view to choose an issue here
+        (optional).
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+        Work item
+      </span>
+      {status === 'loading' ? (
+        <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" />
+          Loading the Project's issues…
+        </div>
+      ) : status === 'failed' ? (
+        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+          Couldn't load the Project's issues — you can pick or link one later
+          (optional).
+        </div>
+      ) : options.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+          No open issues in this Project — link one later (optional).
+        </div>
+      ) : (
+        <div className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-lg border border-border p-1">
+          {options.map((option) => {
+            const selected = selectedUrl === option.url
+            return (
+              <button
+                key={option.itemId}
+                type="button"
+                onClick={() => onPickWorkItem(option)}
+                className={cn(
+                  'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                  selected
+                    ? 'bg-secondary text-foreground'
+                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                )}
+              >
+                <Check className={cn('size-3 flex-none', selected ? 'opacity-70' : 'opacity-0')} />
+                <span className="flex-none font-mono text-[11px] text-muted-foreground">
+                  #{option.number}
+                </span>
+                <span className="truncate">{option.title}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {linkedWorkItem ? (
+        <span className="text-[11px] text-emerald-500">
+          Linked · #{linkedWorkItem.number} {linkedWorkItem.title}
+        </span>
+      ) : null}
     </div>
   )
 }

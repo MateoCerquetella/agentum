@@ -1028,7 +1028,9 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     workspaceStatus,
     linkedGitLabMR,
     linkedGitLabIssue,
-    startup
+    startup,
+    trackerProvider,
+    trackerUrl
   ) => {
     const retryableConflictPatterns = [
       /already exists locally/i,
@@ -1071,7 +1073,10 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             ...(manualOrder !== undefined ? { manualOrder } : {}),
             ...(workspaceStatus !== undefined ? { workspaceStatus } : {}),
             ...(linkedGitLabMR !== undefined ? { linkedGitLabMR } : {}),
-            ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {})
+            ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {}),
+            // Spec 012: only a fully-formed bind (provider + url) is persisted;
+            // a partial one is dropped (fail-closed, no wrong-issue coord).
+            ...(trackerProvider && trackerUrl ? { trackerProvider, trackerUrl } : {})
           }
           const target = getActiveRuntimeTarget(get().settings)
           const result =
@@ -1098,6 +1103,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
                     ...(workspaceStatus !== undefined ? { workspaceStatus } : {}),
                     ...(linkedGitLabMR !== undefined ? { linkedGitLabMR } : {}),
                     ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {}),
+                    ...(trackerProvider && trackerUrl ? { trackerProvider, trackerUrl } : {}),
                     ...(startup
                       ? {
                           startupCommand: startup.command,

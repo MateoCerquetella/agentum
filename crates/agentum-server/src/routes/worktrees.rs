@@ -53,6 +53,19 @@ pub(crate) struct Worktree {
     linked_issue: Option<i64>,
     linked_pr: Option<i64>,
     linked_linear_issue: Option<String>,
+    // Spec 012 tracker-sync coords: which tracker owns this workspace's item and
+    // the canonical issue URL a later transition targets, plus the last-written
+    // pipeline phase (the monotonic no-thrash guard + poller terminal-stop).
+    // `#[serde(default)] Option<String>` and — like every registry field — NO
+    // `#[serde(alias)]` (spec 004 lesson: an alias makes serde see a legacy
+    // shadowed key twice → parse error → `read_worktrees` wipes to `[]`). An
+    // old-shape registry deserializes each to `None`, never `[]`.
+    #[serde(default)]
+    tracker_provider: Option<String>,
+    #[serde(default)]
+    tracker_url: Option<String>,
+    #[serde(default)]
+    tracker_phase: Option<String>,
     is_archived: bool,
     is_unread: bool,
     is_pinned: bool,
@@ -88,6 +101,107 @@ fn write_worktrees(worktrees: &[Worktree]) -> Result<(), ApiError> {
     let serialized =
         serde_json::to_string_pretty(worktrees).map_err(|e| ApiError::Internal(e.to_string()))?;
     std::fs::write(path, format!("{serialized}\n")).map_err(|e| ApiError::Internal(e.to_string()))
+}
+
+/// A worktree's tracker-sync coordinates (spec 012) — exactly the fields the
+/// session-start reactor and the PR/merge poller (`crate::tracker_sync`) read
+/// off the registry. A plain owned view so those sibling modules never touch
+/// `Worktree`'s private fields.
+#[derive(Debug, Clone)]
+pub(crate) struct TrackerWorktree {
+    pub id: String,
+    /// The worktree's on-disk path (== the session workdir the reactor resolves).
+    pub path: String,
+    /// The worktree's branch, when known and not detached — the poller's
+    /// `gh pr list --head <branch>` key.
+    pub branch: Option<String>,
+    pub tracker_provider: Option<String>,
+    pub tracker_url: Option<String>,
+    pub tracker_phase: Option<String>,
+    pub linked_pr: Option<i64>,
+    pub linked_linear_issue: Option<String>,
+}
+
+/// Project a registry `Worktree` (already enriched with git path/branch) into
+/// the tracker-sync view. The path/branch come from the persisted `extra` the
+/// create handler stamped, so no git subprocess runs here (spec 009's
+/// no-N×remote-sweep discipline).
+fn tracker_view(wt: &Worktree) -> TrackerWorktree {
+    let path = wt
+        .extra
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| wt.id.split_once("::").map(|(_, p)| p.to_string()))
+        .unwrap_or_default();
+    let branch = wt
+        .extra
+        .get("branch")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|b| !b.is_empty() && b != "HEAD");
+    TrackerWorktree {
+        id: wt.id.clone(),
+        path,
+        branch,
+        tracker_provider: wt.tracker_provider.clone(),
+        tracker_url: wt.tracker_url.clone(),
+        tracker_phase: wt.tracker_phase.clone(),
+        linked_pr: wt.linked_pr,
+        linked_linear_issue: wt.linked_linear_issue.clone(),
+    }
+}
+
+/// Every worktree as a tracker-sync view (spec 012). Best-effort: a corrupt or
+/// absent registry reads as empty, so the poller tick never wedges.
+pub(crate) fn list_tracker_worktrees() -> Vec<TrackerWorktree> {
+    read_worktrees()
+        .map(|wts| wts.iter().map(tracker_view).collect())
+        .unwrap_or_default()
+}
+
+/// The tracker-sync view for the worktree whose on-disk path == `path` (the
+/// session workdir the reactor resolves from a `session.started` event). `None`
+/// when no registry row matches — a plain, non-registered workdir is a silent
+/// no-op.
+pub(crate) fn find_tracker_worktree_by_path(path: &str) -> Option<TrackerWorktree> {
+    let want = path.trim_end_matches('/');
+    read_worktrees()
+        .ok()?
+        .iter()
+        .find(|wt| {
+            let by_extra = wt
+                .extra
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|p| p.trim_end_matches('/'));
+            let by_id = wt.id.split_once("::").map(|(_, p)| p.trim_end_matches('/'));
+            by_extra == Some(want) || by_id == Some(want)
+        })
+        .map(tracker_view)
+}
+
+/// Persist tracker lifecycle progress (spec 012) onto a worktree by id: the
+/// last-written pipeline phase and/or the detected PR number. Best-effort — a
+/// missing worktree is a silent `Ok(())` no-op (the reactor/poller never halt
+/// on a registry miss). Reuses the same read/write path `update_meta` does, so
+/// the registry stays single-shape.
+pub(crate) fn persist_tracker_progress(
+    worktree_id: &str,
+    phase: Option<&str>,
+    linked_pr: Option<i64>,
+) -> Result<(), ApiError> {
+    let mut worktrees = read_worktrees()?;
+    let Some(wt) = worktrees.iter_mut().find(|w| w.id == worktree_id) else {
+        return Ok(());
+    };
+    if let Some(phase) = phase {
+        wt.tracker_phase = Some(phase.to_string());
+    }
+    if let Some(pr) = linked_pr {
+        wt.linked_pr = Some(pr);
+    }
+    write_worktrees(&worktrees)
 }
 
 /// Backfill the GitWorktreeInfo fields the UI's `Worktree` type requires
@@ -281,6 +395,15 @@ struct CreateBody {
     linked_pr: Option<i64>,
     #[serde(default)]
     linked_linear_issue: Option<String>,
+    /// Spec 012 bind coords: the tracker provider (`github`/`linear`) and the
+    /// picked item's canonical URL, persisted so the session-start reactor and
+    /// PR/merge poller can drive the item's status without a per-event
+    /// `git remote` lookup. Optional + no alias: an old client that omits them
+    /// still creates a workspace, bound to nothing (fail-closed, AC 3).
+    #[serde(default)]
+    tracker_provider: Option<String>,
+    #[serde(default)]
+    tracker_url: Option<String>,
 }
 
 /// `POST /api/worktrees/create` — `git worktree add` under
@@ -375,6 +498,11 @@ async fn create(
         linked_issue: body.linked_issue,
         linked_pr: body.linked_pr,
         linked_linear_issue: body.linked_linear_issue,
+        tracker_provider: body.tracker_provider,
+        tracker_url: body.tracker_url,
+        // The reactor stamps `in_progress` on first session start; a create is
+        // Todo (no phase written) so the monotonic guard advances cleanly.
+        tracker_phase: None,
         is_archived: false,
         is_unread: false,
         is_pinned: false,
@@ -993,6 +1121,9 @@ prunable gitdir file points to non-existent location
             linked_issue: None,
             linked_pr: Some(7),
             linked_linear_issue: None,
+            tracker_provider: None,
+            tracker_url: None,
+            tracker_phase: None,
             is_archived: false,
             is_unread: false,
             is_pinned: true,
@@ -1061,6 +1192,114 @@ prunable gitdir file points to non-existent location
         assert_eq!(body.linked_issue, None);
         assert_eq!(body.linked_pr, None);
         assert_eq!(body.linked_linear_issue, None);
+    }
+
+    /// Spec 012 AC 2/AC 3: the create body accepts the tracker bind coords
+    /// (`trackerProvider` + `trackerUrl`) and, when a client omits them (the
+    /// old shape), defaults both to `None` — an unbound-but-created workspace.
+    #[test]
+    fn create_body_accepts_and_defaults_tracker_coords() {
+        let body: CreateBody = serde_json::from_value(serde_json::json!({
+            "repoId": "r1",
+            "name": "feat",
+            "linkedIssue": 42,
+            "trackerProvider": "github",
+            "trackerUrl": "https://github.com/o/r/issues/42"
+        }))
+        .unwrap();
+        assert_eq!(body.linked_issue, Some(42));
+        assert_eq!(body.tracker_provider.as_deref(), Some("github"));
+        assert_eq!(
+            body.tracker_url.as_deref(),
+            Some("https://github.com/o/r/issues/42")
+        );
+
+        // An old client that never sends the coords still parses; both default None.
+        let body: CreateBody = serde_json::from_value(serde_json::json!({
+            "repoId": "r1",
+            "name": "feat"
+        }))
+        .unwrap();
+        assert_eq!(body.tracker_provider, None);
+        assert_eq!(body.tracker_url, None);
+    }
+
+    /// Spec 012 AC 2: the persisted `Worktree` serializes the tracker coords as
+    /// camelCase (`trackerProvider`/`trackerUrl`/`trackerPhase`) — the exact
+    /// keys `find_tracker_worktree_by_path` reads back — and never as a
+    /// `tracker_*` snake_case key.
+    #[test]
+    fn worktree_serializes_tracker_coords_camel_case() {
+        let wt = Worktree {
+            id: "r1::/p".into(),
+            repo_id: "r1".into(),
+            display_name: "p".into(),
+            comment: String::new(),
+            linked_issue: Some(42),
+            linked_pr: None,
+            linked_linear_issue: None,
+            tracker_provider: Some("github".into()),
+            tracker_url: Some("https://github.com/o/r/issues/42".into()),
+            tracker_phase: Some("in_progress".into()),
+            is_archived: false,
+            is_unread: false,
+            is_pinned: false,
+            sort_order: 0,
+            last_activity_at: 0,
+            extra: Map::new(),
+        };
+        let v = serde_json::to_value(&wt).unwrap();
+        assert_eq!(v["trackerProvider"], "github");
+        assert_eq!(v["trackerUrl"], "https://github.com/o/r/issues/42");
+        assert_eq!(v["trackerPhase"], "in_progress");
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("tracker_provider"));
+        assert!(!obj.contains_key("tracker_url"));
+    }
+
+    /// Spec 012 invariant #7 (the spec-004 lesson, restated for the new fields):
+    /// an OLD-shape registry — a full worktree list written before the tracker
+    /// fields existed — deserializes with `tracker_* == None` and the list
+    /// **preserved**, NOT collapsed to `[]`. This is exactly what
+    /// `read_worktrees`' `unwrap_or_default()` would turn into a registry wipe
+    /// if a new field broke deserialization.
+    #[test]
+    fn old_shape_registry_round_trips_to_none_not_wiped() {
+        // Two rows in the pre-012 shape (no tracker keys at all), plus a stray
+        // legacy `extra` key to prove flatten still absorbs the unknown.
+        let raw = r#"[
+            {
+                "id": "r1::/a", "repoId": "r1", "displayName": "a", "comment": "",
+                "linkedIssue": 7, "linkedPr": null, "linkedLinearIssue": null,
+                "isArchived": false, "isUnread": false, "isPinned": false,
+                "sortOrder": 0, "lastActivityAt": 1, "branch": "feat/a"
+            },
+            {
+                "id": "r2::/b", "repoId": "r2", "displayName": "b", "comment": "",
+                "linkedIssue": null, "linkedPr": null, "linkedLinearIssue": null,
+                "isArchived": false, "isUnread": false, "isPinned": false,
+                "sortOrder": 1, "lastActivityAt": 2
+            }
+        ]"#;
+        // The exact call `read_worktrees` makes; a broken widening would panic
+        // into `unwrap_or_default()` → `[]` in production.
+        let worktrees: Vec<Worktree> = serde_json::from_str(raw).unwrap_or_default();
+        assert_eq!(worktrees.len(), 2, "old-shape list must NOT be wiped to []");
+        for wt in &worktrees {
+            assert_eq!(wt.tracker_provider, None);
+            assert_eq!(wt.tracker_url, None);
+            assert_eq!(wt.tracker_phase, None);
+        }
+        // The unknown legacy `branch` key rode into `extra` (flatten), untouched.
+        assert_eq!(
+            worktrees[0].extra.get("branch").and_then(Value::as_str),
+            Some("feat/a")
+        );
+        // And the tracker view reads that branch back without a git call.
+        assert_eq!(
+            tracker_view(&worktrees[0]).branch.as_deref(),
+            Some("feat/a")
+        );
     }
 
     #[test]
