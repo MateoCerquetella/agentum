@@ -27,7 +27,9 @@ import {
 } from '../../runtime/cdp-screencast-client'
 import {
   getRemoteBrowserKeypressKey,
-  getRemoteBrowserKeyboardShortcut
+  getRemoteBrowserKeyboardShortcut,
+  getRemoteBrowserInsertText,
+  isRemoteBrowserPasteShortcut
 } from './remote-browser-keyboard'
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
@@ -410,6 +412,12 @@ export default function AgentBrowserScreencastPane({
         sendInput('browser.reload', {})
         return
       }
+      if (isRemoteBrowserPasteShortcut(shortcut)) {
+        // Let the native paste event fire (→ onPaste) so the clipboard TEXT is
+        // forwarded as browser.insertText. preventDefault here would kill the
+        // paste; a keypress here would just type a literal "v" and never paste.
+        return
+      }
       const key = getRemoteBrowserKeypressKey(e)
       if (key == null) {
         return
@@ -418,6 +426,23 @@ export default function AgentBrowserScreencastPane({
       // The serializer emits 'Space' for the spacebar; the CDP bridge wants the
       // literal character for printable input.
       sendInput('browser.keypress', { key: key === 'Space' ? ' ' : key })
+    },
+    [sendInput, markDriving]
+  )
+
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      markDriving()
+      // Text-only paste from the ClipboardEvent (no navigator.clipboard.readText()
+      // — that can prompt or be blocked in the Tauri webview). Forwards
+      // browser.insertText → CDP Input.insertText (a trusted paste), which a
+      // synthetic Cmd/Ctrl+V keystroke cannot achieve in headless Chromium.
+      const message = getRemoteBrowserInsertText(e.clipboardData.getData('text'))
+      if (!message) {
+        return
+      }
+      e.preventDefault()
+      sendInput(message.method, message.params)
     },
     [sendInput, markDriving]
   )
@@ -502,6 +527,7 @@ export default function AgentBrowserScreencastPane({
               onMouseUp={onMouseUp}
               onWheel={onWheel}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               onContextMenu={(e) => e.preventDefault()}
             />
             {!hasFrame ? (

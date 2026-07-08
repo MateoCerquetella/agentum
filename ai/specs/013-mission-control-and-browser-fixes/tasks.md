@@ -42,5 +42,31 @@ component-level close callers. Selecting a worktree restores `activeView:'termin
 guard beyond the architecture's simpler form — prevents yanking users off
 settings/tasks/projects when a background process nulls the active worktree.
 
-## F3 — Browser paste — PENDING (next developer iteration)
+## F3 — Browser paste ✅ CODE-COMPLETE + GREEN
+
+New `browser.insertText` input verb: `onPaste` ClipboardEvent → `browser.insertText`
+→ CDP `Input.insertText` (trusted paste). Cmd/Ctrl+V no longer types a literal "v".
+
+**Files:**
+- `crates/agentum-server/src/cdp_screencast.rs` — `InputCommand::InsertText{text}`
+  variant + `is_human_action` arm + `"browser.insertText"` parse arm + dispatch to
+  CDP `Input.insertText` (reuses the trusted-insert primitive the agent-driver fill
+  path uses, `cdp_driver.rs:550`). Agent-driver path untouched. + Rust test
+  `insert_text_parses_and_maps_to_cdp_insert_text`.
+- `crates/agentum-desktop/ui/src/components/browser-pane/remote-browser-keyboard.ts`
+  — pure `getRemoteBrowserInsertText(text)` builder + `isRemoteBrowserPasteShortcut`.
+- `crates/agentum-desktop/ui/src/components/browser-pane/remote-browser-keyboard.test.ts`
+  — paste-chord detection + insertText builder (empty text dropped).
+- `crates/agentum-desktop/ui/src/components/browser-pane/AgentBrowserScreencastPane.tsx`
+  — `onPaste` handler (text-only `ClipboardEvent`, NO `navigator.clipboard.readText()`)
+  wired on the canvas; `onKeyDown` short-circuits Cmd/Ctrl+V so the native paste
+  fires (no preventDefault, no literal-"v" keypress). Transport `sendInput(method,
+  params)` is generic — no protocol/client change needed.
+
+**Gate:** UI `remote-browser-keyboard.test` → **5/5**; `bun run build` → **green**;
+`cargo test -p agentum-server --lib cdp_screencast` → **16/0** (incl. the new test).
+
+**QA-deferred (needs the running app + a real CDP page):** the live "Cmd+V pastes
+into a focused page field" is a `qa.sh` / installed-app check (Mateo).
+
 ## F2 — Browser viewport + contain-aware clicks (+ first-frame spike) — PENDING
