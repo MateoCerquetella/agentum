@@ -2,6 +2,7 @@ import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
+import { viewAfterWorktreeClose } from './worktree-close-view'
 import type {
   DetectedWorktreeListResult,
   TerminalLayoutSnapshot,
@@ -726,6 +727,7 @@ function buildWorktreePurgeState(s: AppState, worktreeIds: string[]): Partial<Ap
     everActivatedWorktreeIds: nextEverActivatedWorktreeIds,
     lastVisitedAtByWorktreeId: omitByWorktree(s.lastVisitedAtByWorktreeId),
     activeWorktreeId: removedActive ? null : s.activeWorktreeId,
+    activeView: viewAfterWorktreeClose(removedActive, s.activeView),
     activeFileId: activeFileCleared ? null : s.activeFileId,
     activeBrowserTabId: removedActive ? null : s.activeBrowserTabId,
     activeTabId: activeTabCleared ? null : s.activeTabId,
@@ -1347,6 +1349,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             return nextSearch
           })(),
           activeWorktreeId: removedActiveWorktree ? null : s.activeWorktreeId,
+          activeView: viewAfterWorktreeClose(removedActiveWorktree, s.activeView),
           activeTabId: s.activeTabId && tabIds.has(s.activeTabId) ? null : s.activeTabId,
           openFiles: newOpenFiles,
           browserTabsByWorktree: nextBrowserTabsByWorktree,
@@ -1975,7 +1978,8 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     set((s) => {
       if (!worktreeId) {
         return {
-          activeWorktreeId: null
+          activeWorktreeId: null,
+          activeView: viewAfterWorktreeClose(true, s.activeView)
         }
       }
 
