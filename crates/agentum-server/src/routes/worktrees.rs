@@ -110,8 +110,6 @@ fn write_worktrees(worktrees: &[Worktree]) -> Result<(), ApiError> {
 #[derive(Debug, Clone)]
 pub(crate) struct TrackerWorktree {
     pub id: String,
-    /// The worktree's on-disk path (== the session workdir the reactor resolves).
-    pub path: String,
     /// The worktree's branch, when known and not detached — the poller's
     /// `gh pr list --head <branch>` key.
     pub branch: Option<String>,
@@ -127,13 +125,6 @@ pub(crate) struct TrackerWorktree {
 /// create handler stamped, so no git subprocess runs here (spec 009's
 /// no-N×remote-sweep discipline).
 fn tracker_view(wt: &Worktree) -> TrackerWorktree {
-    let path = wt
-        .extra
-        .get("path")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| wt.id.split_once("::").map(|(_, p)| p.to_string()))
-        .unwrap_or_default();
     let branch = wt
         .extra
         .get("branch")
@@ -142,7 +133,6 @@ fn tracker_view(wt: &Worktree) -> TrackerWorktree {
         .filter(|b| !b.is_empty() && b != "HEAD");
     TrackerWorktree {
         id: wt.id.clone(),
-        path,
         branch,
         tracker_provider: wt.tracker_provider.clone(),
         tracker_url: wt.tracker_url.clone(),
