@@ -33,6 +33,7 @@ import {
 } from './remote-browser-keyboard'
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
+import { clientToDevicePoint } from './screencast-geometry'
 
 /** Device scale the page lays out at, sent via `sendViewport`. Kept at 1× to match
  *  the server's 1× capture (`cdp_device_scale` → `--force-device-scale-factor`):
@@ -60,8 +61,10 @@ type AgentBrowserScreencastPaneProps = {
 }
 
 /** Map a client point onto the CDP device coordinate space the page expects.
- *  Mirrors the legacy pane's formula against the rendered <canvas> rect
- *  (`x = round(((clientX-rectLeft)/rectWidth)*deviceWidth)`). */
+ *  The canvas is `object-contain`, so the mapping must account for any letterbox
+ *  (see {@link clientToDevicePoint}) — mapping against the raw box rect
+ *  mis-routes clicks whenever the frame aspect ≠ the box aspect (the transient
+ *  first-open letterbox). Returns null on a bar click, so it's never mis-routed. */
 function toDevicePoint(
   event: { clientX: number; clientY: number },
   canvas: HTMLCanvasElement | null,
@@ -75,13 +78,14 @@ function toDevicePoint(
   // decoded bitmap), so it's the natural fallback when metadata is absent.
   const deviceWidth = metadata?.deviceWidth ?? canvas.width
   const deviceHeight = metadata?.deviceHeight ?? canvas.height
-  if (rect.width <= 0 || rect.height <= 0 || deviceWidth <= 0 || deviceHeight <= 0) {
-    return null
-  }
-  return {
-    x: Math.round(((event.clientX - rect.left) / rect.width) * deviceWidth),
-    y: Math.round(((event.clientY - rect.top) / rect.height) * deviceHeight)
-  }
+  return clientToDevicePoint(
+    event.clientX - rect.left,
+    event.clientY - rect.top,
+    rect.width,
+    rect.height,
+    deviceWidth,
+    deviceHeight
+  )
 }
 
 export default function AgentBrowserScreencastPane({
@@ -329,6 +333,19 @@ export default function AgentBrowserScreencastPane({
       }
     }
   }, [isActive, sendViewport])
+
+  // First-frame viewport re-sync. The initial frame can arrive at the launcher's
+  // fixed window size (letterboxed in a differently-shaped pane) before the
+  // setDeviceMetricsOverride relayout lands, and a fully-loaded static page won't
+  // repaint on its own — so the stale frame keeps painting until a resize forces a
+  // new one (the "works only after I pop out and re-enter" bug). Re-send the
+  // viewport ONCE the first frame lands to force a re-capture at the pane's aspect.
+  // Idempotent when the viewport is already correct; NOT a timer poll (principle 3).
+  useEffect(() => {
+    if (isActive && hasFrame) {
+      sendViewport()
+    }
+  }, [isActive, hasFrame, sendViewport])
 
   // --- input handlers (forward to the same CDP instance the agent drives) -----
 

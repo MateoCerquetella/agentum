@@ -69,4 +69,32 @@ New `browser.insertText` input verb: `onPaste` ClipboardEvent → `browser.inser
 **QA-deferred (needs the running app + a real CDP page):** the live "Cmd+V pastes
 into a focused page field" is a `qa.sh` / installed-app check (Mateo).
 
-## F2 — Browser viewport + contain-aware clicks (+ first-frame spike) — PENDING
+## F2 — Browser viewport + contain-aware clicks ✅ CODE-COMPLETE + GREEN
+
+Fix first-open letterbox + click mis-routing (they share the object-contain geometry).
+
+**Files:**
+- `crates/agentum-desktop/ui/src/components/browser-pane/screencast-geometry.ts`
+  (new) — pure `containContentBox()` + `clientToDevicePoint()` (object-contain
+  content box; maps a click into device pixels; **drops bar clicks** so they're
+  never mis-routed).
+- `crates/agentum-desktop/ui/src/components/browser-pane/screencast-geometry.test.ts`
+  (new) — both bar orientations, exact no-letterbox case, bar-click dropped.
+- `crates/agentum-desktop/ui/src/components/browser-pane/AgentBrowserScreencastPane.tsx`
+  — `toDevicePoint` now wraps `clientToDevicePoint` (contain-aware); **new
+  first-frame viewport re-sync** effect: re-send `sendViewport()` once the first
+  frame lands to force a re-capture at the pane aspect (the idle-page single-frame
+  case → the "works only after remount" bug). Idempotent; NOT a timer poll.
+
+**Gate:** `screencast-geometry.test` → **8/8**; `bun run build` → **green**.
+
+**First-frame spike (architecture §5) — resolved to the UI-only path:** re-sending
+the viewport after the first frame forces the relayout/re-capture; no server-side
+`Page.startScreencast` re-arm was added. **QA-deferred (needs running app + CDP
+page):** "no black bars on first open" + "clicks land" are `qa.sh`/installed-app
+checks (Mateo). If QA shows the UI nudge insufficient on a fully-idle page, the
+permitted fallback is a bounded server re-capture in `cdp_screencast.rs` (still no poll).
+
+---
+**All three features (F1 · F3 · F2) code-complete + unit-green → tester.**
+Browser QA (F2/F3 live behaviors) is installed-app/`qa.sh`-deferred to Mateo.
