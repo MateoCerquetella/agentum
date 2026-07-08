@@ -3,12 +3,14 @@ import {
   buildWizardRecap,
   canLeaveRepoStep,
   deriveUnifiedTrackerStatus,
+  deriveWizardComposerSeed,
   resolveWizardAgentOptions,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
   WIZARD_FALLBACK_AGENT_IDS
 } from './create-workspace-wizard-model'
 import type { PickerProjectRef } from './work-item-picker-model'
+import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import type { TuiAgent } from '../../../../shared/types'
 
 const PROJECT: PickerProjectRef = { owner: 'acme', ownerType: 'organization', number: 7 }
@@ -165,5 +167,51 @@ describe('deriveUnifiedTrackerStatus', () => {
     expect(
       deriveUnifiedTrackerStatus({ resolved: null, status: 'loading', optionCount: 0 })
     ).toEqual({ kind: 'none' })
+  })
+})
+
+describe('deriveWizardComposerSeed (spec 013 F4 single front door)', () => {
+  const LINKED: LinkedWorkItemSummary = {
+    type: 'issue',
+    number: 42,
+    title: 'Fix the sidebar flicker',
+    url: 'https://github.com/acme/agentum/issues/42'
+  }
+
+  it('defaults every field for a plain open (no lost capability, no phantom arming)', () => {
+    const seed = deriveWizardComposerSeed({})
+    expect(seed.initialName).toBe('')
+    expect(seed.initialRepoId).toBeUndefined()
+    expect(seed.initialLinkedWorkItem).toBeNull()
+    expect(seed.initialWorkspaceStatus).toBeUndefined()
+    expect(seed.initialBaseBranch).toBeUndefined()
+    expect(seed.telemetrySource).toBeUndefined()
+    // Absent startGatedRun ⇒ the toggle prop is not seeded (stays default off).
+    expect('initialStartGatedRun' in seed).toBe(false)
+  })
+
+  it('honors every opinionated field a caller can pass', () => {
+    const seed = deriveWizardComposerSeed({
+      prefilledName: 'fix-login',
+      initialRepoId: 'repo-1',
+      linkedWorkItem: LINKED,
+      initialBaseBranch: 'develop',
+      initialWorkspaceStatus: 'doing',
+      startGatedRun: true,
+      telemetrySource: 'sidebar'
+    })
+    expect(seed.initialName).toBe('fix-login')
+    expect(seed.initialRepoId).toBe('repo-1')
+    expect(seed.initialLinkedWorkItem).toBe(LINKED)
+    expect(seed.initialBaseBranch).toBe('develop')
+    expect(seed.initialWorkspaceStatus).toBe('doing')
+    expect(seed.telemetrySource).toBe('sidebar')
+    // Armed open ⇒ the toggle opens already armed (inv. 4, via initialStartGatedRunProp).
+    expect(seed).toHaveProperty('initialStartGatedRun', true)
+  })
+
+  it('does not arm the gated-run toggle when startGatedRun is false/absent', () => {
+    expect('initialStartGatedRun' in deriveWizardComposerSeed({ startGatedRun: false })).toBe(false)
+    expect('initialStartGatedRun' in deriveWizardComposerSeed({ prefilledName: 'x' })).toBe(false)
   })
 })

@@ -4,7 +4,13 @@
 // can be unit-tested without mounting the component (mirrors the goal step's
 // `workspace-goal-step.ts`). The component owns only local state + JSX.
 import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../../shared/tui-agent-selection'
-import type { TuiAgent } from '../../../../shared/types'
+import type {
+  TuiAgent,
+  WorkspaceCreateTelemetrySource,
+  WorkspaceStatus
+} from '../../../../shared/types'
+import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
+import { initialStartGatedRunProp } from '@/lib/composer-modal-props'
 import type { PickerProjectRef } from './work-item-picker-model'
 
 export type WizardStep = 1 | 2 | 3
@@ -126,4 +132,52 @@ export function deriveUnifiedTrackerStatus(input: {
   if (input.status === 'failed') return { kind: 'unavailable' }
   if (input.optionCount <= 0) return { kind: 'connected-empty' }
   return { kind: 'connected', issueCount: input.optionCount }
+}
+
+// ---------- Single front door (spec 013 F4) ----------
+
+/**
+ * The modal-open data the wizard honors. Widened (spec 013 F4) from the plain
+ * subset to the full `ComposerModalData` shape so the wizard is the SINGLE
+ * front door: every opinionated open (`startGatedRun`, `linkedWorkItem`,
+ * `initialBaseBranch`, `initialWorkspaceStatus`, …) reaches an equivalent
+ * create through the wizard, with no lost capability (the composer card + goal
+ * step are removed).
+ */
+export type CreateWorkspaceWizardData = {
+  prefilledName?: string
+  initialRepoId?: string
+  linkedWorkItem?: LinkedWorkItemSummary | null
+  initialBaseBranch?: string
+  initialWorkspaceStatus?: WorkspaceStatus
+  /** Spec 005 F1 (AC 3): open with the "Start gated run" toggle armed. */
+  startGatedRun?: boolean
+  telemetrySource?: WorkspaceCreateTelemetrySource
+}
+
+/**
+ * Map the modal-open data onto the `useComposerState` seed the wizard passes
+ * (spec 013 F4). Pure so each opinionated field's honoring is unit-pinned — a
+ * caller's `linkedWorkItem` / `initialBaseBranch` / `initialWorkspaceStatus` /
+ * `startGatedRun` can never silently fail to seed. `initialStartGatedRun` rides
+ * through the existing `initialStartGatedRunProp` seam (inv. 4), so an armed
+ * open opens the toggle already armed and submits via the same gated path.
+ */
+export function deriveWizardComposerSeed(modalData: CreateWorkspaceWizardData): {
+  initialName: string
+  initialRepoId: string | undefined
+  initialLinkedWorkItem: LinkedWorkItemSummary | null
+  initialWorkspaceStatus: WorkspaceStatus | undefined
+  initialBaseBranch: string | undefined
+  telemetrySource: WorkspaceCreateTelemetrySource | undefined
+} & ({ initialStartGatedRun: true } | Record<string, never>) {
+  return {
+    initialName: modalData.prefilledName ?? '',
+    initialRepoId: modalData.initialRepoId,
+    initialLinkedWorkItem: modalData.linkedWorkItem ?? null,
+    initialWorkspaceStatus: modalData.initialWorkspaceStatus,
+    initialBaseBranch: modalData.initialBaseBranch,
+    telemetrySource: modalData.telemetrySource,
+    ...initialStartGatedRunProp(modalData)
+  }
 }

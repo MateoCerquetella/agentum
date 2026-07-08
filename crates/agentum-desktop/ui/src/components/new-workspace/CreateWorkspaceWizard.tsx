@@ -46,9 +46,11 @@ import {
   buildWizardRecap,
   canLeaveRepoStep as canLeaveRepoStepModel,
   deriveUnifiedTrackerStatus,
+  deriveWizardComposerSeed,
   resolveWizardAgentOptions,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
+  type CreateWorkspaceWizardData,
   type UnifiedTrackerStatus,
   type WizardStep
 } from '@/components/new-workspace/create-workspace-wizard-model'
@@ -89,39 +91,26 @@ import type {
   LinearIssue,
   LinearTeam,
   Repo,
-  TuiAgent,
-  WorkspaceCreateTelemetrySource
+  TuiAgent
 } from '../../../../shared/types'
-
-/** The modal-data slice the wizard honors. A superset lives on the composer
- *  modal; the wizard only reads the plain-open fields (opinionated opens route
- *  to the advanced card instead). */
-export type CreateWorkspaceWizardData = {
-  prefilledName?: string
-  initialRepoId?: string
-  linkedWorkItem?: LinkedWorkItemSummary | null
-  telemetrySource?: WorkspaceCreateTelemetrySource
-}
 
 /**
  * The "Create Workspace" wizard — a three-step front-end (Host → Repo &
  * worktree → Agent & tracker) over the shared `useComposerState` creation
- * engine. Like `NewWorkspaceGoalStep`, it never becomes a state machine inside
- * the engine: it drives the same host/repo/name/baseBranch/agent state the
- * composer card drives and calls `submitQuick`, so YOLO translation, SSH
- * gating, setup hooks and post-create launch stay centralized.
+ * engine. Spec 013 F4: it is the SINGLE front door for `new-workspace-composer`
+ * — it never becomes a state machine inside the engine, it drives the same
+ * host/repo/name/baseBranch/agent state the composer card drove and calls the
+ * same `submitQuick`, so YOLO translation, SSH gating, setup hooks, the gated
+ * run (`start_work`) and post-create launch stay centralized (no new paths).
  */
 export default function CreateWorkspaceWizard({
   modalData,
   onClose,
-  onOpenChange,
-  onUseGoal
+  onOpenChange
 }: {
   modalData: CreateWorkspaceWizardData
   onClose: () => void
   onOpenChange: (open: boolean) => void
-  /** Switch to the goal-first step (spec 008), when the caller offers it. */
-  onUseGoal?: () => void
 }): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const repos = useAppStore((s) => s.repos)
@@ -134,14 +123,15 @@ export default function CreateWorkspaceWizard({
   // preserved when there's no per-repo binding).
   const activeProject = settings?.githubProjects?.activeProject ?? null
 
+  // Spec 013 F4: seed the SAME `useComposerState` from the full modal-open data
+  // (pure `deriveWizardComposerSeed` — every opinionated field honored). The
+  // gate mode / issue-automation / submit path are unchanged, so the gated run
+  // is inherited byte-identically (inv. 4).
   const { cardProps, submitQuick, nameInputRef } = useComposerState({
-    initialName: modalData.prefilledName ?? '',
+    ...deriveWizardComposerSeed(modalData),
     initialPrompt: '',
-    initialLinkedWorkItem: null,
-    initialRepoId: modalData.initialRepoId,
     persistDraft: false,
     onCreated: onClose,
-    ...(modalData.telemetrySource ? { telemetrySource: modalData.telemetrySource } : {}),
     enableIssueAutomation: false,
     createGateMode: 'quick'
   })
@@ -181,7 +171,13 @@ export default function CreateWorkspaceWizard({
     onCreateIssueSubmit,
     // Spec 013 F3: bind a filed Linear issue through the SAME composer seam the
     // Linear @-picker uses (`setLinkedWorkItem(buildLinearIssueLinkedWorkItem)`).
-    onSmartLinearIssueSelect
+    onSmartLinearIssueSelect,
+    // Spec 013 F4: the gated-run toggle — the SAME seams the composer card used,
+    // so `submitQuick` inherits the `start_work` precondition set unchanged.
+    canStartGatedRun,
+    startGatedRun,
+    onStartGatedRunChange,
+    sddRolesEnabled
   } = cardProps
 
   // Quick-agent selection mirrors the composer modal's `QuickTabBody`: the
@@ -418,6 +414,12 @@ export default function CreateWorkspaceWizard({
                 onSubmit: onCreateIssueSubmit
               }}
               linear={{ settings, onBind: onSmartLinearIssueSelect }}
+              gatedRun={{
+                canStart: canStartGatedRun,
+                enabled: startGatedRun,
+                onChange: onStartGatedRunChange,
+                sddRolesEnabled
+              }}
             />
           ) : null}
         </div>
@@ -432,14 +434,6 @@ export default function CreateWorkspaceWizard({
             >
               <ArrowLeft className="size-3.5" />
               Back
-            </button>
-          ) : onUseGoal ? (
-            <button
-              type="button"
-              onClick={onUseGoal}
-              className="text-[11.5px] text-muted-foreground underline decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
-            >
-              Start from a goal
             </button>
           ) : null}
           <span className="flex-1" />
@@ -947,6 +941,17 @@ type LinearCreateSeams = {
   onBind: (issue: LinearIssue) => void
 }
 
+/** Spec 013 F4: the composer's gated-run seams, migrated into the wizard. Maps
+ *  1:1 onto `cardProps` — no new state or submit path. */
+type GatedRunSeams = {
+  /** Eligible when a github.com issue is linked and the repo is local git. */
+  canStart: boolean
+  enabled: boolean
+  onChange: (value: boolean) => void
+  /** Whether gated runs use the SDD role loop (drives the armed copy only). */
+  sddRolesEnabled: boolean
+}
+
 function AgentStep({
   agents,
   detectedAgentIds,
@@ -958,7 +963,8 @@ function AgentStep({
   linkedWorkItem,
   onPickWorkItem,
   createIssue,
-  linear
+  linear,
+  gatedRun
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
@@ -971,6 +977,7 @@ function AgentStep({
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
+  gatedRun: GatedRunSeams
 }): React.JSX.Element {
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
@@ -1031,6 +1038,30 @@ function AgentStep({
         createIssue={createIssue}
         linear={linear}
       />
+
+      {/* Spec 013 F4: the migrated "Start gated run" toggle — eligible only when
+          a github.com issue is linked to a local git repo. Bound to the SAME
+          cardProps seams, so submitting arms `start_work` unchanged (inv. 4). */}
+      {gatedRun.canStart ? (
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-secondary px-3 py-2.5">
+          <input
+            type="checkbox"
+            checked={gatedRun.enabled}
+            onChange={(event) => gatedRun.onChange(event.target.checked)}
+            className="mt-0.5 size-3.5 flex-none accent-primary"
+          />
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-[12.5px] font-medium text-foreground">Start gated run</span>
+            <span className="text-[11px] text-muted-foreground">
+              {gatedRun.enabled
+                ? gatedRun.sddRolesEnabled
+                  ? 'The linked issue becomes the spec; the SDD role loop drives the worktree behind a verify gate.'
+                  : 'The linked issue becomes the spec; the Harness Engine drives the worktree behind a verify gate.'
+                : 'Turn the linked issue into a spec and let the Harness Engine drive the worktree behind a verify gate.'}
+            </span>
+          </span>
+        </label>
+      ) : null}
     </div>
   )
 }
