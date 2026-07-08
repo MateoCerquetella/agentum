@@ -45,7 +45,7 @@ fn phase_rank(phase: TrackerPhase) -> i8 {
     match phase {
         TrackerPhase::Todo => 0,
         TrackerPhase::InProgress => 1,
-        // TrackerPhase::InReview => 2,  // reserved (F3)
+        TrackerPhase::InReview => 2,
         TrackerPhase::ReadyToTest => 3,
         TrackerPhase::Done => 4,
     }
@@ -58,6 +58,7 @@ pub(crate) fn tracker_phase_wire(phase: TrackerPhase) -> &'static str {
     match phase {
         TrackerPhase::Todo => "todo",
         TrackerPhase::InProgress => "in_progress",
+        TrackerPhase::InReview => "in_review",
         TrackerPhase::ReadyToTest => "ready_to_test",
         TrackerPhase::Done => "done",
     }
@@ -195,6 +196,253 @@ pub async fn run_session_start_reactor(store: Arc<Store>, bus: broadcast::Sender
     }
 }
 
+// ─── F3/F4: the PR-open/merge poller ────────────────────────────────────────
+//
+// No inbound webhooks on a self-hosted daemon (invariant #6) → a bounded,
+// backed-off `gh` loop is the only sanctioned PR/merge detector. GitHub-only in
+// v1. Bounded: a per-call timeout, a per-tick cap, and loop backoff on a
+// wholly-failed tick keep it rate-limit friendly and never-halt (invariant #3).
+
+/// Default poll cadence; override with `AGENTUM_TRACKER_POLL_SECS`.
+const DEFAULT_POLL_SECS: u64 = 45;
+/// Per-tick worktree cap so a large registry never fans out an unbounded burst.
+const MAX_WORKTREES_PER_TICK: usize = 50;
+/// Per-`gh`-call timeout so a hung request degrades to a skip, never a stall.
+/// 30s matches the other `gh` runners — generous enough that a delayed spawn
+/// under a saturated test run never trips it.
+const GH_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The one PR a bound branch cares about, parsed from `gh pr list`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrInfo {
+    pub number: i64,
+    pub is_draft: bool,
+    pub state: String,
+    pub url: String,
+}
+
+/// Parse `gh pr list --json number,state,isDraft,url` (a JSON array) into the
+/// first PR, or `None` when the array is empty/malformed (no PR yet). Pure.
+pub(crate) fn parse_pr_list(stdout: &str) -> Option<PrInfo> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    let first = value.as_array()?.first()?;
+    Some(PrInfo {
+        number: first.get("number")?.as_i64()?,
+        is_draft: first
+            .get("isDraft")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        state: first
+            .get("state")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        url: first
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+/// The PR-open decision (F3): the first NON-draft PR advances a bound worktree
+/// to InReview (guarded monotonic). A draft PR is not a trigger (spec open
+/// question 5). Pure.
+pub(crate) fn poll_pr_open_decision(
+    current_phase: Option<&str>,
+    pr: &PrInfo,
+) -> Option<TrackerPhase> {
+    if pr.is_draft {
+        return None;
+    }
+    next_phase_write(current_phase, TrackerPhase::InReview)
+}
+
+/// Pure argv for the branch's PR probe (open PRs — the default `gh pr list`
+/// state; a pre-poll merge is the explicitly out-of-scope edge, spec §non-goals).
+fn pr_list_argv<'a>(slug: &'a str, branch: &'a str) -> [&'a str; 8] {
+    [
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--repo",
+        slug,
+        "--json",
+        "number,state,isDraft,url",
+    ]
+}
+
+/// One bounded `gh` call capturing stdout (the poller's runner; the binary comes
+/// from the shared `github_projects::gh_bin` seam so tests inject a fake — no
+/// fourth `gh_bin` dup, invariant #8). `Err` on timeout / spawn failure /
+/// non-zero exit — the caller logs and skips, never halts.
+async fn run_gh_capture(program: &str, args: &[&str]) -> Result<String, String> {
+    // Pin the cwd to the always-present neutral dir ($HOME), like every other
+    // `gh` runner: the `--repo` calls don't need the repo cwd, and inheriting a
+    // deleted test/working dir makes process spawn itself fail (ENOENT on getcwd).
+    let fut = tokio::process::Command::new(program)
+        .args(args)
+        .current_dir(crate::task_sink::neutral_cwd())
+        .output();
+    let output = match tokio::time::timeout(GH_CALL_TIMEOUT, fut).await {
+        Err(_) => return Err("gh timed out".into()),
+        Ok(Err(e)) => return Err(format!("failed to run `{program}`: {e}")),
+        Ok(Ok(o)) => o,
+    };
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    Err(if msg.is_empty() {
+        format!("gh exited with {}", output.status)
+    } else {
+        msg
+    })
+}
+
+/// `gh pr list` for a branch → the first PR (if any). `Ok(None)` = no PR yet;
+/// `Err` = a `gh` failure the caller logs and skips (never-halt).
+async fn pr_list_via_gh(program: &str, slug: &str, branch: &str) -> Result<Option<PrInfo>, String> {
+    let out = run_gh_capture(program, &pr_list_argv(slug, branch)).await?;
+    Ok(parse_pr_list(&out))
+}
+
+/// One transition + persist for a poller-detected phase (github). Best-effort:
+/// a transport failure logs and is dropped; the phase is persisted on success so
+/// the guard/terminal-stop survives a reboot.
+async fn drive_and_persist(
+    store: &Store,
+    worktree_id: &str,
+    tracker_url: &str,
+    linked_linear_issue: Option<&str>,
+    target: TrackerPhase,
+) {
+    let tracker_id = tracker_id_for("github", tracker_url, linked_linear_issue);
+    match apply_tracker_transition(store, "github", &tracker_id, Some(tracker_url), target).await {
+        Ok(result) => {
+            tracing::info!(worktree = %worktree_id, ?target, ?result, "poller tracker transition");
+            if let Err(e) = crate::routes::worktrees::persist_tracker_progress(
+                worktree_id,
+                Some(tracker_phase_wire(target)),
+                None,
+            ) {
+                tracing::warn!(error = %e, "persisting tracker_phase failed (non-fatal)");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(worktree = %worktree_id, error = %e, "poller tracker transition failed (non-fatal)");
+        }
+    }
+}
+
+/// One tick's `gh`-call accounting, so the loop can back off a wholly-failed tick.
+#[derive(Debug, Default)]
+struct PollTick {
+    attempted: usize,
+    failed: usize,
+}
+
+impl PollTick {
+    /// Every `gh` call this tick failed (and there was at least one) — back off.
+    fn all_failed(&self) -> bool {
+        self.attempted > 0 && self.failed == self.attempted
+    }
+}
+
+/// One poll tick: for each bound, non-Done github worktree with a branch, detect
+/// its PR lifecycle. F3 handles PR-open → InReview + persist `linked_pr`. (F4
+/// extends this with merge → Done for a worktree that already has a `linked_pr`.)
+async fn poll_pr_lifecycle_once(store: &Store, program: &str) -> PollTick {
+    let mut tick = PollTick::default();
+    let worktrees: Vec<crate::routes::worktrees::TrackerWorktree> =
+        crate::routes::worktrees::list_tracker_worktrees()
+            .into_iter()
+            .filter(|w| {
+                w.tracker_provider.as_deref() == Some("github")
+                    && w.branch.is_some()
+                    // Terminal-stop (F4 AC12): a merged workspace is excluded,
+                    // restart-safe via the persisted phase.
+                    && w.tracker_phase.as_deref() != Some("done")
+            })
+            .take(MAX_WORKTREES_PER_TICK)
+            .collect();
+
+    for w in worktrees {
+        let Some(url) = w.tracker_url.as_deref() else {
+            continue;
+        };
+        // The label/Projects target is the ISSUE (parsed from tracker_url); the
+        // PR is queried by (repo, head-branch).
+        let Some((slug, _number)) = crate::task_sink::github_slug_and_number_from_issue_url(url)
+        else {
+            continue;
+        };
+        let Some(branch) = w.branch.as_deref() else {
+            continue;
+        };
+
+        if w.linked_pr.is_none() {
+            // F3: no PR seen yet — probe for the first non-draft PR → InReview.
+            tick.attempted += 1;
+            match pr_list_via_gh(program, &slug, branch).await {
+                Ok(Some(pr)) if !pr.is_draft => {
+                    // Persist the PR number first so a later transition failure
+                    // still records that a PR exists (avoids re-probing forever).
+                    let _ = crate::routes::worktrees::persist_tracker_progress(
+                        &w.id,
+                        None,
+                        Some(pr.number),
+                    );
+                    if poll_pr_open_decision(w.tracker_phase.as_deref(), &pr).is_some() {
+                        drive_and_persist(
+                            store,
+                            &w.id,
+                            url,
+                            w.linked_linear_issue.as_deref(),
+                            TrackerPhase::InReview,
+                        )
+                        .await;
+                    }
+                }
+                Ok(_) => {} // no PR, or a draft PR — not a trigger yet
+                Err(reason) => {
+                    tick.failed += 1;
+                    tracing::warn!(slug = %slug, branch = %branch, %reason, "gh pr list failed (non-fatal)");
+                }
+            }
+        }
+    }
+    tick
+}
+
+/// The PR/merge poller loop (F3/F4): every `AGENTUM_TRACKER_POLL_SECS` (default
+/// 45s), drive InReview on the first non-draft PR and — once F4 lands — Done on
+/// merge, for every bound github worktree. Bounded + backed-off + never-halt.
+/// Spawned at server boot beside the other background workers.
+pub async fn run_pr_merge_poller(store: Arc<Store>) {
+    let secs = std::env::var("AGENTUM_TRACKER_POLL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_POLL_SECS);
+    let base = std::time::Duration::from_secs(secs);
+    let mut consecutive_failed_ticks: u32 = 0;
+    loop {
+        // Exponential backoff (capped) after a wholly-failed tick — rate-limit
+        // friendly; a healthy tick resets to the base cadence.
+        let wait = base * 2u32.pow(consecutive_failed_ticks.min(4));
+        tokio::time::sleep(wait).await;
+        let program = crate::github_projects::gh_bin();
+        let tick = poll_pr_lifecycle_once(&store, &program).await;
+        if tick.all_failed() {
+            consecutive_failed_ticks = consecutive_failed_ticks.saturating_add(1);
+        } else {
+            consecutive_failed_ticks = 0;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +574,134 @@ mod tests {
         );
         // Linear with no persisted identifier falls back to the URL string.
         assert_eq!(tracker_id_for("linear", "ENG-42", None), "ENG-42");
+    }
+
+    // ─── F3: the PR-open poller ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_pr_list_takes_first_pr_or_none() {
+        let pr = parse_pr_list(
+            r#"[{"number":7,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/7"}]"#,
+        )
+        .unwrap();
+        assert_eq!(pr.number, 7);
+        assert!(!pr.is_draft);
+        assert_eq!(pr.state, "OPEN");
+        assert_eq!(pr.url, "https://github.com/o/r/pull/7");
+        // An empty array (no PR on the branch) and junk both read as None.
+        assert_eq!(parse_pr_list("[]"), None);
+        assert_eq!(parse_pr_list("not json"), None);
+        assert_eq!(parse_pr_list(""), None);
+    }
+
+    #[test]
+    fn poll_open_nondraft_pr_fires_inreview_but_draft_does_not() {
+        let open = PrInfo {
+            number: 7,
+            is_draft: false,
+            state: "OPEN".into(),
+            url: "https://github.com/o/r/pull/7".into(),
+        };
+        // A non-draft PR on a not-yet-advanced worktree → InReview.
+        assert_eq!(
+            poll_pr_open_decision(None, &open),
+            Some(TrackerPhase::InReview)
+        );
+        assert_eq!(
+            poll_pr_open_decision(Some("in_progress"), &open),
+            Some(TrackerPhase::InReview)
+        );
+        // Idempotent / no regress: already InReview, or already Done.
+        assert_eq!(poll_pr_open_decision(Some("in_review"), &open), None);
+        assert_eq!(poll_pr_open_decision(Some("done"), &open), None);
+        // A DRAFT PR is never a trigger (spec open question 5).
+        let draft = PrInfo {
+            is_draft: true,
+            ..open.clone()
+        };
+        assert_eq!(poll_pr_open_decision(None, &draft), None);
+        assert_eq!(poll_pr_open_decision(Some("in_progress"), &draft), None);
+    }
+
+    #[test]
+    fn pr_list_argv_shape() {
+        assert_eq!(
+            pr_list_argv("o/r", "feat/x"),
+            [
+                "pr",
+                "list",
+                "--head",
+                "feat/x",
+                "--repo",
+                "o/r",
+                "--json",
+                "number,state,isDraft,url",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_fake_gh(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("gh-fake");
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    /// A fake `gh` returning a non-draft PR for the branch → `pr_list_via_gh`
+    /// parses it (proves the argv + parse path, no env mutation).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pr_list_via_gh_returns_the_branch_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = r#"[{"number":42,"state":"OPEN","isDraft":false,"url":"https://github.com/o/r/pull/42"}]"#;
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\nprintf '%s' '{body}'\nexit 0\n"),
+        );
+        let result = pr_list_via_gh(script.to_str().unwrap(), "o/r", "feat/x").await;
+        let pr = result
+            .unwrap_or_else(|e| panic!("pr_list_via_gh errored: {e}"))
+            .expect("a PR should parse");
+        assert_eq!(pr.number, 42);
+        assert!(!pr.is_draft);
+    }
+
+    /// F3 AC10: a `gh` that exits non-zero surfaces as `Err` (the poller logs +
+    /// skips it) — the loop never halts.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pr_list_via_gh_failure_is_err_never_halts() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_fake_gh(
+            dir.path(),
+            "#!/bin/sh\necho 'boom: gh failed' >&2\nexit 1\n",
+        );
+        let result = pr_list_via_gh(script.to_str().unwrap(), "o/r", "feat/x").await;
+        let err = result.expect_err("a gh failure is an Err the poller skips");
+        assert!(err.contains("boom: gh failed"), "unexpected err: {err}");
+    }
+
+    #[test]
+    fn poll_tick_all_failed_gates_backoff() {
+        assert!(
+            !PollTick::default().all_failed(),
+            "an empty tick is not a failure"
+        );
+        assert!(
+            PollTick {
+                attempted: 3,
+                failed: 3
+            }
+            .all_failed()
+        );
+        assert!(
+            !PollTick {
+                attempted: 3,
+                failed: 1
+            }
+            .all_failed()
+        );
     }
 }

@@ -507,6 +507,16 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         });
     }
 
+    // Spec 012 F3/F4: the PR/merge poller. No inbound webhooks on a self-hosted
+    // daemon (invariant #6) → a bounded, backed-off `gh` loop drives InReview on
+    // the first non-draft PR and Done on merge for each bound github worktree.
+    {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            tracker_sync::run_pr_merge_poller(store).await;
+        });
+    }
+
     // Host-metrics ticker: publishes CPU+RAM onto the bus so one sampler feeds
     // every connected client over the events WS; idles while no client is on.
     routes::host::spawn_ticker(bus.clone(), state.events_ws_clients.clone());

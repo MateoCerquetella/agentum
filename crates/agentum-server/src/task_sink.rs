@@ -219,18 +219,24 @@ impl TaskSink {
 pub enum TrackerPhase {
     Todo,
     InProgress,
+    /// Spec 012 F3: a PR is open on the workspace's branch. Sits between
+    /// InProgress and ReadyToTest in the canonical order (`tracker_sync`), so a
+    /// plain session walks InProgress → InReview → Done while a gated run's
+    /// ReadyToTest (unit-green) never regresses when a PR opens.
+    InReview,
     ReadyToTest,
     Done,
 }
 
-/// Parse a wire-format phase string (`todo` / `in_progress` / `ready_to_test` /
-/// `done`) into a [`TrackerPhase`]. Pure; `None` for anything else — the MCP
-/// `agentum_report_status` tool (spec 005 F4) treats that as a caller bug, not
-/// a tracker hiccup.
+/// Parse a wire-format phase string (`todo` / `in_progress` / `in_review` /
+/// `ready_to_test` / `done`) into a [`TrackerPhase`]. Pure; `None` for anything
+/// else — the MCP `agentum_report_status` tool (spec 005 F4) treats that as a
+/// caller bug, not a tracker hiccup.
 pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
     match s {
         "todo" => Some(TrackerPhase::Todo),
         "in_progress" => Some(TrackerPhase::InProgress),
+        "in_review" => Some(TrackerPhase::InReview),
         "ready_to_test" => Some(TrackerPhase::ReadyToTest),
         "done" => Some(TrackerPhase::Done),
         _ => None,
@@ -257,6 +263,9 @@ fn board_status_for(phase: TrackerPhase) -> &'static str {
     match phase {
         TrackerPhase::Todo => "todo",
         TrackerPhase::InProgress => "doing",
+        // The internal board has no distinct in-review column — InReview folds
+        // onto `review` alongside ReadyToTest (the board is a coarse mirror).
+        TrackerPhase::InReview => "review",
         TrackerPhase::ReadyToTest => "review",
         TrackerPhase::Done => "done",
     }
@@ -265,9 +274,11 @@ fn board_status_for(phase: TrackerPhase) -> &'static str {
 /// Canonical, harness-owned status labels with fixed colors (spec 004 D3).
 /// NOT `.github/labels.sh`'s `status/qa*` set — that is the human-QA lifecycle
 /// (architecture C4); the transition never touches foreign `status/*` labels.
-const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 4] = [
+const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 5] = [
     (TrackerPhase::Todo, "status/todo", "ededed"),
     (TrackerPhase::InProgress, "status/in-progress", "1d76db"),
+    // Spec 012 F3: the fifth mutually-exclusive pipeline label (purple).
+    (TrackerPhase::InReview, "status/in-review", "5319e7"),
     (TrackerPhase::ReadyToTest, "status/ready-to-test", "fbca04"),
     (TrackerPhase::Done, "status/done", "0e8a16"),
 ];
@@ -278,8 +289,9 @@ const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 4] = [
 /// (D-A) and lives only on the GitHub-label layer. Red (`b60205`).
 const GITHUB_BLOCKED_LABEL: (&str, &str) = ("status/blocked", "b60205");
 
-/// All FIVE canonical status names for the one-per-issue remove-set (spec 008
-/// D6): the four CONFIGURED pipeline names + the fixed blocked name. Every
+/// All SIX canonical status names for the one-per-issue remove-set (spec 008
+/// D6, extended spec 012 F3): the five CONFIGURED pipeline names + the fixed
+/// blocked name. Every
 /// pipeline transition removes this whole set (minus its own target), so setting
 /// any pipeline label also clears `status/blocked` — the board can't lie in
 /// either direction (a re-driven blocked feature drops the label at InProgress).
@@ -323,17 +335,19 @@ pub(crate) fn github_status_color(phase: TrackerPhase) -> &'static str {
 pub struct GithubStateMap {
     pub todo: String,
     pub in_progress: String,
+    pub in_review: String,
     pub ready_to_test: String,
     pub done: String,
 }
 
 impl Default for GithubStateMap {
-    /// The canonical four from [`GITHUB_STATUS_LABELS`], via the
+    /// The canonical five from [`GITHUB_STATUS_LABELS`], via the
     /// [`github_status_label`] accessor so defaults and table can't drift.
     fn default() -> Self {
         Self {
             todo: github_status_label(TrackerPhase::Todo).into(),
             in_progress: github_status_label(TrackerPhase::InProgress).into(),
+            in_review: github_status_label(TrackerPhase::InReview).into(),
             ready_to_test: github_status_label(TrackerPhase::ReadyToTest).into(),
             done: github_status_label(TrackerPhase::Done).into(),
         }
@@ -350,6 +364,8 @@ struct StoredGithubStateMap {
     todo: Option<String>,
     #[serde(default)]
     in_progress: Option<String>,
+    #[serde(default)]
+    in_review: Option<String>,
     #[serde(default)]
     ready_to_test: Option<String>,
     #[serde(default)]
@@ -409,6 +425,7 @@ impl GithubStateMap {
             for (slot, v) in [
                 (&mut m.todo, sm.todo),
                 (&mut m.in_progress, sm.in_progress),
+                (&mut m.in_review, sm.in_review),
                 (&mut m.ready_to_test, sm.ready_to_test),
                 (&mut m.done, sm.done),
             ] {
@@ -421,6 +438,7 @@ impl GithubStateMap {
         for (slot, key) in [
             (&mut m.todo, "AGENTUM_GITHUB_STATUS_TODO"),
             (&mut m.in_progress, "AGENTUM_GITHUB_STATUS_IN_PROGRESS"),
+            (&mut m.in_review, "AGENTUM_GITHUB_STATUS_IN_REVIEW"),
             (&mut m.ready_to_test, "AGENTUM_GITHUB_STATUS_READY_TO_TEST"),
             (&mut m.done, "AGENTUM_GITHUB_STATUS_DONE"),
         ] {
@@ -436,6 +454,7 @@ impl GithubStateMap {
         match phase {
             TrackerPhase::Todo => &self.todo,
             TrackerPhase::InProgress => &self.in_progress,
+            TrackerPhase::InReview => &self.in_review,
             TrackerPhase::ReadyToTest => &self.ready_to_test,
             TrackerPhase::Done => &self.done,
         }
@@ -443,10 +462,11 @@ impl GithubStateMap {
 
     /// The configured names in canonical phase order (may contain duplicates
     /// when a user maps two phases to one name — callers dedupe by name).
-    fn labels(&self) -> [&str; 4] {
+    fn labels(&self) -> [&str; 5] {
         [
             &self.todo,
             &self.in_progress,
+            &self.in_review,
             &self.ready_to_test,
             &self.done,
         ]
@@ -1164,6 +1184,7 @@ mod tests {
         let labels = [
             github_status_label(TrackerPhase::Todo),
             github_status_label(TrackerPhase::InProgress),
+            github_status_label(TrackerPhase::InReview),
             github_status_label(TrackerPhase::ReadyToTest),
             github_status_label(TrackerPhase::Done),
         ];
@@ -1172,12 +1193,13 @@ mod tests {
             [
                 "status/todo",
                 "status/in-progress",
+                "status/in-review",
                 "status/ready-to-test",
                 "status/done"
             ]
         );
         let unique: std::collections::HashSet<_> = labels.iter().collect();
-        assert_eq!(unique.len(), 4, "labels must be pairwise distinct");
+        assert_eq!(unique.len(), 5, "labels must be pairwise distinct");
     }
 
     /// `--force` makes the ensure-create idempotent (an existing label is
@@ -1241,21 +1263,24 @@ mod tests {
         assert_eq!(github_slug_and_number_from_issue_url(""), None);
     }
 
-    /// Spec 004 (C4 invariant at argv level) + spec 008 D6: one `gh issue edit`
-    /// adds the target label and removes exactly the OTHER FOUR canonical labels
-    /// — the three other pipeline phases AND the fixed `status/blocked` — so a
-    /// pipeline flip also clears a lingering blocked label (the board can't lie
-    /// in either direction). The target is never removed, and no non-canonical
-    /// name (e.g. this repo's own `status/qa*` human-QA labels) appears.
+    /// Spec 004 (C4 invariant at argv level) + spec 008 D6 + spec 012 F3: one
+    /// `gh issue edit` adds the target label and removes exactly the OTHER FIVE
+    /// canonical labels — the four other pipeline phases AND the fixed
+    /// `status/blocked` — so a pipeline flip also clears a lingering blocked
+    /// label (the board can't lie in either direction). The target is never
+    /// removed, and no non-canonical name (e.g. this repo's own `status/qa*`
+    /// human-QA labels) appears.
     ///
-    /// The `expected` literals now carry the trailing `--remove-label
-    /// status/blocked` D6 added; the pipeline order/tokens are otherwise the spec
-    /// 004/005 shape. Do not regenerate them from the code under test.
+    /// The `expected` literals carry the D6 `--remove-label status/blocked` tail
+    /// and the F3 `status/in-review` label; the pipeline order/tokens are
+    /// otherwise the spec 004/005 shape. Do not regenerate them from the code
+    /// under test.
     #[test]
-    fn gh_set_status_label_argv_adds_one_removes_the_three_pipeline_and_blocked() {
+    fn gh_set_status_label_argv_adds_one_removes_the_four_pipeline_and_blocked() {
         let all_phases = [
             TrackerPhase::Todo,
             TrackerPhase::InProgress,
+            TrackerPhase::InReview,
             TrackerPhase::ReadyToTest,
             TrackerPhase::Done,
         ];
@@ -1275,6 +1300,8 @@ mod tests {
                     "--remove-label",
                     "status/in-progress",
                     "--remove-label",
+                    "status/in-review",
+                    "--remove-label",
                     "status/ready-to-test",
                     "--remove-label",
                     "status/done",
@@ -1291,6 +1318,27 @@ mod tests {
                     "status/in-progress",
                     "--remove-label",
                     "status/todo",
+                    "--remove-label",
+                    "status/in-review",
+                    "--remove-label",
+                    "status/ready-to-test",
+                    "--remove-label",
+                    "status/done",
+                    "--remove-label",
+                    "status/blocked",
+                ],
+                TrackerPhase::InReview => vec![
+                    "issue",
+                    "edit",
+                    "42",
+                    "--repo",
+                    "owner/repo",
+                    "--add-label",
+                    "status/in-review",
+                    "--remove-label",
+                    "status/todo",
+                    "--remove-label",
+                    "status/in-progress",
                     "--remove-label",
                     "status/ready-to-test",
                     "--remove-label",
@@ -1311,6 +1359,8 @@ mod tests {
                     "--remove-label",
                     "status/in-progress",
                     "--remove-label",
+                    "status/in-review",
+                    "--remove-label",
                     "status/done",
                     "--remove-label",
                     "status/blocked",
@@ -1327,6 +1377,8 @@ mod tests {
                     "status/todo",
                     "--remove-label",
                     "status/in-progress",
+                    "--remove-label",
+                    "status/in-review",
                     "--remove-label",
                     "status/ready-to-test",
                     "--remove-label",
@@ -1355,7 +1407,7 @@ mod tests {
                     pair[1]
                 })
                 .collect();
-            assert_eq!(removed.len(), 4, "three pipeline + blocked removed");
+            assert_eq!(removed.len(), 5, "four pipeline + blocked removed");
             assert!(
                 !removed.contains(&target),
                 "the target label must never be removed"
@@ -1386,6 +1438,7 @@ mod tests {
         let m = GithubStateMap::default();
         assert_eq!(m.todo, "status/todo");
         assert_eq!(m.in_progress, "status/in-progress");
+        assert_eq!(m.in_review, "status/in-review");
         assert_eq!(m.ready_to_test, "status/ready-to-test");
         assert_eq!(m.done, "status/done");
         for (p, name, _) in GITHUB_STATUS_LABELS.iter() {
@@ -1409,6 +1462,7 @@ mod tests {
         let file = StoredGithubStateMap {
             todo: Some("triage".into()),
             in_progress: Some(" wip ".into()), // trimmed
+            in_review: None,
             ready_to_test: None,
             done: Some("   ".into()), // blank keeps the lower layer
         };
@@ -1445,6 +1499,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "triage".into(),
             in_progress: "wip".into(),
+            in_review: "reviewing".into(),
             ready_to_test: "qa-ready".into(),
             done: "shipped".into(),
         };
@@ -1461,6 +1516,8 @@ mod tests {
                 "wip",
                 "--remove-label",
                 "triage",
+                "--remove-label",
+                "reviewing",
                 "--remove-label",
                 "qa-ready",
                 "--remove-label",
@@ -1487,6 +1544,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "status/todo".into(),
             in_progress: "active".into(),
+            in_review: "status/in-review".into(),
             ready_to_test: "active".into(),
             done: "status/done".into(),
         };
@@ -1502,19 +1560,32 @@ mod tests {
                 .collect();
             assert_eq!(
                 removed,
-                // …plus the D6 blocked label (spec 008).
-                ["status/todo", "status/done", "status/blocked"],
+                // …plus the F3 in-review label and the D6 blocked label (spec 008).
+                [
+                    "status/todo",
+                    "status/in-review",
+                    "status/done",
+                    "status/blocked"
+                ],
                 "the shared target must be absent from its own remove list"
             );
         }
         // Shared name NOT the target → removed once, not twice (+ blocked, D6).
         let argv = gh_set_status_label_argv("42", "o/r", TrackerPhase::Done, &map);
         let removed: Vec<&str> = argv[7..].chunks(2).map(|pair| pair[1]).collect();
-        assert_eq!(removed, ["status/todo", "active", "status/blocked"]);
+        assert_eq!(
+            removed,
+            [
+                "status/todo",
+                "active",
+                "status/in-review",
+                "status/blocked"
+            ]
+        );
     }
 
-    /// Spec 005 F5 (§6 item 6): a fake `gh` logs the full custom-map
-    /// transition — 4 ensure-creates carrying the CUSTOM names with the
+    /// Spec 005 F5 (§6 item 6), extended spec 012 F3: a fake `gh` logs the full
+    /// custom-map transition — 5 ensure-creates carrying the CUSTOM names with the
     /// canonical PHASE colors, then one edit that adds/removes only configured
     /// names. Explicit `program` + explicit `map` → no env mutation, no lock.
     #[cfg(unix)]
@@ -1529,6 +1600,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "triage".into(),
             in_progress: "wip".into(),
+            in_review: "reviewing".into(),
             ready_to_test: "qa-ready".into(),
             done: "shipped".into(),
         };
@@ -1545,21 +1617,22 @@ mod tests {
 
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
-        assert_eq!(lines.len(), 5, "4 ensure-creates + 1 edit, got: {calls}");
+        assert_eq!(lines.len(), 6, "5 ensure-creates + 1 edit, got: {calls}");
         assert_eq!(
-            lines[..4],
+            lines[..5],
             [
                 "label create triage --repo owner/repo --color ededed --force",
                 "label create wip --repo owner/repo --color 1d76db --force",
+                "label create reviewing --repo owner/repo --color 5319e7 --force",
                 "label create qa-ready --repo owner/repo --color fbca04 --force",
                 "label create shipped --repo owner/repo --color 0e8a16 --force",
             ]
         );
         assert_eq!(
-            lines[4],
+            lines[5],
             "issue edit 42 --repo owner/repo --add-label qa-ready \
-             --remove-label triage --remove-label wip --remove-label shipped \
-             --remove-label status/blocked"
+             --remove-label triage --remove-label wip --remove-label reviewing \
+             --remove-label shipped --remove-label status/blocked"
         );
         for (_, canonical, _) in GITHUB_STATUS_LABELS.iter() {
             assert!(
@@ -1583,6 +1656,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "status/todo".into(),
             in_progress: "active".into(),
+            in_review: "status/in-review".into(),
             ready_to_test: "active".into(),
             done: "status/done".into(),
         };
@@ -1599,33 +1673,39 @@ mod tests {
 
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
-        assert_eq!(lines.len(), 4, "3 deduped ensure-creates + 1 edit: {calls}");
+        assert_eq!(lines.len(), 5, "4 deduped ensure-creates + 1 edit: {calls}");
         assert_eq!(
-            lines[..3],
+            lines[..4],
             [
                 "label create status/todo --repo owner/repo --color ededed --force",
                 // InProgress comes first in canonical order, so its color wins.
                 "label create active --repo owner/repo --color 1d76db --force",
+                "label create status/in-review --repo owner/repo --color 5319e7 --force",
                 "label create status/done --repo owner/repo --color 0e8a16 --force",
             ]
         );
     }
 
-    /// Spec 005 F4: the wire-format phase parser accepts exactly the four
-    /// pipeline phases and rejects everything else (case-sensitive, no aliases).
+    /// Spec 005 F4 + spec 012 F3: the wire-format phase parser accepts exactly
+    /// the five pipeline phases and rejects everything else (case-sensitive, no
+    /// aliases).
     #[test]
-    fn parse_tracker_phase_accepts_the_four_and_rejects_junk() {
+    fn parse_tracker_phase_accepts_the_five_and_rejects_junk() {
         assert_eq!(parse_tracker_phase("todo"), Some(TrackerPhase::Todo));
         assert_eq!(
             parse_tracker_phase("in_progress"),
             Some(TrackerPhase::InProgress)
         );
         assert_eq!(
+            parse_tracker_phase("in_review"),
+            Some(TrackerPhase::InReview)
+        );
+        assert_eq!(
             parse_tracker_phase("ready_to_test"),
             Some(TrackerPhase::ReadyToTest)
         );
         assert_eq!(parse_tracker_phase("done"), Some(TrackerPhase::Done));
-        for junk in ["", "Todo", "DONE", "in-progress", "ready to test", "qa"] {
+        for junk in ["", "Todo", "DONE", "in-review", "ready to test", "qa"] {
             assert_eq!(parse_tracker_phase(junk), None, "{junk:?} must be rejected");
         }
     }
@@ -1634,6 +1714,9 @@ mod tests {
     fn board_status_mapping_covers_all_phases() {
         assert_eq!(board_status_for(TrackerPhase::Todo), "todo");
         assert_eq!(board_status_for(TrackerPhase::InProgress), "doing");
+        // InReview folds onto the internal board's `review` column alongside
+        // ReadyToTest (no distinct in-review board column).
+        assert_eq!(board_status_for(TrackerPhase::InReview), "review");
         assert_eq!(board_status_for(TrackerPhase::ReadyToTest), "review");
         assert_eq!(board_status_for(TrackerPhase::Done), "done");
     }
@@ -1738,9 +1821,9 @@ mod tests {
 
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
-        // 4 ensure-creates then the single issue edit, in that order.
-        assert_eq!(lines.len(), 5, "expected 5 gh invocations, got: {calls}");
-        for line in &lines[..4] {
+        // 5 ensure-creates then the single issue edit, in that order.
+        assert_eq!(lines.len(), 6, "expected 6 gh invocations, got: {calls}");
+        for line in &lines[..5] {
             assert!(
                 line.starts_with("label create status/"),
                 "expected an ensure-create, got: {line}"
@@ -1748,9 +1831,45 @@ mod tests {
             assert!(line.ends_with("--force"));
         }
         assert!(
-            lines[4].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
+            lines[5].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
             "last call must be the issue edit, got: {}",
-            lines[4]
+            lines[5]
+        );
+    }
+
+    /// Spec 012 F3 (the first-failing test): the new `InReview` phase writes the
+    /// `status/in-review` label and removes exactly the OTHER FOUR pipeline names
+    /// plus `status/blocked` — the five-label mutual exclusion. Fake-`gh`, no env.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn inreview_writes_in_review_label_and_removes_other_four() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::InReview,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 6, "5 ensure-creates + 1 edit, got: {calls}");
+        // The single edit adds in-review and removes the other four + blocked.
+        assert_eq!(
+            lines[5],
+            "issue edit 42 --repo owner/repo --add-label status/in-review \
+             --remove-label status/todo --remove-label status/in-progress \
+             --remove-label status/ready-to-test --remove-label status/done \
+             --remove-label status/blocked"
         );
     }
 
@@ -1783,10 +1902,11 @@ mod tests {
 
     // ---- Spec 008 D6: the `status/blocked` escalation ------------------------
 
-    /// The blocked argv adds `status/blocked` and removes the FOUR pipeline
-    /// names (the mirror of `gh_set_status_label_argv` with a fixed target).
+    /// The blocked argv adds `status/blocked` and removes the FIVE pipeline
+    /// names (the mirror of `gh_set_status_label_argv` with a fixed target;
+    /// spec 012 F3 added `status/in-review`).
     #[test]
-    fn gh_set_blocked_label_argv_adds_blocked_removes_four_pipeline() {
+    fn gh_set_blocked_label_argv_adds_blocked_removes_five_pipeline() {
         let map = GithubStateMap::default();
         let argv = gh_set_blocked_label_argv("42", "owner/repo", &map);
         assert_eq!(
@@ -1803,6 +1923,8 @@ mod tests {
                 "status/todo",
                 "--remove-label",
                 "status/in-progress",
+                "--remove-label",
+                "status/in-review",
                 "--remove-label",
                 "status/ready-to-test",
                 "--remove-label",
@@ -1911,7 +2033,8 @@ mod tests {
             lines[1],
             "issue edit 42 --repo owner/repo --add-label status/blocked \
              --remove-label status/todo --remove-label status/in-progress \
-             --remove-label status/ready-to-test --remove-label status/done"
+             --remove-label status/in-review --remove-label status/ready-to-test \
+             --remove-label status/done"
         );
         assert_eq!(lines[2], "issue comment");
 
@@ -2036,8 +2159,8 @@ mod tests {
 
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
-        assert_eq!(lines.len(), 5, "expected 5 gh invocations, got: {calls}");
-        for line in &lines[..4] {
+        assert_eq!(lines.len(), 6, "expected 6 gh invocations, got: {calls}");
+        for line in &lines[..5] {
             assert!(
                 line.starts_with("label create status/"),
                 "expected an ensure-create, got: {line}"
@@ -2045,9 +2168,9 @@ mod tests {
             assert!(line.ends_with("--force"));
         }
         assert!(
-            lines[4].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
+            lines[5].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
             "last call must be the issue edit, got: {}",
-            lines[4]
+            lines[5]
         );
         assert!(
             !calls.contains("api graphql"),
@@ -2106,7 +2229,7 @@ mod tests {
                 .lines()
                 .filter(|l| l.starts_with("label create status/"))
                 .count(),
-            4,
+            5,
             "label ensures untouched: {calls}"
         );
         assert!(calls.contains("issue edit 42"), "label edit ran: {calls}");

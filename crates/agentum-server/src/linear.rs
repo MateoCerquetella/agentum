@@ -48,6 +48,8 @@ struct StoredStateMap {
     #[serde(default)]
     in_progress: Option<String>,
     #[serde(default)]
+    in_review: Option<String>,
+    #[serde(default)]
     ready_to_test: Option<String>,
     #[serde(default)]
     done: Option<String>,
@@ -183,6 +185,7 @@ pub async fn create_issue(
 pub struct LinearStateMap {
     pub todo: String,
     pub in_progress: String,
+    pub in_review: String,
     pub ready_to_test: String,
     pub done: String,
 }
@@ -192,6 +195,9 @@ impl Default for LinearStateMap {
         Self {
             todo: "Todo".into(),
             in_progress: "In Progress".into(),
+            // Spec 012 F3: the Linear "In Review" state. A team without one is a
+            // logged skip at transition time (fail-closed), never an error.
+            in_review: "In Review".into(),
             ready_to_test: "Ready to Test".into(),
             done: "Done".into(),
         }
@@ -213,6 +219,9 @@ impl LinearStateMap {
             if let Some(v) = sm.in_progress.filter(|s| !s.trim().is_empty()) {
                 m.in_progress = v.trim().to_string();
             }
+            if let Some(v) = sm.in_review.filter(|s| !s.trim().is_empty()) {
+                m.in_review = v.trim().to_string();
+            }
             if let Some(v) = sm.ready_to_test.filter(|s| !s.trim().is_empty()) {
                 m.ready_to_test = v.trim().to_string();
             }
@@ -229,6 +238,11 @@ impl LinearStateMap {
         if let Ok(v) = std::env::var("AGENTUM_LINEAR_STATE_IN_PROGRESS") {
             if !v.trim().is_empty() {
                 m.in_progress = v.trim().to_string();
+            }
+        }
+        if let Ok(v) = std::env::var("AGENTUM_LINEAR_STATE_IN_REVIEW") {
+            if !v.trim().is_empty() {
+                m.in_review = v.trim().to_string();
             }
         }
         if let Ok(v) = std::env::var("AGENTUM_LINEAR_STATE_READY_TO_TEST") {
@@ -250,6 +264,7 @@ impl LinearStateMap {
         match phase {
             Todo => &self.todo,
             InProgress => &self.in_progress,
+            InReview => &self.in_review,
             ReadyToTest => &self.ready_to_test,
             Done => &self.done,
         }
