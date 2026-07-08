@@ -1,8 +1,9 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
   Check,
+  ChevronsUpDown,
   GitBranch,
   KanbanSquare,
   Laptop,
@@ -17,6 +18,15 @@ import {
   DialogDescription,
   DialogTitle
 } from '@/components/ui/dialog'
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { searchRuntimeRepoBaseRefs } from '@/runtime/runtime-repo-client'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { useComposerState } from '@/hooks/useComposerState'
@@ -33,10 +43,12 @@ import {
   WIZARD_STEP_LABELS,
   buildWizardRecap,
   canLeaveRepoStep as canLeaveRepoStepModel,
+  deriveWizardTracker,
   resolveWizardAgentOptions,
-  wizardNextHint,
+  wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
-  type WizardStep
+  type WizardStep,
+  type WizardTracker
 } from '@/components/new-workspace/create-workspace-wizard-model'
 import type { Repo, TuiAgent, WorkspaceCreateTelemetrySource } from '../../../../shared/types'
 
@@ -62,14 +74,11 @@ export default function CreateWorkspaceWizard({
   modalData,
   onClose,
   onOpenChange,
-  onAdvanced,
   onUseGoal
 }: {
   modalData: CreateWorkspaceWizardData
   onClose: () => void
   onOpenChange: (open: boolean) => void
-  /** Switch to the full composer card (linked items, gated run, sparse, …). */
-  onAdvanced: () => void
   /** Switch to the goal-first step (spec 008), when the caller offers it. */
   onUseGoal?: () => void
 }): React.JSX.Element {
@@ -106,7 +115,6 @@ export default function CreateWorkspaceWizard({
     detectedAgentIds,
     creating,
     createDisabled,
-    selectedRepoPath,
     selectedRepoRequiresConnection,
     selectedRepoConnectInProgress,
     onConnectSelectedRepo
@@ -217,7 +225,18 @@ export default function CreateWorkspaceWizard({
   const primaryLabel = wizardPrimaryLabel(step)
   const primaryDisabled =
     step === 3 ? createDisabled || creating : step === 2 ? !canLeaveRepoStep : false
-  const nextHint = wizardNextHint(step, selectedHostLabel)
+
+  // Honest, per-repo tracker: derived from the selected repo's own remote, not
+  // a hardcoded "auto-detected from origin". Fails closed to "no tracker".
+  const tracker = useMemo<WizardTracker>(
+    () =>
+      deriveWizardTracker({
+        remoteUrl: selectedRepo?.remoteUrl,
+        requiresConnection: selectedRepoRequiresConnection,
+        isGit: selectedRepoIsGit
+      }),
+    [selectedRepo, selectedRepoIsGit, selectedRepoRequiresConnection]
+  )
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -280,7 +299,6 @@ export default function CreateWorkspaceWizard({
               onRepoChange={onRepoChange}
               selectedRepo={selectedRepo}
               selectedRepoIsGit={selectedRepoIsGit}
-              selectedRepoPath={selectedRepoPath}
               name={name}
               onNameValueChange={onNameValueChange}
               nameInputRef={nameInputRef}
@@ -298,8 +316,8 @@ export default function CreateWorkspaceWizard({
               detectedAgentIds={detectedAgentIds}
               quickAgent={quickAgent}
               onPick={setQuickAgentOverride}
-              selectedRepo={selectedRepo}
-              selectedRepoIsGit={selectedRepoIsGit}
+              tracker={tracker}
+              repoDisplayName={selectedRepo?.displayName}
             />
           ) : null}
         </div>
@@ -315,28 +333,16 @@ export default function CreateWorkspaceWizard({
               <ArrowLeft className="size-3.5" />
               Back
             </button>
-          ) : (
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={onAdvanced}
-                className="text-[11.5px] text-muted-foreground underline decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
-              >
-                Advanced options
-              </button>
-              {onUseGoal ? (
-                <button
-                  type="button"
-                  onClick={onUseGoal}
-                  className="text-[11.5px] text-muted-foreground underline decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
-                >
-                  Start from a goal
-                </button>
-              ) : null}
-            </div>
-          )}
+          ) : onUseGoal ? (
+            <button
+              type="button"
+              onClick={onUseGoal}
+              className="text-[11.5px] text-muted-foreground underline decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
+            >
+              Start from a goal
+            </button>
+          ) : null}
           <span className="flex-1" />
-          <span className="hidden text-[11.5px] text-muted-foreground sm:inline">{nextHint}</span>
           <button
             type="button"
             onClick={handlePrimary}
@@ -497,7 +503,6 @@ function RepoStep({
   onRepoChange,
   selectedRepo,
   selectedRepoIsGit,
-  selectedRepoPath,
   name,
   onNameValueChange,
   nameInputRef,
@@ -514,7 +519,6 @@ function RepoStep({
   onRepoChange: (value: string) => void
   selectedRepo: Repo | undefined
   selectedRepoIsGit: boolean
-  selectedRepoPath: string | null
   name: string
   onNameValueChange: (value: string) => void
   nameInputRef: React.RefObject<HTMLInputElement | null>
@@ -524,10 +528,6 @@ function RepoStep({
   connectInProgress: boolean
   onConnect: () => Promise<void>
 }): React.JSX.Element {
-  const slug = (name.trim() || 'worktree').replace(/\//g, '-')
-  const worktreePath = selectedRepoPath ? `${selectedRepoPath}/.worktrees/${slug}` : null
-  const defaultBranchPlaceholder = selectedRepo?.worktreeBaseRef?.trim() || 'default branch'
-
   return (
     <div className="flex animate-in flex-col gap-3.5 fade-in-0 slide-in-from-bottom-1">
       <div className="flex flex-col gap-0.5">
@@ -614,17 +614,12 @@ function RepoStep({
           <div className="grid grid-cols-[160px_1fr] gap-2.5">
             <label className="flex flex-col gap-1.5">
               <span className="text-[11.5px] text-muted-foreground">Base branch</span>
-              <span className="flex h-[34px] items-center gap-2 rounded-md border border-input bg-secondary px-2.5">
-                <GitBranch className="size-3.5 flex-none text-muted-foreground" />
-                <input
-                  value={baseBranch ?? ''}
-                  placeholder={defaultBranchPlaceholder}
-                  onChange={(event) =>
-                    onBaseBranchChange(event.target.value.trim() ? event.target.value : undefined)
-                  }
-                  className="w-full min-w-0 bg-transparent font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70"
-                />
-              </span>
+              <BaseBranchCombobox
+                repoId={repoId}
+                baseBranch={baseBranch}
+                defaultRef={selectedRepo?.worktreeBaseRef ?? null}
+                onChange={onBaseBranchChange}
+              />
             </label>
             <label className="flex flex-col gap-1.5">
               <span className="text-[11.5px] text-muted-foreground">Worktree name</span>
@@ -637,11 +632,6 @@ function RepoStep({
               />
             </label>
           </div>
-          {worktreePath ? (
-            <span className="truncate font-mono text-[11px] text-muted-foreground">
-              → {worktreePath}
-            </span>
-          ) : null}
         </div>
       ) : selectedRepo ? (
         <div className="flex flex-col gap-2.5">
@@ -672,6 +662,164 @@ function selectedRepoBadge(repo: Repo, selected: boolean): string {
   return isFolderRepo(repo) ? 'folder' : 'git'
 }
 
+/**
+ * Base-branch picker: a searchable combobox over the repo's refs (spec 011).
+ * Replaces the old free-text input — the user picks a branch from a list rather
+ * than having to know and type its name. Reuses `searchRuntimeRepoBaseRefs` (the
+ * same client Settings' BaseRefPicker uses); an empty query returns the repo's
+ * full ref list, so the list is populated the moment the popover opens. Picking
+ * "Default branch" clears the pin (`baseBranch = undefined`); a typed-but-unlisted
+ * value stays committable so arbitrary refs (e.g. `upstream/main`) still work.
+ */
+function BaseBranchCombobox({
+  repoId,
+  baseBranch,
+  defaultRef,
+  onChange
+}: {
+  repoId: string
+  baseBranch: string | undefined
+  defaultRef: string | null
+  onChange: (next: string | undefined) => void
+}): React.JSX.Element {
+  const settings = useAppStore((s) => s.settings)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [refs, setRefs] = useState<string[]>([])
+  const [loading, setLoading] = useState(false)
+
+  // Fetch (debounced) whenever the popover is open and the query changes. An
+  // empty query returns the repo's full ref list (backend filters on
+  // `needle.is_empty() || contains`), so the list fills as soon as it opens.
+  useEffect(() => {
+    if (!open || !repoId) {
+      return
+    }
+    let stale = false
+    setLoading(true)
+    const timer = window.setTimeout(() => {
+      void searchRuntimeRepoBaseRefs(settings, repoId, query.trim(), 50)
+        .then((results) => {
+          if (!stale) {
+            setRefs(results)
+          }
+        })
+        .catch((err) => {
+          // Degrade to an empty list (Default + free-text options still let the
+          // user proceed) rather than blocking the step on a search hiccup.
+          console.error('[BaseBranchCombobox] searchBaseRefs failed', err)
+          if (!stale) {
+            setRefs([])
+          }
+        })
+        .finally(() => {
+          if (!stale) {
+            setLoading(false)
+          }
+        })
+    }, 180)
+    return () => {
+      stale = true
+      window.clearTimeout(timer)
+    }
+  }, [open, query, repoId, settings])
+
+  const usingDefault = !baseBranch?.trim()
+  const triggerLabel = wizardBaseBranchTriggerLabel(baseBranch, defaultRef)
+  const trimmedQuery = query.trim()
+  const showRawOption =
+    trimmedQuery.length > 0 && !refs.some((ref) => ref.toLowerCase() === trimmedQuery.toLowerCase())
+
+  const commit = useCallback(
+    (ref: string | undefined) => {
+      const trimmed = ref?.trim()
+      onChange(trimmed ? trimmed : undefined)
+      setOpen(false)
+      setQuery('')
+    },
+    [onChange]
+  )
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) {
+          setQuery('')
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          aria-expanded={open}
+          className="flex h-[34px] items-center gap-2 rounded-md border border-input bg-secondary px-2.5 text-left focus-visible:border-ring focus-visible:outline-none"
+        >
+          <GitBranch className="size-3.5 flex-none text-muted-foreground" />
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate font-mono text-[12.5px]',
+              usingDefault ? 'text-muted-foreground/80' : 'text-foreground'
+            )}
+          >
+            {triggerLabel}
+          </span>
+          <ChevronsUpDown className="size-3.5 flex-none opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[var(--radix-popover-trigger-width)] min-w-[220px] p-0"
+      >
+        <Command shouldFilter={false}>
+          <CommandInput
+            autoFocus
+            placeholder="Search branches…"
+            value={query}
+            onValueChange={setQuery}
+            className="text-xs"
+          />
+          <CommandList>
+            {loading ? (
+              <div className="px-3 py-2 text-[11.5px] text-muted-foreground">Searching…</div>
+            ) : null}
+            <CommandEmpty>No matching branches.</CommandEmpty>
+            <CommandItem value="__default__" onSelect={() => commit(undefined)} className="gap-2 text-xs">
+              <Check className={cn('size-3', usingDefault ? 'opacity-70' : 'opacity-0')} />
+              <span className="text-muted-foreground">
+                Default branch{defaultRef ? ` (${defaultRef})` : ''}
+              </span>
+            </CommandItem>
+            {showRawOption ? (
+              <CommandItem
+                value={`__raw__:${trimmedQuery}`}
+                onSelect={() => commit(trimmedQuery)}
+                className="gap-2 text-xs"
+              >
+                <Check className="size-3 opacity-0" />
+                <span className="truncate">
+                  Use <span className="font-mono">{trimmedQuery}</span>
+                </span>
+              </CommandItem>
+            ) : null}
+            {refs.map((ref) => {
+              const selected = baseBranch?.trim() === ref
+              return (
+                <CommandItem key={ref} value={ref} onSelect={() => commit(ref)} className="gap-2 text-xs">
+                  <Check className={cn('size-3', selected ? 'opacity-70' : 'opacity-0')} />
+                  <span className="truncate font-mono">{ref}</span>
+                </CommandItem>
+              )
+            })}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 // ---------- Step 3: Agent & tracker ----------
 
 function AgentStep({
@@ -679,17 +827,16 @@ function AgentStep({
   detectedAgentIds,
   quickAgent,
   onPick,
-  selectedRepo,
-  selectedRepoIsGit
+  tracker,
+  repoDisplayName
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
   quickAgent: TuiAgent | null
   onPick: (agent: TuiAgent) => void
-  selectedRepo: Repo | undefined
-  selectedRepoIsGit: boolean
+  tracker: WizardTracker
+  repoDisplayName?: string
 }): React.JSX.Element {
-  const trackerName = selectedRepo?.displayName ?? 'this repo'
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
       <div className="flex flex-col gap-0.5">
@@ -744,14 +891,14 @@ function AgentStep({
         <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
           Tracker
         </span>
-        {selectedRepoIsGit ? (
+        {tracker.kind === 'detected' ? (
           <>
             <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-3">
               <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
               <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-2.5">
-                <span className="text-[13px] font-medium text-foreground">{trackerName}</span>
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  auto-detected from origin
+                <span className="text-[13px] font-medium text-foreground">{tracker.label}</span>
+                <span className="truncate font-mono text-[11px] text-muted-foreground">
+                  {tracker.slug}
                 </span>
               </span>
               <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
@@ -762,6 +909,18 @@ function AgentStep({
               Link only — issues stay in their tracker. Configure the source in the Tasks view.
             </span>
           </>
+        ) : tracker.kind === 'disconnected' ? (
+          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border px-3 py-3">
+            <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-[13px] font-medium text-foreground">
+                {repoDisplayName ?? 'This repo'}
+              </span>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                not connected — connect to detect its tracker
+              </span>
+            </span>
+          </div>
         ) : (
           <div className="rounded-lg border border-dashed border-border px-3 py-3 text-[12px] text-muted-foreground">
             No tracker — link one later from the Tasks view (optional).

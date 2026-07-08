@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   buildWizardRecap,
   canLeaveRepoStep,
+  deriveWizardTracker,
+  parseRemoteSlug,
   resolveWizardAgentOptions,
-  wizardNextHint,
+  wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
   WIZARD_FALLBACK_AGENT_IDS
 } from './create-workspace-wizard-model'
@@ -96,10 +98,92 @@ describe('footer copy', () => {
     expect(wizardPrimaryLabel(1)).toBe('Continue')
     expect(wizardPrimaryLabel(2)).toBe('Continue')
   })
+})
 
-  it('hints what each step leads to', () => {
-    expect(wizardNextHint(1, 'hetzner-01')).toBe('Next: repos on hetzner-01')
-    expect(wizardNextHint(2, 'hetzner-01')).toBe('Next: agent & tracker')
-    expect(wizardNextHint(3, 'hetzner-01')).toBe('Lands you in a fresh session')
+describe('wizardBaseBranchTriggerLabel', () => {
+  it('shows the chosen base branch when set', () => {
+    expect(wizardBaseBranchTriggerLabel('feature/x', 'main')).toBe('feature/x')
+  })
+  it('falls back to the resolved default ref', () => {
+    expect(wizardBaseBranchTriggerLabel(undefined, 'origin/main')).toBe('origin/main')
+    expect(wizardBaseBranchTriggerLabel('   ', 'develop')).toBe('develop')
+  })
+  it('falls back to a generic hint when no default is known', () => {
+    expect(wizardBaseBranchTriggerLabel(undefined, null)).toBe('default branch')
+    expect(wizardBaseBranchTriggerLabel(undefined, '  ')).toBe('default branch')
+  })
+})
+
+describe('parseRemoteSlug', () => {
+  it('parses an HTTPS GitHub remote', () => {
+    expect(parseRemoteSlug('https://github.com/acme/agentum.git')).toEqual({
+      host: 'github.com',
+      slug: 'acme/agentum',
+      provider: 'github'
+    })
+  })
+  it('parses an scp-like SSH GitHub remote', () => {
+    expect(parseRemoteSlug('git@github.com:acme/agentum.git')).toEqual({
+      host: 'github.com',
+      slug: 'acme/agentum',
+      provider: 'github'
+    })
+  })
+  it('parses a GitLab remote (incl. nested groups)', () => {
+    expect(parseRemoteSlug('https://gitlab.com/group/sub/app.git')).toEqual({
+      host: 'gitlab.com',
+      slug: 'group/sub/app',
+      provider: 'gitlab'
+    })
+  })
+  it('treats a self-hosted remote as provider "other" keeping the host', () => {
+    expect(parseRemoteSlug('git@git.mycorp.com:team/app.git')).toEqual({
+      host: 'git.mycorp.com',
+      slug: 'team/app',
+      provider: 'other'
+    })
+  })
+  it('returns null for empty, non-slug, or unparseable input', () => {
+    expect(parseRemoteSlug(undefined)).toBeNull()
+    expect(parseRemoteSlug('')).toBeNull()
+    expect(parseRemoteSlug('not a url')).toBeNull()
+    expect(parseRemoteSlug('https://github.com/onlyowner')).toBeNull()
+  })
+})
+
+describe('deriveWizardTracker', () => {
+  it('detects a tracker from a parseable remote', () => {
+    expect(
+      deriveWizardTracker({
+        remoteUrl: 'git@github.com:acme/agentum.git',
+        requiresConnection: false,
+        isGit: true
+      })
+    ).toEqual({
+      kind: 'detected',
+      provider: 'github',
+      label: 'GitHub',
+      host: 'github.com',
+      slug: 'acme/agentum'
+    })
+  })
+  it('reports "disconnected" when the repo still needs a connection and has no readable remote', () => {
+    expect(
+      deriveWizardTracker({ remoteUrl: null, requiresConnection: true, isGit: true })
+    ).toEqual({ kind: 'disconnected' })
+  })
+  it('reports "none" for a git repo with no remote', () => {
+    expect(
+      deriveWizardTracker({ remoteUrl: undefined, requiresConnection: false, isGit: true })
+    ).toEqual({ kind: 'none' })
+  })
+  it('reports "none" for a non-git folder regardless of remote', () => {
+    expect(
+      deriveWizardTracker({
+        remoteUrl: 'git@github.com:acme/agentum.git',
+        requiresConnection: false,
+        isGit: false
+      })
+    ).toEqual({ kind: 'none' })
   })
 })

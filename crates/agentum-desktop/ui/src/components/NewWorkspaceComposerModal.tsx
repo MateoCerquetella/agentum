@@ -129,7 +129,6 @@ function ComposerModalBody({
         modalData={modalData}
         onClose={onClose}
         onOpenChange={onOpenChange}
-        onAdvanced={() => setPhase('details')}
         onUseGoal={() => setPhase('goal')}
       />
     )
