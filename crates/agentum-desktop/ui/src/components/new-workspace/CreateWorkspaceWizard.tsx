@@ -53,8 +53,14 @@ import {
 import {
   buildBindPayload,
   deriveIssueOptions,
+  resolvePickerProject,
   type WorkItemOption
 } from '@/components/new-workspace/work-item-picker-model'
+import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
+import {
+  getProjectBinding,
+  type ProjectBindingDto
+} from '@/runtime/github-projects-client'
 import type {
   GetProjectViewTableArgs,
   GetProjectViewTableResult,
@@ -103,8 +109,10 @@ export default function CreateWorkspaceWizard({
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
-  // Spec 012: the New Workspace issue picker is scoped to the globally-active
-  // GitHub Project (settings.githubProjects.activeProject) — never per-repo.
+  // Spec 011 F2: the issue picker resolves its Project from the selected repo's
+  // per-repo binding first; the globally-active Project
+  // (settings.githubProjects.activeProject) is the fallback (spec 012 behavior,
+  // preserved when there's no per-repo binding).
   const activeProject = settings?.githubProjects?.activeProject ?? null
 
   const { cardProps, submitQuick, nameInputRef } = useComposerState({
@@ -283,6 +291,13 @@ export default function CreateWorkspaceWizard({
     [selectedRepo, selectedRepoIsGit, selectedRepoRequiresConnection]
   )
 
+  // The per-repo binding resolves through the local `gh`, so only a LOCAL git
+  // repo can carry (or configure) one. For a remote/folder repo these stay
+  // undefined and the picker falls back to the global activeProject.
+  const trackerWorkdir =
+    selectedRepo && !selectedRepo.connectionId && selectedRepoIsGit ? selectedRepo.path : undefined
+  const trackerSlug = tracker.kind === 'detected' ? tracker.slug : undefined
+
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
@@ -363,6 +378,8 @@ export default function CreateWorkspaceWizard({
               onPick={setQuickAgentOverride}
               tracker={tracker}
               repoDisplayName={selectedRepo?.displayName}
+              trackerWorkdir={trackerWorkdir}
+              trackerSlug={trackerSlug}
               activeProject={activeProject}
               fetchProjectViewTable={fetchProjectViewTable}
               linkedWorkItem={linkedWorkItem}
@@ -878,6 +895,8 @@ function AgentStep({
   onPick,
   tracker,
   repoDisplayName,
+  trackerWorkdir,
+  trackerSlug,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -889,6 +908,8 @@ function AgentStep({
   onPick: (agent: TuiAgent) => void
   tracker: WizardTracker
   repoDisplayName?: string
+  trackerWorkdir?: string
+  trackerSlug?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -984,6 +1005,8 @@ function AgentStep({
           </div>
         )}
         <WorkItemPicker
+          workdir={trackerWorkdir}
+          slug={trackerSlug}
           activeProject={activeProject}
           fetchProjectViewTable={fetchProjectViewTable}
           linkedWorkItem={linkedWorkItem}
@@ -995,30 +1018,69 @@ function AgentStep({
 }
 
 /**
- * Spec 012 F1: the New Workspace issue picker. Lists the globally-active GitHub
- * Project's OPEN issues (PRs/closed excluded, via `deriveIssueOptions`) so the
- * operator binds the card they're about to work. Picking is OPTIONAL and
- * non-fatal (AC 3): no active Project / an unreachable fetch shows an honest
- * empty state and never blocks the step. Binding flows through the composer's
- * `applyLinkedWorkItem` seam (via `onPickWorkItem`), so the workspace persists
- * its tracker coords on create.
+ * Spec 011 F2 / 012 F1: the New Workspace issue picker. Resolves its Project
+ * from the selected repo's per-repo binding first, falling back to the globally-
+ * active Project (spec 012, no regression), then lists that Project's OPEN issues
+ * (PRs/closed excluded, via `deriveIssueOptions`) so the operator binds the card
+ * they're about to work. A compact "configure / change tracker" popover mounts
+ * the SAME `ProjectBindingEditor` the hub uses, so the Project can be picked or
+ * switched right here. Picking is OPTIONAL and non-fatal (AC 3): no resolved
+ * Project / an unreachable fetch shows an honest empty state and never blocks the
+ * step. Binding flows through the composer's `applyLinkedWorkItem` seam (via
+ * `onPickWorkItem`), so the workspace persists its tracker coords on create.
  */
 function WorkItemPicker({
+  workdir,
+  slug,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
   onPickWorkItem
 }: {
+  /** The selected repo's local workdir — present only for a LOCAL git repo,
+   *  which is the only kind that can carry/configure a per-repo binding. */
+  workdir?: string
+  /** The repo's `owner/repo` slug (keys the binding alongside workdir). */
+  slug?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
-}): React.JSX.Element | null {
+}): React.JSX.Element {
+  const [binding, setBinding] = useState<ProjectBindingDto | null>(null)
   const [table, setTable] = useState<GitHubProjectTable | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  const [configureOpen, setConfigureOpen] = useState(false)
+
+  // Read the selected repo's per-repo Projects binding. Fail-closed — a missing
+  // binding, a remote repo, or gh being unavailable leaves `binding` null so
+  // resolution falls back to the global activeProject (spec 012).
+  useEffect(() => {
+    if (!workdir) {
+      setBinding(null)
+      return
+    }
+    let cancelled = false
+    void getProjectBinding({ workdir, ...(slug ? { slug } : {}) })
+      .then((res) => {
+        if (!cancelled) setBinding(res.binding)
+      })
+      .catch(() => {
+        if (!cancelled) setBinding(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [workdir, slug])
+
+  // Per-repo binding wins; else the global activeProject; else null.
+  const resolved = useMemo(
+    () => resolvePickerProject({ binding, activeProject }),
+    [binding, activeProject]
+  )
 
   useEffect(() => {
-    if (!activeProject) {
+    if (!resolved) {
       setTable(null)
       setStatus('idle')
       return
@@ -1026,9 +1088,9 @@ function WorkItemPicker({
     let cancelled = false
     setStatus('loading')
     void fetchProjectViewTable({
-      owner: activeProject.owner,
-      ownerType: activeProject.ownerType,
-      projectNumber: activeProject.number
+      owner: resolved.owner,
+      ownerType: resolved.ownerType,
+      projectNumber: resolved.number
     })
       .then((res) => {
         if (cancelled) return
@@ -1049,27 +1111,56 @@ function WorkItemPicker({
     return () => {
       cancelled = true
     }
-  }, [activeProject, fetchProjectViewTable])
+  }, [resolved, fetchProjectViewTable])
 
   const options = useMemo(() => deriveIssueOptions(table), [table])
   const selectedUrl = linkedWorkItem?.type === 'issue' ? linkedWorkItem.url : null
 
-  // No active Project — the honest empty state (never a fabricated tracker).
-  if (!activeProject) {
-    return (
-      <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-        Pick a work item: open a Project in the Board view to choose an issue here
-        (optional).
-      </div>
-    )
-  }
+  // The compact configure/switch affordance — only a LOCAL git repo (a
+  // resolvable workdir) can carry a binding, so gate the control on it. Reuses
+  // the SAME editor as the hub / Settings; onBound refreshes the picker so it
+  // re-resolves to the freshly-bound Project.
+  const configureControl = workdir ? (
+    <Popover open={configureOpen} onOpenChange={setConfigureOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
+        >
+          <KanbanSquare className="size-3" />
+          {resolved ? 'Change tracker' : 'Configure tracker'}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="max-h-[420px] w-[360px] overflow-y-auto p-3">
+        <ProjectBindingEditor
+          workdir={workdir}
+          {...(slug ? { slug } : {})}
+          onBound={(next) => {
+            setBinding(next)
+            setConfigureOpen(false)
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  ) : null
 
   return (
     <div className="flex flex-col gap-2">
-      <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
-        Work item
-      </span>
-      {status === 'loading' ? (
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+          Work item
+        </span>
+        {configureControl}
+      </div>
+      {!resolved ? (
+        // No Project resolved (no binding + no active Project) — the honest
+        // empty state; the Configure control above still lets a local repo bind.
+        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+          {workdir
+            ? "No Project bound to this repo yet — configure a tracker to pick an issue (optional)."
+            : 'Pick a work item: open a Project in the Board view to choose an issue here (optional).'}
+        </div>
+      ) : status === 'loading' ? (
         <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin" />
           Loading the Project's issues…
