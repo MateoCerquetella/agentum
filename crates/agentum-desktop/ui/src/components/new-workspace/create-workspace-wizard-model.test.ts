@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest'
 import {
   buildWizardRecap,
   canLeaveRepoStep,
-  deriveWizardTracker,
-  parseRemoteSlug,
+  deriveUnifiedTrackerStatus,
   resolveWizardAgentOptions,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
   WIZARD_FALLBACK_AGENT_IDS
 } from './create-workspace-wizard-model'
+import type { PickerProjectRef } from './work-item-picker-model'
 import type { TuiAgent } from '../../../../shared/types'
+
+const PROJECT: PickerProjectRef = { owner: 'acme', ownerType: 'organization', number: 7 }
 
 describe('canLeaveRepoStep', () => {
   it('allows advancing when a repo is chosen and no connection is pending', () => {
@@ -114,76 +116,54 @@ describe('wizardBaseBranchTriggerLabel', () => {
   })
 })
 
-describe('parseRemoteSlug', () => {
-  it('parses an HTTPS GitHub remote', () => {
-    expect(parseRemoteSlug('https://github.com/acme/agentum.git')).toEqual({
-      host: 'github.com',
-      slug: 'acme/agentum',
-      provider: 'github'
+describe('deriveUnifiedTrackerStatus', () => {
+  // The load-bearing AC 3 invariant: the merged section's status reads from the
+  // SAME resolved Project the picker lists from, so "no tracker" is impossible
+  // to show while issues are available.
+  it('never reports "none" when a Project resolves', () => {
+    for (const status of ['idle', 'loading', 'failed'] as const) {
+      for (const optionCount of [0, 1, 5]) {
+        expect(
+          deriveUnifiedTrackerStatus({ resolved: PROJECT, status, optionCount }).kind
+        ).not.toBe('none')
+      }
+    }
+    // ...and the only path to "none" is a null resolution.
+    expect(deriveUnifiedTrackerStatus({ resolved: null, status: 'idle', optionCount: 0 })).toEqual({
+      kind: 'none'
     })
   })
-  it('parses an scp-like SSH GitHub remote', () => {
-    expect(parseRemoteSlug('git@github.com:acme/agentum.git')).toEqual({
-      host: 'github.com',
-      slug: 'acme/agentum',
-      provider: 'github'
-    })
-  })
-  it('parses a GitLab remote (incl. nested groups)', () => {
-    expect(parseRemoteSlug('https://gitlab.com/group/sub/app.git')).toEqual({
-      host: 'gitlab.com',
-      slug: 'group/sub/app',
-      provider: 'gitlab'
-    })
-  })
-  it('treats a self-hosted remote as provider "other" keeping the host', () => {
-    expect(parseRemoteSlug('git@git.mycorp.com:team/app.git')).toEqual({
-      host: 'git.mycorp.com',
-      slug: 'team/app',
-      provider: 'other'
-    })
-  })
-  it('returns null for empty, non-slug, or unparseable input', () => {
-    expect(parseRemoteSlug(undefined)).toBeNull()
-    expect(parseRemoteSlug('')).toBeNull()
-    expect(parseRemoteSlug('not a url')).toBeNull()
-    expect(parseRemoteSlug('https://github.com/onlyowner')).toBeNull()
-  })
-})
 
-describe('deriveWizardTracker', () => {
-  it('detects a tracker from a parseable remote', () => {
+  it('reports "connecting" while a resolved Project is loading', () => {
     expect(
-      deriveWizardTracker({
-        remoteUrl: 'git@github.com:acme/agentum.git',
-        requiresConnection: false,
-        isGit: true
-      })
-    ).toEqual({
-      kind: 'detected',
-      provider: 'github',
-      label: 'GitHub',
-      host: 'github.com',
-      slug: 'acme/agentum'
-    })
+      deriveUnifiedTrackerStatus({ resolved: PROJECT, status: 'loading', optionCount: 0 })
+    ).toEqual({ kind: 'connecting' })
   })
-  it('reports "disconnected" when the repo still needs a connection and has no readable remote', () => {
+
+  it('reports "unavailable" when a resolved Project failed to load (still connected)', () => {
     expect(
-      deriveWizardTracker({ remoteUrl: null, requiresConnection: true, isGit: true })
-    ).toEqual({ kind: 'disconnected' })
+      deriveUnifiedTrackerStatus({ resolved: PROJECT, status: 'failed', optionCount: 0 })
+    ).toEqual({ kind: 'unavailable' })
   })
-  it('reports "none" for a git repo with no remote', () => {
+
+  it('reports "connected-empty" when a resolved Project loaded zero open issues', () => {
     expect(
-      deriveWizardTracker({ remoteUrl: undefined, requiresConnection: false, isGit: true })
+      deriveUnifiedTrackerStatus({ resolved: PROJECT, status: 'idle', optionCount: 0 })
+    ).toEqual({ kind: 'connected-empty' })
+  })
+
+  it('reports "connected" with the issue count when a resolved Project loaded issues', () => {
+    expect(
+      deriveUnifiedTrackerStatus({ resolved: PROJECT, status: 'idle', optionCount: 3 })
+    ).toEqual({ kind: 'connected', issueCount: 3 })
+  })
+
+  it('reports "none" regardless of status/count when no Project resolves', () => {
+    expect(
+      deriveUnifiedTrackerStatus({ resolved: null, status: 'failed', optionCount: 0 })
     ).toEqual({ kind: 'none' })
-  })
-  it('reports "none" for a non-git folder regardless of remote', () => {
     expect(
-      deriveWizardTracker({
-        remoteUrl: 'git@github.com:acme/agentum.git',
-        requiresConnection: false,
-        isGit: false
-      })
+      deriveUnifiedTrackerStatus({ resolved: null, status: 'loading', optionCount: 0 })
     ).toEqual({ kind: 'none' })
   })
 })

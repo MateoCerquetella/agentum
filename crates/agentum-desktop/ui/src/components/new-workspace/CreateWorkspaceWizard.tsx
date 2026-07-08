@@ -43,12 +43,12 @@ import {
   WIZARD_STEP_LABELS,
   buildWizardRecap,
   canLeaveRepoStep as canLeaveRepoStepModel,
-  deriveWizardTracker,
+  deriveUnifiedTrackerStatus,
   resolveWizardAgentOptions,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
-  type WizardStep,
-  type WizardTracker
+  type UnifiedTrackerStatus,
+  type WizardStep
 } from '@/components/new-workspace/create-workspace-wizard-model'
 import {
   buildBindPayload,
@@ -279,24 +279,14 @@ export default function CreateWorkspaceWizard({
   const primaryDisabled =
     step === 3 ? createDisabled || creating : step === 2 ? !canLeaveRepoStep : false
 
-  // Honest, per-repo tracker: derived from the selected repo's own remote, not
-  // a hardcoded "auto-detected from origin". Fails closed to "no tracker".
-  const tracker = useMemo<WizardTracker>(
-    () =>
-      deriveWizardTracker({
-        remoteUrl: selectedRepo?.remoteUrl,
-        requiresConnection: selectedRepoRequiresConnection,
-        isGit: selectedRepoIsGit
-      }),
-    [selectedRepo, selectedRepoIsGit, selectedRepoRequiresConnection]
-  )
-
-  // The per-repo binding resolves through the local `gh`, so only a LOCAL git
-  // repo can carry (or configure) one. For a remote/folder repo these stay
-  // undefined and the picker falls back to the global activeProject.
+  // Spec 013 F1: the tracker section reads SOLELY from the Project the picker
+  // resolves (per-repo binding ∨ global activeProject) — no git-remote heuristic
+  // that could disagree with the picker's issue list. The per-repo binding
+  // resolves through the local `gh`, so only a LOCAL git repo can carry (or
+  // configure) one; a remote/folder repo leaves `trackerWorkdir` undefined and
+  // the picker falls back to the global activeProject.
   const trackerWorkdir =
     selectedRepo && !selectedRepo.connectionId && selectedRepoIsGit ? selectedRepo.path : undefined
-  const trackerSlug = tracker.kind === 'detected' ? tracker.slug : undefined
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -376,10 +366,7 @@ export default function CreateWorkspaceWizard({
               detectedAgentIds={detectedAgentIds}
               quickAgent={quickAgent}
               onPick={setQuickAgentOverride}
-              tracker={tracker}
-              repoDisplayName={selectedRepo?.displayName}
               trackerWorkdir={trackerWorkdir}
-              trackerSlug={trackerSlug}
               activeProject={activeProject}
               fetchProjectViewTable={fetchProjectViewTable}
               linkedWorkItem={linkedWorkItem}
@@ -893,10 +880,7 @@ function AgentStep({
   detectedAgentIds,
   quickAgent,
   onPick,
-  tracker,
-  repoDisplayName,
   trackerWorkdir,
-  trackerSlug,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -906,10 +890,7 @@ function AgentStep({
   detectedAgentIds: Set<TuiAgent> | null
   quickAgent: TuiAgent | null
   onPick: (agent: TuiAgent) => void
-  tracker: WizardTracker
-  repoDisplayName?: string
   trackerWorkdir?: string
-  trackerSlug?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -965,83 +946,48 @@ function AgentStep({
         ) : null}
       </div>
 
-      <div className="flex flex-col gap-2.5">
-        <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
-          Tracker
-        </span>
-        {tracker.kind === 'detected' ? (
-          <>
-            <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-3">
-              <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-              <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-2.5">
-                <span className="text-[13px] font-medium text-foreground">{tracker.label}</span>
-                <span className="truncate font-mono text-[11px] text-muted-foreground">
-                  {tracker.slug}
-                </span>
-              </span>
-              <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
-                detected
-              </span>
-            </div>
-            <span className="text-[11.5px] text-muted-foreground">
-              Link only — issues stay in their tracker. Configure the source in the Tasks view.
-            </span>
-          </>
-        ) : tracker.kind === 'disconnected' ? (
-          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border px-3 py-3">
-            <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-[13px] font-medium text-foreground">
-                {repoDisplayName ?? 'This repo'}
-              </span>
-              <span className="font-mono text-[11px] text-muted-foreground">
-                not connected — connect to detect its tracker
-              </span>
-            </span>
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-border px-3 py-3 text-[12px] text-muted-foreground">
-            No tracker — link one later from the Tasks view (optional).
-          </div>
-        )}
-        <WorkItemPicker
-          workdir={trackerWorkdir}
-          slug={trackerSlug}
-          activeProject={activeProject}
-          fetchProjectViewTable={fetchProjectViewTable}
-          linkedWorkItem={linkedWorkItem}
-          onPickWorkItem={onPickWorkItem}
-        />
-      </div>
+      <TrackerSection
+        workdir={trackerWorkdir}
+        activeProject={activeProject}
+        fetchProjectViewTable={fetchProjectViewTable}
+        linkedWorkItem={linkedWorkItem}
+        onPickWorkItem={onPickWorkItem}
+      />
     </div>
   )
 }
 
 /**
- * Spec 011 F2 / 012 F1: the New Workspace issue picker. Resolves its Project
- * from the selected repo's per-repo binding first, falling back to the globally-
- * active Project (spec 012, no regression), then lists that Project's OPEN issues
- * (PRs/closed excluded, via `deriveIssueOptions`) so the operator binds the card
- * they're about to work. A compact "configure / change tracker" popover mounts
- * the SAME `ProjectBindingEditor` the hub uses, so the Project can be picked or
- * switched right here. Picking is OPTIONAL and non-fatal (AC 3): no resolved
- * Project / an unreachable fetch shows an honest empty state and never blocks the
- * step. Binding flows through the composer's `applyLinkedWorkItem` seam (via
- * `onPickWorkItem`), so the workspace persists its tracker coords on create.
+ * Spec 011 F2 / 012 F1 / 013 F1: the New Workspace tracker section — ONE honest
+ * section. It resolves its Project from the selected repo's per-repo binding
+ * first, falling back to the globally-active Project (spec 012, no regression),
+ * then lists that Project's OPEN issues (PRs/closed excluded, via
+ * `deriveIssueOptions`) so the operator binds the card they're about to work.
+ *
+ * Spec 013 F1: the "Change / Configure tracker" control lives in this section's
+ * TOP header, and the status line is driven SOLELY by the resolved Project
+ * (`deriveUnifiedTrackerStatus`) — the same value that seeds the issue list — so
+ * the section can never claim "no tracker" while it lists issues (AC 3). The
+ * old git-remote heuristic (`deriveWizardTracker`) is gone. The
+ * `ProjectBindingEditor` popover is the SAME editor the hub / Settings use, so
+ * the Project can be picked or switched right here.
+ *
+ * Picking is OPTIONAL and non-fatal (AC 3): no resolved Project / an unreachable
+ * fetch shows an honest empty state and never blocks the step. Binding flows
+ * through the composer's `applyLinkedWorkItem` seam (via `onPickWorkItem`), so
+ * the workspace persists its tracker coords on create.
  */
-function WorkItemPicker({
+function TrackerSection({
   workdir,
-  slug,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
   onPickWorkItem
 }: {
   /** The selected repo's local workdir — present only for a LOCAL git repo,
-   *  which is the only kind that can carry/configure a per-repo binding. */
+   *  which is the only kind that can carry/configure a per-repo binding. The
+   *  slug is resolved server-side from this workdir's git remote. */
   workdir?: string
-  /** The repo's `owner/repo` slug (keys the binding alongside workdir). */
-  slug?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -1061,7 +1007,7 @@ function WorkItemPicker({
       return
     }
     let cancelled = false
-    void getProjectBinding({ workdir, ...(slug ? { slug } : {}) })
+    void getProjectBinding({ workdir })
       .then((res) => {
         if (!cancelled) setBinding(res.binding)
       })
@@ -1071,7 +1017,7 @@ function WorkItemPicker({
     return () => {
       cancelled = true
     }
-  }, [workdir, slug])
+  }, [workdir])
 
   // Per-repo binding wins; else the global activeProject; else null.
   const resolved = useMemo(
@@ -1116,9 +1062,15 @@ function WorkItemPicker({
   const options = useMemo(() => deriveIssueOptions(table), [table])
   const selectedUrl = linkedWorkItem?.type === 'issue' ? linkedWorkItem.url : null
 
+  // Spec 013 F1: the ONE status, from the ONE resolved Project the list reads.
+  const trackerStatus = useMemo<UnifiedTrackerStatus>(
+    () => deriveUnifiedTrackerStatus({ resolved, status, optionCount: options.length }),
+    [resolved, status, options.length]
+  )
+
   // The compact configure/switch affordance — only a LOCAL git repo (a
   // resolvable workdir) can carry a binding, so gate the control on it. Reuses
-  // the SAME editor as the hub / Settings; onBound refreshes the picker so it
+  // the SAME editor as the hub / Settings; onBound refreshes the section so it
   // re-resolves to the freshly-bound Project.
   const configureControl = workdir ? (
     <Popover open={configureOpen} onOpenChange={setConfigureOpen}>
@@ -1134,7 +1086,6 @@ function WorkItemPicker({
       <PopoverContent align="end" className="max-h-[420px] w-[360px] overflow-y-auto p-3">
         <ProjectBindingEditor
           workdir={workdir}
-          {...(slug ? { slug } : {})}
           onBound={(next) => {
             setBinding(next)
             setConfigureOpen(false)
@@ -1145,36 +1096,20 @@ function WorkItemPicker({
   ) : null
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2.5">
+      {/* Spec 013 F1 (AC 1): one section header, the control at the TOP. */}
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
-          Work item
+          Tracker
         </span>
         {configureControl}
       </div>
-      {!resolved ? (
-        // No Project resolved (no binding + no active Project) — the honest
-        // empty state; the Configure control above still lets a local repo bind.
-        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-          {workdir
-            ? "No Project bound to this repo yet — configure a tracker to pick an issue (optional)."
-            : 'Pick a work item: open a Project in the Board view to choose an issue here (optional).'}
-        </div>
-      ) : status === 'loading' ? (
-        <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" />
-          Loading the Project's issues…
-        </div>
-      ) : status === 'failed' ? (
-        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-          Couldn't load the Project's issues — you can pick or link one later
-          (optional).
-        </div>
-      ) : options.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-          No open issues in this Project — link one later (optional).
-        </div>
-      ) : (
+
+      {/* Status line — driven SOLELY by the resolved Project (AC 2). */}
+      <TrackerStatusLine status={trackerStatus} hasWorkdir={Boolean(workdir)} />
+
+      {/* Issue list — only when a Project resolved and has open issues. */}
+      {trackerStatus.kind === 'connected' ? (
         <div className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-lg border border-border p-1">
           {options.map((option) => {
             const selected = selectedUrl === option.url
@@ -1199,7 +1134,8 @@ function WorkItemPicker({
             )
           })}
         </div>
-      )}
+      ) : null}
+
       {linkedWorkItem ? (
         <span className="text-[11px] text-emerald-500">
           Linked · #{linkedWorkItem.number} {linkedWorkItem.title}
@@ -1207,4 +1143,67 @@ function WorkItemPicker({
       ) : null}
     </div>
   )
+}
+
+/** The single status line for the unified tracker section — a pure view of
+ *  `deriveUnifiedTrackerStatus`. "none" is the ONLY state that reads "no
+ *  tracker", and it renders only when no Project resolved (AC 3). */
+function TrackerStatusLine({
+  status,
+  hasWorkdir
+}: {
+  status: UnifiedTrackerStatus
+  hasWorkdir: boolean
+}): React.JSX.Element {
+  switch (status.kind) {
+    case 'connecting':
+      return (
+        <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" />
+          Connecting — loading the Project's issues…
+        </div>
+      )
+    case 'unavailable':
+      return (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
+          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+            Tracker connected, but its issues couldn't load — pick or link one later (optional).
+          </span>
+        </div>
+      )
+    case 'connected-empty':
+      return (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
+          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+            Tracker connected — no open issues in this Project. Link one later (optional).
+          </span>
+          <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
+            connected
+          </span>
+        </div>
+      )
+    case 'connected':
+      return (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
+          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+            Tracker connected — pick the issue you're about to work (optional).
+          </span>
+          <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
+            {status.issueCount} open
+          </span>
+        </div>
+      )
+    case 'none':
+    default:
+      return (
+        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+          {hasWorkdir
+            ? 'No tracker bound to this repo yet — configure one above to pick an issue (optional).'
+            : 'No tracker — configure one from the Board view to pick an issue here (optional).'}
+        </div>
+      )
+  }
 }
