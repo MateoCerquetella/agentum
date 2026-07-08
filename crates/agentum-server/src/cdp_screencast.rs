@@ -201,6 +201,13 @@ pub enum InputCommand {
     KeyPress {
         key: String,
     },
+    /// Insert clipboard text (paste). The pane sends the OS clipboard text from an
+    /// `onPaste` ClipboardEvent because a synthetic Cmd/Ctrl+V key event never
+    /// triggers a real clipboard read in headless Chromium. Maps to
+    /// `Input.insertText`, which inserts the text as trusted input.
+    InsertText {
+        text: String,
+    },
     Goto {
         url: String,
     },
@@ -229,6 +236,7 @@ impl InputCommand {
                 | InputCommand::MouseUp { .. }
                 | InputCommand::MouseWheel { .. }
                 | InputCommand::KeyPress { .. }
+                | InputCommand::InsertText { .. }
                 | InputCommand::Goto { .. }
                 | InputCommand::Back
                 | InputCommand::Forward
@@ -264,6 +272,9 @@ pub fn parse_input_message(raw: &str) -> Option<InputCommand> {
         }),
         "browser.keypress" => Some(InputCommand::KeyPress {
             key: p.get("key")?.as_str()?.to_string(),
+        }),
+        "browser.insertText" => Some(InputCommand::InsertText {
+            text: p.get("text")?.as_str()?.to_string(),
         }),
         "browser.goto" => Some(InputCommand::Goto {
             url: p.get("url")?.as_str()?.to_string(),
@@ -333,6 +344,12 @@ pub fn input_command_to_cdp(
             }
         })],
         InputCommand::KeyPress { key } => key_press_to_cdp(key, &mut id),
+        // Paste: `Input.insertText` inserts the text as one trusted edit (the same
+        // primitive the agent-driver fill path uses), which a synthetic Cmd/Ctrl+V
+        // keystroke cannot achieve in headless Chromium.
+        InputCommand::InsertText { text } => vec![json!({
+            "id": id(), "method": "Input.insertText", "params": { "text": text }
+        })],
         InputCommand::Goto { url } => vec![json!({
             "id": id(), "method": "Page.navigate", "params": { "url": url }
         })],
@@ -652,6 +669,43 @@ mod tests {
         // Unknown / malformed methods are ignored, never an error.
         assert_eq!(parse_input_message(r#"{"method":"browser.unknown"}"#), None);
         assert_eq!(parse_input_message("not json"), None);
+    }
+
+    #[test]
+    fn insert_text_parses_and_maps_to_cdp_insert_text() {
+        // Paste (F3): the pane sends browser.insertText with the clipboard text…
+        assert_eq!(
+            parse_input_message(
+                r#"{"method":"browser.insertText","params":{"text":"hello world"}}"#
+            ),
+            Some(InputCommand::InsertText {
+                text: "hello world".into()
+            })
+        );
+        // Missing text → ignored, never an error (bridge stays up).
+        assert_eq!(
+            parse_input_message(r#"{"method":"browser.insertText","params":{}}"#),
+            None
+        );
+        // …and maps to exactly one Input.insertText carrying the verbatim text —
+        // NOT a synthetic keypress (which Chromium won't turn into a real paste).
+        let mut p = PointerState::default();
+        let mut id = 0u64;
+        let out = input_command_to_cdp(
+            &InputCommand::InsertText {
+                text: "pasted".into(),
+            },
+            &mut p,
+            &mut id,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["method"], "Input.insertText");
+        assert_eq!(out[0]["params"]["text"], "pasted");
+        // Paste is a human action (grabs the co-browse wheel like a keypress).
+        assert!(InputCommand::InsertText {
+            text: "x".into()
+        }
+        .is_human_action());
     }
 
     #[test]
