@@ -3,8 +3,12 @@ import {
   canDraftIssue,
   canFileIssue,
   deriveCreateIssueIntentPhase,
-  deriveIntentTitle
+  deriveIntentTitle,
+  resolveCreateIssueProvider
 } from './create-issue-intent-model'
+import type { PickerProjectRef } from './work-item-picker-model'
+
+const PROJECT: PickerProjectRef = { owner: 'acme', ownerType: 'organization', number: 7 }
 
 describe('deriveCreateIssueIntentPhase', () => {
   it('is idle before anything is drafted', () => {
@@ -87,5 +91,20 @@ describe('deriveIntentTitle', () => {
     const title = deriveIntentTitle(long)
     expect(title.length).toBeLessThanOrEqual(72)
     expect(title.endsWith('…')).toBe(true)
+  })
+})
+
+describe('resolveCreateIssueProvider', () => {
+  it('prefers the resolved GitHub Project, falls back to Linear, flags ambiguous', () => {
+    // A resolved Project wins (follow the resolved tracker's provider).
+    expect(resolveCreateIssueProvider({ resolved: PROJECT, linearConnected: false })).toBe('github')
+    // No Project but Linear connected ⇒ Linear.
+    expect(resolveCreateIssueProvider({ resolved: null, linearConnected: true })).toBe('linear')
+    // Both ⇒ ambiguous (the sub-panel shows a toggle).
+    expect(resolveCreateIssueProvider({ resolved: PROJECT, linearConnected: true })).toBe(
+      'ambiguous'
+    )
+    // Neither ⇒ github (the default create path surfaces its own error inline).
+    expect(resolveCreateIssueProvider({ resolved: null, linearConnected: false })).toBe('github')
   })
 })

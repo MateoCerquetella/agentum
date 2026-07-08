@@ -6,6 +6,7 @@
 // phase and gates the two buttons, so the sub-panel is unit-testable without a
 // DOM (the UI package ships no jsdom).
 import { deriveGoalIssueDraft } from '@/lib/workspace-goal-step'
+import type { PickerProjectRef } from './work-item-picker-model'
 
 /**
  * The sub-panel's high-level phase, a pure function of the hook's create-issue
@@ -49,4 +50,28 @@ export function canFileIssue(title: string, busy: boolean): boolean {
  *  produces a titled draft, exactly like the goal step's issue seed). */
 export function deriveIntentTitle(intent: string): string {
   return deriveGoalIssueDraft(intent).title
+}
+
+/** Which provider "Create issue" files into. */
+export type CreateIssueProvider = 'github' | 'linear'
+
+/**
+ * Spec 013 F3: which tracker "Create issue" targets. Follows the resolved
+ * tracker's provider (open question 2, decisive default):
+ *  - a resolved GitHub Project ⇒ `github`;
+ *  - no Project but Linear connected ⇒ `linear`;
+ *  - BOTH a Project AND Linear ⇒ `ambiguous` (the sub-panel shows a provider
+ *    toggle so the operator disambiguates);
+ *  - neither ⇒ `github` — the default create path; the GitHub arm surfaces the
+ *    honest no-repo / no-credential error inline (never silently misfiles).
+ * The drafted body is provider-agnostic; only the *create* call branches.
+ */
+export function resolveCreateIssueProvider(input: {
+  resolved: PickerProjectRef | null
+  linearConnected: boolean
+}): CreateIssueProvider | 'ambiguous' {
+  if (input.resolved && input.linearConnected) return 'ambiguous'
+  if (input.resolved) return 'github'
+  if (input.linearConnected) return 'linear'
+  return 'github'
 }

@@ -56,14 +56,23 @@ import {
   buildBindPayload,
   deriveIssueOptions,
   resolvePickerProject,
+  type PickerProjectRef,
   type WorkItemOption
 } from '@/components/new-workspace/work-item-picker-model'
 import {
   canDraftIssue,
   canFileIssue,
   deriveCreateIssueIntentPhase,
-  deriveIntentTitle
+  deriveIntentTitle,
+  resolveCreateIssueProvider,
+  type CreateIssueProvider
 } from '@/components/new-workspace/create-issue-intent-model'
+import {
+  linearCreateIssue,
+  linearListTeams,
+  linearStatus,
+  type RuntimeLinearSettings
+} from '@/runtime/runtime-linear-client'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 import {
   getProjectBinding,
@@ -77,6 +86,8 @@ import type {
 } from '@/shared/github-project-types'
 import type {
   GitHubWorkItem,
+  LinearIssue,
+  LinearTeam,
   Repo,
   TuiAgent,
   WorkspaceCreateTelemetrySource
@@ -167,7 +178,10 @@ export default function CreateWorkspaceWizard({
     onGenerateIssueBody,
     createIssueSubmitting,
     createIssueError,
-    onCreateIssueSubmit
+    onCreateIssueSubmit,
+    // Spec 013 F3: bind a filed Linear issue through the SAME composer seam the
+    // Linear @-picker uses (`setLinkedWorkItem(buildLinearIssueLinkedWorkItem)`).
+    onSmartLinearIssueSelect
   } = cardProps
 
   // Quick-agent selection mirrors the composer modal's `QuickTabBody`: the
@@ -403,6 +417,7 @@ export default function CreateWorkspaceWizard({
                 error: createIssueError,
                 onSubmit: onCreateIssueSubmit
               }}
+              linear={{ settings, onBind: onSmartLinearIssueSelect }}
             />
           ) : null}
         </div>
@@ -924,6 +939,14 @@ type CreateIssueSeams = {
   onSubmit: () => void
 }
 
+/** Spec 013 F3: the seams the Linear create arm needs — the runtime settings
+ *  (routes the RPC to local or the active remote) and the bind callback (the
+ *  same `onSmartLinearIssueSelect` the Linear @-picker uses). */
+type LinearCreateSeams = {
+  settings: RuntimeLinearSettings
+  onBind: (issue: LinearIssue) => void
+}
+
 function AgentStep({
   agents,
   detectedAgentIds,
@@ -934,7 +957,8 @@ function AgentStep({
   fetchProjectViewTable,
   linkedWorkItem,
   onPickWorkItem,
-  createIssue
+  createIssue,
+  linear
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
@@ -946,6 +970,7 @@ function AgentStep({
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
+  linear: LinearCreateSeams
 }): React.JSX.Element {
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
@@ -1004,6 +1029,7 @@ function AgentStep({
         linkedWorkItem={linkedWorkItem}
         onPickWorkItem={onPickWorkItem}
         createIssue={createIssue}
+        linear={linear}
       />
     </div>
   )
@@ -1035,7 +1061,8 @@ function TrackerSection({
   fetchProjectViewTable,
   linkedWorkItem,
   onPickWorkItem,
-  createIssue
+  createIssue,
+  linear
 }: {
   /** The selected repo's local workdir — present only for a LOCAL git repo,
    *  which is the only kind that can carry/configure a per-repo binding. The
@@ -1046,6 +1073,7 @@ function TrackerSection({
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
+  linear: LinearCreateSeams
 }): React.JSX.Element {
   const [binding, setBinding] = useState<ProjectBindingDto | null>(null)
   const [table, setTable] = useState<GitHubProjectTable | null>(null)
@@ -1190,9 +1218,12 @@ function TrackerSection({
         </div>
       ) : null}
 
-      {/* Spec 013 F2: create an issue from a short intent, then bind it. Only
-          when nothing is linked yet and the repo is a local git repo. */}
-      {createIssue.canCreate ? <CreateIssuePanel createIssue={createIssue} /> : null}
+      {/* Spec 013 F2/F3: create an issue from a short intent, then bind it. Only
+          when nothing is linked yet and the repo is a local git repo. The file
+          arm targets GitHub or Linear per the resolved tracker (F3). */}
+      {createIssue.canCreate ? (
+        <CreateIssuePanel createIssue={createIssue} linear={linear} resolved={resolved} />
+      ) : null}
 
       {linkedWorkItem ? (
         <span className="text-[11px] text-emerald-500">
@@ -1204,33 +1235,151 @@ function TrackerSection({
 }
 
 /**
- * Spec 013 F2: "Create issue from intent" — a thin surface over the composer's
- * EXISTING create-issue seams. The operator types "what do you want to do?",
- * Draft calls `onGenerateIssueBody` (wiki+codebase-grounded server-side), then
- * Create files via `onCreateIssueSubmit` (→ `createGithubIssue` →
- * `applyLinkedWorkItem`). Errors render inline; the wizard's Create workspace
- * primary is never gated on this panel (inv. 7).
+ * Spec 013 F2/F3: "Create issue from intent" — a thin surface over the
+ * composer's EXISTING create-issue seams. The operator types "what do you want
+ * to do?", Draft calls `onGenerateIssueBody` (wiki+codebase-grounded
+ * server-side), then Create files the drafted title+body.
+ *
+ * F3: the *file* step branches by provider (`resolveCreateIssueProvider`): a
+ * GitHub Project resolves ⇒ GitHub (`onCreateIssueSubmit` → `createGithubIssue`
+ * → `applyLinkedWorkItem`); no Project but Linear connected ⇒ Linear
+ * (`linearCreateIssue`, then bind via the SAME `onSmartLinearIssueSelect` seam);
+ * BOTH ⇒ a provider toggle. The drafted body is provider-agnostic.
+ *
+ * Errors render inline; the wizard's Create workspace primary is never gated on
+ * this panel (inv. 7).
  */
-function CreateIssuePanel({ createIssue }: { createIssue: CreateIssueSeams }): React.JSX.Element {
+function CreateIssuePanel({
+  createIssue,
+  linear,
+  resolved
+}: {
+  createIssue: CreateIssueSeams
+  linear: LinearCreateSeams
+  resolved: PickerProjectRef | null
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [intent, setIntent] = useState('')
+  // F3 Linear arm — probed lazily when the panel opens (best-effort; a failure
+  // leaves `linearConnected` false so the panel stays GitHub-only).
+  const [linearConnected, setLinearConnected] = useState(false)
+  const [teams, setTeams] = useState<LinearTeam[]>([])
+  const [teamId, setTeamId] = useState<string | null>(null)
+  const [providerChoice, setProviderChoice] = useState<CreateIssueProvider | null>(null)
+  const [linearFiling, setLinearFiling] = useState(false)
+  const [linearError, setLinearError] = useState<string | null>(null)
 
-  const busy = createIssue.generating || createIssue.submitting
+  // Probe Linear once the panel is open: is it connected, and what teams exist?
+  // Non-fatal — any failure keeps the GitHub-only default.
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    let cancelled = false
+    void linearStatus(linear.settings)
+      .then((status) => {
+        if (cancelled || !status.connected) {
+          return
+        }
+        setLinearConnected(true)
+        return linearListTeams(linear.settings).then((list) => {
+          if (cancelled) {
+            return
+          }
+          setTeams(list)
+          // Default to the sole team when there's exactly one (open question 2).
+          if (list.length === 1) {
+            setTeamId(list[0].id)
+          }
+        })
+      })
+      .catch(() => {
+        /* best-effort: stay GitHub-only */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, linear.settings])
+
+  const provider = resolveCreateIssueProvider({ resolved, linearConnected })
+  const effectiveProvider: CreateIssueProvider =
+    provider === 'ambiguous' ? (providerChoice ?? 'github') : provider
+
+  const busy = createIssue.generating || createIssue.submitting || linearFiling
   const phase = deriveCreateIssueIntentPhase({
     generating: createIssue.generating,
-    submitting: createIssue.submitting,
-    error: createIssue.error,
+    submitting: createIssue.submitting || linearFiling,
+    error: createIssue.error ?? linearError,
     hasBody: createIssue.body.trim().length > 0
   })
+  const inlineError = effectiveProvider === 'linear' ? linearError : createIssue.error
 
   const handleDraft = useCallback(() => {
     if (!canDraftIssue(intent, busy)) {
       return
     }
-    // Seed the title from the intent (reuse), then draft the body server-side.
+    setLinearError(null)
+    // Seed the title from the intent (reuse), then draft the body server-side
+    // (provider-agnostic markdown — the same body files to either tracker).
     createIssue.onTitleChange(deriveIntentTitle(intent))
     createIssue.onGenerate()
   }, [busy, createIssue, intent])
+
+  // F3 Linear file arm: create the issue in Linear, then bind it through the
+  // SAME composer seam (`onSmartLinearIssueSelect`) the Linear @-picker uses, so
+  // the workspace persists `trackerProvider:'linear'` on create (spec 012).
+  const handleLinearFile = useCallback(async () => {
+    const title = createIssue.title.trim()
+    if (!canFileIssue(title, busy)) {
+      return
+    }
+    if (!teamId) {
+      setLinearError('Pick a Linear team to file into.')
+      return
+    }
+    const team = teams.find((t) => t.id === teamId)
+    setLinearFiling(true)
+    setLinearError(null)
+    try {
+      const result = await linearCreateIssue(linear.settings, {
+        teamId,
+        title,
+        description: createIssue.body.trim() || undefined
+      })
+      if (!result.ok) {
+        setLinearError(result.error || 'Could not create the Linear issue.')
+        return
+      }
+      const issue: LinearIssue = {
+        id: result.id,
+        identifier: result.identifier,
+        title: result.title,
+        description: createIssue.body.trim() || undefined,
+        url: result.url,
+        state: { name: 'Todo', type: 'unstarted', color: '#9ca3af' },
+        team: team
+          ? { id: team.id, name: team.name, key: team.key }
+          : { id: teamId, name: teamId, key: teamId },
+        labels: [],
+        labelIds: [],
+        priority: 0,
+        updatedAt: new Date().toISOString()
+      }
+      linear.onBind(issue)
+    } catch (error) {
+      setLinearError(error instanceof Error ? error.message : 'Could not create the Linear issue.')
+    } finally {
+      setLinearFiling(false)
+    }
+  }, [busy, createIssue.body, createIssue.title, linear, teamId, teams])
+
+  const handleFile = useCallback(() => {
+    if (effectiveProvider === 'linear') {
+      void handleLinearFile()
+    } else {
+      createIssue.onSubmit()
+    }
+  }, [createIssue, effectiveProvider, handleLinearFile])
 
   if (!open) {
     return (
@@ -1260,6 +1409,28 @@ function CreateIssuePanel({ createIssue }: { createIssue: CreateIssueSeams }): R
           <X className="size-3.5" />
         </button>
       </div>
+
+      {/* F3: only when a repo has BOTH a GitHub Project and Linear connected. */}
+      {provider === 'ambiguous' ? (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-muted-foreground">File into</span>
+          {(['github', 'linear'] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setProviderChoice(p)}
+              className={cn(
+                'rounded-md border px-2 py-0.5 text-[11px] capitalize transition-colors',
+                effectiveProvider === p
+                  ? 'border-muted-foreground/40 bg-secondary text-foreground'
+                  : 'border-border text-muted-foreground hover:border-muted-foreground/25'
+              )}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <label className="flex flex-col gap-1.5">
         <span className="text-[11px] text-muted-foreground">What do you want to do?</span>
@@ -1307,21 +1478,43 @@ function CreateIssuePanel({ createIssue }: { createIssue: CreateIssueSeams }): R
               className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
             />
           </label>
+
+          {/* F3: pick the Linear team when filing into Linear and >1 exists. */}
+          {effectiveProvider === 'linear' && teams.length > 1 ? (
+            <label className="flex flex-col gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Linear team</span>
+              <select
+                value={teamId ?? ''}
+                onChange={(event) => setTeamId(event.target.value || null)}
+                className="h-[34px] rounded-md border border-input bg-secondary px-2 text-[12.5px] text-foreground outline-none focus-visible:border-ring"
+              >
+                <option value="">Select a team…</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name} ({team.key})
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
           <button
             type="button"
-            onClick={createIssue.onSubmit}
+            onClick={handleFile}
             disabled={!canFileIssue(createIssue.title, busy)}
             className="inline-flex items-center gap-1.5 self-start rounded-full bg-primary px-3.5 py-1.5 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {phase === 'filing' ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {phase === 'filing' ? 'Creating…' : 'Create issue'}
+            {phase === 'filing'
+              ? 'Creating…'
+              : effectiveProvider === 'linear'
+                ? 'Create Linear issue'
+                : 'Create issue'}
           </button>
         </>
       ) : null}
 
-      {createIssue.error ? (
-        <span className="text-[11px] text-destructive">{createIssue.error}</span>
-      ) : null}
+      {inlineError ? <span className="text-[11px] text-destructive">{inlineError}</span> : null}
     </div>
   )
 }
