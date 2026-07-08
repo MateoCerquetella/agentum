@@ -2235,6 +2235,79 @@ mod tests {
         assert!(calls.contains("issue edit 42"), "label edit ran: {calls}");
     }
 
+    /// Spec 012 F4 (AC 11): the Done transition the poller fires on merge, on a
+    /// BOUND repo with `done_closes_issue` ON, drives the full 010 path — the
+    /// `status/done` label, the Done-mapped Project OPTION, then the probe-then-
+    /// close that closes the still-open issue. Explicit binding (knob ON), no env.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn done_transition_closes_issue_when_knob_on_with_fake_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let node_body =
+            serde_json::json!({"data": {"repository": {"issue": {"id": "I_d"}}}}).to_string();
+        let add_body =
+            serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_d"}}}})
+                .to_string();
+        let update_body = serde_json::json!(
+            {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_d"}}}}
+        )
+        .to_string();
+        // The issue is OPEN, so knob-ON Done must probe then close it.
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"issue\" ] && [ \"$2\" = \"view\" ]; then\n  \
+                 echo \"$@\" >> \"{log}\"\n  printf 'OPEN\\n'\n  exit 0\nfi\n\
+                 echo \"$@\" >> \"{log}\"\n\
+                 case \"$*\" in\n  \
+                 *updateProjectV2ItemFieldValue*) printf '%s\\n' '{update_body}' ;;\n  \
+                 *addProjectV2ItemById*) printf '%s\\n' '{add_body}' ;;\n  \
+                 *repository*) printf '%s\\n' '{node_body}' ;;\n\
+                 esac\nexit 0\n",
+                log = log.display(),
+            ),
+        );
+
+        let mut binding = seam_board_binding();
+        binding.done_closes_issue = true;
+        let res = github_transition_with_board(
+            script.to_str().unwrap(),
+            "acme/done-closes",
+            "42",
+            TrackerPhase::Done,
+            &GithubStateMap::default(),
+            Some(&binding),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        // The Done-mapped OPTION ID rode the Project write.
+        assert!(
+            calls
+                .lines()
+                .any(|l| l.contains("updateProjectV2ItemFieldValue")
+                    && l.contains("-f option=opt-done")),
+            "the Done option rides the write: {calls}"
+        );
+        // Knob ON + OPEN issue → the probe then the close.
+        assert!(
+            calls.contains("issue view 42 --repo acme/done-closes --json state --jq .state"),
+            "state probe ran: {calls}"
+        );
+        assert!(
+            calls.contains("issue close 42 --repo acme/done-closes"),
+            "Done closed the issue (010 done_closes_issue): {calls}"
+        );
+        // The `status/done` label edit ran too.
+        assert!(
+            calls.contains("issue edit 42 --repo acme/done-closes --add-label status/done"),
+            "the status/done label edit ran: {calls}"
+        );
+    }
+
     /// AC 5: the blocked escalation on a BOUND repo adds the card move to the
     /// Blocked-mapped OPTION ID after today's label+comment path — and never
     /// probes/closes/reopens (knob ON notwithstanding: no close/reopen on

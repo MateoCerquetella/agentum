@@ -308,6 +308,63 @@ async fn pr_list_via_gh(program: &str, slug: &str, branch: &str) -> Result<Optio
     Ok(parse_pr_list(&out))
 }
 
+/// A known PR's merge state, from `gh pr view <n> --json state,mergedAt`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrView {
+    pub state: String,
+    pub merged: bool,
+}
+
+/// Parse `gh pr view --json state,mergedAt` → `(state, merged)`. Merged iff the
+/// state is `MERGED` or `mergedAt` is a non-null timestamp (either signal is
+/// authoritative). Pure; `None` on malformed JSON.
+pub(crate) fn parse_pr_view(stdout: &str) -> Option<PrView> {
+    let value: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    let state = value
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let merged = state.eq_ignore_ascii_case("MERGED")
+        || value.get("mergedAt").map(|m| !m.is_null()).unwrap_or(false);
+    Some(PrView { state, merged })
+}
+
+/// The merge decision (F4): a MERGED PR advances a bound worktree to Done
+/// (terminal). Guarded monotonic — a worktree already at Done yields `None` (the
+/// terminal-stop, so a re-observed merge never re-transitions / re-closes the
+/// issue). Pure.
+pub(crate) fn poll_pr_merge_decision(
+    current_phase: Option<&str>,
+    view: &PrView,
+) -> Option<TrackerPhase> {
+    if !view.merged {
+        return None;
+    }
+    next_phase_write(current_phase, TrackerPhase::Done)
+}
+
+/// Pure argv for a known PR's merge probe.
+fn pr_view_argv<'a>(number: &'a str, slug: &'a str) -> [&'a str; 7] {
+    [
+        "pr",
+        "view",
+        number,
+        "--repo",
+        slug,
+        "--json",
+        "state,mergedAt",
+    ]
+}
+
+/// `gh pr view <n>` → the PR's merge state. `Err` = a `gh` failure the caller
+/// logs and skips (never-halt).
+async fn pr_view_via_gh(program: &str, slug: &str, number: i64) -> Result<PrView, String> {
+    let number = number.to_string();
+    let out = run_gh_capture(program, &pr_view_argv(&number, slug)).await?;
+    parse_pr_view(&out).ok_or_else(|| format!("could not parse `gh pr view` output: {out}"))
+}
+
 /// One transition + persist for a poller-detected phase (github). Best-effort:
 /// a transport failure logs and is dropped; the phase is persisted on success so
 /// the guard/terminal-stop survives a reboot.
@@ -411,15 +468,41 @@ async fn poll_pr_lifecycle_once(store: &Store, program: &str) -> PollTick {
                     tracing::warn!(slug = %slug, branch = %branch, %reason, "gh pr list failed (non-fatal)");
                 }
             }
+        } else if let Some(pr_number) = w.linked_pr {
+            // F4: a PR was seen — check for merge → Done (terminal). The
+            // `tracker_phase != "done"` filter already excludes a done workspace,
+            // so this only runs for an InReview one awaiting its merge.
+            tick.attempted += 1;
+            match pr_view_via_gh(program, &slug, pr_number).await {
+                Ok(view) => {
+                    if poll_pr_merge_decision(w.tracker_phase.as_deref(), &view).is_some() {
+                        // Done moves the label + Project option to done and, per
+                        // 010's `done_closes_issue`, closes the issue. Persisting
+                        // "done" makes the terminal-stop restart-safe.
+                        drive_and_persist(
+                            store,
+                            &w.id,
+                            url,
+                            w.linked_linear_issue.as_deref(),
+                            TrackerPhase::Done,
+                        )
+                        .await;
+                    }
+                }
+                Err(reason) => {
+                    tick.failed += 1;
+                    tracing::warn!(slug = %slug, pr = pr_number, %reason, "gh pr view failed (non-fatal)");
+                }
+            }
         }
     }
     tick
 }
 
 /// The PR/merge poller loop (F3/F4): every `AGENTUM_TRACKER_POLL_SECS` (default
-/// 45s), drive InReview on the first non-draft PR and — once F4 lands — Done on
-/// merge, for every bound github worktree. Bounded + backed-off + never-halt.
-/// Spawned at server boot beside the other background workers.
+/// 45s), drive InReview on the first non-draft PR and Done on merge, for every
+/// bound github worktree. Bounded + backed-off + never-halt. Spawned at server
+/// boot beside the other background workers.
 pub async fn run_pr_merge_poller(store: Arc<Store>) {
     let secs = std::env::var("AGENTUM_TRACKER_POLL_SECS")
         .ok()
@@ -681,6 +764,91 @@ mod tests {
         let result = pr_list_via_gh(script.to_str().unwrap(), "o/r", "feat/x").await;
         let err = result.expect_err("a gh failure is an Err the poller skips");
         assert!(err.contains("boom: gh failed"), "unexpected err: {err}");
+    }
+
+    // ─── F4: merge → Done ───────────────────────────────────────────────────
+
+    #[test]
+    fn parse_pr_view_detects_merge_by_state_or_merged_at() {
+        // MERGED state.
+        let v = parse_pr_view(r#"{"state":"MERGED","mergedAt":"2026-07-08T00:00:00Z"}"#).unwrap();
+        assert!(v.merged);
+        assert_eq!(v.state, "MERGED");
+        // Open PR — not merged.
+        let v = parse_pr_view(r#"{"state":"OPEN","mergedAt":null}"#).unwrap();
+        assert!(!v.merged);
+        // A non-null mergedAt with a lagging state still counts as merged.
+        let v = parse_pr_view(r#"{"state":"CLOSED","mergedAt":"2026-07-08T00:00:00Z"}"#).unwrap();
+        assert!(v.merged);
+        // Closed-unmerged is NOT merged.
+        let v = parse_pr_view(r#"{"state":"CLOSED","mergedAt":null}"#).unwrap();
+        assert!(!v.merged);
+        assert_eq!(parse_pr_view("junk"), None);
+    }
+
+    #[test]
+    fn poll_merged_pr_fires_done_then_stops() {
+        let merged = PrView {
+            state: "MERGED".into(),
+            merged: true,
+        };
+        // A merged PR on an InReview worktree → Done.
+        assert_eq!(
+            poll_pr_merge_decision(Some("in_review"), &merged),
+            Some(TrackerPhase::Done)
+        );
+        assert_eq!(
+            poll_pr_merge_decision(Some("in_progress"), &merged),
+            Some(TrackerPhase::Done)
+        );
+        // Terminal-stop: once Done, a re-observed merge never re-fires.
+        assert_eq!(poll_pr_merge_decision(Some("done"), &merged), None);
+        // An un-merged PR is never a Done trigger.
+        let open = PrView {
+            state: "OPEN".into(),
+            merged: false,
+        };
+        assert_eq!(poll_pr_merge_decision(Some("in_review"), &open), None);
+    }
+
+    #[test]
+    fn pr_view_argv_shape() {
+        assert_eq!(
+            pr_view_argv("42", "o/r"),
+            [
+                "pr",
+                "view",
+                "42",
+                "--repo",
+                "o/r",
+                "--json",
+                "state,mergedAt",
+            ]
+        );
+    }
+
+    /// A fake `gh` reporting a merged PR → `pr_view_via_gh` parses `merged`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pr_view_via_gh_reports_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = r#"{"state":"MERGED","mergedAt":"2026-07-08T00:00:00Z"}"#;
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\nprintf '%s' '{body}'\nexit 0\n"),
+        );
+        let view = pr_view_via_gh(script.to_str().unwrap(), "o/r", 42)
+            .await
+            .unwrap_or_else(|e| panic!("pr_view_via_gh errored: {e}"));
+        assert!(view.merged);
+
+        // A gh failure surfaces as Err (poller logs + skips, never halts).
+        let fail = write_fake_gh(dir.path(), "#!/bin/sh\necho 'boom' >&2\nexit 1\n");
+        assert!(
+            pr_view_via_gh(fail.to_str().unwrap(), "o/r", 42)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
