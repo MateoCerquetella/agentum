@@ -10,6 +10,7 @@ import {
   Loader2,
   PlugZap,
   Plus,
+  Search,
   Server,
   Sparkles,
   X
@@ -42,11 +43,14 @@ import { filterReposForHost } from '@/hooks/composer-host-scoping'
 import { LOCAL_HOST_KEY } from '@/components/sidebar/worktree-list-groups'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import {
+  REPO_LIST_COLLAPSED_CAP,
   WIZARD_STEP_LABELS,
   buildWizardRecap,
   canLeaveRepoStep as canLeaveRepoStepModel,
+  capRepoList,
   deriveUnifiedTrackerStatus,
   deriveWizardComposerSeed,
+  filterRepoList,
   resolveWizardAgentOptions,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
@@ -622,6 +626,19 @@ function RepoStep({
   connectInProgress: boolean
   onConnect: () => Promise<void>
 }): React.JSX.Element {
+  // Many-project hosts render a wall of repo rows the operator has to scroll
+  // past — collapse to the first few, with a search field + "show all" expander
+  // to recover the rest fast. Filtering + capping are pure (unit-tested); the
+  // component owns only the query + expanded local state.
+  const [repoQuery, setRepoQuery] = useState('')
+  const [reposExpanded, setReposExpanded] = useState(false)
+  const filteredRepos = useMemo(() => filterRepoList(repos, repoQuery), [repos, repoQuery])
+  const { visible: visibleRepos, hiddenCount } = useMemo(
+    () => capRepoList({ repos: filteredRepos, expanded: reposExpanded, selectedId: repoId }),
+    [filteredRepos, reposExpanded, repoId]
+  )
+  const showRepoSearch = repos.length > REPO_LIST_COLLAPSED_CAP
+
   return (
     <div className="flex animate-in flex-col gap-3.5 fade-in-0 slide-in-from-bottom-1">
       <div className="flex flex-col gap-0.5">
@@ -639,48 +656,77 @@ function RepoStep({
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
-          {repos.map((repo) => {
-            const selected = repo.id === repoId
-            const disabledReason = disabledRepoIds.get(repo.id)
-            const isDisabled = Boolean(disabledReason)
-            return (
-              <button
-                key={repo.id}
-                type="button"
-                disabled={isDisabled}
-                onClick={() => onRepoChange(repo.id)}
-                title={disabledReason}
-                className={cn(
-                  'grid grid-cols-[14px_1fr_auto] items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors',
-                  isDisabled
-                    ? 'cursor-not-allowed border-border opacity-50'
-                    : selected
-                      ? 'border-muted-foreground/40 bg-secondary'
-                      : 'border-border hover:border-muted-foreground/25 hover:bg-secondary/50'
-                )}
-              >
-                <span
+          {showRepoSearch ? (
+            <div className="flex items-center gap-2 rounded-md border border-input bg-secondary px-2.5 focus-within:border-ring">
+              <Search className="size-3.5 flex-none text-muted-foreground" />
+              <input
+                value={repoQuery}
+                onChange={(event) => setRepoQuery(event.target.value)}
+                placeholder={`Search ${repos.length} repos…`}
+                className="h-[34px] flex-1 bg-transparent font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70"
+              />
+            </div>
+          ) : null}
+
+          {visibleRepos.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-[12px] text-muted-foreground">
+              No repos match &ldquo;{repoQuery.trim()}&rdquo;.
+            </div>
+          ) : (
+            visibleRepos.map((repo) => {
+              const selected = repo.id === repoId
+              const disabledReason = disabledRepoIds.get(repo.id)
+              const isDisabled = Boolean(disabledReason)
+              return (
+                <button
+                  key={repo.id}
+                  type="button"
+                  disabled={isDisabled}
+                  onClick={() => onRepoChange(repo.id)}
+                  title={disabledReason}
                   className={cn(
-                    'box-border size-[14px] rounded-full',
-                    selected
-                      ? 'border-[4px] border-foreground bg-background'
-                      : 'border-[1.5px] border-muted-foreground/60'
+                    'grid grid-cols-[14px_1fr_auto] items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors',
+                    isDisabled
+                      ? 'cursor-not-allowed border-border opacity-50'
+                      : selected
+                        ? 'border-muted-foreground/40 bg-secondary'
+                        : 'border-border hover:border-muted-foreground/25 hover:bg-secondary/50'
                   )}
-                />
-                <span className="flex min-w-0 items-baseline gap-2.5">
-                  <span className="text-[13.5px] font-medium text-foreground">
-                    {repo.displayName}
+                >
+                  <span
+                    className={cn(
+                      'box-border size-[14px] rounded-full',
+                      selected
+                        ? 'border-[4px] border-foreground bg-background'
+                        : 'border-[1.5px] border-muted-foreground/60'
+                    )}
+                  />
+                  <span className="flex min-w-0 items-baseline gap-2.5">
+                    <span className="text-[13.5px] font-medium text-foreground">
+                      {repo.displayName}
+                    </span>
+                    <span className="truncate font-mono text-[11.5px] text-muted-foreground">
+                      {repo.path}
+                    </span>
                   </span>
-                  <span className="truncate font-mono text-[11.5px] text-muted-foreground">
-                    {repo.path}
+                  <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10.5px] text-muted-foreground">
+                    {disabledReason ? disabledReason : selectedRepoBadge(repo, selected)}
                   </span>
-                </span>
-                <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10.5px] text-muted-foreground">
-                  {disabledReason ? disabledReason : selectedRepoBadge(repo, selected)}
-                </span>
-              </button>
-            )
-          })}
+                </button>
+              )
+            })
+          )}
+
+          {hiddenCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setReposExpanded(true)}
+              className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-1 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span className="font-mono leading-none">…</span>
+              Show all {filteredRepos.length} repos
+            </button>
+          ) : null}
         </div>
       )}
 

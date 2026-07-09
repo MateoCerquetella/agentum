@@ -94,6 +94,57 @@ export function wizardBaseBranchTriggerLabel(
   return fallback || 'default branch'
 }
 
+// ---------- Repo list (step 2) — searchable + collapsed for many projects ----------
+
+/** How many repo rows step 2 shows before collapsing behind a "show all". Kept
+ *  small so a host with many projects doesn't render a wall of rows the operator
+ *  has to scroll past; the search field + expander recover the rest. */
+export const REPO_LIST_COLLAPSED_CAP = 4
+
+/** Case-insensitive filter over a repo list by display name or path. An empty
+ *  query returns the list unchanged (a fresh copy). */
+export function filterRepoList<T extends { displayName: string; path?: string }>(
+  repos: readonly T[],
+  query: string
+): T[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return [...repos]
+  return repos.filter(
+    (repo) =>
+      repo.displayName.toLowerCase().includes(q) ||
+      (repo.path ? repo.path.toLowerCase().includes(q) : false)
+  )
+}
+
+/**
+ * Cap the (already-filtered) repo list to `cap` rows unless expanded, so a
+ * many-project host stays scannable. The currently-selected repo is always kept
+ * visible even when it would fall past the cap, so a collapsed list never hides
+ * the active choice. Returns the rows to render + how many stay hidden (0 when
+ * expanded or already within the cap) for the "show all N" affordance.
+ */
+export function capRepoList<T extends { id: string }>(input: {
+  repos: readonly T[]
+  expanded: boolean
+  selectedId: string
+  cap?: number
+}): { visible: T[]; hiddenCount: number } {
+  const cap = input.cap ?? REPO_LIST_COLLAPSED_CAP
+  if (input.expanded || input.repos.length <= cap) {
+    return { visible: [...input.repos], hiddenCount: 0 }
+  }
+  const head = input.repos.slice(0, cap)
+  // Keep the selected repo visible even if it sorts past the cap.
+  if (input.selectedId && !head.some((repo) => repo.id === input.selectedId)) {
+    const selected = input.repos.find((repo) => repo.id === input.selectedId)
+    if (selected) {
+      const visible = [...input.repos.slice(0, cap - 1), selected]
+      return { visible, hiddenCount: input.repos.length - visible.length }
+    }
+  }
+  return { visible: head, hiddenCount: input.repos.length - head.length }
+}
+
 // ---------- Unified tracker (spec 013 F1 — one honest source) ----------
 
 /**

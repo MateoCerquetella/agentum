@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   buildWizardRecap,
   canLeaveRepoStep,
+  capRepoList,
   deriveUnifiedTrackerStatus,
   deriveWizardComposerSeed,
+  filterRepoList,
+  REPO_LIST_COLLAPSED_CAP,
   resolveWizardAgentOptions,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
@@ -213,5 +216,72 @@ describe('deriveWizardComposerSeed (spec 013 F4 single front door)', () => {
   it('does not arm the gated-run toggle when startGatedRun is false/absent', () => {
     expect('initialStartGatedRun' in deriveWizardComposerSeed({ startGatedRun: false })).toBe(false)
     expect('initialStartGatedRun' in deriveWizardComposerSeed({ prefilledName: 'x' })).toBe(false)
+  })
+})
+
+describe('filterRepoList (step 2 search)', () => {
+  const repos = [
+    { id: 'a', displayName: 'agentum', path: '/dev/agentum' },
+    { id: 'b', displayName: 'billing-api', path: '/dev/acme/billing' },
+    { id: 'c', displayName: 'website', path: '/dev/agentum-www' }
+  ]
+
+  it('returns a fresh copy of the whole list for a blank/whitespace query', () => {
+    expect(filterRepoList(repos, '')).toEqual(repos)
+    expect(filterRepoList(repos, '   ')).toEqual(repos)
+    expect(filterRepoList(repos, '')).not.toBe(repos)
+  })
+
+  it('matches case-insensitively on display name', () => {
+    expect(filterRepoList(repos, 'BILLING').map((r) => r.id)).toEqual(['b'])
+  })
+
+  it('also matches on path (so "agentum-www" finds the website repo)', () => {
+    expect(filterRepoList(repos, 'agentum').map((r) => r.id)).toEqual(['a', 'c'])
+  })
+
+  it('returns empty when nothing matches', () => {
+    expect(filterRepoList(repos, 'zzz')).toEqual([])
+  })
+
+  it('tolerates repos without a path', () => {
+    expect(filterRepoList([{ id: 'x', displayName: 'solo' }], 'solo').map((r) => r.id)).toEqual([
+      'x'
+    ])
+  })
+})
+
+describe('capRepoList (step 2 collapse)', () => {
+  const many = Array.from({ length: 9 }, (_, i) => ({ id: `r${i}` }))
+
+  it('returns everything untouched when within the cap', () => {
+    const few = many.slice(0, REPO_LIST_COLLAPSED_CAP)
+    const out = capRepoList({ repos: few, expanded: false, selectedId: '' })
+    expect(out.visible).toEqual(few)
+    expect(out.hiddenCount).toBe(0)
+  })
+
+  it('caps to REPO_LIST_COLLAPSED_CAP rows and reports the hidden count', () => {
+    const out = capRepoList({ repos: many, expanded: false, selectedId: '' })
+    expect(out.visible).toHaveLength(REPO_LIST_COLLAPSED_CAP)
+    expect(out.hiddenCount).toBe(many.length - REPO_LIST_COLLAPSED_CAP)
+  })
+
+  it('shows the full list (hiddenCount 0) when expanded', () => {
+    const out = capRepoList({ repos: many, expanded: true, selectedId: '' })
+    expect(out.visible).toHaveLength(many.length)
+    expect(out.hiddenCount).toBe(0)
+  })
+
+  it('keeps the selected repo visible even when it sorts past the cap', () => {
+    const out = capRepoList({ repos: many, expanded: false, selectedId: 'r8' })
+    expect(out.visible.map((r) => r.id)).toContain('r8')
+    expect(out.visible).toHaveLength(REPO_LIST_COLLAPSED_CAP)
+    expect(out.hiddenCount).toBe(many.length - REPO_LIST_COLLAPSED_CAP)
+  })
+
+  it('does not duplicate a selected repo already within the cap', () => {
+    const out = capRepoList({ repos: many, expanded: false, selectedId: 'r1' })
+    expect(out.visible.map((r) => r.id)).toEqual(['r0', 'r1', 'r2', 'r3'])
   })
 })
