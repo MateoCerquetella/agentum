@@ -56,3 +56,47 @@ variant; Skipped/Err emit nothing; no transition awaits the bus; launch path
 untouched.
 
 **Deviations:** none.
+
+## F2 — `phase-chip-live` (AC 4–6) — DONE
+
+**What changed** (architecture §4/§5):
+
+- `crates/agentum-server/src/routes/worktrees.rs` — the `scan_git_worktrees`
+  row body extracted into a pure `detected_row(repo_id, idx, path, branch,
+  &registry)` (behavior-identical) and the row gained the three camelCase
+  keys `trackerProvider`/`trackerUrl`/`trackerPhase` from the registry meta.
+  Registry `Worktree` struct serde shape UNTOUCHED (alias-free rule holds by
+  construction).
+- `crates/agentum-desktop/ui/src/shared/types.ts` — `Worktree` gains the
+  three OPTIONAL fields (`trackerPhase` as the 5-value wire union).
+- NEW `ui/src/lib/tracker-phase.ts` — pure model: `TrackerPhaseWire`,
+  `parseTrackerPhaseWire`, `trackerEventFromFrame` (both kinds; malformed →
+  null), `matchEventToWorktree` (id first, trackerUrl fallback),
+  `deriveTrackerChip` (persisted + live overlay → chip | null).
+- NEW `ui/src/lib/tracker-phase.test.ts` — jsdom-free vitest (12 tests).
+- NEW `ui/src/store/slices/tracker-phase.ts` —
+  `trackerLiveByWorktreeId` + `patchTrackerPhase` (attention:=false) /
+  `setTrackerAttention` / `clearTrackerLive`; no-op-on-equal writes.
+  Registered in `store/index.ts` + `store/types.ts`.
+- NEW `ui/src/hooks/useTrackerPhaseSync.ts` — `subscribeServerEvents` (shared
+  socket) → parse → join → patch; clears the slice on unmount.
+- NEW `ui/src/components/sidebar/TrackerPhaseChip.tsx` — thin badge
+  (MetadataStatusBadge styling), attention = rose/alert variant, null render
+  when unbound.
+- TOUCH `ui/src/components/sidebar/WorktreeCardMeta.tsx` — hover's issue
+  badge row renders the chip beside `IssueStateBadge`; the hover props gain
+  optional `worktreeId`/`trackerPhase`.
+- TOUCH `ui/src/components/sidebar/WorktreeCard.tsx` — passes
+  `worktree.id`/`worktree.trackerPhase` into the details hover.
+- TOUCH `ui/src/App.tsx` — `useTrackerPhaseSync()` mounted beside
+  `useServerWorktreeActivity()`.
+
+**Gate:** `cargo test -p agentum-server --lib routes::worktrees` → 16/16
+(incl. new `detected_row_exposes_tracker_keys_bound_and_null_unbound`);
+`bun run build` ✓ (3m11s); `bunx vitest run src/lib/tracker-phase.test.ts` →
+12/12. Full-suite vitest baseline recorded below when the background run
+finishes (pre-existing failures are a known baseline per project memory).
+
+**Deviations:** `detected_row` extraction (pure fn) was not named by the
+architecture — added so the wire shape is hermetically testable without
+git/host plumbing; JSON emitted is byte-identical.

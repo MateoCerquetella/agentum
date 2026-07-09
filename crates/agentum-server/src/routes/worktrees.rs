@@ -859,52 +859,70 @@ async fn scan_git_worktrees(host: &Host, repo_id: &str) -> Result<Vec<Value>, Ap
     Ok(entries
         .into_iter()
         .enumerate()
-        .map(|(idx, (path, branch))| {
-            let name = branch.clone().unwrap_or_else(|| {
-                std::path::Path::new(&path)
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.clone())
-            });
-            let is_primary = idx == 0;
-            let id = format!("{repo_id}::{path}");
-            let meta = registry.iter().find(|wt| wt.id == id);
-            serde_json::json!({
-                "id": id,
-                "repoId": repo_id,
-                "displayName": meta
-                    .map(|m| m.display_name.clone())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(name),
-                "comment": meta.map(|m| m.comment.clone()).unwrap_or_default(),
-                "linkedIssue": meta.and_then(|m| m.linked_issue),
-                // The UI reads `linkedPR` (shared/types.ts pins that casing);
-                // the old `linkedPr` key here was dead — no reader anywhere.
-                "linkedPR": meta.and_then(|m| m.linked_pr),
-                "linkedLinearIssue": meta.and_then(|m| m.linked_linear_issue.clone()),
-                "isArchived": meta.map(|m| m.is_archived).unwrap_or(false),
-                "isUnread": meta.map(|m| m.is_unread).unwrap_or(false),
-                // Pinning is EXPLICIT: a worktree with no registry row is NOT
-                // pinned. Defaulting the primary to pinned made it impossible to
-                // keep unpinned — deleting a worktree drops its row, so it
-                // reverted to auto-pinned, and a repo's primary worktree (which
-                // `git worktree remove` can't delete) reappeared pinned forever.
-                "isPinned": meta.map(|m| m.is_pinned).unwrap_or(false),
-                "sortOrder": meta.map(|m| m.sort_order).unwrap_or(idx as i64),
-                "lastActivityAt": meta.map(|m| m.last_activity_at).unwrap_or(0),
-                "path": path,
-                "branch": branch,
-                "ownership": "self",
-                "selectedCheckout": is_primary,
-                // The first `git worktree list` entry is the repo's primary
-                // worktree. The sidebar's "Hide default branch" filter keys off
-                // this; without it the flag defaulted to false for every row and
-                // the filter silently did nothing.
-                "isMainWorktree": is_primary,
-                "visible": true
-            })
-        })
+        .map(|(idx, (path, branch))| detected_row(repo_id, idx, path, branch, &registry))
         .collect())
+}
+
+/// One `/api/worktrees/detected` row: the git-authoritative path/branch
+/// overlaid with persisted registry metadata. Pure (no git, no IO) so the wire
+/// shape — including the spec 014 tracker keys — is unit-testable.
+fn detected_row(
+    repo_id: &str,
+    idx: usize,
+    path: String,
+    branch: Option<String>,
+    registry: &[Worktree],
+) -> Value {
+    let name = branch.clone().unwrap_or_else(|| {
+        std::path::Path::new(&path)
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.clone())
+    });
+    let is_primary = idx == 0;
+    let id = format!("{repo_id}::{path}");
+    let meta = registry.iter().find(|wt| wt.id == id);
+    serde_json::json!({
+        "id": id,
+        "repoId": repo_id,
+        "displayName": meta
+            .map(|m| m.display_name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(name),
+        "comment": meta.map(|m| m.comment.clone()).unwrap_or_default(),
+        "linkedIssue": meta.and_then(|m| m.linked_issue),
+        // The UI reads `linkedPR` (shared/types.ts pins that casing);
+        // the old `linkedPr` key here was dead — no reader anywhere.
+        "linkedPR": meta.and_then(|m| m.linked_pr),
+        "linkedLinearIssue": meta.and_then(|m| m.linked_linear_issue.clone()),
+        // Spec 014 F2 (AC 4): the persisted tracker coords + phase ride
+        // on the detected rows so the sidebar chip has a cold-truth
+        // source. Unbound (no registry row / no bind) ⇒ all three null
+        // ⇒ no chip (fail-closed). Registry `Worktree` shape untouched.
+        "trackerProvider": meta.and_then(|m| m.tracker_provider.clone()),
+        "trackerUrl": meta.and_then(|m| m.tracker_url.clone()),
+        "trackerPhase": meta.and_then(|m| m.tracker_phase.clone()),
+        "isArchived": meta.map(|m| m.is_archived).unwrap_or(false),
+        "isUnread": meta.map(|m| m.is_unread).unwrap_or(false),
+        // Pinning is EXPLICIT: a worktree with no registry row is NOT
+        // pinned. Defaulting the primary to pinned made it impossible to
+        // keep unpinned — deleting a worktree drops its row, so it
+        // reverted to auto-pinned, and a repo's primary worktree (which
+        // `git worktree remove` can't delete) reappeared pinned forever.
+        "isPinned": meta.map(|m| m.is_pinned).unwrap_or(false),
+        "sortOrder": meta.map(|m| m.sort_order).unwrap_or(idx as i64),
+        "lastActivityAt": meta.map(|m| m.last_activity_at).unwrap_or(0),
+        "path": path,
+        "branch": branch,
+        "ownership": "self",
+        "selectedCheckout": is_primary,
+        // The first `git worktree list` entry is the repo's primary
+        // worktree. The sidebar's "Hide default branch" filter keys off
+        // this; without it the flag defaulted to false for every row and
+        // the filter silently did nothing.
+        "isMainWorktree": is_primary,
+        "visible": true
+    })
 }
 
 /// `GET /api/worktrees/detected?repoId=` — git-authoritative worktree list.
@@ -1245,6 +1263,45 @@ prunable gitdir file points to non-existent location
         let obj = v.as_object().unwrap();
         assert!(!obj.contains_key("tracker_provider"));
         assert!(!obj.contains_key("tracker_url"));
+    }
+
+    /// Spec 014 F2 (AC 4): a `detected` row for a BOUND worktree carries the
+    /// three camelCase tracker keys from the registry; a worktree with NO
+    /// registry row exposes all three as null (fail-closed → no chip, AC 6).
+    #[test]
+    fn detected_row_exposes_tracker_keys_bound_and_null_unbound() {
+        let wt = Worktree {
+            id: "r1::/p".into(),
+            repo_id: "r1".into(),
+            display_name: "p".into(),
+            comment: String::new(),
+            linked_issue: Some(42),
+            linked_pr: None,
+            linked_linear_issue: None,
+            tracker_provider: Some("github".into()),
+            tracker_url: Some("https://github.com/o/r/issues/42".into()),
+            tracker_phase: Some("in_progress".into()),
+            is_archived: false,
+            is_unread: false,
+            is_pinned: false,
+            sort_order: 0,
+            last_activity_at: 0,
+            extra: Map::new(),
+        };
+
+        // Bound: registry row matches by id → the persisted coords ride out.
+        let row = detected_row("r1", 0, "/p".into(), Some("feat/x".into()), &[wt]);
+        assert_eq!(row["trackerProvider"], "github");
+        assert_eq!(row["trackerUrl"], "https://github.com/o/r/issues/42");
+        assert_eq!(row["trackerPhase"], "in_progress");
+
+        // Unbound: no registry row → all three null, keys still present.
+        let row = detected_row("r1", 0, "/p".into(), Some("feat/x".into()), &[]);
+        let obj = row.as_object().unwrap();
+        for key in ["trackerProvider", "trackerUrl", "trackerPhase"] {
+            assert!(obj.contains_key(key), "{key} must be present");
+            assert!(row[key].is_null(), "{key} must be null when unbound");
+        }
     }
 
     /// Spec 012 invariant #7 (the spec-004 lesson, restated for the new fields):
