@@ -731,6 +731,10 @@ async fn github_transition_with_board(
 /// succeeds — the comment is secondary, so its failure is dropped, never a
 /// downgrade to `Skipped`. `program`/`map` are explicit so the fake-`gh` test
 /// injects them without env mutation (mirrors [`github_transition_with`]).
+///
+/// `with_comment: false` (spec 014 F4, the crash-loop guard) skips ONLY the
+/// comment step — the idempotent label edit still runs, so a re-blocked issue
+/// keeps its flag without a duplicate comment inside the cooldown.
 #[allow(clippy::too_many_arguments)]
 async fn github_mark_blocked_with(
     program: &str,
@@ -740,6 +744,7 @@ async fn github_mark_blocked_with(
     gate_label: &str,
     attempts: u32,
     gate_tail: &str,
+    with_comment: bool,
     map: &GithubStateMap,
 ) -> TransitionResult {
     // Ensure the blocked label exists (non-fatal — a shared repo without
@@ -754,8 +759,10 @@ async fn github_mark_blocked_with(
         return TransitionResult::Skipped(reason);
     }
     // Best-effort comment; a failure here never downgrades the applied label.
-    let body = blocked_comment_body(feature_name, gate_label, attempts, gate_tail);
-    let _ = run_gh(program, &gh_issue_comment_argv(number, slug, &body)).await;
+    if with_comment {
+        let body = blocked_comment_body(feature_name, gate_label, attempts, gate_tail);
+        let _ = run_gh(program, &gh_issue_comment_argv(number, slug, &body)).await;
+    }
     TransitionResult::Applied
 }
 
@@ -775,6 +782,7 @@ async fn github_mark_blocked_with_board(
     gate_label: &str,
     attempts: u32,
     gate_tail: &str,
+    with_comment: bool,
     map: &GithubStateMap,
     binding: Option<&crate::github_projects::BoardBinding>,
 ) -> TransitionResult {
@@ -786,6 +794,7 @@ async fn github_mark_blocked_with_board(
         gate_label,
         attempts,
         gate_tail,
+        with_comment,
         map,
     )
     .await;
@@ -966,6 +975,10 @@ async fn transition_inner(
 /// Spec 014 F1: on `Ok(Applied)` a `tracker.blocked` event is emitted on the
 /// bus (fire-and-forget, same rules as the pipeline seam). `reason` in the
 /// payload is the caller's `gate_label`.
+///
+/// Spec 014 F4: `with_comment: false` suppresses only the explanatory comment
+/// (crash-loop cooldown); the label edit and Projects Blocked-column write are
+/// unchanged. The harness retries-exhausted caller passes `true`.
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_blocked_transition(
     store: &Store,
@@ -976,6 +989,7 @@ pub async fn apply_blocked_transition(
     gate_label: &str,
     attempts: u32,
     gate_tail: &str,
+    with_comment: bool,
     emit: TrackerEmit<'_>,
 ) -> anyhow::Result<TransitionResult> {
     let result = blocked_inner(
@@ -987,6 +1001,7 @@ pub async fn apply_blocked_transition(
         gate_label,
         attempts,
         gate_tail,
+        with_comment,
     )
     .await;
     if matches!(result, Ok(TransitionResult::Applied)) {
@@ -1004,7 +1019,8 @@ pub async fn apply_blocked_transition(
     result
 }
 
-/// The pre-014 blocked body, verbatim (see [`transition_inner`]).
+/// The pre-014 blocked body (see [`transition_inner`]), plus the F4
+/// `with_comment` thread-through.
 #[allow(clippy::too_many_arguments)]
 async fn blocked_inner(
     store: &Store,
@@ -1015,6 +1031,7 @@ async fn blocked_inner(
     gate_label: &str,
     attempts: u32,
     gate_tail: &str,
+    with_comment: bool,
 ) -> anyhow::Result<TransitionResult> {
     let _ = (store, tracker_id);
     match provider {
@@ -1041,6 +1058,7 @@ async fn blocked_inner(
                 gate_label,
                 attempts,
                 gate_tail,
+                with_comment,
                 &map,
                 binding.as_ref(),
             )
@@ -2025,6 +2043,7 @@ mod tests {
             "gate",
             1,
             "boom",
+            true,
             emit(),
         )
         .await
@@ -2260,6 +2279,7 @@ mod tests {
             "unit-test gate (verify.sh)",
             3,
             "assertion failed: foo != bar",
+            /* with_comment */ true,
             &GithubStateMap::default(),
         )
         .await;
@@ -2300,6 +2320,148 @@ mod tests {
         );
     }
 
+    // ---- Spec 014 F4: comment suppression + clear flow ------------------------
+
+    /// AC 10 crash-loop guard at the seam: `with_comment=false` runs the
+    /// idempotent label edit but ZERO `issue comment`; a true+false pair (what
+    /// the attention ledger decides for two crashes inside the cooldown)
+    /// leaves TWO label edits and exactly ONE comment in the log.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_with_comment_false_suppresses_only_the_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"comment\" ]; then\n  \
+                 echo \"issue comment\" >> \"{log}\"\nelse\n  \
+                 echo \"$@\" >> \"{log}\"\nfi\nexit 0\n",
+                log = log.display(),
+            ),
+        );
+
+        // Crash #1: a fresh episode — label + comment.
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "session crash",
+            1,
+            "panic: boom",
+            /* with_comment */ true,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+        // Crash #2 inside the cooldown: the ledger says LabelOnly — the label
+        // re-applies (idempotent), the comment is suppressed.
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "session crash",
+            1,
+            "panic: boom again",
+            /* with_comment */ false,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 5, "2×(ensure + edit) + ONE comment: {calls}");
+        let edits = lines
+            .iter()
+            .filter(|l| l.starts_with("issue edit 42 --repo owner/repo --add-label status/blocked"))
+            .count();
+        assert_eq!(edits, 2, "the label edit runs both times: {calls}");
+        let comments = lines.iter().filter(|l| **l == "issue comment").count();
+        assert_eq!(comments, 1, "exactly ONE comment across the loop: {calls}");
+    }
+
+    /// AC 10 clear flow: after a blocked write, the recovery re-apply (any
+    /// pipeline edit) removes `status/blocked` in the SAME `issue edit` — the
+    /// board can't stay stale-red.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_then_pipeline_transition_removes_blocked_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "awaiting input",
+            1,
+            "stuck",
+            true,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+        // Recovery: the attention worker re-applies the persisted phase
+        // verbatim through the pipeline seam.
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::InProgress,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let pipeline_edit = calls
+            .lines()
+            .find(|l| l.contains("--add-label status/in-progress"))
+            .expect("the recovery pipeline edit ran");
+        assert!(
+            pipeline_edit.contains("--remove-label status/blocked"),
+            "the re-apply drops the blocked label: {pipeline_edit}"
+        );
+    }
+
+    /// Never-halt (AC 8): a failing `gh` degrades the blocked write to
+    /// `Skipped` — never an `Err`/panic the worker loop would die on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_write_gh_failure_is_skipped_never_halts() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_fake_gh(
+            dir.path(),
+            "#!/bin/sh\necho 'boom: gh failed' >&2\nexit 1\n",
+        );
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "session crash",
+            1,
+            "panic",
+            true,
+            &GithubStateMap::default(),
+        )
+        .await;
+        match res {
+            TransitionResult::Skipped(reason) => {
+                assert!(reason.contains("boom: gh failed"), "got: {reason}")
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+    }
+
     /// D-A: board and Linear have no blocked column, so `apply_blocked_transition`
     /// skips them (never `Err`) — the D6 label is GitHub-only. A github.com URL is
     /// passed to prove they skip on provider, not on a missing URL.
@@ -2317,6 +2479,7 @@ mod tests {
                 "unit-test gate",
                 2,
                 "boom",
+                true,
                 TrackerEmit {
                     bus: &bus,
                     worktree_id: None,
@@ -2348,6 +2511,7 @@ mod tests {
             "gate",
             1,
             "boom",
+            true,
             TrackerEmit {
                 bus: &bus,
                 worktree_id: None,
@@ -2365,6 +2529,7 @@ mod tests {
             "gate",
             1,
             "boom",
+            true,
             TrackerEmit {
                 bus: &bus,
                 worktree_id: None,
@@ -2624,6 +2789,7 @@ mod tests {
             "unit-test gate (verify.sh)",
             3,
             "assertion failed: foo != bar",
+            /* with_comment */ true,
             &GithubStateMap::default(),
             Some(&binding),
         )

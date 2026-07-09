@@ -137,3 +137,67 @@ combined targeted run); `grep -rn setInterval src/components/github-project/`
 → 0.
 
 **Deviations:** none.
+
+## F4 — `attention-signal` (AC 8–11) — DONE
+
+**What changed** (architecture §3):
+
+- `crates/agentum-server/src/task_sink.rs` — `with_comment: bool` threaded
+  through `apply_blocked_transition` → `blocked_inner` →
+  `github_mark_blocked_with_board` → `github_mark_blocked_with`; `false`
+  skips ONLY the `gh issue comment` step (label edit + Projects Blocked
+  write unchanged).
+- `crates/agentum-server/src/harness/drive.rs` — retries-exhausted caller
+  passes `with_comment: true` (behavior unchanged).
+- NEW `crates/agentum-server/src/tracker_attention.rs` — the worker:
+  - `ATTENTION_SWEEP` 30 s, `BLOCKED_COMMENT_COOLDOWN` 3600 s (named
+    consts), `attention_after()` = `AGENTUM_ATTENTION_AFTER_SECS` default
+    600 (PM D1).
+  - Pure `Ledger { awaiting_since, episodes }` with `due` /
+    `due_sessions` / `begin_episode -> Fire{Skip,LabelAndComment,LabelOnly}`
+    / `end_episode` / `any_active_episode`; episodes keyed by WORKTREE.
+  - `select!` loop: bus recv (lag-tolerant) + one coarse sweep tick.
+  - `session.crashed` → immediate escalation (gate_tail =
+    `payload.signature`, gate_label "session crash"); sustained awaiting via
+    the sweep (gate_label "awaiting input"). Both resolve session →
+    `find_tracker_worktree_by_path` (workdir, `worktree_path` fallback) →
+    GITHUB-bound only (fail-closed; signal is GitHub-label-only per spec
+    scope) → `apply_blocked_transition(..., with_comment, TrackerEmit{bus,
+    Some(&wt.id)})`.
+  - Clear on `agent.working`/`agent.input_resolved`/`session.started`:
+    `end_episode` gates a verbatim re-apply of the PERSISTED phase via
+    `apply_tracker_transition` (never fabricate; intentionally bypasses
+    `next_phase_write` — rank-equal re-apply, remove-set drops the label,
+    the emitted `tracker.phase_changed` clears the chip). `agent.finished`
+    clears the awaiting timer only.
+  - `any_active_episode` gate keeps chatty `agent.working` events from
+    hitting the store/registry while nothing is flagged.
+- `crates/agentum-server/src/lib.rs` — `pub mod tracker_attention;` + spawn
+  in `spawn_background_workers` right after the poller.
+
+**Tests**
+
+- `tracker_attention.rs::tests` (pure, no IO/$HOME): due threshold,
+  first-timestamp retention, one-fire-per-episode (AC 9), crash-loop
+  cooldown ⇒ LabelOnly then LabelAndComment past cooldown (AC 10),
+  end_episode gating, transient-prompt fires nothing, per-worktree episodes,
+  the recovery-resolve gate, default threshold.
+- `task_sink.rs::tests` (fake-gh, program-explicit, no env):
+  `blocked_with_comment_false_suppresses_only_the_comment` (true+false pair
+  ⇒ 2 label edits, exactly ONE comment — the AC 10 crash-loop shape),
+  `blocked_then_pipeline_transition_removes_blocked_label` (clear flow),
+  `blocked_write_gh_failure_is_skipped_never_halts` (never-halt).
+- Existing blocked-path tests updated with `with_comment: true`.
+
+**Gate:** `cargo test -p agentum-server --lib` → 657 passed / 0 failed /
+5 ignored. `cargo fmt --all` clean (only spec-014 files reflowed).
+
+**Invariants checked:** `next_phase_write` diff EMPTY (grep 0 in diff); no
+new `TrackerPhase` variant (enum count 1, unchanged); harness blocked path
+byte-equivalent with `with_comment=true`; no watchdog-crate changes;
+launch path untouched.
+
+**Deviations:** the clear re-apply and the blocked fire are GitHub-only by
+an explicit provider check in `resolve_bound_github` (spec scope: "the
+attention signal is GitHub-label-only") — a linear-bound worktree never
+starts an episode, so it can never get a spurious clear write either.

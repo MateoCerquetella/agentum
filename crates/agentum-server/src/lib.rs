@@ -52,6 +52,7 @@ mod routes;
 mod rules;
 pub mod task_sink;
 pub mod tls;
+pub mod tracker_attention;
 pub mod tracker_sync;
 mod transcript_store;
 pub mod usage;
@@ -517,6 +518,18 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         let bus = bus.clone();
         tokio::spawn(async move {
             tracker_sync::run_pr_merge_poller(store, bus).await;
+        });
+    }
+
+    // Spec 014 F4: the watchdog→tracker attention worker. Crashed or
+    // sustained-awaiting sessions in a bound worktree flag the issue with the
+    // existing `status/blocked` escalation; recovery re-applies the persisted
+    // phase (which clears the label). Best-effort, per-worktree episode dedupe.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            tracker_attention::run_tracker_attention_worker(store, bus).await;
         });
     }
 

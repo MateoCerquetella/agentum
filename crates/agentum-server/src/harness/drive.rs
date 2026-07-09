@@ -328,6 +328,10 @@ async fn handle_gate_failure(
                 gate_label,
                 attempts,
                 &tail(output, 2000),
+                // Retries-exhausted always explains itself on the issue; only
+                // the spec-014 attention worker suppresses inside a cooldown.
+                /* with_comment */
+                true,
                 crate::task_sink::TrackerEmit {
                     bus: &state.bus,
                     worktree_id: None,
