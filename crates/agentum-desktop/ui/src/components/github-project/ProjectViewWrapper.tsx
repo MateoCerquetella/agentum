@@ -49,6 +49,7 @@ import ProjectPicker, { type ResolvedProjectSelection } from './ProjectPicker'
 import ProjectViewList from './ProjectViewList'
 import ProjectBoardView from './ProjectBoardView'
 import ProjectItemSlugDialog from './ProjectItemSlugDialog'
+import { useProjectViewLiveRefresh } from './use-project-view-live-refresh'
 import {
   resolveMissingRepoProjectDialogState,
   resolveRepoBackedProjectDialogState
@@ -190,6 +191,33 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
       queryOverride
     )
   }, [activeProject, lastViewByProject, projectViewCache, doFetch, appliedQueryByView])
+
+  // Spec 014 F3: a tracker.* event (agentum just moved a card on GitHub)
+  // re-fetches the active view after the 2 s coalesce window — same values as
+  // the auto-fetch effect above, but force=true (the cache holds the stale
+  // pre-move table). Event-driven only; no interval.
+  const liveRefetch = useCallback(() => {
+    if (!activeProject) {
+      return
+    }
+    const key = `${activeProject.ownerType}:${activeProject.owner}:${activeProject.number}`
+    const viewId = lastViewByProject[key]?.viewId
+    if (!viewId) {
+      return
+    }
+    const queryOverride = appliedQueryByView[`${key}:${viewId}`]
+    void doFetch(
+      {
+        owner: activeProject.owner,
+        ownerType: activeProject.ownerType,
+        projectNumber: activeProject.number,
+        viewId
+      },
+      /* force */ true,
+      queryOverride
+    )
+  }, [activeProject, lastViewByProject, appliedQueryByView, doFetch])
+  useProjectViewLiveRefresh(liveRefetch)
 
   // Load the project's view list whenever the active project changes so the
   // tab strip can render. The list is small and rarely changes — fetched once

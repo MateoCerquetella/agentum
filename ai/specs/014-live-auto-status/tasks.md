@@ -100,3 +100,40 @@ finishes (pre-existing failures are a known baseline per project memory).
 **Deviations:** `detected_row` extraction (pure fn) was not named by the
 architecture — added so the wire shape is hermetically testable without
 git/host plumbing; JSON emitted is byte-identical.
+
+**Full-suite vitest baseline** (recorded during F2, includes F2 code):
+39 failed files / 138 failed tests / 5900 passed (749 files, 6038 tests) —
+the known pre-existing baseline (project memory: ~38 failing files). Spot
+check: `WorktreeCardMeta.test.tsx > includes branch identity before metadata
+details` fails because the test passes a `review` prop the component does not
+have (asserts 'PR #456' renders; it never does) — pre-existing, untouched by
+the chip change (the fixture passes no `worktreeId`, so the chip branch never
+renders).
+
+## F3 — `board-live-refresh` (AC 7) — DONE
+
+**What changed** (architecture §5 F3):
+
+- NEW `ui/src/components/github-project/project-view-live-refresh.ts` — pure
+  trailing-edge coalescer: `PROJECT_VIEW_EVENT_REFETCH_COALESCE_MS = 2_000`
+  (named constant), `isTrackerEventKind` (`kind.startsWith('tracker.')`),
+  `coalesceEvent(state, nowMs) -> {state, schedule}` /
+  `coalesceFire(state)` reducers — no timers in the model.
+- NEW `ui/src/components/github-project/project-view-live-refresh.test.ts` —
+  jsdom-free vitest (6 tests): burst ⇒ ONE fire, post-window event ⇒ second
+  fire, non-tracker kinds ignored, stale-fire no-op, constant pinned.
+- NEW `ui/src/components/github-project/use-project-view-live-refresh.ts` —
+  hook: shared `subscribeServerEvents` socket, kind filter, `setTimeout`
+  drive, latest-callback ref; unmount unsubscribes + clears the pending timer
+  (hidden/inactive views fetch nothing).
+- TOUCH `ui/src/components/github-project/ProjectViewWrapper.tsx` — ONE
+  `useProjectViewLiveRefresh(liveRefetch)` call; `liveRefetch` is a
+  `useCallback` built from the same values as the auto-fetch effect
+  (`activeProject` + `lastViewByProject` + `appliedQueryByView`) with
+  `force: true`.
+
+**Gate:** `bun run build` ✓ (1m28s); coalescer vitest 6/6 (ran green in the
+combined targeted run); `grep -rn setInterval src/components/github-project/`
+→ 0.
+
+**Deviations:** none.
