@@ -713,7 +713,7 @@ mod tests {
     use super::*;
     // Types/fns these tests use that the (slimmed) non-test imports no longer
     // pull in, plus the two drive-internal fns under test (now in `drive`).
-    use super::drive::{SettleOutcome, resolve_qa_mode, wait_for_settle};
+    use super::drive::{SettleOutcome, resolve_qa_mode, spawn_session_name, wait_for_settle};
     use agentum_core::Event;
     use std::path::Path;
     use std::time::Duration;
@@ -1355,6 +1355,60 @@ mod tests {
             elapsed < Duration::from_secs(5),
             "must not wait out the full timeout on an early settle, got {elapsed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn settle_ignores_initial_boot_classification() {
+        // The watchdog's first classification of a fresh pane emits
+        // `agent.finished {"initial": true}` (the REPL booting to idle, ~1s
+        // after spawn). That is NOT the agent finishing its injected turn:
+        // counting it settled the wait at the grace boundary and tore down a
+        // just-started agent (#302). It must be ignored — with no real settle
+        // signal after it, the wait falls through at the settle timeout.
+        let (tx, _keepalive) = broadcast::channel::<Event>(16);
+        let sid = Uuid::new_v4();
+        let grace = Duration::from_millis(50);
+        let timeout = Duration::from_millis(400);
+
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = tx2.send(
+                Event::new("agent.finished")
+                    .with_session(sid, "s")
+                    .with_payload(serde_json::json!({"initial": true})),
+            );
+        });
+
+        let begin = std::time::Instant::now();
+        let outcome = wait_for_settle(&tx, sid, grace, timeout).await;
+        assert_eq!(
+            outcome,
+            SettleOutcome::TimedOut,
+            "a boot-time initial classification must never count as a settle"
+        );
+        assert!(begin.elapsed() >= timeout, "should wait out the timeout");
+    }
+
+    #[test]
+    fn spawn_session_names_are_unique_per_spawn_and_valid() {
+        // sessions.name is UNIQUE and old harness rows are only marked
+        // stopped, so a retry/re-drive reusing the previous spawn's name
+        // failed the whole run with AlreadyExists (#302). Every spawn must
+        // mint a fresh, tmux-safe, validate_name-legal name that still
+        // carries the run correlation prefix.
+        let run = Uuid::new_v4();
+        let a = spawn_session_name("pm", run);
+        let b = spawn_session_name("pm", run);
+        assert_ne!(a, b, "two spawns of the same role must not collide");
+        let prefix = format!("harness-pm-{}-", &run.simple().to_string()[..8]);
+        assert!(a.starts_with(&prefix) && b.starts_with(&prefix));
+        agentum_core::validate_name(&a).expect("name must satisfy validate_name");
+
+        // A long kind (hand-written backlog ids) is clamped, not a panic or an
+        // over-64-char name.
+        let long = spawn_session_name(&"x".repeat(100), run);
+        agentum_core::validate_name(&long).expect("clamped name must stay legal");
     }
 
     #[tokio::test]
