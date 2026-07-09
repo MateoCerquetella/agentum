@@ -228,6 +228,22 @@ pub enum TrackerPhase {
     Done,
 }
 
+impl TrackerPhase {
+    /// The lowercase wire form (the exact inverse of [`parse_tracker_phase`]).
+    /// Lives on the seam type (spec 014 F1) so the emitted
+    /// `tracker.phase_changed` payload and the persisted `tracker_phase` can
+    /// never drift; `tracker_sync::tracker_phase_wire` delegates here.
+    pub(crate) fn wire_str(self) -> &'static str {
+        match self {
+            TrackerPhase::Todo => "todo",
+            TrackerPhase::InProgress => "in_progress",
+            TrackerPhase::InReview => "in_review",
+            TrackerPhase::ReadyToTest => "ready_to_test",
+            TrackerPhase::Done => "done",
+        }
+    }
+}
+
 /// Parse a wire-format phase string (`todo` / `in_progress` / `in_review` /
 /// `ready_to_test` / `done`) into a [`TrackerPhase`]. Pure; `None` for anything
 /// else — the MCP `agentum_report_status` tool (spec 005 F4) treats that as a
@@ -799,6 +815,18 @@ async fn github_mark_blocked_with_board(
     }
 }
 
+/// Fire-and-forget emission coords for the spec-014 tracker bus events. A
+/// REQUIRED parameter on both seam fns so "transition without emitting" is
+/// unrepresentable — every existing and future caller must provide a bus (to
+/// skip emission you'd have to pass a dummy channel, visible in review).
+pub struct TrackerEmit<'a> {
+    pub bus: &'a tokio::sync::broadcast::Sender<agentum_core::Event>,
+    /// The bound workspace, when the caller knows it (reactor / poller /
+    /// attention worker). `None` for tracker-coord-only callers (harness,
+    /// MCP, planning) — consumers then join on `tracker_url`.
+    pub worktree_id: Option<&'a str>,
+}
+
 /// Drive a created feature's tracker item to `phase`, dispatching on the provider
 /// recorded when the feature was created. **Best-effort by contract**: returns
 /// `Ok(Skipped)` for providers/states that don't apply and only `Err` for a real
@@ -810,7 +838,38 @@ async fn github_mark_blocked_with_board(
 /// GitHub arm parses `owner/repo` AND the issue number from it (spec 004 — a
 /// spec-from-issue backlog derives N features from ONE issue, so `tracker_id`
 /// cannot double as the issue number). Board/Linear ignore it.
+///
+/// Spec 014 F1: on — and ONLY on — `Ok(Applied)` a `tracker.phase_changed`
+/// event is emitted on the bus. `broadcast::Sender::send` is synchronous and
+/// non-blocking; the ignored zero-receiver `Err` makes fire-and-forget
+/// structural. `Skipped`/`Err` emit nothing (the bus never lies) — including a
+/// partial write that folds into `Skipped` (the persisted-phase re-fetch
+/// reconciles clients).
 pub async fn apply_tracker_transition(
+    store: &Store,
+    provider: &str,
+    tracker_id: &str,
+    tracker_url: Option<&str>,
+    phase: TrackerPhase,
+    emit: TrackerEmit<'_>,
+) -> anyhow::Result<TransitionResult> {
+    let result = transition_inner(store, provider, tracker_id, tracker_url, phase).await;
+    if matches!(result, Ok(TransitionResult::Applied)) {
+        let _ = emit.bus.send(
+            agentum_core::Event::new("tracker.phase_changed").with_payload(serde_json::json!({
+                "worktree_id": emit.worktree_id,
+                "provider": provider,
+                "phase": phase.wire_str(),
+                "tracker_url": tracker_url,
+            })),
+        );
+    }
+    result
+}
+
+/// The pre-014 transition body, verbatim — the wrapper above owns emission so
+/// the only-on-Applied rule is enforced at exactly one `matches!` arm.
+async fn transition_inner(
     store: &Store,
     provider: &str,
     tracker_id: &str,
@@ -903,8 +962,51 @@ pub async fn apply_tracker_transition(
 /// `apply_tracker_transition` (so `drive.rs` calls both identically) but unused
 /// while blocked is GitHub-only — the GitHub arm derives owner/repo + number from
 /// `tracker_url`, and board/linear need no id to skip.
+///
+/// Spec 014 F1: on `Ok(Applied)` a `tracker.blocked` event is emitted on the
+/// bus (fire-and-forget, same rules as the pipeline seam). `reason` in the
+/// payload is the caller's `gate_label`.
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_blocked_transition(
+    store: &Store,
+    provider: &str,
+    tracker_id: &str,
+    tracker_url: Option<&str>,
+    feature_name: &str,
+    gate_label: &str,
+    attempts: u32,
+    gate_tail: &str,
+    emit: TrackerEmit<'_>,
+) -> anyhow::Result<TransitionResult> {
+    let result = blocked_inner(
+        store,
+        provider,
+        tracker_id,
+        tracker_url,
+        feature_name,
+        gate_label,
+        attempts,
+        gate_tail,
+    )
+    .await;
+    if matches!(result, Ok(TransitionResult::Applied)) {
+        let _ = emit
+            .bus
+            .send(
+                agentum_core::Event::new("tracker.blocked").with_payload(serde_json::json!({
+                    "worktree_id": emit.worktree_id,
+                    "provider": provider,
+                    "tracker_url": tracker_url,
+                    "reason": gate_label,
+                })),
+            );
+    }
+    result
+}
+
+/// The pre-014 blocked body, verbatim (see [`transition_inner`]).
+#[allow(clippy::too_many_arguments)]
+async fn blocked_inner(
     store: &Store,
     provider: &str,
     tracker_id: &str,
@@ -1721,6 +1823,12 @@ mod tests {
         assert_eq!(board_status_for(TrackerPhase::Done), "done");
     }
 
+    /// A throwaway bus for the seam's required `TrackerEmit` (spec 014 F1) —
+    /// tests that don't assert emission just need a live sender to pass.
+    fn test_bus() -> tokio::sync::broadcast::Sender<agentum_core::Event> {
+        tokio::sync::broadcast::channel(8).0
+    }
+
     #[tokio::test]
     async fn board_transition_moves_card_status() {
         let store = fresh_store().await;
@@ -1737,9 +1845,20 @@ mod tests {
             .await
             .unwrap();
 
-        let res = apply_tracker_transition(&store, "board", &r.id, None, TrackerPhase::InProgress)
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_tracker_transition(
+            &store,
+            "board",
+            &r.id,
+            None,
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(res, TransitionResult::Applied);
         let card = store
             .list_board_items()
@@ -1754,9 +1873,20 @@ mod tests {
     #[tokio::test]
     async fn board_transition_unknown_key_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_tracker_transition(&store, "board", "AG-9999", None, TrackerPhase::Done)
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_tracker_transition(
+            &store,
+            "board",
+            "AG-9999",
+            None,
+            TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
     }
 
@@ -1766,14 +1896,35 @@ mod tests {
     #[tokio::test]
     async fn github_transition_without_url_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_tracker_transition(&store, "github", "42", None, TrackerPhase::Done)
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_tracker_transition(
+            &store,
+            "github",
+            "42",
+            None,
+            TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         // Blank and unparseable (a /pull/ link) URLs are skips too.
-        let res = apply_tracker_transition(&store, "github", "42", Some("  "), TrackerPhase::Done)
-            .await
-            .unwrap();
+        let res = apply_tracker_transition(
+            &store,
+            "github",
+            "42",
+            Some("  "),
+            TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         let res = apply_tracker_transition(
             &store,
@@ -1781,10 +1932,106 @@ mod tests {
             "42",
             Some("https://github.com/o/r/pull/42"),
             TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
         )
         .await
         .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
+    }
+
+    // ---- Spec 014 F1: bus emission at the seam --------------------------------
+
+    /// AC 1: an `Applied` transition emits exactly one `tracker.phase_changed`
+    /// with the full payload. Driven through the hermetic board arm — the
+    /// emission choke point is upstream of provider dispatch, so this proves it
+    /// for all providers (the gh transport is covered by the fake-gh tests).
+    #[tokio::test]
+    async fn applied_transition_emits_phase_changed_on_bus() {
+        let store = fresh_store().await;
+        let here = std::env::temp_dir();
+        let r = TaskSink::Board
+            .create_feature(
+                &ctx(&store, &here, None),
+                &NewFeature {
+                    title: "Emit on applied".into(),
+                    body: None,
+                    labels: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        let (bus, mut rx) = tokio::sync::broadcast::channel(8);
+        let res = apply_tracker_transition(
+            &store,
+            "board",
+            &r.id,
+            None,
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: Some("repo-1::/tmp/wt"),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(res, TransitionResult::Applied);
+
+        let ev = rx.try_recv().expect("Applied emits one event");
+        assert_eq!(ev.kind, "tracker.phase_changed");
+        assert_eq!(ev.payload["worktree_id"], "repo-1::/tmp/wt");
+        assert_eq!(ev.payload["provider"], "board");
+        assert_eq!(ev.payload["phase"], "in_progress");
+        assert!(ev.payload["tracker_url"].is_null(), "board has no URL");
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly ONE event per applied transition"
+        );
+    }
+
+    /// AC 2: a skipped transition emits NOTHING — the bus never lies. Covers
+    /// the board unknown-key skip and the github hermetic no-url/unparseable
+    /// skips (the blocked seam shares the same wrapper shape).
+    #[tokio::test]
+    async fn skipped_transition_emits_nothing() {
+        let store = fresh_store().await;
+        let (bus, mut rx) = tokio::sync::broadcast::channel(8);
+        let emit = || TrackerEmit {
+            bus: &bus,
+            worktree_id: None,
+        };
+
+        let res =
+            apply_tracker_transition(&store, "board", "AG-9999", None, TrackerPhase::Done, emit())
+                .await
+                .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+
+        let res =
+            apply_tracker_transition(&store, "github", "42", None, TrackerPhase::Done, emit())
+                .await
+                .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+
+        let res = apply_blocked_transition(
+            &store,
+            "github",
+            "42",
+            None,
+            "feat",
+            "gate",
+            1,
+            "boom",
+            emit(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+
+        assert!(rx.try_recv().is_err(), "Skipped must emit nothing");
     }
 
     /// Write an executable fake `gh` into `dir` and return its path. Passed to
@@ -2059,6 +2306,7 @@ mod tests {
     #[tokio::test]
     async fn apply_blocked_transition_board_and_linear_are_skipped() {
         let store = fresh_store().await;
+        let bus = test_bus();
         for provider in ["board", "linear"] {
             let res = apply_blocked_transition(
                 &store,
@@ -2069,6 +2317,10 @@ mod tests {
                 "unit-test gate",
                 2,
                 "boom",
+                TrackerEmit {
+                    bus: &bus,
+                    worktree_id: None,
+                },
             )
             .await
             .unwrap();
@@ -2086,9 +2338,23 @@ mod tests {
     #[tokio::test]
     async fn apply_blocked_transition_github_without_url_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_blocked_transition(&store, "github", "42", None, "feat", "gate", 1, "boom")
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_blocked_transition(
+            &store,
+            "github",
+            "42",
+            None,
+            "feat",
+            "gate",
+            1,
+            "boom",
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         let res = apply_blocked_transition(
             &store,
@@ -2099,6 +2365,10 @@ mod tests {
             "gate",
             1,
             "boom",
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
         )
         .await
         .unwrap();

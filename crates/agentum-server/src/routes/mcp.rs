@@ -1204,6 +1204,10 @@ async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<St
         &id,
         url.as_deref(),
         phase,
+        crate::task_sink::TrackerEmit {
+            bus: &state.bus,
+            worktree_id: None,
+        },
     )
     .await;
     Ok(report_status_text(outcome, &provider, phase))

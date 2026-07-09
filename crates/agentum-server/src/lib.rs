@@ -510,10 +510,13 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     // Spec 012 F3/F4: the PR/merge poller. No inbound webhooks on a self-hosted
     // daemon (invariant #6) → a bounded, backed-off `gh` loop drives InReview on
     // the first non-draft PR and Done on merge for each bound github worktree.
+    // The bus rides in so an applied transition emits `tracker.phase_changed`
+    // (spec 014 F1).
     {
         let store = state.store.clone();
+        let bus = bus.clone();
         tokio::spawn(async move {
-            tracker_sync::run_pr_merge_poller(store).await;
+            tracker_sync::run_pr_merge_poller(store, bus).await;
         });
     }
 

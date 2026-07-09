@@ -28,7 +28,7 @@ use agentum_store::Store;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::task_sink::{TrackerPhase, apply_tracker_transition, parse_tracker_phase};
+use crate::task_sink::{TrackerEmit, TrackerPhase, apply_tracker_transition, parse_tracker_phase};
 
 /// The canonical monotonic rank of a pipeline phase (spec 012 §4):
 ///
@@ -53,15 +53,11 @@ fn phase_rank(phase: TrackerPhase) -> i8 {
 
 /// The lowercase wire form of a phase — the value persisted as a worktree's
 /// `tracker_phase` and re-parsed by [`parse_tracker_phase`] on the next event.
-/// The exact inverse of `parse_tracker_phase` (round-trips).
+/// The exact inverse of `parse_tracker_phase` (round-trips). A thin delegate
+/// since spec 014 moved the table onto the seam type ([`TrackerPhase::wire_str`])
+/// so the emitted event payload and the persisted value can never drift.
 pub(crate) fn tracker_phase_wire(phase: TrackerPhase) -> &'static str {
-    match phase {
-        TrackerPhase::Todo => "todo",
-        TrackerPhase::InProgress => "in_progress",
-        TrackerPhase::InReview => "in_review",
-        TrackerPhase::ReadyToTest => "ready_to_test",
-        TrackerPhase::Done => "done",
-    }
+    phase.wire_str()
 }
 
 /// The monotonic-forward guard (invariant #4). Returns `Some(target)` only when
@@ -134,7 +130,7 @@ fn tracker_id_for(provider: &str, url: &str, linked_linear_issue: Option<&str>) 
 /// workdir, and — if bound and not already advanced — fire `InProgress` and
 /// persist the phase. Best-effort/never-halt (invariant #3): every miss is a
 /// quiet return, every transport failure logs and is dropped.
-async fn react_to_session_start(store: &Store, session_id: Uuid) {
+async fn react_to_session_start(store: &Store, bus: &broadcast::Sender<Event>, session_id: Uuid) {
     let Ok(Some(session)) = store.get_session_by_id(session_id).await else {
         return;
     };
@@ -150,7 +146,11 @@ async fn react_to_session_start(store: &Store, session_id: Uuid) {
         return; // unbound, or already ≥ InProgress (converges / no regress)
     };
     let tracker_id = tracker_id_for(&provider, &url, worktree.linked_linear_issue.as_deref());
-    match apply_tracker_transition(store, &provider, &tracker_id, Some(&url), target).await {
+    let emit = TrackerEmit {
+        bus,
+        worktree_id: Some(&worktree.id),
+    };
+    match apply_tracker_transition(store, &provider, &tracker_id, Some(&url), target, emit).await {
         Ok(result) => {
             tracing::info!(
                 workdir = %workdir,
@@ -186,7 +186,7 @@ pub async fn run_session_start_reactor(store: Arc<Store>, bus: broadcast::Sender
             Ok(event) => {
                 if event.kind == "session.started" {
                     if let Some(session_id) = event.session_id {
-                        react_to_session_start(&store, session_id).await;
+                        react_to_session_start(&store, &bus, session_id).await;
                     }
                 }
             }
@@ -370,13 +370,27 @@ async fn pr_view_via_gh(program: &str, slug: &str, number: i64) -> Result<PrView
 /// the guard/terminal-stop survives a reboot.
 async fn drive_and_persist(
     store: &Store,
+    bus: &broadcast::Sender<Event>,
     worktree_id: &str,
     tracker_url: &str,
     linked_linear_issue: Option<&str>,
     target: TrackerPhase,
 ) {
     let tracker_id = tracker_id_for("github", tracker_url, linked_linear_issue);
-    match apply_tracker_transition(store, "github", &tracker_id, Some(tracker_url), target).await {
+    let emit = TrackerEmit {
+        bus,
+        worktree_id: Some(worktree_id),
+    };
+    match apply_tracker_transition(
+        store,
+        "github",
+        &tracker_id,
+        Some(tracker_url),
+        target,
+        emit,
+    )
+    .await
+    {
         Ok(result) => {
             tracing::info!(worktree = %worktree_id, ?target, ?result, "poller tracker transition");
             if let Err(e) = crate::routes::worktrees::persist_tracker_progress(
@@ -410,7 +424,11 @@ impl PollTick {
 /// One poll tick: for each bound, non-Done github worktree with a branch, detect
 /// its PR lifecycle. F3 handles PR-open → InReview + persist `linked_pr`. (F4
 /// extends this with merge → Done for a worktree that already has a `linked_pr`.)
-async fn poll_pr_lifecycle_once(store: &Store, program: &str) -> PollTick {
+async fn poll_pr_lifecycle_once(
+    store: &Store,
+    bus: &broadcast::Sender<Event>,
+    program: &str,
+) -> PollTick {
     let mut tick = PollTick::default();
     let worktrees: Vec<crate::routes::worktrees::TrackerWorktree> =
         crate::routes::worktrees::list_tracker_worktrees()
@@ -454,6 +472,7 @@ async fn poll_pr_lifecycle_once(store: &Store, program: &str) -> PollTick {
                     if poll_pr_open_decision(w.tracker_phase.as_deref(), &pr).is_some() {
                         drive_and_persist(
                             store,
+                            bus,
                             &w.id,
                             url,
                             w.linked_linear_issue.as_deref(),
@@ -481,6 +500,7 @@ async fn poll_pr_lifecycle_once(store: &Store, program: &str) -> PollTick {
                         // "done" makes the terminal-stop restart-safe.
                         drive_and_persist(
                             store,
+                            bus,
                             &w.id,
                             url,
                             w.linked_linear_issue.as_deref(),
@@ -503,7 +523,7 @@ async fn poll_pr_lifecycle_once(store: &Store, program: &str) -> PollTick {
 /// 45s), drive InReview on the first non-draft PR and Done on merge, for every
 /// bound github worktree. Bounded + backed-off + never-halt. Spawned at server
 /// boot beside the other background workers.
-pub async fn run_pr_merge_poller(store: Arc<Store>) {
+pub async fn run_pr_merge_poller(store: Arc<Store>, bus: broadcast::Sender<Event>) {
     let secs = std::env::var("AGENTUM_TRACKER_POLL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -517,7 +537,7 @@ pub async fn run_pr_merge_poller(store: Arc<Store>) {
         let wait = base * 2u32.pow(consecutive_failed_ticks.min(4));
         tokio::time::sleep(wait).await;
         let program = crate::github_projects::gh_bin();
-        let tick = poll_pr_lifecycle_once(&store, &program).await;
+        let tick = poll_pr_lifecycle_once(&store, &bus, &program).await;
         if tick.all_failed() {
             consecutive_failed_ticks = consecutive_failed_ticks.saturating_add(1);
         } else {

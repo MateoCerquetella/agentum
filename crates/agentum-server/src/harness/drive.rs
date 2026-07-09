@@ -328,6 +328,10 @@ async fn handle_gate_failure(
                 gate_label,
                 attempts,
                 &tail(output, 2000),
+                crate::task_sink::TrackerEmit {
+                    bus: &state.bus,
+                    worktree_id: None,
+                },
             )
             .await
             {
@@ -391,6 +395,10 @@ async fn transition_tracker(
         &feature.id,
         feature.tracker_url.as_deref(),
         phase,
+        crate::task_sink::TrackerEmit {
+            bus: &state.bus,
+            worktree_id: None,
+        },
     )
     .await
     {

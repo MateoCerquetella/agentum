@@ -608,6 +608,10 @@ async fn plan_goal_harness(
                 &id,
                 url.as_deref(),
                 crate::task_sink::TrackerPhase::Todo,
+                crate::task_sink::TrackerEmit {
+                    bus: &state.bus,
+                    worktree_id: None,
+                },
             )
             .await
             {
