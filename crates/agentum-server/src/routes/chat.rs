@@ -662,7 +662,12 @@ async fn retrieve_wiki_for_query(workdir: Option<&str>, query: &str) -> Option<S
 /// the query (the last user message) and delegates to `retrieve_wiki_for_query`
 /// — zero behavior change for `chat()`. No user turn → `None`.
 async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Option<String> {
-    let query = messages.iter().rev().find(|m| m.role == "user")?.content.clone();
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")?
+        .content
+        .clone();
     retrieve_wiki_for_query(workdir, &query).await
 }
 
@@ -1881,8 +1886,7 @@ pub(crate) async fn draft_issue_body(
     // best-effort — a wiki miss (no sidecar, model mismatch, blank title) yields
     // `None` and the draft still proceeds from the repo snapshot alone.
     let wiki = retrieve_wiki_for_query(workdir, title).await;
-    let instructions =
-        draft_body_instructions(repo_slug, repo_context.as_deref(), wiki.as_deref());
+    let instructions = draft_body_instructions(repo_slug, repo_context.as_deref(), wiki.as_deref());
     let system = build_system(&auth, &instructions);
     let messages = vec![json!({ "role": "user", "content": draft_body_user_message(title) })];
 
@@ -3006,8 +3010,7 @@ mod tests {
     fn draft_body_instructions_is_provider_neutral() {
         // Open question 1: the body is provider-agnostic (reused for Linear), so
         // the drafting instructions must not hard-code "GitHub".
-        let instructions =
-            draft_body_instructions(Some("o/r"), Some("ctx"), Some("wiki"));
+        let instructions = draft_body_instructions(Some("o/r"), Some("ctx"), Some("wiki"));
         assert!(instructions.contains("The repository is `o/r`."));
         assert!(!instructions.contains("GitHub repository"));
     }
@@ -3017,7 +3020,11 @@ mod tests {
         // Non-fatal by contract: no workdir (and a blank query) yield `None`,
         // never a panic — the drafter proceeds from repo context alone.
         assert!(retrieve_wiki_for_query(None, "anything").await.is_none());
-        assert!(retrieve_wiki_for_query(Some("/nonexistent/path"), "   ").await.is_none());
+        assert!(
+            retrieve_wiki_for_query(Some("/nonexistent/path"), "   ")
+                .await
+                .is_none()
+        );
     }
 
     #[test]

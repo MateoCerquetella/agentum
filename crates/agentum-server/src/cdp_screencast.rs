@@ -702,10 +702,7 @@ mod tests {
         assert_eq!(out[0]["method"], "Input.insertText");
         assert_eq!(out[0]["params"]["text"], "pasted");
         // Paste is a human action (grabs the co-browse wheel like a keypress).
-        assert!(InputCommand::InsertText {
-            text: "x".into()
-        }
-        .is_human_action());
+        assert!(InputCommand::InsertText { text: "x".into() }.is_human_action());
     }
 
     #[test]
