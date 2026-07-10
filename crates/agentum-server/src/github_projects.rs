@@ -528,11 +528,8 @@ async fn run_gh_graphql(
 /// every call), so a scope/auth/network miss classifies identically at bind
 /// time and mid-run.
 async fn run_gh_graphql_argv(program: &str, argv: &[String]) -> Result<Value, ProjectsError> {
-    let fut = crate::task_sink::output_with_etxtbsy_retry(
-        program,
-        argv,
-        crate::task_sink::neutral_cwd(),
-    );
+    let fut =
+        crate::task_sink::output_with_etxtbsy_retry(program, argv, crate::task_sink::neutral_cwd());
     let output = match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
         Err(_) => return Err(ProjectsError::new("network_error", "gh timed out")),
         Ok(Err(e)) => {
@@ -750,11 +747,8 @@ fn gh_issue_reopen_argv<'a>(number: &'a str, slug: &'a str) -> [&'a str; 5] {
 /// hung or failing `gh` degrades to a reason string, never a stalled
 /// transition.
 async fn run_gh_capture(program: &str, args: &[&str]) -> Result<String, String> {
-    let fut = crate::task_sink::output_with_etxtbsy_retry(
-        program,
-        args,
-        crate::task_sink::neutral_cwd(),
-    );
+    let fut =
+        crate::task_sink::output_with_etxtbsy_retry(program, args, crate::task_sink::neutral_cwd());
     let output = match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
         Err(_) => return Err("gh timed out".into()),
         Ok(Err(e)) => return Err(format!("failed to run `{program}`: {e}")),
