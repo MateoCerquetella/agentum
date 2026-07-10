@@ -492,11 +492,13 @@ fn map_row(item: &Value, position: usize) -> Value {
     })
 }
 
-// A ProjectV2View → the renderer's GitHubProjectView. `groupByFields` drives the
-// Board (Kanban) layout's columns and any Table view's group headers, so it is
-// queried and mapped. `sortByFields` stays empty on purpose: leaving it unset
-// makes rows fall back to item `position` (GitHub's manual board order, which is
-// exactly right within a board column) and avoids changing Table view ordering.
+// A ProjectV2View → the renderer's GitHubProjectView. `verticalGroupByFields`
+// is GitHub's model of a Board view's columns (usually Status) and drives the
+// Kanban renderer; `groupByFields` drives Table group headers (on a Board it is
+// the optional swimlane grouping, typically empty). Both are queried and
+// mapped. `sortByFields` stays empty on purpose: leaving it unset makes rows
+// fall back to item `position` (GitHub's manual board order, which is exactly
+// right within a board column) and avoids changing Table view ordering.
 fn map_view(node: &Value) -> Value {
     json!({
         "id": str_at(node, "id"),
@@ -506,6 +508,7 @@ fn map_view(node: &Value) -> Value {
         "filter": node.get("filter").and_then(Value::as_str).unwrap_or(""),
         "fields": nodes_map(node.get("fields"), map_field),
         "groupByFields": nodes_map(node.get("groupByFields"), map_field),
+        "verticalGroupByFields": nodes_map(node.get("verticalGroupByFields"), map_field),
         "sortByFields": [],
     })
 }
@@ -785,6 +788,7 @@ pub async fn gh_get_project_view_table(
                   id number name layout filter
                   fields(first: 50) {{ nodes {{ {FIELD_SELECTION} }} }}
                   groupByFields(first: 20) {{ nodes {{ {FIELD_SELECTION} }} }}
+                  verticalGroupByFields(first: 20) {{ nodes {{ {FIELD_SELECTION} }} }}
                 }}
               }}
             }}
@@ -1068,6 +1072,27 @@ mod tests {
         let mapped = map_field(&node);
         assert_eq!(mapped["kind"], "field");
         assert_eq!(mapped["dataType"], "TITLE");
+    }
+
+    #[test]
+    fn map_view_carries_board_column_field() {
+        // A Board view's columns arrive in `verticalGroupByFields` (usually
+        // Status); `groupByFields` holds only the optional swimlane grouping.
+        let node = json!({
+            "id": "V1", "number": 1, "name": "Backlog", "layout": "BOARD_LAYOUT",
+            "filter": null,
+            "fields": { "nodes": [] },
+            "groupByFields": { "nodes": [] },
+            "verticalGroupByFields": { "nodes": [{
+                "__typename": "ProjectV2SingleSelectField",
+                "id": "F1", "name": "Status", "dataType": "SINGLE_SELECT",
+                "options": [{ "id": "o1", "name": "Todo", "color": "GRAY" }]
+            }] }
+        });
+        let mapped = map_view(&node);
+        assert_eq!(mapped["groupByFields"], json!([]));
+        assert_eq!(mapped["verticalGroupByFields"][0]["id"], "F1");
+        assert_eq!(mapped["verticalGroupByFields"][0]["kind"], "single-select");
     }
 
     #[test]

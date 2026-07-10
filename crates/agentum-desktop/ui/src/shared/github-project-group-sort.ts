@@ -95,7 +95,16 @@ export function groupRows(
   table: GitHubProjectTable,
   rowsInOrder: GitHubProjectRow[]
 ): ProjectGroup[] {
-  const groupField = table.selectedView.groupByFields[0]
+  return groupRowsByField(table.selectedView.groupByFields[0] ?? null, rowsInOrder)
+}
+
+// Why: Table grouping and Board columns bucket rows identically but are driven
+// by different view fields (`groupByFields` vs `verticalGroupByFields`), so the
+// bucketing takes the field explicitly instead of reading it off the view.
+function groupRowsByField(
+  groupField: GitHubProjectField | null,
+  rowsInOrder: GitHubProjectRow[]
+): ProjectGroup[] {
   if (!groupField) {
     return [{ key: 'all', label: '', iteration: null, rows: rowsInOrder }]
   }
@@ -171,7 +180,13 @@ export type ProjectBoard = {
 // appends a trailing "No <field>" column so unset items are visible and the
 // field can be cleared by dragging there.
 export function boardColumns(table: GitHubProjectTable): ProjectBoard {
-  const field = table.selectedView.groupByFields[0] ?? null
+  // Why: GitHub exposes a board's column field as `verticalGroupByFields`;
+  // `groupByFields` on a Board view is the optional swimlane grouping and is
+  // empty for a typical board — reading only it collapsed every board into a
+  // single read-only "All" column. Fall back to `groupByFields` for cached
+  // payloads that predate `verticalGroupByFields`.
+  const field =
+    table.selectedView.verticalGroupByFields?.[0] ?? table.selectedView.groupByFields[0] ?? null
   const sorted = sortRows(table, table.rows)
   if (!field) {
     return {
@@ -182,10 +197,10 @@ export function boardColumns(table: GitHubProjectTable): ProjectBoard {
     }
   }
 
-  // Reuse groupRows' bucketing (and its computed labels) so a card's column
-  // matches its Table group header exactly. Buckets are keyed by option id /
-  // iteration id / EMPTY_GROUP_KEY.
-  const groups = groupRows(table, sorted)
+  // Reuse the Table grouping's bucketing (and its computed labels) so a card's
+  // column matches what a group header would show for the same field. Buckets
+  // are keyed by option id / iteration id / EMPTY_GROUP_KEY.
+  const groups = groupRowsByField(field, sorted)
   const byKey = new Map(groups.map((g) => [g.key, g]))
   const rowsFor = (key: string): GitHubProjectRow[] => byKey.get(key)?.rows ?? []
   const consumed = new Set<string>([EMPTY_GROUP_KEY])

@@ -694,11 +694,9 @@ async fn commit_scaffold_files(workdir: &Path) -> CommitReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // `json!` and the git helpers below are used only by the `#[cfg(unix)]`
-    // tests, so they read as dead on Windows under `-D warnings`. Allow rather
-    // than cfg-gate each, keeping the helpers available if a cross-platform test
-    // later needs them.
-    #[allow(unused_imports)]
+    // Why: only the #[cfg(unix)] tests below use json!; an unconditional
+    // import is an unused-import error on Windows under -D warnings.
+    #[cfg(unix)]
     use serde_json::json;
 
     // ─── Argv pins ──────────────────────────────────────────────────────────
@@ -794,8 +792,9 @@ mod tests {
 
     /// A temp repo with one initial commit. Repo-local identity + gpgsign off
     /// so the provision commit works on any machine/CI regardless of global
-    /// git config.
-    #[allow(dead_code)] // unix-only test helper (unused on Windows)
+    /// git config. Unix-gated like every test that calls it — dead code on
+    /// Windows fails -D warnings.
+    #[cfg(unix)]
     fn init_repo(root: &Path) -> PathBuf {
         let workdir = root.join("repo");
         std::fs::create_dir_all(&workdir).unwrap();
@@ -811,7 +810,7 @@ mod tests {
 
     /// The run-twice fixture: the repo above + a bare `origin` so the plain
     /// push has somewhere real to land.
-    #[allow(dead_code)] // unix-only test helper (unused on Windows)
+    #[cfg(unix)]
     fn init_repo_with_origin(root: &Path) -> PathBuf {
         let workdir = init_repo(root);
         git(root, &["init", "--quiet", "--bare", "origin.git"]);
@@ -823,7 +822,7 @@ mod tests {
         workdir
     }
 
-    #[allow(dead_code)] // unix-only test helper (unused on Windows)
+    #[cfg(unix)]
     fn commit_count(workdir: &Path) -> u32 {
         git(workdir, &["rev-list", "--count", "HEAD"])
             .trim()
@@ -866,7 +865,7 @@ mod tests {
         script
     }
 
-    #[allow(dead_code)] // unix-only test helper (unused on Windows)
+    #[cfg(unix)]
     fn sample_binding() -> BoardBinding {
         BoardBinding {
             project_id: "PVT_old".into(),

@@ -1095,6 +1095,11 @@ fn home_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    // Why: `isolate_home()` hands each test a `TEST_ENV_LOCK` guard that must
+    // span the whole test body — including awaits — to serialize AGENTUM_HOME
+    // mutation across the crate's tests. Each #[tokio::test] runs on its own
+    // single-thread runtime, so blocking peers on the std mutex is safe.
+    #![allow(clippy::await_holding_lock)]
     use super::*;
     use std::path::Path;
 
