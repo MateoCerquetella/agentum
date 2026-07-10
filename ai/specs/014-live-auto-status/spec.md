@@ -1,7 +1,7 @@
 # Spec 014 — Auto-status you can SEE: live tracker phase inside agentum + agent-attention signal
 
 - **Number:** 014
-- **Status:** PM             <!-- Draft | PM | Architect | In progress | Done -->
+- **Status:** Done             <!-- Draft | PM | Architect | In progress | Done -->
 - **Surface:** `crates/agentum-server` (bus event on transition, watchdog→blocked bridge) + `crates/agentum-desktop/ui` (live phase chip, Projects-board live refresh)
 - **Author:** Mateo (via /sdd-spec)
 - **Date:** 2026-07-09
