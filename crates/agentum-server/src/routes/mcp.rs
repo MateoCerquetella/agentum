@@ -1298,8 +1298,8 @@ fn prompts_get(params: Option<&Value>) -> Result<Value, (i64, String)> {
         .and_then(|p| p.get("name"))
         .and_then(Value::as_str)
         .ok_or((-32602, "missing prompt name".to_string()))?;
-    let playbook = crate::sdd::get(name)
-        .ok_or_else(|| (-32602, format!("unknown prompt: {name}")))?;
+    let playbook =
+        crate::sdd::get(name).ok_or_else(|| (-32602, format!("unknown prompt: {name}")))?;
     let args = params
         .and_then(|p| p.get("arguments"))
         .and_then(|a| a.get("args"))
@@ -1432,15 +1432,25 @@ mod tests {
     fn tool_sdd_lists_fetches_and_rejects_unknown_playbooks() {
         // No name → a discoverable list of all six playbooks.
         let list = tool_sdd(&json!({})).unwrap();
-        for name in ["sdd-spec", "sdd-spec-socratic", "sdd-orchestrate", "sdd-status"] {
+        for name in [
+            "sdd-spec",
+            "sdd-spec-socratic",
+            "sdd-orchestrate",
+            "sdd-status",
+        ] {
             assert!(list.contains(name), "list mentions {name}");
         }
         // Named fetch → the playbook body (with args appended when given).
         let body = tool_sdd(&json!({ "name": "sdd-orchestrate", "args": "autonomous" })).unwrap();
-        assert!(body.contains("validate_handoff"), "carries the real procedure");
+        assert!(
+            body.contains("validate_handoff"),
+            "carries the real procedure"
+        );
         assert!(body.contains("Arguments: autonomous"));
         // Unknown → an actionable error, not a silent empty result.
-        let err = tool_sdd(&json!({ "name": "sdd-nope" })).unwrap_err().to_string();
+        let err = tool_sdd(&json!({ "name": "sdd-nope" }))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("sdd-nope") && err.contains("list"));
     }
 

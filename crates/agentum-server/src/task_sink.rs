@@ -630,10 +630,7 @@ fn gh_bin() -> String {
 /// Err carries stderr truncated to ~240 chars. Bounded by a 30s timeout so a
 /// hung `gh` (network stall) degrades to a `Skipped`, never a stalled run.
 async fn run_gh(program: &str, args: &[&str]) -> Result<(), String> {
-    let fut = tokio::process::Command::new(program)
-        .args(args)
-        .current_dir(neutral_cwd())
-        .output();
+    let fut = output_with_etxtbsy_retry(program, args, neutral_cwd());
     let output = match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
         Err(_) => return Err("gh timed out".into()),
         Ok(Err(e)) => return Err(format!("failed to run `{program}`: {e}")),
@@ -1132,6 +1129,37 @@ fn push_label_args(argv: &mut Vec<String>, labels: &[String]) {
 /// from the same neutral cwd as issue creation (spec 002).
 pub(crate) fn neutral_cwd() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_else(std::env::temp_dir)
+}
+
+/// Spawn one subprocess and capture its output, retrying briefly on ETXTBSY
+/// (os error 26). Under the parallel test runner, another test thread's fork
+/// can transiently inherit a just-written fake-gh script's write fd, so this
+/// thread's exec hits "Text file busy" — a fixture race that made the suite
+/// flaky ~1-in-3, never a real failure (production binaries aren't being
+/// written to, so the retry is dead code there). Shared by every gh/git
+/// runner (`run_gh`, the two `run_gh_capture`s, `run_gh_graphql_argv`,
+/// `provision::run_in`) so the fix lives in ONE place; callers keep their own
+/// timeout/error shaping around it.
+pub(crate) async fn output_with_etxtbsy_retry(
+    program: &str,
+    args: &[impl AsRef<std::ffi::OsStr>],
+    cwd: impl AsRef<std::path::Path>,
+) -> std::io::Result<std::process::Output> {
+    let mut attempt = 0;
+    loop {
+        match tokio::process::Command::new(program)
+            .args(args.iter().map(AsRef::as_ref))
+            .current_dir(cwd.as_ref())
+            .output()
+            .await
+        {
+            Err(e) if e.raw_os_error() == Some(26) && attempt < 3 => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            }
+            other => return other,
+        }
+    }
 }
 
 /// Parse the issue URL `gh issue create` prints to stdout into a [`FeatureRef`].

@@ -312,7 +312,13 @@ fn emit_loop_stopped(state: &AppState, id: Uuid, name: &str, reason: &str, steps
 /// The loop worker: drive to a terminal reason, then clean up — but only if
 /// this activation still owns the map entry (a re-toggle may have replaced it,
 /// and the successor's entry/stop-event are not ours to touch).
-async fn run_loop(state: AppState, id: Uuid, generation: u64, step: Arc<AtomicU32>, max_steps: u32) {
+async fn run_loop(
+    state: AppState,
+    id: Uuid,
+    generation: u64,
+    step: Arc<AtomicU32>,
+    max_steps: u32,
+) {
     let reason = drive_sdd_loop(&state, id, &step, max_steps).await;
     let is_current = {
         let mut map = state.sdd_loops.lock().expect("sdd_loops lock");
@@ -490,7 +496,10 @@ mod tests {
         )
         .await;
         assert!(err.is_err());
-        assert!(state.sdd_loops.lock().unwrap().is_empty(), "no worker spawned");
+        assert!(
+            state.sdd_loops.lock().unwrap().is_empty(),
+            "no worker spawned"
+        );
     }
 
     #[tokio::test]
