@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   ChevronsUpDown,
+  FolderOpen,
   FolderPlus,
   GitBranch,
   KanbanSquare,
@@ -30,9 +31,13 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { api } from '@/tauri'
+import { toast } from 'sonner'
 import { searchRuntimeRepoBaseRefs } from '@/runtime/runtime-repo-client'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
+import { useMountedRef } from '@/hooks/useMountedRef'
+import { RemoteFileBrowser } from '@/components/sidebar/RemoteFileBrowser'
 import { useComposerState } from '@/hooks/useComposerState'
 import {
   pickQuickWorkspaceAgent,
@@ -124,7 +129,6 @@ export default function CreateWorkspaceWizard({
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
   const addRepoFromStore = useAppStore((s) => s.addRepo)
   const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
-  const openModal = useAppStore((s) => s.openModal)
   // Spec 011 F2: the issue picker resolves its Project from the selected repo's
   // per-repo binding first; the globally-active Project
   // (settings.githubProjects.activeProject) is the fallback (spec 012 behavior,
@@ -216,6 +220,10 @@ export default function CreateWorkspaceWizard({
 
   const [step, setStep] = useState<WizardStep>(1)
   const [addingRepo, setAddingRepo] = useState(false)
+  // Spec: SSH/remote "Add project" is inline in the wizard (not a separate
+  // dialog) — this toggles the inline remote-add panel in step 2. Reset on host
+  // switch so it never lingers over a host that can't use it.
+  const [remoteAddOpen, setRemoteAddOpen] = useState(false)
   // Badge the host we opened on ("last used") — captured once so re-selecting
   // doesn't move the badge around.
   const lastUsedHostKeyRef = useRef(selectedHostKey)
@@ -272,22 +280,25 @@ export default function CreateWorkspaceWizard({
     setStep((prev) => (prev > 1 ? ((prev - 1) as WizardStep) : prev))
   }, [])
 
+  // The SSH connection behind the selected host (`ssh:<id>` → id), or '' for
+  // the local machine. Drives whether "Add project" adds locally or remotely.
+  const selectedConnectionId = selectedHostKey.startsWith('ssh:')
+    ? selectedHostKey.slice('ssh:'.length)
+    : ''
+
   // Step 2 "Add project": register a repo without leaving the wizard, so the
-  // user never has to bail to the sidebar and lose their place. On a local host
-  // this opens the native folder picker (`store.addRepo`) and selects the new
-  // repo, letting them continue straight to the worktree fields. An SSH host's
-  // filesystem isn't reachable by the OS picker, so route to the add-repo
-  // dialog's Remote step with the host preselected (mirrors the composer card's
-  // `handleAddRepo`).
+  // user never has to bail to the sidebar and lose their place. Both host kinds
+  // stay in the wizard and end by selecting the new repo — one consistent flow.
+  // Local uses the native OS folder picker (`store.addRepo`). An SSH host's
+  // filesystem isn't reachable by that picker, so it opens the inline
+  // remote-add panel (`AddRemoteProjectPanel`) — the host is already chosen in
+  // step 1, so no separate dialog/target-picker is needed.
   const handleAddRepo = useCallback(async () => {
     if (addingRepo) {
       return
     }
-    const connectionId = selectedHostKey.startsWith('ssh:')
-      ? selectedHostKey.slice('ssh:'.length)
-      : ''
-    if (connectionId) {
-      openModal('add-repo', { connectionId })
+    if (selectedConnectionId) {
+      setRemoteAddOpen(true)
       return
     }
     setAddingRepo(true)
@@ -305,7 +316,23 @@ export default function CreateWorkspaceWizard({
     } finally {
       setAddingRepo(false)
     }
-  }, [addingRepo, addRepoFromStore, fetchWorktrees, onRepoChange, openModal, selectedHostKey])
+  }, [addingRepo, addRepoFromStore, fetchWorktrees, onRepoChange, selectedConnectionId])
+
+  // Collapse the inline remote-add panel whenever the host changes — it's
+  // connection-specific and must not carry over to a different (or local) host.
+  useEffect(() => {
+    setRemoteAddOpen(false)
+  }, [selectedHostKey])
+
+  // A remote repo landed: select it and collapse the panel, mirroring the
+  // local add's "auto-select and stay in the wizard" outcome.
+  const handleRemoteRepoAdded = useCallback(
+    (repoId: string) => {
+      onRepoChange(repoId)
+      setRemoteAddOpen(false)
+    },
+    [onRepoChange]
+  )
 
   const handlePrimary = useCallback(() => {
     if (step === 3) {
@@ -433,6 +460,10 @@ export default function CreateWorkspaceWizard({
               onConnect={onConnectSelectedRepo}
               onAddRepo={handleAddRepo}
               addingRepo={addingRepo}
+              connectionId={selectedConnectionId}
+              remoteAddOpen={remoteAddOpen}
+              onCloseRemoteAdd={() => setRemoteAddOpen(false)}
+              onRemoteRepoAdded={handleRemoteRepoAdded}
             />
           ) : null}
 
@@ -652,7 +683,11 @@ function RepoStep({
   connectInProgress,
   onConnect,
   onAddRepo,
-  addingRepo
+  addingRepo,
+  connectionId,
+  remoteAddOpen,
+  onCloseRemoteAdd,
+  onRemoteRepoAdded
 }: {
   hostLabel: string
   repos: Repo[]
@@ -671,6 +706,12 @@ function RepoStep({
   onConnect: () => Promise<void>
   onAddRepo: () => void | Promise<void>
   addingRepo: boolean
+  /** SSH connection behind the host (`ssh:<id>` → id), or '' for local. */
+  connectionId: string
+  /** Whether the inline remote-add panel is open (SSH hosts only). */
+  remoteAddOpen: boolean
+  onCloseRemoteAdd: () => void
+  onRemoteRepoAdded: (repoId: string) => void
 }): React.JSX.Element {
   // Many-project hosts render a wall of repo rows the operator has to scroll
   // past — collapse to the first few, with a search field + "show all" expander
@@ -699,7 +740,9 @@ function RepoStep({
       {repos.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border px-4 py-6 text-center">
           <span className="text-[12.5px] text-muted-foreground">No repos on {hostLabel} yet.</span>
-          <AddProjectButton onAddRepo={onAddRepo} addingRepo={addingRepo} variant="solid" />
+          {!remoteAddOpen ? (
+            <AddProjectButton onAddRepo={onAddRepo} addingRepo={addingRepo} variant="solid" />
+          ) : null}
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
@@ -775,9 +818,24 @@ function RepoStep({
             </button>
           ) : null}
 
-          <AddProjectButton onAddRepo={onAddRepo} addingRepo={addingRepo} variant="row" />
+          {!remoteAddOpen ? (
+            <AddProjectButton onAddRepo={onAddRepo} addingRepo={addingRepo} variant="row" />
+          ) : null}
         </div>
       )}
+
+      {/* SSH/remote "Add project" stays in the wizard: the host is already
+          chosen, so we collect just a remote path (with a remote file browser)
+          and select the new repo — no separate dialog, no "choose how to start"
+          fork. Only rendered for SSH hosts (connectionId set). */}
+      {connectionId && remoteAddOpen ? (
+        <AddRemoteProjectPanel
+          connectionId={connectionId}
+          hostLabel={hostLabel}
+          onAdded={onRemoteRepoAdded}
+          onCancel={onCloseRemoteAdd}
+        />
+      ) : null}
 
       {requiresConnection ? (
         <button
@@ -844,10 +902,213 @@ function RepoStep({
 }
 
 /**
+ * Inline SSH/remote "Add project" — the in-wizard counterpart to the local
+ * native folder picker. The SSH host is already chosen in step 1, so this only
+ * needs a remote path (typed, or picked via the shared `RemoteFileBrowser`),
+ * then registers the repo through `api.repos.addRemote` and hands the id back so
+ * the wizard selects it. No separate dialog, no "choose how to start" setup step
+ * — the user stays in the wizard exactly like the local flow.
+ *
+ * `api.repos.addRemote` doesn't touch the store, so we upsert the returned repo
+ * ourselves (mirrors `AddRepoDialog`/`AddProjectFromFolderDialog`) so it appears
+ * in the host-scoped list and is selectable.
+ */
+function AddRemoteProjectPanel({
+  connectionId,
+  hostLabel,
+  onAdded,
+  onCancel
+}: {
+  connectionId: string
+  hostLabel: string
+  onAdded: (repoId: string) => void
+  onCancel: () => void
+}): React.JSX.Element {
+  const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
+  const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
+  const [remotePath, setRemotePath] = useState('~/')
+  const [browsing, setBrowsing] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [connecting, setConnecting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const mountedRef = useMountedRef()
+
+  const connected = sshConnectionStates.get(connectionId)?.status === 'connected'
+
+  const handleConnect = useCallback(async () => {
+    setConnecting(true)
+    setError(null)
+    try {
+      // Dynamic import: server-host-client pulls in `@/store`; a static import
+      // from this wizard chunk risks the known boot-time TDZ cycle. Deferring to
+      // call time keeps the module graph acyclic (mirrors the repo store slice).
+      const { connectSshTargetViaServer } = await import('@/runtime/server-host-client')
+      const result = await connectSshTargetViaServer(connectionId)
+      if (!result.ok && mountedRef.current) {
+        setError(result.message)
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      if (mountedRef.current) {
+        setConnecting(false)
+      }
+    }
+  }, [connectionId, mountedRef])
+
+  const handleAdd = useCallback(async () => {
+    const path = remotePath.trim()
+    if (!path || adding) {
+      return
+    }
+    setAdding(true)
+    setError(null)
+    try {
+      const result = await api.repos.addRemote({ connectionId, remotePath: path })
+      if ('error' in result) {
+        if (mountedRef.current) {
+          setError(result.error)
+        }
+        return
+      }
+      const repo = result.repo
+      const state = useAppStore.getState()
+      const existingIdx = state.repos.findIndex((r) => r.id === repo.id)
+      if (existingIdx === -1) {
+        useAppStore.setState({ repos: [...state.repos, repo] })
+      } else {
+        state.clearAgentumHookTrustForRepo(repo.id)
+        const updated = [...state.repos]
+        updated[existingIdx] = repo
+        useAppStore.setState({ repos: updated })
+      }
+      toast.success('Remote project added', { description: repo.displayName })
+      await fetchWorktrees(repo.id)
+      if (!mountedRef.current) {
+        return
+      }
+      onAdded(repo.id)
+    } catch (err) {
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      if (mountedRef.current) {
+        setAdding(false)
+      }
+    }
+  }, [adding, connectionId, fetchWorktrees, mountedRef, onAdded, remotePath])
+
+  if (browsing) {
+    return (
+      <div className="rounded-lg border border-border bg-secondary/40 p-2">
+        <RemoteFileBrowser
+          targetId={connectionId}
+          initialPath={remotePath || '~'}
+          onSelect={(path) => {
+            setRemotePath(path)
+            setBrowsing(false)
+          }}
+          onCancel={() => setBrowsing(false)}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-border bg-secondary/40 p-3">
+      <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+        Add a project on {hostLabel}
+      </span>
+
+      {!connected ? (
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[12px] text-muted-foreground">
+            Connect to browse this host&apos;s folders.
+          </span>
+          <button
+            type="button"
+            onClick={() => void handleConnect()}
+            disabled={connecting}
+            className="inline-flex flex-none items-center gap-2 rounded-md border border-border px-3 py-1.5 text-[12.5px] text-foreground transition-colors hover:border-muted-foreground/40 disabled:opacity-60"
+          >
+            {connecting ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <PlugZap className="size-3.5" />
+            )}
+            {connecting ? 'Connecting…' : 'Connect'}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="flex gap-2">
+            <input
+              value={remotePath}
+              onChange={(event) => {
+                setRemotePath(event.target.value)
+                setError(null)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && remotePath.trim() && !adding) {
+                  event.preventDefault()
+                  void handleAdd()
+                }
+              }}
+              placeholder="/home/user/project"
+              spellCheck={false}
+              disabled={adding}
+              className="h-[34px] min-w-0 flex-1 rounded-md border border-input bg-secondary px-2.5 font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+            />
+            <button
+              type="button"
+              onClick={() => setBrowsing(true)}
+              disabled={adding}
+              aria-label="Browse remote folders"
+              className="inline-flex size-[34px] flex-none items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:opacity-60"
+            >
+              <FolderOpen className="size-3.5" />
+            </button>
+          </div>
+
+          {error ? <span className="text-[11px] text-destructive">{error}</span> : null}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-md px-2 py-1 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Cancel
+            </button>
+            <span className="flex-1" />
+            <button
+              type="button"
+              onClick={() => void handleAdd()}
+              disabled={!remotePath.trim() || adding}
+              className="inline-flex items-center gap-2 rounded-md bg-primary px-3.5 py-1.5 text-[12.5px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {adding ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <FolderPlus className="size-3.5" />
+              )}
+              {adding ? 'Adding…' : 'Add project'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
  * The step-2 "Add project" affordance. `solid` is the primary CTA shown in the
  * empty state; `row` is the dashed, list-aligned entry rendered under an
  * existing repo list. Both call `onAddRepo` (local: native folder picker →
- * auto-select; SSH: the add-repo Remote dialog).
+ * auto-select; SSH: the inline remote-add panel).
  */
 function AddProjectButton({
   onAddRepo,
