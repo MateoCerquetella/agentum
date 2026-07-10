@@ -16,12 +16,15 @@
 // made the stream feel like a laggy VPS. Mouse-move is likewise coalesced to one
 // send per frame so a drag doesn't flood the input channel.
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import type { BrowserPage } from '../../../../shared/types'
 import {
   decodeBrowserScreencastFrame,
   type BrowserScreencastFrameMetadata
 } from '../../../../shared/browser-screencast-protocol'
 import {
+  clearProjectCdpData,
   openCdpScreencast,
   type CdpScreencastSubscription
 } from '../../runtime/cdp-screencast-client'
@@ -34,6 +37,17 @@ import {
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
 import { clientToDevicePoint } from './screencast-geometry'
+import { deriveProjectRepoId } from '../../lib/browser-project'
+import { api } from '@/tauri'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 
 /** Device scale the page lays out at, sent via `sendViewport`. Kept at 1× to match
  *  the server's 1× capture (`cdp_device_scale` → `--force-device-scale-factor`):
@@ -472,6 +486,44 @@ export default function AgentBrowserScreencastPane({
     }
   }, [addressBar, sendInput, bumpNav])
 
+  // Project-scoped "Clear browsing data" (spec 014 AC 5). Offered only when the
+  // pane's context derives to a project — synthetic/pseudo contexts have no
+  // project profile to clear.
+  const projectRepoId = deriveProjectRepoId(worktreeId)
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const clearProjectBrowsingData = useCallback(async () => {
+    if (!projectRepoId || clearing) {
+      return
+    }
+    setClearing(true)
+    try {
+      const server = await clearProjectCdpData(projectRepoId)
+      // Native (WKWebView) half — its warning is surfaced verbatim: a degraded
+      // clear must be OBSERVABLE, never a silent success (the old stub's bug).
+      let nativeWarning: string | null = null
+      try {
+        const native = (await api.browser.clearProjectData({ repoId: projectRepoId })) as {
+          cleared?: boolean
+          warning?: string | null
+        } | null
+        nativeWarning = native?.warning ?? null
+      } catch {
+        nativeWarning = 'native store not cleared — command unavailable'
+      }
+      if (!server.ok) {
+        toast.error(`Clear browsing data failed: ${server.error}`)
+      } else if (nativeWarning) {
+        toast.warning(`Browsing data cleared for this project. ${nativeWarning}`)
+      } else {
+        toast.success('Browsing data cleared for this project')
+      }
+    } finally {
+      setClearing(false)
+      setClearDialogOpen(false)
+    }
+  }, [projectRepoId, clearing])
+
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
       <div className="flex items-center gap-1 border-b border-border px-2 py-1">
@@ -518,7 +570,48 @@ export default function AgentBrowserScreencastPane({
           spellCheck={false}
           aria-label="Agent browser address"
         />
+        {projectRepoId ? (
+          <button
+            type="button"
+            className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+            onClick={() => setClearDialogOpen(true)}
+            aria-label="Clear browsing data for this project"
+            title="Clear browsing data for this project…"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        ) : null}
       </div>
+
+      <Dialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+        <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle className="text-base">Clear browsing data</DialogTitle>
+            <DialogDescription className="text-xs">
+              Deletes this project&apos;s browser cookies, logins, and storage — every
+              workspace of this project is signed out. Other projects are not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setClearDialogOpen(false)}
+              disabled={clearing}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={clearProjectBrowsingData}
+              disabled={clearing}
+            >
+              {clearing ? 'Clearing…' : 'Clear data'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div
         ref={containerRef}
