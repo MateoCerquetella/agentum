@@ -32,6 +32,7 @@ pub mod preflight;
 pub mod profiles;
 pub mod provision;
 pub mod repos;
+pub mod sdd;
 pub mod sessions;
 pub mod uploads;
 pub mod usage;

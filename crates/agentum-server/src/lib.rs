@@ -50,6 +50,7 @@ pub mod provision;
 pub mod ratelimit;
 mod routes;
 mod rules;
+pub mod sdd;
 pub mod task_sink;
 pub mod tls;
 pub mod tracker_attention;
@@ -210,6 +211,10 @@ pub struct AppState {
     /// background [`harness::drive`] task operate on the same in-memory runs +
     /// event bus. Cheap to construct; always present.
     pub harness: Arc<harness::HarnessEngine>,
+    /// Live per-session SDD loops (issue #313). Server-owned so the desktop's
+    /// Loop toggle renders one truth across clients/reloads; workers remove
+    /// their own entry when they end and announce it as `sdd.loop.stopped`.
+    pub sdd_loops: routes::sdd::SddLoops,
     /// Live `/api/events` WebSocket client count. The host-metrics ticker
     /// gates its sysinfo sampling on THIS, not `bus.receiver_count()`: the
     /// goal reconciler and comment bridge hold permanent bus subscriptions,
@@ -259,6 +264,7 @@ impl AppState {
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
             harness: Arc::new(harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
             events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
@@ -337,6 +343,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::provision::router())
         .merge(routes::usage::router())
         .merge(routes::harness::router())
+        .merge(routes::sdd::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::require_token,

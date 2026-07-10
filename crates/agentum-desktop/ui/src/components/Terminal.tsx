@@ -25,6 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import TabBar from './tab-bar/TabBar'
 import TerminalPane from './terminal-pane/TerminalPane'
+import { SddBar } from './sdd/SddBar'
 import CloseTerminalDialog from './terminal-pane/CloseTerminalDialog'
 import { useRunningTerminalCloseGuard } from './terminal-pane/use-running-terminal-close-guard'
 import {
@@ -273,6 +274,14 @@ function Terminal(): React.JSX.Element | null {
     tabs.length === 0 &&
     worktreeBrowserTabs.length === 0 &&
     worktreeFiles.length === 0
+  // The SDD bar targets the active AGENT tab's server session (issue #313);
+  // plain shell tabs get no bar — the playbooks are agent procedures.
+  const sddAgentTab =
+    activeView === 'terminal' && activeTabType === 'terminal' && activeWorktreeId
+      ? (tabsByWorktree[activeWorktreeId] ?? []).find(
+          (t) => t.id === activeTabId && !!t.launchAgent
+        )
+      : undefined
   const getEffectiveLayoutForWorktree = useCallback(
     (worktreeId: string) =>
       getEffectiveLayout(worktreeId, layoutByWorktree, groupsByWorktree, activeGroupIdByWorktree),
@@ -1750,6 +1759,12 @@ function Terminal(): React.JSX.Element | null {
                 )
               })}
           </div>
+
+          {/* SDD quick-inject bar + Loop toggle for the active agent tab
+              (issue #313). Sits below the pane, mirroring the design mock;
+              keyed by tab so per-tab state (preview, notices) never leaks
+              across sessions. */}
+          {sddAgentTab && <SddBar key={sddAgentTab.id} tabId={sddAgentTab.id} />}
 
           {/* Browser panes container — all browser panes for the active worktree
               stay mounted so webview DOM state (scroll position, form inputs, etc.)
