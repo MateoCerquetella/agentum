@@ -819,6 +819,7 @@ mod tests {
             api_base_url: None,
             desktop_bridge: None,
             harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
             events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }

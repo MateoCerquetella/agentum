@@ -751,7 +751,10 @@ async fn load(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
         .ok_or_else(|| ApiError::NotFound(id.to_string()))
 }
 
-async fn load_host_for_session(state: &AppState, session: &Session) -> Result<Host, ApiError> {
+pub(crate) async fn load_host_for_session(
+    state: &AppState,
+    session: &Session,
+) -> Result<Host, ApiError> {
     let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
     state
         .store
@@ -1291,6 +1294,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
@@ -1438,6 +1442,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
