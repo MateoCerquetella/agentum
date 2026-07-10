@@ -82,6 +82,16 @@ fn registry_path() -> Result<PathBuf, ApiError> {
     Ok(home.join(".agentum").join("worktrees.json"))
 }
 
+/// `(repo_id, full registry id)` pairs for browser-scope resolution
+/// (`crate::cdp_browser::resolve_browser_scope`, spec 014). Tolerant: an
+/// unreadable registry yields an empty table (resolution then falls through to
+/// the git probe / adhoc isolation).
+pub(crate) fn scope_worktree_pairs() -> Vec<(String, String)> {
+    read_worktrees()
+        .map(|rows| rows.into_iter().map(|w| (w.repo_id, w.id)).collect())
+        .unwrap_or_default()
+}
+
 pub(crate) fn read_worktrees() -> Result<Vec<Worktree>, ApiError> {
     let path = registry_path()?;
     if !path.exists() {
@@ -555,11 +565,13 @@ async fn remove(
     let mut worktrees = read_worktrees()?;
     worktrees.retain(|wt| wt.id != body.worktree_id);
     write_worktrees(&worktrees)?;
-    // Tear down this worktree's per-worktree CDP browser (kill its tmux + drop
-    // its profile) so a deleted worktree doesn't leak an idle headless Chromium.
-    // Best-effort + idempotent: a no-op when isolation is off, the worktree never
-    // opened a browser, or it lived on an SSH host (no local browser to kill).
-    let _ = crate::cdp_browser::stop_local_cdp_browser_for(worktree_path).await;
+    // Release this worktree's claim on its project browser so a deleted worktree
+    // doesn't leak an idle headless Chromium. The FULL id (not the bare path) is
+    // required: the registry row was just deregistered above, so a bare path no
+    // longer resolves to its project — the `<repoId>::` prefix does (spec 014).
+    // The project's profile dir persists; only the process may stop (and only
+    // when no other workspace of the project has a live browser pane).
+    let _ = crate::cdp_browser::stop_local_cdp_browser_for(&body.worktree_id).await;
     Ok(Json(serde_json::json!({})))
 }
 
@@ -737,9 +749,16 @@ async fn prune(
                     )
                     .await;
                     let _ = git_in_dir(&host, &repo_path, &["worktree", "prune"]).await;
-                    // Drop the worktree's per-worktree browser too (best-effort,
-                    // idempotent; no-op for remote/never-launched worktrees).
-                    let _ = crate::cdp_browser::stop_local_cdp_browser_for(&wt.path).await;
+                    // Release the worktree's claim on its project browser too
+                    // (best-effort, idempotent; no-op for remote/never-launched
+                    // worktrees). Full `<repoId>::<path>` id so it resolves to
+                    // the project even after deregistration (spec 014); the
+                    // project profile persists.
+                    let _ = crate::cdp_browser::stop_local_cdp_browser_for(&format!(
+                        "{repo_id}::{}",
+                        wt.path
+                    ))
+                    .await;
                 }
                 pruned.push(entry);
             } else {
