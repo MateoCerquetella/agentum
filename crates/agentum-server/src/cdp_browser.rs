@@ -1444,6 +1444,13 @@ mod tests {
     }
 
     #[tokio::test]
+    // `isolate_home()` holds `TEST_ENV_LOCK` across the awaits below BY DESIGN:
+    // it serializes `AGENTUM_HOME` mutation (`set_var` is unsound under
+    // concurrent env access) and the code under test reads `AGENTUM_HOME` while
+    // awaiting. Dropping the guard before the await would break isolation, so
+    // the `await_holding_lock` lint is a false positive for these env-scoped
+    // tests. Same rationale applies to every `isolate_home()` test below.
+    #[allow(clippy::await_holding_lock)]
     async fn stop_project_scope_never_deletes_profile_dir() {
         let (home, _guard) = isolate_home();
         let raw = "repo-keep::/tmp/agentum-test-wt-keep";
@@ -1470,6 +1477,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
     async fn stop_adhoc_scope_deletes_profile_dir() {
         let (home, _guard) = isolate_home();
         let raw = "github-pr:repo:42";
@@ -1489,6 +1497,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
     async fn release_is_noop_while_project_attached() {
         let (home, _guard) = isolate_home();
         let raw = "repo-att::/tmp/agentum-test-wt-att";
@@ -1519,6 +1528,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
     async fn sweep_deletes_only_legacy_entries() {
         let (_home, _guard) = isolate_home();
         let root = agentum_store::paths::state_dir()
@@ -1544,6 +1554,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
     async fn clear_project_browser_data_deletes_only_that_project() {
         let (home, _guard) = isolate_home();
         let root = agentum_store::paths::state_dir()
