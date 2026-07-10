@@ -101,6 +101,7 @@ async fn make_state(dir: &std::path::Path) -> AppState {
         cert_fingerprint: Arc::new(String::new()),
         transcripts: agentum_server::TranscriptStore::new(broadcast::channel(16).0),
         stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         hostname: "test".to_string(),
         no_auth: true,
         clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
