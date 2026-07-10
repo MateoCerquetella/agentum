@@ -253,8 +253,10 @@ const statusValue = (optionId: string, name: string) =>
     }
   })
 
+// Mirrors GitHub's real Board payload: the column field arrives in
+// `verticalGroupByFields`; `groupByFields` (swimlanes) is empty.
 function boardView(field: GitHubProjectField): GitHubProjectView {
-  return { ...makeView(field), layout: 'BOARD_LAYOUT', groupByFields: [field] }
+  return { ...makeView(field), layout: 'BOARD_LAYOUT', verticalGroupByFields: [field] }
 }
 
 describe('boardColumns', () => {
@@ -332,5 +334,30 @@ describe('boardColumns', () => {
     expect(columns[0].key).toBe('all')
     expect(columns[0].droppable).toBe(false)
     expect(columns[0].rows.map((r) => r.id)).toEqual(['r1', 'r2'])
+  })
+
+  it('prefers verticalGroupByFields (column field) over groupByFields (swimlanes)', () => {
+    const rows = [makeRow('rA', 0, statusValue('opt_a', 'Todo'))]
+    const view: GitHubProjectView = {
+      ...makeView(singleSelectField),
+      layout: 'BOARD_LAYOUT',
+      verticalGroupByFields: [singleSelectField],
+      groupByFields: [iterationField]
+    }
+    const { field, columns } = boardColumns(makeTable(view, rows))
+    expect(field?.id).toBe('F_status')
+    expect(columns.map((c) => c.key)).toEqual(['opt_a', 'opt_b', '__empty__'])
+  })
+
+  it('falls back to groupByFields for cached payloads without verticalGroupByFields', () => {
+    const rows = [makeRow('rA', 0, statusValue('opt_a', 'Todo'))]
+    const view: GitHubProjectView = {
+      ...makeView(singleSelectField),
+      layout: 'BOARD_LAYOUT',
+      groupByFields: [singleSelectField]
+    }
+    const { field, columns } = boardColumns(makeTable(view, rows))
+    expect(field?.id).toBe('F_status')
+    expect(columns.map((c) => c.key)).toEqual(['opt_a', 'opt_b', '__empty__'])
   })
 })
