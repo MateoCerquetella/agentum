@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   ChevronsUpDown,
+  FolderPlus,
   GitBranch,
   KanbanSquare,
   Laptop,
@@ -38,7 +39,7 @@ import {
   resolveQuickWorkspaceAgentSelection
 } from '@/lib/quick-workspace-agent-selection'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
-import { isFolderRepo } from '../../../../shared/repo-kind'
+import { isFolderRepo, isGitRepoKind } from '../../../../shared/repo-kind'
 import { filterReposForHost } from '@/hooks/composer-host-scoping'
 import { LOCAL_HOST_KEY } from '@/components/sidebar/worktree-list-groups'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
@@ -121,6 +122,9 @@ export default function CreateWorkspaceWizard({
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
+  const addRepoFromStore = useAppStore((s) => s.addRepo)
+  const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
+  const openModal = useAppStore((s) => s.openModal)
   // Spec 011 F2: the issue picker resolves its Project from the selected repo's
   // per-repo binding first; the globally-active Project
   // (settings.githubProjects.activeProject) is the fallback (spec 012 behavior,
@@ -211,6 +215,7 @@ export default function CreateWorkspaceWizard({
   const quickAgent = resolvedAgent.quickAgent
 
   const [step, setStep] = useState<WizardStep>(1)
+  const [addingRepo, setAddingRepo] = useState(false)
   // Badge the host we opened on ("last used") — captured once so re-selecting
   // doesn't move the badge around.
   const lastUsedHostKeyRef = useRef(selectedHostKey)
@@ -266,6 +271,41 @@ export default function CreateWorkspaceWizard({
   const goBack = useCallback(() => {
     setStep((prev) => (prev > 1 ? ((prev - 1) as WizardStep) : prev))
   }, [])
+
+  // Step 2 "Add project": register a repo without leaving the wizard, so the
+  // user never has to bail to the sidebar and lose their place. On a local host
+  // this opens the native folder picker (`store.addRepo`) and selects the new
+  // repo, letting them continue straight to the worktree fields. An SSH host's
+  // filesystem isn't reachable by the OS picker, so route to the add-repo
+  // dialog's Remote step with the host preselected (mirrors the composer card's
+  // `handleAddRepo`).
+  const handleAddRepo = useCallback(async () => {
+    if (addingRepo) {
+      return
+    }
+    const connectionId = selectedHostKey.startsWith('ssh:')
+      ? selectedHostKey.slice('ssh:'.length)
+      : ''
+    if (connectionId) {
+      openModal('add-repo', { connectionId })
+      return
+    }
+    setAddingRepo(true)
+    try {
+      const repo = await addRepoFromStore()
+      if (!repo) {
+        return
+      }
+      // Populate worktrees for git repos so the worktree/base-branch fields have
+      // data the moment the row is selected (matches RepoCombobox's add flow).
+      if (isGitRepoKind(repo)) {
+        await fetchWorktrees(repo.id)
+      }
+      onRepoChange(repo.id)
+    } finally {
+      setAddingRepo(false)
+    }
+  }, [addingRepo, addRepoFromStore, fetchWorktrees, onRepoChange, openModal, selectedHostKey])
 
   const handlePrimary = useCallback(() => {
     if (step === 3) {
@@ -391,6 +431,8 @@ export default function CreateWorkspaceWizard({
               requiresConnection={selectedRepoRequiresConnection}
               connectInProgress={selectedRepoConnectInProgress}
               onConnect={onConnectSelectedRepo}
+              onAddRepo={handleAddRepo}
+              addingRepo={addingRepo}
             />
           ) : null}
 
@@ -608,7 +650,9 @@ function RepoStep({
   onBaseBranchChange,
   requiresConnection,
   connectInProgress,
-  onConnect
+  onConnect,
+  onAddRepo,
+  addingRepo
 }: {
   hostLabel: string
   repos: Repo[]
@@ -625,6 +669,8 @@ function RepoStep({
   requiresConnection: boolean
   connectInProgress: boolean
   onConnect: () => Promise<void>
+  onAddRepo: () => void | Promise<void>
+  addingRepo: boolean
 }): React.JSX.Element {
   // Many-project hosts render a wall of repo rows the operator has to scroll
   // past — collapse to the first few, with a search field + "show all" expander
@@ -651,8 +697,9 @@ function RepoStep({
       </div>
 
       {repos.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[12.5px] text-muted-foreground">
-          No repos on {hostLabel} yet. Add one from the sidebar, then come back.
+        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border px-4 py-6 text-center">
+          <span className="text-[12.5px] text-muted-foreground">No repos on {hostLabel} yet.</span>
+          <AddProjectButton onAddRepo={onAddRepo} addingRepo={addingRepo} variant="solid" />
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
@@ -727,6 +774,8 @@ function RepoStep({
               Show all {filteredRepos.length} repos
             </button>
           ) : null}
+
+          <AddProjectButton onAddRepo={onAddRepo} addingRepo={addingRepo} variant="row" />
         </div>
       )}
 
@@ -791,6 +840,49 @@ function RepoStep({
         </div>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * The step-2 "Add project" affordance. `solid` is the primary CTA shown in the
+ * empty state; `row` is the dashed, list-aligned entry rendered under an
+ * existing repo list. Both call `onAddRepo` (local: native folder picker →
+ * auto-select; SSH: the add-repo Remote dialog).
+ */
+function AddProjectButton({
+  onAddRepo,
+  addingRepo,
+  variant
+}: {
+  onAddRepo: () => void | Promise<void>
+  addingRepo: boolean
+  variant: 'solid' | 'row'
+}): React.JSX.Element {
+  const Icon = addingRepo ? Loader2 : FolderPlus
+  const icon = <Icon className={cn('size-3.5 flex-none', addingRepo && 'animate-spin')} />
+  if (variant === 'solid') {
+    return (
+      <button
+        type="button"
+        onClick={() => void onAddRepo()}
+        disabled={addingRepo}
+        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-[12.5px] text-foreground transition-colors hover:border-muted-foreground/40 disabled:opacity-60"
+      >
+        {icon}
+        {addingRepo ? 'Adding…' : 'Add project'}
+      </button>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void onAddRepo()}
+      disabled={addingRepo}
+      className="flex items-center gap-2.5 rounded-lg border border-dashed border-border px-3 py-2.5 text-left text-[12.5px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:opacity-60"
+    >
+      {icon}
+      {addingRepo ? 'Adding…' : 'Add project'}
+    </button>
   )
 }
 
