@@ -55,6 +55,7 @@ import IssueSourceSelector, { issueSourceChipClass } from '@/components/github/I
 import { TaskKanbanBoard } from '@/components/tasks/TaskKanbanBoard'
 import { TWO_COLUMNS, githubColumn } from '@/components/tasks/task-kanban'
 import { transitionGithubIssue } from '@/components/tasks/task-kanban-github'
+import { useKanbanPointerDrag } from '@/lib/use-kanban-pointer-drag'
 import { reconcileLinearTeamSelection } from '@/components/task-page-linear-team-selection'
 import { parseTaskQuery, stripRepoQualifiers, withQualifier } from '../../../shared/task-query'
 import {
@@ -152,7 +153,6 @@ import {
   groupLinearIssues,
   type LinearDisplayProperty,
   type LinearGroupBy,
-  type LinearGroupSection,
   type LinearOrderBy
 } from './task-page/linear-helpers'
 import { formatRelativeTime } from '@/lib/relative-time'
@@ -167,7 +167,7 @@ import {
   GITHUB_TASK_STICKY_ID_CELL_CLASS,
   GITHUB_TASK_STICKY_TITLE_CELL_CLASS
 } from './task-page/github-grid-styles'
-import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_BOARD_DRAG_ISSUE_MIME, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
+import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
 import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
 import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
 
@@ -943,8 +943,6 @@ export default function TaskPage({
   const [linearCustomViewContentsError, setLinearCustomViewContentsError] = useState<string | null>(
     null
   )
-  const [linearBoardDraggingIssueId, setLinearBoardDraggingIssueId] = useState<string | null>(null)
-  const [linearBoardDragOverKey, setLinearBoardDragOverKey] = useState<string | null>(null)
   const [linearBoardUpdatingIssueIds, setLinearBoardUpdatingIssueIds] = useState<
     ReadonlySet<string>
   >(() => new Set())
@@ -1568,48 +1566,9 @@ export default function TaskPage({
   )
   const linearStatusBoardEnabled = linearGroupBy === 'none' || linearGroupBy === 'status'
 
-  const handleLinearBoardCardDragStart = useCallback(
-    (issue: LinearIssue, event: React.DragEvent<HTMLDivElement>) => {
-      if (!linearStatusBoardEnabled || linearBoardUpdatingIssueIds.has(issue.id)) {
-        event.preventDefault()
-        return
-      }
-      event.dataTransfer.effectAllowed = 'move'
-      event.dataTransfer.setData(LINEAR_BOARD_DRAG_ISSUE_MIME, issue.id)
-      event.dataTransfer.setData('text/plain', issue.id)
-      setLinearBoardDraggingIssueId(issue.id)
-    },
-    [linearBoardUpdatingIssueIds, linearStatusBoardEnabled]
-  )
-
-  const handleLinearBoardDragOver = useCallback(
-    (section: LinearGroupSection, event: React.DragEvent<HTMLElement>) => {
-      if (!linearStatusBoardEnabled || !getLinearStatusSectionState(section)) {
-        return
-      }
-      event.preventDefault()
-      event.dataTransfer.dropEffect = 'move'
-      setLinearBoardDragOverKey(section.key)
-    },
-    [linearStatusBoardEnabled]
-  )
-
-  const handleLinearBoardDrop = useCallback(
-    async (section: LinearGroupSection, event: React.DragEvent<HTMLElement>) => {
-      event.preventDefault()
-      event.stopPropagation()
-      setLinearBoardDragOverKey(null)
-
-      const targetState = getLinearStatusSectionState(section)
-      if (!linearStatusBoardEnabled || !targetState) {
-        return
-      }
-
-      const issueId =
-        event.dataTransfer.getData(LINEAR_BOARD_DRAG_ISSUE_MIME) || linearBoardDraggingIssueId
-      const issue = filteredLinearIssues.find((item) => item.id === issueId)
+  const moveLinearIssueToState = useCallback(
+    async (issue: LinearIssue, targetState: LinearIssue['state']) => {
       if (
-        !issue ||
         linearBoardUpdatingIssueIds.has(issue.id) ||
         (issue.state.name === targetState.name && issue.state.type === targetState.type)
       ) {
@@ -1672,16 +1631,25 @@ export default function TaskPage({
         })
       }
     },
-    [
-      filteredLinearIssues,
-      linearBoardDraggingIssueId,
-      linearBoardUpdatingIssueIds,
-      linearStatusBoardEnabled,
-      patchScopedLinearIssue,
-      patchLinearIssue,
-      settings
-    ]
+    [linearBoardUpdatingIssueIds, patchScopedLinearIssue, patchLinearIssue, settings]
   )
+
+  const linearBoardRef = useRef<HTMLDivElement>(null)
+  const {
+    dragCardId: linearBoardDraggingIssueId,
+    overColumnKey: linearBoardDragOverKey,
+    onBoardPointerDownCapture: onLinearBoardPointerDownCapture
+  } = useKanbanPointerDrag({
+    boardRef: linearBoardRef,
+    onDrop: (cardId, columnKey) => {
+      const section = linearBoardSections.find((s) => s.key === columnKey)
+      const targetState = section ? getLinearStatusSectionState(section) : null
+      const issue = filteredLinearIssues.find((item) => item.id === cardId)
+      if (linearStatusBoardEnabled && issue && targetState) {
+        void moveLinearIssueToState(issue, targetState)
+      }
+    }
+  })
 
   const toggleLinearDisplayProperty = useCallback((property: LinearDisplayProperty): void => {
     if (property === 'team') {
@@ -5217,12 +5185,20 @@ export default function TaskPage({
                 ) : null}
 
                 {linearViewMode === 'board' ? (
-                  <div className="grid min-w-0 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div
+                    ref={linearBoardRef}
+                    onPointerDownCapture={onLinearBoardPointerDownCapture}
+                    className="grid min-w-0 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3"
+                  >
                     {linearBoardSections.map((section) => (
                       <section
                         key={section.key}
-                        onDragOver={(event) => handleLinearBoardDragOver(section, event)}
-                        onDrop={(event) => void handleLinearBoardDrop(section, event)}
+                        data-kanban-column-key={section.key}
+                        data-kanban-column-droppable={
+                          linearStatusBoardEnabled && getLinearStatusSectionState(section)
+                            ? undefined
+                            : 'false'
+                        }
                         className={cn(
                           'min-h-0 rounded-md border border-border/50 bg-muted/20 transition-[border-color,box-shadow]',
                           linearBoardDragOverKey === section.key &&
@@ -5252,17 +5228,12 @@ export default function TaskPage({
                                 key={issue.id}
                                 role="button"
                                 tabIndex={0}
-                                draggable={linearStatusBoardEnabled && !updating}
+                                data-kanban-card-id={
+                                  linearStatusBoardEnabled && !updating ? issue.id : undefined
+                                }
                                 aria-current={selected ? 'true' : undefined}
                                 data-current={selected ? 'true' : undefined}
                                 aria-disabled={updating ? 'true' : undefined}
-                                onDragStart={(event) =>
-                                  handleLinearBoardCardDragStart(issue, event)
-                                }
-                                onDragEnd={() => {
-                                  setLinearBoardDraggingIssueId(null)
-                                  setLinearBoardDragOverKey(null)
-                                }}
                                 onClick={() => openLinearDetailPage(issue)}
                                 onKeyDown={(e) => {
                                   if (e.target !== e.currentTarget) {
@@ -5292,7 +5263,12 @@ export default function TaskPage({
                                       {issue.title}
                                     </h3>
                                   </div>
-                                  <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                                  {/* Action buttons opt out of drag so a jittery
+                                      click never gets eaten. */}
+                                  <div
+                                    data-kanban-no-drag=""
+                                    className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100"
+                                  >
                                     <Button
                                       variant="ghost"
                                       size="icon-xs"

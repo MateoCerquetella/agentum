@@ -2,14 +2,14 @@
 // from the view's group-by field (via `boardColumns`); dragging a card to
 // another column writes the group-by field back to GitHub through the same
 // optimistic `onEditField` path the table cells use, so the card moves
-// instantly and rolls back on failure. Native HTML5 drag-and-drop — the same
-// approach as components/tasks/TaskKanbanBoard.tsx (no extra dependency).
-import React, { useMemo, useState } from 'react'
+// instantly and rolls back on failure. Pointer-event drag via
+// useKanbanPointerDrag — the same approach as
+// components/tasks/TaskKanbanBoard.tsx (HTML5 drag-and-drop never fires inside
+// the Tauri webview on Linux/Windows; see lib/kanban-pointer-drag.ts).
+import React, { useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
-import {
-  boardColumns,
-  type ProjectBoardColumn
-} from '../../../../shared/github-project-group-sort'
+import { useKanbanPointerDrag } from '@/lib/use-kanban-pointer-drag'
+import { boardColumns } from '../../../../shared/github-project-group-sort'
 import type {
   GitHubProjectFieldMutationValue,
   GitHubProjectRow,
@@ -65,7 +65,7 @@ export default function ProjectBoardView({
   onOpenInBrowser
 }: Props): React.JSX.Element {
   const board = useMemo(() => boardColumns(table), [table])
-  const [overKey, setOverKey] = useState<string | null>(null)
+  const boardRef = useRef<HTMLDivElement>(null)
 
   // rowId → current column key, and rowId → row, so a drop can suppress a
   // same-column no-op and resolve the dragged row without a linear scan.
@@ -86,45 +86,33 @@ export default function ProjectBoardView({
   // field is single-select or iteration). Read-only boards render static cards.
   const canDrag = field?.kind === 'single-select' || field?.kind === 'iteration'
 
-  const handleDrop = (col: ProjectBoardColumn, e: React.DragEvent): void => {
-    e.preventDefault()
-    setOverKey(null)
-    if (!col.droppable || !field || !onEditField) {
-      return
+  const { dragCardId, overColumnKey, onBoardPointerDownCapture } = useKanbanPointerDrag({
+    boardRef,
+    onDrop: (cardId, columnKey) => {
+      const col = board.columns.find((c) => c.key === columnKey)
+      if (!col?.droppable || !field || !onEditField || columnKeyByRowId.get(cardId) === columnKey) {
+        return
+      }
+      const row = rowById.get(cardId)
+      if (row) {
+        onEditField(row, field.id, col.moveValue)
+      }
     }
-    const id = e.dataTransfer.getData('text/plain')
-    if (!id || columnKeyByRowId.get(id) === col.key) {
-      return
-    }
-    const row = rowById.get(id)
-    if (row) {
-      onEditField(row, field.id, col.moveValue)
-    }
-  }
+  })
 
   return (
-    <div className="flex h-full min-h-0 gap-3 overflow-x-auto p-3 scrollbar-sleek">
+    <div
+      ref={boardRef}
+      onPointerDownCapture={onBoardPointerDownCapture}
+      className="flex h-full min-h-0 gap-3 overflow-x-auto p-3 scrollbar-sleek"
+    >
       {board.columns.map((col) => {
-        const isOver = overKey === col.key && col.droppable
+        const isOver = overColumnKey === col.key && col.droppable
         return (
           <section
             key={col.key}
-            onDragOver={(e) => {
-              if (!col.droppable) {
-                return
-              }
-              e.preventDefault()
-              if (overKey !== col.key) {
-                setOverKey(col.key)
-              }
-            }}
-            onDragLeave={(e) => {
-              // Only clear when leaving the column itself, not a child card.
-              if (e.currentTarget === e.target) {
-                setOverKey(null)
-              }
-            }}
-            onDrop={(e) => handleDrop(col, e)}
+            data-kanban-column-key={col.key}
+            data-kanban-column-droppable={col.droppable ? undefined : 'false'}
             className={cn(
               'flex w-72 flex-none flex-col rounded-lg border bg-card/40 transition-colors',
               isOver ? 'border-primary/60 bg-primary/5' : 'border-border'
@@ -150,11 +138,8 @@ export default function ProjectBoardView({
                   <ProjectBoardCard
                     key={row.id}
                     row={row}
-                    draggable={canDrag && row.itemType !== 'REDACTED'}
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData('text/plain', row.id)
-                      e.dataTransfer.effectAllowed = 'move'
-                    }}
+                    dragId={canDrag && row.itemType !== 'REDACTED' ? row.id : null}
+                    dragging={dragCardId === row.id}
                     onOpenDialog={onOpenDialog ? () => onOpenDialog(row) : undefined}
                     onOpenInBrowser={onOpenInBrowser ? () => onOpenInBrowser(row) : undefined}
                     onStartWork={onStartWork ? () => onStartWork(row) : undefined}

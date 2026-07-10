@@ -19,8 +19,10 @@ function labelHex(color: string): string {
 
 type Props = {
   row: GitHubProjectRow
-  draggable: boolean
-  onDragStart: (e: React.DragEvent) => void
+  /** Pointer-drag payload (see lib/kanban-pointer-drag.ts); null = not draggable. */
+  dragId: string | null
+  /** True while this card is the one being dragged (dims the in-column copy). */
+  dragging: boolean
   onOpenDialog?: () => void
   onOpenInBrowser?: () => void
   onStartWork?: () => void
@@ -28,8 +30,8 @@ type Props = {
 
 export default function ProjectBoardCard({
   row,
-  draggable,
-  onDragStart,
+  dragId,
+  dragging,
   onOpenDialog,
   onOpenInBrowser,
   onStartWork
@@ -52,14 +54,14 @@ export default function ProjectBoardCard({
 
   return (
     <div
-      draggable={draggable}
-      onDragStart={draggable ? onDragStart : undefined}
+      data-kanban-card-id={dragId ?? undefined}
       className={cn(
         'group rounded-md border border-border bg-background p-2.5 shadow-sm',
-        draggable
+        dragId
           ? 'cursor-grab active:cursor-grabbing hover:border-foreground/30'
           : 'cursor-default',
-        row.itemType === 'REDACTED' && 'opacity-60'
+        row.itemType === 'REDACTED' && 'opacity-60',
+        dragging && 'opacity-50'
       )}
     >
       <div className="mb-1 flex items-center gap-1.5">
@@ -67,7 +69,11 @@ export default function ProjectBoardCard({
         {content.number != null ? (
           <span className="font-mono text-[10.5px] text-muted-foreground">#{content.number}</span>
         ) : null}
-        <div className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+        {/* Hover actions opt out of drag so a jittery click never gets eaten. */}
+        <div
+          data-kanban-no-drag=""
+          className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100"
+        >
           {content.url && onOpenInBrowser ? (
             <button
               type="button"
