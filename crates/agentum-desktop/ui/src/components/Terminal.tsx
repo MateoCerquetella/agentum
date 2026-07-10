@@ -25,7 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import TabBar from './tab-bar/TabBar'
 import TerminalPane from './terminal-pane/TerminalPane'
-import { SddBar } from './sdd/SddBar'
+import { SddBarGate } from './sdd/SddBar'
 import CloseTerminalDialog from './terminal-pane/CloseTerminalDialog'
 import { useRunningTerminalCloseGuard } from './terminal-pane/use-running-terminal-close-guard'
 import {
@@ -274,13 +274,13 @@ function Terminal(): React.JSX.Element | null {
     tabs.length === 0 &&
     worktreeBrowserTabs.length === 0 &&
     worktreeFiles.length === 0
-  // The SDD bar targets the active AGENT tab's server session (issue #313);
-  // plain shell tabs get no bar — the playbooks are agent procedures.
-  const sddAgentTab =
+  // The SDD bar targets the active tab's server session (issue #313); the
+  // agent-or-shell decision lives in SddBarGate (useTabAgent live signals),
+  // so plain shell tabs get no bar while ANY tab actually running an agent —
+  // launched, attached, or started by hand — gets one.
+  const sddCandidateTab =
     activeView === 'terminal' && activeTabType === 'terminal' && activeWorktreeId
-      ? (tabsByWorktree[activeWorktreeId] ?? []).find(
-          (t) => t.id === activeTabId && !!t.launchAgent
-        )
+      ? (tabsByWorktree[activeWorktreeId] ?? []).find((t) => t.id === activeTabId)
       : undefined
   const getEffectiveLayoutForWorktree = useCallback(
     (worktreeId: string) =>
@@ -1764,7 +1764,7 @@ function Terminal(): React.JSX.Element | null {
               (issue #313). Sits below the pane, mirroring the design mock;
               keyed by tab so per-tab state (preview, notices) never leaks
               across sessions. */}
-          {sddAgentTab && <SddBar key={sddAgentTab.id} tabId={sddAgentTab.id} />}
+          {sddCandidateTab && <SddBarGate key={sddCandidateTab.id} tab={sddCandidateTab} />}
 
           {/* Browser panes container — all browser panes for the active worktree
               stay mounted so webview DOM state (scroll position, form inputs, etc.)
