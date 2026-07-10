@@ -105,9 +105,14 @@ pub(crate) async fn fetch_github_issue(
         .await?
         .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
 
+    // Expand `~`/trailing-slash before the origin read: `git -C` runs with no
+    // shell, so a stored `~/…` workdir would fail resolution spuriously (twin of
+    // the github_projects binding-resolver fix).
+    let workdir = super::util::expand_workdir(workdir)?;
+    let workdir = workdir.to_string_lossy();
     // Prefer the `owner/repo` hint (zero I/O); fall back to the project's
     // `origin` read. Reuses the exact resolver the board issue path uses.
-    let slug = super::board_goals::resolve_github_slug(&host, workdir, slug_hint)
+    let slug = super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
         .await
         .map_err(|reason| {
             ApiError::BadRequest(format!("could not resolve a GitHub repo: {reason:?}"))
@@ -230,7 +235,11 @@ async fn create_issue(
         .await?
         .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
 
-    let slug = match super::board_goals::resolve_github_slug(&host, workdir, body.slug.as_deref())
+    // Expand `~`/trailing-slash before the origin read (twin of the project-
+    // binding resolver fix) — `git -C` won't expand a stored `~/…` path.
+    let workdir = super::util::expand_workdir(workdir)?;
+    let workdir = workdir.to_string_lossy();
+    let slug = match super::board_goals::resolve_github_slug(&host, &workdir, body.slug.as_deref())
         .await
     {
         Ok(slug) => slug,
@@ -255,7 +264,7 @@ async fn create_issue(
                 store: &state.store,
                 // The explicit-slug GitHub arm runs `gh` from `$HOME`; workdir
                 // is passed for shape only (same note as the Chat path).
-                workdir: std::path::Path::new(workdir),
+                workdir: std::path::Path::new(workdir.as_ref()),
                 parent_goal_id: None,
                 slug: Some(&slug),
             },
@@ -307,10 +316,14 @@ async fn draft_issue_body(
     if workdir.is_empty() {
         return Err(ApiError::BadRequest("`workdir` is required".into()));
     }
+    // Expand `~`/trailing-slash so the repo-context + wiki reads below hit the
+    // real directory (fs ops don't expand `~` either) — twin of the resolver fix.
+    let workdir = super::util::expand_workdir(workdir)?;
+    let workdir = workdir.to_string_lossy();
     // Title validation (blank → 400) lives in the shared helper so every
     // future caller inherits it.
     let drafted = super::chat::draft_issue_body(
-        Some(workdir),
+        Some(&workdir),
         body.slug
             .as_deref()
             .map(str::trim)
@@ -371,7 +384,11 @@ async fn list_labels(
         .await?
         .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
 
-    let slug = match super::board_goals::resolve_github_slug(&host, workdir, q.slug.as_deref())
+    // Expand `~`/trailing-slash before the origin read (twin of the project-
+    // binding resolver fix) — `git -C` won't expand a stored `~/…` path.
+    let workdir = super::util::expand_workdir(workdir)?;
+    let workdir = workdir.to_string_lossy();
+    let slug = match super::board_goals::resolve_github_slug(&host, &workdir, q.slug.as_deref())
         .await
     {
         Ok(slug) => slug,
