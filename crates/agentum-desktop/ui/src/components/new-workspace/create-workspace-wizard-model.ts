@@ -15,7 +15,10 @@ import type { PickerProjectRef } from './work-item-picker-model'
 
 export type WizardStep = 1 | 2 | 3
 
-export const WIZARD_STEP_LABELS = ['Host', 'Repo & worktree', 'Agent & tracker'] as const
+// Why this order: the issue is linked/created BEFORE the worktree is named, so
+// the name can derive from the issue title (step 3 renders tracker → name →
+// agent). Step 2 only picks the repo + base branch.
+export const WIZARD_STEP_LABELS = ['Host', 'Repo & branch', 'Issue & agent'] as const
 
 // Fallback agent pills for when detection hasn't produced a set yet (or found
 // nothing installed) — kept small and catalog-ordered so the picker is never

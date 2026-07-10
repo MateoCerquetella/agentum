@@ -106,8 +106,11 @@ import type {
 
 /**
  * The "Create Workspace" wizard — a three-step front-end (Host → Repo &
- * worktree → Agent & tracker) over the shared `useComposerState` creation
- * engine. Spec 013 F4: it is the SINGLE front door for `new-workspace-composer`
+ * branch → Issue & agent) over the shared `useComposerState` creation
+ * engine. The issue is linked/created BEFORE the worktree is named — step 3
+ * renders tracker → worktree name → agent, so `applyLinkedWorkItem`'s
+ * title-derived auto-name lands in a visible, editable field.
+ * Spec 013 F4: it is the SINGLE front door for `new-workspace-composer`
  * — it never becomes a state machine inside the engine, it drives the same
  * host/repo/name/baseBranch/agent state the composer card drove and calls the
  * same `submitQuick`, so YOLO translation, SSH gating, setup hooks, the gated
@@ -398,7 +401,8 @@ export default function CreateWorkspaceWizard({
       >
         <DialogTitle className="sr-only">New workspace</DialogTitle>
         <DialogDescription className="sr-only">
-          Create a workspace in three steps: choose a host, a repo and worktree, then the agent.
+          Create a workspace in three steps: choose a host, a repo and base branch, then the
+          issue, worktree name, and agent.
         </DialogDescription>
 
         {/* Header: title, step chip, recap, close */}
@@ -450,9 +454,6 @@ export default function CreateWorkspaceWizard({
               onRepoChange={onRepoChange}
               selectedRepo={selectedRepo}
               selectedRepoIsGit={selectedRepoIsGit}
-              name={name}
-              onNameValueChange={onNameValueChange}
-              nameInputRef={nameInputRef}
               baseBranch={baseBranch}
               onBaseBranchChange={onBaseBranchChange}
               requiresConnection={selectedRepoRequiresConnection}
@@ -473,6 +474,11 @@ export default function CreateWorkspaceWizard({
               detectedAgentIds={detectedAgentIds}
               quickAgent={quickAgent}
               onPick={setQuickAgentOverride}
+              selectedRepoIsGit={selectedRepoIsGit}
+              repoDisplayName={selectedRepo?.displayName}
+              name={name}
+              onNameValueChange={onNameValueChange}
+              nameInputRef={nameInputRef}
               trackerWorkdir={trackerWorkdir}
               activeProject={activeProject}
               fetchProjectViewTable={fetchProjectViewTable}
@@ -664,7 +670,7 @@ function HostStep({
   )
 }
 
-// ---------- Step 2: Repo & worktree ----------
+// ---------- Step 2: Repo & branch ----------
 
 function RepoStep({
   hostLabel,
@@ -674,9 +680,6 @@ function RepoStep({
   onRepoChange,
   selectedRepo,
   selectedRepoIsGit,
-  name,
-  onNameValueChange,
-  nameInputRef,
   baseBranch,
   onBaseBranchChange,
   requiresConnection,
@@ -696,9 +699,6 @@ function RepoStep({
   onRepoChange: (value: string) => void
   selectedRepo: Repo | undefined
   selectedRepoIsGit: boolean
-  name: string
-  onNameValueChange: (value: string) => void
-  nameInputRef: React.RefObject<HTMLInputElement | null>
   baseBranch: string | undefined
   onBaseBranchChange: (next: string | undefined) => void
   requiresConnection: boolean
@@ -853,47 +853,25 @@ function RepoStep({
         </button>
       ) : null}
 
+      {/* The worktree/workspace NAME deliberately lives in step 3, after the
+          tracker section — linking or creating the issue first lets the name
+          derive from the issue title instead of being fixed before it exists. */}
       {selectedRepoIsGit ? (
         <div className="flex flex-col gap-2.5">
           <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
             Worktree
           </span>
-          <div className="grid grid-cols-[160px_1fr] gap-2.5">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[11.5px] text-muted-foreground">Base branch</span>
-              <BaseBranchCombobox
-                repoId={repoId}
-                baseBranch={baseBranch}
-                defaultRef={selectedRepo?.worktreeBaseRef ?? null}
-                onChange={onBaseBranchChange}
-              />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[11.5px] text-muted-foreground">Worktree name</span>
-              <input
-                ref={nameInputRef}
-                value={name}
-                onChange={(event) => onNameValueChange(event.target.value)}
-                placeholder="auto"
-                className="h-[34px] rounded-md border border-input bg-secondary px-2.5 font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
-              />
-            </label>
-          </div>
-        </div>
-      ) : selectedRepo ? (
-        <div className="flex flex-col gap-2.5">
-          <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
-            Workspace name
-          </span>
-          <input
-            ref={nameInputRef}
-            value={name}
-            onChange={(event) => onNameValueChange(event.target.value)}
-            placeholder="auto"
-            className="h-[34px] rounded-md border border-input bg-secondary px-2.5 font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
-          />
+          <label className="flex max-w-[240px] flex-col gap-1.5">
+            <span className="text-[11.5px] text-muted-foreground">Base branch</span>
+            <BaseBranchCombobox
+              repoId={repoId}
+              baseBranch={baseBranch}
+              defaultRef={selectedRepo?.worktreeBaseRef ?? null}
+              onChange={onBaseBranchChange}
+            />
+          </label>
           <span className="text-[11px] text-muted-foreground">
-            {selectedRepo.displayName} isn&apos;t a git repo — the workspace opens the folder as-is.
+            The worktree is named in the next step — from the issue you link or create.
           </span>
         </div>
       ) : null}
@@ -1313,7 +1291,7 @@ function BaseBranchCombobox({
   )
 }
 
-// ---------- Step 3: Agent & tracker ----------
+// ---------- Step 3: Issue & agent ----------
 
 /** The composer's create-issue seams, bundled for threading into the tracker
  *  section (spec 013 F2). Every field maps 1:1 onto a `useComposerState`
@@ -1356,6 +1334,11 @@ function AgentStep({
   detectedAgentIds,
   quickAgent,
   onPick,
+  selectedRepoIsGit,
+  repoDisplayName,
+  name,
+  onNameValueChange,
+  nameInputRef,
   trackerWorkdir,
   activeProject,
   fetchProjectViewTable,
@@ -1369,6 +1352,11 @@ function AgentStep({
   detectedAgentIds: Set<TuiAgent> | null
   quickAgent: TuiAgent | null
   onPick: (agent: TuiAgent) => void
+  selectedRepoIsGit: boolean
+  repoDisplayName?: string
+  name: string
+  onNameValueChange: (value: string) => void
+  nameInputRef: React.RefObject<HTMLInputElement | null>
   trackerWorkdir?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
@@ -1382,11 +1370,42 @@ function AgentStep({
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
       <div className="flex flex-col gap-0.5">
         <span className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
-          Who drives — and where is it tracked?
+          What&apos;s the work — and who drives it?
         </span>
         <span className="text-[12px] text-muted-foreground">
-          Remembered from last time. Confirm or change.
+          Link or create the issue first — the {selectedRepoIsGit ? 'worktree' : 'workspace'} is
+          named after it. Then pick the agent.
         </span>
+      </div>
+
+      {/* Tracker FIRST: linking/creating the issue auto-fills the name field
+          below (via applyLinkedWorkItem's title slug) while it's still blank. */}
+      <TrackerSection
+        workdir={trackerWorkdir}
+        activeProject={activeProject}
+        fetchProjectViewTable={fetchProjectViewTable}
+        linkedWorkItem={linkedWorkItem}
+        onPickWorkItem={onPickWorkItem}
+        createIssue={createIssue}
+        linear={linear}
+      />
+
+      <div className="flex flex-col gap-2.5">
+        <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+          {selectedRepoIsGit ? 'Worktree name' : 'Workspace name'}
+        </span>
+        <input
+          ref={nameInputRef}
+          value={name}
+          onChange={(event) => onNameValueChange(event.target.value)}
+          placeholder="auto"
+          className="h-[34px] rounded-md border border-input bg-secondary px-2.5 font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+        />
+        {!selectedRepoIsGit && repoDisplayName ? (
+          <span className="text-[11px] text-muted-foreground">
+            {repoDisplayName} isn&apos;t a git repo — the workspace opens the folder as-is.
+          </span>
+        ) : null}
       </div>
 
       <div className="flex flex-col gap-2.5">
@@ -1427,16 +1446,6 @@ function AgentStep({
           </span>
         ) : null}
       </div>
-
-      <TrackerSection
-        workdir={trackerWorkdir}
-        activeProject={activeProject}
-        fetchProjectViewTable={fetchProjectViewTable}
-        linkedWorkItem={linkedWorkItem}
-        onPickWorkItem={onPickWorkItem}
-        createIssue={createIssue}
-        linear={linear}
-      />
 
       {/* Spec 013 F4: the migrated "Start gated run" toggle — eligible only when
           a github.com issue is linked to a local git repo. Bound to the SAME

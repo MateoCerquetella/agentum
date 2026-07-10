@@ -914,9 +914,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         prompt: agentPrompt,
         linkedIssueNumber: parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       }),
-    [agentPrompt, fallbackCreatureName, linkedPR, name, parsedLinkedIssueNumber]
+    [agentPrompt, fallbackCreatureName, linkedPR, linkedWorkItem, name, parsedLinkedIssueNumber]
   )
   // Why: when the user links an issue/PR but has not typed any prompt text
   // (attachments don't count), swap the generic "Linked work items:" context
@@ -2609,6 +2610,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         prompt: '',
         linkedIssueNumber: parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       })
       if (
