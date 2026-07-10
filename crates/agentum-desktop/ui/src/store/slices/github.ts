@@ -151,7 +151,15 @@ function optimisticFieldValueFromMutation(
   fieldId: string,
   value: GitHubProjectFieldMutationValue
 ): GitHubProjectTable['rows'][number]['fieldValuesByFieldId'][string] | null {
-  const field = table.selectedView.fields.find((f) => f.id === fieldId)
+  // Why: a Board drop writes the column field (verticalGroupByFields, usually
+  // Status), which is not always among the view's visible `fields` — search
+  // the group-by fields too so the optimistic value keeps its name/color.
+  const view = table.selectedView
+  const field = [
+    ...view.fields,
+    ...(view.verticalGroupByFields ?? []),
+    ...view.groupByFields
+  ].find((f) => f.id === fieldId)
   switch (value.kind) {
     case 'single-select': {
       if (field?.kind === 'single-select') {

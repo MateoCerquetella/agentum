@@ -94,6 +94,11 @@ export type GitHubProjectView = {
   filter: string
   fields: GitHubProjectField[]
   groupByFields: GitHubProjectField[]
+  /** Board (Kanban) column field. Why: GitHub models a board's columns as
+   *  `verticalGroupByFields`; `groupByFields` on a Board view is the optional
+   *  swimlane grouping. Optional because cached payloads from before this
+   *  field shipped lack the key. */
+  verticalGroupByFields?: GitHubProjectField[]
   sortByFields: GitHubProjectSort[]
 }
 
