@@ -118,10 +118,7 @@ fn parse_project_create_output(stdout: &str) -> Result<i64, String> {
 /// (length-bounded) VERBATIM — e.g. gh's "not a template repository" must
 /// reach the user unedited (handoff deviation-risk 3).
 async fn run_in(program: &str, args: &[&str], cwd: &Path) -> Result<String, String> {
-    let fut = tokio::process::Command::new(program)
-        .args(args)
-        .current_dir(cwd)
-        .output();
+    let fut = crate::task_sink::output_with_etxtbsy_retry(program, args, cwd);
     let output =
         match tokio::time::timeout(std::time::Duration::from_secs(PROVISION_TIMEOUT_SECS), fut)
             .await

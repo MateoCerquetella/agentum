@@ -34,7 +34,11 @@ pub struct Playbook {
 /// verbatim copies of the original `.claude/commands/sdd-*.md`; keep them in
 /// sync by editing HERE (this is the canonical home now, not `~/.claude`).
 const EMBEDDED: &[(&str, &str, &str)] = &[
-    ("sdd-spec", "Spec", include_str!("sdd_playbooks/sdd-spec.md")),
+    (
+        "sdd-spec",
+        "Spec",
+        include_str!("sdd_playbooks/sdd-spec.md"),
+    ),
     (
         "sdd-spec-socratic",
         "Spec Socratic",
@@ -45,9 +49,21 @@ const EMBEDDED: &[(&str, &str, &str)] = &[
         "Orchestrate",
         include_str!("sdd_playbooks/sdd-orchestrate.md"),
     ),
-    ("sdd-status", "Status", include_str!("sdd_playbooks/sdd-status.md")),
-    ("sdd-handoff", "Handoff", include_str!("sdd_playbooks/sdd-handoff.md")),
-    ("sdd-init", "Init", include_str!("sdd_playbooks/sdd-init.md")),
+    (
+        "sdd-status",
+        "Status",
+        include_str!("sdd_playbooks/sdd-status.md"),
+    ),
+    (
+        "sdd-handoff",
+        "Handoff",
+        include_str!("sdd_playbooks/sdd-handoff.md"),
+    ),
+    (
+        "sdd-init",
+        "Init",
+        include_str!("sdd_playbooks/sdd-init.md"),
+    ),
 ];
 
 /// Where per-user playbook overrides live. `$AGENTUM_HOME` wins so tests (and
