@@ -281,10 +281,11 @@ async fn run_gh_capture(program: &str, args: &[&str]) -> Result<String, String> 
     // Pin the cwd to the always-present neutral dir ($HOME), like every other
     // `gh` runner: the `--repo` calls don't need the repo cwd, and inheriting a
     // deleted test/working dir makes process spawn itself fail (ENOENT on getcwd).
-    let fut = tokio::process::Command::new(program)
-        .args(args)
-        .current_dir(crate::task_sink::neutral_cwd())
-        .output();
+    let fut = crate::task_sink::output_with_etxtbsy_retry(
+        program,
+        args,
+        crate::task_sink::neutral_cwd(),
+    );
     let output = match tokio::time::timeout(GH_CALL_TIMEOUT, fut).await {
         Err(_) => return Err("gh timed out".into()),
         Ok(Err(e)) => return Err(format!("failed to run `{program}`: {e}")),
