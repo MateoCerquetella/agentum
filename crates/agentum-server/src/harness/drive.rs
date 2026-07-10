@@ -422,6 +422,22 @@ async fn transition_tracker(
     }
 }
 
+/// A per-SPAWN unique, tmux-safe session name: `harness-<kind>-<run8>-<nonce4>`.
+///
+/// The nonce is load-bearing: `sessions.name` is UNIQUE and harness session
+/// rows are only marked stopped (never deleted), so a role-gate retry, a QA
+/// re-run, or a re-drive of an existing run that reused the previous spawn's
+/// name would fail `create_session_on_host` with AlreadyExists and take the
+/// WHOLE run to `Failed` (#302). `kind` is clamped so the name stays within
+/// `validate_name`'s 64-char cap (safe to byte-slice: inputs are ASCII —
+/// `sanitize` output and role slugs).
+pub(super) fn spawn_session_name(kind: &str, harness_id: Uuid) -> String {
+    let kind = &kind[..kind.len().min(40)];
+    let run = harness_id.simple().to_string();
+    let nonce = Uuid::new_v4().simple().to_string();
+    format!("harness-{kind}-{}-{}", &run[..8], &nonce[..4])
+}
+
 /// Create + start a real agent session scoped to one feature.
 async fn spawn_feature_agent(
     state: &AppState,
@@ -436,9 +452,7 @@ async fn spawn_feature_agent(
         .await?
         .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
 
-    // A unique, tmux-safe session name per feature+run.
-    let short = harness_id.simple().to_string();
-    let name = format!("harness-{}-{}", sanitize(&feature.id), &short[..8]);
+    let name = spawn_session_name(&sanitize(&feature.id), harness_id);
 
     // The harness is non-interactive — push the canonical YOLO marker so the
     // agent runs without permission prompts (the shared spawn path translates it
@@ -530,8 +544,7 @@ async fn spawn_qa_agent(
         .get_host(LOCAL_HOST_ID)
         .await?
         .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
-    let short = harness_id.simple().to_string();
-    let name = format!("harness-qa-{}-{}", sanitize(&feature.id), &short[..8]);
+    let name = spawn_session_name(&format!("qa-{}", sanitize(&feature.id)), harness_id);
     let flags = if config.features.agent_yolo {
         vec![agentum_executor::YOLO_MARKER.to_string()]
     } else {
@@ -676,8 +689,7 @@ async fn spawn_role_agent(
         .get_host(LOCAL_HOST_ID)
         .await?
         .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
-    let short = harness_id.simple().to_string();
-    let name = format!("harness-{}-{}", role.as_str(), &short[..8]);
+    let name = spawn_session_name(role.as_str(), harness_id);
     let flags = if config.features.agent_yolo {
         vec![agentum_executor::YOLO_MARKER.to_string()]
     } else {
@@ -1186,6 +1198,15 @@ pub(crate) async fn wait_for_settle(
                 }
                 match ev.kind.as_str() {
                     "agent.awaiting_input" | "agent.finished" => {
+                        // The watchdog's FIRST classification of a fresh pane
+                        // arrives as one of these kinds with {"initial": true} —
+                        // the REPL booting to its idle prompt, not the agent
+                        // finishing the injected turn. Counting it as a settle
+                        // tears a just-started agent down at the grace boundary
+                        // (#302), so boot-time classifications never settle.
+                        if ev.payload.get("initial").and_then(|v| v.as_bool()) == Some(true) {
+                            continue;
+                        }
                         if start.elapsed() >= grace {
                             return SettleOutcome::Settled;
                         }
