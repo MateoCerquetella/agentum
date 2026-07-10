@@ -1524,6 +1524,21 @@ mod tests {
         assert_eq!(reason, SlugReason::NoGithubRemote);
     }
 
+    /// A literal `~/…` workdir can't resolve: `resolve_github_slug` runs
+    /// `git -C <workdir>` with no shell, so the tilde reaches git verbatim and
+    /// the origin read fails. This is exactly why every caller must
+    /// `expand_workdir` FIRST — the `github_projects` binding resolver once
+    /// skipped that and dead-ended the Tracker on a spurious `no_github_repo`
+    /// even for a real GitHub checkout.
+    #[tokio::test]
+    async fn resolve_github_slug_literal_tilde_path_does_not_resolve() {
+        let host = local_host();
+        let reason = resolve_github_slug(&host, "~/definitely-not-a-real-path/repo", None)
+            .await
+            .expect_err("a literal ~ path is not a directory git can read");
+        assert_eq!(reason, SlugReason::NoGithubRemote);
+    }
+
     /// AC-1: a workdir that does NOT exist locally + a valid GitHub slug hint
     /// must NOT return "workdir does not exist". The Chat path resolves the slug
     /// from the hint (no IO, no existence check) and drives `gh issue create
