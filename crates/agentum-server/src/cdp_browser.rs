@@ -306,11 +306,12 @@ fn resolve_scope_from_tables(
         });
     }
     // A bare absolute path (the agent/MCP side): a registered worktree first,
-    // then a session running in a repo's main checkout. Use `Path::is_absolute`
-    // (not `starts_with('/')`) so Windows drive/UNC paths (`C:\…`, `\\…`) also
-    // reach the worktree/repo match + git fallback instead of being misfiled as
-    // an Adhoc key.
-    if Path::new(raw).is_absolute() {
+    // then a session running in a repo's main checkout. Accept BOTH conventions:
+    // `starts_with('/')` for POSIX paths (and `/`-style test fixtures, which are
+    // NOT `is_absolute()` on Windows — no drive letter), plus `Path::is_absolute`
+    // for Windows drive/UNC paths (`C:\…`, `\\…`). Either way, don't misfile an
+    // absolute path as an Adhoc key.
+    if raw.starts_with('/') || Path::new(raw).is_absolute() {
         if let Some((repo_id, _)) = worktrees
             .iter()
             .find(|(_, id)| canonical_worktree_key(id) == raw)
