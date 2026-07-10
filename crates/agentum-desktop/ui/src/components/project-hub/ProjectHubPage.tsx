@@ -18,6 +18,7 @@ import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
 import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
+import { getProjectBinding } from '@/runtime/github-projects-client'
 import { ProjectSessionsList } from './ProjectSessionsList'
 
 // Lazy like App.tsx's page mounts: the hub chunk stays small and each surface
@@ -70,6 +71,56 @@ export default function ProjectHubPage(): React.JSX.Element {
       taskPageData: { ...s.taskPageData, preselectedRepoId: repo.id }
     }))
   }, [repo, tab, taskDataSeeded])
+
+  // When this project is bound to a GitHub Projects v2 board, make that Project
+  // the active one and open the Tasks tab in project mode — so the tab shows the
+  // board's REAL Status columns (Backlog / In progress / QA / …) through the
+  // existing ProjectViewWrapper, instead of the coarse open/closed issue Kanban.
+  // Unbound repos no-op (the binding is null), so their issue board is unchanged.
+  // Relies on the repo-slug resolver (#315) to load the per-repo binding.
+  useEffect(() => {
+    if (!repo?.path || tab !== 'tasks' || !isGitRepoKind(repo)) return
+    let cancelled = false
+    void getProjectBinding({ workdir: repo.path })
+      .then((res) => {
+        if (cancelled) return
+        const b = res.binding
+        const owner = b?.projectOwner
+        const ownerType = b?.projectOwnerType
+        const number = b?.projectNumber
+        // A binding with no resolved project ref can't drive the board view.
+        if (!owner || number == null || (ownerType !== 'organization' && ownerType !== 'user')) {
+          return
+        }
+        const s = useAppStore.getState()
+        // Force project mode so the bound board wins over a resumed 'items' view.
+        s.setTaskResumeState({ githubMode: 'project' })
+        const gh = s.settings?.githubProjects ?? {
+          pinned: [],
+          recent: [],
+          lastViewByProject: {},
+          activeProject: null
+        }
+        const active = gh.activeProject
+        if (
+          active &&
+          active.owner === owner &&
+          active.ownerType === ownerType &&
+          active.number === number
+        ) {
+          return // already the active project — skip a redundant settings write
+        }
+        void s.updateSettings({
+          githubProjects: { ...gh, activeProject: { owner, ownerType, number } }
+        })
+      })
+      .catch(() => {
+        // A binding-load failure just leaves the default Tasks view (no board).
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [repo, tab])
 
   // Tasks-tab badge (ADE prototype "Tasks <count>"): open-item count from the
   // work-items cache. Null (no badge) until the key is warm — the prefetch
