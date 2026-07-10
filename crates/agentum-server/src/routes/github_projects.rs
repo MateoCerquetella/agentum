@@ -51,17 +51,35 @@ async fn resolve_slug(
     if workdir.is_empty() {
         return Err(ApiError::BadRequest("`workdir` is required".into()));
     }
+    // Expand `~`/trailing-slash before the git read. `resolve_github_slug` runs
+    // `git -C <workdir>` with no shell, so a stored `~/…` project path is passed
+    // literally and git can't cd into it — the origin read fails and the binding
+    // dead-ends on a spurious `no_github_repo`. Every other local route already
+    // expands (`sessions`/`provision`/`wiki`/`uploads`); this resolver was the
+    // lone exception. No-op for the common absolute path, so working repos are
+    // unaffected.
+    let expanded = super::util::expand_workdir(workdir)?;
+    let workdir = expanded.to_string_lossy();
     let host = state
         .store
         .get_host(LOCAL_HOST_ID)
         .await?
         .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
-    super::board_goals::resolve_github_slug(&host, workdir, slug_hint)
+    super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
         .await
-        .map_err(|_| {
+        .map_err(|reason| {
+            // Keep the `no_github_repo` code the UI branches on, but carry the
+            // real reason in the message — a repo whose `origin` isn't a GitHub
+            // remote must not be indistinguishable from an unreachable host.
+            let message = match reason {
+                super::board_goals::SlugReason::NoGithubRemote =>
+                    "no GitHub repo resolved for this project — its folder has no `origin` remote pointing at GitHub",
+                super::board_goals::SlugReason::HostUnreachable =>
+                    "no GitHub repo resolved for this project — could not read the repo's git origin",
+            };
             ApiError::Custom(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                json!({ "error": { "code": "no_github_repo", "message": "no GitHub repo resolved for this project" } }),
+                json!({ "error": { "code": "no_github_repo", "message": message } }),
             )
         })
 }
