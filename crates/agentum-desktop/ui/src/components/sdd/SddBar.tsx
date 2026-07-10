@@ -9,6 +9,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { FileText, ListChecks, MessagesSquare, Repeat2, StepForward } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useAppStore } from '@/store'
+import { useTabAgent } from '@/lib/use-tab-agent'
+import type { TerminalTab } from '../../../../shared/types'
 import {
   getSddLoop,
   injectSddPlaybook,
@@ -97,6 +99,22 @@ function PlaybookPreviewModal({
       </div>
     </div>
   )
+}
+
+/**
+ * Visibility gate for the SDD bar: show it whenever the tab is ACTUALLY
+ * running an agent, resolved from live signals (foreground process, pane
+ * title, lifecycle hooks, launchAgent) via `useTabAgent` — NOT the raw
+ * `tab.launchAgent` field, which is only stamped by the agent quick-launcher
+ * and absent on attached sessions, persisted tabs, and manually-started
+ * agents (the v0.72.0 "where are the buttons?" bug).
+ */
+export function SddBarGate({ tab }: { tab: TerminalTab }): React.JSX.Element | null {
+  const agent = useTabAgent(tab)
+  if (!agent) {
+    return null
+  }
+  return <SddBar tabId={tab.id} />
 }
 
 export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
