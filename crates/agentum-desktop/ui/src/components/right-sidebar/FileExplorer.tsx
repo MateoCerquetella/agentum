@@ -503,6 +503,7 @@ function FileExplorerInner(): React.JSX.Element {
               isLoading={isLoading}
               error={hasError ? rootError : null}
               isEmpty={isEmptyState && !isLoading && !hasError}
+              onRetry={manualRefresh.handleRefresh}
             />
           )}
           {showTree && (

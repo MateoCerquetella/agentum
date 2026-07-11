@@ -106,16 +106,20 @@ export function SshPane(_props: SshPaneProps): React.JSX.Element {
     }
 
     try {
+      // The pre-edit target: the server host row still carries these coords, so
+      // the sync below can find it by them after the user changes the IP/user/
+      // port (matching by the new coords alone would miss and silently no-op,
+      // leaving every session dialing the old, dead address).
+      const previous = editingId ? targets.find((t) => t.id === editingId) : undefined
       const saved = (await (editingId
         ? api.ssh.updateTarget({ id: editingId, updates: target })
         : api.ssh.addTarget({ target }))) as SshTarget | undefined
       recordFeatureInteraction('ssh')
-      // Push the (possibly re-entered) password/key to the embedded server host
-      // so the daemon authenticates with the current secret, not a stale one.
-      // The host is created/matched by host/user/port and otherwise never has
-      // its secret refreshed — this is what makes "fix the password" actually work.
+      // Push the edited coords + (possibly re-entered) password/key to the
+      // embedded server host so the daemon connects with the current address
+      // and secret, not stale ones — what makes "fix the IP/password" work.
       if (saved?.id) {
-        void syncServerHostAuthForTarget(saved)
+        void syncServerHostAuthForTarget(saved, previous)
       }
       if (!mountedRef.current) {
         return
