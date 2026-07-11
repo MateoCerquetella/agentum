@@ -519,6 +519,15 @@ Test) → browser QA gate green → ticket Done. The pieces:
 
 ## Common gotchas
 
+- **HTML5 drag-and-drop is dead in the desktop webview (Linux/Windows)**:
+  the Tauri shell keeps `dragDropEnabled` on (default) so OS file drops
+  reach the screenshot-onto-terminal handler (`WindowEvent::DragDrop` in
+  `agentum-desktop/src/lib.rs`) — and on Linux/Windows wry consumes the
+  native drag loop for it, so in-page `dragstart`/`dragover`/`drop`
+  never fire. Any new drag surface in the UI must use pointer events:
+  `lib/use-kanban-pointer-drag.ts` for kanbans (contract in
+  `lib/kanban-pointer-drag.ts`), or the bespoke hooks the sidebar uses.
+  Don't "fix" it by disabling `dragDropEnabled` — that kills file drops.
 - **rust-embed compile-time**: see "Critical: rebuild rhythm" above.
 - **YOLO marker**: never push tool-specific YOLO flag spellings from
   the TUI/dashboard. Always push the Claude marker; let the adapter
