@@ -568,7 +568,8 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
         ...(remove.length ? { removeLabels: remove } : {})
       })
       if (!res.ok) {
-        toast.error(res.error.message)
+        // `|| fallback`: a malformed error envelope must never blank the toast.
+        toast.error(res.error?.message || 'Failed to update labels.')
       }
     },
     [currentCacheKey, patchProjectIssueOrPr]
@@ -581,7 +582,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
       }
       const res = await patchProjectRowIssueType(currentCacheKey, row.id, issueType)
       if (!res.ok) {
-        toast.error(res.error.message)
+        toast.error(res.error?.message || 'Failed to update the issue type.')
       }
     },
     [currentCacheKey, patchProjectRowIssueType]
@@ -601,7 +602,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           ? await clearProjectFieldValue(currentCacheKey, row.id, fieldId)
           : await updateProjectFieldValue(currentCacheKey, row.id, fieldId, value)
       if (!result.ok) {
-        toast.error(result.error.message)
+        toast.error(result.error?.message || 'Failed to update the field.')
       }
     },
     [clearProjectFieldValue, currentCacheKey, updateProjectFieldValue]
