@@ -27,6 +27,8 @@ export async function fetchGithubIssueBody(input: {
   number: number
   workdir: string
   slug?: string
+  /** Spec 020 F3: resolve the slug (and run `gh`) on this repo's own host. */
+  repoId?: string
   /** Abort budget — a slow/hung `gh` must not delay the composer. */
   timeoutMs?: number
 }): Promise<GithubIssueBody> {
@@ -36,6 +38,9 @@ export async function fetchGithubIssueBody(input: {
   })
   if (input.slug) {
     params.set('slug', input.slug)
+  }
+  if (input.repoId) {
+    params.set('repoId', input.repoId)
   }
   const url = await apiUrl(`/api/github/issue?${params.toString()}`)
 
@@ -105,18 +110,42 @@ export type CreatedGithubIssue = {
   author: string | null
 }
 
+/** The create-issue request body (spec 020 F3). Pure + exported for the wire
+ *  pins: absent optionals produce absent keys, so a repoId-less call keeps the
+ *  pre-020 body byte-identical. */
+export function createIssuePayload(input: {
+  title: string
+  body?: string
+  workdir: string
+  slug?: string
+  repoId?: string
+  labels?: string[]
+}): Record<string, unknown> {
+  return {
+    title: input.title,
+    ...(input.body ? { body: input.body } : {}),
+    workdir: input.workdir,
+    ...(input.slug ? { slug: input.slug } : {}),
+    ...(input.repoId ? { repoId: input.repoId } : {}),
+    // Omitted when empty so the pre-006 wire shape stays byte-identical.
+    ...(input.labels?.length ? { labels: input.labels } : {})
+  }
+}
+
 /**
  * File a new GitHub issue through the embedded server's `TaskSink::Github`
  * path (spec 004 F3) — the composer's issue-first affordance. `workdir` is the
  * selected repo's path (used for the `origin` slug read when no `slug` hint is
- * supplied). Throws on any non-2xx so the caller can render an inline error
- * without mutating composer state.
+ * supplied); `repoId` (spec 020 F3) makes that read run on the repo's own
+ * host — the robustness path when no slug was learned. Throws on any non-2xx
+ * so the caller can render an inline error without mutating composer state.
  */
 export async function createGithubIssue(input: {
   title: string
   body?: string
   workdir: string
   slug?: string
+  repoId?: string
   /** Spec 006 F1: labels applied at creation (existing repo label names). */
   labels?: string[]
   /** Abort budget — issue creation shells out to `gh`. */
@@ -129,14 +158,7 @@ export async function createGithubIssue(input: {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-      body: JSON.stringify({
-        title: input.title,
-        ...(input.body ? { body: input.body } : {}),
-        workdir: input.workdir,
-        ...(input.slug ? { slug: input.slug } : {}),
-        // Omitted when empty so the pre-006 wire shape stays byte-identical.
-        ...(input.labels?.length ? { labels: input.labels } : {})
-      }),
+      body: JSON.stringify(createIssuePayload(input)),
       signal: controller.signal
     })
     if (!res.ok) {
@@ -176,6 +198,10 @@ export function extractServerErrorMessage(raw: string, fallback: string): string
 // (crates/agentum-server/src/routes/github.rs::DraftBodyResponse).
 export type DraftedGithubIssueBody = {
   body: string
+  /** Spec 020 F3 (D4): whether repo/wiki context actually grounded the draft.
+   *  Optional client-side only to tolerate an older-server skew — the embedded
+   *  server ships lockstep, so it is effectively always present. */
+  grounding?: { repo: boolean; wiki: boolean }
 }
 
 /**

@@ -7,19 +7,20 @@
 //! `POST /api/workspace/provision` — the ONE idempotent provisioning ensure
 //! (labels, board link-or-create + bind, scaffold, consent-gated commit).
 //!
-//! Local-host only (the harness routes' pattern): `expand_workdir` +
-//! `is_dir` guards; the only hard 4xx are request-shape / missing-workdir
-//! errors — every provisioning step inside is best-effort and per-step
-//! reported. All routes authed (no `is_public` changes).
+//! Provisioning is local-host only (the harness routes' pattern):
+//! `expand_workdir` + `is_dir` guards; the only hard 4xx are request-shape /
+//! missing-workdir errors — every provisioning step inside is best-effort and
+//! per-step reported. Only the *slug resolution* half is host-aware
+//! (spec 020 F1, via the shared `util::resolve_tracker_slug`); an SSH repoId
+//! still dies at the local `is_dir` gate first, which is correct — remote
+//! scaffolding is its own future spec. All routes authed (no `is_public`
+//! changes).
 
-use agentum_core::LOCAL_HOST_ID;
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::routing::post;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -30,34 +31,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/github/repo-from-template", post(repo_from_template))
         .route("/api/workspace/provision", post(provision_workspace))
-}
-
-/// Resolve the repo slug — the same `{workdir, slug?}` contract and typed
-/// `no_github_repo` 422 as the sibling github routes. A local copy of
-/// `routes::github_projects::resolve_slug` (private there; F3's boundary
-/// keeps that F1 file untouched) — keep the two in sync.
-async fn resolve_slug(
-    state: &AppState,
-    workdir: &str,
-    slug_hint: Option<&str>,
-) -> Result<String, ApiError> {
-    let workdir = workdir.trim();
-    if workdir.is_empty() {
-        return Err(ApiError::BadRequest("`workdir` is required".into()));
-    }
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
-    super::board_goals::resolve_github_slug(&host, workdir, slug_hint)
-        .await
-        .map_err(|_| {
-            ApiError::Custom(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                json!({ "error": { "code": "no_github_repo", "message": "no GitHub repo resolved for this project" } }),
-            )
-        })
 }
 
 // ─── Pure request validation (unit-tested) ──────────────────────────────────
@@ -268,6 +241,10 @@ struct ProvisionRequest {
     workdir: String,
     #[serde(default)]
     slug: Option<String>,
+    /// Spec 020 F1: resolve the slug on this registered repo's host instead
+    /// of the local one. Absent = local (pre-020 behavior byte-for-byte).
+    #[serde(default)]
+    repo_id: Option<String>,
     /// Absent = no board requested (an existing binding still short-circuits
     /// to "already bound"; labels + scaffold + commit still ensure).
     #[serde(default)]
@@ -295,7 +272,13 @@ async fn provision_workspace(
             workdir.display()
         )));
     }
-    let slug = resolve_slug(&state, &req.workdir, req.slug.as_deref()).await?;
+    let slug = super::util::resolve_tracker_slug(
+        &state,
+        req.repo_id.as_deref(),
+        &req.workdir,
+        req.slug.as_deref(),
+    )
+    .await?;
     let project = match &req.project {
         Some(dto) => Some(project_choice(dto).map_err(ApiError::BadRequest)?),
         None => None,
@@ -398,8 +381,18 @@ mod tests {
         .unwrap();
         assert!(req.commit_scaffold);
         assert_eq!(req.done_closes_issue, Some(false));
+        // Spec 020 F1: absent repoId → None (pre-020 requests byte-identical).
+        assert_eq!(req.repo_id, None);
         let mapping = status_mapping_from_wire(req.status_mapping.as_ref().unwrap()).unwrap();
         assert_eq!(mapping.ready_to_test, "r");
+
+        let with_repo: ProvisionRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/repo",
+            "repoId": "r-1",
+            "commitScaffold": false
+        }))
+        .unwrap();
+        assert_eq!(with_repo.repo_id.as_deref(), Some("r-1"));
 
         let partial: WireStatusMapping = serde_json::from_value(serde_json::json!({
             "todo": "t", "inProgress": " ", "readyToTest": "r", "done": "d", "blocked": ""

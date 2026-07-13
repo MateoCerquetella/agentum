@@ -4,11 +4,16 @@ import { api } from '@/tauri'
 // (opening the item dialog in repo-backed mode, launching a worktree) can
 // dispatch correctly, we need a renderer-side index mapping slug → Repo[].
 //
-// The index is built lazily from `api.gh.repoSlug({ repoPath })` —
-// the main-process resolver that reads `git remote` and classifies the
-// remote into `owner/repo`. Repos whose slug cannot be resolved (no GitHub
-// remote, SSH lookup failure) are excluded; the design doc (§Row actions)
-// says to keep the unknown-repo fallback in that case.
+// The index is built lazily via one of three arms per repo (spec 020 F2,
+// picked by `slugResolutionArm`): an active runtime environment resolves over
+// the environment RPC (`github.repoSlug`); an SSH repo (`connectionId`)
+// resolves via the server's host-aware `GET /api/repos/{id}/slug` — the
+// local-only native read can never see a remote checkout; local repos keep
+// the native `api.gh.repoSlug({ repoPath })`, the main-process resolver that
+// reads `git remote` and classifies the remote into `owner/repo`. Repos whose
+// slug cannot be resolved (no GitHub remote, SSH lookup failure, host down)
+// are excluded; the design doc (§Row actions) says to keep the unknown-repo
+// fallback in that case.
 //
 // The index rebuilds only when `state.repos` changes — adding or removing
 // a repo is rare enough that a full re-resolution is simpler than per-id
@@ -19,6 +24,8 @@ import { useAppStore } from '@/store'
 import type { Repo } from '../../../shared/types'
 import type { GlobalSettings } from '../../../shared/types'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
+import { getServerRepoSlug } from '@/runtime/server-repo-client'
+import { slugResolutionArm } from './repo-slug-arm'
 
 /** Lowercased `owner/repo` → Repo[]. Case folded because GitHub treats slugs
  *  case-insensitively but displays the canonical casing; the lookup side
@@ -66,8 +73,18 @@ async function resolveRepoSlug(
   }
   try {
     const target = getActiveRuntimeTarget(settings)
+    const arm = slugResolutionArm(target.kind === 'environment', repo.connectionId)
+    if (arm === 'server') {
+      // SSH repo: read `origin` on the repo's OWN host via the server route.
+      // Any throw (no origin, host down, unknown id) falls to the catch below
+      // — fail-closed exclusion, exactly like a native miss (spec 020 AC 7).
+      const { slug: resolved } = await getServerRepoSlug(repo.id)
+      const slug = resolved.toLowerCase()
+      slugByRepoId.set(cacheKey, slug)
+      return slug
+    }
     const result =
-      target.kind === 'environment'
+      arm === 'environment-rpc'
         ? await callRuntimeRpc<{ owner: string; repo: string } | null>(
             target,
             'github.repoSlug',

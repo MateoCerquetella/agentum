@@ -39,6 +39,7 @@ import {
 import { deriveCheckStatusFromChecks, syncPRChecksStatus } from './github-checks'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 import { rightSidebarShowsPullRequestData } from '@/lib/right-sidebar-visibility'
+import { findRepoByPathPreferLocal } from '@/lib/find-repo-by-path'
 import { hostedReviewInfoFromGitHubPRInfo } from '../../../../shared/hosted-review-github'
 import { getHostedReviewCacheKey, linkedReviewHintKey } from './hosted-review-cache-identity'
 import { getGitHubPRCacheKey, getGitHubRepoCacheKey } from './github-cache-key'
@@ -104,7 +105,7 @@ function getRuntimeRepoTarget(
   if (target.kind !== 'environment') {
     return null
   }
-  const repo = state.repos.find((candidate) => candidate.path === repoPath)
+  const repo = findRepoByPathPreferLocal(state.repos, repoPath)
   return repo ? { target, repo } : null
 }
 
@@ -1982,9 +1983,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchPRForBranch: async (repoPath, branch, options): Promise<PRInfo | null> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = prCacheKey(repoPath, repoId, branch, requestSettings, repo?.connectionId)
@@ -2146,7 +2147,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchIssue: async (repoPath, number, options) => {
-    const repoId = options?.repoId ?? get().repos?.find((repo) => repo.path === repoPath)?.id
+    const repoId = options?.repoId ?? findRepoByPathPreferLocal(get().repos, repoPath)?.id
     const cacheKey = repoScopedCacheKey(repoPath, repoId, String(number))
     const cached = get().issueCache[cacheKey]
     if (isFresh(cached)) {
@@ -2196,9 +2197,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
     prRepo,
     options
   ): Promise<PRCheckDetail[]> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2317,9 +2318,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchPRCheckDetails: async (repoPath, args, options): Promise<PRCheckRunDetails | null> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
@@ -2349,9 +2350,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchPRComments: async (repoPath, prNumber, options): Promise<PRComment[]> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2413,9 +2414,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   addPRConversationComment: async (repoPath, prNumber, body, options) => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2469,9 +2470,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   addPRReviewCommentReply: async (repoPath, prNumber, commentId, body, options) => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2537,9 +2538,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   resolveReviewThread: async (repoPath, prNumber, threadId, resolve, options) => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(

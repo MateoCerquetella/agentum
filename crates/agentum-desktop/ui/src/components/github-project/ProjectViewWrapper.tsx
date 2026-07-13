@@ -27,9 +27,12 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import GitHubItemDialog, { type GitHubItemDialogProjectOrigin } from '@/components/GitHubItemDialog'
 import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
+import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
+import { getLinkedWorkItemSuggestedName, type LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { useRepoSlugIndex } from '@/lib/repo-slug-index'
 import { cn } from '@/lib/utils'
+import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
@@ -44,7 +47,7 @@ import type {
   GitHubProjectViewSummary,
   ListProjectViewsResult
 } from '../../../../shared/github-project-types'
-import type { GitHubWorkItem } from '../../../../shared/types'
+import type { GitHubWorkItem, Repo } from '../../../../shared/types'
 import ProjectPicker, { type ResolvedProjectSelection } from './ProjectPicker'
 import ProjectViewList from './ProjectViewList'
 import ProjectBoardView from './ProjectBoardView'
@@ -54,6 +57,7 @@ import {
   resolveMissingRepoProjectDialogState,
   resolveRepoBackedProjectDialogState
 } from './project-dialog-state'
+import { classifyStartWorkRepoMatches } from './start-work-repo-match'
 
 type Props = Record<string, never>
 
@@ -472,6 +476,104 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
     []
   )
 
+  // Spec 015 F2: hop a multi-host work item into the new-workspace composer
+  // seeded on a host that actually holds the repo. Mirrors TaskPage's
+  // `openComposerForItem`: snapshot the issue body into `linkedContext` so the
+  // spawned agent gets the spec, not just the URL — best-effort, a fetch
+  // failure must never block the hop. Deliberately NO `startGatedRun` (board
+  // Start-work is an ungated direct launch) and NO `initialBaseBranch` (the
+  // wizard owns its own PR-head resolution).
+  const openComposerForChoice = useCallback(
+    async (
+      item: GitHubWorkItem,
+      match: { repos: Repo[]; seedRepoId: string },
+      origin: { owner: string; repo: string }
+    ): Promise<void> => {
+      let linkedWorkItem: LinkedWorkItemSummary = {
+        type: item.type,
+        number: item.number,
+        title: item.title,
+        url: item.url
+      }
+      const seedRepo = match.repos.find((repo) => repo.id === match.seedRepoId)
+      // Why: the body fetch runs `gh` against a local checkout, so only a
+      // local seed's path is a usable workdir; a remote-only match set keeps
+      // the title+URL fallback.
+      const workdir = seedRepo && seedRepo.connectionId == null ? seedRepo.path : null
+      if (item.type === 'issue' && workdir) {
+        try {
+          const fetched = await fetchGithubIssueBody({
+            number: item.number,
+            workdir,
+            slug: `${origin.owner}/${origin.repo}`
+          })
+          linkedWorkItem = buildGithubIssueLinkedWorkItem(item, fetched)
+        } catch (err) {
+          // Best-effort: keep the title+URL fallback so the composer still opens.
+          console.warn('[project-view] could not load GitHub issue body for Start work:', err)
+        }
+      }
+      useAppStore.getState().openModal('new-workspace-composer', {
+        linkedWorkItem,
+        prefilledName: getLinkedWorkItemSuggestedName(item),
+        initialRepoId: match.seedRepoId,
+        telemetrySource: 'sidebar'
+      })
+    },
+    []
+  )
+
+  // Spec 015 F2: the single classification point for both board start
+  // gestures (row "Start work" and the item dialog's "Use") — a repo
+  // registered on several hosts asks where via the wizard instead of
+  // silently assuming local or falsely claiming it isn't in Agentum.
+  const startWorkForItem = useCallback(
+    (args: {
+      /** Build the launchable item for the classified repo id; null aborts
+       *  (redacted/draft rows can't launch). */
+      buildItem: (repoId: string) => GitHubWorkItem | null
+      origin: { owner: string; repo: string }
+      url: string | null
+    }): void => {
+      const { buildItem, origin, url } = args
+      const match = classifyStartWorkRepoMatches(lookupSlug(`${origin.owner}/${origin.repo}`))
+      if (match.kind === 'none') {
+        setRepoNotInAgentum({ owner: origin.owner, repo: origin.repo, url })
+        return
+      }
+      if (match.kind === 'direct') {
+        const workItem = buildItem(match.repo.id)
+        if (!workItem) {
+          return
+        }
+        void launchWorkItemDirect({
+          item: workItem,
+          repoId: match.repo.id,
+          launchSource: 'task_page',
+          telemetrySource: 'sidebar',
+          openModalFallback: () => {
+            // Why: when `launchWorkItemDirect` wants user input
+            // (setupRunPolicy:'ask' or agent detection fails), fall back to
+            // opening the URL so the user keeps a path forward. The composer
+            // modal is app-mounted and reachable (the multi-host arm below
+            // hops to it), but the single-match gesture stays byte-equivalent
+            // to the pre-015 direct launch (AC 6).
+            if (url) {
+              void api.shell.openUrl(url)
+            }
+          }
+        })
+        return
+      }
+      const workItem = buildItem(match.seedRepoId)
+      if (!workItem) {
+        return
+      }
+      void openComposerForChoice(workItem, match, origin)
+    },
+    [lookupSlug, openComposerForChoice]
+  )
+
   const handleOpenDialog = useCallback(
     (row: GitHubProjectRow) => {
       if (!currentCacheKey || !table) {
@@ -485,12 +587,20 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
         }
         return
       }
-      const matches = lookupSlug(`${origin.owner}/${origin.repo}`)
-      const matched = matches.length === 1 ? matches[0] : null
-      if (matched) {
-        const workItem = buildWorkItem(row, matched.id)
+      const match = classifyStartWorkRepoMatches(lookupSlug(`${origin.owner}/${origin.repo}`))
+      if (match.kind !== 'none') {
+        // Why: a repo registered on several hosts still gets the full
+        // repo-backed dialog — its mutations are slug-addressed (see the
+        // dialog comment below), so any same-slug candidate is safe; seed
+        // with the local copy when present (spec 015 F2).
+        const repo =
+          match.kind === 'direct'
+            ? match.repo
+            : (match.repos.find((candidate) => candidate.id === match.seedRepoId) ??
+              match.repos[0])
+        const workItem = buildWorkItem(row, repo.id)
         if (workItem) {
-          setDialogRepoItem({ workItem, repoPath: matched.path, repoId: matched.id, origin })
+          setDialogRepoItem({ workItem, repoPath: repo.path, repoId: repo.id, origin })
           return
         }
       }
@@ -509,37 +619,13 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
       if (!origin) {
         return
       }
-      const matches = lookupSlug(`${origin.owner}/${origin.repo}`)
-      const matched = matches.length === 1 ? matches[0] : null
-      if (!matched) {
-        setRepoNotInAgentum({
-          owner: origin.owner,
-          repo: origin.repo,
-          url: row.content.url ?? null
-        })
-        return
-      }
-      const workItem = buildWorkItem(row, matched.id)
-      if (!workItem) {
-        return
-      }
-      void launchWorkItemDirect({
-        item: workItem,
-        repoId: matched.id,
-        launchSource: 'task_page',
-        telemetrySource: 'sidebar',
-        openModalFallback: () => {
-          // Why: Project mode does not own the new-workspace composer modal.
-          // When `launchWorkItemDirect` wants user input (setupRunPolicy:'ask'
-          // or agent detection fails), fall back to opening the URL so the
-          // user keeps a path forward rather than a silent no-op.
-          if (row.content.url) {
-            void api.shell.openUrl(row.content.url)
-          }
-        }
+      startWorkForItem({
+        buildItem: (repoId) => buildWorkItem(row, repoId),
+        origin,
+        url: row.content.url ?? null
       })
     },
-    [currentCacheKey, table, buildOrigin, lookupSlug, buildWorkItem]
+    [currentCacheKey, table, buildOrigin, buildWorkItem, startWorkForItem]
   )
 
   const handleEditAssignees = useCallback(
@@ -802,16 +888,13 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           if (!current) {
             return
           }
-          void launchWorkItemDirect({
-            item,
-            repoId: current.workItem.repoId,
-            launchSource: 'task_page',
-            telemetrySource: 'sidebar',
-            openModalFallback: () => {
-              if (item.url) {
-                void api.shell.openUrl(item.url)
-              }
-            }
+          // Spec 015 F2: "Use" re-classifies against the slug index so a
+          // multi-host repo routes through the same wizard hop as the row's
+          // Start work — the dialog's repoId was only the seed candidate.
+          startWorkForItem({
+            buildItem: (repoId) => ({ ...item, repoId }),
+            origin: { owner: current.origin.owner, repo: current.origin.repo },
+            url: item.url ?? null
           })
         }}
         onClose={() => setDialogRepoItem(null)}

@@ -59,10 +59,14 @@ function toBindError(err: unknown): BindError {
 export function ProjectBindingEditor({
   workdir,
   slug,
+  repoId,
   onBound
 }: {
   workdir: string
   slug?: string
+  /** Spec 020 F3: the registered repo's id — the server resolves the slug on
+   *  that repo's own host, so SSH repos bind too. Absent = local (pre-020). */
+  repoId?: string
   onBound?: (binding: ProjectBindingDto) => void
 }): React.JSX.Element {
   const mounted = useMountedRef()
@@ -91,7 +95,7 @@ export function ProjectBindingEditor({
     setSaved(false)
     dispatchSelection({ type: 'reset', selection: EMPTY_SELECTION })
     let cancelled = false
-    void getProjectBinding({ workdir, slug })
+    void getProjectBinding({ workdir, slug, ...(repoId ? { repoId } : {}) })
       .then((res) => {
         if (cancelled || !mounted.current) return
         setBinding(res.binding)
@@ -106,7 +110,7 @@ export function ProjectBindingEditor({
     return () => {
       cancelled = true
     }
-  }, [workdir, slug, mounted])
+  }, [workdir, slug, repoId, mounted])
 
   // The accessible-projects list loads only for the unbound pick UI — bound
   // repos never need it, and re-binding starts from the stored project ref.
@@ -229,6 +233,7 @@ export function ProjectBindingEditor({
       const res = await putProjectBinding({
         workdir,
         ...(slug ? { slug } : {}),
+        ...(repoId ? { repoId } : {}),
         projectId: discovery.projectId,
         statusFieldId: discovery.statusFieldId,
         statusMapping: { ...selection },
@@ -251,7 +256,7 @@ export function ProjectBindingEditor({
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }, [discovery, picked, selection, doneClosesIssue, workdir, slug, onBound, mounted])
+  }, [discovery, picked, selection, doneClosesIssue, workdir, slug, repoId, onBound, mounted])
 
   // Flip the D1 knob on an already-bound repo without a re-discover: the
   // stored binding carries every field the PUT needs.
@@ -264,6 +269,7 @@ export function ProjectBindingEditor({
         const res = await putProjectBinding({
           workdir,
           ...(slug ? { slug } : {}),
+          ...(repoId ? { repoId } : {}),
           projectId: binding.projectId,
           statusFieldId: binding.statusFieldId,
           statusMapping: binding.statusMapping,
@@ -282,14 +288,14 @@ export function ProjectBindingEditor({
         setError(toBindError(err))
       }
     },
-    [binding, workdir, slug, mounted]
+    [binding, workdir, slug, repoId, mounted]
   )
 
   const handleUnbind = useCallback(async () => {
     setBusy('unbind')
     setError(null)
     try {
-      await deleteProjectBinding({ workdir, slug })
+      await deleteProjectBinding({ workdir, slug, ...(repoId ? { repoId } : {}) })
       if (!mounted.current) return
       setBinding(null)
       setDiscovery(null)
@@ -302,7 +308,7 @@ export function ProjectBindingEditor({
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }, [workdir, slug, mounted])
+  }, [workdir, slug, repoId, mounted])
 
   if (!loaded) {
     return (
