@@ -20,19 +20,38 @@ You are the Orchestrator. Drive the current spec through the role loop with expl
    - Load **only** the role file for that phase: `ai/roles/<role>.md`. Don't pre-load other roles.
    - Run the phase to its output (updated spec, architecture.md, code, test results, review notes).
    - Run the gate from `validate_handoff.md`.
-   - On pass: advance and update `STATE.md`.
+   - On pass: advance, update `STATE.md`, and **report the tracker phase** (see "Tracker status" below).
    - On fail: route to the shallowest fixing role per the decision tree.
 
 6. **For Developer and Tester phases**, prefer launching a sub-agent (`Agent` tool) so the main orchestration session stays lean. The orchestrator's job is routing, not implementation.
 
-7. **DONE**: when the Reviewer signs off, update `STATE.md` (`current_phase: done`) and ask the human whether to continue to the next spec or stop.
+7. **DONE**: when the Reviewer signs off, update `STATE.md` (`current_phase: done`), report tracker phase `done`, and ask the human whether to continue to the next spec or stop.
+
+## Tracker status (GitHub / Linear / board)
+
+If the current spec carries a `tracker:` URL in its `spec.md` frontmatter (a GitHub
+issue URL, Linear ticket, or board card — written by `/sdd-spec`), mirror every
+phase transition to the tracker with the `agentum_report_status` MCP tool:
+
+| Entering SDD phase | `agentum_report_status` phase |
+| ------------------ | ----------------------------- |
+| PM / Architect     | `todo`                        |
+| Developer          | `in_progress`                 |
+| Tester             | `ready_to_test`               |
+| Reviewer           | `in_review`                   |
+| done               | `done`                        |
+
+For a GitHub issue pass `{"provider": "github", "url": "<tracker url>", "phase": …}`.
+The call is best-effort by contract — a "skipped" result is informational; never
+let a tracker hiccup stop the loop. If there is no `tracker:` URL, skip this
+section entirely.
 
 ## Hard rules
 
 - One role at a time. Never load all roles at once.
 - Max 2 auto-iterations on the same gate. Third forces HITL.
 - Every gate failure produces a handoff note (`ai/contracts/templates/handoff_contract.md`).
-- Every phase transition updates `STATE.md`.
+- Every phase transition updates `STATE.md` — and reports the tracker phase when the spec has a `tracker:` URL.
 
 ## Inputs you can take
 

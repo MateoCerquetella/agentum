@@ -21,10 +21,17 @@ You are running the Socratic spec-authoring flow, primarily for a Business Analy
    One pass per turn. One or two questions at a time. Reflect each answer back before advancing.
 
 4. **Crystallize** the answers into `ai/specs/<NNN>-<name>/spec.md` using `ai/specs/_template/spec.md` as the structure. Pick the next free `NNN` (3-digit number).
+   If the ask stems from (or is tracked by) a ticket — a GitHub issue URL, Linear
+   ticket, or board card — record it as `tracker: <url>` in the spec's frontmatter;
+   the orchestrator mirrors phase transitions to it (see `/sdd-orchestrate`).
 
 5. **Run the Analyst gate** (checklist in `ai/skills/validate_handoff.md`). Iterate once on any failed item.
 
 6. **Update `ai/STATE.md`**: set `current_spec`, advance phase to `pm`, append a decision line.
+   If the spec has a `tracker:` URL, report the starting phase now: call the
+   `agentum_report_status` MCP tool (for GitHub:
+   `{"provider": "github", "url": "<tracker url>", "phase": "todo"}`). Best-effort —
+   a "skipped" result never blocks the handoff.
 
 7. **Hand off** to the PM. In HITL mode, ask the human: "Spec drafted. Approve handoff to PM?" before invoking `ai/roles/pm.md`.
 
