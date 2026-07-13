@@ -1,6 +1,6 @@
 # Handoff 03 — Developer → Tester
 
-- **Spec:** 009-pinned-chat-repo-context
+- **Spec:** 017-pinned-chat-repo-context
 - **Date:** 2026-07-13
 - **From:** Developer (autonomous sdd-orchestrate)
 - **To:** Tester

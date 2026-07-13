@@ -1,10 +1,10 @@
 # Handoff 01 — PM → Architect
 
-- **Spec:** 009-pinned-chat-repo-context
+- **Spec:** 017-pinned-chat-repo-context
 - **Date:** 2026-07-13
 - **From:** PM (autonomous sdd-orchestrate iteration 1)
 - **To:** Architect
-- **Artifact:** `ai/specs/009-pinned-chat-repo-context/spec.md` (PM-gated)
+- **Artifact:** `ai/specs/017-pinned-chat-repo-context/spec.md` (PM-gated)
 - **Tracker:** GitHub #361 (p1, `type/fix`) — keep the issue updated on every
   feature state transition (architecture-principles rule).
 
@@ -103,6 +103,6 @@ wiring correct (`ProjectHubPage.tsx:180` → `ChatPage.tsx:302`).
 
 ## Expected architect artifact
 
-`ai/specs/009-pinned-chat-repo-context/architecture.md` — boundaries, seam
+`ai/specs/017-pinned-chat-repo-context/architecture.md` — boundaries, seam
 signatures, the remote-arm purity split, test plan per feature, risks —
 matching prior specs' `architecture.md` shape.

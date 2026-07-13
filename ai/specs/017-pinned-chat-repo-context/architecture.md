@@ -1,6 +1,6 @@
-# Architecture — Spec 009 pinned-chat-repo-context
+# Architecture — Spec 017 pinned-chat-repo-context
 
-- **Spec:** `ai/specs/009-pinned-chat-repo-context/spec.md` (PM handoff 01)
+- **Spec:** `ai/specs/017-pinned-chat-repo-context/spec.md` (PM handoff 01)
 - **Date:** 2026-07-13
 - **Author:** Architect (autonomous sdd-orchestrate)
 - **Verdict:** Buildable as one spec, three gated slices (F1 → F2 → F3). No
@@ -214,6 +214,6 @@ Riskiest first within F2: land S2 (refactor under existing tests) before S3.
 
 ## Expected developer artifact
 
-`ai/specs/009-pinned-chat-repo-context/tasks.md` — per-slice task list with
+`ai/specs/017-pinned-chat-repo-context/tasks.md` — per-slice task list with
 gate results, plus handoff `03-developer-to-tester.md`. Update GitHub #361 on
 each slice transition (coding / gate green).

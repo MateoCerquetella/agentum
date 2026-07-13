@@ -1,6 +1,6 @@
 # Handoff 02 — Architect → Developer
 
-- **Spec:** 009-pinned-chat-repo-context
+- **Spec:** 017-pinned-chat-repo-context
 - **Date:** 2026-07-13
 - **From:** Architect (autonomous sdd-orchestrate)
 - **To:** Developer

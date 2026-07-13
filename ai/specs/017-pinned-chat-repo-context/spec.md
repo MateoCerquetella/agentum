@@ -1,6 +1,6 @@
-# Spec 009 — Pinned chat gets its project's repo context
+# Spec 017 — Pinned chat gets its project's repo context
 
-- **Number:** 009
+- **Number:** 017
 - **Status:** Done
 - **Surface:** `crates/agentum-server/src/routes/chat.rs` + `crates/agentum-desktop/ui`
 - **Author:** Claude (from GitHub issue #361, filed by Mateo)

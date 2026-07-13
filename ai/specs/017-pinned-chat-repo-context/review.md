@@ -1,6 +1,6 @@
-# Review — Spec 009 pinned-chat-repo-context
+# Review — Spec 017 pinned-chat-repo-context
 
-- **Spec:** `ai/specs/009-pinned-chat-repo-context/spec.md` (GitHub #361, p1)
+- **Spec:** `ai/specs/017-pinned-chat-repo-context/spec.md` (GitHub #361, p1)
 - **Date:** 2026-07-13
 - **Reviewer:** autonomous sdd-orchestrate (main session), on top of the
   independent tester verdict (`verification.md`, PASS-WITH-DEFERRALS)

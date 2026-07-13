@@ -1,6 +1,6 @@
-# Verification — Spec 009 pinned-chat-repo-context
+# Verification — Spec 017 pinned-chat-repo-context
 
-- **Spec:** `ai/specs/009-pinned-chat-repo-context/spec.md`
+- **Spec:** `ai/specs/017-pinned-chat-repo-context/spec.md`
 - **Date:** 2026-07-13
 - **Tester:** independent re-run (autonomous sdd-orchestrate)
 - **Code under test:** `e6b6798f`, `6d457545`, `6ea8e5f9`, `c5b22ce0`, `e56f1fea` on top of base `d957eefd`
@@ -26,8 +26,8 @@ scoped run covers the full regression surface. **Zero new vitest failures.**
 
 | AC | Verdict | Evidence |
 | -- | ------- | -------- |
-| AC-1 local `~` paths ground | **PASS** | `local_repo_context` runs `super::util::expand_with_home(wd, home).ok()?` BEFORE `is_dir()` (`routes/chat.rs:344-349`); test `local_repo_context_expands_tilde_workdir` (`chat.rs:~2830`) uses an explicit temp home — **no env mutation** (whole 009 diff greps clean for `set_var`; the only `std::env` touch is the production `var_os("HOME")` READ in `gather_repo_context`, `chat.rs:334`). Pre-existing `gather_repo_context_reads_guide_and_manifests` + `gather_repo_context_none_for_missing_or_empty_workdir` still pass. |
-| AC-2 requests carry repo identity | **PASS** | `ChatRequest.repo_id` `#[serde(default)]` (`chat.rs:130-131`) + `chat_request_repo_id_is_serde_default` (absent → None). Client path verified end-to-end: `ChatPage.tsx:309` `repoId: workspace?.id` (workspace = pinnedRepo in pinned mode, `ChatPage.tsx:194-197`) → `chat-store.ts:231` `repoId: opts.repoId` → `streamChat` → pure `buildChatStreamBody` (`lib/chat-body.ts`) sends `repo_id`. Vitest `chat-body.test.ts` asserts body includes both `workdir` + `repo_id` and that absent opts keep the pre-009 wire shape (JSON.stringify drops undefined) — pure model test, no fetch mock, per architecture S6. |
+| AC-1 local `~` paths ground | **PASS** | `local_repo_context` runs `super::util::expand_with_home(wd, home).ok()?` BEFORE `is_dir()` (`routes/chat.rs:344-349`); test `local_repo_context_expands_tilde_workdir` (`chat.rs:~2830`) uses an explicit temp home — **no env mutation** (whole 017 diff greps clean for `set_var`; the only `std::env` touch is the production `var_os("HOME")` READ in `gather_repo_context`, `chat.rs:334`). Pre-existing `gather_repo_context_reads_guide_and_manifests` + `gather_repo_context_none_for_missing_or_empty_workdir` still pass. |
+| AC-2 requests carry repo identity | **PASS** | `ChatRequest.repo_id` `#[serde(default)]` (`chat.rs:130-131`) + `chat_request_repo_id_is_serde_default` (absent → None). Client path verified end-to-end: `ChatPage.tsx:309` `repoId: workspace?.id` (workspace = pinnedRepo in pinned mode, `ChatPage.tsx:194-197`) → `chat-store.ts:231` `repoId: opts.repoId` → `streamChat` → pure `buildChatStreamBody` (`lib/chat-body.ts`) sends `repo_id`. Vitest `chat-body.test.ts` asserts body includes both `workdir` + `repo_id` and that absent opts keep the pre-017 wire shape (JSON.stringify drops undefined) — pure model test, no fetch mock, per architecture S6. |
 | AC-3 SSH projects ground | **PASS (unit seams) / live SSH DEFERRED** | Remote arm exists: `remote_context_script` (pure, `shlex::try_quote`d workdir, `exit 42` cd guard) + `parse_remote_context_output` (pure) + `gather_repo_context_ssh` → ONE `sh -c` round trip via `host_runtime::ssh_stdout`. Both arms feed the SAME `assemble_repo_context` (owns ALL budgets + section headers, `chat.rs:255-303`), so headers/budgets can't drift — proven by `remote_context_output_round_trips_to_snapshot` asserting the local headers (`## Repo guide (…)`, `## Root manifests`, `### Cargo.toml`, `Repo file tree (git-tracked)`) on parsed remote output. Host resolution: `gather_repo_context_for` → `repos::load_host_for_repo` (`repos.rs:363`), `HostKind::Local` → local arm, `Ssh` → remote arm. |
 | AC-4 failure is loud | **PASS (logic) / pixel render DEFERRED** | Log line: `log_repo_context_outcome` called from BOTH `chat` (`chat.rs:~822`) and `chat_stream` (`chat.rs:~941`) with workdir/repo_id/arm/context_len/grounded. Event: `context_event_json(repo_id_present, has_context)` returns None without repo_id (test `context_event_only_for_repo_backed_requests`); yielded FIRST in the stream generator (`chat.rs:1036-1041`), before the redacted-thinking notice. Banner: `ChatPage.tsx:655-657` renders `WarningBanner` from `chat.contextMissing[activeId]`; store sets it via `applyContextDelta` on the `context` delta (`chat-store.ts:240-245`). |
 | AC-5 remote failure never breaks chat | **PASS (unit seams) / live wedged-SSH DEFERRED** | `SSH_CONTEXT_TIMEOUT = 10s` (`chat.rs:~371`); `gather_repo_context_ssh` wraps the one call in `tokio::time::timeout`; ALL failure legs (transport Err, non-zero exit incl. `exit 42`, timeout) → `tracing::warn!` + `None` — grep of `local_repo_context` / `gather_repo_context_ssh` / `gather_repo_context_for` finds **zero** `ApiError` returns; the handler proceeds and the reply streams regardless. Inner `ssh_stdout` timeout is 12s so the outer 10s bound dominates. |
@@ -35,7 +35,7 @@ scoped run covers the full regression surface. **Zero new vitest failures.**
 ## Sacred invariants (all verified)
 
 - **`intake_grounding_blocks` byte-identical to base:** SHA-1 of the function
-  body at `d957eefd` vs HEAD → `79c1d995…` both. The 009 diff never mentions the
+  body at `d957eefd` vs HEAD → `79c1d995…` both. The 017 diff never mentions the
   function or its literals. Byte-pin tests green in the run:
   `interviewer_is_honest_blind_when_no_context` (base `chat.rs:2332` area),
   `socratic_stage_reuses_the_shared_grounding_blocks` (base `:2470` area),

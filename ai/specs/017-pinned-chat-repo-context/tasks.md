@@ -1,4 +1,4 @@
-# Tasks — Spec 009 pinned-chat-repo-context (Developer log)
+# Tasks — Spec 017 pinned-chat-repo-context (Developer log)
 
 - **Date:** 2026-07-13
 - **Branch:** `project-hub-chat-is-blind-pinned-chat-has-no-rep` (this worktree)
