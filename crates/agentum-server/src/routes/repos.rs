@@ -83,8 +83,19 @@ fn registry_path() -> Result<PathBuf, ApiError> {
 /// the project identity). Tolerant: an unreadable registry → empty table.
 pub(crate) fn scope_repo_pairs() -> Vec<(String, String)> {
     read_repos()
-        .map(|repos| repos.into_iter().map(|r| (r.id, r.path)).collect())
+        .map(scope_pairs_locals_first)
         .unwrap_or_default()
+}
+
+/// Pure core of [`scope_repo_pairs`]: local entries first (stable), so a
+/// bare-path browser scope on a spec-015 dual entry (same path, local +
+/// remote) resolves to the LOCAL id — a local Chromium can only ever serve
+/// local checkouts, and a registry reorder must not silently migrate which
+/// id keys its profile.
+fn scope_pairs_locals_first(mut repos: Vec<Repo>) -> Vec<(String, String)> {
+    // sort_by_key is stable: locals keep registry order, then remotes in order.
+    repos.sort_by_key(|repo| repo.connection_id.is_some());
+    repos.into_iter().map(|r| (r.id, r.path)).collect()
 }
 
 fn read_repos() -> Result<Vec<Repo>, ApiError> {
@@ -122,17 +133,22 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Adds `path` to the registry (idempotent by path) and returns the Repo. Shared
-/// by add/create/clone so registration stays in one place.
-fn append_repo(
+/// Pure core of registration (spec 015 D6): a repo's identity is WHERE it
+/// lives (its desktop connection, `None` = local) plus its path there.
+/// Returns the existing entry for (path, connection_id) or appends a new
+/// one; `true` = appended (the caller persists).
+fn register_repo(
+    repos: &mut Vec<Repo>,
     path: String,
     kind: Option<String>,
     connection_id: Option<String>,
     host_id: Option<Uuid>,
-) -> Result<Repo, ApiError> {
-    let mut repos = read_repos()?;
-    if let Some(existing) = repos.iter().find(|repo| repo.path == path) {
-        return Ok(existing.clone());
+) -> (Repo, bool) {
+    if let Some(existing) = repos
+        .iter()
+        .find(|repo| repo.path == path && repo.connection_id == connection_id)
+    {
+        return (existing.clone(), false);
     }
     // detect_kind probes the LOCAL filesystem, which is meaningless for a remote
     // (connection_id) path. Use the caller's kind, else default remote repos to
@@ -156,7 +172,22 @@ fn append_repo(
         extra: Map::new(),
     };
     repos.push(repo.clone());
-    write_repos(&repos)?;
+    (repo, true)
+}
+
+/// Adds `path` to the registry (idempotent by (path, connection)) and returns
+/// the Repo. Shared by add/create/clone so registration stays in one place.
+fn append_repo(
+    path: String,
+    kind: Option<String>,
+    connection_id: Option<String>,
+    host_id: Option<Uuid>,
+) -> Result<Repo, ApiError> {
+    let mut repos = read_repos()?;
+    let (repo, added) = register_repo(&mut repos, path, kind, connection_id, host_id);
+    if added {
+        write_repos(&repos)?;
+    }
     Ok(repo)
 }
 
@@ -196,7 +227,27 @@ async fn add(Json(body): Json<AddBody>) -> Result<Json<Value>, ApiError> {
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
-/// `PATCH /api/repos/{id}` — apply `updates`; id/path/addedAt are not updatable.
+/// Pure PATCH merge with identity protection: `id`/`path`/`addedAt` were
+/// always immutable, and spec 015 adds `connectionId` — it is half of the
+/// registry's (path, connection) identity key, so an edit could collide two
+/// entries onto one key. `hostId` stays editable (routing metadata,
+/// repairable).
+fn apply_repo_updates(repo: &Repo, updates: Map<String, Value>) -> Result<Repo, ApiError> {
+    let mut object = serde_json::to_value(repo)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .ok_or_else(|| ApiError::Internal("failed to serialize repo".into()))?;
+    for (key, value) in updates {
+        if key == "id" || key == "path" || key == "addedAt" || key == "connectionId" {
+            continue;
+        }
+        object.insert(key, value);
+    }
+    serde_json::from_value(Value::Object(object)).map_err(|e| ApiError::BadRequest(e.to_string()))
+}
+
+/// `PATCH /api/repos/{id}` — apply `updates`; id/path/addedAt/connectionId are
+/// not updatable.
 async fn update(
     Path(repo_id): Path<String>,
     Json(updates): Json<Map<String, Value>>,
@@ -206,19 +257,7 @@ async fn update(
         .iter()
         .position(|repo| repo.id == repo_id)
         .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))?;
-
-    let mut object = serde_json::to_value(&repos[index])
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .ok_or_else(|| ApiError::Internal("failed to serialize repo".into()))?;
-    for (key, value) in updates {
-        if key == "id" || key == "path" || key == "addedAt" {
-            continue;
-        }
-        object.insert(key, value);
-    }
-    let updated: Repo = serde_json::from_value(Value::Object(object))
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let updated = apply_repo_updates(&repos[index], updates)?;
     repos[index] = updated.clone();
     write_repos(&repos)?;
     Ok(Json(updated))
@@ -523,6 +562,161 @@ async fn base_ref_details(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal registry entry for the pure-registration tests (no fs, no env).
+    fn repo_with(path: &str, connection_id: Option<&str>) -> Repo {
+        Repo {
+            id: uuid::Uuid::new_v4().to_string(),
+            path: path.to_string(),
+            display_name: basename(path),
+            badge_color: BADGE_COLORS[0].to_string(),
+            added_at: 1,
+            kind: Some("git".into()),
+            connection_id: connection_id.map(str::to_string),
+            host_id: None,
+            extra: Map::new(),
+        }
+    }
+
+    // ── spec 015 F1: identity is (path, connection_id) ──────────────────────
+
+    #[test]
+    fn same_path_local_then_remote_registers_two_entries() {
+        let mut repos = Vec::new();
+        let host = Uuid::new_v4();
+        let (local, added_local) =
+            register_repo(&mut repos, "/x/proj".into(), Some("git".into()), None, None);
+        assert!(added_local);
+        // AC 1: the remote add must NOT return the pre-existing local entry.
+        let (remote, added_remote) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(host),
+        );
+        assert!(added_remote);
+        assert_eq!(repos.len(), 2);
+        assert_ne!(local.id, remote.id);
+        assert_eq!(remote.connection_id.as_deref(), Some("ssh-1"));
+        assert_eq!(remote.host_id, Some(host));
+        // The pre-existing local entry is untouched.
+        assert_eq!(repos[0].id, local.id);
+        assert!(repos[0].connection_id.is_none());
+        assert!(repos[0].host_id.is_none());
+    }
+
+    #[test]
+    fn same_path_same_connection_is_idempotent() {
+        let mut repos = Vec::new();
+        let (first, added_first) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(Uuid::new_v4()),
+        );
+        assert!(added_first);
+        let (second, added_second) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(Uuid::new_v4()),
+        );
+        assert!(!added_second); // AC 2 remote: no duplicate row, no rewrite
+        assert_eq!(repos.len(), 1);
+        assert_eq!(first.id, second.id);
+    }
+
+    #[test]
+    fn local_readd_stays_idempotent() {
+        let mut repos = Vec::new();
+        let (first, _) =
+            register_repo(&mut repos, "/x/proj".into(), Some("git".into()), None, None);
+        let (second, added) =
+            register_repo(&mut repos, "/x/proj".into(), Some("git".into()), None, None);
+        assert!(!added); // AC 2 local: None == None dedupes
+        assert_eq!(repos.len(), 1);
+        assert_eq!(first.id, second.id);
+    }
+
+    #[test]
+    fn two_connections_same_path_are_two_entries() {
+        // D6: key is connection_id, NOT host_id — two desktop connections to
+        // one server host stay two entries (one per UI host bucket).
+        let mut repos = Vec::new();
+        let host = Uuid::new_v4();
+        let (a, _) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(host),
+        );
+        let (b, added) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-2".into()),
+            Some(host),
+        );
+        assert!(added);
+        assert_eq!(repos.len(), 2);
+        assert_ne!(a.id, b.id);
+    }
+
+    #[test]
+    fn remote_register_defaults_kind_git() {
+        // detect_kind probes the LOCAL fs, meaningless for a remote path — the
+        // pre-015 default-to-git behavior must survive the refactor.
+        let mut repos = Vec::new();
+        let (repo, _) = register_repo(
+            &mut repos,
+            "/definitely/not/here".into(),
+            None,
+            Some("ssh-1".into()),
+            None,
+        );
+        assert_eq!(repo.kind.as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn update_refuses_connection_id_edit() {
+        // connectionId is half the (path, connection) identity key — a PATCH
+        // must not be able to collide two entries onto one key. hostId stays
+        // editable (routing metadata, repairable).
+        let repo = repo_with("/x/proj", Some("ssh-1"));
+        let host = Uuid::new_v4();
+        let mut updates = Map::new();
+        updates.insert("connectionId".into(), Value::String("ssh-2".into()));
+        updates.insert("displayName".into(), Value::String("renamed".into()));
+        updates.insert("hostId".into(), Value::String(host.to_string()));
+        let updated = apply_repo_updates(&repo, updates).unwrap();
+        assert_eq!(updated.connection_id.as_deref(), Some("ssh-1")); // refused
+        assert_eq!(updated.display_name, "renamed"); // ordinary keys still apply
+        assert_eq!(updated.host_id, Some(host)); // hostId remains editable
+
+        // Nulling it out is refused too (a remote entry can't be made local).
+        let mut null_update = Map::new();
+        null_update.insert("connectionId".into(), Value::Null);
+        let updated = apply_repo_updates(&repo, null_update).unwrap();
+        assert_eq!(updated.connection_id.as_deref(), Some("ssh-1"));
+    }
+
+    #[test]
+    fn scope_pairs_lists_locals_first_stably() {
+        // Dual entries share a path; the browser-scope table must resolve the
+        // LOCAL id first regardless of registry order (and keep relative order
+        // within each partition).
+        let r1 = repo_with("/a", Some("ssh-1"));
+        let l1 = repo_with("/a", None);
+        let r2 = repo_with("/b", Some("ssh-2"));
+        let l2 = repo_with("/c", None);
+        let pairs = scope_pairs_locals_first(vec![r1.clone(), l1.clone(), r2.clone(), l2.clone()]);
+        let ids: Vec<&str> = pairs.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec![&l1.id, &l2.id, &r1.id, &r2.id]);
+    }
 
     #[test]
     fn basename_takes_last_segment() {
