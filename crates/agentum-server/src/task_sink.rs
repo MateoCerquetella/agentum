@@ -219,18 +219,40 @@ impl TaskSink {
 pub enum TrackerPhase {
     Todo,
     InProgress,
+    /// Spec 012 F3: a PR is open on the workspace's branch. Sits between
+    /// InProgress and ReadyToTest in the canonical order (`tracker_sync`), so a
+    /// plain session walks InProgress → InReview → Done while a gated run's
+    /// ReadyToTest (unit-green) never regresses when a PR opens.
+    InReview,
     ReadyToTest,
     Done,
 }
 
-/// Parse a wire-format phase string (`todo` / `in_progress` / `ready_to_test` /
-/// `done`) into a [`TrackerPhase`]. Pure; `None` for anything else — the MCP
-/// `agentum_report_status` tool (spec 005 F4) treats that as a caller bug, not
-/// a tracker hiccup.
+impl TrackerPhase {
+    /// The lowercase wire form (the exact inverse of [`parse_tracker_phase`]).
+    /// Lives on the seam type (spec 014 F1) so the emitted
+    /// `tracker.phase_changed` payload and the persisted `tracker_phase` can
+    /// never drift; `tracker_sync::tracker_phase_wire` delegates here.
+    pub(crate) fn wire_str(self) -> &'static str {
+        match self {
+            TrackerPhase::Todo => "todo",
+            TrackerPhase::InProgress => "in_progress",
+            TrackerPhase::InReview => "in_review",
+            TrackerPhase::ReadyToTest => "ready_to_test",
+            TrackerPhase::Done => "done",
+        }
+    }
+}
+
+/// Parse a wire-format phase string (`todo` / `in_progress` / `in_review` /
+/// `ready_to_test` / `done`) into a [`TrackerPhase`]. Pure; `None` for anything
+/// else — the MCP `agentum_report_status` tool (spec 005 F4) treats that as a
+/// caller bug, not a tracker hiccup.
 pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
     match s {
         "todo" => Some(TrackerPhase::Todo),
         "in_progress" => Some(TrackerPhase::InProgress),
+        "in_review" => Some(TrackerPhase::InReview),
         "ready_to_test" => Some(TrackerPhase::ReadyToTest),
         "done" => Some(TrackerPhase::Done),
         _ => None,
@@ -244,7 +266,10 @@ pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
 pub enum TransitionResult {
     /// The tracker state was changed.
     Applied,
-    /// Nothing to do (provider has no such concept, or no external tracker).
+    /// Not fully applied — the reason names what did and didn't land. Covers
+    /// both "nothing to do" (provider has no such concept, or no external
+    /// tracker) and, since spec 010 F2, a partial write on a board-bound repo
+    /// (e.g. "status label applied; Projects board write failed: …").
     Skipped(String),
 }
 
@@ -254,6 +279,9 @@ fn board_status_for(phase: TrackerPhase) -> &'static str {
     match phase {
         TrackerPhase::Todo => "todo",
         TrackerPhase::InProgress => "doing",
+        // The internal board has no distinct in-review column — InReview folds
+        // onto `review` alongside ReadyToTest (the board is a coarse mirror).
+        TrackerPhase::InReview => "review",
         TrackerPhase::ReadyToTest => "review",
         TrackerPhase::Done => "done",
     }
@@ -262,9 +290,11 @@ fn board_status_for(phase: TrackerPhase) -> &'static str {
 /// Canonical, harness-owned status labels with fixed colors (spec 004 D3).
 /// NOT `.github/labels.sh`'s `status/qa*` set — that is the human-QA lifecycle
 /// (architecture C4); the transition never touches foreign `status/*` labels.
-const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 4] = [
+const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 5] = [
     (TrackerPhase::Todo, "status/todo", "ededed"),
     (TrackerPhase::InProgress, "status/in-progress", "1d76db"),
+    // Spec 012 F3: the fifth mutually-exclusive pipeline label (purple).
+    (TrackerPhase::InReview, "status/in-review", "5319e7"),
     (TrackerPhase::ReadyToTest, "status/ready-to-test", "fbca04"),
     (TrackerPhase::Done, "status/done", "0e8a16"),
 ];
@@ -275,8 +305,9 @@ const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 4] = [
 /// (D-A) and lives only on the GitHub-label layer. Red (`b60205`).
 const GITHUB_BLOCKED_LABEL: (&str, &str) = ("status/blocked", "b60205");
 
-/// All FIVE canonical status names for the one-per-issue remove-set (spec 008
-/// D6): the four CONFIGURED pipeline names + the fixed blocked name. Every
+/// All SIX canonical status names for the one-per-issue remove-set (spec 008
+/// D6, extended spec 012 F3): the five CONFIGURED pipeline names + the fixed
+/// blocked name. Every
 /// pipeline transition removes this whole set (minus its own target), so setting
 /// any pipeline label also clears `status/blocked` — the board can't lie in
 /// either direction (a re-driven blocked feature drops the label at InProgress).
@@ -302,7 +333,10 @@ fn github_status_label(phase: TrackerPhase) -> &'static str {
 /// never the label name (spec 005 F5): a custom-named label inherits its
 /// phase's canonical color via the same `--force` ensure-create, so a renamed
 /// pipeline still reads at a glance and a manually recolored label self-heals.
-fn github_status_color(phase: TrackerPhase) -> &'static str {
+/// `pub(crate)` for spec 010 F3: provisioning runs its OWN label-ensure loop
+/// over this builder pair (never a refactor of the transition's pinned
+/// ensure sequence).
+pub(crate) fn github_status_color(phase: TrackerPhase) -> &'static str {
     GITHUB_STATUS_LABELS
         .iter()
         .find(|(p, _, _)| *p == phase)
@@ -317,17 +351,19 @@ fn github_status_color(phase: TrackerPhase) -> &'static str {
 pub struct GithubStateMap {
     pub todo: String,
     pub in_progress: String,
+    pub in_review: String,
     pub ready_to_test: String,
     pub done: String,
 }
 
 impl Default for GithubStateMap {
-    /// The canonical four from [`GITHUB_STATUS_LABELS`], via the
+    /// The canonical five from [`GITHUB_STATUS_LABELS`], via the
     /// [`github_status_label`] accessor so defaults and table can't drift.
     fn default() -> Self {
         Self {
             todo: github_status_label(TrackerPhase::Todo).into(),
             in_progress: github_status_label(TrackerPhase::InProgress).into(),
+            in_review: github_status_label(TrackerPhase::InReview).into(),
             ready_to_test: github_status_label(TrackerPhase::ReadyToTest).into(),
             done: github_status_label(TrackerPhase::Done).into(),
         }
@@ -344,6 +380,8 @@ struct StoredGithubStateMap {
     todo: Option<String>,
     #[serde(default)]
     in_progress: Option<String>,
+    #[serde(default)]
+    in_review: Option<String>,
     #[serde(default)]
     ready_to_test: Option<String>,
     #[serde(default)]
@@ -403,6 +441,7 @@ impl GithubStateMap {
             for (slot, v) in [
                 (&mut m.todo, sm.todo),
                 (&mut m.in_progress, sm.in_progress),
+                (&mut m.in_review, sm.in_review),
                 (&mut m.ready_to_test, sm.ready_to_test),
                 (&mut m.done, sm.done),
             ] {
@@ -415,6 +454,7 @@ impl GithubStateMap {
         for (slot, key) in [
             (&mut m.todo, "AGENTUM_GITHUB_STATUS_TODO"),
             (&mut m.in_progress, "AGENTUM_GITHUB_STATUS_IN_PROGRESS"),
+            (&mut m.in_review, "AGENTUM_GITHUB_STATUS_IN_REVIEW"),
             (&mut m.ready_to_test, "AGENTUM_GITHUB_STATUS_READY_TO_TEST"),
             (&mut m.done, "AGENTUM_GITHUB_STATUS_DONE"),
         ] {
@@ -430,6 +470,7 @@ impl GithubStateMap {
         match phase {
             TrackerPhase::Todo => &self.todo,
             TrackerPhase::InProgress => &self.in_progress,
+            TrackerPhase::InReview => &self.in_review,
             TrackerPhase::ReadyToTest => &self.ready_to_test,
             TrackerPhase::Done => &self.done,
         }
@@ -437,10 +478,11 @@ impl GithubStateMap {
 
     /// The configured names in canonical phase order (may contain duplicates
     /// when a user maps two phases to one name — callers dedupe by name).
-    fn labels(&self) -> [&str; 4] {
+    fn labels(&self) -> [&str; 5] {
         [
             &self.todo,
             &self.in_progress,
+            &self.in_review,
             &self.ready_to_test,
             &self.done,
         ]
@@ -449,7 +491,12 @@ impl GithubStateMap {
 
 /// Idempotent ensure-create: `--force` updates an existing label's color to
 /// canonical instead of failing. One argv token per value — never a shell.
-fn gh_label_ensure_argv<'a>(name: &'a str, slug: &'a str, color: &'a str) -> [&'a str; 8] {
+/// `pub(crate)` for spec 010 F3 (see [`github_status_color`]).
+pub(crate) fn gh_label_ensure_argv<'a>(
+    name: &'a str,
+    slug: &'a str,
+    color: &'a str,
+) -> [&'a str; 8] {
     [
         "label", "create", name, "--repo", slug, "--color", color, "--force",
     ]
@@ -583,10 +630,7 @@ fn gh_bin() -> String {
 /// Err carries stderr truncated to ~240 chars. Bounded by a 30s timeout so a
 /// hung `gh` (network stall) degrades to a `Skipped`, never a stalled run.
 async fn run_gh(program: &str, args: &[&str]) -> Result<(), String> {
-    let fut = tokio::process::Command::new(program)
-        .args(args)
-        .current_dir(neutral_cwd())
-        .output();
+    let fut = output_with_etxtbsy_retry(program, args, neutral_cwd());
     let output = match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
         Err(_) => return Err("gh timed out".into()),
         Ok(Err(e)) => return Err(format!("failed to run `{program}`: {e}")),
@@ -644,12 +688,50 @@ async fn github_transition_with(
     }
 }
 
+/// Label transition + (when bound) the ADDITIVE Projects-board write (spec 010
+/// F2). The label path is the byte-identical [`github_transition_with`]
+/// (AC 8); unbound (`binding: None`) returns its result untouched — today's
+/// behavior byte-for-byte. A board failure can only append to the report,
+/// never alter label behavior, and NEVER becomes an `Err` (AC 7): it folds
+/// into the existing `Skipped(reason)` so `drive.rs`'s `transition_tracker`
+/// log line and the MCP tool's `skipped:` text carry it with zero call-site
+/// edits — loud through today's plumbing (§7.9).
+async fn github_transition_with_board(
+    program: &str,
+    slug: &str,
+    number: &str,
+    phase: TrackerPhase,
+    map: &GithubStateMap,
+    binding: Option<&crate::github_projects::BoardBinding>,
+) -> TransitionResult {
+    let label = github_transition_with(program, slug, number, phase, map).await;
+    let Some(b) = binding else { return label };
+    match crate::github_projects::board_write_with(program, b, slug, number, phase.into()).await {
+        Ok(()) => label,
+        Err(reason) => {
+            tracing::warn!(slug, number, ?phase, %reason, "Projects board write failed (non-fatal)");
+            match label {
+                TransitionResult::Applied => TransitionResult::Skipped(format!(
+                    "status label applied; Projects board write failed: {reason}"
+                )),
+                TransitionResult::Skipped(why) => TransitionResult::Skipped(format!(
+                    "{why}; Projects board write failed: {reason}"
+                )),
+            }
+        }
+    }
+}
+
 /// GitHub block escalation (spec 008 D6): ensure `status/blocked` exists, one
 /// `issue edit` (add blocked + remove the four pipeline names), then one
 /// best-effort comment (retry count + gate tail). `Applied` iff the LABEL edit
 /// succeeds — the comment is secondary, so its failure is dropped, never a
 /// downgrade to `Skipped`. `program`/`map` are explicit so the fake-`gh` test
 /// injects them without env mutation (mirrors [`github_transition_with`]).
+///
+/// `with_comment: false` (spec 014 F4, the crash-loop guard) skips ONLY the
+/// comment step — the idempotent label edit still runs, so a re-blocked issue
+/// keeps its flag without a duplicate comment inside the cooldown.
 #[allow(clippy::too_many_arguments)]
 async fn github_mark_blocked_with(
     program: &str,
@@ -659,6 +741,7 @@ async fn github_mark_blocked_with(
     gate_label: &str,
     attempts: u32,
     gate_tail: &str,
+    with_comment: bool,
     map: &GithubStateMap,
 ) -> TransitionResult {
     // Ensure the blocked label exists (non-fatal — a shared repo without
@@ -673,9 +756,81 @@ async fn github_mark_blocked_with(
         return TransitionResult::Skipped(reason);
     }
     // Best-effort comment; a failure here never downgrades the applied label.
-    let body = blocked_comment_body(feature_name, gate_label, attempts, gate_tail);
-    let _ = run_gh(program, &gh_issue_comment_argv(number, slug, &body)).await;
+    if with_comment {
+        let body = blocked_comment_body(feature_name, gate_label, attempts, gate_tail);
+        let _ = run_gh(program, &gh_issue_comment_argv(number, slug, &body)).await;
+    }
     TransitionResult::Applied
+}
+
+/// The blocked-path sibling of [`github_transition_with_board`] (spec 010
+/// AC 5): today's label+comment escalation ([`github_mark_blocked_with`],
+/// byte-identical) plus, when bound, the ADDITIVE card move to the
+/// Blocked-mapped option. `board_write_with` never probes/closes/reopens for
+/// `BoardPhase::Blocked` (that is Done/InProgress-only), and a board failure
+/// folds into the returned reason exactly like the pipeline seam — never an
+/// `Err`, never a change to label behavior.
+#[allow(clippy::too_many_arguments)]
+async fn github_mark_blocked_with_board(
+    program: &str,
+    slug: &str,
+    number: &str,
+    feature_name: &str,
+    gate_label: &str,
+    attempts: u32,
+    gate_tail: &str,
+    with_comment: bool,
+    map: &GithubStateMap,
+    binding: Option<&crate::github_projects::BoardBinding>,
+) -> TransitionResult {
+    let label = github_mark_blocked_with(
+        program,
+        slug,
+        number,
+        feature_name,
+        gate_label,
+        attempts,
+        gate_tail,
+        with_comment,
+        map,
+    )
+    .await;
+    let Some(b) = binding else { return label };
+    match crate::github_projects::board_write_with(
+        program,
+        b,
+        slug,
+        number,
+        crate::github_projects::BoardPhase::Blocked,
+    )
+    .await
+    {
+        Ok(()) => label,
+        // The identical fold — see `github_transition_with_board`.
+        Err(reason) => {
+            tracing::warn!(slug, number, %reason, "Projects board write failed (non-fatal)");
+            match label {
+                TransitionResult::Applied => TransitionResult::Skipped(format!(
+                    "status label applied; Projects board write failed: {reason}"
+                )),
+                TransitionResult::Skipped(why) => TransitionResult::Skipped(format!(
+                    "{why}; Projects board write failed: {reason}"
+                )),
+            }
+        }
+    }
+}
+
+/// Fire-and-forget emission coords for the spec-014 tracker bus events. A
+/// REQUIRED parameter on both seam fns so "transition without emitting" is
+/// unrepresentable — every existing and future caller must provide a bus (to
+/// skip emission you'd have to pass a dummy channel, visible in review).
+pub struct TrackerEmit<'a> {
+    pub bus: &'a tokio::sync::broadcast::Sender<agentum_core::Event>,
+    /// The bound workspace, when the caller knows it (reactor / poller /
+    /// attention worker). `None` for tracker-coord-only callers (harness,
+    /// MCP, planning) — consumers then join on `tracker_url`.
+    pub worktree_id: Option<&'a str>,
 }
 
 /// Drive a created feature's tracker item to `phase`, dispatching on the provider
@@ -689,7 +844,38 @@ async fn github_mark_blocked_with(
 /// GitHub arm parses `owner/repo` AND the issue number from it (spec 004 — a
 /// spec-from-issue backlog derives N features from ONE issue, so `tracker_id`
 /// cannot double as the issue number). Board/Linear ignore it.
+///
+/// Spec 014 F1: on — and ONLY on — `Ok(Applied)` a `tracker.phase_changed`
+/// event is emitted on the bus. `broadcast::Sender::send` is synchronous and
+/// non-blocking; the ignored zero-receiver `Err` makes fire-and-forget
+/// structural. `Skipped`/`Err` emit nothing (the bus never lies) — including a
+/// partial write that folds into `Skipped` (the persisted-phase re-fetch
+/// reconciles clients).
 pub async fn apply_tracker_transition(
+    store: &Store,
+    provider: &str,
+    tracker_id: &str,
+    tracker_url: Option<&str>,
+    phase: TrackerPhase,
+    emit: TrackerEmit<'_>,
+) -> anyhow::Result<TransitionResult> {
+    let result = transition_inner(store, provider, tracker_id, tracker_url, phase).await;
+    if matches!(result, Ok(TransitionResult::Applied)) {
+        let _ = emit.bus.send(
+            agentum_core::Event::new("tracker.phase_changed").with_payload(serde_json::json!({
+                "worktree_id": emit.worktree_id,
+                "provider": provider,
+                "phase": phase.wire_str(),
+                "tracker_url": tracker_url,
+            })),
+        );
+    }
+    result
+}
+
+/// The pre-014 transition body, verbatim — the wrapper above owns emission so
+/// the only-on-Applied rule is enforced at exactly one `matches!` arm.
+async fn transition_inner(
     store: &Store,
     provider: &str,
     tracker_id: &str,
@@ -728,8 +914,11 @@ pub async fn apply_tracker_transition(
             Ok(TransitionResult::Applied)
         }
         // GitHub Issues has no workflow column; the phase lives as exactly one
-        // canonical `status/*` label (spec 004 D3). `Done` is label-only — the
-        // issue stays open; closing remains the PR's `Closes #N` job (D1).
+        // canonical `status/*` label (spec 004 D3). Unbound, `Done` is
+        // label-only — the issue stays open; closing remains the PR's
+        // `Closes #N` job (004 D1). On a board-BOUND repo the additive
+        // Projects arm also moves the card and may close/reopen at
+        // Done/InProgress (spec 010 D1 supersedes 004 D1 for bound repos only).
         "github" => {
             let Some(url) = tracker_url.map(str::trim).filter(|u| !u.is_empty()) else {
                 return Ok(TransitionResult::Skipped(
@@ -745,7 +934,19 @@ pub async fn apply_tracker_transition(
             // AFTER the URL parse succeeds so the no-url/unparseable skips
             // never touch the config file (keeps those tests hermetic).
             let map = GithubStateMap::from_env();
-            Ok(github_transition_with(&gh_bin(), &slug, &number, phase, &map).await)
+            // Spec 010 F2: the binding read follows the SAME hermeticity
+            // discipline — only after the parse, so the no-url/unparseable
+            // skip tests never touch the config files.
+            let binding = crate::github_projects::binding_for_slug(&slug);
+            Ok(github_transition_with_board(
+                &gh_bin(),
+                &slug,
+                &number,
+                phase,
+                &map,
+                binding.as_ref(),
+            )
+            .await)
         }
         other => Ok(TransitionResult::Skipped(format!(
             "unknown tracker provider {other:?}"
@@ -767,6 +968,14 @@ pub async fn apply_tracker_transition(
 /// `apply_tracker_transition` (so `drive.rs` calls both identically) but unused
 /// while blocked is GitHub-only — the GitHub arm derives owner/repo + number from
 /// `tracker_url`, and board/linear need no id to skip.
+///
+/// Spec 014 F1: on `Ok(Applied)` a `tracker.blocked` event is emitted on the
+/// bus (fire-and-forget, same rules as the pipeline seam). `reason` in the
+/// payload is the caller's `gate_label`.
+///
+/// Spec 014 F4: `with_comment: false` suppresses only the explanatory comment
+/// (crash-loop cooldown); the label edit and Projects Blocked-column write are
+/// unchanged. The harness retries-exhausted caller passes `true`.
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_blocked_transition(
     store: &Store,
@@ -777,6 +986,49 @@ pub async fn apply_blocked_transition(
     gate_label: &str,
     attempts: u32,
     gate_tail: &str,
+    with_comment: bool,
+    emit: TrackerEmit<'_>,
+) -> anyhow::Result<TransitionResult> {
+    let result = blocked_inner(
+        store,
+        provider,
+        tracker_id,
+        tracker_url,
+        feature_name,
+        gate_label,
+        attempts,
+        gate_tail,
+        with_comment,
+    )
+    .await;
+    if matches!(result, Ok(TransitionResult::Applied)) {
+        let _ = emit
+            .bus
+            .send(
+                agentum_core::Event::new("tracker.blocked").with_payload(serde_json::json!({
+                    "worktree_id": emit.worktree_id,
+                    "provider": provider,
+                    "tracker_url": tracker_url,
+                    "reason": gate_label,
+                })),
+            );
+    }
+    result
+}
+
+/// The pre-014 blocked body (see [`transition_inner`]), plus the F4
+/// `with_comment` thread-through.
+#[allow(clippy::too_many_arguments)]
+async fn blocked_inner(
+    store: &Store,
+    provider: &str,
+    tracker_id: &str,
+    tracker_url: Option<&str>,
+    feature_name: &str,
+    gate_label: &str,
+    attempts: u32,
+    gate_tail: &str,
+    with_comment: bool,
 ) -> anyhow::Result<TransitionResult> {
     let _ = (store, tracker_id);
     match provider {
@@ -792,7 +1044,10 @@ pub async fn apply_blocked_transition(
                 )));
             };
             let map = GithubStateMap::from_env();
-            Ok(github_mark_blocked_with(
+            // Spec 010 F2: binding read only AFTER the parse (the hermeticity
+            // discipline — see the pipeline arm above).
+            let binding = crate::github_projects::binding_for_slug(&slug);
+            Ok(github_mark_blocked_with_board(
                 &gh_bin(),
                 &slug,
                 &number,
@@ -800,7 +1055,9 @@ pub async fn apply_blocked_transition(
                 gate_label,
                 attempts,
                 gate_tail,
+                with_comment,
                 &map,
+                binding.as_ref(),
             )
             .await)
         }
@@ -872,6 +1129,37 @@ fn push_label_args(argv: &mut Vec<String>, labels: &[String]) {
 /// from the same neutral cwd as issue creation (spec 002).
 pub(crate) fn neutral_cwd() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_else(std::env::temp_dir)
+}
+
+/// Spawn one subprocess and capture its output, retrying briefly on ETXTBSY
+/// (os error 26). Under the parallel test runner, another test thread's fork
+/// can transiently inherit a just-written fake-gh script's write fd, so this
+/// thread's exec hits "Text file busy" — a fixture race that made the suite
+/// flaky ~1-in-3, never a real failure (production binaries aren't being
+/// written to, so the retry is dead code there). Shared by every gh/git
+/// runner (`run_gh`, the two `run_gh_capture`s, `run_gh_graphql_argv`,
+/// `provision::run_in`) so the fix lives in ONE place; callers keep their own
+/// timeout/error shaping around it.
+pub(crate) async fn output_with_etxtbsy_retry(
+    program: &str,
+    args: &[impl AsRef<std::ffi::OsStr>],
+    cwd: impl AsRef<std::path::Path>,
+) -> std::io::Result<std::process::Output> {
+    let mut attempt = 0;
+    loop {
+        match tokio::process::Command::new(program)
+            .args(args.iter().map(AsRef::as_ref))
+            .current_dir(cwd.as_ref())
+            .output()
+            .await
+        {
+            Err(e) if e.raw_os_error() == Some(26) && attempt < 3 => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            }
+            other => return other,
+        }
+    }
 }
 
 /// Parse the issue URL `gh issue create` prints to stdout into a [`FeatureRef`].
@@ -1044,6 +1332,7 @@ mod tests {
         let labels = [
             github_status_label(TrackerPhase::Todo),
             github_status_label(TrackerPhase::InProgress),
+            github_status_label(TrackerPhase::InReview),
             github_status_label(TrackerPhase::ReadyToTest),
             github_status_label(TrackerPhase::Done),
         ];
@@ -1052,12 +1341,13 @@ mod tests {
             [
                 "status/todo",
                 "status/in-progress",
+                "status/in-review",
                 "status/ready-to-test",
                 "status/done"
             ]
         );
         let unique: std::collections::HashSet<_> = labels.iter().collect();
-        assert_eq!(unique.len(), 4, "labels must be pairwise distinct");
+        assert_eq!(unique.len(), 5, "labels must be pairwise distinct");
     }
 
     /// `--force` makes the ensure-create idempotent (an existing label is
@@ -1121,21 +1411,24 @@ mod tests {
         assert_eq!(github_slug_and_number_from_issue_url(""), None);
     }
 
-    /// Spec 004 (C4 invariant at argv level) + spec 008 D6: one `gh issue edit`
-    /// adds the target label and removes exactly the OTHER FOUR canonical labels
-    /// — the three other pipeline phases AND the fixed `status/blocked` — so a
-    /// pipeline flip also clears a lingering blocked label (the board can't lie
-    /// in either direction). The target is never removed, and no non-canonical
-    /// name (e.g. this repo's own `status/qa*` human-QA labels) appears.
+    /// Spec 004 (C4 invariant at argv level) + spec 008 D6 + spec 012 F3: one
+    /// `gh issue edit` adds the target label and removes exactly the OTHER FIVE
+    /// canonical labels — the four other pipeline phases AND the fixed
+    /// `status/blocked` — so a pipeline flip also clears a lingering blocked
+    /// label (the board can't lie in either direction). The target is never
+    /// removed, and no non-canonical name (e.g. this repo's own `status/qa*`
+    /// human-QA labels) appears.
     ///
-    /// The `expected` literals now carry the trailing `--remove-label
-    /// status/blocked` D6 added; the pipeline order/tokens are otherwise the spec
-    /// 004/005 shape. Do not regenerate them from the code under test.
+    /// The `expected` literals carry the D6 `--remove-label status/blocked` tail
+    /// and the F3 `status/in-review` label; the pipeline order/tokens are
+    /// otherwise the spec 004/005 shape. Do not regenerate them from the code
+    /// under test.
     #[test]
-    fn gh_set_status_label_argv_adds_one_removes_the_three_pipeline_and_blocked() {
+    fn gh_set_status_label_argv_adds_one_removes_the_four_pipeline_and_blocked() {
         let all_phases = [
             TrackerPhase::Todo,
             TrackerPhase::InProgress,
+            TrackerPhase::InReview,
             TrackerPhase::ReadyToTest,
             TrackerPhase::Done,
         ];
@@ -1155,6 +1448,8 @@ mod tests {
                     "--remove-label",
                     "status/in-progress",
                     "--remove-label",
+                    "status/in-review",
+                    "--remove-label",
                     "status/ready-to-test",
                     "--remove-label",
                     "status/done",
@@ -1171,6 +1466,27 @@ mod tests {
                     "status/in-progress",
                     "--remove-label",
                     "status/todo",
+                    "--remove-label",
+                    "status/in-review",
+                    "--remove-label",
+                    "status/ready-to-test",
+                    "--remove-label",
+                    "status/done",
+                    "--remove-label",
+                    "status/blocked",
+                ],
+                TrackerPhase::InReview => vec![
+                    "issue",
+                    "edit",
+                    "42",
+                    "--repo",
+                    "owner/repo",
+                    "--add-label",
+                    "status/in-review",
+                    "--remove-label",
+                    "status/todo",
+                    "--remove-label",
+                    "status/in-progress",
                     "--remove-label",
                     "status/ready-to-test",
                     "--remove-label",
@@ -1191,6 +1507,8 @@ mod tests {
                     "--remove-label",
                     "status/in-progress",
                     "--remove-label",
+                    "status/in-review",
+                    "--remove-label",
                     "status/done",
                     "--remove-label",
                     "status/blocked",
@@ -1207,6 +1525,8 @@ mod tests {
                     "status/todo",
                     "--remove-label",
                     "status/in-progress",
+                    "--remove-label",
+                    "status/in-review",
                     "--remove-label",
                     "status/ready-to-test",
                     "--remove-label",
@@ -1235,7 +1555,7 @@ mod tests {
                     pair[1]
                 })
                 .collect();
-            assert_eq!(removed.len(), 4, "three pipeline + blocked removed");
+            assert_eq!(removed.len(), 5, "four pipeline + blocked removed");
             assert!(
                 !removed.contains(&target),
                 "the target label must never be removed"
@@ -1266,6 +1586,7 @@ mod tests {
         let m = GithubStateMap::default();
         assert_eq!(m.todo, "status/todo");
         assert_eq!(m.in_progress, "status/in-progress");
+        assert_eq!(m.in_review, "status/in-review");
         assert_eq!(m.ready_to_test, "status/ready-to-test");
         assert_eq!(m.done, "status/done");
         for (p, name, _) in GITHUB_STATUS_LABELS.iter() {
@@ -1289,6 +1610,7 @@ mod tests {
         let file = StoredGithubStateMap {
             todo: Some("triage".into()),
             in_progress: Some(" wip ".into()), // trimmed
+            in_review: None,
             ready_to_test: None,
             done: Some("   ".into()), // blank keeps the lower layer
         };
@@ -1325,6 +1647,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "triage".into(),
             in_progress: "wip".into(),
+            in_review: "reviewing".into(),
             ready_to_test: "qa-ready".into(),
             done: "shipped".into(),
         };
@@ -1341,6 +1664,8 @@ mod tests {
                 "wip",
                 "--remove-label",
                 "triage",
+                "--remove-label",
+                "reviewing",
                 "--remove-label",
                 "qa-ready",
                 "--remove-label",
@@ -1367,6 +1692,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "status/todo".into(),
             in_progress: "active".into(),
+            in_review: "status/in-review".into(),
             ready_to_test: "active".into(),
             done: "status/done".into(),
         };
@@ -1382,19 +1708,32 @@ mod tests {
                 .collect();
             assert_eq!(
                 removed,
-                // …plus the D6 blocked label (spec 008).
-                ["status/todo", "status/done", "status/blocked"],
+                // …plus the F3 in-review label and the D6 blocked label (spec 008).
+                [
+                    "status/todo",
+                    "status/in-review",
+                    "status/done",
+                    "status/blocked"
+                ],
                 "the shared target must be absent from its own remove list"
             );
         }
         // Shared name NOT the target → removed once, not twice (+ blocked, D6).
         let argv = gh_set_status_label_argv("42", "o/r", TrackerPhase::Done, &map);
         let removed: Vec<&str> = argv[7..].chunks(2).map(|pair| pair[1]).collect();
-        assert_eq!(removed, ["status/todo", "active", "status/blocked"]);
+        assert_eq!(
+            removed,
+            [
+                "status/todo",
+                "active",
+                "status/in-review",
+                "status/blocked"
+            ]
+        );
     }
 
-    /// Spec 005 F5 (§6 item 6): a fake `gh` logs the full custom-map
-    /// transition — 4 ensure-creates carrying the CUSTOM names with the
+    /// Spec 005 F5 (§6 item 6), extended spec 012 F3: a fake `gh` logs the full
+    /// custom-map transition — 5 ensure-creates carrying the CUSTOM names with the
     /// canonical PHASE colors, then one edit that adds/removes only configured
     /// names. Explicit `program` + explicit `map` → no env mutation, no lock.
     #[cfg(unix)]
@@ -1409,6 +1748,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "triage".into(),
             in_progress: "wip".into(),
+            in_review: "reviewing".into(),
             ready_to_test: "qa-ready".into(),
             done: "shipped".into(),
         };
@@ -1425,21 +1765,22 @@ mod tests {
 
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
-        assert_eq!(lines.len(), 5, "4 ensure-creates + 1 edit, got: {calls}");
+        assert_eq!(lines.len(), 6, "5 ensure-creates + 1 edit, got: {calls}");
         assert_eq!(
-            lines[..4],
+            lines[..5],
             [
                 "label create triage --repo owner/repo --color ededed --force",
                 "label create wip --repo owner/repo --color 1d76db --force",
+                "label create reviewing --repo owner/repo --color 5319e7 --force",
                 "label create qa-ready --repo owner/repo --color fbca04 --force",
                 "label create shipped --repo owner/repo --color 0e8a16 --force",
             ]
         );
         assert_eq!(
-            lines[4],
+            lines[5],
             "issue edit 42 --repo owner/repo --add-label qa-ready \
-             --remove-label triage --remove-label wip --remove-label shipped \
-             --remove-label status/blocked"
+             --remove-label triage --remove-label wip --remove-label reviewing \
+             --remove-label shipped --remove-label status/blocked"
         );
         for (_, canonical, _) in GITHUB_STATUS_LABELS.iter() {
             assert!(
@@ -1463,6 +1804,7 @@ mod tests {
         let map = GithubStateMap {
             todo: "status/todo".into(),
             in_progress: "active".into(),
+            in_review: "status/in-review".into(),
             ready_to_test: "active".into(),
             done: "status/done".into(),
         };
@@ -1479,33 +1821,39 @@ mod tests {
 
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
-        assert_eq!(lines.len(), 4, "3 deduped ensure-creates + 1 edit: {calls}");
+        assert_eq!(lines.len(), 5, "4 deduped ensure-creates + 1 edit: {calls}");
         assert_eq!(
-            lines[..3],
+            lines[..4],
             [
                 "label create status/todo --repo owner/repo --color ededed --force",
                 // InProgress comes first in canonical order, so its color wins.
                 "label create active --repo owner/repo --color 1d76db --force",
+                "label create status/in-review --repo owner/repo --color 5319e7 --force",
                 "label create status/done --repo owner/repo --color 0e8a16 --force",
             ]
         );
     }
 
-    /// Spec 005 F4: the wire-format phase parser accepts exactly the four
-    /// pipeline phases and rejects everything else (case-sensitive, no aliases).
+    /// Spec 005 F4 + spec 012 F3: the wire-format phase parser accepts exactly
+    /// the five pipeline phases and rejects everything else (case-sensitive, no
+    /// aliases).
     #[test]
-    fn parse_tracker_phase_accepts_the_four_and_rejects_junk() {
+    fn parse_tracker_phase_accepts_the_five_and_rejects_junk() {
         assert_eq!(parse_tracker_phase("todo"), Some(TrackerPhase::Todo));
         assert_eq!(
             parse_tracker_phase("in_progress"),
             Some(TrackerPhase::InProgress)
         );
         assert_eq!(
+            parse_tracker_phase("in_review"),
+            Some(TrackerPhase::InReview)
+        );
+        assert_eq!(
             parse_tracker_phase("ready_to_test"),
             Some(TrackerPhase::ReadyToTest)
         );
         assert_eq!(parse_tracker_phase("done"), Some(TrackerPhase::Done));
-        for junk in ["", "Todo", "DONE", "in-progress", "ready to test", "qa"] {
+        for junk in ["", "Todo", "DONE", "in-review", "ready to test", "qa"] {
             assert_eq!(parse_tracker_phase(junk), None, "{junk:?} must be rejected");
         }
     }
@@ -1514,8 +1862,17 @@ mod tests {
     fn board_status_mapping_covers_all_phases() {
         assert_eq!(board_status_for(TrackerPhase::Todo), "todo");
         assert_eq!(board_status_for(TrackerPhase::InProgress), "doing");
+        // InReview folds onto the internal board's `review` column alongside
+        // ReadyToTest (no distinct in-review board column).
+        assert_eq!(board_status_for(TrackerPhase::InReview), "review");
         assert_eq!(board_status_for(TrackerPhase::ReadyToTest), "review");
         assert_eq!(board_status_for(TrackerPhase::Done), "done");
+    }
+
+    /// A throwaway bus for the seam's required `TrackerEmit` (spec 014 F1) —
+    /// tests that don't assert emission just need a live sender to pass.
+    fn test_bus() -> tokio::sync::broadcast::Sender<agentum_core::Event> {
+        tokio::sync::broadcast::channel(8).0
     }
 
     #[tokio::test]
@@ -1534,9 +1891,20 @@ mod tests {
             .await
             .unwrap();
 
-        let res = apply_tracker_transition(&store, "board", &r.id, None, TrackerPhase::InProgress)
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_tracker_transition(
+            &store,
+            "board",
+            &r.id,
+            None,
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(res, TransitionResult::Applied);
         let card = store
             .list_board_items()
@@ -1551,9 +1919,20 @@ mod tests {
     #[tokio::test]
     async fn board_transition_unknown_key_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_tracker_transition(&store, "board", "AG-9999", None, TrackerPhase::Done)
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_tracker_transition(
+            &store,
+            "board",
+            "AG-9999",
+            None,
+            TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
     }
 
@@ -1563,14 +1942,35 @@ mod tests {
     #[tokio::test]
     async fn github_transition_without_url_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_tracker_transition(&store, "github", "42", None, TrackerPhase::Done)
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_tracker_transition(
+            &store,
+            "github",
+            "42",
+            None,
+            TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         // Blank and unparseable (a /pull/ link) URLs are skips too.
-        let res = apply_tracker_transition(&store, "github", "42", Some("  "), TrackerPhase::Done)
-            .await
-            .unwrap();
+        let res = apply_tracker_transition(
+            &store,
+            "github",
+            "42",
+            Some("  "),
+            TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         let res = apply_tracker_transition(
             &store,
@@ -1578,10 +1978,107 @@ mod tests {
             "42",
             Some("https://github.com/o/r/pull/42"),
             TrackerPhase::Done,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
         )
         .await
         .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
+    }
+
+    // ---- Spec 014 F1: bus emission at the seam --------------------------------
+
+    /// AC 1: an `Applied` transition emits exactly one `tracker.phase_changed`
+    /// with the full payload. Driven through the hermetic board arm — the
+    /// emission choke point is upstream of provider dispatch, so this proves it
+    /// for all providers (the gh transport is covered by the fake-gh tests).
+    #[tokio::test]
+    async fn applied_transition_emits_phase_changed_on_bus() {
+        let store = fresh_store().await;
+        let here = std::env::temp_dir();
+        let r = TaskSink::Board
+            .create_feature(
+                &ctx(&store, &here, None),
+                &NewFeature {
+                    title: "Emit on applied".into(),
+                    body: None,
+                    labels: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        let (bus, mut rx) = tokio::sync::broadcast::channel(8);
+        let res = apply_tracker_transition(
+            &store,
+            "board",
+            &r.id,
+            None,
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: Some("repo-1::/tmp/wt"),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(res, TransitionResult::Applied);
+
+        let ev = rx.try_recv().expect("Applied emits one event");
+        assert_eq!(ev.kind, "tracker.phase_changed");
+        assert_eq!(ev.payload["worktree_id"], "repo-1::/tmp/wt");
+        assert_eq!(ev.payload["provider"], "board");
+        assert_eq!(ev.payload["phase"], "in_progress");
+        assert!(ev.payload["tracker_url"].is_null(), "board has no URL");
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly ONE event per applied transition"
+        );
+    }
+
+    /// AC 2: a skipped transition emits NOTHING — the bus never lies. Covers
+    /// the board unknown-key skip and the github hermetic no-url/unparseable
+    /// skips (the blocked seam shares the same wrapper shape).
+    #[tokio::test]
+    async fn skipped_transition_emits_nothing() {
+        let store = fresh_store().await;
+        let (bus, mut rx) = tokio::sync::broadcast::channel(8);
+        let emit = || TrackerEmit {
+            bus: &bus,
+            worktree_id: None,
+        };
+
+        let res =
+            apply_tracker_transition(&store, "board", "AG-9999", None, TrackerPhase::Done, emit())
+                .await
+                .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+
+        let res =
+            apply_tracker_transition(&store, "github", "42", None, TrackerPhase::Done, emit())
+                .await
+                .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+
+        let res = apply_blocked_transition(
+            &store,
+            "github",
+            "42",
+            None,
+            "feat",
+            "gate",
+            1,
+            "boom",
+            true,
+            emit(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(res, TransitionResult::Skipped(_)));
+
+        assert!(rx.try_recv().is_err(), "Skipped must emit nothing");
     }
 
     /// Write an executable fake `gh` into `dir` and return its path. Passed to
@@ -1618,9 +2115,9 @@ mod tests {
 
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
-        // 4 ensure-creates then the single issue edit, in that order.
-        assert_eq!(lines.len(), 5, "expected 5 gh invocations, got: {calls}");
-        for line in &lines[..4] {
+        // 5 ensure-creates then the single issue edit, in that order.
+        assert_eq!(lines.len(), 6, "expected 6 gh invocations, got: {calls}");
+        for line in &lines[..5] {
             assert!(
                 line.starts_with("label create status/"),
                 "expected an ensure-create, got: {line}"
@@ -1628,9 +2125,45 @@ mod tests {
             assert!(line.ends_with("--force"));
         }
         assert!(
-            lines[4].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
+            lines[5].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
             "last call must be the issue edit, got: {}",
-            lines[4]
+            lines[5]
+        );
+    }
+
+    /// Spec 012 F3 (the first-failing test): the new `InReview` phase writes the
+    /// `status/in-review` label and removes exactly the OTHER FOUR pipeline names
+    /// plus `status/blocked` — the five-label mutual exclusion. Fake-`gh`, no env.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn inreview_writes_in_review_label_and_removes_other_four() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::InReview,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 6, "5 ensure-creates + 1 edit, got: {calls}");
+        // The single edit adds in-review and removes the other four + blocked.
+        assert_eq!(
+            lines[5],
+            "issue edit 42 --repo owner/repo --add-label status/in-review \
+             --remove-label status/todo --remove-label status/in-progress \
+             --remove-label status/ready-to-test --remove-label status/done \
+             --remove-label status/blocked"
         );
     }
 
@@ -1663,10 +2196,11 @@ mod tests {
 
     // ---- Spec 008 D6: the `status/blocked` escalation ------------------------
 
-    /// The blocked argv adds `status/blocked` and removes the FOUR pipeline
-    /// names (the mirror of `gh_set_status_label_argv` with a fixed target).
+    /// The blocked argv adds `status/blocked` and removes the FIVE pipeline
+    /// names (the mirror of `gh_set_status_label_argv` with a fixed target;
+    /// spec 012 F3 added `status/in-review`).
     #[test]
-    fn gh_set_blocked_label_argv_adds_blocked_removes_four_pipeline() {
+    fn gh_set_blocked_label_argv_adds_blocked_removes_five_pipeline() {
         let map = GithubStateMap::default();
         let argv = gh_set_blocked_label_argv("42", "owner/repo", &map);
         assert_eq!(
@@ -1683,6 +2217,8 @@ mod tests {
                 "status/todo",
                 "--remove-label",
                 "status/in-progress",
+                "--remove-label",
+                "status/in-review",
                 "--remove-label",
                 "status/ready-to-test",
                 "--remove-label",
@@ -1771,6 +2307,7 @@ mod tests {
             "unit-test gate (verify.sh)",
             3,
             "assertion failed: foo != bar",
+            /* with_comment */ true,
             &GithubStateMap::default(),
         )
         .await;
@@ -1791,7 +2328,8 @@ mod tests {
             lines[1],
             "issue edit 42 --repo owner/repo --add-label status/blocked \
              --remove-label status/todo --remove-label status/in-progress \
-             --remove-label status/ready-to-test --remove-label status/done"
+             --remove-label status/in-review --remove-label status/ready-to-test \
+             --remove-label status/done"
         );
         assert_eq!(lines[2], "issue comment");
 
@@ -1810,12 +2348,155 @@ mod tests {
         );
     }
 
+    // ---- Spec 014 F4: comment suppression + clear flow ------------------------
+
+    /// AC 10 crash-loop guard at the seam: `with_comment=false` runs the
+    /// idempotent label edit but ZERO `issue comment`; a true+false pair (what
+    /// the attention ledger decides for two crashes inside the cooldown)
+    /// leaves TWO label edits and exactly ONE comment in the log.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_with_comment_false_suppresses_only_the_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"issue\" ] && [ \"$2\" = \"comment\" ]; then\n  \
+                 echo \"issue comment\" >> \"{log}\"\nelse\n  \
+                 echo \"$@\" >> \"{log}\"\nfi\nexit 0\n",
+                log = log.display(),
+            ),
+        );
+
+        // Crash #1: a fresh episode — label + comment.
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "session crash",
+            1,
+            "panic: boom",
+            /* with_comment */ true,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+        // Crash #2 inside the cooldown: the ledger says LabelOnly — the label
+        // re-applies (idempotent), the comment is suppressed.
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "session crash",
+            1,
+            "panic: boom again",
+            /* with_comment */ false,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 5, "2×(ensure + edit) + ONE comment: {calls}");
+        let edits = lines
+            .iter()
+            .filter(|l| l.starts_with("issue edit 42 --repo owner/repo --add-label status/blocked"))
+            .count();
+        assert_eq!(edits, 2, "the label edit runs both times: {calls}");
+        let comments = lines.iter().filter(|l| **l == "issue comment").count();
+        assert_eq!(comments, 1, "exactly ONE comment across the loop: {calls}");
+    }
+
+    /// AC 10 clear flow: after a blocked write, the recovery re-apply (any
+    /// pipeline edit) removes `status/blocked` in the SAME `issue edit` — the
+    /// board can't stay stale-red.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_then_pipeline_transition_removes_blocked_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "awaiting input",
+            1,
+            "stuck",
+            true,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+        // Recovery: the attention worker re-applies the persisted phase
+        // verbatim through the pipeline seam.
+        let res = github_transition_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::InProgress,
+            &GithubStateMap::default(),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let pipeline_edit = calls
+            .lines()
+            .find(|l| l.contains("--add-label status/in-progress"))
+            .expect("the recovery pipeline edit ran");
+        assert!(
+            pipeline_edit.contains("--remove-label status/blocked"),
+            "the re-apply drops the blocked label: {pipeline_edit}"
+        );
+    }
+
+    /// Never-halt (AC 8): a failing `gh` degrades the blocked write to
+    /// `Skipped` — never an `Err`/panic the worker loop would die on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_write_gh_failure_is_skipped_never_halts() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = write_fake_gh(
+            dir.path(),
+            "#!/bin/sh\necho 'boom: gh failed' >&2\nexit 1\n",
+        );
+        let res = github_mark_blocked_with(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "session-a",
+            "session crash",
+            1,
+            "panic",
+            true,
+            &GithubStateMap::default(),
+        )
+        .await;
+        match res {
+            TransitionResult::Skipped(reason) => {
+                assert!(reason.contains("boom: gh failed"), "got: {reason}")
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+    }
+
     /// D-A: board and Linear have no blocked column, so `apply_blocked_transition`
     /// skips them (never `Err`) — the D6 label is GitHub-only. A github.com URL is
     /// passed to prove they skip on provider, not on a missing URL.
     #[tokio::test]
     async fn apply_blocked_transition_board_and_linear_are_skipped() {
         let store = fresh_store().await;
+        let bus = test_bus();
         for provider in ["board", "linear"] {
             let res = apply_blocked_transition(
                 &store,
@@ -1826,6 +2507,11 @@ mod tests {
                 "unit-test gate",
                 2,
                 "boom",
+                true,
+                TrackerEmit {
+                    bus: &bus,
+                    worktree_id: None,
+                },
             )
             .await
             .unwrap();
@@ -1843,9 +2529,24 @@ mod tests {
     #[tokio::test]
     async fn apply_blocked_transition_github_without_url_is_skipped() {
         let store = fresh_store().await;
-        let res = apply_blocked_transition(&store, "github", "42", None, "feat", "gate", 1, "boom")
-            .await
-            .unwrap();
+        let bus = test_bus();
+        let res = apply_blocked_transition(
+            &store,
+            "github",
+            "42",
+            None,
+            "feat",
+            "gate",
+            1,
+            "boom",
+            true,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         let res = apply_blocked_transition(
             &store,
@@ -1856,10 +2557,309 @@ mod tests {
             "gate",
             1,
             "boom",
+            true,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
         )
         .await
         .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
+    }
+
+    // ---- Spec 010 F2: the additive Projects-board arm -------------------------
+    //
+    // The binding rides in EXPLICITLY (like `program`/`map`) — never via the
+    // config file or env. github_projects' ID_CACHE is process-global, so each
+    // test uses its own slug (the established global-state pattern).
+
+    /// A five-phase binding with self-describing option ids for the seam tests.
+    #[cfg(unix)]
+    fn seam_board_binding() -> crate::github_projects::BoardBinding {
+        crate::github_projects::BoardBinding {
+            project_id: "PVT_seam".into(),
+            status_field_id: "PVTSSF_seam".into(),
+            status_mapping: crate::github_projects::StatusMapping {
+                todo: "opt-todo".into(),
+                in_progress: "opt-inprogress".into(),
+                ready_to_test: "opt-rtt".into(),
+                done: "opt-done".into(),
+                blocked: "opt-blocked".into(),
+            },
+            done_closes_issue: false,
+            project_title: None,
+            project_owner: None,
+            project_owner_type: None,
+            project_number: None,
+            option_names: None,
+        }
+    }
+
+    /// AC 8 at the seam: with NO binding, `github_transition_with_board` IS
+    /// today's label path byte-for-byte — the exact 5-invocation log
+    /// `github_transition_applies_with_fake_gh` pins, and no GraphQL at all.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_with_board_unbound_is_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+
+        let res = github_transition_with_board(
+            script.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            TrackerPhase::InProgress,
+            &GithubStateMap::default(),
+            None,
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(lines.len(), 6, "expected 6 gh invocations, got: {calls}");
+        for line in &lines[..5] {
+            assert!(
+                line.starts_with("label create status/"),
+                "expected an ensure-create, got: {line}"
+            );
+            assert!(line.ends_with("--force"));
+        }
+        assert!(
+            lines[5].starts_with("issue edit 42 --repo owner/repo --add-label status/in-progress"),
+            "last call must be the issue edit, got: {}",
+            lines[5]
+        );
+        assert!(
+            !calls.contains("api graphql"),
+            "unbound must never touch GraphQL: {calls}"
+        );
+    }
+
+    /// THE AC-7 pin: the label edit succeeds but every GraphQL call fails →
+    /// the transition comes back `Skipped("status label applied; Projects
+    /// board write failed: …")` — a `TransitionResult` the github arm wraps in
+    /// `Ok`, so the failure is loud through existing plumbing yet never an
+    /// `Err`. The classified scope message keeps its remedy mid-run.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_with_board_board_failure_is_skipped_note_still_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\necho \"$@\" >> \"{log}\"\n\
+                 if [ \"$1\" = \"api\" ]; then\n  \
+                 echo 'your token has not been granted the required scopes [read:project]' >&2\n  \
+                 exit 1\nfi\nexit 0\n",
+                log = log.display()
+            ),
+        );
+
+        let binding = seam_board_binding();
+        let res = github_transition_with_board(
+            script.to_str().unwrap(),
+            "acme/seam-fail",
+            "42",
+            TrackerPhase::InProgress,
+            &GithubStateMap::default(),
+            Some(&binding),
+        )
+        .await;
+        match res {
+            TransitionResult::Skipped(reason) => {
+                assert!(
+                    reason.starts_with("status label applied; Projects board write failed:"),
+                    "got: {reason}"
+                );
+                assert!(
+                    reason.contains("gh auth refresh -s project"),
+                    "the scope remedy rides into the run log: {reason}"
+                );
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+        // The whole label path ran (and succeeded) before the board write.
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls
+                .lines()
+                .filter(|l| l.starts_with("label create status/"))
+                .count(),
+            5,
+            "label ensures untouched: {calls}"
+        );
+        assert!(calls.contains("issue edit 42"), "label edit ran: {calls}");
+    }
+
+    /// Spec 012 F4 (AC 11): the Done transition the poller fires on merge, on a
+    /// BOUND repo with `done_closes_issue` ON, drives the full 010 path — the
+    /// `status/done` label, the Done-mapped Project OPTION, then the probe-then-
+    /// close that closes the still-open issue. Explicit binding (knob ON), no env.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn done_transition_closes_issue_when_knob_on_with_fake_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let node_body =
+            serde_json::json!({"data": {"repository": {"issue": {"id": "I_d"}}}}).to_string();
+        let add_body =
+            serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_d"}}}})
+                .to_string();
+        let update_body = serde_json::json!(
+            {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_d"}}}}
+        )
+        .to_string();
+        // The issue is OPEN, so knob-ON Done must probe then close it.
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"issue\" ] && [ \"$2\" = \"view\" ]; then\n  \
+                 echo \"$@\" >> \"{log}\"\n  printf 'OPEN\\n'\n  exit 0\nfi\n\
+                 echo \"$@\" >> \"{log}\"\n\
+                 case \"$*\" in\n  \
+                 *updateProjectV2ItemFieldValue*) printf '%s\\n' '{update_body}' ;;\n  \
+                 *addProjectV2ItemById*) printf '%s\\n' '{add_body}' ;;\n  \
+                 *repository*) printf '%s\\n' '{node_body}' ;;\n\
+                 esac\nexit 0\n",
+                log = log.display(),
+            ),
+        );
+
+        let mut binding = seam_board_binding();
+        binding.done_closes_issue = true;
+        let res = github_transition_with_board(
+            script.to_str().unwrap(),
+            "acme/done-closes",
+            "42",
+            TrackerPhase::Done,
+            &GithubStateMap::default(),
+            Some(&binding),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        // The Done-mapped OPTION ID rode the Project write.
+        assert!(
+            calls
+                .lines()
+                .any(|l| l.contains("updateProjectV2ItemFieldValue")
+                    && l.contains("-f option=opt-done")),
+            "the Done option rides the write: {calls}"
+        );
+        // Knob ON + OPEN issue → the probe then the close.
+        assert!(
+            calls.contains("issue view 42 --repo acme/done-closes --json state --jq .state"),
+            "state probe ran: {calls}"
+        );
+        assert!(
+            calls.contains("issue close 42 --repo acme/done-closes"),
+            "Done closed the issue (010 done_closes_issue): {calls}"
+        );
+        // The `status/done` label edit ran too.
+        assert!(
+            calls.contains("issue edit 42 --repo acme/done-closes --add-label status/done"),
+            "the status/done label edit ran: {calls}"
+        );
+    }
+
+    /// AC 5: the blocked escalation on a BOUND repo adds the card move to the
+    /// Blocked-mapped OPTION ID after today's label+comment path — and never
+    /// probes/closes/reopens (knob ON notwithstanding: no close/reopen on
+    /// Blocked).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_arm_moves_card_to_blocked_option_with_fake_gh() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let body_file = dir.path().join("comment-body.txt");
+        let node_body =
+            serde_json::json!({"data": {"repository": {"issue": {"id": "I_b"}}}}).to_string();
+        let add_body =
+            serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_b"}}}})
+                .to_string();
+        let update_body = serde_json::json!(
+            {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_b"}}}}
+        )
+        .to_string();
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"issue\" ] && [ \"$2\" = \"comment\" ]; then\n  \
+                 echo \"issue comment\" >> \"{log}\"\n  printf '%s' \"$7\" > \"{body}\"\n  exit 0\nfi\n\
+                 echo \"$@\" >> \"{log}\"\n\
+                 case \"$*\" in\n  \
+                 *updateProjectV2ItemFieldValue*) printf '%s\\n' '{update_body}' ;;\n  \
+                 *addProjectV2ItemById*) printf '%s\\n' '{add_body}' ;;\n  \
+                 *repository*) printf '%s\\n' '{node_body}' ;;\n\
+                 esac\nexit 0\n",
+                log = log.display(),
+                body = body_file.display(),
+            ),
+        );
+
+        let mut binding = seam_board_binding();
+        binding.done_closes_issue = true; // knob ON must still not act on Blocked
+        let res = github_mark_blocked_with_board(
+            script.to_str().unwrap(),
+            "acme/seam-blocked",
+            "42",
+            "Login screen",
+            "unit-test gate (verify.sh)",
+            3,
+            "assertion failed: foo != bar",
+            /* with_comment */ true,
+            &GithubStateMap::default(),
+            Some(&binding),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = calls.lines().collect();
+        assert_eq!(
+            lines.len(),
+            6,
+            "label ensure + edit + comment, then 3 GraphQL: {calls}"
+        );
+        assert_eq!(
+            lines[0],
+            "label create status/blocked --repo acme/seam-blocked --color b60205 --force"
+        );
+        assert!(
+            lines[1]
+                .starts_with("issue edit 42 --repo acme/seam-blocked --add-label status/blocked"),
+            "got: {}",
+            lines[1]
+        );
+        assert_eq!(lines[2], "issue comment");
+        assert!(
+            lines[3].contains("repository(owner: $owner"),
+            "{}",
+            lines[3]
+        );
+        assert!(lines[4].contains("addProjectV2ItemById"), "{}", lines[4]);
+        assert!(
+            lines[5].contains("updateProjectV2ItemFieldValue")
+                && lines[5].contains("-f option=opt-blocked"),
+            "the Blocked-mapped OPTION ID rides the write: {}",
+            lines[5]
+        );
+        assert!(
+            !calls.contains("issue view")
+                && !calls.contains("issue close")
+                && !calls.contains("issue reopen"),
+            "no close/reopen on Blocked: {calls}"
+        );
     }
 
     #[tokio::test]

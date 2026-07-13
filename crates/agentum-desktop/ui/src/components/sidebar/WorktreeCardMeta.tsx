@@ -18,6 +18,7 @@ import {
   WorktreeCardDetailSectionContent
 } from './WorktreeCardDetailSection'
 import { IssueStateBadge, LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
+import { TrackerPhaseChip } from './TrackerPhaseChip'
 import type { IssueInfo } from '../../../../shared/types'
 
 export type WorktreeCardIssueDisplay =
@@ -52,6 +53,10 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
   branchName?: string
   workspaceTitle?: string
   detailsAfter?: React.ReactNode
+  /** Spec 014 F2: coords for the live tracker-phase chip in the issue badge
+   *  row. Optional — callers without a worktree context render no chip. */
+  worktreeId?: string
+  trackerPhase?: string | null
   onEditIssue: (event: React.MouseEvent) => void
   onEditComment: (event: React.MouseEvent) => void
   onOpenGitHubIssueInAgentum?: (event: React.MouseEvent) => void
@@ -218,6 +223,8 @@ export function WorktreeCardDetailsHover({
   branchName,
   workspaceTitle,
   detailsAfter,
+  worktreeId,
+  trackerPhase,
   onEditIssue,
   onEditComment,
   onOpenGitHubIssueInAgentum,
@@ -304,9 +311,14 @@ export function WorktreeCardDetailsHover({
                 <div className="text-[13px] font-semibold leading-snug text-foreground break-words">
                   {issue.title}
                 </div>
-                {(issue.state || issueLabels.length > 0) && (
+                {(issue.state || issueLabels.length > 0 || worktreeId) && (
                   <div className="flex flex-wrap gap-1">
                     {issue.state && <IssueStateBadge state={issue.state} />}
+                    {/* Spec 014 F2: the pipeline-phase chip, distinct from the
+                        open/closed badge; renders nothing when unbound. */}
+                    {worktreeId && (
+                      <TrackerPhaseChip worktreeId={worktreeId} persistedPhase={trackerPhase} />
+                    )}
                     {issueLabels.map((label) => (
                       <Badge key={label} variant="outline" className="h-4 px-1.5 text-[9px]">
                         {label}

@@ -47,7 +47,9 @@ import type {
 import type { GitHubWorkItem } from '../../../../shared/types'
 import ProjectPicker, { type ResolvedProjectSelection } from './ProjectPicker'
 import ProjectViewList from './ProjectViewList'
+import ProjectBoardView from './ProjectBoardView'
 import ProjectItemSlugDialog from './ProjectItemSlugDialog'
+import { useProjectViewLiveRefresh } from './use-project-view-live-refresh'
 import {
   resolveMissingRepoProjectDialogState,
   resolveRepoBackedProjectDialogState
@@ -189,6 +191,33 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
       queryOverride
     )
   }, [activeProject, lastViewByProject, projectViewCache, doFetch, appliedQueryByView])
+
+  // Spec 014 F3: a tracker.* event (agentum just moved a card on GitHub)
+  // re-fetches the active view after the 2 s coalesce window — same values as
+  // the auto-fetch effect above, but force=true (the cache holds the stale
+  // pre-move table). Event-driven only; no interval.
+  const liveRefetch = useCallback(() => {
+    if (!activeProject) {
+      return
+    }
+    const key = `${activeProject.ownerType}:${activeProject.owner}:${activeProject.number}`
+    const viewId = lastViewByProject[key]?.viewId
+    if (!viewId) {
+      return
+    }
+    const queryOverride = appliedQueryByView[`${key}:${viewId}`]
+    void doFetch(
+      {
+        owner: activeProject.owner,
+        ownerType: activeProject.ownerType,
+        projectNumber: activeProject.number,
+        viewId
+      },
+      /* force */ true,
+      queryOverride
+    )
+  }, [activeProject, lastViewByProject, appliedQueryByView, doFetch])
+  useProjectViewLiveRefresh(liveRefetch)
 
   // Load the project's view list whenever the active project changes so the
   // tab strip can render. The list is small and rarely changes — fetched once
@@ -539,7 +568,8 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
         ...(remove.length ? { removeLabels: remove } : {})
       })
       if (!res.ok) {
-        toast.error(res.error.message)
+        // `|| fallback`: a malformed error envelope must never blank the toast.
+        toast.error(res.error?.message || 'Failed to update labels.')
       }
     },
     [currentCacheKey, patchProjectIssueOrPr]
@@ -552,7 +582,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
       }
       const res = await patchProjectRowIssueType(currentCacheKey, row.id, issueType)
       if (!res.ok) {
-        toast.error(res.error.message)
+        toast.error(res.error?.message || 'Failed to update the issue type.')
       }
     },
     [currentCacheKey, patchProjectRowIssueType]
@@ -572,7 +602,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           ? await clearProjectFieldValue(currentCacheKey, row.id, fieldId)
           : await updateProjectFieldValue(currentCacheKey, row.id, fieldId, value)
       if (!result.ok) {
-        toast.error(result.error.message)
+        toast.error(result.error?.message || 'Failed to update the field.')
       }
     },
     [clearProjectFieldValue, currentCacheKey, updateProjectFieldValue]
@@ -727,20 +757,34 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           }}
         />
       ) : visibleTable ? (
-        <ProjectViewList
-          table={visibleTable}
-          onOpenDialog={handleOpenDialog}
-          onEditField={handleEditField}
-          onEditAssignees={(row, add, remove) => void handleEditAssignees(row, add, remove)}
-          onEditLabels={(row, add, remove) => void handleEditLabels(row, add, remove)}
-          onEditIssueType={(row, issueType) => void handleEditIssueType(row, issueType)}
-          onOpenInBrowser={(row) => {
-            if (row.content.url) {
-              void api.shell.openUrl(row.content.url)
-            }
-          }}
-          onStartWork={handleStartWork}
-        />
+        visibleTable.selectedView.layout === 'BOARD_LAYOUT' ? (
+          <ProjectBoardView
+            table={visibleTable}
+            onOpenDialog={handleOpenDialog}
+            onEditField={handleEditField}
+            onOpenInBrowser={(row) => {
+              if (row.content.url) {
+                void api.shell.openUrl(row.content.url)
+              }
+            }}
+            onStartWork={handleStartWork}
+          />
+        ) : (
+          <ProjectViewList
+            table={visibleTable}
+            onOpenDialog={handleOpenDialog}
+            onEditField={handleEditField}
+            onEditAssignees={(row, add, remove) => void handleEditAssignees(row, add, remove)}
+            onEditLabels={(row, add, remove) => void handleEditLabels(row, add, remove)}
+            onEditIssueType={(row, issueType) => void handleEditIssueType(row, issueType)}
+            onOpenInBrowser={(row) => {
+              if (row.content.url) {
+                void api.shell.openUrl(row.content.url)
+              }
+            }}
+            onStartWork={handleStartWork}
+          />
+        )
       ) : null}
 
       {/* Full repo-backed dialog — writes still go through slug-addressed
@@ -962,7 +1006,8 @@ function ViewTabStrip({
   return (
     <div className="project-view-tab-strip flex min-h-[41px] min-w-0 flex-none items-end gap-1 overflow-x-auto overflow-y-hidden border-b border-border/50 bg-muted/20 px-3 pt-3">
       {views.map((v) => {
-        const supported = v.layout === 'TABLE_LAYOUT'
+        // Table and Board (Kanban) layouts both render in-app; Roadmap does not.
+        const supported = v.layout === 'TABLE_LAYOUT' || v.layout === 'BOARD_LAYOUT'
         const active = v.id === activeViewId
         const layoutLabel =
           v.layout === 'BOARD_LAYOUT'

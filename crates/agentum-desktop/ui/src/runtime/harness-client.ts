@@ -145,7 +145,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** `POST /api/harness` — register a run from a project dir containing `.harness/`. */
-function startHarness(workdir: string): Promise<{ harness_id: string }> {
+export function startHarness(workdir: string): Promise<{ harness_id: string }> {
   return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
 }
 
@@ -273,7 +273,7 @@ export function setHarnessSettings(patch: Partial<HarnessSettings>): Promise<Har
 }
 
 /** `GET /api/harness` — status for every registered run. */
-function listHarnesses(): Promise<HarnessStatus[]> {
+export function listHarnesses(): Promise<HarnessStatus[]> {
   return request('/api/harness')
 }
 
@@ -283,7 +283,7 @@ function getHarnessStatus(id: string): Promise<HarnessStatus> {
 }
 
 /** `POST /api/harness/{id}/run` — kick off the end-to-end drive loop. */
-function runHarness(id: string): Promise<void> {
+export function runHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}/run`, { method: 'POST' })
 }
 

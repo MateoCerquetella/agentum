@@ -305,6 +305,7 @@ All HTTP/WS routes live in `crates/agentum-server/src/routes/`:
 | `fs.rs`           | `/api/fs/list`             | Workdir picker. |
 | `mcp.rs`          | `/mcp`                     | agentum's own MCP server (see below). |
 | `harness.rs`      | `/api/harness/*` + `/events` WS | Harness Engine: drive agents one feature at a time behind a verify gate (see below). |
+| `sdd.rs`          | `/api/sdd/playbooks`, `/api/sessions/{id}/sdd/*` | Server-owned SDD playbooks: list, button inject, per-session SDD loop (see "SDD playbooks" below). |
 | `git.rs`          | `/api/sessions/{id}/git/*` | Per-session git surface. Decomposed by domain into `git/` submodules — `history_routes`, `compare_routes` (commit/branch compare), `conflict_routes` (rebase/abort/discard/upstream), `sync_routes` (branches/log/fetch/pull/push), `write_routes` (stage/commit mutations), `content_routes` (diff/file), `file_links_routes` (remote URL/blob). The root keeps the router, shared git-exec/path-safety plumbing (`run_git`, `host_and_cwd_for`, `ensure_safe_relative`), and the shared status core (`parse_porcelain_z`/`GitStatus`) that `write_routes` reuses; submodules reach it via `use super::*`. |
 | `board.rs`, `notes.rs`, `channels.rs`, `watchdog.rs`, `doctor.rs` | various | Self-explanatory. |
 
@@ -329,13 +330,16 @@ skill files. This supersedes the old "install a skill into
 
 - **Server** (`routes/mcp.rs`): a hand-rolled streamable-HTTP JSON-RPC
   server at `POST /mcp` — `initialize` / `ping` / `tools/list` /
-  `tools/call`, stateless, single `application/json` responses (no SSE;
+  `tools/call` / `prompts/list` / `prompts/get`, stateless, single
+  `application/json` responses (no SSE;
   `GET /mcp` → 405). Each tool is a thin view over an existing
   route/store helper, never a reimplementation. Tools so far:
   `agentum_list_sessions`, `agentum_list_worktrees`,
   `agentum_send_message`, `agentum_check_messages` (the `orchestration`
   mailbox). Add a tool by appending to `tool_specs()` + a `call_tool`
-  arm.
+  arm. The `prompts/*` surface serves the SDD playbooks (below) as native
+  slash commands for clients that render MCP prompts (Claude Code,
+  Gemini CLI).
 - **Auth**: `/mcp` is **not** public — it requires the bearer token on a
   networked daemon. It's reachable on the embedded loopback server
   because that runs `no_auth` (loopback-bound). For an authed standalone
@@ -356,6 +360,44 @@ skill files. This supersedes the old "install a skill into
   needs the npm build env to verify; do it after the remaining skill
   capabilities (computer-use, scheduling, browser, orchestration DAG) are
   ported to MCP tools, else those capabilities are lost.
+
+---
+
+## SDD playbooks (server-owned `/sdd-*`) — issue #313
+
+The SDD workflow commands (`sdd-spec`, `sdd-spec-socratic`, `sdd-orchestrate`,
+`sdd-status`, `sdd-handoff`, `sdd-init`) are **owned by agentum-server**, not
+installed per-agent. They used to be untracked `.claude/commands/*.md` files
+(gitignored → a fresh install never got them, and Claude-only); now the
+canonical bodies live in `crates/agentum-server/src/sdd_playbooks/*.md`,
+embedded via `include_str!` (registry: `src/sdd.rs`). A per-user override at
+`~/.agentum/commands/<name>.md` (`$AGENTUM_HOME/commands` in tests) wins over
+the embedded copy. **Edit the playbooks there, not in `~/.claude`.**
+
+One registry, three delivery paths (all in-repo consumers read `crate::sdd`):
+
+- **MCP** (`routes/mcp.rs`): the `agentum_sdd` tool (list/fetch — works in
+  every MCP client) + `prompts/list`/`prompts/get` (native `/sdd-*` slash
+  commands where the client renders MCP prompts). Any agentum-launched agent
+  is MCP-wired (see auto-wiring above), so every agent on every install gets
+  the same procedures.
+- **SDD bar** (`routes/sdd.rs` + `agentum-desktop/ui/src/components/sdd/SddBar.tsx`):
+  pill buttons (Spec / Spec Socratic / Continue / Status) under the active
+  agent tab's terminal. A click previews the playbook, then
+  `POST /api/sessions/{id}/sdd/inject` types a short **bootstrap line** into
+  the pane ("call `agentum_sdd` and follow it") via the harness's two-step
+  `inject_prompt`; tools with no MCP wiring (bash/aider/…) automatically get
+  the **full playbook text** instead (`mode: full`).
+- **SDD loop** (`routes/sdd.rs`): `POST /api/sessions/{id}/sdd/loop` toggles a
+  per-session worker that re-injects `sdd-orchestrate` (autonomous mode) each
+  time the agent settles (`agent.awaiting_input`/`agent.finished`, reusing
+  `harness::wait_for_settle`), capped at `max_steps` (default 10). The state
+  is **server-owned** (`AppState::sdd_loops`) and broadcast as
+  `sdd.loop.started/step/stopped` on `/api/events` — the UI's rainbow Loop
+  toggle renders whatever the server says, so it survives reloads and shows
+  loops started by anyone. The worker stops on toggle-off, session
+  stop/kill/crash, settle timeout, or step cap — every exit reason lands in
+  the `sdd.loop.stopped` payload.
 
 ---
 
@@ -477,6 +519,15 @@ Test) → browser QA gate green → ticket Done. The pieces:
 
 ## Common gotchas
 
+- **HTML5 drag-and-drop is dead in the desktop webview (Linux/Windows)**:
+  the Tauri shell keeps `dragDropEnabled` on (default) so OS file drops
+  reach the screenshot-onto-terminal handler (`WindowEvent::DragDrop` in
+  `agentum-desktop/src/lib.rs`) — and on Linux/Windows wry consumes the
+  native drag loop for it, so in-page `dragstart`/`dragover`/`drop`
+  never fire. Any new drag surface in the UI must use pointer events:
+  `lib/use-kanban-pointer-drag.ts` for kanbans (contract in
+  `lib/kanban-pointer-drag.ts`), or the bespoke hooks the sidebar uses.
+  Don't "fix" it by disabling `dragDropEnabled` — that kills file drops.
 - **rust-embed compile-time**: see "Critical: rebuild rhythm" above.
 - **YOLO marker**: never push tool-specific YOLO flag spellings from
   the TUI/dashboard. Always push the Claude marker; let the adapter
@@ -494,6 +545,16 @@ Test) → browser QA gate green → ticket Done. The pieces:
 - **Cargo.lock drift**: `Cargo.lock` gets updated whenever a dep
   changes. Commit it; we ship binaries from CI and reproducibility
   matters.
+- **Boot revival vs watchdog ordering**: an OS reboot kills the local
+  tmux server while the store still says `running`. At boot,
+  `routes::sessions::boot_revive_dead_sessions` respawns those local
+  panes through `spawn_agent_into_pane` (Claude resumes its
+  conversation — the adapter swaps `--session-id` for `--resume` when
+  the transcript exists). It runs on the SAME tokio task as the
+  watchdog, strictly before it (`lib.rs::spawn_background_workers`) —
+  start the watchdog earlier and it marks the not-yet-revived rows
+  crashed. Non-resumable tools (codex/cursor/gemini) are deliberately
+  NOT revived: a silently-fresh instance would hide the context loss.
 - **Session streaming is push-based, never poll**: both local and
   remote `/stream` WS feed the client raw incremental pane bytes from
   a `tmux pipe-pane` log (RIS + one `capture-pane` snapshot on connect,
@@ -503,7 +564,17 @@ Test) → browser QA gate green → ticket Done. The pieces:
   Do **not** reintroduce the old `capture-pane`-every-N-ms full-snapshot
   poll for remote — it lagged ~700 ms and flickered (full-screen RIS
   repaint each tick). `pipe_pane` is armed at session start and re-armed
-  idempotently (`-o`) on each connect.
+  on each connect.
+- **`tmux pipe-pane -o` TOGGLES — it is NOT an idempotent arm** (issue
+  #270). tmux always closes an existing pipe first; `-o` merely skips
+  opening the replacement — so calling it against a live pipe DISARMS
+  the stream. That blind re-arm blanked every new agent session at
+  first connect and disarmed healthy sessions on app restart (the
+  `pane_repair` sweep). Every arm path must probe `#{pane_pipe}` first
+  and skip when live (`agentum_tmux::pipe_pane`, `remote_pipe_script`,
+  `snapshot_with_offset_script` all do); when actually arming, use
+  plain `pipe-pane` without `-o` so a lost race still ends armed.
+  Never call `tmux pipe-pane -o` directly.
 
 ---
 

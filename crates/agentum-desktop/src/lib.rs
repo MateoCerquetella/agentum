@@ -128,6 +128,11 @@ pub fn run() {
             // browser is running yet, so only orphans are killed. Non-blocking.
             tauri::async_runtime::spawn(async {
                 agentum_server::cdp_browser::reap_orphaned_cdp_browsers().await;
+                // Strictly AFTER the reap (never delete under a live process):
+                // sweep legacy per-worktree profile dirs. Persistent
+                // `project-*` profiles and the `shared` profile survive
+                // (spec 014 — logins persist across relaunch).
+                agentum_server::cdp_browser::sweep_legacy_profile_dirs().await;
             });
 
             // On-device speech-to-text state (Voice dictation). Models live under
@@ -387,6 +392,7 @@ pub fn run() {
             browser_native::browser_webview_set_bounds,
             browser_native::browser_webview_set_visible,
             browser_native::browser_webview_close,
+            browser_native::browser_clear_project_data,
             browser_native::browser_webview_state,
             browser_native::browser_inpage_annotate,
             browser::browser_unregister_guest,
@@ -503,8 +509,8 @@ pub fn run() {
             gh::gh_list_labels_by_slug,
             gh::gh_list_assignable_users_by_slug,
             gh_projects::gh_get_project_view_table,
-            gh::gh_update_project_item_field,
-            gh::gh_clear_project_item_field,
+            gh_projects::gh_update_project_item_field,
+            gh_projects::gh_clear_project_item_field,
             gh::gh_update_issue_type_by_slug,
             gh::gh_pr_comments,
             gh::gh_resolve_review_thread,

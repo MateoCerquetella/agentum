@@ -620,13 +620,15 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
           activeTabType: activeFileCleared ? 'terminal' : s.activeTabType,
           lastVisitedAtByWorktreeId: nextLastVisitedAtByWorktreeId,
           sortEpoch: s.sortEpoch + 1,
-          // Why: removing the last repo while in settings leaves activeView as
-          // 'settings', which renders an empty settings pane instead of Landing.
-          // Also clear activeWorktreeId so App renders Landing (it checks
-          // !activeWorktreeId). Without this, the terminal surface shows instead.
+          // Why: removing the last repo leaves no workspace, so land on Mission
+          // Control. Use 'activity' (not 'terminal'+null) so it renders through the
+          // right-sidebar-SUPPRESSED slot — the 'terminal' && !activeWorktreeId
+          // fallback keeps the right sidebar mounted and squeezes the dashboard
+          // (spec 013 F1). Clearing activeWorktreeId also gets us out of any stale
+          // settings/terminal surface.
           ...(nextRepos.length === 0
             ? {
-                activeView: 'terminal' as const,
+                activeView: 'activity' as const,
                 activeWorktreeId: null,
                 activeRepoId: null
               }

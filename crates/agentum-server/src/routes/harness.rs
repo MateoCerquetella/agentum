@@ -326,6 +326,7 @@ async fn spec_from_issue(
 
     let ensured = ensure_spec_and_plan(
         &state.store,
+        &state.bus,
         &workdir,
         req.number.trim(),
         &issue,
@@ -366,6 +367,9 @@ struct EnsuredSpec {
 /// `types.rs`) because it needs `&Store` and the fs-only plan helpers don't.
 async fn ensure_spec_and_plan(
     store: &agentum_store::Store,
+    // Spec 014 F1: the seam's TrackerEmit needs a bus; threaded from the
+    // route handlers' `state.bus` (tests pass a throwaway channel).
+    bus: &tokio::sync::broadcast::Sender<agentum_core::Event>,
     // Fully qualified: `Path` in this module is the axum extractor.
     workdir: &std::path::Path,
     number: &str,
@@ -428,6 +432,10 @@ async fn ensure_spec_and_plan(
             number,
             Some(&issue.url),
             crate::task_sink::TrackerPhase::Todo,
+            crate::task_sink::TrackerEmit {
+                bus,
+                worktree_id: None,
+            },
         )
         .await
         {
@@ -567,6 +575,7 @@ async fn start_work(
     // Converge-scaffold + plan (forced ON, AC 1) + Todo-at-plan (AC 4).
     let ensured = ensure_spec_and_plan(
         &state.store,
+        &state.bus,
         &workdir,
         req.number.trim(),
         &issue,
@@ -689,6 +698,12 @@ mod tests {
             .unwrap()
     }
 
+    /// A throwaway bus for the seam's required `TrackerEmit` (spec 014 F1) —
+    /// these tests assert planning behavior, not emission.
+    fn test_bus() -> tokio::sync::broadcast::Sender<agentum_core::Event> {
+        tokio::sync::broadcast::channel(8).0
+    }
+
     /// A synthetic already-fetched issue — exactly what makes
     /// `ensure_spec_and_plan` unit-testable without `gh` (it takes the issue
     /// instead of fetching). Two checkboxes → two planned features.
@@ -712,9 +727,10 @@ mod tests {
         let url = "https://example.com/acme/widgets/issues/42";
         let issue = synthetic_issue(url);
 
-        let ensured = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, false)
-            .await
-            .unwrap();
+        let ensured =
+            ensure_spec_and_plan(&store, &test_bus(), dir.path(), "42", &issue, true, false)
+                .await
+                .unwrap();
         assert!(!ensured.spec_existed);
         assert_eq!(ensured.spec_id, "42-add-widget");
         assert_eq!(
@@ -754,15 +770,16 @@ mod tests {
         std::fs::create_dir_all(&spec_dir).unwrap();
         std::fs::write(spec_dir.join("spec.md"), "# Edited\n\n- [ ] Only one\n").unwrap();
 
-        let err = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, false)
+        let err = ensure_spec_and_plan(&store, &test_bus(), dir.path(), "42", &issue, true, false)
             .await
             .err()
             .expect("never-overwrite 400 without converge");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
 
-        let ensured = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, true)
-            .await
-            .unwrap();
+        let ensured =
+            ensure_spec_and_plan(&store, &test_bus(), dir.path(), "42", &issue, true, true)
+                .await
+                .unwrap();
         assert!(ensured.spec_existed);
         let list = ensured.features.unwrap();
         assert_eq!(list.features.len(), 1, "planned from the existing spec");
@@ -816,7 +833,8 @@ mod tests {
         // dev machine would rename the asserted default `status/todo` label.
         unsafe { std::env::set_var("AGENTUM_GH_BIN", &script) };
         unsafe { std::env::set_var("AGENTUM_GITHUB_CONFIG", dir.path().join("github.json")) };
-        let result = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, false).await;
+        let result =
+            ensure_spec_and_plan(&store, &test_bus(), dir.path(), "42", &issue, true, false).await;
         unsafe { std::env::remove_var("AGENTUM_GH_BIN") };
         unsafe { std::env::remove_var("AGENTUM_GITHUB_CONFIG") };
         drop(guard);

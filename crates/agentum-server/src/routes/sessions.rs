@@ -39,7 +39,7 @@ use streaming::{stream_remote_session, stream_session};
 mod provision;
 use super::util::parse_uuid;
 use provision::{Reprovision, reprovision_session};
-pub(crate) use provision::{boot_drift_rescan, spawn_agent_into_pane};
+pub(crate) use provision::{boot_drift_rescan, boot_revive_dead_sessions, spawn_agent_into_pane};
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -602,7 +602,20 @@ async fn start(
     // All launch conventions (YOLO translation, loopback env, Claude hook, MCP
     // wiring, pipe-pane, status flip) live in the shared spawn helper so the
     // harness-engine driver goes through the exact same path.
-    spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await?;
+    if let Err(e) = spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await {
+        // Lost a spawn race: the boot revival sweep (or a concurrent /start)
+        // can create this pane between the has_session probe above and our
+        // spawn, which tmux rejects as a duplicate name. If the pane exists
+        // NOW the session is running — report a reattach rather than a 500
+        // the client would surface as a dead tab.
+        if crate::host_runtime::has_session(&host, &target)
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(Json(session_with_spawned(load(&state, id).await?, false)));
+        }
+        return Err(e);
+    }
     Ok(Json(session_with_spawned(load(&state, id).await?, true)))
 }
 
@@ -738,7 +751,10 @@ async fn load(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
         .ok_or_else(|| ApiError::NotFound(id.to_string()))
 }
 
-async fn load_host_for_session(state: &AppState, session: &Session) -> Result<Host, ApiError> {
+pub(crate) async fn load_host_for_session(
+    state: &AppState,
+    session: &Session,
+) -> Result<Host, ApiError> {
     let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
     state
         .store
@@ -1266,6 +1282,7 @@ mod tests {
                 cert_fingerprint: Arc::new(String::new()),
                 transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
                 stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 hostname: "test".to_string(),
                 no_auth: true,
                 clipboard_pending: Arc::new(
@@ -1277,6 +1294,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
@@ -1412,6 +1430,7 @@ mod tests {
                 cert_fingerprint: Arc::new(String::new()),
                 transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
                 stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 hostname: "test".to_string(),
                 no_auth: true,
                 clipboard_pending: Arc::new(
@@ -1423,6 +1442,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }

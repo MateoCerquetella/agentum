@@ -4,12 +4,16 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 016-sdd-loop-checkin-and-issue-project-status
-- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (016 drafted 2026-07-13 from GH issue #358 + Mateo's in-session ask; harness mirror at `.agentum-harness/specs/358-the-sdd-loop-sohuld-inject-itself-10-tim/spec.md` — 2 checkbox features. ⚠️ implementation must branch from fresh origin/develop: this worktree is v0.57.0-era, `routes/sdd.rs` doesn't exist here. 008 RELEASED v0.57.0; 007 v0.55.0; 006 v0.54.0)
+- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (016 drafted 2026-07-13 from GH issue #358; PM-gated to one slice — the issue-hover Project-status chip split out to spec 358b. Architect plan at `.agentum-harness/specs/358-the-sdd-loop-sohuld-inject-itself-10-tim/architecture.md`, grounded at origin/develop `253173ad`; this branch merged up from v0.57.0-era to that commit 2026-07-13. Harness driving F1 (`agentum_sdd_loop` MCP check-in). 015 SHIP-READY 2026-07-13 (its release remains human-gated, see prior phase note in git history); 008 RELEASED v0.57.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **010-end-to-end-autonomous-flow** — RELEASED v0.60.0 (2026-07-06) with the
+  AC-11 live custom-column board demo still PENDING and human-run (Mateo;
+  evidence contract = issue #276 timeline + a demo-pass line here). Follow-up
+  ticket #277 = the resolve_slug/gh_bin/BLOCKED_LABEL consolidation chore.
 - **003-chat-issue-preview** — CODE COMPLETE + SHIPPED to develop (issue **#198**,
   PR **#199**, `feat/chat-board-revamp`). All 4 increments gated. ⏭ Browser QA at
   STAGING + tagged release = Mateo-gated. [Merged into this worktree 2026-07-01;
@@ -63,66 +67,80 @@
 
 ## Decision log
 
-<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
-  intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
-  Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
-  extracted VERBATIM (Fast byte-identical, pinned); `build_intake_instructions`
-  router; `socratic_stage_instructions`+`socratic_pass_body` (5 passes WHO/WHAT/
-  WHY/done/risks, reflect-back, stage5→"Preview issues"); `chat_auth_gate` shared
-  no-creds gate (Complex surfaces NO_CREDS by construction). Client: pure
-  `lib/socratic-intake.ts` reducer (one pass/turn, cap5, Fast never advances) +
-  localStorage `Conversation.intake` (D1 no new table) + two ChatPage buttons +
-  Enter-stays-Fast. Gates: server 552/0/5 (F1 546 held), vitest 10/0 new, fmt+
-  clippy clean, vite green; full vitest 139-fail = PROVEN pre-existing baseline
-  (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
-  untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
-  surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.
-- 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
-  (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
-  `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
-  (deriveWorkspaceGoalSeed/isGoalStepReady/firstGoalStepBlocker/
-  OPTIONAL_WORKSPACE_STEPS/shouldStartAtGoalStep/revealDetails) + thin
-  `NewWorkspaceGoalStep.tsx` (goal textarea + reused RepoCombobox workdir) +
-  modal renders it as default first screen, "Skip to details" → today's composer
-  (D3); goal+workdir required, worktree/scaffold/tracker skippable (D9);
-  `useComposerState` NEVER edited (props only), F1's initialStartGatedRunProp
-  intact. Gates: vite+tsc green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3
-  pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
-  AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
-  code-complete → tester.**
-- 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
-  HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
-  every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
-  compile #[ignore], vite green, spec-008 vitest 34/0; full vitest 139-fail
-  baseline corroborated PRE-EXISTING via 4 methods (disjoint set / no-reference
-  grep / diff-scope / failure-kind). All 11 deviations ACCURATE against code;
-  sacred surfaces clean (inject_prompt send-sequence byte-identical, await_repl_ready
-  poll logic unchanged, apply_blocked_transition Ok-Skipped-never-Err, compose_issue_body
-  + useComposerState internals untouched, F1 initialStartGatedRunProp preserved).
-  NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
-  AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
-  +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
-- 2026-07-13 | Spec | **016 DRAFTED via /sdd-spec (GH #358) → phase pm.**
-  Two features: F1 SDD loop stops on agent check-in over MCP (new
-  `agentum_sdd_loop` tool + `state_done` STATE.md belt; 10-step cap demoted to
-  backstop — kills the blind ×10 re-injection that litters/confuses sessions);
-  F2 (rider, Mateo mid-run ask) issue hover card shows the bound GitHub
-  Project's Status chip (lazy fetch on open, silent absence). Grounded in
-  origin/develop @ `bee8dc2d` (`routes/sdd.rs:60/350`, `sdd.rs:165`,
-  `mcp.rs:1227`, `WorktreeCardMeta.tsx:218/316`, `github_projects.rs`).
-  Harness mirror written with exactly 2 backlog checkboxes
-  (`derive_backlog_from_spec` = one feature per `- [ ]`). One-slice gate
-  waived for F2 by the human's explicit bundling request. ⚠️ build from fresh
-  origin/develop, NOT this v0.57.0-era worktree.
-- 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
-  sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
-  + `await_repl_ready` poll/trust unchanged, only return type); `apply_blocked_transition`
-  never-`Err` + honest 5-name remove-set (board can't lie either direction); no
-  D6 shell injection (argv exec); Fast byte-identical (construction + pin); live
-  test asserts the REAL leg (MARKER in pane = prompt landed, not hollow); F3
-  preserves F1 Tasks hop; no new `is_public` holes; D1–D9 honored. 1 Should-fix
-  = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
-  ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
-  HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
+<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->- 2026-07-13 | Architect | **015 gate PASS → phase developer** (sub-agent;
+  `architecture.md` 451 ln + handoff 02). Q1: ONE mount — Terminal.tsx root
+  flex strip (`relative z-30 shrink-0`) after `EditorAutosaveController`,
+  self-gates on offer slice keyed by worktreeId; launcher overlay is
+  `absolute z-20` so the strip shows in BOTH auto-launch and empty-state
+  paths; REJECTED launcher-only (D1), dual-mount, and the `:1666` legacy
+  block (#313 invisibility trap). Q2: fire-and-forget
+  `maybeOfferWorkspaceHarnessRun` at END of `openCreatedWorkspace` — both
+  create paths converge (`useComposerState.ts:2533/:2750`) so ZERO
+  useComposerState edits; zustand slice holds the RESOLVED offer (rejected
+  pending-signal: non-reactive, banner must appear when async detection
+  resolves). Detection mirrors `resolve_harness_dir` semantics (canonical dir
+  present w/o feature_list ⇒ NO legacy fallback). Residuals accepted:
+  quick-create "don't start a session" path yields no offer; symlink-spelling
+  dedupe gap. Dev must NOT: touch useComposerState/planCreatedWorkspaceOpen
+  pins, poll, pass hostId, jsdom, persist offers, rely on engine dedupe
+  (`harness.rs:95` inserts unconditionally).
+- 2026-07-13 | Developer | **015 f1+f2+f3 CODE-COMPLETE + GREEN → phase tester**
+  (sub-agent; commits `66f1e161`/`03f2eb2b`/`41cbeab8` + docs `5f753260`;
+  `tasks.md` + handoff `03-developer-to-tester.md`). Gates: f1 20/0, f2 45/0,
+  f3 50/0 (4 targeted vitest files, bun) + vite build ✓ ×3 (~38s each).
+  Scope audit (orchestrator): 15 files exactly per architecture §6, NO
+  useComposerState/planCreatedWorkspace/Rust edits,
+  open-created-workspace.test.ts additions-only (+39/-0). 3 deviations, all
+  code-commented + tasks.md-logged: (1) acceptHarnessOffer swallows+toasts
+  (no re-throw), banner busy-reset via .finally — observable behavior
+  identical + pinned; (2) banner test mocks the offer lib (network-free
+  render, sdd-bar precedent); (3) trigger pins = NEW describe block w/
+  per-test mockClear (existing pins byte-identical). Env notes: worktree
+  needed `bun install`; anchors had ZERO drift; zustand v5 SSR snapshot
+  forces mocked-store banner testing (validates handoff prescription).
+- 2026-07-13 | Tester | **015 verdict PASS-WITH-DEFERRALS → phase reviewer**
+  (sub-agent; `verification.md` + handoff `04-tester-to-reviewer.md`, commit
+  `d66d4c40`; 0 blockers, 0 should-fix, 3 info nits). Independently re-ran
+  gates: vitest 50/0 exact per-file match (20+14+12+4), vite build exit 0.
+  AC 1/7 PASS now; AC 2-6 PASS(deferred qa.sh/staging) with model logic
+  pinned (dedupe+trailing-slash, gatedRun/local-only zero-fs-call, dismiss =
+  zero client calls, detail-in-toast, ≤2 fs calls not-found). Deviations 3/3
+  ACCURATE. Spot-checks 7/7 (incl. mount OUTSIDE legacy/#313 + split
+  surface; close-race store re-read `offer.ts:93-100`). Sacred: EMPTY
+  useComposerState diff; open-created-workspace.ts = import + trailing void
+  call; test additions-only; harness-client exactly +3 exports. Nits: handoff
+  03 STATE-claim wording; `normalizeWorkdir('//')` unreachable edge;
+  POSIX-only join. Tracker: issue #301 → status/ready-to-test.
+- 2026-07-13 | Reviewer | **015 SIGN-OFF → SHIP-READY, phase done**
+  (sub-agent; `review.md` + spec Status → Done, commit `d390346a`; 0
+  blockers). All 6 focus areas PASS w/ quoted evidence: close-race re-check
+  sufficient for reachable cases; back-to-back creations sound (record-keyed
+  slice); `normalizeWorkdir` = exact `expand_with_home` mirror; security
+  clean (own workdir + server ids only, no auth in toasts, harnessDir const
+  union escaped); invariants held (one launch path, register+run only — no
+  /init, zero polling, D2/D5/D6 structurally pre-fs); mount layout shift IS
+  the designed non-occlusion (shrink-0 vs flex-1 anchor, z-30 over z-20);
+  React clean (.finally-after-unmount = React-18 no-op). **F1 Should-fix →
+  follow-up ticket**: `harnessOfferByWorktreeId` missing from
+  `buildWorktreePurgeState` (`worktrees.ts:606`) — stale offer survives
+  worktree deletion (fail-safe on accept; one-line fix + pin). F2–F5 nits
+  leave-as-is. All 3 dev deviations + 3 tester nits ruled leave-as-is.
+  **RELEASE = HUMAN**: PR → develop, promote, browser QA (qa.sh scenario,
+  handoff 02) for AC 2–6 runtime legs.
+- 2026-07-13 | Release | **015 SHIPPED → v0.75.0** (Mateo: "release
+  please"; browser QA of AC 2–6 runtime legs remains PENDING and human-run —
+  shipped ahead per 008/010 precedent; evidence contract = a demo-pass line
+  HERE + #301 timeline). PR **#353** merged → develop `8b797347`; promoted
+  develop→staging `a789f9ab` → main `ee104eb7`; bump 0.74.3→0.75.0
+  (Cargo.toml+lock+tauri.conf.json) + tag v0.75.0 (fires release.yml). Issue
+  #301 closes via this commit's `Closes`. Follow-up: **#352** (offer
+  purge-state miss, reviewer Should-fix).
+- 2026-07-13 | Developer | **016 F1 STARTED (harness-driven).** Spec 016
+  PM-gated to one slice (SDD loop stops on agent check-in over MCP; hover-card
+  chip → spec 358b). Branch `the-sdd-loop-sohuldt-inject-itself-10-times-it-ma`
+  merged up from v0.57.0-era to origin/develop `253173ad` (the architect's
+  grounding commit) — `routes/sdd.rs` now present. Implementing F1: new
+  `agentum_sdd_loop` MCP tool (session/done/summary/generation) delegating to
+  `routes::sdd::agent_checkin`; done:true → remove+abort+emit
+  `agent_completed`; done:false → summary parked for next `sdd.loop.step`;
+  no-loop/stale-gen → success no-op. Per architecture.md D1–D3.

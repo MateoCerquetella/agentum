@@ -1,12 +1,5 @@
 import React from 'react'
-import {
-  BookText,
-  Columns3,
-  MessagesSquare,
-  Radar,
-  Search,
-  type LucideIcon
-} from 'lucide-react'
+import { Columns3, FolderGit2, MessagesSquare, Radar, Search, type LucideIcon } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -101,8 +94,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
-  const openWikiPage = useAppStore((s) => s.openWikiPage)
-  const setActiveView = useAppStore((s) => s.setActiveView)
+  const openProjectsPage = useAppStore((s) => s.openProjectsPage)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
   const repos = useAppStore((s) => s.repos)
@@ -192,7 +184,9 @@ const SidebarNav = React.memo(function SidebarNav() {
   const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
-  const wikiActive = activeView === 'wiki'
+  // The hub ('project') is a destination *inside* Projects, so the rail item
+  // stays lit while the user is in either — one section, two depths.
+  const projectsActive = activeView === 'projects' || activeView === 'project'
   // Why: Mission Control is now the always-on home, so its "needs you" badge is
   // always tracked (no longer gated behind the old experimental Agents button).
   const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
@@ -216,7 +210,16 @@ const SidebarNav = React.memo(function SidebarNav() {
         active={harnessActive}
         onClick={openHarnessPage}
       />
-      <PrimaryNavItem icon={BookText} label="Wiki" active={wikiActive} onClick={openWikiPage} />
+      {/* Projects replaces both the old global Wiki rail item (spec 009 D1)
+          and the v0.59.0 per-repo sidebar group (#274 — Mateo: repos never
+          list in the sidebar). It opens the full Projects page; a project's
+          surfaces (Chat / Wiki / Board / Sessions) are chosen inside the hub. */}
+      <PrimaryNavItem
+        icon={FolderGit2}
+        label="Projects"
+        active={projectsActive}
+        onClick={openProjectsPage}
+      />
 
       {/* Secondary utilities: external task trackers, the goals pipeline, and
           fuzzy search. Tasks + Goals fold into Board in Phase 2/3. */}

@@ -313,17 +313,32 @@ function updateServerHost(id: string, name: string, target: SshTarget): Promise<
 }
 
 /**
- * Push a saved target's auth to its matching server host so a re-entered or
- * changed password takes effect immediately. Updates an existing host only —
- * it does not eagerly create one (the resolver creates it lazily on first
- * session, with this same current auth). Best-effort: never throws into the
- * save flow.
+ * Push a saved target's connection settings — coordinates AND auth — to its
+ * matching server host so an edit (changed IP/user/port, re-entered password
+ * or key) takes effect immediately, rewriting the SAME host row so sessions
+ * stay attached (the server's `update_host` keeps the id). Updates an existing
+ * host only — it does not eagerly create one (the resolver creates it lazily
+ * on first session, with this same current state). Best-effort: never throws
+ * into the save flow.
+ *
+ * `previous` is the target as it was BEFORE the edit. It lets the matcher find
+ * the host row by its old coordinates when the user just changed the IP/user/
+ * port — matching by the new coords alone finds nothing then, which used to
+ * silently skip the update: the host row kept the dead IP, every host API call
+ * timed out against it, and a later cold resolve created a duplicate host that
+ * stranded the old row's sessions.
  */
-export async function syncServerHostAuthForTarget(target: SshTarget): Promise<void> {
+export async function syncServerHostAuthForTarget(
+  target: SshTarget,
+  previous?: SshTarget
+): Promise<void> {
   try {
     const hosts = await listServerHosts()
-    const existing = hosts.find((h) => sameSshCoords(h, target))
+    const existing = findServerHostForTarget(hosts, target, previous)
     if (!existing) {
+      // A cached id that matched no row is stale (host deleted server-side) —
+      // drop it so the resolver re-creates instead of routing at a dead id.
+      hostIdByConnectionId.delete(target.id)
       return
     }
     const host = await updateServerHost(existing.id, target.label || target.host, target)
@@ -343,6 +358,31 @@ function sameSshCoords(host: ServerHost, target: SshTarget): boolean {
     host.user === target.username &&
     host.hostname === targetHostname(target) &&
     (host.port ?? 22) === (target.port ?? 22)
+  )
+}
+
+/**
+ * Find the server host row that belongs to `target`, tolerating edited
+ * coordinates. Precedence:
+ * 1. the host id this connection already resolved to this run (strongest —
+ *    it is the row the app's sessions are attached to),
+ * 2. the target's current coords (the unchanged-coords / auth-only case),
+ * 3. the pre-edit coords, when the caller has them (IP/user/port just changed
+ *    in the edit form),
+ * 4. the host name (`label || host`, unique server-side) — heals a target
+ *    whose coords diverged in an earlier app run (cold cache, no `previous`).
+ */
+function findServerHostForTarget(
+  hosts: ServerHost[],
+  target: SshTarget,
+  previous?: SshTarget
+): ServerHost | undefined {
+  const cachedId = hostIdByConnectionId.get(target.id)
+  return (
+    (cachedId ? hosts.find((h) => h.id === cachedId) : undefined) ??
+    hosts.find((h) => sameSshCoords(h, target)) ??
+    (previous ? hosts.find((h) => sameSshCoords(h, previous)) : undefined) ??
+    hosts.find((h) => h.kind === 'ssh' && h.name === (target.label || target.host))
   )
 }
 
@@ -367,9 +407,12 @@ export async function resolveServerHostIdForConnection(
       return null
     }
     const hosts = await listServerHosts()
-    const existing = hosts.find((h) => sameSshCoords(h, target))
-    // Refresh an existing host's auth from the target (not just reuse it) so a
-    // password changed since the host was created actually takes effect.
+    // Coords-tolerant match (see findServerHostForTarget): a target whose IP
+    // changed heals its existing row — keeping its sessions attached — instead
+    // of creating a duplicate host that strands them on the dead IP.
+    const existing = findServerHostForTarget(hosts, target)
+    // Refresh an existing host's coords+auth from the target (not just reuse
+    // it) so a password or IP changed since the host was created takes effect.
     const host = existing
       ? await updateServerHost(existing.id, target.label || target.host, target)
       : await createServerHost(target.label || target.host, target)

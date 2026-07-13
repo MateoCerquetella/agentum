@@ -35,7 +35,11 @@ pub fn browser_session_detect_browsers() -> Vec<Value> {
 
 #[tauri::command]
 pub fn browser_session_delete_profile() -> bool {
-    true
+    // Honest failure (spec 014 AC 5): the legacy cookie-profile subsystem isn't
+    // ported, so deleting one CANNOT succeed — the old hardcoded `true` faked
+    // success and hid that. Project-scoped clearing lives in
+    // `browser_clear_project_data` + `POST /api/cdp-browser/clear-project-data`.
+    false
 }
 
 #[tauri::command]

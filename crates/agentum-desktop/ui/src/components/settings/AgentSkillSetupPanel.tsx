@@ -21,8 +21,6 @@ type AgentSkillSetupPanelProps = {
   icon?: ReactNode
   variant?: AgentSkillSetupPanelVariant
   className?: string
-  preInstallNotice?: ReactNode
-  onBeforeOpenTerminal?: () => void | Promise<void>
   showRecheckWhenInstalled?: boolean
   onRecheck: () => void | Promise<void>
 }

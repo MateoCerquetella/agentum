@@ -242,6 +242,13 @@ export type Worktree = {
   // to typecheck and load without migration.
   linkedGitLabMR?: number | null
   linkedGitLabIssue?: number | null
+  // Spec 014 F2: the persisted tracker bind coords + last-written pipeline
+  // phase, exposed by /api/worktrees/detected (camelCase keys added server-
+  // side). Optional so older fixtures/persisted rows typecheck; null/absent
+  // for an unbound worktree — the chip renders nothing then (fail-closed).
+  trackerProvider?: string | null
+  trackerUrl?: string | null
+  trackerPhase?: 'todo' | 'in_progress' | 'in_review' | 'ready_to_test' | 'done' | null
   isArchived: boolean
   isUnread: boolean
   isPinned: boolean

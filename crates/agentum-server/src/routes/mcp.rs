@@ -215,7 +215,15 @@ async fn dispatch(
                 .unwrap_or(DEFAULT_PROTOCOL_VERSION);
             Ok(json!({
                 "protocolVersion": pv,
-                "capabilities": { "tools": { "listChanged": false } },
+                // `prompts` = the server-owned SDD playbooks (crate::sdd). Agents
+                // that render MCP prompts as slash commands (Claude Code, Gemini
+                // CLI) get native /sdd-*; everyone else reaches the same bodies
+                // through the `agentum_sdd` tool — tools/call is the lowest
+                // common denominator every MCP client supports.
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "prompts": { "listChanged": false },
+                },
                 "serverInfo": { "name": "agentum", "version": state.version },
                 // Top-level guidance surfaced to every connecting agent. The browser
                 // steer is the point: without it agents reach for claude-in-chrome /
@@ -227,6 +235,8 @@ async fn dispatch(
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_specs(orchestration_enabled(state).await) })),
         "tools/call" => call_tool(state, params).await,
+        "prompts/list" => Ok(prompts_list()),
+        "prompts/get" => prompts_get(params),
         other => Err((-32601, format!("method not found: {other}"))),
     }
 }
@@ -566,6 +576,23 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             },
         },
         {
+            "name": "agentum_sdd",
+            "description": "Fetch a server-owned SDD (spec-driven development) playbook. \
+                Call with no arguments to list the available playbooks (sdd-spec, \
+                sdd-spec-socratic, sdd-orchestrate, sdd-status, sdd-handoff, sdd-init); \
+                call with `name` to fetch one — then FOLLOW the returned playbook exactly. \
+                These are the same playbooks the desktop SDD buttons and the SDD loop \
+                deliver; agentum owns the bodies so every agent gets the same procedure.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Playbook to fetch, e.g. `sdd-spec`. Omit to list all." },
+                    "args": { "type": "string", "description": "Optional free-form arguments for the playbook (e.g. `autonomous` or a spec id for sdd-orchestrate)." }
+                },
+                "additionalProperties": false,
+            },
+        },
+        {
             "name": "agentum_harness_log_decision",
             "description": "Append one entry to the project's append-only decision log \
                 (`.agentum-harness/decisions.md`, spec 010e) — the durable 'why', incl. \
@@ -651,6 +678,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_check" => tool_harness_check(&args).await,
         "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
         "agentum_report_status" => tool_report_status(state, &args).await,
+        "agentum_sdd" => tool_sdd(&args),
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -1204,9 +1232,85 @@ async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<St
         &id,
         url.as_deref(),
         phase,
+        crate::task_sink::TrackerEmit {
+            bus: &state.bus,
+            worktree_id: None,
+        },
     )
     .await;
     Ok(report_status_text(outcome, &provider, phase))
+}
+
+/// Fetch (or list) the server-owned SDD playbooks. This is the universal
+/// delivery path — the bootstrap line the SDD buttons/loop inject tells the
+/// agent to call this; agents whose client renders MCP prompts can use
+/// `prompts/get` instead, but `tools/call` works everywhere.
+fn tool_sdd(args: &Value) -> anyhow::Result<String> {
+    let name = args.get("name").and_then(Value::as_str);
+    let extra = args.get("args").and_then(Value::as_str);
+    match name {
+        None => {
+            let list = crate::sdd::playbooks()
+                .into_iter()
+                .map(|p| format!("- `{}` ({}): {}", p.name, p.title, p.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(format!(
+                "Available SDD playbooks (fetch one with {{\"name\": …}}):\n{list}"
+            ))
+        }
+        Some(name) => {
+            let playbook = crate::sdd::get(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown playbook `{name}` — call agentum_sdd with no arguments to list them"
+                )
+            })?;
+            Ok(crate::sdd::full_prompt(&playbook, extra))
+        }
+    }
+}
+
+/// MCP `prompts/list`: the SDD playbooks as native prompts. Clients that
+/// surface these as slash commands (Claude Code, Gemini CLI) get `/sdd-*`
+/// with zero per-agent installation.
+fn prompts_list() -> Value {
+    let prompts: Vec<Value> = crate::sdd::playbooks()
+        .into_iter()
+        .map(|p| {
+            json!({
+                "name": p.name,
+                "title": p.title,
+                "description": p.description,
+                "arguments": [{
+                    "name": "args",
+                    "description": "Optional free-form arguments (e.g. `autonomous` or a spec id for sdd-orchestrate)",
+                    "required": false,
+                }],
+            })
+        })
+        .collect();
+    json!({ "prompts": prompts })
+}
+
+/// MCP `prompts/get`: resolve one playbook into a user-role message.
+fn prompts_get(params: Option<&Value>) -> Result<Value, (i64, String)> {
+    let name = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .ok_or((-32602, "missing prompt name".to_string()))?;
+    let playbook =
+        crate::sdd::get(name).ok_or_else(|| (-32602, format!("unknown prompt: {name}")))?;
+    let args = params
+        .and_then(|p| p.get("arguments"))
+        .and_then(|a| a.get("args"))
+        .and_then(Value::as_str);
+    Ok(json!({
+        "description": playbook.description,
+        "messages": [{
+            "role": "user",
+            "content": { "type": "text", "text": crate::sdd::full_prompt(&playbook, args) },
+        }],
+    }))
 }
 
 #[cfg(test)]
@@ -1316,6 +1420,62 @@ mod tests {
             .filter_map(|t| t.get("name").and_then(Value::as_str))
             .map(str::to_string)
             .collect()
+    }
+
+    #[test]
+    fn agentum_sdd_is_advertised_regardless_of_the_orchestration_gate() {
+        assert!(tool_names(true).contains(&"agentum_sdd".to_string()));
+        assert!(tool_names(false).contains(&"agentum_sdd".to_string()));
+    }
+
+    #[test]
+    fn tool_sdd_lists_fetches_and_rejects_unknown_playbooks() {
+        // No name → a discoverable list of all six playbooks.
+        let list = tool_sdd(&json!({})).unwrap();
+        for name in [
+            "sdd-spec",
+            "sdd-spec-socratic",
+            "sdd-orchestrate",
+            "sdd-status",
+        ] {
+            assert!(list.contains(name), "list mentions {name}");
+        }
+        // Named fetch → the playbook body (with args appended when given).
+        let body = tool_sdd(&json!({ "name": "sdd-orchestrate", "args": "autonomous" })).unwrap();
+        assert!(
+            body.contains("validate_handoff"),
+            "carries the real procedure"
+        );
+        assert!(body.contains("Arguments: autonomous"));
+        // Unknown → an actionable error, not a silent empty result.
+        let err = tool_sdd(&json!({ "name": "sdd-nope" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sdd-nope") && err.contains("list"));
+    }
+
+    #[test]
+    fn prompts_surface_serves_the_sdd_playbooks() {
+        let list = prompts_list();
+        let names: Vec<&str> = list["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["name"].as_str())
+            .collect();
+        assert_eq!(names.len(), 6);
+        assert!(names.contains(&"sdd-spec"));
+
+        let got = prompts_get(Some(&json!({
+            "name": "sdd-status",
+            "arguments": { "args": "" },
+        })))
+        .unwrap();
+        let text = got["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("STATE.md"));
+
+        let err = prompts_get(Some(&json!({ "name": "nope" }))).unwrap_err();
+        assert_eq!(err.0, -32602);
     }
 
     #[test]
@@ -1484,6 +1644,7 @@ mod tests {
             cert_fingerprint: Arc::new(String::new()),
             transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: "test".to_string(),
             no_auth: true,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -1493,6 +1654,7 @@ mod tests {
             api_base_url: None,
             desktop_bridge: None,
             harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
             events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }

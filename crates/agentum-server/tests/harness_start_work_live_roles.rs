@@ -1,3 +1,4 @@
+#![cfg(unix)] // Drives a real claude CLI in tmux via sh scripts; Unix-only (#265).
 //! LIVE companion to `harness_start_work_live.rs` with the SDD roles loop ON
 //! (spec 006 D1 default): the FIRST spawn is the PM role gate, not the feature
 //! agent (spec 008 architecture §1). Proves the PM-gate-first path also spawns a

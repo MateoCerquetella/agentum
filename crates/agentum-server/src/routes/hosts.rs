@@ -432,10 +432,11 @@ fn external_session_name(tmux_name: &str) -> String {
 /// A tmux session that is already the target of an agentum-MANAGED session
 /// row is never given a second (external) binding — the managed session is
 /// returned instead. A pane has exactly ONE `pipe-pane` slot, so a duplicate
-/// binding can't stream anyway (`pipe-pane -o` no-ops against the managed
-/// session's pipe), and detaching the duplicate used to `unpipe_pane` the
-/// shared pane — silently freezing the real session's stream (no output,
-/// keystrokes never echo) with no self-heal on local hosts.
+/// binding can't stream anyway (the `#{pane_pipe}` guard in `pipe_pane`
+/// leaves the managed session's live pipe untouched), and detaching the
+/// duplicate used to `unpipe_pane` the shared pane — silently freezing the
+/// real session's stream (no output, keystrokes never echo) with no
+/// self-heal on local hosts.
 async fn attach_tmux_session(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
@@ -524,7 +525,8 @@ async fn attach_tmux_session(
     };
 
     // Arm the pane log pipe and mark the record running with the external
-    // target. `pipe-pane -o` is idempotent, so re-attach is harmless.
+    // target. `pipe_pane` skips panes whose pipe is already live (the
+    // `#{pane_pipe}` guard), so re-attach is harmless.
     let log =
         paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
     crate::host_runtime::pipe_pane(&host, &name, &log)

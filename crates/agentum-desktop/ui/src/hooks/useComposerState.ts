@@ -87,6 +87,7 @@ import {
 } from '@/lib/new-workspace-ssh-gate'
 import { getSuggestedCreatureName } from '@/components/sidebar/worktree-name-suggestions'
 import type { SmartWorkspaceNameSelection } from '@/components/new-workspace/SmartWorkspaceNameField'
+import { deriveTrackerBindCoords } from '@/components/new-workspace/work-item-picker-model'
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { normalizeSparseDirectoryLines, sparseDirectoriesMatch } from '@/lib/sparse-paths'
 import { joinPath } from '@/lib/path'
@@ -194,6 +195,13 @@ type ComposerCardProps = {
   onRemoveAttachment: (pathValue: string) => void
   linkedWorkItem: LinkedWorkItemSummary | null
   onRemoveLinkedWorkItem: () => void
+  /** Bind an existing work item (spec 012 New Workspace issue picker). The one
+   *  attach seam — setting the composer's `linkedWorkItem` so the create path
+   *  persists the tracker bind (see `deriveTrackerBindCoords`). */
+  applyLinkedWorkItem: (
+    item: GitHubWorkItem,
+    options?: { preserveBranchNameOverride?: boolean }
+  ) => void
   /** True when the composer should offer "Create GitHub issue": nothing is
    *  linked yet and the selected repo is a local git repo (spec 004 F3). */
   canCreateGithubIssue: boolean
@@ -906,9 +914,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         prompt: agentPrompt,
         linkedIssueNumber: parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       }),
-    [agentPrompt, fallbackCreatureName, linkedPR, name, parsedLinkedIssueNumber]
+    [agentPrompt, fallbackCreatureName, linkedPR, linkedWorkItem, name, parsedLinkedIssueNumber]
   )
   // Why: when the user links an issue/PR but has not typed any prompt text
   // (attachments don't count), swap the generic "Linked work items:" context
@@ -2455,6 +2464,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         workspaceName,
         preserveWorkspaceNameEdits: branchNameOverridePreservesNameEdits
       })
+      // Spec 012: persist the tracker bind so the session-start reactor + PR
+      // poller can drive the linked item's status. GitHub issue → URL; Linear →
+      // identifier; PR/MR-linked or unlinked create binds nothing.
+      const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
       const result = await createWorktree(
         repoId,
         workspaceName,
@@ -2476,7 +2489,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         effectiveBranchNameOverride,
         resolvedInitialWorkspaceStatus,
         linkedGitLabMR ?? undefined,
-        linkedGitLabIssue ?? undefined
+        linkedGitLabIssue ?? undefined,
+        undefined,
+        trackerBind?.trackerProvider,
+        trackerBind?.trackerUrl
       )
       const worktree = result.worktree
 
@@ -2594,6 +2610,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         prompt: '',
         linkedIssueNumber: parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       })
       if (
@@ -2869,6 +2886,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setAttachmentPaths((current) => current.filter((currentPath) => currentPath !== pathValue)),
     linkedWorkItem,
     onRemoveLinkedWorkItem: handleRemoveLinkedWorkItem,
+    applyLinkedWorkItem,
     canCreateGithubIssue,
     createIssueOpen,
     onCreateIssueOpenChange: handleCreateIssueOpenChange,

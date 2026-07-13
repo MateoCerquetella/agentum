@@ -79,6 +79,14 @@ fn registry_path() -> Result<PathBuf, ApiError> {
     Ok(home.join(".agentum").join("repos.json"))
 }
 
+/// `(id, path)` pairs for browser-scope resolution (spec 014 D2: `Repo.id` is
+/// the project identity). Tolerant: an unreadable registry → empty table.
+pub(crate) fn scope_repo_pairs() -> Vec<(String, String)> {
+    read_repos()
+        .map(|repos| repos.into_iter().map(|r| (r.id, r.path)).collect())
+        .unwrap_or_default()
+}
+
 fn read_repos() -> Result<Vec<Repo>, ApiError> {
     let path = registry_path()?;
     if !path.exists() {
