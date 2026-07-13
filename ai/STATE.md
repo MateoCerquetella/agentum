@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 015-workspace-harness-autostart
-- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 Architect gate PASS 2026-07-13, `architecture.md` + handoff `02-architect-to-developer.md`. Q1 = Terminal.tsx root flex strip `relative z-30` after EditorAutosaveController, self-gating on a new offer slice — NOT the launcher, NOT the `:1666` legacy block (#313 trap). Q2 = fire-and-forget runner call at END of `openCreatedWorkspace` (both create paths converge there — ZERO useComposerState edits) + zustand `workspace-harness-offer` slice. Build f1 detect-helper → f2 slice/runner/banner/mount → f3 exports+accept. Gates: 4 targeted vitest files + vite build; full-vitest/tsc pre-broken baselines.)
+- **phase:** tester         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 Developer phase DONE 2026-07-13: f1 `66f1e161` + f2 `03f2eb2b` + f3 `41cbeab8` + docs `5f753260`. Gates green per slice — final 50/0 across the 4 targeted vitest files + vite build ✓ ×3. 3 documented deviations (accept swallow-and-toast w/ .finally busy-reset; banner test mocks offer lib; trigger pins as new describe block). Orchestrator spot-check: scope = exactly the architected 15 files, no must-not files (useComposerState/planCreatedWorkspace/Rust untouched), open-created-workspace.test.ts additions-only. Tester: independently re-run gates + audit deviations + pin byte-identity.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -188,3 +188,17 @@
   dedupe gap. Dev must NOT: touch useComposerState/planCreatedWorkspaceOpen
   pins, poll, pass hostId, jsdom, persist offers, rely on engine dedupe
   (`harness.rs:95` inserts unconditionally).
+- 2026-07-13 | Developer | **015 f1+f2+f3 CODE-COMPLETE + GREEN → phase tester**
+  (sub-agent; commits `66f1e161`/`03f2eb2b`/`41cbeab8` + docs `5f753260`;
+  `tasks.md` + handoff `03-developer-to-tester.md`). Gates: f1 20/0, f2 45/0,
+  f3 50/0 (4 targeted vitest files, bun) + vite build ✓ ×3 (~38s each).
+  Scope audit (orchestrator): 15 files exactly per architecture §6, NO
+  useComposerState/planCreatedWorkspace/Rust edits,
+  open-created-workspace.test.ts additions-only (+39/-0). 3 deviations, all
+  code-commented + tasks.md-logged: (1) acceptHarnessOffer swallows+toasts
+  (no re-throw), banner busy-reset via .finally — observable behavior
+  identical + pinned; (2) banner test mocks the offer lib (network-free
+  render, sdd-bar precedent); (3) trigger pins = NEW describe block w/
+  per-test mockClear (existing pins byte-identical). Env notes: worktree
+  needed `bun install`; anchors had ZERO drift; zustand v5 SSR snapshot
+  forces mocked-store banner testing (validates handoff prescription).
