@@ -2,11 +2,18 @@
 // Real store (seeded like open-created-workspace.test.ts), mocked runtime
 // clients; no network, no fs.
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 import type { Worktree } from '../../../shared/types'
 import type { FsFileEntry } from '@/runtime/server-fs-client'
 import { useAppStore } from '@/store'
 import { fsListEntries } from '@/runtime/server-fs-client'
-import { maybeOfferWorkspaceHarnessRun } from './workspace-harness-offer'
+import {
+  listHarnesses,
+  runHarness,
+  startHarness,
+  subscribeHarnessRunErrors
+} from '@/runtime/harness-client'
+import { acceptHarnessOffer, maybeOfferWorkspaceHarnessRun } from './workspace-harness-offer'
 
 vi.mock('@/runtime/server-fs-client', () => ({
   fsListEntries: vi.fn()
@@ -17,6 +24,10 @@ vi.mock('@/runtime/harness-client', () => ({
   startHarness: vi.fn(),
   runHarness: vi.fn(),
   subscribeHarnessRunErrors: vi.fn(() => Promise.resolve({ close: () => {} }))
+}))
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() }
 }))
 
 const initialAppStoreState = useAppStore.getState()
@@ -143,13 +154,24 @@ describe('maybeOfferWorkspaceHarnessRun', () => {
 
   it('nothing found: no offer, no harness-client call (AC 6)', async () => {
     seedStore()
-    const { listHarnesses } = await import('@/runtime/harness-client')
     vi.mocked(fsListEntries)
       .mockRejectedValueOnce(new Error('path error: missing'))
       .mockRejectedValueOnce(new Error('path error: missing'))
     await maybeOfferWorkspaceHarnessRun({ worktreeId: WT_ID, gatedRun: false })
     expect(fsListEntries).toHaveBeenCalledTimes(2)
     expect(listHarnesses).not.toHaveBeenCalled()
+    expect(offers()).toEqual({})
+  })
+
+  it('workdir already registered with the engine: no offer (AC 5)', async () => {
+    seedStore()
+    vi.mocked(fsListEntries).mockResolvedValueOnce(listing([specFileEntry()]))
+    vi.mocked(listHarnesses).mockResolvedValueOnce([
+      // Trailing-slash spelling: normalization must still dedupe it.
+      { workdir: '/workspace/feature/' }
+    ] as unknown as Awaited<ReturnType<typeof listHarnesses>>)
+    await maybeOfferWorkspaceHarnessRun({ worktreeId: WT_ID, gatedRun: false })
+    expect(listHarnesses).toHaveBeenCalledTimes(1)
     expect(offers()).toEqual({})
   })
 
@@ -179,5 +201,80 @@ describe('maybeOfferWorkspaceHarnessRun', () => {
     await maybeOfferWorkspaceHarnessRun({ worktreeId: 'repo-1::/nope', gatedRun: false })
     expect(fsListEntries).not.toHaveBeenCalled()
     expect(offers()).toEqual({})
+  })
+})
+
+// Spec 015 f3 — the accept flow: exactly register + run (the gate is sacred),
+// success clears the offer, failure keeps it retryable with the server's
+// detail in the toast.
+describe('acceptHarnessOffer', () => {
+  const OFFER = {
+    worktreeId: WT_ID,
+    workdir: '/workspace/feature',
+    harnessDir: '.agentum-harness'
+  } as const
+
+  function seedOffer(): void {
+    seedStore()
+    useAppStore.getState().setWorkspaceHarnessOffer(OFFER)
+  }
+
+  it('happy path: register then run in order, success toast, slice cleared, error stream armed', async () => {
+    seedOffer()
+    vi.mocked(startHarness).mockResolvedValueOnce({ harness_id: 'h-1' })
+    vi.mocked(runHarness).mockResolvedValueOnce(undefined)
+
+    await acceptHarnessOffer(OFFER)
+
+    expect(startHarness).toHaveBeenCalledWith('/workspace/feature')
+    expect(runHarness).toHaveBeenCalledWith('h-1')
+    expect(vi.mocked(startHarness).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runHarness).mock.invocationCallOrder[0]!
+    )
+    expect(toast.success).toHaveBeenCalledWith('Harness run started')
+    expect(offers()).toEqual({})
+    // Early drive-phase failures (red init.sh, spawn errors) surface via the
+    // bounded, id-scoped subscription.
+    expect(subscribeHarnessRunErrors).toHaveBeenCalledWith('h-1', expect.any(Function))
+  })
+
+  it('startHarness failure: toast carries the server detail, run never fires, slice KEPT', async () => {
+    seedOffer()
+    vi.mocked(startHarness).mockRejectedValueOnce(
+      new Error('harness 400 on /api/harness — workdir does not exist')
+    )
+
+    await acceptHarnessOffer(OFFER)
+
+    expect(runHarness).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('workdir does not exist'))
+    expect(offers()).toEqual({ [WT_ID]: OFFER })
+    expect(subscribeHarnessRunErrors).not.toHaveBeenCalled()
+  })
+
+  it('runHarness failure: toast carries the detail, slice KEPT', async () => {
+    seedOffer()
+    vi.mocked(startHarness).mockResolvedValueOnce({ harness_id: 'h-1' })
+    vi.mocked(runHarness).mockRejectedValueOnce(
+      new Error('harness 409 on /api/harness/h-1/run — already running')
+    )
+
+    await acceptHarnessOffer(OFFER)
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('already running'))
+    expect(offers()).toEqual({ [WT_ID]: OFFER })
+    expect(subscribeHarnessRunErrors).not.toHaveBeenCalled()
+  })
+
+  it('dismiss clears the slice with ZERO harness-client calls (AC 4)', () => {
+    seedOffer()
+
+    useAppStore.getState().clearWorkspaceHarnessOffer(WT_ID)
+
+    expect(offers()).toEqual({})
+    expect(startHarness).not.toHaveBeenCalled()
+    expect(runHarness).not.toHaveBeenCalled()
+    expect(listHarnesses).not.toHaveBeenCalled()
+    expect(subscribeHarnessRunErrors).not.toHaveBeenCalled()
   })
 })

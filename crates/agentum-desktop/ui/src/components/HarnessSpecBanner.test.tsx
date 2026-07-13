@@ -20,6 +20,12 @@ vi.mock('@/store', () => ({
   useAppStore: (selector: (s: typeof STORE_STATE) => unknown) => selector(STORE_STATE)
 }))
 
+// No network at render time: renderToStaticMarkup never fires onClick, so the
+// accept flow (toasts + harness-client) is mocked out of the import graph.
+vi.mock('@/lib/workspace-harness-offer', () => ({
+  acceptHarnessOffer: vi.fn()
+}))
+
 async function importBanner(): Promise<typeof import('./HarnessSpecBanner')> {
   return await import('./HarnessSpecBanner')
 }

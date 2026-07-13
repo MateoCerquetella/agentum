@@ -2,15 +2,23 @@
 // once per workspace creation (fired fire-and-forget from
 // `openCreatedWorkspace`, D2) and writes the offer slice only on a positive
 // detection. Any failure means "no banner", never a broken create flow.
+import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { fsListEntries, type FsFileEntry } from '@/runtime/server-fs-client'
+import {
+  listHarnesses,
+  runHarness,
+  startHarness,
+  subscribeHarnessRunErrors
+} from '@/runtime/harness-client'
 import {
   HARNESS_DIR,
   LEGACY_HARNESS_DIR,
   decideHarnessOffer,
   detectHarnessSpec,
   normalizeWorkdir,
-  shouldDetectHarnessSpec
+  shouldDetectHarnessSpec,
+  type WorkspaceHarnessOffer
 } from './workspace-harness-detect'
 
 /**
@@ -69,9 +77,9 @@ export async function maybeOfferWorkspaceHarnessRun(opts: {
       return
     }
 
-    // f3 wires listHarnesses() here for the AC 5 dedupe; until then nothing is
-    // ever considered pre-registered.
-    const registeredWorkdirs: string[] = []
+    // AC 5 dedupe — only reached on the found path, so the not-found flow
+    // stays at the fs listing alone (AC 6: no other network).
+    const registeredWorkdirs = (await listHarnesses()).map((h) => h.workdir)
     const offer = decideHarnessOffer({
       detection,
       worktreeId: opts.worktreeId,
@@ -93,5 +101,39 @@ export async function maybeOfferWorkspaceHarnessRun(opts: {
     useAppStore.getState().setWorkspaceHarnessOffer(offer)
   } catch {
     // Fire-and-forget: a failed detection is a skipped offer, nothing more.
+  }
+}
+
+/**
+ * Accept the offer: register the project with the engine, kick off the drive
+ * loop, and surface early drive-phase failures. The gate is sacred — this is
+ * `POST /api/harness` + `POST /{id}/run` and NOTHING else (the engine spawns
+ * the agents; init/verify semantics are untouched).
+ *
+ * On failure the slice entry is KEPT (the banner stays mounted, retryable)
+ * and the toast carries the server's error detail — the harness-client
+ * `request()` helper already embeds the response text in `error.message`.
+ *
+ * Deviation from architecture §5 (documented in tasks.md): the failure is
+ * toasted HERE and swallowed rather than re-thrown — the resolved promise is
+ * the component's "settle" signal and its only job is the busy flag, so no
+ * caller needs a try/catch and nothing can become an unhandled rejection.
+ */
+export async function acceptHarnessOffer(offer: WorkspaceHarnessOffer): Promise<void> {
+  try {
+    const { harness_id } = await startHarness(offer.workdir)
+    await runHarness(harness_id)
+    toast.success('Harness run started')
+    useAppStore.getState().clearWorkspaceHarnessOffer(offer.worktreeId)
+    // runHarness returns before the bg drive loop does anything, so the most
+    // common failure class — a red init.sh seconds later — would otherwise
+    // vanish. Bounded, self-closing subscription (spec 008 F1 precedent).
+    void subscribeHarnessRunErrors(harness_id, (message) => {
+      toast.error(`Harness run failed: ${message}`)
+    })
+  } catch (error) {
+    // Swallow after toasting: the slice entry stays (banner remains mounted,
+    // retryable) and the caller only needs to reset its busy flag.
+    toast.error(error instanceof Error ? error.message : String(error))
   }
 }

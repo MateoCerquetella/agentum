@@ -7,6 +7,7 @@ import React, { useCallback, useState } from 'react'
 import { X } from 'lucide-react'
 import { Button } from './ui/button'
 import { useAppStore } from '@/store'
+import { acceptHarnessOffer } from '@/lib/workspace-harness-offer'
 
 export type HarnessSpecBannerViewProps = {
   harnessDir: string
@@ -69,9 +70,17 @@ export default function HarnessSpecBanner({
   const [busy, setBusy] = useState(false)
 
   const handleAccept = useCallback(() => {
-    // f3 wires acceptHarnessOffer here; until then accept is a busy no-op.
-    void setBusy
-  }, [])
+    if (!offer || busy) {
+      return
+    }
+    setBusy(true)
+    // acceptHarnessOffer toasts + swallows its own failures and clears the
+    // slice on success (unmounting us); resetting busy afterwards re-enables
+    // the buttons on the failure path so the offer stays retryable.
+    void acceptHarnessOffer(offer).finally(() => {
+      setBusy(false)
+    })
+  }, [busy, offer])
 
   const handleDismiss = useCallback(() => {
     clearOffer(worktreeId)
