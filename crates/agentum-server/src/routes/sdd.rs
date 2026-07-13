@@ -490,6 +490,14 @@ where
         if session.status != Status::Running || session.tmux_target.is_none() {
             return "session_not_running";
         }
+        // Belt for MCP-unwired tools (bash/aider can't call the
+        // `agentum_sdd_loop` check-in): when the workdir's own `ai/STATE.md`
+        // already says the phase is done, another step prompt would only breed
+        // invented work. Read/parse failures fall through silently — the belt
+        // must never stop a loop that today's behavior would run.
+        if state_md_phase_done(&session).await {
+            return "state_done";
+        }
         step_counter.store(step, Ordering::Relaxed);
         let mut payload = json!({ "step": step, "max_steps": max_steps });
         // A `done:false` check-in parks a one-line progress note; it rides the
@@ -515,6 +523,41 @@ where
         }
     }
     "max_steps"
+}
+
+/// Does the session's workdir carry an `ai/STATE.md` whose phase is `done`
+/// (spec 016 F3)? Local sessions only — a remote session's workdir path is
+/// meaningless on this host, and probing a same-named local dir could stop
+/// someone else's loop. Any failure (bad path, missing file, no parse) is a
+/// silent fall-through by contract.
+async fn state_md_phase_done(session: &Session) -> bool {
+    if session
+        .host_id
+        .is_some_and(|h| h != agentum_core::LOCAL_HOST_ID)
+    {
+        return false;
+    }
+    let Ok(dir) = super::util::expand_workdir(session.effective_cwd()) else {
+        return false;
+    };
+    match tokio::fs::read_to_string(dir.join("ai").join("STATE.md")).await {
+        Ok(contents) => state_md_says_done(&contents),
+        Err(_) => false,
+    }
+}
+
+/// Find a `current_phase` field set to `done`. Agents rewrite STATE.md
+/// free-form, so tolerate markdown dressing around key and value
+/// (`- **current_phase:** \`done\``) — but only a whole-line field counts:
+/// a prose mention ("set current_phase: done when …") must not trip the belt.
+fn state_md_says_done(contents: &str) -> bool {
+    let dressing = |c: char| !c.is_ascii_alphanumeric() && c != '_';
+    contents.lines().any(|line| {
+        line.split_once(':').is_some_and(|(key, value)| {
+            key.trim_matches(dressing) == "current_phase"
+                && value.trim_matches(dressing).eq_ignore_ascii_case("done")
+        })
+    })
 }
 
 #[cfg(test)]
@@ -570,12 +613,25 @@ mod tests {
         }
     }
 
+    /// Hermetic workdir: the loop now probes `<workdir>/ai/STATE.md`, so a
+    /// shared path like `/tmp` would let ambient files leak into tests.
+    fn fresh_workdir() -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        std::mem::forget(dir);
+        path
+    }
+
     async fn seed_session(state: &AppState) -> agentum_core::Session {
+        seed_session_in(state, &fresh_workdir()).await
+    }
+
+    async fn seed_session_in(state: &AppState, workdir: &str) -> agentum_core::Session {
         state
             .store
             .create_session(NewSession {
                 name: "sdd-test".into(),
-                workdir: "/tmp".into(),
+                workdir: workdir.into(),
                 tool: "claude".into(),
                 model: None,
                 flags: vec![],
@@ -793,5 +849,83 @@ mod tests {
         assert_eq!(ev.payload["summary"], "F1 wired; tests next");
         // Consumed on delivery — a later step won't repeat it.
         assert!(summary.lock().unwrap().is_none());
+    }
+
+    // --- spec 016 F3: ai/STATE.md belt ---
+
+    #[test]
+    fn state_md_parser_accepts_dressing_and_rejects_everything_else() {
+        assert!(state_md_says_done("current_phase: done"));
+        assert!(state_md_says_done(
+            "current_spec: 016\ncurrent_phase: DONE\n"
+        ));
+        assert!(state_md_says_done("- **current_phase:** `done`"));
+        // Not done, wrong key, prose mention, trailing words, empty — all fall
+        // through.
+        assert!(!state_md_says_done("current_phase: developer"));
+        assert!(!state_md_says_done("phase: done"));
+        assert!(!state_md_says_done(
+            "set current_phase: done when reviewer signs off"
+        ));
+        assert!(!state_md_says_done("current_phase: done pending qa"));
+        assert!(!state_md_says_done(""));
+    }
+
+    /// Write `<workdir>/ai/STATE.md` and return the workdir path.
+    fn workdir_with_state_md(contents: &str) -> String {
+        let workdir = fresh_workdir();
+        let ai = std::path::Path::new(&workdir).join("ai");
+        std::fs::create_dir_all(&ai).unwrap();
+        std::fs::write(ai.join("STATE.md"), contents).unwrap();
+        workdir
+    }
+
+    #[tokio::test]
+    async fn state_md_done_stops_loop_before_any_injection() {
+        let state = fresh_state().await;
+        let workdir = workdir_with_state_md("current_spec: 016\ncurrent_phase: done\n");
+        let session = seed_session_in(&state, &workdir).await;
+        state
+            .store
+            .update_status_and_target(session.id, Status::Running, Some("agentum-test"))
+            .await
+            .unwrap();
+
+        let injected = AtomicU32::new(0);
+        let step = AtomicU32::new(0);
+        let summary = std::sync::Mutex::new(None);
+        let reason = drive_sdd_loop_with(&state, session.id, 1, &step, 10, &summary, |_s, _p| {
+            injected.fetch_add(1, Ordering::Relaxed);
+            async { StepOutcome::Settled }
+        })
+        .await;
+        assert_eq!(reason, "state_done");
+        assert_eq!(injected.load(Ordering::Relaxed), 0, "no prompt injected");
+        assert_eq!(step.load(Ordering::Relaxed), 0, "stopped before step 1");
+    }
+
+    #[tokio::test]
+    async fn state_md_not_done_falls_through_to_injection() {
+        let state = fresh_state().await;
+        let workdir = workdir_with_state_md("current_spec: 016\ncurrent_phase: developer\n");
+        let session = seed_session_in(&state, &workdir).await;
+        state
+            .store
+            .update_status_and_target(session.id, Status::Running, Some("agentum-test"))
+            .await
+            .unwrap();
+
+        // InjectFailed exits right after the first delivery attempt — reaching
+        // it proves a non-done phase didn't trip the belt. The missing-file
+        // case rides every other drive test (their workdirs have no ai/).
+        let step = AtomicU32::new(0);
+        let summary = std::sync::Mutex::new(None);
+        let reason =
+            drive_sdd_loop_with(&state, session.id, 1, &step, 10, &summary, |_s, _p| async {
+                StepOutcome::InjectFailed
+            })
+            .await;
+        assert_eq!(reason, "inject_failed");
+        assert_eq!(step.load(Ordering::Relaxed), 1, "step 1 was attempted");
     }
 }
