@@ -188,6 +188,31 @@ export function deriveUnifiedTrackerStatus(input: {
   return { kind: 'connected', issueCount: input.optionCount }
 }
 
+/** Where the tracker section reads the per-repo binding from. `hostId` set =
+ *  the repo lives on an SSH host (read-only resolution there; configuring the
+ *  binding stays a local-repo affordance). */
+export type TrackerBindingTarget = { workdir: string; hostId?: string }
+
+/**
+ * Derive the binding lookup target for the selected repo. Any GIT repo gets
+ * one — local repos as before, SSH repos with their `connectionId` as `hostId`
+ * (the server resolves the slug on that host; bindings are slug-keyed, so a
+ * binding configured on the local clone serves the SSH copy too). Non-git
+ * selections resolve nothing and the picker falls back to the global
+ * `activeProject`.
+ */
+export function deriveTrackerBindingTarget(input: {
+  repo: { path: string; connectionId?: string | null } | null | undefined
+  isGit: boolean
+}): TrackerBindingTarget | null {
+  if (!input.repo || !input.isGit) return null
+  const path = input.repo.path.trim()
+  if (!path) return null
+  return input.repo.connectionId
+    ? { workdir: path, hostId: input.repo.connectionId }
+    : { workdir: path }
+}
+
 // ---------- Single front door (spec 013 F4) ----------
 
 /**
