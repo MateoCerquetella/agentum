@@ -180,26 +180,41 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
+/// Guide candidates, first hit wins — CLAUDE.md is the codebase guide,
+/// AGENTS.md the agent-instructions equivalent, README a fallback. Shared by
+/// the local collector and the remote script so the arms can't drift.
+const GUIDE_CANDIDATES: [&str; 3] = ["CLAUDE.md", "AGENTS.md", "README.md"];
+/// Root build manifests probed in this order (same both arms).
+const MANIFEST_NAMES: [&str; 10] = [
+    "Cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "go.mod",
+    "Gemfile",
+    "pom.xml",
+    "build.gradle",
+    "composer.json",
+    "requirements.txt",
+    "tsconfig.json",
+];
+
 /// Read the first existing, non-empty file among `candidates` (relative to
-/// `root`), truncated to `budget`. Returns `(name, content)`.
-fn read_first_file(
-    root: &std::path::Path,
-    candidates: &[&str],
-    budget: usize,
-) -> Option<(String, String)> {
+/// `root`), RAW — truncation is the assembler's job (double-truncating would
+/// stack `…[truncated]` markers). Returns `(name, content)`.
+fn read_first_file(root: &std::path::Path, candidates: &[&str]) -> Option<(String, String)> {
     for name in candidates {
         if let Ok(content) = std::fs::read_to_string(root.join(name)) {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
-                return Some(((*name).to_string(), truncate_chars(trimmed, budget)));
+                return Some(((*name).to_string(), trimmed.to_string()));
             }
         }
     }
     None
 }
 
-/// The git-tracked file tree (so the interviewer knows what already exists),
-/// capped at [`TREE_MAX_FILES`]. `None` when `root` isn't a git repo.
+/// The RAW git-tracked file tree — the assembler owns the [`TREE_MAX_FILES`]
+/// cap so the remote arm gets it for free. `None` when `root` isn't a git repo.
 fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -211,6 +226,82 @@ fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(&out.stdout);
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(text.into_owned())
+}
+
+/// The sections a repo-context snapshot is built from — ONE shape for both
+/// arms (local fs reads, remote script output), so the prompt format and every
+/// budget live in a single function.
+struct RepoContextParts {
+    /// `(filename, body)` of the first guide candidate found.
+    guide: Option<(String, String)>,
+    harness_agents: Option<String>,
+    feature_list: Option<String>,
+    /// `(filename, body)` in [`MANIFEST_NAMES`] order.
+    manifests: Vec<(String, String)>,
+    /// Raw `git ls-files` output; capped here, not at the collectors.
+    tree: Option<String>,
+}
+
+/// Assemble the system-prompt snapshot from collected parts. Owns ALL budgets
+/// and the section headers — the local/remote arms only collect. Empty or
+/// whitespace-only parts are dropped, so a sparse remote parse degrades to a
+/// smaller snapshot, never a malformed one.
+fn assemble_repo_context(parts: RepoContextParts) -> Option<String> {
+    let mut out = String::new();
+
+    if let Some((name, body)) = parts.guide {
+        let body = truncate_chars(body.trim(), GUIDE_BUDGET);
+        if !body.is_empty() {
+            out.push_str(&format!("## Repo guide ({name})\n{body}\n\n"));
+        }
+    }
+
+    // The harness contract — so the breakdown fits the verification-gated
+    // pipeline: the harness AGENTS.md + the current feature backlog.
+    if let Some(body) = parts.harness_agents {
+        let body = truncate_chars(body.trim(), HARNESS_AGENTS_BUDGET);
+        if !body.is_empty() {
+            out.push_str(&format!("## .harness/AGENTS.md\n{body}\n\n"));
+        }
+    }
+    if let Some(body) = parts.feature_list {
+        let body = truncate_chars(body.trim(), FEATURE_LIST_BUDGET);
+        if !body.is_empty() {
+            out.push_str(&format!(
+                "## .harness/feature_list.json (current backlog)\n{body}\n\n"
+            ));
+        }
+    }
+
+    // Root build manifests — so the spec imitates the real stack + deps.
+    let mut manifests = String::new();
+    for (name, body) in parts.manifests {
+        let body = truncate_chars(body.trim(), MANIFEST_BUDGET);
+        if !body.is_empty() {
+            manifests.push_str(&format!("### {name}\n{body}\n\n"));
+        }
+    }
+    if !manifests.is_empty() {
+        out.push_str("## Root manifests\n");
+        out.push_str(&manifests);
+    }
+
+    // The file tree so it can reference real files/areas.
+    if let Some(tree) = parts.tree.and_then(|t| capped_tree(&t)) {
+        out.push_str(&format!("## Repo file tree (git-tracked)\n{tree}\n"));
+    }
+
+    let out = truncate_chars(out.trim(), CONTEXT_BUDGET);
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Cap the tree at [`TREE_MAX_FILES`] lines with the `…(+N more files)`
+/// suffix. `None` for an empty tree.
+fn capped_tree(text: &str) -> Option<String> {
     let total = text.lines().count();
     if total == 0 {
         return None;
@@ -251,63 +342,26 @@ fn local_repo_context(workdir: Option<&str>, home: Option<&std::path::Path>) -> 
     }
     let root = root.as_path();
 
-    let mut out = String::new();
-
-    // The curated repo guide — CLAUDE.md is the codebase guide; AGENTS.md the
-    // agent-instructions equivalent; README a fallback.
-    if let Some((name, body)) =
-        read_first_file(root, &["CLAUDE.md", "AGENTS.md", "README.md"], GUIDE_BUDGET)
-    {
-        out.push_str(&format!("## Repo guide ({name})\n{body}\n\n"));
-    }
-
-    // The harness contract — so the breakdown fits the verification-gated
-    // pipeline: the harness AGENTS.md + the current feature backlog.
-    if root.join(".harness").is_dir() {
-        if let Some((_, body)) =
-            read_first_file(root, &[".harness/AGENTS.md"], HARNESS_AGENTS_BUDGET)
-        {
-            out.push_str(&format!("## .harness/AGENTS.md\n{body}\n\n"));
-        }
-        if let Some((_, body)) =
-            read_first_file(root, &[".harness/feature_list.json"], FEATURE_LIST_BUDGET)
-        {
-            out.push_str(&format!(
-                "## .harness/feature_list.json (current backlog)\n{body}\n\n"
-            ));
-        }
-    }
-
-    // Root build manifests — so the spec imitates the real stack + deps.
-    let mut manifests = String::new();
-    for name in [
-        "Cargo.toml",
-        "package.json",
-        "pyproject.toml",
-        "go.mod",
-        "Gemfile",
-        "pom.xml",
-        "build.gradle",
-        "composer.json",
-        "requirements.txt",
-        "tsconfig.json",
-    ] {
-        if let Some((n, body)) = read_first_file(root, &[name], MANIFEST_BUDGET) {
-            manifests.push_str(&format!("### {n}\n{body}\n\n"));
-        }
-    }
-    if !manifests.is_empty() {
-        out.push_str("## Root manifests\n");
-        out.push_str(&manifests);
-    }
-
-    // The file tree so it can reference real files/areas.
-    if let Some(tree) = git_tracked_tree(root) {
-        out.push_str(&format!("## Repo file tree (git-tracked)\n{tree}\n"));
-    }
-
-    let out = truncate_chars(out.trim(), CONTEXT_BUDGET);
-    if out.is_empty() { None } else { Some(out) }
+    // `.harness/*` reads stay gated on the dir existing — a repo with a FILE
+    // named `.harness` must not surface it as the contract.
+    let harness = root.join(".harness").is_dir();
+    let parts = RepoContextParts {
+        guide: read_first_file(root, &GUIDE_CANDIDATES),
+        harness_agents: harness
+            .then(|| read_first_file(root, &[".harness/AGENTS.md"]))
+            .flatten()
+            .map(|(_, body)| body),
+        feature_list: harness
+            .then(|| read_first_file(root, &[".harness/feature_list.json"]))
+            .flatten()
+            .map(|(_, body)| body),
+        manifests: MANIFEST_NAMES
+            .iter()
+            .filter_map(|name| read_first_file(root, &[name]))
+            .collect(),
+        tree: git_tracked_tree(root),
+    };
+    assemble_repo_context(parts)
 }
 
 /// One line per chat request saying whether grounding happened and why not —
