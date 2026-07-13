@@ -546,16 +546,27 @@ async fn state_md_phase_done(session: &Session) -> bool {
     }
 }
 
-/// Find a `current_phase` field set to `done`. Agents rewrite STATE.md
-/// free-form, so tolerate markdown dressing around key and value
-/// (`- **current_phase:** \`done\``) — but only a whole-line field counts:
-/// a prose mention ("set current_phase: done when …") must not trip the belt.
+/// Find a whole-line `phase` / `current_phase` field whose value is `done`.
+/// BOTH key spellings exist in the wild — `sdd-init` scaffolds
+/// `current_phase:`, while real files use `- **phase:** done <!-- idle | … -->`
+/// (this repo's own ai/STATE.md) — so the parser is deliberately their union;
+/// `phase:` or `current_phase:` alone each go dead on the other shape (review
+/// gate finding, attempts 1–4). The value is the first meaningful token only
+/// (delimited by whitespace or `<`, markdown dressing stripped) so an inline
+/// `<!-- … | done -->` enum comment can't mask — or fake — `done`. Only a
+/// whole-line field counts: a prose mention ("set current_phase: done when …")
+/// must not trip the belt.
 fn state_md_says_done(contents: &str) -> bool {
     let dressing = |c: char| !c.is_ascii_alphanumeric() && c != '_';
     contents.lines().any(|line| {
         line.split_once(':').is_some_and(|(key, value)| {
-            key.trim_matches(dressing) == "current_phase"
-                && value.trim_matches(dressing).eq_ignore_ascii_case("done")
+            let key = key.trim_matches(dressing);
+            (key.eq_ignore_ascii_case("phase") || key.eq_ignore_ascii_case("current_phase"))
+                && value
+                    .split(|c: char| c.is_whitespace() || c == '<')
+                    .map(|token| token.trim_matches(dressing))
+                    .find(|token| !token.is_empty())
+                    .is_some_and(|token| token.eq_ignore_ascii_case("done"))
         })
     })
 }
@@ -860,14 +871,28 @@ mod tests {
             "current_spec: 016\ncurrent_phase: DONE\n"
         ));
         assert!(state_md_says_done("- **current_phase:** `done`"));
-        // Not done, wrong key, prose mention, trailing words, empty — all fall
-        // through.
+        // Both key spellings are live in the wild (review gate attempts 1–4):
+        // the bare `phase:` key and the real STATE.md shape, where an inline
+        // enum comment follows the value on the same line.
+        assert!(state_md_says_done("phase: done"));
+        assert!(state_md_says_done(
+            "- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->"
+        ));
+        assert!(state_md_says_done(
+            "- **phase:** `done` <!-- idle | … | done -->"
+        ));
+        // First-token rule: a non-done phase is not rescued by `done`
+        // appearing later in the line (comment or prose).
+        assert!(!state_md_says_done(
+            "- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->"
+        ));
+        // Not done, prose mention (key is not a whole-line field), empty — all
+        // fall through.
         assert!(!state_md_says_done("current_phase: developer"));
-        assert!(!state_md_says_done("phase: done"));
+        assert!(!state_md_says_done("phase: reviewer"));
         assert!(!state_md_says_done(
             "set current_phase: done when reviewer signs off"
         ));
-        assert!(!state_md_says_done("current_phase: done pending qa"));
         assert!(!state_md_says_done(""));
     }
 
