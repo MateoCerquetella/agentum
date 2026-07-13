@@ -3,6 +3,7 @@ import {
   buildWizardRecap,
   canLeaveRepoStep,
   capRepoList,
+  deriveTrackerBindingTarget,
   deriveUnifiedTrackerStatus,
   deriveWizardComposerSeed,
   filterRepoList,
@@ -283,5 +284,42 @@ describe('capRepoList (step 2 collapse)', () => {
   it('does not duplicate a selected repo already within the cap', () => {
     const out = capRepoList({ repos: many, expanded: false, selectedId: 'r1' })
     expect(out.visible.map((r) => r.id)).toEqual(['r0', 'r1', 'r2', 'r3'])
+  })
+})
+
+describe('deriveTrackerBindingTarget (#356 — SSH repos resolve their binding too)', () => {
+  it('local git repo → workdir only (no hostId), byte-compatible with the old gate', () => {
+    expect(
+      deriveTrackerBindingTarget({ repo: { path: '/home/me/proj', connectionId: null }, isGit: true })
+    ).toEqual({ workdir: '/home/me/proj' })
+  })
+
+  it('SSH git repo → workdir + hostId (the fix: no longer dropped)', () => {
+    expect(
+      deriveTrackerBindingTarget({
+        repo: { path: '/srv/proj', connectionId: 'host-uuid-1' },
+        isGit: true
+      })
+    ).toEqual({ workdir: '/srv/proj', hostId: 'host-uuid-1' })
+  })
+
+  it('non-git selection resolves nothing (falls back to global activeProject)', () => {
+    expect(
+      deriveTrackerBindingTarget({ repo: { path: '/somewhere', connectionId: null }, isGit: false })
+    ).toBeNull()
+  })
+
+  it('no repo / blank path resolve nothing', () => {
+    expect(deriveTrackerBindingTarget({ repo: null, isGit: true })).toBeNull()
+    expect(deriveTrackerBindingTarget({ repo: undefined, isGit: true })).toBeNull()
+    expect(
+      deriveTrackerBindingTarget({ repo: { path: '   ', connectionId: 'h' }, isGit: true })
+    ).toBeNull()
+  })
+
+  it('undefined connectionId is local (hostId key absent, not undefined-valued)', () => {
+    const out = deriveTrackerBindingTarget({ repo: { path: '/p' }, isGit: true })
+    expect(out).toEqual({ workdir: '/p' })
+    expect(out && 'hostId' in out).toBe(false)
   })
 })

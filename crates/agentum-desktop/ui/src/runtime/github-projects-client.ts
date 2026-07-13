@@ -118,15 +118,21 @@ export async function discoverProjectStatus(input: {
   }
 }
 
-/** `GET /api/github/project-binding` — the repo's stored binding (null = unbound). */
+/** `GET /api/github/project-binding` — the repo's stored binding (null = unbound).
+ *  Host-aware: pass `hostId` for a repo living on an SSH host — the server
+ *  reads the git origin on that host; omit it for local repos. */
 export async function getProjectBinding(input: {
   workdir: string
   slug?: string
+  hostId?: string
   timeoutMs?: number
 }): Promise<{ slug: string; binding: ProjectBindingDto | null }> {
   const params = new URLSearchParams({ workdir: input.workdir })
   if (input.slug) {
     params.set('slug', input.slug)
+  }
+  if (input.hostId) {
+    params.set('host_id', input.hostId)
   }
   const url = await apiUrl(`/api/github/project-binding?${params.toString()}`)
   const controller = new AbortController()
