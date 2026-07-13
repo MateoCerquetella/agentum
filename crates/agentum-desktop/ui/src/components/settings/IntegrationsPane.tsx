@@ -232,12 +232,12 @@ function GithubStatusLabelsEditor(): React.JSX.Element {
  * wizard-independent surface F2 dogfoods on an existing workspace.
  */
 function GithubProjectsBoardEditor(): React.JSX.Element {
+  // Spec 020 F3: SSH repos are listed too — the threaded `repoId` makes the
+  // server resolve the binding's slug on the repo's own host, so the old
+  // local-only filter no longer reflects a real limitation.
   const repos = useAppStore((s) => s.repos)
-  // Bindings resolve through the server's LOCAL host (`gh` + the origin
-  // read), so remote (SSH) repos are out of scope here.
-  const localRepos = repos.filter((r) => !r.connectionId)
   const [repoId, setRepoId] = useState<string>('')
-  const selected = localRepos.find((r) => r.id === repoId) ?? localRepos[0] ?? null
+  const selected = repos.find((r) => r.id === repoId) ?? repos[0] ?? null
 
   return (
     <div className="mt-3 rounded-md border border-border/50 bg-background/60 p-3">
@@ -246,9 +246,9 @@ function GithubProjectsBoardEditor(): React.JSX.Element {
         Bind a repo to a GitHub Projects v2 board: gated runs move its cards by column as features
         code, verify, and finish — custom column names included.
       </p>
-      {localRepos.length === 0 ? (
+      {repos.length === 0 ? (
         <p className="mt-2.5 text-xs text-muted-foreground">
-          Add a local repo first — bindings are per-repo.
+          Add a repo first — bindings are per-repo.
         </p>
       ) : (
         <div className="mt-2.5 space-y-2.5">
@@ -257,13 +257,15 @@ function GithubProjectsBoardEditor(): React.JSX.Element {
             onChange={(e) => setRepoId(e.target.value)}
             className="h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-xs text-foreground"
           >
-            {localRepos.map((r) => (
+            {repos.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.displayName}
               </option>
             ))}
           </select>
-          {selected ? <ProjectBindingEditor key={selected.id} workdir={selected.path} /> : null}
+          {selected ? (
+            <ProjectBindingEditor key={selected.id} workdir={selected.path} repoId={selected.id} />
+          ) : null}
         </div>
       )}
     </div>

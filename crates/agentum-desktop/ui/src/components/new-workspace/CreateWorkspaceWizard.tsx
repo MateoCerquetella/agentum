@@ -385,12 +385,16 @@ export default function CreateWorkspaceWizard({
 
   // Spec 013 F1: the tracker section reads SOLELY from the Project the picker
   // resolves (per-repo binding ∨ global activeProject) — no git-remote heuristic
-  // that could disagree with the picker's issue list. The per-repo binding
-  // resolves through the local `gh`, so only a LOCAL git repo can carry (or
-  // configure) one; a remote/folder repo leaves `trackerWorkdir` undefined and
-  // the picker falls back to the global activeProject.
+  // that could disagree with the picker's issue list. The local-only gate is a
+  // PRODUCT choice post-020 (the server can now resolve SSH repos via `repoId`),
+  // kept deliberately unrelaxed here — lighting the wizard's tracker section up
+  // for SSH repos is a named follow-up shared with in-flight specs. A
+  // remote/folder repo leaves `trackerWorkdir` undefined and the picker falls
+  // back to the global activeProject.
   const trackerWorkdir =
     selectedRepo && !selectedRepo.connectionId && selectedRepoIsGit ? selectedRepo.path : undefined
+  const trackerRepoId =
+    selectedRepo && !selectedRepo.connectionId && selectedRepoIsGit ? selectedRepo.id : undefined
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -480,6 +484,7 @@ export default function CreateWorkspaceWizard({
               onNameValueChange={onNameValueChange}
               nameInputRef={nameInputRef}
               trackerWorkdir={trackerWorkdir}
+              trackerRepoId={trackerRepoId}
               activeProject={activeProject}
               fetchProjectViewTable={fetchProjectViewTable}
               linkedWorkItem={linkedWorkItem}
@@ -1340,6 +1345,7 @@ function AgentStep({
   onNameValueChange,
   nameInputRef,
   trackerWorkdir,
+  trackerRepoId,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -1358,6 +1364,7 @@ function AgentStep({
   onNameValueChange: (value: string) => void
   nameInputRef: React.RefObject<HTMLInputElement | null>
   trackerWorkdir?: string
+  trackerRepoId?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -1382,6 +1389,7 @@ function AgentStep({
           below (via applyLinkedWorkItem's title slug) while it's still blank. */}
       <TrackerSection
         workdir={trackerWorkdir}
+        repoId={trackerRepoId}
         activeProject={activeProject}
         fetchProjectViewTable={fetchProjectViewTable}
         linkedWorkItem={linkedWorkItem}
@@ -1496,6 +1504,7 @@ function AgentStep({
  */
 function TrackerSection({
   workdir,
+  repoId,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -1507,6 +1516,9 @@ function TrackerSection({
    *  which is the only kind that can carry/configure a per-repo binding. The
    *  slug is resolved server-side from this workdir's git remote. */
   workdir?: string
+  /** Spec 020 F3: the repo's registry id, threaded to the binding editor so
+   *  the server resolves the slug host-aware. Gated exactly like `workdir`. */
+  repoId?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -1607,6 +1619,7 @@ function TrackerSection({
       <PopoverContent align="end" className="max-h-[420px] w-[360px] overflow-y-auto p-3">
         <ProjectBindingEditor
           workdir={workdir}
+          repoId={repoId}
           onBound={(next) => {
             setBinding(next)
             setConfigureOpen(false)

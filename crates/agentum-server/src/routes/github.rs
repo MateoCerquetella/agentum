@@ -310,9 +310,21 @@ struct DraftBodyRequest {
     slug: Option<String>,
 }
 
+/// Spec 020 F3 (D4): which context sources actually grounded the draft. Both
+/// reads are local-by-design, so for an SSH repo's dir both come back false —
+/// the intake panel keys its honest "drafted without repo grounding" note on
+/// `repo == false`, never on client-side host inference.
+#[derive(Debug, Serialize)]
+struct DraftGroundingDto {
+    repo: bool,
+    wiki: bool,
+}
+
 #[derive(Debug, Serialize)]
 struct DraftBodyResponse {
     body: String,
+    /// Always present, add-only — old readers of `{body}` are unaffected.
+    grounding: DraftGroundingDto,
 }
 
 /// `POST /api/github/issues/draft-body` — draft an SDD-shaped issue body
@@ -343,7 +355,13 @@ async fn draft_issue_body(
         &body.title,
     )
     .await?;
-    Ok(Json(DraftBodyResponse { body: drafted }))
+    Ok(Json(DraftBodyResponse {
+        body: drafted.body,
+        grounding: DraftGroundingDto {
+            repo: drafted.grounded_repo,
+            wiki: drafted.grounded_wiki,
+        },
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -639,11 +657,34 @@ mod tests {
     }
 
     #[test]
-    fn draft_body_response_serializes_body_field() {
-        let json = serde_json::to_string(&DraftBodyResponse {
+    fn draft_body_response_serializes_body_and_grounding() {
+        // Spec 020 F3 (D4): `grounding` is always present and add-only — old
+        // readers of `{body}` keep working; the intake panel keys its honest
+        // note on `grounding.repo == false`.
+        let ungrounded = serde_json::to_string(&DraftBodyResponse {
             body: "## Problem".into(),
+            grounding: DraftGroundingDto {
+                repo: false,
+                wiki: false,
+            },
         })
         .unwrap();
-        assert_eq!(json, "{\"body\":\"## Problem\"}");
+        assert_eq!(
+            ungrounded,
+            "{\"body\":\"## Problem\",\"grounding\":{\"repo\":false,\"wiki\":false}}"
+        );
+
+        let grounded = serde_json::to_string(&DraftBodyResponse {
+            body: "## Problem".into(),
+            grounding: DraftGroundingDto {
+                repo: true,
+                wiki: true,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            grounded,
+            "{\"body\":\"## Problem\",\"grounding\":{\"repo\":true,\"wiki\":true}}"
+        );
     }
 }

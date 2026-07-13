@@ -1864,6 +1864,17 @@ fn sanitize_draft_body(raw: &str) -> String {
     truncate_chars(unfenced, DRAFT_BODY_MAX_CHARS)
 }
 
+/// A drafted issue body plus the grounding facts (spec 020 F3, D4): whether
+/// the LOCAL repo snapshot and the wiki sidecar actually contributed. Both
+/// reads are local-by-design ("Chat never SSHes"), so an SSH repo's draft is
+/// ungrounded — the route surfaces these booleans so the client can say so
+/// honestly instead of presenting a generic draft as grounded.
+pub(crate) struct DraftedIssue {
+    pub body: String,
+    pub grounded_repo: bool,
+    pub grounded_wiki: bool,
+}
+
 /// Draft an SDD-shaped issue body from a title + local repo context. Shared
 /// plumbing with `/api/chat`: same credential resolution (loud, actionable
 /// error naming both recovery paths when absent), same repo snapshot, same
@@ -1872,7 +1883,7 @@ pub(crate) async fn draft_issue_body(
     workdir: Option<&str>,
     repo_slug: Option<&str>,
     title: &str,
-) -> Result<String, ApiError> {
+) -> Result<DraftedIssue, ApiError> {
     let title = title.trim();
     if title.is_empty() {
         return Err(ApiError::BadRequest(
@@ -1886,6 +1897,10 @@ pub(crate) async fn draft_issue_body(
     // best-effort — a wiki miss (no sidecar, model mismatch, blank title) yields
     // `None` and the draft still proceeds from the repo snapshot alone.
     let wiki = retrieve_wiki_for_query(workdir, title).await;
+    // Captured before the contexts move into the prompt: these are the D4
+    // grounding facts the response reports (a non-local dir → `None` → false).
+    let grounded_repo = repo_context.is_some();
+    let grounded_wiki = wiki.is_some();
     let instructions = draft_body_instructions(repo_slug, repo_context.as_deref(), wiki.as_deref());
     let system = build_system(&auth, &instructions);
     let messages = vec![json!({ "role": "user", "content": draft_body_user_message(title) })];
@@ -1899,7 +1914,11 @@ pub(crate) async fn draft_issue_body(
             "the model returned an empty issue body".into(),
         ));
     }
-    Ok(body)
+    Ok(DraftedIssue {
+        body,
+        grounded_repo,
+        grounded_wiki,
+    })
 }
 
 #[cfg(test)]

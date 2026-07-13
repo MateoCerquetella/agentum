@@ -234,3 +234,132 @@ plus `ProjectBindingEditor`/`use-tracker-intake.ts` are untouched as promised.
 Note for the tester: the new route's 502 (`host_unreachable`) is
 wire-distinguishable from the binding family's 422 `no_github_repo` envelope —
 qa.sh's "host-down shows the unreachable-flavored error" can key on the status.
+
+## F3 — intake-ssh-honest (UI + one server flag) — BUILT ✅ (2026-07-13)
+
+Increment of spec 020 F3 per `architecture.md` §4 and
+`handoffs/02-architect-to-developer.md`. Untouched by contract:
+`start-work-repo-match.ts`, `repo-slug-arm.ts`/`repo-slug-index.ts` (F2's),
+`ProjectBindingEditor`'s binding/discover logic beyond the repoId threading,
+the native `gh` commands, the wizard's `trackerWorkdir` gate (threaded but NOT
+relaxed — §1.5.5 named follow-up), `fetchGithubRepoLabels` (unwidened per
+§4.2), `task_sink.rs`, `auth.rs::is_public`.
+
+### What was built
+
+1. **Server grounding flag (D4, §4.1)** —
+   `chat.rs::draft_issue_body` returns
+   `pub(crate) struct DraftedIssue { body, grounded_repo, grounded_wiki }`
+   (facts captured from `gather_repo_context(...).is_some()` /
+   `retrieve_wiki_for_query(...).is_some()` BEFORE the values move into the
+   prompt); sole caller `github.rs::draft_issue_body` (verified sole by grep)
+   serializes an **always-present, add-only**
+   `grounding: {repo: bool, wiki: bool}` next to `body`
+   (`DraftGroundingDto`, single-word fields, no renames/aliases).
+   `DraftBodyRequest` gets NO `repoId` (deliberate — §1.5.1: the route
+   resolves no slug and touches no host).
+2. **Client widenings (§4.2)** —
+   `runtime/github-projects-client.ts`: pure exported `bindingQuery({workdir,
+   slug?, repoId?})` (used by GET + DELETE); `getProjectBinding` /
+   `putProjectBinding` / `deleteProjectBinding` inputs gain `repoId?`
+   (PUT body spreads it conditionally, the `:176` slug pattern).
+   `runtime/github-issue-client.ts`: pure exported `createIssuePayload`
+   (extracted from the create body literal); `createGithubIssue` +
+   `fetchGithubIssueBody` gain `repoId?`; `DraftedGithubIssueBody` widens to
+   `{body, grounding?}` (optional client-side for old-server skew).
+3. **Editor + feeders (§4.3)** — `ProjectBindingEditor` gains a `repoId?`
+   prop, threaded into its 4 client calls + dep arrays (binding-load effect,
+   handleSave, handleToggleDoneCloses, handleUnbind). Feeders:
+   ProjectHubPage passes `repoId={repo.id}` (the hub's `repo.path ?` gate
+   already passes SSH repos); IntegrationsPane passes `repoId={selected.id}`
+   **and drops the `localRepos` filter** (§1.5.4 — comment rewritten to say
+   the limitation it documented is what 020 removed); CreateWorkspaceWizard
+   computes `trackerRepoId` with the SAME local-only gate as `trackerWorkdir`
+   (comment updated: the gate is now a product choice, not technical),
+   threads it through `AgentStep` → `TrackerSection` (new `repoId?` prop) →
+   the editor mount.
+4. **Intake hook + panel (§4.4)** — `use-tracker-intake.ts`: binding read
+   threads `repoId: repo.id` (the leg that un-dead-ends SSH repos; deps gain
+   `repo.id`); file threads `repoId: repo.id` (no-hint robustness when the
+   binding read failed and `slug` is null); draft leg unchanged payload
+   (slug-first) + captures `grounding` from the response (reset beside the
+   `setFiled(null)` per-draft reset); new derived `groundingNote` via
+   `deriveDraftGroundingNote(grounding, hostLabel)` with `hostLabel` from the
+   `sshTargetLabels` store selector (WorktreeCard precedent, `?? 'a remote
+   host'` per §4.4). `TrackerIntakePanel` renders the note after the
+   Description field, muted (`text-[11px] text-muted-foreground`), never
+   destructive-styled. `filed`/error handling untouched (AC 10).
+5. **Pure model (add-only)** — `create-issue-intent-model.ts` gains
+   `DraftGrounding` + `deriveDraftGroundingNote`: null flag (pre-020 server)
+   → null; `repo: true` → null (wiki-only miss silent — §1.5.3); repo miss →
+   the §4.4 exact strings (host-label vs unreadable-folder flavors, "or
+   wiki" folded in when both missed). 015's exports untouched.
+
+### Test-first evidence
+
+Tests written BEFORE implementation; red runs pinned exactly the missing
+surface:
+- **Vitest red:** 13 failures — `deriveDraftGroundingNote is not a function`,
+  `bindingQuery`/`createIssuePayload` not exported (module for
+  github-projects-client.test.ts had no export).
+- **Rust red:** 4 compile errors — `DraftBodyResponse` has no field
+  `grounding`, `DraftGroundingDto` not found.
+
+New/extended tests:
+- `create-issue-intent-model.test.ts` (+6, add-only describe): null-flag
+  silence, grounded silence, wiki-only-miss silence, repo-miss + label
+  (wiki true/false — "or wiki" wording), repo-miss without label (both wiki
+  variants). **015's 26 existing cases pass unmodified.**
+- `runtime/github-projects-client.test.ts` (NEW, 4): `bindingQuery` param
+  present iff supplied (workdir-only pre-020 shape, slug, repoId, all three).
+- `runtime/github-issue-client.test.ts` (+3): `createIssuePayload` minimal =
+  exactly `{title, workdir}`; all optionals present when supplied; empty
+  labels array omitted (pre-006/020 wire pins).
+- Rust: `github::tests::draft_body_response_serializes_body_and_grounding` —
+  exact JSON for grounded and ungrounded shapes. The
+  `None`-for-non-local-dir grounding facts stay pinned by the EXISTING
+  `chat.rs` tests (`gather_repo_context_none_for_missing_or_empty_workdir`,
+  `retrieve_wiki_for_query_is_none_without_a_workdir`) — no LLM-call test
+  needed.
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `cargo test -p agentum-server --lib` | **701 passed / 0 failed / 5 ignored** (F2 baseline 701/0/5; the F3 serde pin replaced the old `DraftBodyResponse` pin one-for-one — see deviation 1; all other existing tests green unmodified) |
+| `cargo fmt --all` (`--check` clean) | ✅ |
+| `cargo clippy -p agentum-server --lib --tests -- -D warnings` | ✅ 0 warnings |
+| `bunx vitest run` (intent-model + issue-client + projects-client + repo-slug-arm + start-work-repo-match) | ✅ 5 files, **53 tests** (32 + 6 + 4 + 4 + 7) — 015 model cases and F2 arm-picker suite green unmodified |
+| `npm run build --prefix crates/agentum-desktop/ui` | ✅ |
+
+### Deviations (numbered)
+
+1. **Existing Rust test amended, not added-beside:**
+   `github::tests::draft_body_response_serializes_body_field` asserted the
+   exact pre-020 JSON (`{"body":"…"}`) of the struct F3 changes — it IS the
+   response's wire-shape pin, so it was renamed/updated to
+   `draft_body_response_serializes_body_and_grounding` with the new
+   always-present shape. Test count unchanged (701). Every other existing
+   test is untouched.
+2. **IntegrationsPane empty-state string updated** ("Add a local repo first"
+   → "Add a repo first") — follows the sanctioned filter drop (§1.5.4): with
+   SSH repos now listed, "local" in the empty-state would be wrong.
+3. **`trackerRepoId` threads through `AgentStep`:** the architecture's §4.3
+   names the mount (`:1383`) and `TrackerSection`, but the mount lives inside
+   the `AgentStep` subcomponent — `trackerRepoId` is passed wizard →
+   `AgentStep` (new prop) → `TrackerSection` → editor. Same gate, one extra
+   hop the blueprint's line-anchors didn't show.
+4. **Line drift (cosmetic):** `chat.rs::draft_issue_body` sat at
+   `:1871-1903` as cited; `github.rs`'s draft route at `:323-347`
+   (architecture cited `:311-335` — F1's DTO comments shifted it); editor
+   calls at `:94/:229(+2)/:264(+2)/:292(+3)`; hub mount `:274`; pane filter
+   `:238`; wizard gate `:392-393`, mounts `:1383(+5)/:1608(+8)`. No
+   functional drift.
+5. **`ai/STATE.md` concurrent drift** (same as F1 dev. 7 / F2 dev. 3):
+   modified by another agent during this build — left uncommitted; only F3
+   files + this tasks.md are in the commit.
+
+### Developer-phase verdict
+
+All three slices (F1 `09726c46`, F2 `e8fb31a8`, F3 this commit) built and
+green on every gate. Spec 020 ACs 1–10 implemented; ready for the tester.

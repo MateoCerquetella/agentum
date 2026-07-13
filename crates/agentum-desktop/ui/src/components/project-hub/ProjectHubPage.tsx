@@ -273,6 +273,7 @@ function ProjectTrackerConfig({ repo }: { repo: Repo }): React.JSX.Element {
           {repo.path ? (
             <ProjectBindingEditor
               workdir={repo.path}
+              repoId={repo.id}
               onBound={() => setBindingVersion((v) => v + 1)}
             />
           ) : (

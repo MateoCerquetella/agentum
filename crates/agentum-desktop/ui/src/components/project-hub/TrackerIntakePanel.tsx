@@ -101,6 +101,11 @@ export function TrackerIntakePanel({
               />
             </label>
 
+            {/* Spec 020 AC 9: honesty, not failure — muted, never destructive. */}
+            {intake.groundingNote ? (
+              <span className="text-[11px] text-muted-foreground">{intake.groundingNote}</span>
+            ) : null}
+
             {/* Pick the Linear team when filing into Linear and >1 exists. */}
             {intake.effectiveProvider === 'linear' && intake.teams.length > 1 ? (
               <label className="flex flex-col gap-1.5">

@@ -3,6 +3,7 @@ import {
   canDraftIssue,
   canFileIssue,
   deriveCreateIssueIntentPhase,
+  deriveDraftGroundingNote,
   deriveFiledGatedRunGate,
   deriveIntentTitle,
   deriveTrackerIntakePhase,
@@ -217,5 +218,45 @@ describe('deriveFiledGatedRunGate', () => {
       eligible: false,
       reason: 'no-linked-item'
     })
+  })
+})
+
+// ---------- Spec 020 F3: the honest grounding note (add-only) ----------
+
+describe('deriveDraftGroundingNote', () => {
+  it('is silent when the server sent no flag (a pre-020 response)', () => {
+    expect(deriveDraftGroundingNote(null, 'vps')).toBeNull()
+    expect(deriveDraftGroundingNote(null, null)).toBeNull()
+  })
+
+  it('is silent when the repo grounded the draft', () => {
+    expect(deriveDraftGroundingNote({ repo: true, wiki: true }, null)).toBeNull()
+    expect(deriveDraftGroundingNote({ repo: true, wiki: true }, 'vps')).toBeNull()
+  })
+
+  it('stays silent on a wiki-only miss — the normal local no-sidecar case', () => {
+    expect(deriveDraftGroundingNote({ repo: true, wiki: false }, null)).toBeNull()
+    expect(deriveDraftGroundingNote({ repo: true, wiki: false }, 'vps')).toBeNull()
+  })
+
+  it('notes a repo miss with the host label (SSH repo: files live elsewhere)', () => {
+    expect(deriveDraftGroundingNote({ repo: false, wiki: true }, 'vps')).toBe(
+      "Drafted without repo grounding — the repo's files live on vps."
+    )
+  })
+
+  it('folds the wiki word in when BOTH sources were skipped', () => {
+    expect(deriveDraftGroundingNote({ repo: false, wiki: false }, 'vps')).toBe(
+      "Drafted without repo or wiki grounding — the repo's files live on vps."
+    )
+  })
+
+  it('explains an unreadable local folder when no host label exists', () => {
+    expect(deriveDraftGroundingNote({ repo: false, wiki: true }, null)).toBe(
+      "Drafted without repo grounding — the project folder wasn't readable here."
+    )
+    expect(deriveDraftGroundingNote({ repo: false, wiki: false }, null)).toBe(
+      "Drafted without repo or wiki grounding — the project folder wasn't readable here."
+    )
   })
 })

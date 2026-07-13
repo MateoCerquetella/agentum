@@ -118,16 +118,34 @@ export async function discoverProjectStatus(input: {
   }
 }
 
-/** `GET /api/github/project-binding` — the repo's stored binding (null = unbound). */
-export async function getProjectBinding(input: {
+/** The binding GET/DELETE query (spec 020 F3). Pure + exported for the wire
+ *  pins: `repoId` appended only when present, so a repoId-less call keeps the
+ *  pre-020 query byte-identical (the server treats absent as local). */
+export function bindingQuery(input: {
   workdir: string
   slug?: string
-  timeoutMs?: number
-}): Promise<{ slug: string; binding: ProjectBindingDto | null }> {
+  repoId?: string
+}): URLSearchParams {
   const params = new URLSearchParams({ workdir: input.workdir })
   if (input.slug) {
     params.set('slug', input.slug)
   }
+  if (input.repoId) {
+    params.set('repoId', input.repoId)
+  }
+  return params
+}
+
+/** `GET /api/github/project-binding` — the repo's stored binding (null = unbound).
+ *  `repoId` (spec 020 F3) resolves the slug on the repo's own host — the leg
+ *  that makes SSH repos bindable at all. */
+export async function getProjectBinding(input: {
+  workdir: string
+  slug?: string
+  repoId?: string
+  timeoutMs?: number
+}): Promise<{ slug: string; binding: ProjectBindingDto | null }> {
+  const params = bindingQuery(input)
   const url = await apiUrl(`/api/github/project-binding?${params.toString()}`)
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 10000)
@@ -153,6 +171,8 @@ export async function getProjectBinding(input: {
 export async function putProjectBinding(input: {
   workdir: string
   slug?: string
+  /** Spec 020 F3: resolve the binding's slug on this repo's own host. */
+  repoId?: string
   projectId: string
   statusFieldId: string
   statusMapping: StatusMappingWire
@@ -174,6 +194,7 @@ export async function putProjectBinding(input: {
       body: JSON.stringify({
         workdir: input.workdir,
         ...(input.slug ? { slug: input.slug } : {}),
+        ...(input.repoId ? { repoId: input.repoId } : {}),
         projectId: input.projectId,
         statusFieldId: input.statusFieldId,
         statusMapping: input.statusMapping,
@@ -284,16 +305,15 @@ export async function provisionWorkspace(input: {
   }
 }
 
-/** `DELETE /api/github/project-binding` — unbind (idempotent; 204). */
+/** `DELETE /api/github/project-binding` — unbind (idempotent; 204). `repoId`
+ *  (spec 020 F3) resolves the slug on the repo's own host, like the GET. */
 export async function deleteProjectBinding(input: {
   workdir: string
   slug?: string
+  repoId?: string
   timeoutMs?: number
 }): Promise<void> {
-  const params = new URLSearchParams({ workdir: input.workdir })
-  if (input.slug) {
-    params.set('slug', input.slug)
-  }
+  const params = bindingQuery(input)
   const url = await apiUrl(`/api/github/project-binding?${params.toString()}`)
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 10000)

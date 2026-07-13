@@ -12,6 +12,7 @@ import type { LinearTeam, Repo } from '@/shared/types'
 import {
   canDraftIssue,
   canFileIssue,
+  deriveDraftGroundingNote,
   deriveFiledGatedRunGate,
   deriveIntentTitle,
   deriveTrackerIntakePhase,
@@ -19,6 +20,7 @@ import {
 } from '@/components/new-workspace/create-issue-intent-model'
 import type {
   CreateIssueProvider,
+  DraftGrounding,
   FiledIssue,
   TrackerIntakePhase
 } from '@/components/new-workspace/create-issue-intent-model'
@@ -54,6 +56,9 @@ export type TrackerIntake = {
   phase: TrackerIntakePhase
   error: string | null
   filed: FiledIssue | null
+  /** Spec 020 AC 9: the honest note when the draft ran without repo grounding
+   *  (SSH repo / unreadable folder) — null when grounded or unknown. */
+  groundingNote: string | null
   canDraft: boolean
   canFile: boolean
   draft: () => void
@@ -101,7 +106,9 @@ export function useTrackerIntake({
       return
     }
     let cancelled = false
-    void getProjectBinding({ workdir })
+    // Spec 020 F3: `repoId` makes the slug resolve on the repo's OWN host —
+    // the leg that un-dead-ends SSH repos (it's how `slug` gets learned at all).
+    void getProjectBinding({ workdir, repoId: repo.id })
       .then((res) => {
         if (cancelled) return
         setBinding(res.binding)
@@ -115,7 +122,7 @@ export function useTrackerIntake({
     return () => {
       cancelled = true
     }
-  }, [repo.path, bindingVersion])
+  }, [repo.path, repo.id, bindingVersion])
 
   const resolved = useMemo(
     () => resolvePickerProject({ binding, activeProject }),
@@ -161,6 +168,9 @@ export function useTrackerIntake({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filed, setFiled] = useState<FiledIssue | null>(null)
+  // Spec 020 F3 (D4): the server's word on whether repo/wiki context fed the
+  // draft — never inferred client-side from connectionId.
+  const [grounding, setGrounding] = useState<DraftGrounding | null>(null)
 
   const busy = generating || submitting
   const phase = deriveTrackerIntakePhase({
@@ -183,15 +193,21 @@ export function useTrackerIntake({
     setGenerating(true)
     setError(null)
     // Model contract: a new draft is new work — the old "filed" chip must not
-    // sit over it as if this draft were already tracked.
+    // sit over it as if this draft were already tracked. The grounding flag is
+    // per-draft too: a stale note must never describe a fresh draft.
     setFiled(null)
+    setGrounding(null)
     try {
-      const { body: drafted } = await draftGithubIssueBody({
+      // The draft leg threads the LEARNED slug, not repoId (spec 020 §1.5.1):
+      // this route resolves no slug and touches no host — its folder reads are
+      // local-by-design, which is exactly what `grounding` reports.
+      const res = await draftGithubIssueBody({
         workdir,
         title: seededTitle,
         ...(slug ? { slug } : {})
       })
-      setBody(drafted)
+      setBody(res.body)
+      setGrounding(res.grounding ?? null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not generate a description.')
     } finally {
@@ -209,11 +225,15 @@ export function useTrackerIntake({
     setSubmitting(true)
     setError(null)
     try {
+      // Spec 020 F3: `repoId` is the no-hint robustness path — when the
+      // binding read failed earlier (host down) and `slug` is still null, the
+      // server resolves the origin on the repo's own host instead of 422ing.
       const created = await createGithubIssue({
         title: trimmedTitle,
         ...(body.trim() ? { body: body.trim() } : {}),
         workdir,
-        ...(slug ? { slug } : {})
+        ...(slug ? { slug } : {}),
+        repoId: repo.id
       })
       // `filed` only from the provider-confirmed response — never before (AC 12).
       setFiled({
@@ -228,7 +248,7 @@ export function useTrackerIntake({
     } finally {
       setSubmitting(false)
     }
-  }, [body, repo.path, slug, title])
+  }, [body, repo.path, repo.id, slug, title])
 
   const fileLinear = useCallback(async (): Promise<void> => {
     const trimmedTitle = title.trim()
@@ -273,6 +293,14 @@ export function useTrackerIntake({
 
   const gate = deriveFiledGatedRunGate(filed, repo.connectionId)
 
+  // The host label explains WHY the files weren't readable (presentation
+  // only — the WorktreeCard sshTargetLabels precedent); the note itself keys
+  // exclusively on the server's grounding flag.
+  const hostLabel = useAppStore((s) =>
+    repo.connectionId ? (s.sshTargetLabels.get(repo.connectionId) ?? 'a remote host') : null
+  )
+  const groundingNote = deriveDraftGroundingNote(grounding, hostLabel)
+
   const startGatedRun = useCallback((): void => {
     // The gate composes D3 (GitHub-only) and the local-repo precondition; a
     // gated run needs the FRESH worktree the composer creates, so this is the
@@ -301,6 +329,7 @@ export function useTrackerIntake({
     phase,
     error,
     filed,
+    groundingNote,
     canDraft: canDraftIssue(intent, busy),
     canFile: canFileIssue(title, busy),
     draft: () => void draft(),

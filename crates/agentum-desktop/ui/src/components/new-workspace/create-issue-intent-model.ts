@@ -133,3 +133,28 @@ export function deriveFiledGatedRunGate(
     repoConnectionId
   )
 }
+
+// ---------- Spec 020 F3: the honest grounding note (add-only) ----------
+
+/** The draft response's grounding flag — which context sources actually fed
+ *  the drafted body (server-known, D4). */
+export type DraftGrounding = { repo: boolean; wiki: boolean }
+
+/**
+ * The honest grounding note for a drafted body (spec 020 AC 9, D4): null =
+ * no note. Notes ONLY when repo grounding was skipped — a wiki-only miss is
+ * the normal local no-sidecar case and stays silent (015 behavior). A null
+ * `grounding` is a pre-020 server response: silent, exactly today. Never
+ * inferred from `connectionId` — the flag is the server's word; the host
+ * label only explains WHY the files weren't readable.
+ */
+export function deriveDraftGroundingNote(
+  grounding: DraftGrounding | null,
+  hostLabel: string | null
+): string | null {
+  if (!grounding || grounding.repo) return null
+  const skipped = grounding.wiki ? 'repo' : 'repo or wiki'
+  return hostLabel
+    ? `Drafted without ${skipped} grounding — the repo's files live on ${hostLabel}.`
+    : `Drafted without ${skipped} grounding — the project folder wasn't readable here.`
+}
