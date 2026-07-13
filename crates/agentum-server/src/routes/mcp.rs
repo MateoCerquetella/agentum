@@ -1184,7 +1184,9 @@ fn parse_report_status_args(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `phase`"))?;
     let phase = crate::task_sink::parse_tracker_phase(phase_str).ok_or_else(|| {
-        anyhow::anyhow!("unknown `phase` {phase_str:?} (todo|in_progress|in_review|ready_to_test|done)")
+        anyhow::anyhow!(
+            "unknown `phase` {phase_str:?} (todo|in_progress|in_review|ready_to_test|done)"
+        )
     })?;
     let url = args.get("url").and_then(Value::as_str).map(str::to_string);
     let id = match args.get("id").and_then(Value::as_str) {
@@ -1612,14 +1614,11 @@ mod tests {
             .unwrap()
             .iter()
             .find(|t| t["name"] == "agentum_report_status")
-            .expect("agentum_report_status is in the catalog")["inputSchema"]["properties"]
-            ["phase"]["enum"]
+            .expect("agentum_report_status is in the catalog")["inputSchema"]["properties"]["phase"]
+            ["enum"]
             .clone();
         assert!(
-            phase_enum
-                .as_array()
-                .unwrap()
-                .contains(&json!("in_review")),
+            phase_enum.as_array().unwrap().contains(&json!("in_review")),
             "tool-spec phase enum must advertise in_review, got {phase_enum}"
         );
     }
