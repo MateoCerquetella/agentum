@@ -124,6 +124,12 @@ struct ChatRequest {
     /// Optional repo context to ground the interview.
     #[serde(default)]
     workdir: Option<String>,
+    /// Spec 009 (#361): the selected workspace's repo id, so the server can
+    /// resolve the repo's HOST and gather context over SSH when the project is
+    /// remote — `workdir` alone is a path on that host, unreadable locally.
+    /// Serde-default so old clients (workdir-only) are unchanged.
+    #[serde(default)]
+    repo_id: Option<String>,
     #[serde(default)]
     repo_slug: Option<String>,
     /// Optional model override.
@@ -300,12 +306,13 @@ fn assemble_repo_context(parts: RepoContextParts) -> Option<String> {
 }
 
 /// Cap the tree at [`TREE_MAX_FILES`] lines with the `…(+N more files)`
-/// suffix. `None` for an empty tree.
+/// suffix. `None` for an empty (or blank-lines-only) tree — a header with no
+/// files under it would read as grounding without being any.
 fn capped_tree(text: &str) -> Option<String> {
-    let total = text.lines().count();
-    if total == 0 {
+    if text.trim().is_empty() {
         return None;
     }
+    let total = text.lines().count();
     let mut joined = text
         .lines()
         .take(TREE_MAX_FILES)
@@ -364,14 +371,166 @@ fn local_repo_context(workdir: Option<&str>, home: Option<&std::path::Path>) -> 
     assemble_repo_context(parts)
 }
 
+/// Sentinel the remote script prints before each section; the parser splits on
+/// it. A repo file containing this exact line garbles that one snapshot
+/// section at worst — never an error (accepted, documented risk).
+const REMOTE_CTX_SENTINEL: &str = "===AGENTUM-CTX ";
+/// Hard bound on the ONE SSH round trip the remote arm makes. A wedged
+/// ControlMaster must degrade the chat to honest-blind (+ warning event), not
+/// hang the reply (spec 009 AC 5).
+const SSH_CONTEXT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The one-round-trip script the remote arm runs: emit every context section
+/// sentinel-delimited. `head -c` caps are coarse transport bounds (~2× the
+/// char budgets — bytes ≥ chars); [`assemble_repo_context`] enforces the real
+/// budgets. `exit 42` on a bad workdir so the transport reports a clean
+/// non-zero instead of streaming an empty snapshot.
+fn remote_context_script(workdir: &str) -> Option<String> {
+    let wd = shlex::try_quote(workdir).ok()?;
+    let guides = GUIDE_CANDIDATES.join(" ");
+    let manifests = MANIFEST_NAMES.join(" ");
+    Some(format!(
+        r#"cd {wd} 2>/dev/null || exit 42
+for f in {guides}; do
+  if [ -f "$f" ]; then printf '===AGENTUM-CTX guide %s===\n' "$f"; head -c 80000 "$f"; printf '\n'; break; fi
+done
+if [ -f .harness/AGENTS.md ]; then printf '===AGENTUM-CTX harness-agents===\n'; head -c 40000 .harness/AGENTS.md; printf '\n'; fi
+if [ -f .harness/feature_list.json ]; then printf '===AGENTUM-CTX feature-list===\n'; head -c 24000 .harness/feature_list.json; printf '\n'; fi
+for f in {manifests}; do
+  if [ -f "$f" ]; then printf '===AGENTUM-CTX manifest %s===\n' "$f"; head -c 16000 "$f"; printf '\n'; fi
+done
+printf '===AGENTUM-CTX tree===\n'
+git ls-files 2>/dev/null | head -c 120000
+"#
+    ))
+}
+
+/// Split the script's sentinel-delimited output back into parts. Unknown
+/// section names are skipped, so script/parser version skew degrades to a
+/// smaller snapshot rather than failing the gather.
+fn parse_remote_context_output(out: &str) -> RepoContextParts {
+    fn flush(header: &str, body: String, parts: &mut RepoContextParts) {
+        if let Some(name) = header.strip_prefix("guide ") {
+            if parts.guide.is_none() {
+                parts.guide = Some((name.to_string(), body));
+            }
+        } else if header == "harness-agents" {
+            parts.harness_agents = Some(body);
+        } else if header == "feature-list" {
+            parts.feature_list = Some(body);
+        } else if let Some(name) = header.strip_prefix("manifest ") {
+            parts.manifests.push((name.to_string(), body));
+        } else if header == "tree" {
+            parts.tree = Some(body);
+        }
+    }
+
+    let mut parts = RepoContextParts {
+        guide: None,
+        harness_agents: None,
+        feature_list: None,
+        manifests: Vec::new(),
+        tree: None,
+    };
+    let mut current: Option<(String, String)> = None;
+    for line in out.lines() {
+        if let Some(header) = line
+            .strip_prefix(REMOTE_CTX_SENTINEL)
+            .and_then(|rest| rest.strip_suffix("==="))
+        {
+            if let Some((h, b)) = current.take() {
+                flush(&h, b, &mut parts);
+            }
+            current = Some((header.to_string(), String::new()));
+        } else if let Some((_, buf)) = current.as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    if let Some((h, b)) = current.take() {
+        flush(&h, b, &mut parts);
+    }
+    parts
+}
+
+/// The remote arm: ONE `sh -c` round trip over the pooled SSH transport (the
+/// `git_fs` precedent — the login shell may be fish, which rejects the POSIX
+/// we build), hard-bounded by [`SSH_CONTEXT_TIMEOUT`]. Best-effort by
+/// contract: any transport error, non-zero exit, or timeout → warn + `None`
+/// (the reply must always stream; the F3 warning event tells the user).
+async fn gather_repo_context_ssh(host: &agentum_core::Host, workdir: &str) -> Option<String> {
+    let script = remote_context_script(workdir)?;
+    let cmd = format!("sh -c {}", shlex::try_quote(&script).ok()?);
+    match tokio::time::timeout(
+        SSH_CONTEXT_TIMEOUT,
+        crate::host_runtime::ssh_stdout(host, &cmd),
+    )
+    .await
+    {
+        Ok(Ok(out)) => assemble_repo_context(parse_remote_context_output(&out)),
+        Ok(Err(e)) => {
+            tracing::warn!(host = %host.name, workdir, error = %e, "chat: remote repo-context gather failed");
+            None
+        }
+        Err(_) => {
+            tracing::warn!(host = %host.name, workdir, timeout_s = SSH_CONTEXT_TIMEOUT.as_secs(), "chat: remote repo-context gather timed out");
+            None
+        }
+    }
+}
+
+/// Resolve which arm grounds this request and run it. `repo_id` (when the
+/// client has a workspace selected) names the repo's host: `Local` → the
+/// local arm, `Ssh` → the remote arm. A stale `repo_id` (repo or host record
+/// deleted) must not blind a still-valid local workdir, so lookup failures
+/// fall through to the local arm. Returns the arm name for the diagnostic log.
+async fn gather_repo_context_for(
+    state: &AppState,
+    workdir: Option<&str>,
+    repo_id: Option<&str>,
+) -> (Option<String>, &'static str) {
+    if let Some(rid) = repo_id.map(str::trim).filter(|s| !s.is_empty()) {
+        match super::repos::load_host_for_repo(state, rid).await {
+            Ok(host) => match &host.kind {
+                agentum_core::HostKind::Local => {
+                    return (gather_repo_context(workdir), "local");
+                }
+                agentum_core::HostKind::Ssh { .. } => {
+                    let Some(wd) = workdir.map(str::trim).filter(|s| !s.is_empty()) else {
+                        return (None, "ssh");
+                    };
+                    return (gather_repo_context_ssh(&host, wd).await, "ssh");
+                }
+            },
+            Err(e) => {
+                tracing::warn!(repo_id = rid, error = ?e, "chat: repo host lookup failed; trying the local arm");
+            }
+        }
+    }
+    let arm = if workdir.map(str::trim).filter(|s| !s.is_empty()).is_some() {
+        "local"
+    } else {
+        "none"
+    };
+    (gather_repo_context(workdir), arm)
+}
+
 /// One line per chat request saying whether grounding happened and why not —
 /// the #361 diagnostic. A pinned chat that goes blind used to be invisible
 /// server-side (the model apologized, nothing logged); this line is the first
 /// thing to read when a user reports "no workspace selected".
-fn log_repo_context_outcome(route: &str, workdir: Option<&str>, ctx: Option<&str>) {
+fn log_repo_context_outcome(
+    route: &str,
+    workdir: Option<&str>,
+    repo_id: Option<&str>,
+    arm: &'static str,
+    ctx: Option<&str>,
+) {
     tracing::info!(
         route,
         workdir = workdir.unwrap_or("<none>"),
+        repo_id = repo_id.unwrap_or("<none>"),
+        arm,
         context_len = ctx.map(str::len).unwrap_or(0),
         grounded = ctx.is_some(),
         "chat repo-context gather"
@@ -752,7 +911,7 @@ async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Optio
 }
 
 async fn chat(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, ApiError> {
     if body.messages.is_empty() {
@@ -784,8 +943,15 @@ async fn chat(
     // mode ⇒ Fast (byte-identical to today); the client owns stage advancement.
     let mode = body.mode.unwrap_or(IntakeMode::Fast);
     let stage = body.stage.unwrap_or(1);
-    let repo_context = gather_repo_context(body.workdir.as_deref());
-    log_repo_context_outcome("chat", body.workdir.as_deref(), repo_context.as_deref());
+    let (repo_context, ctx_arm) =
+        gather_repo_context_for(&state, body.workdir.as_deref(), body.repo_id.as_deref()).await;
+    log_repo_context_outcome(
+        "chat",
+        body.workdir.as_deref(),
+        body.repo_id.as_deref(),
+        ctx_arm,
+        repo_context.as_deref(),
+    );
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
     let instructions = build_intake_instructions(
         mode,
@@ -858,7 +1024,7 @@ fn build_stream_payload(
 /// credential, bad model) is returned as a normal typed error BEFORE the stream
 /// opens, so the client sees a clean failure rather than a 200 that errors.
 async fn chat_stream(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<ChatRequest>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     if body.messages.is_empty() {
@@ -897,10 +1063,13 @@ async fn chat_stream(
     // to today; Socratic runs the staged pass. The client owns stage advancement.
     let mode = body.mode.unwrap_or(IntakeMode::Fast);
     let stage = body.stage.unwrap_or(1);
-    let repo_context = gather_repo_context(body.workdir.as_deref());
+    let (repo_context, ctx_arm) =
+        gather_repo_context_for(&state, body.workdir.as_deref(), body.repo_id.as_deref()).await;
     log_repo_context_outcome(
         "chat_stream",
         body.workdir.as_deref(),
+        body.repo_id.as_deref(),
+        ctx_arm,
         repo_context.as_deref(),
     );
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
@@ -2867,6 +3036,54 @@ mod tests {
         // Absolute paths still pass through expansion unchanged, so the
         // missing-dir contract above holds identically.
         assert!(local_repo_context(Some("/nonexistent/xyzzy"), Some(home.path())).is_none());
+    }
+
+    /// #361 F2: absent `repo_id` must deserialize as `None` so old
+    /// (workdir-only) clients keep the exact wire contract.
+    #[test]
+    fn chat_request_repo_id_is_serde_default() {
+        let req: ChatRequest = serde_json::from_str(r#"{"messages":[]}"#).expect("minimal request");
+        assert!(req.repo_id.is_none());
+        let req: ChatRequest =
+            serde_json::from_str(r#"{"messages":[],"repo_id":"r-1"}"#).expect("with repo_id");
+        assert_eq!(req.repo_id.as_deref(), Some("r-1"));
+    }
+
+    /// #361 F2: the remote script quotes the workdir (spaces must survive the
+    /// `sh -c` hop) and fails loudly on a bad cd so the transport reports
+    /// non-zero instead of an empty snapshot.
+    #[test]
+    fn remote_context_script_quotes_workdir_and_guards_cd() {
+        let script = remote_context_script("/home/u/my repo").expect("script");
+        let first = script.lines().next().expect("cd line");
+        let tokens =
+            shlex::split(first.trim_end_matches("|| exit 42").trim()).expect("cd line splits");
+        assert_eq!(tokens[0], "cd");
+        assert_eq!(tokens[1], "/home/u/my repo");
+        assert!(first.ends_with("|| exit 42"));
+        // Both shared name lists reach the script, so the arms can't drift.
+        assert!(script.contains("CLAUDE.md AGENTS.md README.md"));
+        assert!(script.contains("Cargo.toml package.json"));
+    }
+
+    /// #361 F2: simulated remote output → parts → assembled snapshot carries
+    /// the same section headers as the local arm.
+    #[test]
+    fn remote_context_output_round_trips_to_snapshot() {
+        let out = "===AGENTUM-CTX guide CLAUDE.md===\n# G\nRemote guide body.\n\
+===AGENTUM-CTX manifest Cargo.toml===\n[package]\nname = \"rdemo\"\n\
+===AGENTUM-CTX tree===\nsrc/main.rs\nCargo.toml\n";
+        let ctx = assemble_repo_context(parse_remote_context_output(out)).expect("ctx");
+        assert!(ctx.contains("Repo guide (CLAUDE.md)"));
+        assert!(ctx.contains("Remote guide body."));
+        assert!(ctx.contains("## Root manifests") && ctx.contains("### Cargo.toml"));
+        assert!(ctx.contains("Repo file tree (git-tracked)") && ctx.contains("src/main.rs"));
+        // A tree-only output (empty repo dir) still grounds on the tree alone;
+        // fully empty output is honest-blind.
+        assert!(
+            assemble_repo_context(parse_remote_context_output("===AGENTUM-CTX tree===\n\n"))
+                .is_none()
+        );
     }
 
     #[test]

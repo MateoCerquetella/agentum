@@ -225,6 +225,10 @@ export function sendChatMessage(opts: {
   let reasoning = ''
   void streamChat(history, {
     workdir: opts.workdir,
+    // Spec 009 (#361): repoId used to stop HERE (stored on the conversation,
+    // never sent) — the server needs it to resolve the repo's host for SSH
+    // context gathering.
+    repoId: opts.repoId,
     model: opts.model,
     thinking: opts.thinking,
     // Spec 008 F2: drive the server's per-stage prompt with THIS turn's intake
