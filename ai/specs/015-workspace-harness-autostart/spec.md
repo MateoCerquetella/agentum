@@ -38,17 +38,21 @@ hand-wire the Harness view before the engine does anything.
    `.harness/feature_list.json`) via the existing `fsListEntries` client
    (`GET /api/fs/entries`); the check runs async and never delays the
    workspace/terminal surface from rendering.
-2. When a spec file is found, a dismissible banner renders on the new
-   workspace's empty-state surface offering "Start Harness run"; the agent
-   launcher / terminal beneath it stays fully interactive (non-blocking).
+2. When a spec file is found, a dismissible banner renders in the
+   just-created workspace's view offering "Start Harness run" — visible
+   **whether or not an agent was auto-launched** (the wizard's quick-create
+   path auto-launches the chosen agent; the launcher empty-state only mounts
+   when no agent was chosen) — and the terminal/launcher beneath it stays
+   fully interactive (non-blocking).
 3. Accepting the banner calls `POST /api/harness` (register) then
    `POST /api/harness/{id}/run` (drive loop) with no further manual steps; a
    failure of either call surfaces a toast carrying the server's error detail.
 4. Dismissing the banner performs no writes: no harness is registered, nothing
    is persisted, and the session proceeds unchanged.
 5. If the workdir is already registered with the engine (`GET /api/harness`
-   lists it), the banner does not offer a duplicate registration — it hides
-   (or links to the existing run; architect's call, see open questions).
+   lists it — client fn `listHarnesses()`), or the wizard's "Start gated run"
+   toggle was armed for this creation, the banner does not render (PM D3/D6:
+   hide, no link).
 6. When no spec file is found, the creation flow is unchanged — no UI changes
    and no network calls beyond the single entries check — zero regression
    through `NewWorkspaceComposerModal.tsx` / `WorkspaceAgentLauncher.tsx`.
@@ -76,19 +80,28 @@ hand-wire the Harness view before the engine does anything.
 ### Already exists — do NOT rebuild
 
 - `fsListEntries` (`crates/agentum-desktop/ui/src/runtime/server-fs-client.ts:52`)
-  → `GET /api/fs/entries` (`crates/agentum-server/src/routes/fs.rs:143`) —
-  host-aware dir listing with `hidden: true`; the whole detection transport.
+  → `GET /api/fs/entries` (handler `crates/agentum-server/src/routes/fs.rs:180`,
+  route registered `fs.rs:24`) — host-aware dir listing with `hidden: true`;
+  the whole detection transport.
 - `startHarness(workdir)` (`runtime/harness-client.ts:148`, `POST /api/harness`)
   and `runHarness(id)` (`harness-client.ts:286`, `POST /api/harness/{id}/run`) —
   exactly the register + run pair AC 3 needs. Both are currently
   module-private: **export them**, don't re-implement.
-- `getHarnessStatuses()` (`harness-client.ts:276`, `GET /api/harness`) — the
-  dedupe check for AC 5.
-- `subscribeHarnessRunErrors` (`harness-client.ts:378`) — spec 008 F1's bridge
-  surfacing a just-started run's early drive-phase failure; reuse after accept.
-- `WorkspaceAgentLauncher.tsx` — the empty-state every new workspace lands on
-  (mounted at `components/Terminal.tsx:1569`); the banner's natural mount,
-  inherently non-blocking. Already imports `sonner`'s `toast`.
+- `listHarnesses()` (`harness-client.ts:276`, `GET /api/harness`; each
+  `HarnessStatus` carries `workdir` — `harness-client.ts:78`, server
+  `harness.rs:696`) — the dedupe check for AC 5. Also module-private today;
+  export it.
+- `subscribeHarnessRunErrors` (`harness-client.ts:378`, exported) — spec 008
+  F1's bridge surfacing a just-started run's early drive-phase failure; reuse
+  after accept.
+- Post-create seam: `lib/open-created-workspace.ts` (`planCreatedWorkspaceOpen`;
+  launcher fallback only when `agent === null`, `gatedRun` suppresses plain
+  deliveries at `:40-46`) — the creation moment the banner keys off.
+- `WorkspaceAgentLauncher.tsx` — the no-session empty state (mounted at
+  `components/Terminal.tsx:1578`, conditional at `:1576`) — ONE of the two
+  post-create surfaces; most quick-creates auto-launch the agent and never
+  mount it (its own docstring is outdated on this). Already imports `sonner`'s
+  `toast`.
 - Server dir constants + fallback semantics: `HARNESS_DIR` /
   `LEGACY_HARNESS_DIR` (`crates/agentum-server/src/harness/types.rs:16,19`) —
   mirror these two names client-side; never invent a third spelling.
@@ -97,13 +110,15 @@ hand-wire the Harness view before the engine does anything.
 
 ### Build new
 
-- `lib/workspace-harness-detect.ts` — pure: given the workdir's fs entries and
-  the registered harness workdirs, return
-  `{ found, harnessDir, alreadyRegistered }`; plus its vitest suite.
-- `HarnessSpecBanner` (small dismissible component: offer, accept, dismiss) and
-  its conditional mount in `WorkspaceAgentLauncher.tsx`.
-- `export` keywords on the two existing harness-client functions (keep knip
-  clean by actually consuming them).
+- `lib/workspace-harness-detect.ts` — pure: given the workdir's fs entries,
+  the registered harness workdirs, and the creation context (local? gated-run
+  armed?), return `{ found, harnessDir, offer }`; plus its vitest suite.
+- `HarnessSpecBanner` (small dismissible component: offer, accept, dismiss) —
+  mounted at the workspace-view level for the just-created worktree so it
+  shows regardless of agent auto-launch (exact placement = architect; PM D1).
+- `export` keywords on the three existing harness-client functions
+  (`startHarness`, `runHarness`, `listHarnesses`) — keep knip clean by
+  actually consuming them.
 
 ## Risks & invariants
 
@@ -118,21 +133,27 @@ hand-wire the Harness view before the engine does anything.
   stay in `spawn_agent_into_pane`).
 - **The gate is sacred** — accept only registers + runs; nothing may skip
   init/verify semantics or pre-mark features.
-- **Duplicate drivers** — racing the composer's own "Start gated run" toggle
-  (spec 005/008) or double-accepting must not create two drivers.
-  `POST /{id}/run` already rejects double-run via `claim_driver`; AC 5 hides
-  the offer when the workdir is registered — the architect should pin the
-  ordering so a composer-armed run registers before the banner's check.
+- **Duplicate drivers** — racing the wizard's "Start gated run" toggle
+  (spec 005/013, `POST /api/harness/start-work`) or double-accepting must not
+  create two drivers. `POST /{id}/run` already rejects double-run via
+  `claim_driver`; AC 5 both hides the offer when the workdir is registered
+  AND suppresses it outright when the gated-run toggle was armed for this
+  creation (PM D6) — belt and braces, no ordering race.
+- **Auto-launch reality** — the wizard's quick-create path auto-launches the
+  chosen agent (`CreateWorkspaceWizard.tsx:344` → `openCreatedWorkspace`;
+  launcher only mounts when `agent === null` or for gated runs). The banner
+  must NOT live solely on `WorkspaceAgentLauncher.tsx` or most creates never
+  see it (PM D1: workspace-view-level mount).
 - **Stale map:** CLAUDE.md's `HarnessEngine.tsx` no longer exists
-  (`components/harness/` now holds `ChatPage.tsx`) — re-locate the harness
-  view before wiring any "view run" link.
+  (`components/harness/` now holds `ChatPage.tsx`) — no "view run" link in
+  this slice (PM D3).
 
 ## Harness wiring (the gate)
 
 - **feature_list.json entries:**
   1. `f1-detect-helper` — `lib/workspace-harness-detect.ts` + vitest suite.
-  2. `f2-banner` — `HarnessSpecBanner` + conditional mount in
-     `WorkspaceAgentLauncher.tsx` fed by the helper (AC 1, 2, 6).
+  2. `f2-banner` — `HarnessSpecBanner` + workspace-view mount for the
+     just-created worktree, fed by the helper (AC 1, 2, 6).
   3. `f3-register-run` — export `startHarness`/`runHarness`, wire accept →
      register + run + dedupe + error toast (AC 3, 4, 5).
 - **`verify.sh` asserts:** `bunx vitest run` on the new suites
@@ -144,14 +165,38 @@ hand-wire the Harness view before the engine does anything.
   fixture → `GET /api/harness` unchanged (AC 4); fixture without a spec → no
   banner, flow unchanged (AC 6).
 
-## Open questions
+## PM decisions (locked 2026-07-13; cheap for Mateo to veto later)
 
-1. **Mount point** — `WorkspaceAgentLauncher.tsx` empty-state (recommended:
-   it's where every new workspace lands and it's inherently non-blocking) vs.
-   a session-detail surface. Issue #301 allows either.
-2. **Re-activation scope** — fire only at the creation moment, or whenever the
-   launcher mounts for an unregistered workdir (same code path, still
-   non-blocking; recommended)? Issue text says "on new workspace creation".
-3. **AC 5 shape** — hide the banner entirely for a registered workdir, or show
-   a passive "run exists" link? (Hide is simpler; link needs the harness view
-   re-located per the stale-map risk.)
+- **D1 — workspace-view mount.** The banner renders at the workspace-view
+  level for the just-created worktree, visible whether or not an agent
+  auto-launched. Exact component placement is the architect's (options:
+  `Terminal.tsx` worktree-scoped strip, or a shared slot both the launcher
+  and the tab surface render).
+- **D2 — creation-moment trigger only.** Detection fires once per creation
+  (keyed off the post-create open path, e.g. the `openCreatedWorkspace` seam),
+  NOT on every launcher/workspace mount — no re-offers on relaunch, no fs
+  calls on every activation. Issue #301 says "on new workspace creation";
+  broader triggers are a future slice.
+- **D3 — hide, never link.** Registered workdir ⇒ no banner. No "view run"
+  link in this slice (harness view location drifted; keep the slice small).
+- **D4 — canonical names.** Client dedupe uses `listHarnesses()` (the real
+  fn name; the draft's `getHarnessStatuses` was wrong). Export exactly
+  `startHarness`, `runHarness`, `listHarnesses`.
+- **D5 — local-only.** No banner for SSH-host workdirs: the wizard can create
+  remote worktrees but the engine reads the server-local FS only
+  (`routes/harness.rs` `StartRequest` has no host field). Detection short-
+  circuits before any fs call for non-local hosts.
+- **D6 — gated-run suppression.** A creation with the "Start gated run"
+  toggle armed never shows the banner (that path already registers + runs
+  via `/api/harness/start-work`).
+
+## Open questions (delegated to the Architect)
+
+1. **Q1 — banner mount mechanics under D1:** where exactly the workspace-view
+   strip renders in `Terminal.tsx` (or a small shared component both surfaces
+   mount) so it survives the auto-launch path without touching
+   `useComposerState` internals.
+2. **Q2 — detection hand-off shape:** how the creation context (worktreeId,
+   workdir, hostId, gatedRun) travels from the create flow to the banner —
+   store slice vs module-level pending-signal (precedent:
+   `lib/pending-session-prompt.ts` used by the launcher).

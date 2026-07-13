@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 **SHIP-READY — Reviewer SIGN-OFF 2026-07-06**, `review.md`, 0 blockers, HEAD `8aa8a2d2`. All 20 focus items PASS w/ quoted evidence: 3 dup-drift risks acceptable (ONE consolidation follow-up ticket: resolve_slug→routes/util.rs, gh_bin single owner, BLOCKED_LABEL pin-test); D2 residual honest; Skipped-fold self-describing; D1–D8 all honored; no injection/leak/is_public holes; option IDs never names; Ok-never-Err everywhere. 5 leave-as-is nits. Commits: F1 `474cfd12` F2 `0b03eb9e` F3 `26b1e022` + docs. **RELEASE = HUMAN**: PR → develop, promote, AND the AC-11 live custom-column board demo (runner Mateo; evidence = issue timeline + a demo-pass line here). Follow-up ticket = the consolidation chore.)
+- **current_spec:** 015-workspace-harness-autostart
+- **phase:** architect         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 PM gate PASS 2026-07-13, handoff `01-pm-to-architect.md`. No overlap w/ 010/011/013 — fact-checked. D1–D6 locked (workspace-view mount / creation-moment only / hide-never-link / `listHarnesses` / local-only / gated-run suppression); Q1 mount mechanics + Q2 context hand-off delegated to architect. Prior pointer: 010 SHIP-READY, released v0.60.0 flow per decision log.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,28 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Developer | **010 F2 CODE-COMPLETE + GREEN + COMMITTED
-  `0b03eb9e`** (drive, AC 4–8; tasks.md F2 section; F3 pending → phase STAYS
-  developer). `github_projects.rs` +711: `run_gh_graphql_argv` (ONE
-  runner/classifier for bind-time AND mid-run — scope miss carries the remedy
-  everywhere), pure builders (3 single-line GraphQL consts + argv fns;
-  `singleSelectOptionId` var = PRD AC-6 pin), `run_gh_capture`,
-  `ID_CACHE` LazyLock keyed (slug,number)→(node_id,item_id) (~9 vs ~14
-  calls/run), `board_write_with` (cold resolve → add-item ensure+fetch →
-  option write → stale-invalidate-retry-once → knob-gated probe-then-act
-  close/reopen; Blocked never closes). `task_sink.rs` +339:
-  `github_transition_with_board` + `github_mark_blocked_with_board` (private;
-  label fns BYTE-IDENTICAL; board Err → tracing::warn + fold into
-  Skipped("status label applied; Projects board write failed: …") — loud via
-  existing drive.rs/MCP plumbing); both arm hooks read binding only AFTER the
-  URL parse (hermeticity held — no-url skip tests never touch config). Gates:
-  cargo 604/0/5 (591+13), fmt clean, clippy 0; deletion audit = 7 lines, all
-  intended (2-line runner refactor, docstring, 2 comments, 2 callers) — ZERO
-  test edits; four seam call-site files untouched. 5 deviations documented
-  (2nd private fn = blocked-arm testability; act-failure loud per
-  never-silent; LazyLock over once_cell). ⚠️ ID_CACHE process-global: new
-  tests must use fresh slugs. **Next slice: F3 provision** (run-twice test
-  FIRST).
 - 2026-07-06 | Developer | **010 F3 CODE-COMPLETE + GREEN + COMMITTED
   `26b1e022` → DEVELOPER PHASE DONE, phase → tester** (provision, AC 9–10;
   tasks.md F3; handoff `03-developer-to-tester.md`). NEW crate-root
@@ -161,3 +139,35 @@
   develop → staging → main (pushed separately) → tag v0.60.0 (fires
   release.yml). Evidence contract for AC-11 stays: issue timeline
   project-status + close events + a demo-pass line HERE.
+- 2026-07-13 | Spec/Orchestrator | **015 DRAFTED from GH #301 + loop started
+  (autonomous)** (`015-workspace-harness-autostart/spec.md`, commit `cac37bab`;
+  sdd-spec direct path — ask recovered from the worktree's linked issue). Slice:
+  after new-workspace creation, detect `.agentum-harness/feature_list.json`
+  (+ legacy `.harness/`) in the workdir via existing `GET /api/fs/entries`,
+  non-blocking "Start Harness run" offer → existing `POST /api/harness` +
+  `/{id}/run` (export module-private harness-client fns; no new routes).
+  Orchestration decisions logged: (a) worktree branched from stale main → ff'd
+  onto origin/develop `40030d8b` BEFORE role work; (b) renumbered 009→015
+  (develop carries 009–014, incl. two 013s/014s); (c) `ai/roles/*`,
+  `ai/skills/orchestrate.md`, `ai/orchestration/hitl_policy.md`,
+  `ai/contracts/templates/*` DON'T EXIST on any branch — running the loop from
+  the sdd-orchestrate playbook + validate_handoff.md + specs 004–014 artifact
+  precedent (deviation, flag to Mateo); (d) author-run PM gate on the draft =
+  PASS. Phase = pm IN FLIGHT: overlap re-check vs 010–014 + line re-verify
+  (draft cited the now-DELETED composer files; wizard `CreateWorkspaceWizard.tsx`
+  replaced them). Issue #301 = live status board (comment posted).
+- 2026-07-13 | PM | **015 PM gate PASS → phase architect** (handoff
+  `01-pm-to-architect.md`; fact-check by Explore sub-agent, evidence quoted
+  there). NON-DUPLICATE verified: develop's neighbors are scaffold-on-create
+  (010 F3 `workspace-provision-step.ts`, writes `.agentum-harness/`, excludes
+  feature_list.json) + issue-first gated run (`start_work`) — neither detects
+  an existing feature_list. 3 citation fixes (fs.rs:180 not :143;
+  `listHarnesses` not `getHarnessStatuses`; Terminal.tsx:1578 not :1569).
+  KEY re-decision D1: wizard quick-create AUTO-LAUNCHES the agent
+  (`CreateWorkspaceWizard.tsx:344`; launcher mounts only for agent===null /
+  gated) → banner must be workspace-view-level, NOT launcher-only. D2
+  creation-moment trigger · D3 hide-never-link · D4 export
+  startHarness/runHarness/listHarnesses · D5 local-only (engine StartRequest
+  has no host field) · D6 gated-run suppression. Q1 (mount mechanics) + Q2
+  (context hand-off: store slice vs pending-signal à la
+  `pending-session-prompt.ts`) → architect.
