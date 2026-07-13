@@ -3,13 +3,24 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 **SHIP-READY — Reviewer SIGN-OFF 2026-07-06**, `review.md`, 0 blockers, HEAD `8aa8a2d2`. All 20 focus items PASS w/ quoted evidence: 3 dup-drift risks acceptable (ONE consolidation follow-up ticket: resolve_slug→routes/util.rs, gh_bin single owner, BLOCKED_LABEL pin-test); D2 residual honest; Skipped-fold self-describing; D1–D8 all honored; no injection/leak/is_public holes; option IDs never names; Ok-never-Err everywhere. 5 leave-as-is nits. Commits: F1 `474cfd12` F2 `0b03eb9e` F3 `26b1e022` + docs. **RELEASE = HUMAN**: PR → develop, promote, AND the AC-11 live custom-column board demo (runner Mateo; evidence = issue timeline + a demo-pass line here). Follow-up ticket = the consolidation chore.)
+- **current_spec:** 020-ssh-host-tracker-plumbing
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (020 **SHIP-READY — Reviewer SIGN-OFF 2026-07-13**, `review.md` @ `cc4bde36`, 0 blockers; spec Status → Done. Commits F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` on `fixes-new-workspace`, on top of ship-ready 015. **RELEASE = HUMAN**: ONE train with 015 (same branch) — PR → develop → staging qa.sh (live dyaus binding, SSH filing + grounding note, Start-work direct launch, host-down 422-flavor vs slug-route 502, gh authed on the remote) → main + tag. Follow-up ticket (reviewer should-fixes): SF1 ProjectHubPage:86 Tasks-tab binding read not repoId-threaded — bound SSH repo's Tasks tab never auto-enters board mode; SF2 SSH-repoId issue FETCH composes local neutral_cwd with remote gh — caller-less today but the live wire will trip the deferred QA leg (fix before/at QA); SF3 tasks.md wording. 015's own release checklist + 010's AC-11 demo stay in Active send-backs.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **015-host-aware-start-and-tracker-intake** — **SHIP-READY** (Reviewer
+  SIGN-OFF 2026-07-13, `review.md` @ `aa8ce9e3`, 0 blockers). Commits F1
+  `ff7290ee` F2 `d7d64f33` F3 `3ec6f028` on `fixes-new-workspace`, unpushed.
+  **RELEASE = HUMAN (Mateo)**: PR → develop, promote → staging (`status/qa`;
+  qa.sh legs: live VPS add/pick/create AC 3-4-7, choose-hop AC 5, real filing
+  AC 10, board+gated run AC 11) → main + tag. Release notes: one-time remote
+  re-add + onUse zero-match shift. F1+F2 SAME train. Follow-up ticket: S1
+  residual selectors→findRepoByPathPreferLocal + doctor check, S2 reposUpdate
+  doc comment, S3 reject connectionId:"". NOTE: 019 (SSH tracker plumbing)
+  builds on these commits — 015 ships first. 010's AC-11 live demo also still
+  PENDING/human.
 - **003-chat-issue-preview** — CODE COMPLETE + SHIPPED to develop (issue **#198**,
   PR **#199**, `feat/chat-board-revamp`). All 4 increments gated. ⏭ Browser QA at
   STAGING + tagged release = Mateo-gated. [Merged into this worktree 2026-07-01;
@@ -64,100 +75,95 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Developer | **010 F2 CODE-COMPLETE + GREEN + COMMITTED
-  `0b03eb9e`** (drive, AC 4–8; tasks.md F2 section; F3 pending → phase STAYS
-  developer). `github_projects.rs` +711: `run_gh_graphql_argv` (ONE
-  runner/classifier for bind-time AND mid-run — scope miss carries the remedy
-  everywhere), pure builders (3 single-line GraphQL consts + argv fns;
-  `singleSelectOptionId` var = PRD AC-6 pin), `run_gh_capture`,
-  `ID_CACHE` LazyLock keyed (slug,number)→(node_id,item_id) (~9 vs ~14
-  calls/run), `board_write_with` (cold resolve → add-item ensure+fetch →
-  option write → stale-invalidate-retry-once → knob-gated probe-then-act
-  close/reopen; Blocked never closes). `task_sink.rs` +339:
-  `github_transition_with_board` + `github_mark_blocked_with_board` (private;
-  label fns BYTE-IDENTICAL; board Err → tracing::warn + fold into
-  Skipped("status label applied; Projects board write failed: …") — loud via
-  existing drive.rs/MCP plumbing); both arm hooks read binding only AFTER the
-  URL parse (hermeticity held — no-url skip tests never touch config). Gates:
-  cargo 604/0/5 (591+13), fmt clean, clippy 0; deletion audit = 7 lines, all
-  intended (2-line runner refactor, docstring, 2 comments, 2 callers) — ZERO
-  test edits; four seam call-site files untouched. 5 deviations documented
-  (2nd private fn = blocked-arm testability; act-failure loud per
-  never-silent; LazyLock over once_cell). ⚠️ ID_CACHE process-global: new
-  tests must use fresh slugs. **Next slice: F3 provision** (run-twice test
-  FIRST).
-- 2026-07-06 | Developer | **010 F3 CODE-COMPLETE + GREEN + COMMITTED
-  `26b1e022` → DEVELOPER PHASE DONE, phase → tester** (provision, AC 9–10;
-  tasks.md F3; handoff `03-developer-to-tester.md`). NEW crate-root
-  `provision.rs` (~1050 ln: template argv pins + `parse_project_create_output`
-  frozen from REAL gh 2.92.0; `create_repo_from_template` probe⇒clone /
-  missing⇒create --clone; `provision_repo` 4-step injectable ensure — own
-  5-label loop over the two pub(crate)-widened builders, project
-  link-or-create GUARDED by binding-exists, `scaffold_harness` wrapped,
-  consent-gated commit w/ STATE-ONLY .gitignore rewrite + porcelain-empty
-  no-commit + plain push red-nonfatal) + NEW `routes/provision.rs`
-  (repo-from-template + workspace/provision, traversal-proof validators).
-  UI: pure `workspace-provision-step.ts` (+15 vitest), 4th
-  OPTIONAL_WORKSPACE_STEPS entry, goal-step template mode (registers via the
-  TRACED existing `addRepoPath` action), modal-local 'provision' phase
-  mounting the SHARED ProjectBindingEditor + D8 consent (exact 5-path list);
-  `useComposerState`/`isGoalStepReady`/`initialComposerPhase` untouched.
-  Gates: cargo 616/0/5 (604+12; run-twice AC-10 pin written test-first,
-  proven RED first), deletion audit = exactly the 2 widening signatures,
-  fmt+clippy clean, vite green, vitest 37/0 (only the 4-entry steps pin
-  updated), tsc baseline 1642 EXACTLY held. 10 deviations documented (top:
-  Option<ProjectChoice>; state_map injection = hermeticity; resolve_slug +
-  BLOCKED_LABEL keep-in-sync dups). **All three slices green: F1 `474cfd12`
-  F2 `0b03eb9e` F3 `26b1e022` → tester re-runs everything independently.**
-- 2026-07-06 | Tester | **010 verdict PASS-WITH-DEFERRALS, 0 defects → phase
-  reviewer** (`verification.md`, HEAD `bc4a7310`; handoff
-  `04-tester-to-reviewer.md`). Independently reproduced ALL six gates: cargo
-  616/0/5 (93.6s), FMT-CLEAN, clippy 0 warnings, vite 1m48s, vitest 37/37
-  no-flake, bare-tsc EXACTLY 1642 (baseline held). ACs 1–10 PASS on READ
-  evidence (test bodies inspected); AC 11 PASS(deferred: live custom-column
-  board demo, qa.sh/human, runner Mateo — 008 precedent). Sacred surfaces
-  PROVEN: label fns byte-identical base→HEAD (extracted + string-compared);
-  empty diffs on all 4 seam call sites + useComposerState + harness/types +
-  auth.rs + desktop gh/gh_projects/github_labels; task_sink's 7 deletions all
-  accounted; TrackerPhase 4 variants; TransitionResult no new variant. 25/25
-  deviations ACCURATE. 5 adversarial spot-checks clean (AC-7 fold, run-twice
-  isolation incl. real rev-list equality, real git check-ignore, seam
-  hermeticity — binding read strictly after the two early-return guards,
-  unbound 5-invocation byte-identity). 5 Info nits (top: tasks.md F3 vitest
-  per-file counts SWAPPED 12/15 not 15/12; 03-handoff github_labels.rs path
-  missing `commands/` — tester re-proved at the real path; test-first RED
-  narrative session-internal, not in git). Reviewer focus: 3 accepted
-  dup-drift risks (gh_bin / BLOCKED_LABEL / resolve_slug), D2 residual
-  honesty, Skipped-semantics legibility.
-- 2026-07-06 | Reviewer | **010 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `8aa8a2d2`, 0 blockers). All 20 focus items PASS w/ quoted evidence: the 3
-  accepted dup-drift risks rule sufficient-for-now (ONE consolidation
-  follow-up: resolve_slug→routes/util.rs per repo convention; gh_bin single
-  owner; BLOCKED_LABEL pub(crate) import or pin-test); D2 two-process RMW
-  residual documented HONESTLY (WRITE_LOCK is process-local, all writers
-  server-side, TUI has no bind surface, lost write re-bindable); Skipped-fold
-  strings name what landed + what failed + the remedy (AC-7 pin carries
-  `gh auth refresh -s project` into the run log); D1 knob-gated close/reopen
-  w/ ONE default site + unbound byte-identity; D3 zero echo/poll machinery;
-  D5 no option mutation (only ADD_ITEM + UPDATE_STATUS mutations exist);
-  D7 one component two mounts + refusal→manual-selects; D8 consent commit,
-  plain push, no AI trailer; no shell injection (argv-exec everywhere,
-  owner_node closed literal set, login always $var); traversal
-  unrepresentable; no token leakage (constructed scope message, 240/400-char
-  stderr bounds); no new is_public; option IDs never names at write; Err
-  cannot escape either github arm; id-cache correctness-independent.
-  1 Should-fix = the consolidation chore ticket (post-freeze). 5 leave-as-is
-  nits (stale "three skippable" doc word; validate_owner leading '-';
-  WRITE_LOCK comment x-ref; close-act fold phrasing; tasks.md count swap —
-  recorded in verification.md). spec.md Status → Done. Phase → done.
-  **RELEASE = HUMAN** (PR → develop + promote + AC-11 live board demo,
-  runner Mateo).
-- 2026-07-06 | Release | **010 SHIPPING → v0.60.0** (Mateo: "ship it";
-  AC-11 live board demo remains PENDING and human-run — shipped ahead of it
-  per Mateo's call, 008 precedent). Issue **#276** (feature, closes via the
-  release commit's `Closes` on main) + **#277** (reviewer Should-fix:
-  consolidate resolve_slug/gh_bin/BLOCKED_LABEL keep-in-sync dups). Flow:
-  version bump 0.59.1→0.60.0 (Cargo.toml+lock+tauri.conf.json only) → PR →
-  develop → staging → main (pushed separately) → tag v0.60.0 (fires
-  release.yml). Evidence contract for AC-11 stays: issue timeline
-  project-status + close events + a demo-pass line HERE.
+- 2026-07-13 | Developer | **020 F1 CODE-COMPLETE + GREEN + COMMITTED
+  `09726c46`** (host-aware-slug-family, AC 1-4; tasks.md F1; phase STAYS
+  developer → F2 next). NEW routes/util.rs `resolve_tracker_host` /
+  `resolve_tracker_slug` / pure `no_github_repo_envelope` (+5 tests); pure
+  `host_id_of` extracted in repos.rs (+3); BOTH duplicate resolve_slug copies
+  DELETED (github_projects.rs, provision.rs — provision's :292 is_dir gate
+  stays); `repoId` add-only on BindingQuery/PutBindingRequest/
+  ProvisionRequest/IssueQuery/CreateIssueBody/LabelsQuery, serde-pinned;
+  create/labels collapse to one util call, sink gh + authenticated_github_login
+  stay LOCAL (D5) w/ why-comments; fetch_github_issue takes repo_id and runs
+  gh on the resolved host (harness.rs callers pass None, byte-identical
+  pins). Test-first RED (28 compile errors pinning the contract) → GREEN.
+  Gates: cargo 696/0/5 (687+9, zero unmodified-test churn), fmt+clippy -D
+  warnings clean, vite green, no UI files touched. 7 deviations documented
+  (2 architecture-sanctioned: 422 message split, provision tilde-expand;
+  3 micro-decisions incl. SinkCtx.workdir trimmed-not-expanded shape-only;
+  1 cosmetic anchor drift). Orchestrator-gated PASS. F2 unblocked
+  (resolve_tracker_host ready for the slug route).
+- 2026-07-13 | Developer | **020 F2 CODE-COMPLETE + GREEN + COMMITTED
+  `e8fb31a8`** (slug-index-ssh, AC 5-7; tasks.md F2; phase STAYS developer →
+  F3 last). NEW `GET /api/repos/{id}/slug` in repos.rs (registry path, no
+  hint/workdir; 404 unknown / 422 no_github_remote / **502 host_unreachable**
+  via pure `slug_reason_wire` — transport never masquerades as no-origin;
+  behind require_token, no is_public change); `getServerRepoSlug` in
+  server-repo-client.ts (run() throws on non-2xx = fail-closed); NEW pure
+  import-free `lib/repo-slug-arm.ts` arm-picker (env-RPC > server-for-
+  connectionId > native) wired into repo-slug-index.ts inside the existing
+  try/catch (throw → null cached → EXCLUDED, AC 7); env-RPC + native arms
+  byte-identical; slugByRepoId cache untouched. Gates: cargo 701/0/5 (696+5),
+  fmt+clippy -D warnings clean, vite green, vitest 11/0 (arm-picker 4 +
+  start-work-repo-match pins: sole-remote→direct, both-hosts→choose;
+  classifier file UNTOUCHED). Test-first RED both sides. 1 real deviation
+  (handler core extracted as `slug_on_host(&Host,&str)` so origin tests use a
+  temp git repo, wire-identical). Tester note: host-down = real 502 — qa.sh
+  can key on status not message. Orchestrator-gated PASS. F3 unblocked.
+- 2026-07-13 | Developer | **020 F3 CODE-COMPLETE + GREEN + COMMITTED
+  `820712d9` → DEVELOPER PHASE DONE, phase → tester** (intake-ssh-honest,
+  AC 8-10; tasks.md F3; handoff `03-developer-to-tester.md`). Server:
+  `DraftedIssue {body, grounded_repo, grounded_wiki}` (chat.rs) →
+  always-present add-only `grounding: {repo, wiki}` on DraftBodyResponse +
+  serde pin (github.rs). Clients: pure `bindingQuery`/`createIssuePayload`;
+  repoId? on binding get/put/delete + issue create/fetch; grounding? on
+  DraftedGithubIssueBody (labels route unwidened per spec). UI:
+  ProjectBindingEditor repoId prop → 4 calls (ProjectHubPage,
+  IntegrationsPane + sanctioned local-filter drop, CreateWorkspaceWizard
+  trackerRepoId — workdir gate NOT relaxed); use-tracker-intake repoId on
+  binding+file, draft stays slug-first (amended AC 8), grounding state +
+  `deriveDraftGroundingNote` (renders ONLY when repo===false) + muted
+  TrackerIntakePanel note. Gates: cargo 701/0/5 held, fmt+clippy clean, vite
+  green, vitest 5 files 53/0 (015's 26 model cases UNMODIFIED, F2 arm-picker
+  held). Test-first RED both sides. 5 deviations documented (top: serde pin
+  amended in place; trackerRepoId extra hop through AgentStep). **All three
+  slices green: F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` → tester re-runs
+  everything independently.**
+- 2026-07-13 | Tester | **020 verdict PASS-WITH-DEFERRALS, 0 defects → phase
+  reviewer** (`verification.md`, artifacts commit `a7275ad1`; handoff
+  `04-tester-to-reviewer.md`). Independently reproduced ALL gates @
+  `820712d9`: cargo 701/0/5 (delta arithmetic corroborated 687+9+5=701, F3
+  one-for-one pin swap), fmt clean, clippy FORCED-recompile clean, vite
+  39.3s, vitest 5 files 53/0 (015's 26 intent-model cases 0-deletion
+  unmodified). Sacred proofs: EMPTY diffs on start-work-repo-match(+test),
+  native gh.rs, the WHOLE board_goals.rs (resolve_github_slug/SlugReason
+  trivially unchanged), task_sink.rs, auth.rs; both duplicate resolvers
+  gone (repo-wide grep 0); wizard gate byte-same; env-RPC/native arms
+  byte-identical bodies; zero serde-alias/is_public code changes. ACs
+  1/2/4/5/7/10 PASS, 3/6/8/9 PASS(deferred live-SSH legs = qa.sh/staging).
+  Key reads: ordering test GENUINELY pins unknown-repoId-beats-valid-hint;
+  zero-I/O hint test sound; `grounding` non-optional on success. 15/15
+  deviations ACCURATE. 6 spot-checks clean (502 hygiene: static messages,
+  payload-free SlugReason; stale connectionId="" routes native/falsy;
+  legacy no-repoId byte-identical). 4 nits non-blocking. Reviewer focus:
+  cross-repo repoId/workdir ruling, file-leg unconditional repoId
+  loud-failure, create_issue failure-ordering move.
+- 2026-07-13 | Reviewer | **020 SIGN-OFF → SHIP-READY, phase → done**
+  (`review.md` @ `cc4bde36`, 0 blockers; full `3ec6f028..820712d9` diff read
+  hunk-by-hunk, sacred empty-diffs re-verified independently). All 10 focus
+  items PASS w/ quoted evidence: mismatch ruling ACCEPTED (coherent pairs by
+  construction — PATCH refuses identity edits, re-add mints new id; F2 route
+  takes no workdir); file-leg loud 404 = D1-correct; create_issue ordering
+  move unobservable (local-host still precedes any gh call, comment-pinned);
+  absent-repoId byte-identical per route, unknown-repoId beats valid hint
+  (test-pinned), only Some(id)→local edge is the 015-sacred no-host_id repo;
+  wire 404/422/502 correct + SlugReason payload-free + &'static str messages
+  → SSH stderr/token structurally can't leak; renderer fail-closed w/
+  immutable cache key; grounding non-Option + note only on repo===false;
+  D5 all 0-line diffs + hint precedence preserved; 6 add-only
+  serde(default) widenings, zero aliases; require_token merge verified
+  (lib.rs:336/349), no polling, no spawn code. 3 should-fixes → ONE
+  follow-up ticket (SF1 Tasks-tab binding read unthreaded = next user
+  dead-end; SF2 fetch's neutral_cwd×remote-gh compose = latent 400 on the
+  caller-less wire, will trip deferred QA; SF3 docs wording). 4 leave-as-is
+  nits. spec.md Status → Done. **RELEASE = HUMAN, one train with 015.**
