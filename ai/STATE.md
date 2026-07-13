@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 015-workspace-harness-autostart
-- **phase:** tester         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 Developer phase DONE 2026-07-13: f1 `66f1e161` + f2 `03f2eb2b` + f3 `41cbeab8` + docs `5f753260`. Gates green per slice — final 50/0 across the 4 targeted vitest files + vite build ✓ ×3. 3 documented deviations (accept swallow-and-toast w/ .finally busy-reset; banner test mocks offer lib; trigger pins as new describe block). Orchestrator spot-check: scope = exactly the architected 15 files, no must-not files (useComposerState/planCreatedWorkspace/Rust untouched), open-created-workspace.test.ts additions-only. Tester: independently re-run gates + audit deviations + pin byte-identity.)
+- **phase:** reviewer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 Tester verdict PASS-WITH-DEFERRALS 2026-07-13, 0 blockers/0 should-fix/3 info nits, `verification.md` commit `d66d4c40`. Gates independently re-run: vitest 50/0 (20+14+12+4, 1.01s) + vite build exit 0. All 7 ACs evidenced (AC 2-6 model-pinned, runtime = qa.sh/staging deferral); 3 deviations ACCURATE + accepted; 7/7 adversarial spot-checks PASS (resolve_harness_dir mirror, close-race re-check, #313 mount trap avoided, accept-failure retryable, zero timers, exports consumed); sacred surfaces EMPTY-diff proven. Reviewer = final sign-off.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -202,3 +202,16 @@
   per-test mockClear (existing pins byte-identical). Env notes: worktree
   needed `bun install`; anchors had ZERO drift; zustand v5 SSR snapshot
   forces mocked-store banner testing (validates handoff prescription).
+- 2026-07-13 | Tester | **015 verdict PASS-WITH-DEFERRALS → phase reviewer**
+  (sub-agent; `verification.md` + handoff `04-tester-to-reviewer.md`, commit
+  `d66d4c40`; 0 blockers, 0 should-fix, 3 info nits). Independently re-ran
+  gates: vitest 50/0 exact per-file match (20+14+12+4), vite build exit 0.
+  AC 1/7 PASS now; AC 2-6 PASS(deferred qa.sh/staging) with model logic
+  pinned (dedupe+trailing-slash, gatedRun/local-only zero-fs-call, dismiss =
+  zero client calls, detail-in-toast, ≤2 fs calls not-found). Deviations 3/3
+  ACCURATE. Spot-checks 7/7 (incl. mount OUTSIDE legacy/#313 + split
+  surface; close-race store re-read `offer.ts:93-100`). Sacred: EMPTY
+  useComposerState diff; open-created-workspace.ts = import + trailing void
+  call; test additions-only; harness-client exactly +3 exports. Nits: handoff
+  03 STATE-claim wording; `normalizeWorkdir('//')` unreachable edge;
+  POSIX-only join. Tracker: issue #301 → status/ready-to-test.
