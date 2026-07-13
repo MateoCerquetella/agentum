@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 015-workspace-harness-autostart
-- **phase:** architect         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 PM gate PASS 2026-07-13, handoff `01-pm-to-architect.md`. No overlap w/ 010/011/013 — fact-checked. D1–D6 locked (workspace-view mount / creation-moment only / hide-never-link / `listHarnesses` / local-only / gated-run suppression); Q1 mount mechanics + Q2 context hand-off delegated to architect. Prior pointer: 010 SHIP-READY, released v0.60.0 flow per decision log.)
+- **phase:** developer         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 Architect gate PASS 2026-07-13, `architecture.md` + handoff `02-architect-to-developer.md`. Q1 = Terminal.tsx root flex strip `relative z-30` after EditorAutosaveController, self-gating on a new offer slice — NOT the launcher, NOT the `:1666` legacy block (#313 trap). Q2 = fire-and-forget runner call at END of `openCreatedWorkspace` (both create paths converge there — ZERO useComposerState edits) + zustand `workspace-harness-offer` slice. Build f1 detect-helper → f2 slice/runner/banner/mount → f3 exports+accept. Gates: 4 targeted vitest files + vite build; full-vitest/tsc pre-broken baselines.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -171,3 +171,20 @@
   has no host field) · D6 gated-run suppression. Q1 (mount mechanics) + Q2
   (context hand-off: store slice vs pending-signal à la
   `pending-session-prompt.ts`) → architect.
+- 2026-07-13 | Architect | **015 gate PASS → phase developer** (sub-agent;
+  `architecture.md` 451 ln + handoff 02). Q1: ONE mount — Terminal.tsx root
+  flex strip (`relative z-30 shrink-0`) after `EditorAutosaveController`,
+  self-gates on offer slice keyed by worktreeId; launcher overlay is
+  `absolute z-20` so the strip shows in BOTH auto-launch and empty-state
+  paths; REJECTED launcher-only (D1), dual-mount, and the `:1666` legacy
+  block (#313 invisibility trap). Q2: fire-and-forget
+  `maybeOfferWorkspaceHarnessRun` at END of `openCreatedWorkspace` — both
+  create paths converge (`useComposerState.ts:2533/:2750`) so ZERO
+  useComposerState edits; zustand slice holds the RESOLVED offer (rejected
+  pending-signal: non-reactive, banner must appear when async detection
+  resolves). Detection mirrors `resolve_harness_dir` semantics (canonical dir
+  present w/o feature_list ⇒ NO legacy fallback). Residuals accepted:
+  quick-create "don't start a session" path yields no offer; symlink-spelling
+  dedupe gap. Dev must NOT: touch useComposerState/planCreatedWorkspaceOpen
+  pins, poll, pass hostId, jsdom, persist offers, rely on engine dedupe
+  (`harness.rs:95` inserts unconditionally).
