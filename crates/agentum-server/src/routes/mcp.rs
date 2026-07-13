@@ -562,14 +562,14 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         },
         {
             "name": "agentum_report_status",
-            "description": "Report a work item's pipeline phase to its tracker: GitHub = flip the status/* label, Linear = move the workflow state, board = move the card column. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, ready_to_test, done).",
+            "description": "Report a work item's pipeline phase to its tracker: GitHub = flip the status/* label, Linear = move the workflow state, board = move the card column. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, in_review, ready_to_test, done).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "provider": { "type": "string", "enum": ["github", "linear", "board"] },
                     "id": { "type": "string", "description": "The tracker's stable handle: board card key (AG-12), Linear identifier (ENG-42), or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
                     "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear/board." },
-                    "phase": { "type": "string", "enum": ["todo", "in_progress", "ready_to_test", "done"] }
+                    "phase": { "type": "string", "enum": ["todo", "in_progress", "in_review", "ready_to_test", "done"] }
                 },
                 "required": ["provider", "phase"],
                 "additionalProperties": false,
@@ -1184,7 +1184,9 @@ fn parse_report_status_args(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `phase`"))?;
     let phase = crate::task_sink::parse_tracker_phase(phase_str).ok_or_else(|| {
-        anyhow::anyhow!("unknown `phase` {phase_str:?} (todo|in_progress|ready_to_test|done)")
+        anyhow::anyhow!(
+            "unknown `phase` {phase_str:?} (todo|in_progress|in_review|ready_to_test|done)"
+        )
     })?;
     let url = args.get("url").and_then(Value::as_str).map(str::to_string);
     let id = match args.get("id").and_then(Value::as_str) {
@@ -1588,6 +1590,36 @@ mod tests {
                 "provider": "board", "id": "AG-12", "phase": "shipped",
             }))
             .is_err()
+        );
+    }
+
+    /// `in_review` is a first-class phase (the SDD Reviewer step reports it) —
+    /// it must parse AND be advertised in the tool spec's enum, or a
+    /// schema-respecting client can never send it.
+    #[test]
+    fn report_status_accepts_in_review() {
+        use crate::task_sink::TrackerPhase;
+
+        let (_, _, _, phase) = parse_report_status_args(&json!({
+            "provider": "github",
+            "url": "https://github.com/owner/repo/issues/42",
+            "phase": "in_review",
+        }))
+        .unwrap();
+        assert_eq!(phase, TrackerPhase::InReview);
+
+        let specs = tool_specs(true);
+        let phase_enum = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agentum_report_status")
+            .expect("agentum_report_status is in the catalog")["inputSchema"]["properties"]["phase"]
+            ["enum"]
+            .clone();
+        assert!(
+            phase_enum.as_array().unwrap().contains(&json!("in_review")),
+            "tool-spec phase enum must advertise in_review, got {phase_enum}"
         );
     }
 

@@ -253,6 +253,8 @@ pub struct BindingQuery {
     pub slug: Option<String>,
     /// Spec 020 F1: resolve the slug on this registered repo's host instead
     /// of the local one. Absent = local (pre-020 behavior byte-for-byte).
+    /// Subsumes #359's `host_id` param at the develop merge — the wire
+    /// identity is the repo, never a client-asserted host (020 D1).
     #[serde(default, rename = "repoId")]
     pub repo_id: Option<String>,
 }
@@ -264,8 +266,10 @@ struct GetBindingResponse {
     binding: Option<BindingDto>,
 }
 
-/// `GET /api/github/project-binding?workdir=…&slug=…` — the repo's binding,
-/// fresh from disk (`null` when unbound).
+/// `GET /api/github/project-binding?workdir=…&slug=…&repoId=…` — the repo's
+/// binding, fresh from disk (`null` when unbound). Host-aware via `repoId`
+/// (#356/#359 merged into the spec 020 wire): bindings are keyed by slug, so
+/// an SSH repo resolves to the same binding its local clone configured.
 async fn get_binding(
     State(state): State<AppState>,
     Query(q): Query<BindingQuery>,

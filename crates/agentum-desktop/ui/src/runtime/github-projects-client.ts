@@ -138,7 +138,9 @@ export function bindingQuery(input: {
 
 /** `GET /api/github/project-binding` — the repo's stored binding (null = unbound).
  *  `repoId` (spec 020 F3) resolves the slug on the repo's own host — the leg
- *  that makes SSH repos bindable at all. */
+ *  that makes SSH repos bindable at all (#359's `hostId` param, migrated to
+ *  the repoId wire at the develop merge): pass it for a repo living on an SSH
+ *  host so the server reads the git origin there. */
 export async function getProjectBinding(input: {
   workdir: string
   slug?: string

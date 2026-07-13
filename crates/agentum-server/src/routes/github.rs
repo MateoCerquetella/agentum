@@ -109,11 +109,11 @@ pub(crate) async fn fetch_github_issue(
 
     let host = super::util::resolve_tracker_host(state, repo_id).await?;
 
-    // Expand `~`/trailing-slash before the origin read: `git -C` runs with no
-    // shell, so a stored `~/…` workdir would fail resolution spuriously (twin of
-    // the github_projects binding-resolver fix).
-    let workdir = super::util::expand_workdir(workdir)?;
-    let workdir = workdir.to_string_lossy();
+    // Host-aware `~` expand before the origin read (`git -C` runs with no
+    // shell, so a stored local `~/…` workdir would fail resolution
+    // spuriously): local expands, a remote repoId's workdir passes through
+    // verbatim (#359's fix, shared with `resolve_tracker_slug`).
+    let workdir = super::util::effective_workdir(&host, workdir)?;
     // Prefer the `owner/repo` hint (zero I/O); fall back to the project's
     // `origin` read. Reuses the exact resolver the board issue path uses.
     let slug = super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)

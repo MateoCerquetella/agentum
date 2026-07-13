@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agentum_core::{Host, LOCAL_HOST_ID};
+use agentum_core::{Host, HostKind, LOCAL_HOST_ID};
 use axum::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
@@ -79,15 +79,31 @@ pub(crate) async fn resolve_tracker_host(
     }
 }
 
+/// Host-aware workdir normalization (#356/#359's fix folded into the spec 020
+/// resolver at the develop merge): expand `~`/trailing-slash against the
+/// daemon's `$HOME` for the LOCAL host only. `resolve_github_slug` runs
+/// `git -C <workdir>` with no shell, so a stored local `~/…` path is passed
+/// literally and git can't cd into it — the origin read fails and the caller
+/// dead-ends on a spurious `no_github_repo`. But `expand_workdir` resolves
+/// against THIS machine's `$HOME`, which is meaningless for a remote path —
+/// an SSH host's own side handles its paths, so remote workdirs pass through
+/// untouched.
+pub(crate) fn effective_workdir(host: &Host, raw: &str) -> Result<String, ApiError> {
+    match host.kind {
+        HostKind::Local => Ok(expand_workdir(raw)?.to_string_lossy().into_owned()),
+        HostKind::Ssh { .. } => Ok(raw.trim().to_string()),
+    }
+}
+
 /// The ONE `{workdir, slug?, repoId?}` → slug resolver with the typed
 /// `no_github_repo` 422 (spec 020 F1: unifies the admitted duplicates that
 /// lived in routes::github_projects and routes::provision). Order matters:
-/// workdir shape-check → expand → host (repoId-aware) → `resolve_github_slug`
-/// (whose hint fast-path never touches git). The host resolves BEFORE the
-/// hint short-circuit so a garbage repoId 4xxes even when a valid hint would
-/// have answered — honoring the hint would mask the identity error. A valid
-/// hint still performs zero git I/O: the repoId branch reads the JSON
-/// registry + the host row only.
+/// workdir shape-check → host (repoId-aware) → host-aware expand →
+/// `resolve_github_slug` (whose hint fast-path never touches git). The host
+/// resolves BEFORE the hint short-circuit so a garbage repoId 4xxes even when
+/// a valid hint would have answered — honoring the hint would mask the
+/// identity error. A valid hint still performs zero git I/O: the repoId
+/// branch reads the JSON registry + the host row only.
 pub(crate) async fn resolve_tracker_slug(
     state: &AppState,
     repo_id: Option<&str>,
@@ -98,17 +114,10 @@ pub(crate) async fn resolve_tracker_slug(
     if workdir.is_empty() {
         return Err(ApiError::BadRequest("`workdir` is required".into()));
     }
-    // Expand `~`/trailing-slash before the git read. `resolve_github_slug`
-    // runs `git -C <workdir>` with no shell, so a stored `~/…` project path is
-    // passed literally and git can't cd into it — the origin read fails and
-    // the caller dead-ends on a spurious `no_github_repo`. No-op for the
-    // common absolute path. (Expansion is against the daemon's HOME — wrong
-    // in principle for a remote repoId, but remote registry paths are
-    // absolute by construction, so it stays a no-op there; the pre-existing
-    // edge every `base_ref_*` route shares.)
-    let expanded = expand_workdir(workdir)?;
-    let workdir = expanded.to_string_lossy();
     let host = resolve_tracker_host(state, repo_id).await?;
+    // Local-only `~` expand (#359, merged): a remote repo's workdir must reach
+    // its host verbatim — expanding against the daemon's HOME would mangle it.
+    let workdir = effective_workdir(&host, workdir)?;
     super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
         .await
         .map_err(|reason| {
@@ -235,6 +244,46 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
+    }
+
+    /// #359's core insight, ported to the 020 resolver at the develop merge:
+    /// the `~` expand runs against the daemon's `$HOME`, which is meaningless
+    /// for a path on an SSH host — a remote workdir must pass through
+    /// verbatim, while the local host keeps the expand (the spurious
+    /// `no_github_repo` fix for stored `~/…` paths).
+    #[test]
+    fn effective_workdir_expands_local_only() {
+        fn host(kind: HostKind) -> Host {
+            Host {
+                id: Uuid::new_v4(),
+                name: "h".into(),
+                kind,
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+                last_seen_at: None,
+            }
+        }
+        let ssh = host(HostKind::Ssh {
+            user: "u".into(),
+            hostname: "example".into(),
+            port: 22,
+            auth: agentum_core::SshAuth::Agent,
+        });
+        // Remote: `~` and trailing slashes reach the host untouched (only the
+        // surrounding whitespace trim applies).
+        assert_eq!(effective_workdir(&ssh, "~/srv/proj").unwrap(), "~/srv/proj");
+        assert_eq!(
+            effective_workdir(&ssh, "  /srv/proj/  ").unwrap(),
+            "/srv/proj/"
+        );
+        // Local: the expand still runs (HOME is set in the test env).
+        let local = host(HostKind::Local);
+        let home = std::env::var("HOME").expect("HOME set in test env");
+        assert_eq!(
+            effective_workdir(&local, "~/proj").unwrap(),
+            format!("{home}/proj")
+        );
+        assert_eq!(effective_workdir(&local, "/var/log/").unwrap(), "/var/log");
     }
 
     /// Pure: both slug-miss reasons ride the same 422 `no_github_repo`

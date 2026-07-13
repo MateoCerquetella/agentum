@@ -3,6 +3,7 @@ import {
   buildWizardRecap,
   canLeaveRepoStep,
   capRepoList,
+  deriveTrackerBindingTarget,
   deriveUnifiedTrackerStatus,
   deriveWizardComposerSeed,
   filterRepoList,
@@ -283,5 +284,50 @@ describe('capRepoList (step 2 collapse)', () => {
   it('does not duplicate a selected repo already within the cap', () => {
     const out = capRepoList({ repos: many, expanded: false, selectedId: 'r1' })
     expect(out.visible.map((r) => r.id)).toEqual(['r0', 'r1', 'r2', 'r3'])
+  })
+})
+
+// #359's five pins, migrated hostId → repoId/local at the develop merge:
+// each pin's intent is unchanged (SSH repos resolve their binding; non-git /
+// blank resolve nothing), only the wire identity moved to spec 020's repoId.
+describe('deriveTrackerBindingTarget (#356 — SSH repos resolve their binding too)', () => {
+  it('local git repo → workdir + registry repoId, local (the old gate, 020-identified)', () => {
+    expect(
+      deriveTrackerBindingTarget({
+        repo: { id: 'r-local', path: '/home/me/proj', connectionId: null },
+        isGit: true
+      })
+    ).toEqual({ workdir: '/home/me/proj', repoId: 'r-local', local: true })
+  })
+
+  it('SSH git repo → workdir + repoId, non-local (the fix: no longer dropped)', () => {
+    expect(
+      deriveTrackerBindingTarget({
+        repo: { id: 'r-ssh', path: '/srv/proj', connectionId: 'host-uuid-1' },
+        isGit: true
+      })
+    ).toEqual({ workdir: '/srv/proj', repoId: 'r-ssh', local: false })
+  })
+
+  it('non-git selection resolves nothing (falls back to global activeProject)', () => {
+    expect(
+      deriveTrackerBindingTarget({
+        repo: { id: 'r1', path: '/somewhere', connectionId: null },
+        isGit: false
+      })
+    ).toBeNull()
+  })
+
+  it('no repo / blank path resolve nothing', () => {
+    expect(deriveTrackerBindingTarget({ repo: null, isGit: true })).toBeNull()
+    expect(deriveTrackerBindingTarget({ repo: undefined, isGit: true })).toBeNull()
+    expect(
+      deriveTrackerBindingTarget({ repo: { id: 'r1', path: '   ', connectionId: 'h' }, isGit: true })
+    ).toBeNull()
+  })
+
+  it('undefined connectionId is local', () => {
+    const out = deriveTrackerBindingTarget({ repo: { id: 'r1', path: '/p' }, isGit: true })
+    expect(out).toEqual({ workdir: '/p', repoId: 'r1', local: true })
   })
 })

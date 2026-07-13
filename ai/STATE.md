@@ -75,24 +75,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-13 | Developer | **020 F1 CODE-COMPLETE + GREEN + COMMITTED
-  `09726c46`** (host-aware-slug-family, AC 1-4; tasks.md F1; phase STAYS
-  developer → F2 next). NEW routes/util.rs `resolve_tracker_host` /
-  `resolve_tracker_slug` / pure `no_github_repo_envelope` (+5 tests); pure
-  `host_id_of` extracted in repos.rs (+3); BOTH duplicate resolve_slug copies
-  DELETED (github_projects.rs, provision.rs — provision's :292 is_dir gate
-  stays); `repoId` add-only on BindingQuery/PutBindingRequest/
-  ProvisionRequest/IssueQuery/CreateIssueBody/LabelsQuery, serde-pinned;
-  create/labels collapse to one util call, sink gh + authenticated_github_login
-  stay LOCAL (D5) w/ why-comments; fetch_github_issue takes repo_id and runs
-  gh on the resolved host (harness.rs callers pass None, byte-identical
-  pins). Test-first RED (28 compile errors pinning the contract) → GREEN.
-  Gates: cargo 696/0/5 (687+9, zero unmodified-test churn), fmt+clippy -D
-  warnings clean, vite green, no UI files touched. 7 deviations documented
-  (2 architecture-sanctioned: 422 message split, provision tilde-expand;
-  3 micro-decisions incl. SinkCtx.workdir trimmed-not-expanded shape-only;
-  1 cosmetic anchor drift). Orchestrator-gated PASS. F2 unblocked
-  (resolve_tracker_host ready for the slug route).
 - 2026-07-13 | Developer | **020 F2 CODE-COMPLETE + GREEN + COMMITTED
   `e8fb31a8`** (slug-index-ssh, AC 5-7; tasks.md F2; phase STAYS developer →
   F3 last). NEW `GET /api/repos/{id}/slug` in repos.rs (registry path, no
@@ -167,3 +149,17 @@
   dead-end; SF2 fetch's neutral_cwd×remote-gh compose = latent 400 on the
   caller-less wire, will trip deferred QA; SF3 docs wording). 4 leave-as-is
   nits. spec.md Status → Done. **RELEASE = HUMAN, one train with 015.**
+- 2026-07-13 | Merge | **origin/develop @ `4a184993` merged into
+  `fixes-new-workspace`** (44 commits, incl. v0.75.0 "015-workspace-harness-
+  autostart" + v0.75.1 #359 SSH-binding wizard fix + sdd-bar/tracker-status
+  work — all merged clean except the 020-overlap files). Reconciliation:
+  #359's GET `host_id` param is SUPERSEDED by 020's `repoId` (D1: wire
+  identity = the repo, never a client-asserted host) — the old
+  `github_projects::resolve_slug` stays deleted; #359's expand-skip-for-SSH
+  folded into `util::resolve_tracker_slug` (new host-aware
+  `util::effective_workdir`, + the same fix in github.rs
+  `fetch_github_issue`; +1 test pin); #359's `deriveTrackerBindingTarget`
+  KEPT (wizard tracker section now reads bindings for SSH repos) but
+  migrated to `{workdir, repoId, local}` — its 5 vitest pins adapted
+  hostId→repoId/local, configure editor stays local-gated, F3
+  `trackerRepoId`→ProjectBindingEditor threading preserved.

@@ -54,6 +54,7 @@ import {
   buildWizardRecap,
   canLeaveRepoStep as canLeaveRepoStepModel,
   capRepoList,
+  deriveTrackerBindingTarget,
   deriveUnifiedTrackerStatus,
   deriveWizardComposerSeed,
   filterRepoList,
@@ -385,16 +386,17 @@ export default function CreateWorkspaceWizard({
 
   // Spec 013 F1: the tracker section reads SOLELY from the Project the picker
   // resolves (per-repo binding ∨ global activeProject) — no git-remote heuristic
-  // that could disagree with the picker's issue list. The local-only gate is a
-  // PRODUCT choice post-020 (the server can now resolve SSH repos via `repoId`),
-  // kept deliberately unrelaxed here — lighting the wizard's tracker section up
-  // for SSH repos is a named follow-up shared with in-flight specs. A
-  // remote/folder repo leaves `trackerWorkdir` undefined and the picker falls
-  // back to the global activeProject.
-  const trackerWorkdir =
-    selectedRepo && !selectedRepo.connectionId && selectedRepoIsGit ? selectedRepo.path : undefined
-  const trackerRepoId =
-    selectedRepo && !selectedRepo.connectionId && selectedRepoIsGit ? selectedRepo.id : undefined
+  // that could disagree with the picker's issue list. Any GIT repo carries a
+  // binding target now (#356, shipped v0.75.1): SSH repos resolve their slug
+  // on their own host via spec 020's `repoId` (#359's hostId param, migrated
+  // to the repoId wire at the develop merge). Reading is host-aware;
+  // CONFIGURING the binding stays local-gated inside the section (product
+  // choice, unchanged). A non-git selection resolves nothing and falls back
+  // to the global activeProject.
+  const trackerTarget = deriveTrackerBindingTarget({
+    repo: selectedRepo,
+    isGit: selectedRepoIsGit
+  })
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -483,8 +485,9 @@ export default function CreateWorkspaceWizard({
               name={name}
               onNameValueChange={onNameValueChange}
               nameInputRef={nameInputRef}
-              trackerWorkdir={trackerWorkdir}
-              trackerRepoId={trackerRepoId}
+              trackerWorkdir={trackerTarget?.workdir}
+              trackerRepoId={trackerTarget?.repoId}
+              trackerLocal={trackerTarget?.local}
               activeProject={activeProject}
               fetchProjectViewTable={fetchProjectViewTable}
               linkedWorkItem={linkedWorkItem}
@@ -1346,6 +1349,7 @@ function AgentStep({
   nameInputRef,
   trackerWorkdir,
   trackerRepoId,
+  trackerLocal,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -1364,7 +1368,12 @@ function AgentStep({
   onNameValueChange: (value: string) => void
   nameInputRef: React.RefObject<HTMLInputElement | null>
   trackerWorkdir?: string
+  /** Spec 020 F3: the repo's registry id — the binding resolves on the repo's
+   *  own host (#356: SSH repos included). */
   trackerRepoId?: string
+  /** False when the repo lives on an SSH host — reading works there (#356),
+   *  configuring the binding stays local-gated. */
+  trackerLocal?: boolean
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -1390,6 +1399,7 @@ function AgentStep({
       <TrackerSection
         workdir={trackerWorkdir}
         repoId={trackerRepoId}
+        local={trackerLocal}
         activeProject={activeProject}
         fetchProjectViewTable={fetchProjectViewTable}
         linkedWorkItem={linkedWorkItem}
@@ -1505,6 +1515,7 @@ function AgentStep({
 function TrackerSection({
   workdir,
   repoId,
+  local,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -1512,13 +1523,18 @@ function TrackerSection({
   createIssue,
   linear
 }: {
-  /** The selected repo's local workdir — present only for a LOCAL git repo,
-   *  which is the only kind that can carry/configure a per-repo binding. The
-   *  slug is resolved server-side from this workdir's git remote. */
+  /** The selected GIT repo's workdir (local path, or the path on the repo's
+   *  own host for an SSH repo). The slug is resolved server-side from this
+   *  workdir's git remote — on the right host (#356). */
   workdir?: string
-  /** Spec 020 F3: the repo's registry id, threaded to the binding editor so
-   *  the server resolves the slug host-aware. Gated exactly like `workdir`. */
+  /** Spec 020 F3: the repo's registry id — the server resolves the slug on
+   *  the repo's own host (the read leg that makes SSH repos resolve at all;
+   *  #359's hostId, migrated to the repoId wire). Gated exactly like
+   *  `workdir`; also threaded to the binding editor. */
   repoId?: string
+  /** False for SSH repos. Configuring the binding stays local-only (the
+   *  editor is gated below); reading is host-aware via `repoId`. */
+  local?: boolean
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -1531,16 +1547,19 @@ function TrackerSection({
   const [status, setStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
   const [configureOpen, setConfigureOpen] = useState(false)
 
-  // Read the selected repo's per-repo Projects binding. Fail-closed — a missing
-  // binding, a remote repo, or gh being unavailable leaves `binding` null so
-  // resolution falls back to the global activeProject (spec 012).
+  // Read the selected repo's per-repo Projects binding — host-aware via the
+  // repo's registry id (spec 020: the server resolves the repo's own host, so
+  // SSH repos resolve the same slug-keyed binding their local clone
+  // configured). Fail-closed — a missing binding, an unreachable host, or gh
+  // being unavailable leaves `binding` null so resolution falls back to the
+  // global activeProject (spec 012).
   useEffect(() => {
     if (!workdir) {
       setBinding(null)
       return
     }
     let cancelled = false
-    void getProjectBinding({ workdir })
+    void getProjectBinding({ workdir, repoId })
       .then((res) => {
         if (!cancelled) setBinding(res.binding)
       })
@@ -1550,7 +1569,7 @@ function TrackerSection({
     return () => {
       cancelled = true
     }
-  }, [workdir])
+  }, [workdir, repoId])
 
   // Per-repo binding wins; else the global activeProject; else null.
   const resolved = useMemo(
@@ -1601,11 +1620,12 @@ function TrackerSection({
     [resolved, status, options.length]
   )
 
-  // The compact configure/switch affordance — only a LOCAL git repo (a
-  // resolvable workdir) can carry a binding, so gate the control on it. Reuses
-  // the SAME editor as the hub / Settings; onBound refreshes the section so it
-  // re-resolves to the freshly-bound Project.
-  const configureControl = workdir ? (
+  // The compact configure/switch affordance — configuring a binding stays a
+  // LOCAL-repo affordance (product choice, kept at the #359/020 merge), so an
+  // SSH repo (`local` false) reads its slug-keyed binding but doesn't
+  // configure it here. Reuses the SAME editor as the hub / Settings; onBound
+  // refreshes the section so it re-resolves to the freshly-bound Project.
+  const configureControl = workdir && local ? (
     <Popover open={configureOpen} onOpenChange={setConfigureOpen}>
       <PopoverTrigger asChild>
         <button
