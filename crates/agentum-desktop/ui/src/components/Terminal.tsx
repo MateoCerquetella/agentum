@@ -64,6 +64,7 @@ import {
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { appendUniqueOpenFileIds } from './terminal/unsaved-close-queue'
 import CodexRestartChip from './CodexRestartChip'
+import HarnessSpecBanner from './HarnessSpecBanner'
 import {
   findActivityTerminalPortal,
   useActivityTerminalPortals,
@@ -1567,6 +1568,16 @@ function Terminal(): React.JSX.Element | null {
       className={`relative flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden${activeWorktreeId ? '' : ' hidden'}`}
     >
       <EditorAutosaveController />
+
+      {/* Spec 015: harness-spec offer for a just-created workspace. Mounted
+          ONCE here at the root — a normal flex strip ABOVE both the launcher
+          overlay (z-20, below) and the split surfaces, so it is visible in
+          every render path (the #313 lesson: never mount only in the legacy
+          fallback). Renders null unless the offer slice has an entry for this
+          worktree. */}
+      {activeView === 'terminal' && activeWorktreeId ? (
+        <HarnessSpecBanner worktreeId={activeWorktreeId} />
+      ) : null}
 
       {/* Empty-state: an active workspace with no open session shows the agent
           launcher (pick what to start) instead of auto-spawning a blank terminal.

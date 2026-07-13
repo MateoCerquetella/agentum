@@ -3,13 +3,17 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 010-end-to-end-autonomous-flow
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (010 **SHIP-READY — Reviewer SIGN-OFF 2026-07-06**, `review.md`, 0 blockers, HEAD `8aa8a2d2`. All 20 focus items PASS w/ quoted evidence: 3 dup-drift risks acceptable (ONE consolidation follow-up ticket: resolve_slug→routes/util.rs, gh_bin single owner, BLOCKED_LABEL pin-test); D2 residual honest; Skipped-fold self-describing; D1–D8 all honored; no injection/leak/is_public holes; option IDs never names; Ok-never-Err everywhere. 5 leave-as-is nits. Commits: F1 `474cfd12` F2 `0b03eb9e` F3 `26b1e022` + docs. **RELEASE = HUMAN**: PR → develop, promote, AND the AC-11 live custom-column board demo (runner Mateo; evidence = issue timeline + a demo-pass line here). Follow-up ticket = the consolidation chore.)
+- **current_spec:** 015-workspace-harness-autostart
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 **SHIP-READY — Reviewer SIGN-OFF 2026-07-13**, `review.md` commit `d390346a`, 0 blockers. 1 Should-fix = follow-up ticket (stale offer survives worktree deletion — `harnessOfferByWorktreeId` missing from `buildWorktreePurgeState`, `worktrees.ts:606`; fail-safe on accept). 4 leave-as-is nits. Product commits `66f1e161`+`03f2eb2b`+`41cbeab8`; gates 50/0 vitest + vite build, independently reproduced. **RELEASE = HUMAN (Mateo)**: merge PR → develop, promote → staging → main, browser QA (qa.sh scenario in handoff 02) — AC 2–6 runtime legs deferred there. Loop was fully autonomous; ai/roles/orchestrate/hitl scaffold files still MISSING repo-wide — ran from the sdd-orchestrate playbook + validate_handoff.md + 004–014 precedent.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **010-end-to-end-autonomous-flow** — RELEASED v0.60.0 (2026-07-06) with the
+  AC-11 live custom-column board demo still PENDING and human-run (Mateo;
+  evidence contract = issue #276 timeline + a demo-pass line here). Follow-up
+  ticket #277 = the resolve_slug/gh_bin/BLOCKED_LABEL consolidation chore.
 - **003-chat-issue-preview** — CODE COMPLETE + SHIPPED to develop (issue **#198**,
   PR **#199**, `feat/chat-board-revamp`). All 4 increments gated. ⏭ Browser QA at
   STAGING + tagged release = Mateo-gated. [Merged into this worktree 2026-07-01;
@@ -64,100 +68,78 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-06 | Developer | **010 F2 CODE-COMPLETE + GREEN + COMMITTED
-  `0b03eb9e`** (drive, AC 4–8; tasks.md F2 section; F3 pending → phase STAYS
-  developer). `github_projects.rs` +711: `run_gh_graphql_argv` (ONE
-  runner/classifier for bind-time AND mid-run — scope miss carries the remedy
-  everywhere), pure builders (3 single-line GraphQL consts + argv fns;
-  `singleSelectOptionId` var = PRD AC-6 pin), `run_gh_capture`,
-  `ID_CACHE` LazyLock keyed (slug,number)→(node_id,item_id) (~9 vs ~14
-  calls/run), `board_write_with` (cold resolve → add-item ensure+fetch →
-  option write → stale-invalidate-retry-once → knob-gated probe-then-act
-  close/reopen; Blocked never closes). `task_sink.rs` +339:
-  `github_transition_with_board` + `github_mark_blocked_with_board` (private;
-  label fns BYTE-IDENTICAL; board Err → tracing::warn + fold into
-  Skipped("status label applied; Projects board write failed: …") — loud via
-  existing drive.rs/MCP plumbing); both arm hooks read binding only AFTER the
-  URL parse (hermeticity held — no-url skip tests never touch config). Gates:
-  cargo 604/0/5 (591+13), fmt clean, clippy 0; deletion audit = 7 lines, all
-  intended (2-line runner refactor, docstring, 2 comments, 2 callers) — ZERO
-  test edits; four seam call-site files untouched. 5 deviations documented
-  (2nd private fn = blocked-arm testability; act-failure loud per
-  never-silent; LazyLock over once_cell). ⚠️ ID_CACHE process-global: new
-  tests must use fresh slugs. **Next slice: F3 provision** (run-twice test
-  FIRST).
-- 2026-07-06 | Developer | **010 F3 CODE-COMPLETE + GREEN + COMMITTED
-  `26b1e022` → DEVELOPER PHASE DONE, phase → tester** (provision, AC 9–10;
-  tasks.md F3; handoff `03-developer-to-tester.md`). NEW crate-root
-  `provision.rs` (~1050 ln: template argv pins + `parse_project_create_output`
-  frozen from REAL gh 2.92.0; `create_repo_from_template` probe⇒clone /
-  missing⇒create --clone; `provision_repo` 4-step injectable ensure — own
-  5-label loop over the two pub(crate)-widened builders, project
-  link-or-create GUARDED by binding-exists, `scaffold_harness` wrapped,
-  consent-gated commit w/ STATE-ONLY .gitignore rewrite + porcelain-empty
-  no-commit + plain push red-nonfatal) + NEW `routes/provision.rs`
-  (repo-from-template + workspace/provision, traversal-proof validators).
-  UI: pure `workspace-provision-step.ts` (+15 vitest), 4th
-  OPTIONAL_WORKSPACE_STEPS entry, goal-step template mode (registers via the
-  TRACED existing `addRepoPath` action), modal-local 'provision' phase
-  mounting the SHARED ProjectBindingEditor + D8 consent (exact 5-path list);
-  `useComposerState`/`isGoalStepReady`/`initialComposerPhase` untouched.
-  Gates: cargo 616/0/5 (604+12; run-twice AC-10 pin written test-first,
-  proven RED first), deletion audit = exactly the 2 widening signatures,
-  fmt+clippy clean, vite green, vitest 37/0 (only the 4-entry steps pin
-  updated), tsc baseline 1642 EXACTLY held. 10 deviations documented (top:
-  Option<ProjectChoice>; state_map injection = hermeticity; resolve_slug +
-  BLOCKED_LABEL keep-in-sync dups). **All three slices green: F1 `474cfd12`
-  F2 `0b03eb9e` F3 `26b1e022` → tester re-runs everything independently.**
-- 2026-07-06 | Tester | **010 verdict PASS-WITH-DEFERRALS, 0 defects → phase
-  reviewer** (`verification.md`, HEAD `bc4a7310`; handoff
-  `04-tester-to-reviewer.md`). Independently reproduced ALL six gates: cargo
-  616/0/5 (93.6s), FMT-CLEAN, clippy 0 warnings, vite 1m48s, vitest 37/37
-  no-flake, bare-tsc EXACTLY 1642 (baseline held). ACs 1–10 PASS on READ
-  evidence (test bodies inspected); AC 11 PASS(deferred: live custom-column
-  board demo, qa.sh/human, runner Mateo — 008 precedent). Sacred surfaces
-  PROVEN: label fns byte-identical base→HEAD (extracted + string-compared);
-  empty diffs on all 4 seam call sites + useComposerState + harness/types +
-  auth.rs + desktop gh/gh_projects/github_labels; task_sink's 7 deletions all
-  accounted; TrackerPhase 4 variants; TransitionResult no new variant. 25/25
-  deviations ACCURATE. 5 adversarial spot-checks clean (AC-7 fold, run-twice
-  isolation incl. real rev-list equality, real git check-ignore, seam
-  hermeticity — binding read strictly after the two early-return guards,
-  unbound 5-invocation byte-identity). 5 Info nits (top: tasks.md F3 vitest
-  per-file counts SWAPPED 12/15 not 15/12; 03-handoff github_labels.rs path
-  missing `commands/` — tester re-proved at the real path; test-first RED
-  narrative session-internal, not in git). Reviewer focus: 3 accepted
-  dup-drift risks (gh_bin / BLOCKED_LABEL / resolve_slug), D2 residual
-  honesty, Skipped-semantics legibility.
-- 2026-07-06 | Reviewer | **010 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `8aa8a2d2`, 0 blockers). All 20 focus items PASS w/ quoted evidence: the 3
-  accepted dup-drift risks rule sufficient-for-now (ONE consolidation
-  follow-up: resolve_slug→routes/util.rs per repo convention; gh_bin single
-  owner; BLOCKED_LABEL pub(crate) import or pin-test); D2 two-process RMW
-  residual documented HONESTLY (WRITE_LOCK is process-local, all writers
-  server-side, TUI has no bind surface, lost write re-bindable); Skipped-fold
-  strings name what landed + what failed + the remedy (AC-7 pin carries
-  `gh auth refresh -s project` into the run log); D1 knob-gated close/reopen
-  w/ ONE default site + unbound byte-identity; D3 zero echo/poll machinery;
-  D5 no option mutation (only ADD_ITEM + UPDATE_STATUS mutations exist);
-  D7 one component two mounts + refusal→manual-selects; D8 consent commit,
-  plain push, no AI trailer; no shell injection (argv-exec everywhere,
-  owner_node closed literal set, login always $var); traversal
-  unrepresentable; no token leakage (constructed scope message, 240/400-char
-  stderr bounds); no new is_public; option IDs never names at write; Err
-  cannot escape either github arm; id-cache correctness-independent.
-  1 Should-fix = the consolidation chore ticket (post-freeze). 5 leave-as-is
-  nits (stale "three skippable" doc word; validate_owner leading '-';
-  WRITE_LOCK comment x-ref; close-act fold phrasing; tasks.md count swap —
-  recorded in verification.md). spec.md Status → Done. Phase → done.
-  **RELEASE = HUMAN** (PR → develop + promote + AC-11 live board demo,
-  runner Mateo).
-- 2026-07-06 | Release | **010 SHIPPING → v0.60.0** (Mateo: "ship it";
-  AC-11 live board demo remains PENDING and human-run — shipped ahead of it
-  per Mateo's call, 008 precedent). Issue **#276** (feature, closes via the
-  release commit's `Closes` on main) + **#277** (reviewer Should-fix:
-  consolidate resolve_slug/gh_bin/BLOCKED_LABEL keep-in-sync dups). Flow:
-  version bump 0.59.1→0.60.0 (Cargo.toml+lock+tauri.conf.json only) → PR →
-  develop → staging → main (pushed separately) → tag v0.60.0 (fires
-  release.yml). Evidence contract for AC-11 stays: issue timeline
-  project-status + close events + a demo-pass line HERE.
+- 2026-07-13 | PM | **015 PM gate PASS → phase architect** (handoff
+  `01-pm-to-architect.md`; fact-check by Explore sub-agent, evidence quoted
+  there). NON-DUPLICATE verified: develop's neighbors are scaffold-on-create
+  (010 F3 `workspace-provision-step.ts`, writes `.agentum-harness/`, excludes
+  feature_list.json) + issue-first gated run (`start_work`) — neither detects
+  an existing feature_list. 3 citation fixes (fs.rs:180 not :143;
+  `listHarnesses` not `getHarnessStatuses`; Terminal.tsx:1578 not :1569).
+  KEY re-decision D1: wizard quick-create AUTO-LAUNCHES the agent
+  (`CreateWorkspaceWizard.tsx:344`; launcher mounts only for agent===null /
+  gated) → banner must be workspace-view-level, NOT launcher-only. D2
+  creation-moment trigger · D3 hide-never-link · D4 export
+  startHarness/runHarness/listHarnesses · D5 local-only (engine StartRequest
+  has no host field) · D6 gated-run suppression. Q1 (mount mechanics) + Q2
+  (context hand-off: store slice vs pending-signal à la
+  `pending-session-prompt.ts`) → architect.
+- 2026-07-13 | Architect | **015 gate PASS → phase developer** (sub-agent;
+  `architecture.md` 451 ln + handoff 02). Q1: ONE mount — Terminal.tsx root
+  flex strip (`relative z-30 shrink-0`) after `EditorAutosaveController`,
+  self-gates on offer slice keyed by worktreeId; launcher overlay is
+  `absolute z-20` so the strip shows in BOTH auto-launch and empty-state
+  paths; REJECTED launcher-only (D1), dual-mount, and the `:1666` legacy
+  block (#313 invisibility trap). Q2: fire-and-forget
+  `maybeOfferWorkspaceHarnessRun` at END of `openCreatedWorkspace` — both
+  create paths converge (`useComposerState.ts:2533/:2750`) so ZERO
+  useComposerState edits; zustand slice holds the RESOLVED offer (rejected
+  pending-signal: non-reactive, banner must appear when async detection
+  resolves). Detection mirrors `resolve_harness_dir` semantics (canonical dir
+  present w/o feature_list ⇒ NO legacy fallback). Residuals accepted:
+  quick-create "don't start a session" path yields no offer; symlink-spelling
+  dedupe gap. Dev must NOT: touch useComposerState/planCreatedWorkspaceOpen
+  pins, poll, pass hostId, jsdom, persist offers, rely on engine dedupe
+  (`harness.rs:95` inserts unconditionally).
+- 2026-07-13 | Developer | **015 f1+f2+f3 CODE-COMPLETE + GREEN → phase tester**
+  (sub-agent; commits `66f1e161`/`03f2eb2b`/`41cbeab8` + docs `5f753260`;
+  `tasks.md` + handoff `03-developer-to-tester.md`). Gates: f1 20/0, f2 45/0,
+  f3 50/0 (4 targeted vitest files, bun) + vite build ✓ ×3 (~38s each).
+  Scope audit (orchestrator): 15 files exactly per architecture §6, NO
+  useComposerState/planCreatedWorkspace/Rust edits,
+  open-created-workspace.test.ts additions-only (+39/-0). 3 deviations, all
+  code-commented + tasks.md-logged: (1) acceptHarnessOffer swallows+toasts
+  (no re-throw), banner busy-reset via .finally — observable behavior
+  identical + pinned; (2) banner test mocks the offer lib (network-free
+  render, sdd-bar precedent); (3) trigger pins = NEW describe block w/
+  per-test mockClear (existing pins byte-identical). Env notes: worktree
+  needed `bun install`; anchors had ZERO drift; zustand v5 SSR snapshot
+  forces mocked-store banner testing (validates handoff prescription).
+- 2026-07-13 | Tester | **015 verdict PASS-WITH-DEFERRALS → phase reviewer**
+  (sub-agent; `verification.md` + handoff `04-tester-to-reviewer.md`, commit
+  `d66d4c40`; 0 blockers, 0 should-fix, 3 info nits). Independently re-ran
+  gates: vitest 50/0 exact per-file match (20+14+12+4), vite build exit 0.
+  AC 1/7 PASS now; AC 2-6 PASS(deferred qa.sh/staging) with model logic
+  pinned (dedupe+trailing-slash, gatedRun/local-only zero-fs-call, dismiss =
+  zero client calls, detail-in-toast, ≤2 fs calls not-found). Deviations 3/3
+  ACCURATE. Spot-checks 7/7 (incl. mount OUTSIDE legacy/#313 + split
+  surface; close-race store re-read `offer.ts:93-100`). Sacred: EMPTY
+  useComposerState diff; open-created-workspace.ts = import + trailing void
+  call; test additions-only; harness-client exactly +3 exports. Nits: handoff
+  03 STATE-claim wording; `normalizeWorkdir('//')` unreachable edge;
+  POSIX-only join. Tracker: issue #301 → status/ready-to-test.
+- 2026-07-13 | Reviewer | **015 SIGN-OFF → SHIP-READY, phase done**
+  (sub-agent; `review.md` + spec Status → Done, commit `d390346a`; 0
+  blockers). All 6 focus areas PASS w/ quoted evidence: close-race re-check
+  sufficient for reachable cases; back-to-back creations sound (record-keyed
+  slice); `normalizeWorkdir` = exact `expand_with_home` mirror; security
+  clean (own workdir + server ids only, no auth in toasts, harnessDir const
+  union escaped); invariants held (one launch path, register+run only — no
+  /init, zero polling, D2/D5/D6 structurally pre-fs); mount layout shift IS
+  the designed non-occlusion (shrink-0 vs flex-1 anchor, z-30 over z-20);
+  React clean (.finally-after-unmount = React-18 no-op). **F1 Should-fix →
+  follow-up ticket**: `harnessOfferByWorktreeId` missing from
+  `buildWorktreePurgeState` (`worktrees.ts:606`) — stale offer survives
+  worktree deletion (fail-safe on accept; one-line fix + pin). F2–F5 nits
+  leave-as-is. All 3 dev deviations + 3 tester nits ruled leave-as-is.
+  **RELEASE = HUMAN**: PR → develop, promote, browser QA (qa.sh scenario,
+  handoff 02) for AC 2–6 runtime legs.
