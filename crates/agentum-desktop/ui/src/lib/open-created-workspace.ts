@@ -6,6 +6,7 @@ import type {
 import { activateAndRevealWorktree, type IssueCommandLaunch } from './worktree-activation'
 import { launchAgentInNewTab } from './launch-agent-in-new-tab'
 import { stashPendingSessionPrompt } from './pending-session-prompt'
+import { maybeOfferWorkspaceHarnessRun } from './workspace-harness-offer'
 
 export type OpenCreatedWorkspaceOptions = {
   worktreeId: string
@@ -104,4 +105,8 @@ export function openCreatedWorkspace(opts: OpenCreatedWorkspaceOptions): void {
     // user chooses an agent; without this the typed text would be dropped.
     stashPendingSessionPrompt(worktreeId, prompt)
   }
+
+  // Spec 015 (D2): detect a harness spec in the new workspace's workdir and
+  // offer a run — fire-and-forget so the create flow never waits on fs.
+  void maybeOfferWorkspaceHarnessRun({ worktreeId, gatedRun: gatedRun === true })
 }
