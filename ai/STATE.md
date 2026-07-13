@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 016-sdd-loop-checkin-and-issue-project-status
-- **phase:** developer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (016 drafted 2026-07-13 from GH issue #358; PM-gated to one slice — the issue-hover Project-status chip split out to spec 358b. Architect plan at `.agentum-harness/specs/358-the-sdd-loop-sohuld-inject-itself-10-tim/architecture.md`, grounded at origin/develop `253173ad`; this branch merged up from v0.57.0-era to that commit 2026-07-13. Harness driving F1 (`agentum_sdd_loop` MCP check-in). 015 SHIP-READY 2026-07-13 (its release remains human-gated, see prior phase note in git history); 008 RELEASED v0.57.0)
+- **phase:** done   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (016 F1 slice **REVIEW SIGN-OFF 2026-07-13**, attempt 5 at `99670cf1` after a 4×-blocked review gate — the AC3 STATE.md belt parser silently deviated from architecture.md and never fired on the real `- **phase:** done <!-- … -->` shape; fixed = both keys `phase`|`current_phase` + first-token value, gate re-run 694/0 + fmt. Full trail in `.agentum-harness/decisions.md`. F2 rider = spec 358b, pending its own PM gate. RELEASE = HUMAN: PR → develop, staging qa.sh covers the loop-stop scenario, then main tag. 015 SHIP-READY 2026-07-13; 008 RELEASED v0.57.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -144,3 +144,16 @@
   `routes::sdd::agent_checkin`; done:true → remove+abort+emit
   `agent_completed`; done:false → summary parked for next `sdd.loop.step`;
   no-loop/stale-gen → success no-op. Per architecture.md D1–D3.
+- 2026-07-13 | Reviewer | **016 SIGN-OFF (attempt 5) → phase done** after a
+  4×-blocked review gate (identical diff re-reviewed 4 times; attempt-4
+  HARNESS NOTE routed to developer). Blocking finding: `state_md_says_done`
+  keyed on `current_phase` + whole-value equality → the AC3 belt never fired
+  on the real `- **phase:** done <!-- … -->` shape, and routes/sdd.rs:866
+  cemented the deviation (`!state_md_says_done("phase: done")`). Fix
+  `99670cf1`: both keys (`phase`|`current_phase`) + first-token value
+  (whitespace/`<` delimited) + whole-line-field kept; `phase: done` test
+  flipped; real shapes tested incl. negative (`pm <!-- … | done -->` stays
+  false); both-keys decision named in the doc comment. NAMED trade-off:
+  free-form `current_phase: done pending qa` now reads done (false stop =
+  safe direction for a backstop). Gate 694/0 + fmt. qa.sh loop-stop scenario
+  explicitly handed to staging QA. F1–F5 all green; RELEASE = HUMAN.

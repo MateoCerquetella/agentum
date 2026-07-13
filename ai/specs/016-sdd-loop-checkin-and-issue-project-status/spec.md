@@ -1,7 +1,7 @@
 # Spec 016 — SDD loop check-in over MCP + issue Project-status in the hover card
 
 - **Number:** 016
-- **Status:** Draft
+- **Status:** Done — F1 slice (SDD-loop check-in), reviewer sign-off 2026-07-13 at `99670cf1`; F2 chip rider split to harness spec 358b, not yet built
 - **Surface:** `crates/agentum-server` (routes/sdd.rs, sdd.rs, routes/mcp.rs) + `crates/agentum-desktop/ui` (sidebar hover card)
 - **Author:** Claude (from Mateo's ask, GitHub issue #358)
 - **Date:** 2026-07-13

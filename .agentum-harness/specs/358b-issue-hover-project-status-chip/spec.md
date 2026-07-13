@@ -5,8 +5,8 @@
 > SDD-loop slice violated the one-slice rule). **Not yet PM-gated — run this
 > spec through its own PM gate before building.** Full SDD document (contains
 > both halves): `ai/specs/016-sdd-loop-checkin-and-issue-project-status/spec.md`.
-> No dedicated GitHub issue yet; open one when this spec is picked up
-> (the rider lives in-thread on issue #358).
+> Tracker: https://github.com/MateoCerquetella/agentum/issues/365 (opened at
+> the 016 review sign-off; the rider originally lived in-thread on issue #358).
 
 ## Problem
 
