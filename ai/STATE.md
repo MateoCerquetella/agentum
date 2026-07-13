@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 015-workspace-harness-autostart
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (015 **SHIP-READY — Reviewer SIGN-OFF 2026-07-13**, `review.md` commit `d390346a`, 0 blockers. 1 Should-fix = follow-up ticket (stale offer survives worktree deletion — `harnessOfferByWorktreeId` missing from `buildWorktreePurgeState`, `worktrees.ts:606`; fail-safe on accept). 4 leave-as-is nits. Product commits `66f1e161`+`03f2eb2b`+`41cbeab8`; gates 50/0 vitest + vite build, independently reproduced. **RELEASE = HUMAN (Mateo)**: merge PR → develop, promote → staging → main, browser QA (qa.sh scenario in handoff 02) — AC 2–6 runtime legs deferred there. Loop was fully autonomous; ai/roles/orchestrate/hitl scaffold files still MISSING repo-wide — ran from the sdd-orchestrate playbook + validate_handoff.md + 004–014 precedent.)
+- **current_spec:** 017-pinned-chat-repo-context
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (017 = GitHub **#361** p1 fix, **SHIP-READY — Reviewer SIGN-OFF 2026-07-13**, `review.md`, 0 blockers: Project Hub pinned chat blind — `~` workdir never expanded in chat.rs + SSH repos blind by construction + client never sent `repo_id`. Full autonomous sdd-orchestrate PM→Reviewer in one session; drafted as "009" in a v0.57-era worktree, renumbered 017 at develop-merge (develop already carries 009–015; 016 claimed by the board-per-project draft). Gates independently reproduced: cargo 566/0/5 ×2, vitest 15/15, vite ✓. Deferred to human/staging: qa.sh browser leg + live SSH gather. Prior: 015 SHIPPED v0.75.0.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -135,3 +135,15 @@
   (Cargo.toml+lock+tauri.conf.json) + tag v0.75.0 (fires release.yml). Issue
   #301 closes via this commit's `Closes`. Follow-up: **#352** (offer
   purge-state miss, reviewer Should-fix).
+- 2026-07-13 | Release-prep | **017 pinned-chat-repo-context SHIP-READY, merged-to-develop pass**
+  (GitHub **#361** p1; full autonomous sdd-orchestrate PM→Reviewer, drafted as
+  "009" in a v0.57-era worktree, cherry-picked onto fresh origin/develop and
+  renumbered 017). Fix: expand-first local arm + per-request diagnostic log;
+  ONE pure `assemble_repo_context` for both gather arms; `ChatRequest.repo_id`
+  threaded from every workspace-selected send; SSH gather via
+  `repos::load_host_for_repo` + one `sh -c {q(script)}` round trip, 10s
+  timeout, all-legs-soft-None; `context` SSE lead-in event → `contextMissing`
+  store map → amber WarningBanner. Gates on the v0.57 base: cargo 566/0/5 ×2
+  (dev + independent tester), vitest 15/15, vite ✓; spec-008 byte-pins
+  SHA-verified intact. Re-gated post-cherry-pick on develop before PR (see PR
+  #-ref in issue #361). Deferred human: qa.sh browser leg + live SSH gather.
