@@ -54,6 +54,7 @@ import {
   buildWizardRecap,
   canLeaveRepoStep as canLeaveRepoStepModel,
   capRepoList,
+  deriveTrackerBindingTarget,
   deriveUnifiedTrackerStatus,
   deriveWizardComposerSeed,
   filterRepoList,
@@ -385,12 +386,15 @@ export default function CreateWorkspaceWizard({
 
   // Spec 013 F1: the tracker section reads SOLELY from the Project the picker
   // resolves (per-repo binding ∨ global activeProject) — no git-remote heuristic
-  // that could disagree with the picker's issue list. The per-repo binding
-  // resolves through the local `gh`, so only a LOCAL git repo can carry (or
-  // configure) one; a remote/folder repo leaves `trackerWorkdir` undefined and
-  // the picker falls back to the global activeProject.
-  const trackerWorkdir =
-    selectedRepo && !selectedRepo.connectionId && selectedRepoIsGit ? selectedRepo.path : undefined
+  // that could disagree with the picker's issue list. Any GIT repo carries a
+  // binding target now (#356): SSH repos resolve their slug on their host
+  // (read-only — configuring the binding stays local-gated inside the section);
+  // a non-git selection resolves nothing and falls back to the global
+  // activeProject.
+  const trackerTarget = deriveTrackerBindingTarget({
+    repo: selectedRepo,
+    isGit: selectedRepoIsGit
+  })
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
@@ -479,7 +483,8 @@ export default function CreateWorkspaceWizard({
               name={name}
               onNameValueChange={onNameValueChange}
               nameInputRef={nameInputRef}
-              trackerWorkdir={trackerWorkdir}
+              trackerWorkdir={trackerTarget?.workdir}
+              trackerHostId={trackerTarget?.hostId}
               activeProject={activeProject}
               fetchProjectViewTable={fetchProjectViewTable}
               linkedWorkItem={linkedWorkItem}
@@ -1340,6 +1345,7 @@ function AgentStep({
   onNameValueChange,
   nameInputRef,
   trackerWorkdir,
+  trackerHostId,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -1358,6 +1364,8 @@ function AgentStep({
   onNameValueChange: (value: string) => void
   nameInputRef: React.RefObject<HTMLInputElement | null>
   trackerWorkdir?: string
+  /** Set when the repo lives on an SSH host — binding resolves there (#356). */
+  trackerHostId?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -1382,6 +1390,7 @@ function AgentStep({
           below (via applyLinkedWorkItem's title slug) while it's still blank. */}
       <TrackerSection
         workdir={trackerWorkdir}
+        hostId={trackerHostId}
         activeProject={activeProject}
         fetchProjectViewTable={fetchProjectViewTable}
         linkedWorkItem={linkedWorkItem}
@@ -1496,6 +1505,7 @@ function AgentStep({
  */
 function TrackerSection({
   workdir,
+  hostId,
   activeProject,
   fetchProjectViewTable,
   linkedWorkItem,
@@ -1503,10 +1513,13 @@ function TrackerSection({
   createIssue,
   linear
 }: {
-  /** The selected repo's local workdir — present only for a LOCAL git repo,
-   *  which is the only kind that can carry/configure a per-repo binding. The
-   *  slug is resolved server-side from this workdir's git remote. */
+  /** The selected GIT repo's workdir (local path, or the path on `hostId`'s
+   *  host for an SSH repo). The slug is resolved server-side from this
+   *  workdir's git remote — on the right host (#356). */
   workdir?: string
+  /** Set for SSH repos: the host to resolve the binding on. Configuring the
+   *  binding stays local-only (the editor is gated below). */
+  hostId?: string
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
   linkedWorkItem: LinkedWorkItemSummary | null
@@ -1519,16 +1532,18 @@ function TrackerSection({
   const [status, setStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
   const [configureOpen, setConfigureOpen] = useState(false)
 
-  // Read the selected repo's per-repo Projects binding. Fail-closed — a missing
-  // binding, a remote repo, or gh being unavailable leaves `binding` null so
-  // resolution falls back to the global activeProject (spec 012).
+  // Read the selected repo's per-repo Projects binding — host-aware, so SSH
+  // repos resolve the same slug-keyed binding their local clone configured.
+  // Fail-closed — a missing binding, an unreachable host, or gh being
+  // unavailable leaves `binding` null so resolution falls back to the global
+  // activeProject (spec 012).
   useEffect(() => {
     if (!workdir) {
       setBinding(null)
       return
     }
     let cancelled = false
-    void getProjectBinding({ workdir })
+    void getProjectBinding({ workdir, hostId })
       .then((res) => {
         if (!cancelled) setBinding(res.binding)
       })
@@ -1538,7 +1553,7 @@ function TrackerSection({
     return () => {
       cancelled = true
     }
-  }, [workdir])
+  }, [workdir, hostId])
 
   // Per-repo binding wins; else the global activeProject; else null.
   const resolved = useMemo(
@@ -1589,11 +1604,12 @@ function TrackerSection({
     [resolved, status, options.length]
   )
 
-  // The compact configure/switch affordance — only a LOCAL git repo (a
-  // resolvable workdir) can carry a binding, so gate the control on it. Reuses
-  // the SAME editor as the hub / Settings; onBound refreshes the section so it
-  // re-resolves to the freshly-bound Project.
-  const configureControl = workdir ? (
+  // The compact configure/switch affordance — configuring a binding stays a
+  // LOCAL-repo affordance (the editor PUTs through the local resolver), so an
+  // SSH repo (hostId set) reads its slug-keyed binding but doesn't configure
+  // it here. Reuses the SAME editor as the hub / Settings; onBound refreshes
+  // the section so it re-resolves to the freshly-bound Project.
+  const configureControl = workdir && !hostId ? (
     <Popover open={configureOpen} onOpenChange={setConfigureOpen}>
       <PopoverTrigger asChild>
         <button

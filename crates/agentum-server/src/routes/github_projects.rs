@@ -12,7 +12,7 @@
 //! same `{workdir, slug?}` pattern every github.rs route uses; the file stays
 //! snake_case while these DTOs are the camelCase wire twins.
 
-use agentum_core::LOCAL_HOST_ID;
+use agentum_core::{HostKind, LOCAL_HOST_ID};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
@@ -41,30 +41,38 @@ pub fn router() -> Router<AppState> {
 
 /// Resolve the repo slug the binding is keyed on — the exact
 /// `{workdir, slug?}` contract of the sibling github.rs routes, including the
-/// typed `no_github_repo` 422 the UI already branches on.
+/// typed `no_github_repo` 422 the UI already branches on. Host-aware: a
+/// `host_id` reads the origin on that host (`git_in_dir` execs remotely for
+/// SSH); absent = the local machine, byte-for-byte the old behavior.
 async fn resolve_slug(
     state: &AppState,
     workdir: &str,
     slug_hint: Option<&str>,
+    host_id: Option<uuid::Uuid>,
 ) -> Result<String, ApiError> {
     let workdir = workdir.trim();
     if workdir.is_empty() {
         return Err(ApiError::BadRequest("`workdir` is required".into()));
     }
+    let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
     // Expand `~`/trailing-slash before the git read. `resolve_github_slug` runs
     // `git -C <workdir>` with no shell, so a stored `~/…` project path is passed
     // literally and git can't cd into it — the origin read fails and the binding
-    // dead-ends on a spurious `no_github_repo`. Every other local route already
-    // expands (`sessions`/`provision`/`wiki`/`uploads`); this resolver was the
-    // lone exception. No-op for the common absolute path, so working repos are
-    // unaffected.
-    let expanded = super::util::expand_workdir(workdir)?;
-    let workdir = expanded.to_string_lossy();
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
+    // dead-ends on a spurious `no_github_repo`. Local host only: `expand_workdir`
+    // resolves against THIS machine's $HOME, which is meaningless for a remote
+    // path — an SSH host's own side handles its paths.
+    let workdir = if matches!(host.kind, HostKind::Ssh { .. }) {
+        workdir.to_string()
+    } else {
+        super::util::expand_workdir(workdir)?
+            .to_string_lossy()
+            .into_owned()
+    };
     super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
         .await
         .map_err(|reason| {
@@ -296,6 +304,8 @@ async fn discover_binding(
 pub struct BindingQuery {
     pub workdir: String,
     pub slug: Option<String>,
+    /// Host the workdir lives on (SSH repos); absent = local.
+    pub host_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -305,13 +315,15 @@ struct GetBindingResponse {
     binding: Option<BindingDto>,
 }
 
-/// `GET /api/github/project-binding?workdir=…&slug=…` — the repo's binding,
-/// fresh from disk (`null` when unbound).
+/// `GET /api/github/project-binding?workdir=…&slug=…&host_id=…` — the repo's
+/// binding, fresh from disk (`null` when unbound). Host-aware reads only:
+/// bindings are keyed by slug, so an SSH repo resolves to the same binding its
+/// local clone configured.
 async fn get_binding(
     State(state): State<AppState>,
     Query(q): Query<BindingQuery>,
 ) -> Result<Json<GetBindingResponse>, ApiError> {
-    let slug = resolve_slug(&state, &q.workdir, q.slug.as_deref()).await?;
+    let slug = resolve_slug(&state, &q.workdir, q.slug.as_deref(), q.host_id).await?;
     let binding = github_projects::binding_for_slug(&slug);
     Ok(Json(GetBindingResponse {
         slug,
@@ -365,7 +377,9 @@ async fn put_binding(
     }
     let status_mapping =
         validate_status_mapping(&body.status_mapping).map_err(ApiError::BadRequest)?;
-    let slug = resolve_slug(&state, &body.workdir, body.slug.as_deref()).await?;
+    // Deliberately local-only (no host_id): configuring a binding stays a
+    // local-repo affordance; the slug-keyed binding then serves SSH copies too.
+    let slug = resolve_slug(&state, &body.workdir, body.slug.as_deref(), None).await?;
     let binding = BoardBinding {
         project_id: body.project_id.trim().to_string(),
         status_field_id: body.status_field_id.trim().to_string(),
@@ -398,7 +412,8 @@ async fn delete_binding(
     State(state): State<AppState>,
     Query(q): Query<BindingQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let slug = resolve_slug(&state, &q.workdir, q.slug.as_deref()).await?;
+    // Local-only like PUT — unbind is a configuration write.
+    let slug = resolve_slug(&state, &q.workdir, q.slug.as_deref(), None).await?;
     github_projects::remove_binding(&slug).map_err(ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
