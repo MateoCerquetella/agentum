@@ -50,6 +50,10 @@ pub struct SddLoopHandle {
     step: Arc<AtomicU32>,
     max_steps: u32,
     abort: tokio::task::AbortHandle,
+    /// One-line progress note parked by a `done:false` MCP check-in
+    /// ([`agent_checkin`]); consumed (`take`) by the worker when it emits the
+    /// next `sdd.loop.step` event.
+    summary: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// Monotonic activation counter backing [`SddLoopHandle::generation`].
@@ -239,14 +243,7 @@ async fn loop_toggle(
     if !body.active {
         let removed = state.sdd_loops.lock().expect("sdd_loops lock").remove(&id);
         if let Some(h) = removed {
-            h.abort.abort();
-            emit_loop_stopped(
-                &state,
-                id,
-                &session.name,
-                "toggled_off",
-                h.step.load(Ordering::Relaxed),
-            );
+            abort_and_announce(&state, id, h, "toggled_off").await;
         }
         return Ok(Json(read_loop_state(&state, id)));
     }
@@ -273,12 +270,14 @@ async fn loop_toggle(
     let max_steps = body.max_steps.unwrap_or(DEFAULT_MAX_STEPS).clamp(1, 100);
     let generation = LOOP_GENERATION.fetch_add(1, Ordering::Relaxed);
     let step = Arc::new(AtomicU32::new(0));
+    let summary = Arc::new(std::sync::Mutex::new(None));
     let worker = tokio::spawn(run_loop(
         state.clone(),
         id,
         generation,
         step.clone(),
         max_steps,
+        summary.clone(),
     ));
     state.sdd_loops.lock().expect("sdd_loops lock").insert(
         id,
@@ -287,6 +286,7 @@ async fn loop_toggle(
             step,
             max_steps,
             abort: worker.abort_handle(),
+            summary,
         },
     );
     let _ = state.bus.send(
@@ -309,6 +309,74 @@ fn emit_loop_stopped(state: &AppState, id: Uuid, name: &str, reason: &str, steps
     );
 }
 
+/// Tear down a loop handle that has already been removed from the map and
+/// announce the stop — the shared tail of every *control-path* stop
+/// (toggle-off, MCP check-in), parameterized by reason. `run_loop`'s natural
+/// exit announces its own stop, generation-guarded. Returns the step count.
+async fn abort_and_announce(
+    state: &AppState,
+    id: Uuid,
+    handle: SddLoopHandle,
+    reason: &str,
+) -> u32 {
+    handle.abort.abort();
+    let steps = handle.step.load(Ordering::Relaxed);
+    // Best-effort name, same as `run_loop`'s cleanup — the event must go out
+    // even if the session row vanished mid-stop.
+    let name = state
+        .store
+        .get_session_by_id(id)
+        .await
+        .ok()
+        .flatten()
+        .map(|s| s.name)
+        .unwrap_or_default();
+    emit_loop_stopped(state, id, &name, reason, steps);
+    steps
+}
+
+/// The `agentum_sdd_loop` MCP check-in (spec 016 F1). Every return is a
+/// SUCCESS string by contract — a check-in with no live loop, or from a stale
+/// activation, is a truthful no-op, never an error — so agents can end every
+/// step with it unconditionally.
+pub(crate) async fn agent_checkin(
+    state: &AppState,
+    id: Uuid,
+    generation: Option<u64>,
+    done: bool,
+    summary: Option<String>,
+) -> String {
+    // Inspect + mutate under ONE lock acquisition so a concurrent re-toggle
+    // can't swap the entry between the staleness check and the removal.
+    let stopped = {
+        let mut map = state.sdd_loops.lock().expect("sdd_loops lock");
+        let Some(h) = map.get(&id) else {
+            return "no active SDD loop on this session; nothing to stop".to_string();
+        };
+        // A stale activation's check-in must never stop (or write into) a
+        // successor loop on the same session. Absent `generation` is honored
+        // against the current loop — the realistic failure is an agent
+        // dropping the argument, and then the stop must still work.
+        if generation.is_some_and(|g| g != h.generation) {
+            return "check-in is from an earlier loop activation; ignored".to_string();
+        }
+        if !done {
+            *h.summary.lock().expect("sdd summary lock") = summary;
+            return format!(
+                "noted — loop continues (step {} of {})",
+                h.step.load(Ordering::Relaxed),
+                h.max_steps
+            );
+        }
+        map.remove(&id)
+            .expect("entry checked present under this lock")
+    };
+    let steps = abort_and_announce(state, id, stopped, "agent_completed").await;
+    format!(
+        "confirmed — SDD loop stopped after step {steps}; no further step prompts will be injected. Do not start new work."
+    )
+}
+
 /// The loop worker: drive to a terminal reason, then clean up — but only if
 /// this activation still owns the map entry (a re-toggle may have replaced it,
 /// and the successor's entry/stop-event are not ours to touch).
@@ -318,8 +386,9 @@ async fn run_loop(
     generation: u64,
     step: Arc<AtomicU32>,
     max_steps: u32,
+    summary: Arc<std::sync::Mutex<Option<String>>>,
 ) {
-    let reason = drive_sdd_loop(&state, id, &step, max_steps).await;
+    let reason = drive_sdd_loop(&state, id, &step, max_steps, &summary).await;
     let is_current = {
         let mut map = state.sdd_loops.lock().expect("sdd_loops lock");
         match map.get(&id) {
@@ -346,13 +415,65 @@ async fn run_loop(
 /// One activation's drive: inject the orchestrator step, wait for the agent to
 /// settle, repeat. Every exit path is a named reason (it lands in the
 /// `sdd.loop.stopped` payload — no human is watching the pane, so the event is
-/// the explanation).
+/// the explanation). Thin wrapper over [`drive_sdd_loop_with`] that wires the
+/// real delivery pair (`inject_prompt` + `wait_for_settle`) verbatim.
 async fn drive_sdd_loop(
     state: &AppState,
     id: Uuid,
     step_counter: &AtomicU32,
     max_steps: u32,
+    summary: &std::sync::Mutex<Option<String>>,
 ) -> &'static str {
+    drive_sdd_loop_with(
+        state,
+        id,
+        step_counter,
+        max_steps,
+        summary,
+        |session, prompt| async move {
+            if let Err(e) = crate::harness::inject_prompt(state, &session, &prompt).await {
+                tracing::warn!(target: "agentum::sdd", error = %e, "sdd loop inject failed");
+                return StepOutcome::InjectFailed;
+            }
+            match crate::harness::wait_for_settle(&state.bus, id, SETTLE_GRACE, SETTLE_TIMEOUT)
+                .await
+            {
+                SettleOutcome::Settled => StepOutcome::Settled,
+                SettleOutcome::Crashed => StepOutcome::Crashed,
+                // Re-injecting into an agent that never signalled idle only
+                // piles prompts into a stuck pane — stop loudly instead.
+                SettleOutcome::TimedOut => StepOutcome::TimedOut,
+            }
+        },
+    )
+    .await
+}
+
+/// One delivered step, as the loop cares about it. Mirrors the drive's exit
+/// arms so a test can script steps without tmux (`inject_prompt` polls a real
+/// pane for ~56 s before failing — unusable in a unit test).
+enum StepOutcome {
+    Settled,
+    Crashed,
+    TimedOut,
+    InjectFailed,
+}
+
+/// The loop mechanics behind [`drive_sdd_loop`], generic over step delivery so
+/// unit tests can drive them with a scripted closure. Owned `Session`/`String`
+/// args keep the generic lifetime-free.
+async fn drive_sdd_loop_with<F, Fut>(
+    state: &AppState,
+    id: Uuid,
+    step_counter: &AtomicU32,
+    max_steps: u32,
+    summary: &std::sync::Mutex<Option<String>>,
+    mut step_fn: F,
+) -> &'static str
+where
+    F: FnMut(Session, String) -> Fut,
+    Fut: std::future::Future<Output = StepOutcome>,
+{
     let Some(playbook) = crate::sdd::get("sdd-orchestrate") else {
         return "playbook_missing";
     };
@@ -367,25 +488,27 @@ async fn drive_sdd_loop(
             return "session_not_running";
         }
         step_counter.store(step, Ordering::Relaxed);
+        let mut payload = json!({ "step": step, "max_steps": max_steps });
+        // A `done:false` check-in parks a one-line progress note; it rides the
+        // NEXT step's event (so step 1 never carries one) and is consumed on
+        // delivery.
+        if let Some(s) = summary.lock().expect("sdd summary lock").take() {
+            payload["summary"] = json!(s);
+        }
         let _ = state.bus.send(
             Event::new("sdd.loop.step")
                 .with_session(id, session.name.clone())
-                .with_payload(json!({ "step": step, "max_steps": max_steps })),
+                .with_payload(payload),
         );
         // Autonomous mode: the orchestrator must apply gates itself — a loop
         // that pauses to ask a human defeats its own purpose.
         let (_, base) = prompt_for(state, &session, &playbook, Some("autonomous")).await;
         let prompt = crate::sdd::loop_step_prompt(step, &base);
-        if let Err(e) = crate::harness::inject_prompt(state, &session, &prompt).await {
-            tracing::warn!(target: "agentum::sdd", error = %e, "sdd loop inject failed");
-            return "inject_failed";
-        }
-        match crate::harness::wait_for_settle(&state.bus, id, SETTLE_GRACE, SETTLE_TIMEOUT).await {
-            SettleOutcome::Settled => {}
-            SettleOutcome::Crashed => return "session_ended",
-            // Re-injecting into an agent that never signalled idle only piles
-            // prompts into a stuck pane — stop loudly instead.
-            SettleOutcome::TimedOut => return "settle_timeout",
+        match step_fn(session, prompt).await {
+            StepOutcome::Settled => {}
+            StepOutcome::Crashed => return "session_ended",
+            StepOutcome::TimedOut => return "settle_timeout",
+            StepOutcome::InjectFailed => return "inject_failed",
         }
     }
     "max_steps"
@@ -528,5 +651,138 @@ mod tests {
         )
         .await;
         assert!(matches!(err, Err(ApiError::NotFound(_))));
+    }
+
+    // --- spec 016 F1: agentum_sdd_loop check-in ---
+
+    /// Insert a live loop handle backed by a parked forever-worker, exactly as
+    /// `loop_toggle` would. Returns the generation + the worker's join handle
+    /// so tests can assert cancellation.
+    fn insert_live_loop(
+        state: &AppState,
+        id: Uuid,
+        max_steps: u32,
+    ) -> (u64, tokio::task::JoinHandle<()>) {
+        let generation = LOOP_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let worker = tokio::spawn(std::future::pending::<()>());
+        state.sdd_loops.lock().unwrap().insert(
+            id,
+            SddLoopHandle {
+                generation,
+                step: Arc::new(AtomicU32::new(1)),
+                max_steps,
+                abort: worker.abort_handle(),
+                summary: Arc::new(std::sync::Mutex::new(None)),
+            },
+        );
+        (generation, worker)
+    }
+
+    #[tokio::test]
+    async fn checkin_done_stops_loop_and_emits_agent_completed() {
+        let state = fresh_state().await;
+        let session = seed_session(&state).await;
+        let (generation, worker) = insert_live_loop(&state, session.id, 10);
+        let mut rx = state.bus.subscribe();
+
+        let text = agent_checkin(&state, session.id, Some(generation), true, None).await;
+        assert!(text.contains("stopped"), "{text}");
+
+        // Handle removed + worker aborted → no injector left to fire a next
+        // step; "removed before the next injection" holds by construction.
+        assert!(state.sdd_loops.lock().unwrap().is_empty());
+        assert!(worker.await.unwrap_err().is_cancelled());
+
+        // Exactly one stop event, with the new reason.
+        let ev = rx.recv().await.unwrap();
+        assert_eq!(ev.kind, "sdd.loop.stopped");
+        assert_eq!(ev.payload["reason"], "agent_completed");
+        assert_eq!(ev.session_id, Some(session.id));
+        assert!(rx.try_recv().is_err(), "one stop event, not two");
+    }
+
+    #[tokio::test]
+    async fn checkin_without_active_loop_is_ok_and_stops_nothing() {
+        let state = fresh_state().await;
+        let session = seed_session(&state).await;
+        let mut rx = state.bus.subscribe();
+
+        let text = agent_checkin(&state, session.id, None, true, None).await;
+        assert!(text.contains("no active SDD loop"), "{text}");
+        assert!(rx.try_recv().is_err(), "no stop event for a no-op check-in");
+    }
+
+    #[tokio::test]
+    async fn checkin_with_stale_generation_is_ignored() {
+        let state = fresh_state().await;
+        let session = seed_session(&state).await;
+        let (generation, worker) = insert_live_loop(&state, session.id, 10);
+        let mut rx = state.bus.subscribe();
+
+        // A check-in from an earlier activation must not stop the successor —
+        // not even with done:true.
+        let text = agent_checkin(
+            &state,
+            session.id,
+            Some(generation - 1),
+            true,
+            Some("stale".into()),
+        )
+        .await;
+        assert!(text.contains("ignored"), "{text}");
+        assert!(state.sdd_loops.lock().unwrap().contains_key(&session.id));
+        assert!(!worker.is_finished(), "successor worker untouched");
+        assert!(rx.try_recv().is_err(), "no stop event");
+        // The stale summary must not leak onto the live loop either.
+        assert!(
+            state.sdd_loops.lock().unwrap()[&session.id]
+                .summary
+                .lock()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn checkin_done_false_lands_summary_on_next_step_event() {
+        let state = fresh_state().await;
+        let session = seed_session(&state).await;
+        // The drive's fresh-row check needs a Running session with a target.
+        state
+            .store
+            .update_status_and_target(session.id, Status::Running, Some("agentum-test"))
+            .await
+            .unwrap();
+        let (generation, _worker) = insert_live_loop(&state, session.id, 10);
+
+        let text = agent_checkin(
+            &state,
+            session.id,
+            Some(generation),
+            false,
+            Some("F1 wired; tests next".into()),
+        )
+        .await;
+        assert!(text.contains("loop continues"), "{text}");
+        assert!(
+            state.sdd_loops.lock().unwrap().contains_key(&session.id),
+            "done:false keeps the loop running"
+        );
+
+        // Drive exactly one scripted step (InjectFailed exits right after the
+        // step event) — the parked summary must ride that event's payload.
+        let summary = state.sdd_loops.lock().unwrap()[&session.id].summary.clone();
+        let mut rx = state.bus.subscribe();
+        let step = AtomicU32::new(0);
+        let reason = drive_sdd_loop_with(&state, session.id, &step, 10, &summary, |_s, _p| async {
+            StepOutcome::InjectFailed
+        })
+        .await;
+        assert_eq!(reason, "inject_failed");
+        let ev = rx.recv().await.unwrap();
+        assert_eq!(ev.kind, "sdd.loop.step");
+        assert_eq!(ev.payload["summary"], "F1 wired; tests next");
+        // Consumed on delivery — a later step won't repeat it.
+        assert!(summary.lock().unwrap().is_none());
     }
 }
