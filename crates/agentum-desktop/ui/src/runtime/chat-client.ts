@@ -32,10 +32,14 @@ export function resolveChatModel(id: string | null | undefined): ChatModel {
   return CHAT_MODELS.find((m) => m.id === id) ?? CHAT_MODELS.find((m) => m.id === DEFAULT_CHAT_MODEL) ?? CHAT_MODELS[0]
 }
 
-/** One delta from `/api/chat/stream` — mirrors the server's compact SSE events. */
+/** One delta from `/api/chat/stream` — mirrors the server's compact SSE events.
+ *  `context` (spec 009 #361) leads the stream on workspace-backed requests:
+ *  `missing` means the server could not gather the repo snapshot and the UI
+ *  should warn instead of leaving the model to apologize. */
 export type ChatStreamDelta =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
+  | { type: 'context'; state: 'ok' | 'missing' }
   | { type: 'error'; message: string }
   | { type: 'done' }
 
@@ -171,6 +175,9 @@ export async function streamChat(
       opts.onDelta?.(ev)
     } else if (ev.type === 'thinking') {
       thinking += ev.text
+      opts.onDelta?.(ev)
+    } else if (ev.type === 'context') {
+      // Status signal only — nothing to accumulate; the store owns the state.
       opts.onDelta?.(ev)
     } else if (ev.type === 'error') {
       throw new Error(ev.message || 'the model stream errored')

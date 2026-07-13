@@ -12,6 +12,7 @@
 // preserves the exact `agentum.chat.conversations.v1` storage contract that
 // chat-history owns, and the in-flight streams are imperative async processes
 // holding AbortControllers — not serializable app state.
+import { applyContextDelta, clearContextMissing, type ContextMissingMap } from '../lib/chat-context-status'
 import {
   type IntakeMode,
   type IntakeState,
@@ -38,6 +39,10 @@ export type ChatSnapshot = {
   streaming: Readonly<Record<string, true>>
   /** Last stream failure per conversation — cleared on the next send. */
   errors: Readonly<Record<string, string>>
+  /** Conversations whose last stream reported missing repo context (spec 009
+   *  #361) — drives the "couldn't read this project" warning. Same lifecycle
+   *  as `errors`: cleared on the next send, and by a later `context: ok`. */
+  contextMissing: ContextMissingMap
 }
 
 /** Drop a trailing still-empty assistant placeholder — the residue of a reload
@@ -55,7 +60,8 @@ function pruneInterrupted(list: Conversation[]): Conversation[] {
 let snapshot: ChatSnapshot = {
   conversations: pruneInterrupted(loadConversations()),
   streaming: {},
-  errors: {}
+  errors: {},
+  contextMissing: {}
 }
 
 const listeners = new Set<() => void>()
@@ -218,7 +224,9 @@ export function sendChatMessage(opts: {
   commit({
     conversations: upsertConversation(snapshot.conversations, convo),
     streaming: { ...snapshot.streaming, [convoId]: true },
-    errors
+    errors,
+    // A fresh send resets the context warning — this turn's stream re-reports.
+    contextMissing: clearContextMissing(snapshot.contextMissing, convoId)
   })
 
   let content = ''
@@ -237,6 +245,12 @@ export function sendChatMessage(opts: {
     stage: intakeNow.stage,
     signal: ac.signal,
     onDelta: (d: ChatStreamDelta) => {
+      if (d.type === 'context') {
+        // Leads the stream on workspace-backed requests; `missing` raises the
+        // blind-context banner for this conversation (spec 009 #361).
+        commit({ contextMissing: applyContextDelta(snapshot.contextMissing, convoId, d.state) })
+        return
+      }
       if (d.type === 'text') content += d.text
       else if (d.type === 'thinking') reasoning += d.text
       else return

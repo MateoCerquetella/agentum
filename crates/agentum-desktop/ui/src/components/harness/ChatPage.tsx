@@ -50,6 +50,7 @@ import {
   previewIssuesFromChat,
   resolveChatModel
 } from '@/runtime/chat-client'
+import { contextWarningText } from '@/lib/chat-context-status'
 import { clampStage, type IntakeMode, normalizeIntake } from '@/lib/socratic-intake'
 import { type Conversation, type FiledResult, type StoredTurn } from '@/runtime/chat-history'
 import {
@@ -231,6 +232,9 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   // background at the same time (the sidebar shows a spinner on each).
   const busy = activeId != null && !!chat.streaming[activeId]
   const streamError = activeId != null ? (chat.errors[activeId] ?? null) : null
+  // Spec 009 (#361): the server said this workspace-backed chat couldn't be
+  // grounded — warn visibly instead of leaving the model to apologize for it.
+  const contextMissing = activeId != null && !!chat.contextMissing[activeId]
 
   // Keep the open transcript inside the pinned project's scope: switching hub
   // projects (or opening the hub while a foreign thread was active) resets to
@@ -658,6 +662,9 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                 ))
               )}
 
+              {contextMissing ? (
+                <WarningBanner text={contextWarningText(workspace?.displayName ?? null)} />
+              ) : null}
               {error ? <ErrorBanner text={error} onDismiss={() => setError(null)} /> : null}
               {streamError ? (
                 <ErrorBanner
@@ -1358,6 +1365,17 @@ function Reasoning({ text, streaming }: { text: string; streaming: boolean }) {
 }
 
 /** A dismissible inline error strip for the transcript. */
+/** Amber sibling of ErrorBanner for the blind-context warning (spec 009
+ *  #361). No dismiss: the flag reflects live server state and clears itself on
+ *  the next grounded send — hiding it by hand would hide a real problem. */
+function WarningBanner({ text }: { text: string }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12.5px] text-amber-400">
+      <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{text}</span>
+    </div>
+  )
+}
+
 function ErrorBanner({ text, onDismiss }: { text: string; onDismiss: () => void }) {
   return (
     <div className="flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[12.5px] text-red-400">

@@ -515,6 +515,18 @@ async fn gather_repo_context_for(
     (gather_repo_context(workdir), arm)
 }
 
+/// The `context` SSE event's payload — `None` when the request carried no
+/// repo identity (nothing to warn about: the user never selected a
+/// workspace). Stream-only by design; the non-stream route grounds but has no
+/// side channel. Pure so the emit-or-not decision is directly unit-testable.
+fn context_event_json(repo_id_present: bool, has_context: bool) -> Option<String> {
+    if !repo_id_present {
+        return None;
+    }
+    let state = if has_context { "ok" } else { "missing" };
+    Some(json!({ "type": "context", "state": state }).to_string())
+}
+
 /// One line per chat request saying whether grounding happened and why not —
 /// the #361 diagnostic. A pinned chat that goes blind used to be invisible
 /// server-side (the model apologized, nothing logged); this line is the first
@@ -1146,11 +1158,23 @@ model's thinking._"
         None
     };
 
+    // Spec 009 (#361): tell the client up front whether this workspace-backed
+    // request actually grounded, so a blind pinned chat surfaces as a UI
+    // warning instead of the model apologizing for a wiring bug. Emitted only
+    // when the request carried a repo_id — non-workspace chats see zero wire
+    // change.
+    let context_event = context_event_json(body.repo_id.is_some(), repo_context.is_some());
+
     // Proxy: parse Anthropic's SSE frames as they arrive and re-emit our compact
     // events. We buffer raw bytes and decode only whole frames (delimited by the
     // ASCII `\n\n`) so a multi-byte char split across a chunk is never mangled.
     // `resp`/`secret` are moved into the generator, making the stream `'static`.
     let stream = async_stream::stream! {
+        // Context status FIRST — the banner must precede (and outlive) the
+        // reply tokens.
+        if let Some(ev) = context_event {
+            yield Ok(Event::default().data(ev));
+        }
         // Lead with the redacted-thinking notice (OAuth path) so the reasoning
         // panel explains the blank trace instead of showing nothing.
         if let Some(note) = redacted_thinking_notice {
@@ -3083,6 +3107,23 @@ mod tests {
         assert!(
             assemble_repo_context(parse_remote_context_output("===AGENTUM-CTX tree===\n\n"))
                 .is_none()
+        );
+    }
+
+    /// #361 F3: the context event fires exactly when a workspace-backed
+    /// request is involved — never for plain (no-repo) chats, `ok` vs
+    /// `missing` tracking whether grounding succeeded.
+    #[test]
+    fn context_event_only_for_repo_backed_requests() {
+        assert!(context_event_json(false, false).is_none());
+        assert!(context_event_json(false, true).is_none());
+        assert_eq!(
+            context_event_json(true, true).as_deref(),
+            Some(r#"{"state":"ok","type":"context"}"#)
+        );
+        assert_eq!(
+            context_event_json(true, false).as_deref(),
+            Some(r#"{"state":"missing","type":"context"}"#)
         );
     }
 
