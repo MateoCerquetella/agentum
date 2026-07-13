@@ -67,23 +67,7 @@
 
 ## Decision log
 
-<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-13 | PM | **015 PM gate PASS → phase architect** (handoff
-  `01-pm-to-architect.md`; fact-check by Explore sub-agent, evidence quoted
-  there). NON-DUPLICATE verified: develop's neighbors are scaffold-on-create
-  (010 F3 `workspace-provision-step.ts`, writes `.agentum-harness/`, excludes
-  feature_list.json) + issue-first gated run (`start_work`) — neither detects
-  an existing feature_list. 3 citation fixes (fs.rs:180 not :143;
-  `listHarnesses` not `getHarnessStatuses`; Terminal.tsx:1578 not :1569).
-  KEY re-decision D1: wizard quick-create AUTO-LAUNCHES the agent
-  (`CreateWorkspaceWizard.tsx:344`; launcher mounts only for agent===null /
-  gated) → banner must be workspace-view-level, NOT launcher-only. D2
-  creation-moment trigger · D3 hide-never-link · D4 export
-  startHarness/runHarness/listHarnesses · D5 local-only (engine StartRequest
-  has no host field) · D6 gated-run suppression. Q1 (mount mechanics) + Q2
-  (context hand-off: store slice vs pending-signal à la
-  `pending-session-prompt.ts`) → architect.
-- 2026-07-13 | Architect | **015 gate PASS → phase developer** (sub-agent;
+<!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->- 2026-07-13 | Architect | **015 gate PASS → phase developer** (sub-agent;
   `architecture.md` 451 ln + handoff 02). Q1: ONE mount — Terminal.tsx root
   flex strip (`relative z-30 shrink-0`) after `EditorAutosaveController`,
   self-gates on offer slice keyed by worktreeId; launcher overlay is
@@ -143,3 +127,11 @@
   leave-as-is. All 3 dev deviations + 3 tester nits ruled leave-as-is.
   **RELEASE = HUMAN**: PR → develop, promote, browser QA (qa.sh scenario,
   handoff 02) for AC 2–6 runtime legs.
+- 2026-07-13 | Release | **015 SHIPPED → v0.75.0** (Mateo: "release
+  please"; browser QA of AC 2–6 runtime legs remains PENDING and human-run —
+  shipped ahead per 008/010 precedent; evidence contract = a demo-pass line
+  HERE + #301 timeline). PR **#353** merged → develop `8b797347`; promoted
+  develop→staging `a789f9ab` → main `ee104eb7`; bump 0.74.3→0.75.0
+  (Cargo.toml+lock+tauri.conf.json) + tag v0.75.0 (fires release.yml). Issue
+  #301 closes via this commit's `Closes`. Follow-up: **#352** (offer
+  purge-state miss, reviewer Should-fix).
