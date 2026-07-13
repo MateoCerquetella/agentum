@@ -1,7 +1,7 @@
 # Spec 015 — Workspace harness autostart
 
 - **Number:** 015   <!-- drafted as 009 pre-merge; renumbered — develop already carries 009–014 -->
-- **Status:** PM                <!-- Draft | PM | Architect | In progress | Done -->
+- **Status:** Done                <!-- Draft | PM | Architect | In progress | Done -->
 - **Surface:** `crates/agentum-desktop/ui`
 - **Author:** Claude (sdd-spec direct path, from GitHub issue #301 filed by Mateo)
 - **Tracker:** GitHub [#301](https://github.com/MateoCerquetella/agentum/issues/301)
