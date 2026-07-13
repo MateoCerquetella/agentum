@@ -968,15 +968,21 @@ async fn fetch_rows(
 
 // ─── Field mutations ─────────────────────────────────────────────────────
 
-// Build the `ProjectV2FieldValue` input for one renderer mutation value (the
-// `{ kind, ... }` union in shared/github-project-types.ts): the variable
-// declarations to append to the mutation signature, the `value:` fragment, and
-// the extra vars to bind. Every string travels as a GraphQL variable — the only
-// thing ever spliced into the query text is a Rust-formatted f64 (JSON numbers
-// can't be NaN/Inf), so nothing user-controlled reaches the query string.
-fn field_mutation_value(
-    value: &Value,
-) -> Result<(String, String, Vec<(&'static str, Scalar)>), ProjectError> {
+// One renderer mutation value (the `{ kind, ... }` union in
+// shared/github-project-types.ts) lowered to GraphQL: the variable
+// declarations to append to the mutation signature, the `value:` input
+// fragment, and the extra vars to bind.
+#[derive(Debug)]
+struct FieldMutation {
+    extra_decl: String,
+    fragment: String,
+    vars: Vec<(&'static str, Scalar)>,
+}
+
+// Every string travels as a GraphQL variable — the only thing ever spliced
+// into the query text is a Rust-formatted f64 (JSON numbers can't be NaN/Inf),
+// so nothing user-controlled reaches the query string.
+fn field_mutation_value(value: &Value) -> Result<FieldMutation, ProjectError> {
     let take = |key: &'static str| -> Result<String, ProjectError> {
         value
             .get(key)
@@ -992,31 +998,35 @@ fn field_mutation_value(
     };
     let kind = value.get("kind").and_then(Value::as_str).unwrap_or("");
     match kind {
-        "single-select" => Ok((
-            ", $optionId: String!".to_string(),
-            "{ singleSelectOptionId: $optionId }".to_string(),
-            vec![("optionId", Scalar::Str(take("optionId")?))],
-        )),
-        "iteration" => Ok((
-            ", $iterationId: String!".to_string(),
-            "{ iterationId: $iterationId }".to_string(),
-            vec![("iterationId", Scalar::Str(take("iterationId")?))],
-        )),
-        "text" => Ok((
-            ", $text: String!".to_string(),
-            "{ text: $text }".to_string(),
-            vec![("text", Scalar::Str(take("text")?))],
-        )),
-        "date" => Ok((
-            ", $date: Date!".to_string(),
-            "{ date: $date }".to_string(),
-            vec![("date", Scalar::Str(take("date")?))],
-        )),
+        "single-select" => Ok(FieldMutation {
+            extra_decl: ", $optionId: String!".to_string(),
+            fragment: "{ singleSelectOptionId: $optionId }".to_string(),
+            vars: vec![("optionId", Scalar::Str(take("optionId")?))],
+        }),
+        "iteration" => Ok(FieldMutation {
+            extra_decl: ", $iterationId: String!".to_string(),
+            fragment: "{ iterationId: $iterationId }".to_string(),
+            vars: vec![("iterationId", Scalar::Str(take("iterationId")?))],
+        }),
+        "text" => Ok(FieldMutation {
+            extra_decl: ", $text: String!".to_string(),
+            fragment: "{ text: $text }".to_string(),
+            vars: vec![("text", Scalar::Str(take("text")?))],
+        }),
+        "date" => Ok(FieldMutation {
+            extra_decl: ", $date: Date!".to_string(),
+            fragment: "{ date: $date }".to_string(),
+            vars: vec![("date", Scalar::Str(take("date")?))],
+        }),
         "number" => {
             let n = value.get("number").and_then(Value::as_f64).ok_or_else(|| {
                 ProjectError::new("unknown", "Malformed field value: missing `number`.")
             })?;
-            Ok((String::new(), format!("{{ number: {n} }}"), Vec::new()))
+            Ok(FieldMutation {
+                extra_decl: String::new(),
+                fragment: format!("{{ number: {n} }}"),
+                vars: Vec::new(),
+            })
         }
         other => Err(ProjectError::new(
             "unknown",
@@ -1036,10 +1046,11 @@ pub async fn gh_update_project_item_field(
     field_id: String,
     value: Value,
 ) -> Value {
-    let (extra_decl, fragment, extra_vars) = match field_mutation_value(&value) {
+    let mutation = match field_mutation_value(&value) {
         Ok(parts) => parts,
         Err(err) => return err.envelope(),
     };
+    let (extra_decl, fragment) = (mutation.extra_decl, mutation.fragment);
     let query = format!(
         "mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!{extra_decl}) {{ \
            updateProjectV2ItemFieldValue(input: {{ projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: {fragment} }}) \
@@ -1050,7 +1061,7 @@ pub async fn gh_update_project_item_field(
         ("itemId", Scalar::Str(item_id)),
         ("fieldId", Scalar::Str(field_id)),
     ];
-    vars.extend(extra_vars);
+    vars.extend(mutation.vars);
     match graphql(&query, &vars).await {
         Ok(_) => json!({ "ok": true }),
         Err(err) => err.envelope(),
@@ -1314,36 +1325,33 @@ mod tests {
     #[test]
     fn field_mutation_value_binds_strings_as_variables() {
         // The board drop path: single-select (Status columns) and iteration.
-        let (decl, fragment, vars) =
+        let m =
             field_mutation_value(&json!({ "kind": "single-select", "optionId": "o1" })).unwrap();
-        assert_eq!(decl, ", $optionId: String!");
-        assert_eq!(fragment, "{ singleSelectOptionId: $optionId }");
-        assert!(matches!(&vars[..], [("optionId", Scalar::Str(s))] if s == "o1"));
+        assert_eq!(m.extra_decl, ", $optionId: String!");
+        assert_eq!(m.fragment, "{ singleSelectOptionId: $optionId }");
+        assert!(matches!(&m.vars[..], [("optionId", Scalar::Str(s))] if s == "o1"));
 
-        let (decl, fragment, vars) =
+        let m =
             field_mutation_value(&json!({ "kind": "iteration", "iterationId": "it9" })).unwrap();
-        assert_eq!(decl, ", $iterationId: String!");
-        assert_eq!(fragment, "{ iterationId: $iterationId }");
-        assert!(matches!(&vars[..], [("iterationId", Scalar::Str(s))] if s == "it9"));
+        assert_eq!(m.extra_decl, ", $iterationId: String!");
+        assert_eq!(m.fragment, "{ iterationId: $iterationId }");
+        assert!(matches!(&m.vars[..], [("iterationId", Scalar::Str(s))] if s == "it9"));
 
-        let (_, fragment, vars) =
-            field_mutation_value(&json!({ "kind": "text", "text": "hello" })).unwrap();
-        assert_eq!(fragment, "{ text: $text }");
-        assert!(matches!(&vars[..], [("text", Scalar::Str(s))] if s == "hello"));
+        let m = field_mutation_value(&json!({ "kind": "text", "text": "hello" })).unwrap();
+        assert_eq!(m.fragment, "{ text: $text }");
+        assert!(matches!(&m.vars[..], [("text", Scalar::Str(s))] if s == "hello"));
 
-        let (decl, fragment, _) =
-            field_mutation_value(&json!({ "kind": "date", "date": "2026-07-12" })).unwrap();
-        assert_eq!(decl, ", $date: Date!");
-        assert_eq!(fragment, "{ date: $date }");
+        let m = field_mutation_value(&json!({ "kind": "date", "date": "2026-07-12" })).unwrap();
+        assert_eq!(m.extra_decl, ", $date: Date!");
+        assert_eq!(m.fragment, "{ date: $date }");
     }
 
     #[test]
     fn field_mutation_value_embeds_only_the_number_literal() {
-        let (decl, fragment, vars) =
-            field_mutation_value(&json!({ "kind": "number", "number": 3.5 })).unwrap();
-        assert_eq!(decl, "");
-        assert_eq!(fragment, "{ number: 3.5 }");
-        assert!(vars.is_empty());
+        let m = field_mutation_value(&json!({ "kind": "number", "number": 3.5 })).unwrap();
+        assert_eq!(m.extra_decl, "");
+        assert_eq!(m.fragment, "{ number: 3.5 }");
+        assert!(m.vars.is_empty());
     }
 
     #[test]
