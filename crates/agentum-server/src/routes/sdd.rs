@@ -388,7 +388,7 @@ async fn run_loop(
     max_steps: u32,
     summary: Arc<std::sync::Mutex<Option<String>>>,
 ) {
-    let reason = drive_sdd_loop(&state, id, &step, max_steps, &summary).await;
+    let reason = drive_sdd_loop(&state, id, generation, &step, max_steps, &summary).await;
     let is_current = {
         let mut map = state.sdd_loops.lock().expect("sdd_loops lock");
         match map.get(&id) {
@@ -420,6 +420,7 @@ async fn run_loop(
 async fn drive_sdd_loop(
     state: &AppState,
     id: Uuid,
+    generation: u64,
     step_counter: &AtomicU32,
     max_steps: u32,
     summary: &std::sync::Mutex<Option<String>>,
@@ -427,6 +428,7 @@ async fn drive_sdd_loop(
     drive_sdd_loop_with(
         state,
         id,
+        generation,
         step_counter,
         max_steps,
         summary,
@@ -465,6 +467,7 @@ enum StepOutcome {
 async fn drive_sdd_loop_with<F, Fut>(
     state: &AppState,
     id: Uuid,
+    generation: u64,
     step_counter: &AtomicU32,
     max_steps: u32,
     summary: &std::sync::Mutex<Option<String>>,
@@ -503,7 +506,7 @@ where
         // Autonomous mode: the orchestrator must apply gates itself — a loop
         // that pauses to ask a human defeats its own purpose.
         let (_, base) = prompt_for(state, &session, &playbook, Some("autonomous")).await;
-        let prompt = crate::sdd::loop_step_prompt(step, &base);
+        let prompt = crate::sdd::loop_step_prompt(step, id, generation, &base);
         match step_fn(session, prompt).await {
             StepOutcome::Settled => {}
             StepOutcome::Crashed => return "session_ended",
@@ -774,9 +777,15 @@ mod tests {
         let summary = state.sdd_loops.lock().unwrap()[&session.id].summary.clone();
         let mut rx = state.bus.subscribe();
         let step = AtomicU32::new(0);
-        let reason = drive_sdd_loop_with(&state, session.id, &step, 10, &summary, |_s, _p| async {
-            StepOutcome::InjectFailed
-        })
+        let reason = drive_sdd_loop_with(
+            &state,
+            session.id,
+            generation,
+            &step,
+            10,
+            &summary,
+            |_s, _p| async { StepOutcome::InjectFailed },
+        )
         .await;
         assert_eq!(reason, "inject_failed");
         let ev = rx.recv().await.unwrap();

@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use uuid::Uuid;
 
 /// One SDD playbook: an agent-facing procedure the server owns.
 #[derive(Debug, Clone, Serialize)]
@@ -157,17 +158,22 @@ pub fn full_prompt(playbook: &Playbook, args: Option<&str>) -> String {
 }
 
 /// One step of the automated SDD loop, wrapped around a base prompt (the
-/// bootstrap line or, for unwired tools, the full playbook). The completion
+/// bootstrap line or, for unwired tools, the full playbook). The check-in
 /// instruction matters — the loop's server side only sees settle events, so
-/// the agent saying "complete" (instead of inventing new work) is what makes
-/// the final iterations harmless until the step cap or the user's toggle ends
-/// the loop.
-pub fn loop_step_prompt(step: u32, base_prompt: &str) -> String {
+/// the `agentum_sdd_loop` call ending the turn is the loop's only way to stop
+/// the moment the work is done instead of re-injecting to the step cap. The
+/// session id and generation are embedded because the MCP layer has no
+/// ambient caller identity (same explicit-id pattern as
+/// `agentum_report_status`).
+pub fn loop_step_prompt(step: u32, session_id: Uuid, generation: u64, base_prompt: &str) -> String {
     format!(
         "SDD loop step {step} (automated — no human is watching this pane). {base_prompt} \
-         If `ai/STATE.md` says the current spec's phase is `done` or there is no \
-         actionable next step, do NOT start new work: reply briefly that the SDD \
-         loop is complete and stop."
+         END this step by calling the `agentum_sdd_loop` tool on the agentum MCP server \
+         with exactly {{\"session\": \"{session_id}\", \"generation\": {generation}, \
+         \"done\": true|false, \"summary\": \"<one line>\"}} — `done: true` when \
+         `ai/STATE.md` says the current spec's phase is `done` or there is no actionable \
+         next step (and then do NOT start new work), `done: false` otherwise. If you \
+         cannot call MCP tools, reply with that done verdict instead and stop."
     )
 }
 
@@ -225,11 +231,19 @@ mod tests {
     }
 
     #[test]
-    fn loop_step_prompt_is_autonomous_and_has_a_stop_instruction() {
+    fn loop_step_prompt_embeds_session_id_and_checkin_instruction() {
         let p = get("sdd-orchestrate").unwrap();
-        let prompt = loop_step_prompt(3, &bootstrap_prompt(&p, Some("autonomous")));
+        let id = Uuid::new_v4();
+        let prompt = loop_step_prompt(3, id, 7, &bootstrap_prompt(&p, Some("autonomous")));
         assert!(prompt.contains("step 3"));
         assert!(prompt.contains("autonomous"));
-        assert!(prompt.contains("loop is complete"));
+        // The check-in must be addressable without ambient identity: the tool
+        // call names the session and the activation it came from.
+        assert!(prompt.contains("agentum_sdd_loop"));
+        assert!(prompt.contains(&id.to_string()));
+        assert!(prompt.contains("\"generation\": 7"));
+        assert!(prompt.contains("done"));
+        // The unread completion sentence is gone — the tool call replaced it.
+        assert!(!prompt.contains("reply briefly"));
     }
 }
