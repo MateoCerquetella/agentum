@@ -928,4 +928,46 @@ mod tests {
         assert_eq!(reason, "inject_failed");
         assert_eq!(step.load(Ordering::Relaxed), 1, "step 1 was attempted");
     }
+
+    // --- spec 016 F4: no-check-in loop still ends at the cap ---
+
+    #[tokio::test]
+    async fn drive_without_checkin_ends_at_max_steps() {
+        let state = fresh_state().await;
+        // Fresh workdir (no ai/STATE.md) and no MCP check-in ever arrives —
+        // neither new stop signal fires, so the pre-016 backstop must end the
+        // loop: exactly `max_steps` deliveries, then reason "max_steps".
+        let session = seed_session(&state).await;
+        state
+            .store
+            .update_status_and_target(session.id, Status::Running, Some("agentum-test"))
+            .await
+            .unwrap();
+
+        let delivered = AtomicU32::new(0);
+        let step = AtomicU32::new(0);
+        let summary = std::sync::Mutex::new(None);
+        let reason = drive_sdd_loop_with(
+            &state,
+            session.id,
+            1,
+            &step,
+            DEFAULT_MAX_STEPS,
+            &summary,
+            |_s, _p| {
+                delivered.fetch_add(1, Ordering::Relaxed);
+                async { StepOutcome::Settled }
+            },
+        )
+        .await;
+        assert_eq!(reason, "max_steps");
+        assert_eq!(
+            delivered.load(Ordering::Relaxed),
+            DEFAULT_MAX_STEPS,
+            "one delivery per step, none past the cap"
+        );
+        assert_eq!(step.load(Ordering::Relaxed), DEFAULT_MAX_STEPS);
+        // The default cap value itself is contract (spec 016 F4: "stays 10").
+        assert_eq!(DEFAULT_MAX_STEPS, 10);
+    }
 }
