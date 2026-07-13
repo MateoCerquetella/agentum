@@ -395,7 +395,15 @@ pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
 /// when the repo carries no `host_id` (a local repo, or one added before
 /// this field existed). `pub(crate)` so the worktrees route shares it.
 pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiError> {
-    read_repos()?
+    host_id_of(&read_repos()?, repo_id)
+}
+
+/// Pure core of [`resolve_repo_host_id`], split out so the repoId→host
+/// contract is testable without the registry file: `Ok(None)` = local,
+/// `Ok(Some(_))` = a server host, `Err(NotFound)` = the id isn't registered —
+/// never a silent local fallback (spec 020 D1).
+fn host_id_of(repos: &[Repo], repo_id: &str) -> Result<Option<Uuid>, ApiError> {
+    repos
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| repo.host_id)
@@ -716,6 +724,32 @@ mod tests {
         let pairs = scope_pairs_locals_first(vec![r1.clone(), l1.clone(), r2.clone(), l2.clone()]);
         let ids: Vec<&str> = pairs.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(ids, vec![&l1.id, &l2.id, &r1.id, &r2.id]);
+    }
+
+    // ── spec 020 F1: repoId → host threading (the pure registry core) ──────
+
+    #[test]
+    fn host_id_of_known_local_is_none() {
+        let local = repo_with("/x/proj", None);
+        let repos = vec![local.clone()];
+        assert_eq!(host_id_of(&repos, &local.id).unwrap(), None);
+    }
+
+    #[test]
+    fn host_id_of_known_remote_is_its_host() {
+        let mut remote = repo_with("/x/proj", Some("ssh-1"));
+        let host = Uuid::new_v4();
+        remote.host_id = Some(host);
+        let repos = vec![remote.clone()];
+        assert_eq!(host_id_of(&repos, &remote.id).unwrap(), Some(host));
+    }
+
+    #[test]
+    fn host_id_of_unknown_id_is_not_found() {
+        // D1: an unknown repoId is a loud NotFound, never a silent local pick.
+        let repos = vec![repo_with("/x/proj", None)];
+        let err = host_id_of(&repos, "no-such-id").unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
     }
 
     #[test]

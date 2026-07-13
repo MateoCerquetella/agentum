@@ -320,9 +320,16 @@ async fn spec_from_issue(
 
     // Server-authoritative fetch (validates the digits-only number). The
     // worktree shares the parent repo's `origin`, so it resolves the slug.
-    let issue =
-        super::github::fetch_github_issue(&state, &workdir_str, &req.number, req.slug.as_deref())
-            .await?;
+    // No repoId: the workdir is an is_dir-gated LOCAL worktree (spec 020
+    // byte-identical pin).
+    let issue = super::github::fetch_github_issue(
+        &state,
+        None,
+        &workdir_str,
+        &req.number,
+        req.slug.as_deref(),
+    )
+    .await?;
 
     let ensured = ensure_spec_and_plan(
         &state.store,
@@ -568,9 +575,16 @@ async fn start_work(
 
     // Fetch — needed even when the spec exists, because
     // `spec_id = issue_spec_id(number, title)` needs the title.
-    let issue =
-        super::github::fetch_github_issue(&state, &workdir_str, &req.number, req.slug.as_deref())
-            .await?;
+    // No repoId: the workdir is an is_dir-gated LOCAL worktree (spec 020
+    // byte-identical pin).
+    let issue = super::github::fetch_github_issue(
+        &state,
+        None,
+        &workdir_str,
+        &req.number,
+        req.slug.as_deref(),
+    )
+    .await?;
 
     // Converge-scaffold + plan (forced ON, AC 1) + Todo-at-plan (AC 4).
     let ensured = ensure_spec_and_plan(
