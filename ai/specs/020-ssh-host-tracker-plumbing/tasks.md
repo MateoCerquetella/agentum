@@ -127,3 +127,110 @@ None. `resolve_tracker_host` is in place for F2's `repo_slug` route
 (`load_host_for_repo` + `resolve_repo_path` are already `pub(crate)`), and the
 DTO wire fields F3's clients will target (`repoId` on binding/create/fetch)
 are live and pinned by serde tests.
+
+## F2 — slug-index-ssh (route + renderer) — BUILT ✅ (2026-07-13)
+
+Increment of spec 020 F2 per `architecture.md` §3 and
+`handoffs/02-architect-to-developer.md`. F3 surfaces untouched
+(use-tracker-intake.ts, ProjectBindingEditor, the runtime github clients);
+`start-work-repo-match.ts` / `ProjectViewWrapper` untouched by contract.
+
+### Pre-build collision sweep (handoff step 0)
+
+Re-ran at build time, clean:
+- `grep -n '"/api/repos' crates/agentum-server/src/routes/repos.rs` → no
+  `/slug` route (base-ref family only).
+- No `getServerRepoSlug` / `repo-slug-arm` anywhere under `ui/src`.
+
+### What was built
+
+1. **`routes/repos.rs`** — `GET /api/repos/{id}/slug` (§3.1, exact shape):
+   - `RepoSlugResponse { slug }` — object, add-only-friendly, no `source`
+     constant.
+   - Pure `slug_reason_wire(reason)` — `NoGithubRemote` → 422
+     `no_github_remote` (semantic); `HostUnreachable` → **502**
+     `host_unreachable` (transport must never masquerade as no-origin).
+   - `repo_slug` handler: `resolve_repo_path` (404 unknown id) →
+     `load_host_for_repo` → `board_goals::resolve_github_slug(&host, &path,
+     None)` on the **registry path** (no hint/workdir params by design);
+     errors wrapped as `ApiError::Custom` with the
+     `{"error":{"code","message"}}` envelope. Slug case passed through
+     (client lowercases). Auth: behind the existing top-level `require_token`;
+     **no `is_public` change**.
+2. **`ui/src/runtime/server-repo-client.ts`** — `getServerRepoSlug(repoId)`
+   (§3.2 verbatim); `server-http`'s `run()` throws on non-2xx, so callers
+   fail closed.
+3. **`ui/src/lib/repo-slug-arm.ts`** (NEW, pure, import-free) —
+   `slugResolutionArm(environmentTarget, connectionId)`:
+   environment-RPC > server-for-connectionId-repos > native-local.
+4. **`ui/src/lib/repo-slug-index.ts`** — `resolveRepoSlug` switches on the
+   arm inside the EXISTING `try`: the `server` arm calls `getServerRepoSlug`,
+   lowercases (parity with the native arm), caches, returns; any throw falls
+   to the existing catch → cache `null` → repo excluded (AC 7 fail-closed by
+   construction). The environment-RPC and native arms are byte-identical;
+   the module-scope `slugByRepoId` cache and its eviction are untouched
+   (§1.4 — the arm is a pure function of the immutable `connectionId` +
+   runtime scope, so a cache key can never silently change arms). Module doc
+   updated to describe the three arms.
+5. **Untouched by contract**: `start-work-repo-match.ts` (+ its tests),
+   `ProjectViewWrapper` wiring, the native `gh_repo_slug` Tauri command, the
+   environment-RPC branch, `auth.rs::is_public`, F3's intake/binding files.
+
+### Test-first evidence
+
+- **Rust red:** tests written first; `cargo test -p agentum-server --lib`
+  failed with 10 compile errors pinning exactly the missing surface
+  (`cannot find function slug_reason_wire`/`slug_on_host`, `cannot find
+  struct RepoSlugResponse`, `StatusCode` unresolved).
+- **Vitest red:** `bunx vitest run src/lib/repo-slug-arm.test.ts` failed —
+  module `./repo-slug-arm` does not exist.
+
+New Rust tests (5, in `repos::tests`):
+- `slug_reason_wire_distinguishes_transport_from_semantic` (422/502, codes,
+  distinct messages — the §3.5 error-shape pin)
+- `repo_slug_response_serializes_slug_only` (`{"slug":"Owner/Repo"}` serde pin)
+- `slug_on_host_reads_github_origin` (local temp repo WITH GitHub origin →
+  slug; handler core split out so the registry file is never touched)
+- `slug_on_host_without_origin_is_no_github_remote_422` (local repo WITHOUT
+  origin → Custom 422, code `no_github_remote`, never the 502)
+- `repo_slug_unknown_id_is_not_found` (random-uuid 404 via the handler's
+  first gate; env-tolerant, no env mutation — the 015 house rule)
+
+New vitest (4, `src/lib/repo-slug-arm.test.ts`): environment target wins over
+connectionId (RPC untouched even for SSH repos); environment + local;
+connectionId → `server`; null vs undefined connectionId both `native`.
+Regression pins re-run unmodified: `start-work-repo-match.test.ts` (7 tests —
+sole-remote `direct` at `:26`, both-hosts `choose` at `:32`, AC 6).
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `cargo test -p agentum-server --lib` | **701 passed / 0 failed / 5 ignored** (F1 baseline 696/0/5 → +5; all existing tests green unmodified) |
+| `cargo fmt --all` (`--check` clean) | ✅ |
+| `cargo clippy -p agentum-server --lib --tests -- -D warnings` | ✅ 0 warnings |
+| `bunx vitest run src/lib/repo-slug-arm.test.ts src/components/github-project/start-work-repo-match.test.ts` | ✅ 2 files, 11 tests |
+| `npm run build --prefix crates/agentum-desktop/ui` | ✅ |
+
+### Deviations (numbered)
+
+1. **Handler core split (`slug_on_host`)**: the architecture's §3.1 sketch
+   inlines the resolve+map in `repo_slug`; the mapping is extracted into an
+   async `slug_on_host(&Host, &str)` so the with/without-origin contract
+   (the task's required tests) is testable against a temp git repo without
+   mutating the real `~/.agentum/repos.json`. Wire behavior identical.
+2. **Line drift (cosmetic):** `resolveRepoSlug`'s try body sat at
+   `repo-slug-index.ts:67-91` (architecture cited `:59-91` for the whole fn —
+   matched); no functional drift found anywhere.
+3. **`ai/STATE.md` concurrent drift** (same as F1 deviation 7): modified by
+   another agent during this build — left uncommitted; only F2 files + this
+   tasks.md are in the commit.
+
+### Blocking notes for F3
+
+None. The `repoId` DTO fields F3 threads are live (F1), and
+`DraftedGithubIssueBody`'s widening point (`runtime/github-issue-client.ts`)
+plus `ProjectBindingEditor`/`use-tracker-intake.ts` are untouched as promised.
+Note for the tester: the new route's 502 (`host_unreachable`) is
+wire-distinguishable from the binding family's 422 `no_github_repo` envelope —
+qa.sh's "host-down shows the unreachable-flavored error" can key on the status.

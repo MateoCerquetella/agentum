@@ -12,6 +12,7 @@
 //! window); everything else — list/add/update/create/clone/remove/reorder and
 //! the base-ref helpers — is here.
 
+use super::board_goals::SlugReason;
 use super::util::now_millis;
 use std::path::{Path as StdPath, PathBuf};
 
@@ -19,6 +20,7 @@ use agentum_core::{Host, LOCAL_HOST_ID};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -38,6 +40,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/api/repos/{id}/base-ref-default", get(base_ref_default))
         .route("/api/repos/{id}/base-refs", get(base_refs))
         .route("/api/repos/{id}/base-ref-details", get(base_ref_details))
+        .route("/api/repos/{id}/slug", get(repo_slug))
 }
 
 /// Keystone of the repo registry. `extra` round-trips fields this layer doesn't
@@ -567,6 +570,68 @@ async fn base_ref_details(
     ))
 }
 
+/// `GET /api/repos/{id}/slug` response. An object, not a bare string, so
+/// future fields stay add-only. No `source` field — the only source is the
+/// `origin` read (the route takes no hint by design), so it would be a
+/// constant.
+#[derive(Debug, Serialize)]
+struct RepoSlugResponse {
+    slug: String,
+}
+
+/// Pure: `SlugReason` → (status, code, message). `NoGithubRemote` is semantic
+/// (422); `HostUnreachable` is transport (502, a gateway problem) — the wire
+/// must never let an SSH failure masquerade as "no origin" (spec 020
+/// invariant), even though the renderer's fail-closed index treats both as
+/// "excluded".
+fn slug_reason_wire(reason: SlugReason) -> (StatusCode, &'static str, &'static str) {
+    match reason {
+        SlugReason::NoGithubRemote => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "no_github_remote",
+            "the repo has no `origin` remote pointing at GitHub",
+        ),
+        SlugReason::HostUnreachable => (
+            StatusCode::BAD_GATEWAY,
+            "host_unreachable",
+            "could not read the repo's git origin — its host is unreachable",
+        ),
+    }
+}
+
+/// Host-aware core of [`repo_slug`], split from the handler so the
+/// with/without-origin contract is testable against a temp git repo without
+/// touching the real `~/.agentum` registry.
+async fn slug_on_host(host: &Host, path: &str) -> Result<RepoSlugResponse, ApiError> {
+    let slug = super::board_goals::resolve_github_slug(host, path, None)
+        .await
+        .map_err(|reason| {
+            let (status, code, message) = slug_reason_wire(reason);
+            ApiError::Custom(
+                status,
+                serde_json::json!({ "error": { "code": code, "message": message } }),
+            )
+        })?;
+    Ok(RepoSlugResponse { slug })
+}
+
+/// `GET /api/repos/{id}/slug` — the repo's GitHub `owner/repo`, resolved by
+/// reading `origin` ON THE REPO'S HOST (spec 020 F2). The renderer's slug
+/// index uses this for SSH repos, which the local-only native read can never
+/// see. Deliberately no hint/workdir params: this route IS how a client
+/// learns the slug, and the server owns id→path consistency (the registry
+/// path, like every `base_ref_*` sibling). Slug case is passed through as
+/// resolved; the client lowercases. Fail-closed: any error excludes the repo
+/// from the client's index.
+async fn repo_slug(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<RepoSlugResponse>, ApiError> {
+    let path = resolve_repo_path(&repo_id)?; // 404 unknown id
+    let host = load_host_for_repo(&state, &repo_id).await?;
+    Ok(Json(slug_on_host(&host, &path).await?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,6 +814,112 @@ mod tests {
         // D1: an unknown repoId is a loud NotFound, never a silent local pick.
         let repos = vec![repo_with("/x/proj", None)];
         let err = host_id_of(&repos, "no-such-id").unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
+    }
+
+    // ── spec 020 F2: `GET /api/repos/{id}/slug` (host-aware slug route) ────
+
+    /// Minimal local [`Host`] for the slug-route tests (the board_goals test
+    /// pattern): the resolver only reads `host.kind` to pick local vs SSH.
+    fn local_host() -> Host {
+        Host {
+            id: LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: agentum_core::HostKind::Local,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    /// `git init` + optionally an `origin` remote — enough for
+    /// `remote get-url origin` (the slug read never touches history, so no
+    /// commit is needed).
+    fn init_repo_with_origin(dir: &StdPath, origin: Option<&str>) {
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .expect("git available in test env")
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        if let Some(url) = origin {
+            run(&["remote", "add", "origin", url]);
+        }
+    }
+
+    /// Pure: the transport failure (502 `host_unreachable`) must never
+    /// masquerade as the semantic miss (422 `no_github_remote`) — the spec
+    /// 020 invariant this wire exists to carry.
+    #[test]
+    fn slug_reason_wire_distinguishes_transport_from_semantic() {
+        use super::super::board_goals::SlugReason;
+        let (semantic_status, semantic_code, semantic_msg) =
+            slug_reason_wire(SlugReason::NoGithubRemote);
+        let (transport_status, transport_code, transport_msg) =
+            slug_reason_wire(SlugReason::HostUnreachable);
+        assert_eq!(semantic_status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(semantic_code, "no_github_remote");
+        assert_eq!(transport_status, StatusCode::BAD_GATEWAY);
+        assert_eq!(transport_code, "host_unreachable");
+        assert_ne!(
+            semantic_msg, transport_msg,
+            "reasons must not collapse into one message"
+        );
+    }
+
+    /// The response is `{"slug": "owner/repo"}` — an object so future fields
+    /// stay add-only; slug case is passed through (the client lowercases).
+    #[test]
+    fn repo_slug_response_serializes_slug_only() {
+        let v = serde_json::to_value(RepoSlugResponse {
+            slug: "Owner/Repo".into(),
+        })
+        .unwrap();
+        assert_eq!(v, serde_json::json!({ "slug": "Owner/Repo" }));
+    }
+
+    /// A local repo with a GitHub origin resolves to its slug.
+    #[tokio::test]
+    async fn slug_on_host_reads_github_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo_with_origin(dir.path(), Some("git@github.com:owner/repo.git"));
+        let res = slug_on_host(&local_host(), &dir.path().to_string_lossy())
+            .await
+            .unwrap();
+        assert_eq!(res.slug, "owner/repo");
+    }
+
+    /// A repo with no GitHub origin is the SEMANTIC miss — 422 with code
+    /// `no_github_remote`, never the transport 502.
+    #[tokio::test]
+    async fn slug_on_host_without_origin_is_no_github_remote_422() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo_with_origin(dir.path(), None);
+        let err = slug_on_host(&local_host(), &dir.path().to_string_lossy())
+            .await
+            .unwrap_err();
+        match err {
+            ApiError::Custom(status, body) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(body["error"]["code"], "no_github_remote");
+            }
+            other => panic!("expected Custom 422, got {other:?}"),
+        }
+    }
+
+    /// Unknown repo id → the handler's first gate (`resolve_repo_path`) 404s
+    /// before any host/git work. Env-tolerant: a random uuid misses whatever
+    /// `~/.agentum/repos.json` holds (the 015 house rule — no env mutation).
+    #[test]
+    fn repo_slug_unknown_id_is_not_found() {
+        let id = format!("020-no-such-repo-{}", Uuid::new_v4());
+        let err = resolve_repo_path(&id).unwrap_err();
         assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
     }
 
