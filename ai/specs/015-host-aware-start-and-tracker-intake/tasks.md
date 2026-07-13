@@ -198,3 +198,90 @@ Nothing in F2 blocks F3. F3 is UI-only per the architect ruling (no new
 server route; reuse `linearCreateIssue` et al.) and touches a disjoint
 surface (`ProjectHubPage`/`TrackerIntakePanel`/`create-issue-intent-model`).
 Re-ground `useComposerState` line numbers before editing (012/013 in-flight).
+
+## F3 — tracker-intent-intake (2026-07-13, branch `fixes-new-workspace`)
+
+### What was built
+
+**UI only (`crates/agentum-desktop/ui`); zero Rust — per the architect ruling
+(013 F3's `linearCreateIssue` client is reused; no new server route).**
+
+- `src/components/new-workspace/create-issue-intent-model.ts` — **add-only**
+  extensions (architecture §4.2, exact names/shapes): `TrackerIntakePhase`
+  (013's phases + `'filed'`), `FiledIssue` (github: number/url/slug/title;
+  linear: identifier/url|null/title), `deriveTrackerIntakePhase` (precedence
+  filing > drafting > error > filed > review > idle) and
+  `deriveFiledGatedRunGate` — a composition of the wizard's own
+  `deriveIssueSideEffectGate` (`filed → { type:'issue', url: filed.url ?? '' }`),
+  so a Linear URL honestly fails as `not-github-url` (D3) and a remote repo as
+  `remote-repo`. No existing 013 export edited.
+- NEW `src/components/project-hub/use-tracker-intake.ts` — the thin hook
+  (architecture §4.3): owns intent/title/body/generating/submitting/error/
+  filed/teamId/providerChoice. Its own `getProjectBinding` read (fail-closed
+  null, keyed `[repo.path, bindingVersion]` — the WorkItemsField precedent;
+  the response slug is reused as the draft/create slug hint), then
+  `resolvePickerProject` + the `linearStatus`/`linearListTeams` probe (the
+  CreateIssuePanel precedent; best-effort, failure stays GitHub-only).
+  Draft = `deriveIntentTitle` → `draftGithubIssueBody`; a new draft resets
+  `filed` (model contract). File GitHub = `createGithubIssue` → `filed` only
+  from the provider-confirmed response; File Linear = `linearCreateIssue`
+  (sole team auto-selected; no team → inline "Pick a Linear team");
+  `result.ok === false` → inline error, `filed` unchanged (AC 12 — inconclusive
+  never shows filed). Errors render `Error.message`/`result.error` only —
+  no settings interpolation. "Start gated run" = the spec-008 pre-armed hop
+  `openModal('new-workspace-composer', { linkedWorkItem, prefilledName,
+  initialRepoId: repo.id, startGatedRun: true, telemetrySource: 'sidebar' })`
+  — NEVER a direct `startGatedWork` (§1.4).
+- NEW `src/components/project-hub/TrackerIntakePanel.tsx` — pure render of the
+  hook (props `{ repo, bindingVersion }` as pinned): provider toggle on
+  `ambiguous` (AC 10), intent textarea → Draft → title/body review →
+  provider-labeled file button, inline non-fatal errors (AC 12), filed chip
+  with the issue link (`api.shell.openUrl`), and the gated-run affordance —
+  "Start gated run" renders ONLY when `deriveFiledGatedRunGate` is eligible;
+  a filed Linear issue shows "Gated runs: GitHub issues only." (D3) and a
+  remote repo shows the gate's remote-repo copy.
+- `src/components/project-hub/ProjectHubPage.tsx::ProjectTrackerConfig` —
+  prop widened `{ path }` → `{ repo }` (the hub already holds `repo`);
+  `ProjectBindingEditor` mounted UNTOUCHED except wiring its existing
+  `onBound` prop to a `bindingVersion` bump; `TrackerIntakePanel` mounted as
+  a sibling card whenever the tab has a workdir (architecture §4.1's render
+  policy — a superset of AC 9's "whenever a binding/tracker resolves").
+
+### Test-first evidence
+
+The 14 new model cases (phase matrix incl. filed-beats-review,
+busy-beats-filed, error-beats-filed, busy-beats-stale-error; gate matrix
+github+local → eligible slug+number / github+remote → remote-repo / linear
+url+null-url → not-github-url / null → no-linked-item) were written first;
+`bunx vitest run src/components/new-workspace/create-issue-intent-model.test.ts`
+failed 14 (`deriveTrackerIntakePhase is not a function`, …) with the 12
+pre-existing 013 cases passing — red — then 26/26 green after the add-only
+implementation. The 013 cases were not modified.
+
+### Gate outputs
+
+| Gate | Result |
+|---|---|
+| `bunx vitest run` on the F3 model suite + F1/F2 regression set (`create-issue-intent-model.test.ts`, `find-repo-by-path.test.ts`, `github.test.ts`, `github-checks.test.ts`, `hosted-review.test.ts`, `hosted-review-cache.test.ts`, `hosted-review-cache-race.test.ts`, `start-work-repo-match.test.ts`, `project-dialog-state.test.ts`) | 9 files, 157 passed, 0 failed |
+| `npm run build --prefix crates/agentum-desktop/ui` (vite) | green (38.4s; pre-existing chunk-size warning only) |
+| `cargo test -p agentum-server --lib` | 687 passed, 0 failed, 5 ignored (F3 touches zero Rust — run to prove it) |
+
+### Deviations from architecture.md (numbered)
+
+1. **Linear probe runs on tab mount, not behind an "open" latch.** The wizard's
+   `CreateIssuePanel` probes lazily when its collapsed button is expanded;
+   the Tracker panel IS the tab surface (no collapsed state was specced), so
+   the probe runs on mount, keyed on the runtime-target field
+   (`settings?.activeRuntimeEnvironmentId`) rather than the whole settings
+   object so unrelated settings writes (e.g. the hub's own activeProject
+   write) don't re-probe. Same best-effort semantics.
+2. **`FiledIssue.title` for Linear comes from the create response**
+   (`result.title`) rather than the local input — the provider-confirmed
+   value, byte-equal in practice; GitHub uses the filed title exactly like
+   `handleCreateIssueSubmit` does.
+
+No other deviations: model extensions add-only (013 exports untouched),
+`ProjectBindingEditor` internals untouched, `useComposerState` untouched,
+the wizard's own CreateIssuePanel untouched, hop payload exactly as ruled
+(§4.3, `startGatedRun: true` + minimal linkedWorkItem), no new create/spawn/
+gated-run code, zero Rust.

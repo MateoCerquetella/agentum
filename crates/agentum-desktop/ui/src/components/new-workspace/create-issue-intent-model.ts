@@ -6,6 +6,8 @@
 // phase and gates the two buttons, so the sub-panel is unit-testable without a
 // DOM (the UI package ships no jsdom).
 import { deriveGoalIssueDraft } from '@/lib/workspace-goal-step'
+import { deriveIssueSideEffectGate } from '@/lib/issue-side-effect-gate'
+import type { IssueSideEffectGate } from '@/lib/issue-side-effect-gate'
 import type { PickerProjectRef } from './work-item-picker-model'
 
 /**
@@ -74,4 +76,60 @@ export function resolveCreateIssueProvider(input: {
   if (input.resolved) return 'github'
   if (input.linearConnected) return 'linear'
   return 'github'
+}
+
+// ---------- Spec 015 F3: Tracker-tab intake (add-only extensions) ----------
+// The Project Hub's Tracker panel reuses the 013 phase/gating helpers above
+// unchanged; the additions below cover what the wizard panel never needed — a
+// terminal `filed` phase (the panel outlives the file, offering "Start gated
+// run") and gated-run eligibility for the *filed* issue.
+
+/** The Tracker panel's phase — 013's `CreateIssueIntentPhase` plus `filed`. */
+export type TrackerIntakePhase = 'idle' | 'drafting' | 'review' | 'filing' | 'filed' | 'error'
+
+/**
+ * A provider-CONFIRMED created issue. Set only from a create response carrying
+ * an id/URL — never optimistically — so the panel can't show a phantom
+ * "filed" (spec 015 AC 12).
+ */
+export type FiledIssue =
+  | { provider: 'github'; number: number; url: string; slug: string; title: string }
+  | { provider: 'linear'; identifier: string; url: string | null; title: string }
+
+/**
+ * Precedence: filing > drafting > error > filed > review(hasBody) > idle.
+ * `filed` must beat `review` (the drafted body is still in hand after a
+ * successful file); a new Draft resets `filed` (hook contract), so a stale
+ * "filed" chip can never sit over a fresh draft.
+ */
+export function deriveTrackerIntakePhase(s: {
+  generating: boolean
+  submitting: boolean
+  error: string | null
+  hasBody: boolean
+  filed: FiledIssue | null
+}): TrackerIntakePhase {
+  if (s.submitting) return 'filing'
+  if (s.generating) return 'drafting'
+  if (s.error) return 'error'
+  if (s.filed) return 'filed'
+  if (s.hasBody) return 'review'
+  return 'idle'
+}
+
+/**
+ * Gated-run eligibility for a filed issue: composes the SAME
+ * `deriveIssueSideEffectGate` the wizard submits through, so the panel's
+ * "Start gated run" renders exactly when the wizard's toggle would arm. A
+ * Linear identifier/URL fails the github.com parse and returns
+ * `not-github-url` — honest by construction (D3: gated runs are GitHub-only).
+ */
+export function deriveFiledGatedRunGate(
+  filed: FiledIssue | null,
+  repoConnectionId: string | null | undefined
+): IssueSideEffectGate {
+  return deriveIssueSideEffectGate(
+    filed ? { type: 'issue', url: filed.url ?? '' } : null,
+    repoConnectionId
+  )
 }
