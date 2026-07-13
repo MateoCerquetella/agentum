@@ -6,7 +6,15 @@
 // server state: we render whatever `/sdd/loop` + the `sdd.loop.*` events say,
 // so the rainbow survives reloads and reflects loops started by anyone.
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { FileText, ListChecks, MessagesSquare, Repeat2, StepForward } from 'lucide-react'
+import {
+  ChevronUp,
+  FileText,
+  ListChecks,
+  MessagesSquare,
+  Repeat2,
+  StepForward,
+  X
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useTabAgent } from '@/lib/use-tab-agent'
@@ -34,6 +42,42 @@ const PILL_CLASS =
   'inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40'
 
 const INACTIVE_LOOP: SddLoopState = { active: false, step: 0, maxSteps: 0 }
+
+// Dismissed-bar preference: global (all agent tabs), survives restarts. A
+// window CustomEvent fans the change out to every mounted bar — split groups
+// render one bar per panel, and localStorage's own 'storage' event only fires
+// in OTHER documents.
+const SDD_BAR_COLLAPSED_KEY = 'agentum_sdd_bar_collapsed'
+const SDD_BAR_COLLAPSED_EVENT = 'agentum:sdd-bar-collapsed'
+
+function useSddBarCollapsed(): [boolean, (next: boolean) => void] {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    // Guarded: renderToStaticMarkup (tests) runs initializers with no DOM.
+    try {
+      return globalThis.localStorage?.getItem(SDD_BAR_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    const onChange = (e: Event): void => setCollapsed(Boolean((e as CustomEvent).detail))
+    window.addEventListener(SDD_BAR_COLLAPSED_EVENT, onChange)
+    return () => window.removeEventListener(SDD_BAR_COLLAPSED_EVENT, onChange)
+  }, [])
+  const update = useCallback((next: boolean): void => {
+    try {
+      if (next) {
+        globalThis.localStorage?.setItem(SDD_BAR_COLLAPSED_KEY, '1')
+      } else {
+        globalThis.localStorage?.removeItem(SDD_BAR_COLLAPSED_KEY)
+      }
+    } catch {
+      // Persistence is best-effort; the in-session toggle still works.
+    }
+    window.dispatchEvent(new CustomEvent(SDD_BAR_COLLAPSED_EVENT, { detail: next }))
+  }, [])
+  return [collapsed, update]
+}
 
 /** The server session id behind an agent tab: server-session panes register a
  *  `server:<sessionId>:<leafId>` ptyId (see server-pane-connection.ts) — the
@@ -119,6 +163,7 @@ export function SddBarGate({ tab }: { tab: TerminalTab }): React.JSX.Element | n
 
 export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
   const sessionId = useServerSessionId(tabId)
+  const [collapsed, setCollapsed] = useSddBarCollapsed()
   const [playbooks, setPlaybooks] = useState<SddPlaybook[] | null>(null)
   const [preview, setPreview] = useState<SddPlaybook | null>(null)
   const [loop, setLoop] = useState<SddLoopState>(INACTIVE_LOOP)
@@ -221,6 +266,25 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
   }, [sessionId, loop.active, loopPending])
 
   const disabled = sessionId === null
+
+  // Dismissed: keep a near-invisible strip with a micro-chip that brings the
+  // bar back — discoverable without eating the terminal's vertical space.
+  if (collapsed) {
+    return (
+      <div className="flex shrink-0 items-center justify-end border-t border-border/60 bg-background px-3">
+        <button
+          className="flex items-center gap-1 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/60 transition-colors hover:text-foreground"
+          title="Show the SDD bar"
+          aria-label="Show the SDD bar"
+          onClick={() => setCollapsed(false)}
+        >
+          <ChevronUp className="size-3" />
+          SDD
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="flex shrink-0 items-center gap-2 border-t border-border/60 bg-background px-3 py-1.5">
       <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -254,6 +318,14 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
         <span className={loop.active ? 'sdd-rainbow-text' : ''}>
           {loop.active ? `Loop ${loop.step}/${loop.maxSteps}` : 'Loop'}
         </span>
+      </button>
+      <button
+        className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="Hide the SDD bar"
+        aria-label="Hide the SDD bar"
+        onClick={() => setCollapsed(true)}
+      >
+        <X className="size-3.5" />
       </button>
       {preview && (
         <PlaybookPreviewModal
