@@ -60,33 +60,32 @@ describe('HostGroupHeader', () => {
     expect(onToggle).toHaveBeenCalledOnce()
   })
 
-  it('renders the open-terminal affordance and fires onOpenTerminal without toggling', () => {
+  it('renders the tmux-sessions affordance and fires onOpenTmuxSessions without toggling', () => {
     const onToggle = vi.fn()
-    const onOpenTerminal = vi.fn()
+    const onOpenTmuxSessions = vi.fn()
     const host: SidebarHost = { key: 'ssh:conn-1', kind: 'ssh', label: 'omarchy' }
     const element = HostGroupHeader({
       host,
       count: 2,
       collapsed: false,
       onToggle,
-      onOpenTerminal
+      onOpenTmuxSessions
     })
     const action = findElement(
       element,
-      (props) =>
-        (props as { 'aria-label'?: string })['aria-label'] === 'Open terminal on omarchy'
+      (props) => (props as { 'aria-label'?: string })['aria-label'] === 'Tmux sessions on omarchy'
     )
     expect(action).not.toBeNull()
     const onClick = action?.props.onClick as unknown as
       | ((event: { stopPropagation: () => void }) => void)
       | undefined
     onClick?.({ stopPropagation: () => {} })
-    expect(onOpenTerminal).toHaveBeenCalledOnce()
-    // Clicking the terminal action must not collapse the host section.
+    expect(onOpenTmuxSessions).toHaveBeenCalledOnce()
+    // Clicking the tmux action must not collapse the host section.
     expect(onToggle).not.toHaveBeenCalled()
   })
 
-  it('omits the open-terminal affordance when no handler is provided', () => {
+  it('omits the tmux-sessions affordance when no handler is provided', () => {
     const host: SidebarHost = { key: 'local', kind: 'local', label: 'studio' }
     const markup = renderToStaticMarkup(
       React.createElement(HostGroupHeader, {
@@ -96,6 +95,130 @@ describe('HostGroupHeader', () => {
         onToggle: () => {}
       })
     )
-    expect(markup).not.toContain('Open terminal')
+    expect(markup).not.toContain('Tmux sessions')
+  })
+
+  it('replaces the detail line with an unreachable line + Reconnect when the ssh host is down', () => {
+    const host: SidebarHost = {
+      key: 'ssh:conn-1',
+      kind: 'ssh',
+      label: 'freebee',
+      detail: 'ssh · Linux 6.9',
+      status: 'down',
+      sshStatus: 'error',
+      connectionId: 'conn-1'
+    }
+    const markup = renderToStaticMarkup(
+      React.createElement(HostGroupHeader, {
+        host,
+        count: 1,
+        collapsed: false,
+        onToggle: () => {},
+        onReconnect: () => {}
+      })
+    )
+    expect(markup).toContain('Host unreachable')
+    expect(markup).toContain('Reconnect')
+    // The transport line takes the detail line's slot while the host is down.
+    expect(markup).not.toContain('ssh · Linux 6.9')
+  })
+
+  it('labels a deliberate disconnect as Disconnected, not unreachable', () => {
+    const host: SidebarHost = {
+      key: 'ssh:conn-1',
+      kind: 'ssh',
+      label: 'freebee',
+      status: 'down',
+      sshStatus: 'disconnected',
+      connectionId: 'conn-1'
+    }
+    const markup = renderToStaticMarkup(
+      React.createElement(HostGroupHeader, {
+        host,
+        count: 1,
+        collapsed: false,
+        onToggle: () => {},
+        onReconnect: () => {}
+      })
+    )
+    expect(markup).toContain('Disconnected')
+    expect(markup).not.toContain('Host unreachable')
+  })
+
+  it('shows the transport label while reconnecting and hides the Reconnect action', () => {
+    const host: SidebarHost = {
+      key: 'ssh:conn-1',
+      kind: 'ssh',
+      label: 'freebee',
+      status: 'connecting',
+      sshStatus: 'reconnecting',
+      connectionId: 'conn-1'
+    }
+    const markup = renderToStaticMarkup(
+      React.createElement(HostGroupHeader, {
+        host,
+        count: 1,
+        collapsed: false,
+        onToggle: () => {},
+        onReconnect: () => {}
+      })
+    )
+    expect(markup).toContain('Reconnecting')
+    expect(markup).not.toContain('>Reconnect<')
+  })
+
+  it('fires onReconnect without toggling the section', () => {
+    const onToggle = vi.fn()
+    const onReconnect = vi.fn()
+    const host: SidebarHost = {
+      key: 'ssh:conn-1',
+      kind: 'ssh',
+      label: 'freebee',
+      status: 'down',
+      sshStatus: 'reconnection-failed',
+      connectionId: 'conn-1'
+    }
+    const element = HostGroupHeader({
+      host,
+      count: 1,
+      collapsed: false,
+      onToggle,
+      onReconnect
+    })
+    const action = findElement(
+      element,
+      (props) => (props as { 'aria-label'?: string })['aria-label'] === 'Reconnect to freebee'
+    )
+    expect(action).not.toBeNull()
+    const onClick = action?.props.onClick as unknown as
+      | ((event: { stopPropagation: () => void }) => void)
+      | undefined
+    onClick?.({ stopPropagation: () => {} })
+    expect(onReconnect).toHaveBeenCalledOnce()
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it('keeps the plain detail line when the ssh host is reachable', () => {
+    const host: SidebarHost = {
+      key: 'ssh:conn-1',
+      kind: 'ssh',
+      label: 'freebee',
+      detail: 'ssh · Linux 6.9',
+      status: 'reachable',
+      sshStatus: 'connected',
+      connectionId: 'conn-1'
+    }
+    const markup = renderToStaticMarkup(
+      React.createElement(HostGroupHeader, {
+        host,
+        count: 1,
+        collapsed: false,
+        onToggle: () => {},
+        onReconnect: () => {}
+      })
+    )
+    expect(markup).toContain('ssh · Linux 6.9')
+    expect(markup).not.toContain('Host unreachable')
+    expect(markup).not.toContain('Reconnect')
   })
 })

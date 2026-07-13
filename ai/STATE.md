@@ -75,23 +75,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-13 | Developer | **020 F2 CODE-COMPLETE + GREEN + COMMITTED
-  `e8fb31a8`** (slug-index-ssh, AC 5-7; tasks.md F2; phase STAYS developer →
-  F3 last). NEW `GET /api/repos/{id}/slug` in repos.rs (registry path, no
-  hint/workdir; 404 unknown / 422 no_github_remote / **502 host_unreachable**
-  via pure `slug_reason_wire` — transport never masquerades as no-origin;
-  behind require_token, no is_public change); `getServerRepoSlug` in
-  server-repo-client.ts (run() throws on non-2xx = fail-closed); NEW pure
-  import-free `lib/repo-slug-arm.ts` arm-picker (env-RPC > server-for-
-  connectionId > native) wired into repo-slug-index.ts inside the existing
-  try/catch (throw → null cached → EXCLUDED, AC 7); env-RPC + native arms
-  byte-identical; slugByRepoId cache untouched. Gates: cargo 701/0/5 (696+5),
-  fmt+clippy -D warnings clean, vite green, vitest 11/0 (arm-picker 4 +
-  start-work-repo-match pins: sole-remote→direct, both-hosts→choose;
-  classifier file UNTOUCHED). Test-first RED both sides. 1 real deviation
-  (handler core extracted as `slug_on_host(&Host,&str)` so origin tests use a
-  temp git repo, wire-identical). Tester note: host-down = real 502 — qa.sh
-  can key on status not message. Orchestrator-gated PASS. F3 unblocked.
 - 2026-07-13 | Developer | **020 F3 CODE-COMPLETE + GREEN + COMMITTED
   `820712d9` → DEVELOPER PHASE DONE, phase → tester** (intake-ssh-honest,
   AC 8-10; tasks.md F3; handoff `03-developer-to-tester.md`). Server:
@@ -163,3 +146,10 @@
   migrated to `{workdir, repoId, local}` — its 5 vitest pins adapted
   hostId→repoId/local, configure editor stays local-gated, F3
   `trackerRepoId`→ProjectBindingEditor threading preserved.
+- 2026-07-13 | Release | **merge sync #2 with develop @ 3636d6ac** (PR #367
+  "pinned chat repo context" — ANOTHER worktree independently threaded
+  repo_id + SSH repo-context gathering through chat.rs; complementary to
+  020's grounding flag, auto-merged clean in chat.rs/util.rs; only STATE.md
+  conflicted, ours kept + this line). PR #368 (specs 015+020) open into
+  develop; first merge-reconcile commit b2b19f31 (#359 repoId supersession +
+  effective_workdir). Gates re-run post-merge before push.

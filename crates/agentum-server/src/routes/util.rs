@@ -26,7 +26,10 @@ pub(crate) fn expand_workdir(raw: &str) -> Result<PathBuf, ApiError> {
     expand_with_home(raw, home.as_deref())
 }
 
-fn expand_with_home(raw: &str, home: Option<&Path>) -> Result<PathBuf, ApiError> {
+/// The explicit-home form — `pub(crate)` as the TEST SEAM: callers that must
+/// unit-test tilde expansion (chat's repo-context gather) pass a temp home
+/// instead of mutating `HOME`, which races the parallel test suite.
+pub(crate) fn expand_with_home(raw: &str, home: Option<&Path>) -> Result<PathBuf, ApiError> {
     let trimmed = raw.trim();
     let trimmed = if trimmed.len() > 1 {
         trimmed.trim_end_matches('/')

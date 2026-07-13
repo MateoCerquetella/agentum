@@ -64,6 +64,7 @@ import {
   type WorktreeAttention
 } from './smart-attention'
 import { track } from '@/lib/telemetry'
+import { toast } from 'sonner'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import { deriveRunningAgentSendTargets } from '@/lib/running-agent-targets'
 import { rightSidebarShowsPullRequestData } from '@/lib/right-sidebar-visibility'
@@ -82,8 +83,10 @@ import {
   groupRowsByHost,
   getHostHeaderKey,
   hostKeyForRepo,
-  hostKeysWithOpenTmux
+  hostKeysWithOpenTmux,
+  sidebarHostStatus
 } from './worktree-list-groups'
+import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import { HostGroupHeader } from './HostGroupHeader'
 import { TmuxSessionsModal, type TmuxSessionsModalHost } from './TmuxSessionsModal'
 import { SessionActivityCard } from './SessionActivityCard'
@@ -2868,6 +2871,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
             }
 
             if (row.type === 'host-header') {
+              const hostConnectionId =
+                row.host.kind === 'ssh' ? row.host.connectionId : undefined
               return (
                 <div
                   key={vItem.key}
@@ -2896,6 +2901,18 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         label: row.host.label,
                         kind: row.host.kind
                       })
+                    }
+                    onReconnect={
+                      hostConnectionId
+                        ? async () => {
+                            const result = await connectSshTargetViaServer(hostConnectionId)
+                            if (result.ok) {
+                              toast.success(result.message)
+                            } else {
+                              toast.error(result.message)
+                            }
+                          }
+                        : undefined
                     }
                   />
                 </div>
@@ -4299,18 +4316,12 @@ const WorktreeList = React.memo(function WorktreeList({
       const meta = hostMetaByKey[hostKey]
       const isSsh = hostKey.startsWith('ssh:')
       const connectionId = isSsh ? hostKey.slice('ssh:'.length) : undefined
-      const status: SidebarHost['status'] = !isSsh
-        ? 'reachable'
-        : (() => {
-            const s = connectionId ? sshConnectionStates.get(connectionId)?.status : undefined
-            return s === 'connected'
-              ? 'reachable'
-              : s === 'connecting'
-                ? 'connecting'
-                : s === 'error'
-                  ? 'down'
-                  : 'unknown'
-          })()
+      const connection = connectionId ? sshConnectionStates.get(connectionId) : undefined
+      // A target with no transport record yet behaves like a disconnected one
+      // (mirrors SshStatusSegment): its sessions can't stream either way, and
+      // defaulting gives the host header a Reconnect affordance from the start.
+      const sshStatus = isSsh ? (connection?.status ?? 'disconnected') : undefined
+      const status: SidebarHost['status'] = !isSsh ? 'reachable' : sidebarHostStatus(sshStatus)
       return {
         key: hostKey,
         kind: isSsh ? 'ssh' : 'local',
@@ -4323,6 +4334,9 @@ const WorktreeList = React.memo(function WorktreeList({
             : 'This Mac'),
         detail: meta?.detail,
         status,
+        sshStatus,
+        sshError: connection?.error,
+        connectionId,
         tmuxInstalled: meta?.tmuxInstalled,
         // Truthful per-host signal: this host has a live tmux-backed session
         // right now (computed from the session list in the hosts slice).
