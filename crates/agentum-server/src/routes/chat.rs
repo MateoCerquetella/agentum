@@ -233,11 +233,23 @@ fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
 /// (CLAUDE.md/AGENTS.md), the `.harness/` contract (AGENTS.md + the feature
 /// backlog), and a git-tracked file tree. A missing/remote/empty workdir → None.
 pub(crate) fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    local_repo_context(workdir, home.as_deref())
+}
+
+/// The local arm with the home dir explicit — the tilde-expansion test seam
+/// (mutating `HOME` in a test races the parallel suite). Expansion happens
+/// BEFORE the dir check because repo paths arrive user-spelled (`~/projects/x`
+/// from the picker/registry) and `Path::is_dir("~/…")` is always false —
+/// tilde is a shell concern, not an OS one. Chat grounding is best-effort, so
+/// an expansion error degrades to `None`, never a 4xx.
+fn local_repo_context(workdir: Option<&str>, home: Option<&std::path::Path>) -> Option<String> {
     let wd = workdir.map(str::trim).filter(|s| !s.is_empty())?;
-    let root = std::path::Path::new(wd);
+    let root = super::util::expand_with_home(wd, home).ok()?;
     if !root.is_dir() {
         return None;
     }
+    let root = root.as_path();
 
     let mut out = String::new();
 
@@ -296,6 +308,20 @@ pub(crate) fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
 
     let out = truncate_chars(out.trim(), CONTEXT_BUDGET);
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// One line per chat request saying whether grounding happened and why not —
+/// the #361 diagnostic. A pinned chat that goes blind used to be invisible
+/// server-side (the model apologized, nothing logged); this line is the first
+/// thing to read when a user reports "no workspace selected".
+fn log_repo_context_outcome(route: &str, workdir: Option<&str>, ctx: Option<&str>) {
+    tracing::info!(
+        route,
+        workdir = workdir.unwrap_or("<none>"),
+        context_len = ctx.map(str::len).unwrap_or(0),
+        grounded = ctx.is_some(),
+        "chat repo-context gather"
+    );
 }
 
 /// The grounding blocks BOTH intake modes prepend (spec 008 F2): the
@@ -705,6 +731,7 @@ async fn chat(
     let mode = body.mode.unwrap_or(IntakeMode::Fast);
     let stage = body.stage.unwrap_or(1);
     let repo_context = gather_repo_context(body.workdir.as_deref());
+    log_repo_context_outcome("chat", body.workdir.as_deref(), repo_context.as_deref());
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
     let instructions = build_intake_instructions(
         mode,
@@ -817,6 +844,11 @@ async fn chat_stream(
     let mode = body.mode.unwrap_or(IntakeMode::Fast);
     let stage = body.stage.unwrap_or(1);
     let repo_context = gather_repo_context(body.workdir.as_deref());
+    log_repo_context_outcome(
+        "chat_stream",
+        body.workdir.as_deref(),
+        repo_context.as_deref(),
+    );
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
     let instructions = build_intake_instructions(
         mode,
@@ -2761,6 +2793,26 @@ mod tests {
         assert!(gather_repo_context(None).is_none());
         assert!(gather_repo_context(Some("")).is_none());
         assert!(gather_repo_context(Some("/nonexistent/xyzzy-agentum-chat-test")).is_none());
+    }
+
+    /// #361: a `~`-spelled workdir (how the picker/registry stores repo paths)
+    /// must ground, not silently go blind. Explicit home = the test seam — no
+    /// env mutation (racy under the parallel suite).
+    #[test]
+    fn local_repo_context_expands_tilde_workdir() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(home.path().join("proj")).unwrap();
+        std::fs::write(
+            home.path().join("proj").join("CLAUDE.md"),
+            "# Guide\nTilde-expanded repo.",
+        )
+        .unwrap();
+        let ctx = local_repo_context(Some("~/proj"), Some(home.path())).expect("context");
+        assert!(ctx.contains("Repo guide (CLAUDE.md)"));
+        assert!(ctx.contains("Tilde-expanded repo."));
+        // Absolute paths still pass through expansion unchanged, so the
+        // missing-dir contract above holds identically.
+        assert!(local_repo_context(Some("/nonexistent/xyzzy"), Some(home.path())).is_none());
     }
 
     #[test]
