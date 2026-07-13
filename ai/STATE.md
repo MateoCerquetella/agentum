@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 008-finish-the-loop
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **current_spec:** 016-sdd-loop-checkin-and-issue-project-status
+- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (016 drafted 2026-07-13 from GH issue #358 + Mateo's in-session ask; harness mirror at `.agentum-harness/specs/358-the-sdd-loop-sohuld-inject-itself-10-tim/spec.md` — 2 checkbox features. ⚠️ implementation must branch from fresh origin/develop: this worktree is v0.57.0-era, `routes/sdd.rs` doesn't exist here. 008 RELEASED v0.57.0; 007 v0.55.0; 006 v0.54.0)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -64,20 +64,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
-  F2/F3 deferred to next developer iterations). Built in architecture order:
-  Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
-  Step2 `apply_blocked_transition`+`status/blocked` GitHub-only label, TrackerPhase
-  stays 4 (D-A), remove-set widened to 5-minus-target, `record_feature_failure`→
-  (blocked,attempts) (#16); Step4 pure `start-gated-run-precondition`/`composer-modal-props`
-  + armed-!repoId toast + server-error-detail + `subscribeHarnessRunErrors` bridge
-  (#2 #226 edge, #5); Step5 `#[ignore]` `harness_start_work_live{,_roles}.rs` +
-  `gh_in_dir` honors AGENTUM_GH_BIN; Step3 (sacred, LAST) `await_repl_ready→bool`
-  + `inject_prompt→Result<bool>`, send-sequence BYTE-IDENTICAL, loud readiness log
-  ×4 (#14a). Gates: server 546/0/5, executor 21/0, fmt+clippy clean, vite green,
-  vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
-  green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
-  developer → F2 next.
 - 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
   intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
   Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
@@ -117,6 +103,18 @@
   NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
   AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
   +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
+- 2026-07-13 | Spec | **016 DRAFTED via /sdd-spec (GH #358) → phase pm.**
+  Two features: F1 SDD loop stops on agent check-in over MCP (new
+  `agentum_sdd_loop` tool + `state_done` STATE.md belt; 10-step cap demoted to
+  backstop — kills the blind ×10 re-injection that litters/confuses sessions);
+  F2 (rider, Mateo mid-run ask) issue hover card shows the bound GitHub
+  Project's Status chip (lazy fetch on open, silent absence). Grounded in
+  origin/develop @ `bee8dc2d` (`routes/sdd.rs:60/350`, `sdd.rs:165`,
+  `mcp.rs:1227`, `WorktreeCardMeta.tsx:218/316`, `github_projects.rs`).
+  Harness mirror written with exactly 2 backlog checkboxes
+  (`derive_backlog_from_spec` = one feature per `- [ ]`). One-slice gate
+  waived for F2 by the human's explicit bundling request. ⚠️ build from fresh
+  origin/develop, NOT this v0.57.0-era worktree.
 - 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
   `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
   sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
