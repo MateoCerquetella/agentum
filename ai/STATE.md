@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 020-ssh-host-tracker-plumbing
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (020 **SHIP-READY — Reviewer SIGN-OFF 2026-07-13**, `review.md` @ `cc4bde36`, 0 blockers; spec Status → Done. Commits F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` on `fixes-new-workspace`, on top of ship-ready 015. **RELEASE = HUMAN**: ONE train with 015 (same branch) — PR → develop → staging qa.sh (live dyaus binding, SSH filing + grounding note, Start-work direct launch, host-down 422-flavor vs slug-route 502, gh authed on the remote) → main + tag. Follow-up ticket (reviewer should-fixes): SF1 ProjectHubPage:86 Tasks-tab binding read not repoId-threaded — bound SSH repo's Tasks tab never auto-enters board mode; SF2 SSH-repoId issue FETCH composes local neutral_cwd with remote gh — caller-less today but the live wire will trip the deferred QA leg (fix before/at QA); SF3 tasks.md wording. 015's own release checklist + 010's AC-11 demo stay in Active send-backs.)
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (020 **SHIP-READY — Reviewer SIGN-OFF 2026-07-13**, `review.md` @ `cc4bde36`, 0 blockers; spec Status → Done. Commits F1 `09726c46` F2 `e8fb31a8` F3 `820712d9`. **MERGED TO DEVELOP 2026-07-13: PR #368 → `ac1ca44b`** (two develop merge-syncs on the way: #359 reconciled into the repoId contract + effective_workdir, #367 clean; post-merge gates 708/0 + vite + vitest 101/0). REMAINING (HUMAN): promote → staging qa.sh (live dyaus binding, SSH filing + grounding note, Start-work direct launch, host-down 422-flavor vs slug-route 502, gh authed on the remote) → main + tag. Follow-up ticket (reviewer should-fixes): SF1 ProjectHubPage:86 Tasks-tab binding read not repoId-threaded — bound SSH repo's Tasks tab never auto-enters board mode; SF2 SSH-repoId issue FETCH composes local neutral_cwd with remote gh — caller-less today but the live wire will trip the deferred QA leg (fix before/at QA); SF3 tasks.md wording. 015's own release checklist + 010's AC-11 demo stay in Active send-backs.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -12,8 +12,9 @@
 
 - **015-host-aware-start-and-tracker-intake** — **SHIP-READY** (Reviewer
   SIGN-OFF 2026-07-13, `review.md` @ `aa8ce9e3`, 0 blockers). Commits F1
-  `ff7290ee` F2 `d7d64f33` F3 `3ec6f028` on `fixes-new-workspace`, unpushed.
-  **RELEASE = HUMAN (Mateo)**: PR → develop, promote → staging (`status/qa`;
+  `ff7290ee` F2 `d7d64f33` F3 `3ec6f028` — **MERGED TO DEVELOP via PR #368
+  (`ac1ca44b`, 2026-07-13, one train with 020)**. REMAINING (Mateo):
+  promote → staging (`status/qa`;
   qa.sh legs: live VPS add/pick/create AC 3-4-7, choose-hop AC 5, real filing
   AC 10, board+gated run AC 11) → main + tag. Release notes: one-time remote
   re-add + onUse zero-match shift. F1+F2 SAME train. Follow-up ticket: S1
