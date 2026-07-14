@@ -36,6 +36,7 @@ import {
   sortWorkItemsByUpdatedAt,
   PER_REPO_FETCH_LIMIT
 } from '../../../../shared/work-items'
+import type { BoardBindingState } from '@/lib/board-project-resolution'
 import { deriveCheckStatusFromChecks, syncPRChecksStatus } from './github-checks'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 import { rightSidebarShowsPullRequestData } from '@/lib/right-sidebar-visibility'
@@ -1301,6 +1302,14 @@ export type GitHubSlice = {
    *  until the next refresh. The actual write is dispatched separately via
    *  the slug-addressed update IPCs. */
   patchProjectRowContent: (cacheKey: string, rowId: string, patch: ProjectRowContentPatch) => void
+  // ── Per-repo tracker binding (spec 016) ───────────────────────────────
+  /** Session-only cache of each repo's board-binding identity, keyed by
+   *  Repo.id. The hub's Tasks-tab effect is the only writer (hostId-aware);
+   *  ProjectViewWrapper/TaskPage read it through `resolveBoardProject`. Not
+   *  persisted — the server's slug-keyed bindings.json is the durable source
+   *  and a UI mirror would invite drift. */
+  projectBindingByRepo: Record<string, BoardBindingState>
+  setProjectBindingState: (repoId: string, state: BoardBindingState) => void
 }
 
 export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (set, get) => ({
@@ -1314,6 +1323,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   workItemsCache: {},
   workItemsInvalidationNonce: 0,
   projectViewCache: {},
+  projectBindingByRepo: {},
+  setProjectBindingState: (repoId, state) =>
+    set((s) => ({ projectBindingByRepo: { ...s.projectBindingByRepo, [repoId]: state } })),
 
   fetchProjectViewTable: async (args, options) => {
     const requestKey = projectViewRequestKey(args)

@@ -11,6 +11,7 @@ import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { applyBoardPick } from '@/lib/board-project-resolution'
 import { cn } from '@/lib/utils'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
@@ -40,6 +41,10 @@ type Props = {
     number: number
     title?: string
   } | null
+  /** Spec 016: repoId set = commits write the per-repo pick
+   *  (activeProjectByRepo[repoId]); null/absent = the standalone surface,
+   *  which keeps writing the legacy global activeProject verbatim. */
+  repoId?: string | null
   onSelect: (selection: ResolvedProjectSelection) => void
 }
 
@@ -91,7 +96,11 @@ async function resolveProjectRefForRuntime(
     : api.gh.resolveProjectRef({ input })
 }
 
-export default function ProjectPicker({ activeProject, onSelect }: Props): React.JSX.Element {
+export default function ProjectPicker({
+  activeProject,
+  repoId = null,
+  onSelect
+}: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const mountedRef = useMountedRef()
@@ -190,32 +199,17 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
 
   const commitSelection = useCallback(
     async (selection: ResolvedProjectSelection, title: string | null) => {
-      const key = `${selection.ownerType}:${selection.owner}:${selection.projectNumber}`
-      await updateProjectSettings((prev) => {
-        const recent = [
-          {
-            owner: selection.owner,
-            ownerType: selection.ownerType,
-            number: selection.projectNumber,
-            lastOpenedAt: new Date().toISOString()
-          },
-          ...prev.recent.filter((r) => `${r.ownerType}:${r.owner}:${r.number}` !== key)
-        ].slice(0, 10)
-        const lastViewByProject = { ...prev.lastViewByProject }
-        if (selection.viewId) {
-          lastViewByProject[key] = { viewId: selection.viewId }
-        }
-        return {
-          ...prev,
-          recent,
-          lastViewByProject,
-          activeProject: {
-            owner: selection.owner,
-            ownerType: selection.ownerType,
-            number: selection.projectNumber
-          }
-        }
-      })
+      // Spec 016: `applyBoardPick` owns the split — per-repo active slot when
+      // repoId is set, the pre-016 legacy write when standalone; recent +
+      // lastViewByProject stay global in both branches.
+      await updateProjectSettings((prev) =>
+        applyBoardPick(prev, repoId, {
+          owner: selection.owner,
+          ownerType: selection.ownerType,
+          number: selection.projectNumber,
+          ...(selection.viewId ? { viewId: selection.viewId } : {})
+        })
+      )
       if (!mountedRef.current) {
         return
       }
@@ -225,7 +219,7 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
       setViewPickFor(null)
       void title
     },
-    [mountedRef, onSelect, updateProjectSettings]
+    [mountedRef, onSelect, repoId, updateProjectSettings]
   )
 
   const handleChooseProject = useCallback(

@@ -230,7 +230,17 @@ export type GitHubProjectSettings = {
     lastOpenedAt: string
   }[]
   lastViewByProject: Record<string, { viewId: string }>
+  /** LEGACY global slot. Read-only for new code (spec 016 migration fallback);
+   *  still written ONLY by the standalone (repoId=null) picker path. */
   activeProject: { owner: string; ownerType: GitHubProjectOwnerType; number: number } | null
+  /** Spec 016: the per-repo board pick, keyed by Repo.id. OPTIONAL on the
+   *  wire — upgraded profiles carry a stored `githubProjects` object without
+   *  this key (the settings hydrate merge is top-level shallow, so the stored
+   *  object replaces the default wholesale), so every read must be `?? {}`. */
+  activeProjectByRepo?: Record<
+    string,
+    { owner: string; ownerType: GitHubProjectOwnerType; number: number }
+  >
 }
 
 // ─── Classified errors ─────────────────────────────────────────────────

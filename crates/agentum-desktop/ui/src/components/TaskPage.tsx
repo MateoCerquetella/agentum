@@ -55,6 +55,10 @@ import IssueSourceSelector, { issueSourceChipClass } from '@/components/github/I
 import { TaskKanbanBoard } from '@/components/tasks/TaskKanbanBoard'
 import { TWO_COLUMNS, githubColumn } from '@/components/tasks/task-kanban'
 import { transitionGithubIssue } from '@/components/tasks/task-kanban-github'
+import {
+  resolveBoardProject,
+  type BoardBindingState
+} from '@/lib/board-project-resolution'
 import { useKanbanPointerDrag } from '@/lib/use-kanban-pointer-drag'
 import { reconcileLinearTeamSelection } from '@/components/task-page-linear-team-selection'
 import { parseTaskQuery, stripRepoQualifiers, withQualifier } from '../../../shared/task-query'
@@ -174,6 +178,9 @@ import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
+// Spec 016: stable "no binding entry yet" identity so the embedded resolver
+// memo doesn't churn while the hub effect is still writing the store entry.
+const EMBEDDED_BINDING_ABSENT: BoardBindingState = { status: 'loaded', binding: null }
 
 export default function TaskPage({
   embedded = false
@@ -413,6 +420,47 @@ export default function TaskPage({
   // Tasks-as-Kanban (#2): the GitHub issues view can render as a board where
   // dragging a card between Open/Done pushes the new state back to GitHub.
   const [taskViewMode, setTaskViewMode] = useState<'list' | 'kanban'>('list')
+
+  // Spec 016 (§3.3): the embedded hub board derives its GitHub mode from the
+  // per-repo resolution, applied to LOCAL state only — the global
+  // taskResumeState slot is never written from inside a hub, so stale-mode
+  // leaks in either direction (hub→global, global→hub) are structurally
+  // impossible.
+  const embeddedRepoId = embedded ? (pageData.preselectedRepoId ?? null) : null
+  const embeddedBindingEntry = useAppStore((s) =>
+    embeddedRepoId ? s.projectBindingByRepo[embeddedRepoId] : undefined
+  )
+  const embeddedResolution = useMemo(() => {
+    if (!embeddedRepoId) {
+      return null
+    }
+    return resolveBoardProject({
+      repoId: embeddedRepoId,
+      settings: settings?.githubProjects,
+      bindingState: embeddedBindingEntry ?? EMBEDDED_BINDING_ABSENT
+    })
+  }, [embeddedRepoId, settings?.githubProjects, embeddedBindingEntry])
+  // Re-fire only when the resolution identity CHANGES — a user's manual
+  // Projects/Issues toggle inside the hub must not be fought by re-asserting
+  // the same resolution on every render.
+  const lastAppliedEmbeddedResolutionRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!embeddedResolution || embeddedResolution.source === 'pending') {
+      // pending: the initial 'project' state shows the wrapper skeleton — no
+      // flash, nothing to apply yet.
+      return
+    }
+    const identity = embeddedResolution.project
+      ? `${embeddedResolution.source}:${embeddedResolution.project.ownerType}:${embeddedResolution.project.owner}:${embeddedResolution.project.number}`
+      : embeddedResolution.source
+    if (lastAppliedEmbeddedResolutionRef.current === identity) {
+      return
+    }
+    lastAppliedEmbeddedResolutionRef.current = identity
+    // pick|binding|legacy → the bound/picked board; none → the plain issue
+    // Kanban (the 'project' forcing must never leak into an unbound repo).
+    setGithubMode(embeddedResolution.source === 'none' ? 'items' : 'project')
+  }, [embeddedResolution])
 
   // ── GitLab task-source state ──────────────────────────────────────
   // Why: parallel to Linear's slim per-source state. Skips workItemsCache
@@ -1044,7 +1092,11 @@ export default function TaskPage({
     )
     setRepoSelection(resolvedInitialSelection)
 
-    const nextGithubMode = taskResumeState?.githubMode ?? 'project'
+    // Embedded (spec 016 §3.3): skip the global resume slot — a stale 'items'
+    // from a standalone visit must not leak into a bound repo's hub. The
+    // initial 'project' holds the wrapper skeleton until the per-repo
+    // resolution effect above applies.
+    const nextGithubMode = embedded ? 'project' : (taskResumeState?.githubMode ?? 'project')
     setGithubMode(nextGithubMode)
 
     const preset = taskResumeState?.githubItemsPreset
@@ -3326,13 +3378,21 @@ export default function TaskPage({
                               key={mode.id}
                               type="button"
                               onClick={() => {
+                                // Embedded: local mode only — the global resume
+                                // slot stays untouched from inside a per-project
+                                // view (same discipline as the repo combobox's
+                                // updateSettings gate below).
                                 if (mode.id === 'project') {
                                   setGithubMode('project')
-                                  setTaskResumeState({ githubMode: 'project' })
+                                  if (!embedded) {
+                                    setTaskResumeState({ githubMode: 'project' })
+                                  }
                                   return
                                 }
                                 setGithubMode('items')
-                                setTaskResumeState({ githubMode: 'items' })
+                                if (!embedded) {
+                                  setTaskResumeState({ githubMode: 'items' })
+                                }
                                 handleSelectGithubTaskKind(mode.id)
                               }}
                               className={cn(
@@ -4059,7 +4119,7 @@ export default function TaskPage({
             )
           ) : taskSource === 'github' && githubMode === 'project' ? (
             <div className="mt-3 flex min-h-0 min-w-0 max-h-full flex-col overflow-hidden rounded-md border border-border/50 bg-muted/50 shadow-sm">
-              <ProjectViewWrapper />
+              <ProjectViewWrapper repoId={embeddedRepoId} />
             </div>
           ) : taskSource === 'github' &&
             taskViewMode === 'kanban' &&

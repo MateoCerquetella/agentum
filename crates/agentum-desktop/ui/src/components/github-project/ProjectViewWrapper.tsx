@@ -28,6 +28,11 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import GitHubItemDialog, { type GitHubItemDialogProjectOrigin } from '@/components/GitHubItemDialog'
 import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
 import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
+import {
+  clearBoardPick,
+  resolveBoardProject,
+  type BoardBindingState
+} from '@/lib/board-project-resolution'
 import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
 import { getLinkedWorkItemSuggestedName, type LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { useRepoSlugIndex } from '@/lib/repo-slug-index'
@@ -59,9 +64,18 @@ import {
 } from './project-dialog-state'
 import { classifyStartWorkRepoMatches } from './start-work-repo-match'
 
-type Props = Record<string, never>
+type Props = {
+  /** Spec 016: the hub that mounted this board. null = the standalone/global
+   *  surface — resolution then reads only the legacy `activeProject` slot. */
+  repoId?: string | null
+}
 
 const AGENTUM_FEATURE_REQUEST_URL = 'https://github.com/mateocerquetella/agentum/issues/new'
+
+// Stable identity for "no binding entry" so the resolver memo doesn't churn.
+// Standalone (repoId=null) always resolves through this; an embedded repo only
+// hits it in the frame before the hub effect writes its loading/loaded entry.
+const BINDING_ABSENT: BoardBindingState = { status: 'loaded', binding: null }
 
 function listProjectViewsForRuntime(
   settings: Parameters<typeof getActiveRuntimeTarget>[0],
@@ -75,7 +89,7 @@ function listProjectViewsForRuntime(
     : api.gh.listProjectViews(args)
 }
 
-export default function ProjectViewWrapper(_props: Props = {} as Props): React.JSX.Element {
+export default function ProjectViewWrapper({ repoId = null }: Props = {}): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const projectViewCache = useAppStore((s) => s.projectViewCache)
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
@@ -88,11 +102,41 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
   const { lookupSlug, ready: slugIndexReady } = useRepoSlugIndex()
   const mountedRef = useMountedRef()
 
-  const activeProject = settings?.githubProjects?.activeProject ?? null
+  // Spec 016: pick → binding → legacy, resolved per repo. Everything
+  // downstream of `activeProject` (view-list cache, cache keys, live refresh)
+  // is already project-keyed, so only this read changes.
+  const bindingEntry = useAppStore((s) => (repoId ? s.projectBindingByRepo[repoId] : undefined))
+  const bindingState = bindingEntry ?? BINDING_ABSENT
+  const resolution = useMemo(
+    () => resolveBoardProject({ repoId, settings: settings?.githubProjects, bindingState }),
+    [repoId, settings?.githubProjects, bindingState]
+  )
+  const activeProject = resolution.project
+  const boundProjectTitle =
+    bindingEntry?.status === 'loaded' ? (bindingEntry.binding?.projectTitle ?? null) : null
   const lastViewByProject = useMemo(
     () => settings?.githubProjects?.lastViewByProject ?? {},
     [settings?.githubProjects?.lastViewByProject]
   )
+
+  // D1's escape hatch: drop the per-repo pick so the resolver falls back to
+  // the bound project. Fresh getState() read — same discipline as
+  // handleSwitchView — so a concurrent settings mutation isn't clobbered.
+  const handleUseBoundProject = useCallback(async () => {
+    if (!repoId) {
+      return
+    }
+    const freshSettings = useAppStore.getState().settings
+    const prevSettings = freshSettings?.githubProjects ?? {
+      pinned: [],
+      recent: [],
+      lastViewByProject: {},
+      activeProject: null
+    }
+    await useAppStore.getState().updateSettings({
+      githubProjects: clearBoardPick(prevSettings, repoId)
+    })
+  }, [repoId])
 
   const [loading, setLoading] = useState(false)
   const fetchRunIdRef = useRef(0)
@@ -698,6 +742,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex min-w-0 flex-none flex-wrap items-center gap-2 border-b border-border/50 bg-muted/30 px-3 py-2">
         <ProjectPicker
+          repoId={repoId}
           activeProject={
             activeProject && table
               ? {
@@ -811,6 +856,30 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
         ) : null}
       </div>
 
+      {/* Divergence hint (spec 016 D1): the explicit pick wins the DISPLAY,
+          but status automation keeps writing to the server binding — say so,
+          non-blocking, with a one-click way back to the bound project. */}
+      {resolution.source === 'pick' && resolution.divergesFromBinding ? (
+        <div className="flex min-w-0 flex-none flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+          <span className="min-w-0 truncate">
+            This project&apos;s tracker binding is{' '}
+            <span className="font-medium">
+              {boundProjectTitle ??
+                `${resolution.divergesFromBinding.owner}/#${resolution.divergesFromBinding.number}`}
+            </span>{' '}
+            — status automation writes there.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 border-amber-500/40 bg-transparent px-2 text-[11px]"
+            onClick={() => void handleUseBoundProject()}
+          >
+            Use bound project
+          </Button>
+        </div>
+      ) : null}
+
       {activeProject
         ? (() => {
             const projectKey = `${activeProject.ownerType}:${activeProject.owner}:${activeProject.number}`
@@ -826,7 +895,11 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
           })()
         : null}
 
-      {!activeProject ? (
+      {resolution.source === 'pending' ? (
+        // Binding fetch in flight, no pick: hold on the skeleton rather than
+        // flashing the legacy project (or the empty prompt) and then swapping.
+        <ProjectTableSkeleton />
+      ) : !activeProject ? (
         <div className="flex flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
           Choose a project to get started.
         </div>
