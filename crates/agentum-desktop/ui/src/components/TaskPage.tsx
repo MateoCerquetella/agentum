@@ -267,6 +267,15 @@ export default function TaskPage({
 
   const [repoSelection, setRepoSelection] = useState<ReadonlySet<string>>(resolvedInitialSelection)
 
+  // #360: the GitHub-Projects board binding is per-repo. Only an unambiguous
+  // single-repo scope (the hub's Tasks tab, or an "open tasks for this repo"
+  // entry point) keys the binding; a multi-repo selection resolves/writes the
+  // legacy global project so the cross-repo board keeps its old behavior.
+  const projectBindingRepoId = useMemo(
+    () => (repoSelection.size === 1 ? [...repoSelection][0] : null),
+    [repoSelection]
+  )
+
   // Why: prune selection when a previously-selected repo is removed, and
   // preserve sticky-all (when the selection equaled every eligible repo
   // pre-change, keep it equal to every eligible repo post-change so "All
@@ -4059,7 +4068,7 @@ export default function TaskPage({
             )
           ) : taskSource === 'github' && githubMode === 'project' ? (
             <div className="mt-3 flex min-h-0 min-w-0 max-h-full flex-col overflow-hidden rounded-md border border-border/50 bg-muted/50 shadow-sm">
-              <ProjectViewWrapper />
+              <ProjectViewWrapper bindingRepoId={projectBindingRepoId} />
             </div>
           ) : taskSource === 'github' &&
             taskViewMode === 'kanban' &&

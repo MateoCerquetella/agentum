@@ -230,7 +230,17 @@ export type GitHubProjectSettings = {
     lastOpenedAt: string
   }[]
   lastViewByProject: Record<string, { viewId: string }>
+  /** Legacy single global board (#360): kept as a READ-ONLY migration
+   *  fallback so a pre-per-repo board survives the upgrade. Per-repo
+   *  surfaces never write it again — see `activeProjectByRepo`. */
   activeProject: { owner: string; ownerType: GitHubProjectOwnerType; number: number } | null
+  /** #360: the board is a per-project surface — the active GitHub Project is
+   *  keyed by `Repo.id`. Optional (add-only widen) so persisted profiles and
+   *  the existing default-object literals stay valid without a migration. */
+  activeProjectByRepo?: Record<
+    string,
+    { owner: string; ownerType: GitHubProjectOwnerType; number: number }
+  >
 }
 
 // ─── Classified errors ─────────────────────────────────────────────────

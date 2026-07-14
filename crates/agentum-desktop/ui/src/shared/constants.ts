@@ -243,7 +243,6 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     showGitIgnoredFiles: true,
     sourceControlViewMode: 'list',
     showTitlebarAppName: true,
-    showTasksButton: true,
     showMobileButton: true,
     ctrlTabOrderMode: 'mru',
     // Why: switching worktrees and opening command surfaces from a focused
@@ -321,7 +320,8 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
       pinned: [],
       recent: [],
       lastViewByProject: {},
-      activeProject: null
+      activeProject: null,
+      activeProjectByRepo: {}
     },
     // Why: default-on uses the user's default agent when it supports
     // non-interactive commit-message generation. Keep agent/model maps empty

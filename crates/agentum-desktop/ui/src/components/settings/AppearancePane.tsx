@@ -288,19 +288,6 @@ export function AppearancePane({
 
         <div className="divide-y divide-border/40">
           <SearchableSetting
-            title="Show Tasks Button"
-            description="Show the Tasks button at the top of the left sidebar."
-            keywords={['tasks', 'sidebar', 'button', 'hide', 'show', 'github', 'linear']}
-          >
-            <SettingsSwitchRow
-              label="Show Tasks Button"
-              description="Show the Tasks button at the top of the left sidebar."
-              checked={settings.showTasksButton}
-              onChange={() => updateSettings({ showTasksButton: !settings.showTasksButton })}
-            />
-          </SearchableSetting>
-
-          <SearchableSetting
             title="Show Agentum Mobile Button"
             description="Show the Agentum Mobile button at the top of the left sidebar."
             keywords={['mobile', 'phone', 'sidebar', 'button', 'hide', 'show', 'toolbox']}

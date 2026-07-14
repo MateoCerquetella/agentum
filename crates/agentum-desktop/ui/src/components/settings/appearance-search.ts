@@ -119,11 +119,6 @@ export const STATUS_BAR_ENTRIES: SettingsSearchEntry[] = STATUS_BAR_TOGGLES.map(
 
 export const SIDEBAR_ENTRIES: SettingsSearchEntry[] = [
   {
-    title: 'Show Tasks Button',
-    description: 'Show the Tasks button at the top of the left sidebar.',
-    keywords: ['tasks', 'sidebar', 'button', 'hide', 'show', 'github', 'linear']
-  },
-  {
     title: 'Show Agentum Mobile Button',
     description: 'Show the Agentum Mobile button at the top of the left sidebar.',
     keywords: ['mobile', 'phone', 'sidebar', 'button', 'hide', 'show', 'toolbox']

@@ -1,6 +1,6 @@
 import React, { useCallback, useDeferredValue, useMemo, useState } from 'react'
 import {
-  Columns3,
+  FolderGit2,
   MessagesSquare,
   Palette,
   Radar,
@@ -63,7 +63,7 @@ export default function CommandPalette(): React.JSX.Element {
   const openModal = useAppStore((s) => s.openModal)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
-  const openTaskPage = useAppStore((s) => s.openTaskPage)
+  const openProjectsPage = useAppStore((s) => s.openProjectsPage)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
   const repos = useAppStore((s) => s.repos)
@@ -101,11 +101,13 @@ export default function CommandPalette(): React.JSX.Element {
       run: go(openHarnessPage)
     },
     {
-      id: 'view-board',
-      label: 'Board',
-      hint: 'GitHub / GitLab / Linear issues',
-      icon: Columns3,
-      run: go(() => openTaskPage())
+      // #360: the Board left the rail — a project's board lives in its hub
+      // (Projects → hub → Tasks tab), so the palette routes there instead.
+      id: 'view-projects',
+      label: 'Projects',
+      hint: 'Your projects — each with its Chat / Wiki / Board',
+      icon: FolderGit2,
+      run: go(openProjectsPage)
     },
     {
       id: 'view-color-theme',

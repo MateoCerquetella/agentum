@@ -2027,10 +2027,6 @@ export type GlobalSettings = {
   sourceControlViewMode: SourceControlViewMode
   /** Whether to show the Agentum app name in the titlebar. */
   showTitlebarAppName: boolean
-  /** Why: some users do not use the Tasks feature and prefer to keep the
-   *  left sidebar free of its button entirely. Hiding the button here also
-   *  removes it from keyboard navigation. */
-  showTasksButton: boolean
   /** Why: Agentum Mobile remains reachable from the toolbox; this only controls
    *  whether the top-level sidebar shortcut is shown. */
   showMobileButton?: boolean

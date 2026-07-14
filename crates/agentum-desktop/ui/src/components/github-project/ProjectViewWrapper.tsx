@@ -32,6 +32,7 @@ import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
 import { getLinkedWorkItemSuggestedName, type LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { useRepoSlugIndex } from '@/lib/repo-slug-index'
 import { cn } from '@/lib/utils'
+import { resolveActiveProject } from '@/shared/active-project-binding'
 import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
@@ -59,7 +60,11 @@ import {
 } from './project-dialog-state'
 import { classifyStartWorkRepoMatches } from './start-work-repo-match'
 
-type Props = Record<string, never>
+type Props = {
+  /** The repo whose per-project board this view shows (#360) — null for the
+   *  multi-repo board, which resolves/writes the legacy global selection. */
+  bindingRepoId: string | null
+}
 
 const AGENTUM_FEATURE_REQUEST_URL = 'https://github.com/mateocerquetella/agentum/issues/new'
 
@@ -75,7 +80,7 @@ function listProjectViewsForRuntime(
     : api.gh.listProjectViews(args)
 }
 
-export default function ProjectViewWrapper(_props: Props = {} as Props): React.JSX.Element {
+export default function ProjectViewWrapper({ bindingRepoId }: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const projectViewCache = useAppStore((s) => s.projectViewCache)
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
@@ -88,7 +93,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
   const { lookupSlug, ready: slugIndexReady } = useRepoSlugIndex()
   const mountedRef = useMountedRef()
 
-  const activeProject = settings?.githubProjects?.activeProject ?? null
+  const activeProject = resolveActiveProject(settings?.githubProjects, bindingRepoId)
   const lastViewByProject = useMemo(
     () => settings?.githubProjects?.lastViewByProject ?? {},
     [settings?.githubProjects?.lastViewByProject]
@@ -714,6 +719,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
                   }
                 : null
           }
+          bindingRepoId={bindingRepoId}
           onSelect={handleSelect}
         />
         {currentProjectViewKey ? (

@@ -4,8 +4,9 @@
 // tab embeds the existing full-page surface pinned to the hub's repo (Chat's
 // workspace picker, Wiki's projects rail, and the Board's repo filter collapse
 // into the hub's single project scope), so the hub adds navigation, not a
-// parallel implementation. The rail's Chat / Wiki / Board entries stay the
-// global, cross-project views.
+// parallel implementation. Since #360 the hub is the Board's only nav anchor —
+// the rail's Board entry is gone and each project's Tasks tab shows the
+// tracker bound to THAT repo (activeProjectByRepo).
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { ChevronLeft } from 'lucide-react'
 
@@ -16,6 +17,7 @@ import { useActiveRepo, useWorktreesForRepo } from '@/store/selectors'
 import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 import { cn } from '@/lib/utils'
 import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
+import { isActiveProjectFor, withActiveProjectSelection } from '@/shared/active-project-binding'
 import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
@@ -75,15 +77,17 @@ export default function ProjectHubPage(): React.JSX.Element {
   }, [repo, tab, taskDataSeeded])
 
   // When this project is bound to a GitHub Projects v2 board, make that Project
-  // the active one and open the Tasks tab in project mode — so the tab shows the
-  // board's REAL Status columns (Backlog / In progress / QA / …) through the
-  // existing ProjectViewWrapper, instead of the coarse open/closed issue Kanban.
-  // Unbound repos no-op (the binding is null), so their issue board is unchanged.
-  // Relies on the repo-slug resolver (#315) to load the per-repo binding.
+  // the active one FOR THIS REPO and open the Tasks tab in project mode — so the
+  // tab shows the board's REAL Status columns (Backlog / In progress / QA / …)
+  // through the existing ProjectViewWrapper, instead of the coarse open/closed
+  // issue Kanban. Unbound repos no-op (the binding is null), so their issue
+  // board is unchanged. `repoId` makes the binding read host-aware (spec 020 /
+  // review SF1): an SSH repo's slug resolves on its own host, so a bound remote
+  // repo's Tasks tab auto-enters board mode too.
   useEffect(() => {
     if (!repo?.path || tab !== 'tasks' || !isGitRepoKind(repo)) return
     let cancelled = false
-    void getProjectBinding({ workdir: repo.path })
+    void getProjectBinding({ workdir: repo.path, repoId: repo.id })
       .then((res) => {
         if (cancelled) return
         const b = res.binding
@@ -103,18 +107,14 @@ export default function ProjectHubPage(): React.JSX.Element {
           lastViewByProject: {},
           activeProject: null
         }
-        const active = gh.activeProject
-        if (
-          active &&
-          active.owner === owner &&
-          active.ownerType === ownerType &&
-          active.number === number
-        ) {
-          return // already the active project — skip a redundant settings write
+        const ref = { owner, ownerType, number }
+        if (isActiveProjectFor(gh, repo.id, ref)) {
+          return // already this repo's resolved project — skip a redundant settings write
         }
-        void s.updateSettings({
-          githubProjects: { ...gh, activeProject: { owner, ownerType, number } }
-        })
+        // #360: the write lands in activeProjectByRepo[repo.id] only — opening
+        // project A's hub must never repoint project B's board (or the legacy
+        // global fallback other repos still read).
+        void s.updateSettings({ githubProjects: withActiveProjectSelection(gh, repo.id, ref) })
       })
       .catch(() => {
         // A binding-load failure just leaves the default Tasks view (no board).

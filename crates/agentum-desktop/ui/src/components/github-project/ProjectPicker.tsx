@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
+import { withActiveProjectSelection } from '@/shared/active-project-binding'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
@@ -40,6 +41,10 @@ type Props = {
     number: number
     title?: string
   } | null
+  /** Repo scope for persisting the pick (#360): a repo-scoped pick lands in
+   *  `activeProjectByRepo` only; null (multi-repo board) keeps the legacy
+   *  global write. */
+  bindingRepoId: string | null
   onSelect: (selection: ResolvedProjectSelection) => void
 }
 
@@ -91,7 +96,11 @@ async function resolveProjectRefForRuntime(
     : api.gh.resolveProjectRef({ input })
 }
 
-export default function ProjectPicker({ activeProject, onSelect }: Props): React.JSX.Element {
+export default function ProjectPicker({
+  activeProject,
+  bindingRepoId,
+  onSelect
+}: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const mountedRef = useMountedRef()
@@ -205,16 +214,11 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
         if (selection.viewId) {
           lastViewByProject[key] = { viewId: selection.viewId }
         }
-        return {
-          ...prev,
-          recent,
-          lastViewByProject,
-          activeProject: {
-            owner: selection.owner,
-            ownerType: selection.ownerType,
-            number: selection.projectNumber
-          }
-        }
+        return withActiveProjectSelection({ ...prev, recent, lastViewByProject }, bindingRepoId, {
+          owner: selection.owner,
+          ownerType: selection.ownerType,
+          number: selection.projectNumber
+        })
       })
       if (!mountedRef.current) {
         return
@@ -225,7 +229,7 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
       setViewPickFor(null)
       void title
     },
-    [mountedRef, onSelect, updateProjectSettings]
+    [bindingRepoId, mountedRef, onSelect, updateProjectSettings]
   )
 
   const handleChooseProject = useCallback(
