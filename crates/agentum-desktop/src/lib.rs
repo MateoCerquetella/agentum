@@ -509,6 +509,7 @@ pub fn run() {
             gh::gh_list_labels_by_slug,
             gh::gh_list_assignable_users_by_slug,
             gh_projects::gh_get_project_view_table,
+            gh_projects::gh_issue_project_status,
             gh_projects::gh_update_project_item_field,
             gh_projects::gh_clear_project_item_field,
             gh::gh_update_issue_type_by_slug,

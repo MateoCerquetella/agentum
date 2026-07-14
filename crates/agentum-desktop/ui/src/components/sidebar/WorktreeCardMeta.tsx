@@ -19,6 +19,7 @@ import {
 } from './WorktreeCardDetailSection'
 import { IssueStateBadge, LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
 import { TrackerPhaseChip } from './TrackerPhaseChip'
+import { IssueProjectStatusChip, useIssueProjectStatus } from './IssueProjectStatusChip'
 import type { IssueInfo } from '../../../../shared/types'
 
 export type WorktreeCardIssueDisplay =
@@ -57,6 +58,10 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
    *  row. Optional — callers without a worktree context render no chip. */
   worktreeId?: string
   trackerPhase?: string | null
+  /** Spec 018 (#365): the repo the linked issue lives in, for the on-open
+   *  Project-status read (binding lookup). Optional — no chip without them. */
+  workdir?: string
+  repoId?: string
   onEditIssue: (event: React.MouseEvent) => void
   onEditComment: (event: React.MouseEvent) => void
   onOpenGitHubIssueInAgentum?: (event: React.MouseEvent) => void
@@ -225,12 +230,20 @@ export function WorktreeCardDetailsHover({
   detailsAfter,
   worktreeId,
   trackerPhase,
+  workdir,
+  repoId,
   onEditIssue,
   onEditComment,
   onOpenGitHubIssueInAgentum,
   onOpenLinearIssueInAgentum
 }: WorktreeCardDetailsHoverProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
+  const projectStatus = useIssueProjectStatus({
+    open,
+    issueUrl: issue?.url,
+    workdir,
+    repoId
+  })
   const dismissAndRun = React.useCallback(
     (handler: ((event: React.MouseEvent) => void) | undefined) => (event: React.MouseEvent) => {
       setOpen(false)
@@ -311,7 +324,7 @@ export function WorktreeCardDetailsHover({
                 <div className="text-[13px] font-semibold leading-snug text-foreground break-words">
                   {issue.title}
                 </div>
-                {(issue.state || issueLabels.length > 0 || worktreeId) && (
+                {(issue.state || issueLabels.length > 0 || worktreeId || projectStatus) && (
                   <div className="flex flex-wrap gap-1">
                     {issue.state && <IssueStateBadge state={issue.state} />}
                     {/* Spec 014 F2: the pipeline-phase chip, distinct from the
@@ -319,6 +332,9 @@ export function WorktreeCardDetailsHover({
                     {worktreeId && (
                       <TrackerPhaseChip worktreeId={worktreeId} persistedPhase={trackerPhase} />
                     )}
+                    {/* Spec 018 (#365): the bound GitHub Project's Status column
+                        for this issue; renders nothing when unbound / off-project. */}
+                    <IssueProjectStatusChip status={projectStatus} />
                     {issueLabels.map((label) => (
                       <Badge key={label} variant="outline" className="h-4 px-1.5 text-[9px]">
                         {label}

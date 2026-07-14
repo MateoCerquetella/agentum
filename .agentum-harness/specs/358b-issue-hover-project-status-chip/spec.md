@@ -2,8 +2,9 @@
 
 > Split out of spec `358-the-sdd-loop-sohuld-inject-itself-10-tim` at the PM
 > gate 2026-07-13 (it was a rider added mid-run by Mateo; bundling it with the
-> SDD-loop slice violated the one-slice rule). **Not yet PM-gated — run this
-> spec through its own PM gate before building.** Full SDD document (contains
+> SDD-loop slice violated the one-slice rule). **PM-gated 2026-07-14 as its own SDD spec:
+> `ai/specs/018-issue-hover-project-status-chip/spec.md` — that document
+> supersedes this stub.** Original bundled SDD document (contains
 > both halves): `ai/specs/016-sdd-loop-checkin-and-issue-project-status/spec.md`.
 > Tracker: https://github.com/MateoCerquetella/agentum/issues/365 (opened at
 > the 016 review sign-off; the rider originally lived in-thread on issue #358).
