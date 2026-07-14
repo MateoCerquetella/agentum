@@ -1,14 +1,30 @@
 import type React from 'react'
-import { ChevronDown, Monitor, Server, SquareTerminal } from 'lucide-react'
+import { ChevronDown, Loader2, Monitor, Server, ServerOff, SquareTerminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { STATUS_LABELS } from '@/components/settings/SshTargetCard'
 import type { SidebarHost } from './worktree-list-groups'
 
 const STATUS_DOT: Record<NonNullable<SidebarHost['status']>, string> = {
   reachable: 'bg-emerald-500',
   connecting: 'bg-amber-500',
-  down: 'bg-zinc-400',
+  // Red, not zinc: a down host must read as an outage at a glance — the old
+  // grey dot was indistinguishable from "unknown" while sessions looked dead.
+  down: 'bg-red-500',
   unknown: 'bg-zinc-300'
+}
+
+/** Short wording for the down-line. 'disconnected' is a deliberate/idle state
+ *  (muted), everything else is an outage (red) — mirrors settings statusColor. */
+function downLabel(sshStatus: SidebarHost['sshStatus']): string {
+  switch (sshStatus) {
+    case 'disconnected':
+      return 'Disconnected'
+    case 'auth-failed':
+      return 'Auth failed'
+    default:
+      return 'Host unreachable'
+  }
 }
 
 // Drop IPv4/IPv6 literals from the host detail so the address isn't exposed at a
@@ -39,7 +55,8 @@ export function HostGroupHeader({
   count,
   collapsed,
   onToggle,
-  onOpenTmuxSessions
+  onOpenTmuxSessions,
+  onReconnect
 }: {
   host: SidebarHost
   count: number
@@ -48,9 +65,26 @@ export function HostGroupHeader({
   /** Open the tmux sessions modal for this host. Always shown for SSH hosts;
    *  shown for the local host when tmux is in use. */
   onOpenTmuxSessions?: () => void
+  /** Reconnect the SSH transport for this host. Rendered as an inline action
+   *  on the down-line; the store flips to 'connecting' as soon as the attempt
+   *  starts, so this header re-renders into the spinner state on its own. */
+  onReconnect?: () => void | Promise<void>
 }): React.JSX.Element {
   const Icon = host.kind === 'ssh' ? Server : Monitor
   const status = host.status ?? 'unknown'
+  const isSshDown = host.kind === 'ssh' && status === 'down'
+  const isSshConnecting = host.kind === 'ssh' && status === 'connecting'
+  const downTone =
+    host.sshStatus === 'disconnected' ? 'text-muted-foreground' : 'text-red-400'
+
+  const handleReconnectClick = (e: React.MouseEvent): void => {
+    // Reconnect must never toggle the section collapse. No local busy flag:
+    // the store flips to 'connecting' as the attempt starts, which swaps this
+    // button out for the spinner line (also keeps this component hook-free so
+    // tests can invoke it directly).
+    e.stopPropagation()
+    void onReconnect?.()
+  }
   return (
     <div
       role="button"
@@ -97,7 +131,52 @@ export function HostGroupHeader({
             </Tooltip>
           ) : null}
         </span>
-        {host.detail ? (
+        {isSshDown || isSshConnecting ? (
+          // The transport line replaces the host detail while the connection
+          // is anything but healthy: an unavailable host must say so where the
+          // user is looking (the sidebar), not only in the status bar.
+          <span className="flex min-w-0 items-center gap-1 text-[11px]">
+            {isSshConnecting ? (
+              <Loader2 className="size-3 shrink-0 animate-spin text-amber-500" />
+            ) : (
+              <ServerOff className={cn('size-3 shrink-0', downTone)} />
+            )}
+            {isSshDown && host.sshError ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={cn('cursor-help truncate', downTone)}>
+                    {downLabel(host.sshStatus)}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={4}>
+                  {host.sshError}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className={cn('truncate', isSshConnecting ? 'text-muted-foreground' : downTone)}>
+                {isSshConnecting
+                  ? STATUS_LABELS[host.sshStatus ?? 'connecting']
+                  : downLabel(host.sshStatus)}
+              </span>
+            )}
+            {isSshDown && onReconnect ? (
+              <button
+                type="button"
+                onClick={handleReconnectClick}
+                onKeyDown={(e) => {
+                  // Keep Enter/Space from bubbling into the row's toggle handler.
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.stopPropagation()
+                  }
+                }}
+                className="shrink-0 rounded px-1 py-px text-[11px] font-medium text-foreground hover:bg-sidebar-accent"
+                aria-label={`Reconnect to ${host.label}`}
+              >
+                Reconnect
+              </button>
+            ) : null}
+          </span>
+        ) : host.detail ? (
           hasRedactedIp(host.detail) ? (
             // IP dropped from the line; hover reveals the real address.
             <Tooltip>

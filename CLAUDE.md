@@ -506,10 +506,16 @@ Test) → browser QA gate green → ticket Done. The pieces:
   unit-green→ReadyToTest, QA-green→Done; planning sets Todo. Linear uses
   workflow-state transitions (`linear::transition_issue` + `LinearStateMap`,
   resolved by name); the internal Board moves card `status`
-  (todo/doing/review/done); GitHub is a logged no-op for now. **Best-effort by
+  (todo/doing/review/done); GitHub flips the canonical `status/*` label on the
+  issue (and, when the repo is board-bound, moves the ProjectV2 card too —
+  `github_transition_with_board`). **Best-effort by
   contract**: a tracker hiccup is logged (`HarnessEvent::Log`), never halts the
   run. Each `Feature` carries `tracker_provider`/`tracker_url`, threaded from the
   goal's task sink in `routes::board_goals::plan_goal_harness`.
+  The harness engine fires these transitions itself; SDD-playbook-driven agents
+  fire them via the `agentum_report_status` MCP tool — the playbooks record the
+  ticket as `tracker:` in the spec frontmatter (`sdd-spec*`) and mirror every
+  phase transition to it (`sdd-orchestrate`'s "Tracker status" section).
 - **Linear state names** are configurable: `LinearStateMap` defaults to
   Todo / In Progress / Ready to Test / Done, overridable via the `linear.json`
   `state_map` (written by Settings) and `AGENTUM_LINEAR_STATE_*` env (highest

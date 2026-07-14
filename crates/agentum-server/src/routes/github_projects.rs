@@ -8,11 +8,11 @@
 //!
 //! A separate module from `routes/github.rs` (the issue surface) — the
 //! `git.rs`-decomposition precedent. All routes authed (no `is_public`
-//! changes). Slug resolution reuses `board_goals::resolve_github_slug` via the
-//! same `{workdir, slug?}` pattern every github.rs route uses; the file stays
+//! changes). Slug resolution goes through the shared, host-aware
+//! `util::resolve_tracker_slug` via the same `{workdir, slug?, repoId?}`
+//! pattern every github.rs route uses (spec 020 F1); the file stays
 //! snake_case while these DTOs are the camelCase wire twins.
 
-use agentum_core::{HostKind, LOCAL_HOST_ID};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
@@ -37,59 +37,6 @@ pub fn router() -> Router<AppState> {
             "/api/github/project-binding",
             get(get_binding).put(put_binding).delete(delete_binding),
         )
-}
-
-/// Resolve the repo slug the binding is keyed on — the exact
-/// `{workdir, slug?}` contract of the sibling github.rs routes, including the
-/// typed `no_github_repo` 422 the UI already branches on. Host-aware: a
-/// `host_id` reads the origin on that host (`git_in_dir` execs remotely for
-/// SSH); absent = the local machine, byte-for-byte the old behavior.
-async fn resolve_slug(
-    state: &AppState,
-    workdir: &str,
-    slug_hint: Option<&str>,
-    host_id: Option<uuid::Uuid>,
-) -> Result<String, ApiError> {
-    let workdir = workdir.trim();
-    if workdir.is_empty() {
-        return Err(ApiError::BadRequest("`workdir` is required".into()));
-    }
-    let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
-    let host = state
-        .store
-        .get_host(host_id)
-        .await?
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
-    // Expand `~`/trailing-slash before the git read. `resolve_github_slug` runs
-    // `git -C <workdir>` with no shell, so a stored `~/…` project path is passed
-    // literally and git can't cd into it — the origin read fails and the binding
-    // dead-ends on a spurious `no_github_repo`. Local host only: `expand_workdir`
-    // resolves against THIS machine's $HOME, which is meaningless for a remote
-    // path — an SSH host's own side handles its paths.
-    let workdir = if matches!(host.kind, HostKind::Ssh { .. }) {
-        workdir.to_string()
-    } else {
-        super::util::expand_workdir(workdir)?
-            .to_string_lossy()
-            .into_owned()
-    };
-    super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
-        .await
-        .map_err(|reason| {
-            // Keep the `no_github_repo` code the UI branches on, but carry the
-            // real reason in the message — a repo whose `origin` isn't a GitHub
-            // remote must not be indistinguishable from an unreachable host.
-            let message = match reason {
-                super::board_goals::SlugReason::NoGithubRemote =>
-                    "no GitHub repo resolved for this project — its folder has no `origin` remote pointing at GitHub",
-                super::board_goals::SlugReason::HostUnreachable =>
-                    "no GitHub repo resolved for this project — could not read the repo's git origin",
-            };
-            ApiError::Custom(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                json!({ "error": { "code": "no_github_repo", "message": message } }),
-            )
-        })
 }
 
 /// Map a classified discovery failure onto the wire: `scope_missing` rides the
@@ -304,8 +251,12 @@ async fn discover_binding(
 pub struct BindingQuery {
     pub workdir: String,
     pub slug: Option<String>,
-    /// Host the workdir lives on (SSH repos); absent = local.
-    pub host_id: Option<uuid::Uuid>,
+    /// Spec 020 F1: resolve the slug on this registered repo's host instead
+    /// of the local one. Absent = local (pre-020 behavior byte-for-byte).
+    /// Subsumes #359's `host_id` param at the develop merge — the wire
+    /// identity is the repo, never a client-asserted host (020 D1).
+    #[serde(default, rename = "repoId")]
+    pub repo_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -315,15 +266,21 @@ struct GetBindingResponse {
     binding: Option<BindingDto>,
 }
 
-/// `GET /api/github/project-binding?workdir=…&slug=…&host_id=…` — the repo's
-/// binding, fresh from disk (`null` when unbound). Host-aware reads only:
-/// bindings are keyed by slug, so an SSH repo resolves to the same binding its
-/// local clone configured.
+/// `GET /api/github/project-binding?workdir=…&slug=…&repoId=…` — the repo's
+/// binding, fresh from disk (`null` when unbound). Host-aware via `repoId`
+/// (#356/#359 merged into the spec 020 wire): bindings are keyed by slug, so
+/// an SSH repo resolves to the same binding its local clone configured.
 async fn get_binding(
     State(state): State<AppState>,
     Query(q): Query<BindingQuery>,
 ) -> Result<Json<GetBindingResponse>, ApiError> {
-    let slug = resolve_slug(&state, &q.workdir, q.slug.as_deref(), q.host_id).await?;
+    let slug = super::util::resolve_tracker_slug(
+        &state,
+        q.repo_id.as_deref(),
+        &q.workdir,
+        q.slug.as_deref(),
+    )
+    .await?;
     let binding = github_projects::binding_for_slug(&slug);
     Ok(Json(GetBindingResponse {
         slug,
@@ -337,6 +294,10 @@ struct PutBindingRequest {
     workdir: String,
     #[serde(default)]
     slug: Option<String>,
+    /// Spec 020 F1: resolve the slug on this registered repo's host instead
+    /// of the local one. Absent = local (pre-020 behavior byte-for-byte).
+    #[serde(default)]
+    repo_id: Option<String>,
     project_id: String,
     status_field_id: String,
     status_mapping: StatusMappingDto,
@@ -377,9 +338,13 @@ async fn put_binding(
     }
     let status_mapping =
         validate_status_mapping(&body.status_mapping).map_err(ApiError::BadRequest)?;
-    // Deliberately local-only (no host_id): configuring a binding stays a
-    // local-repo affordance; the slug-keyed binding then serves SSH copies too.
-    let slug = resolve_slug(&state, &body.workdir, body.slug.as_deref(), None).await?;
+    let slug = super::util::resolve_tracker_slug(
+        &state,
+        body.repo_id.as_deref(),
+        &body.workdir,
+        body.slug.as_deref(),
+    )
+    .await?;
     let binding = BoardBinding {
         project_id: body.project_id.trim().to_string(),
         status_field_id: body.status_field_id.trim().to_string(),
@@ -412,8 +377,13 @@ async fn delete_binding(
     State(state): State<AppState>,
     Query(q): Query<BindingQuery>,
 ) -> Result<StatusCode, ApiError> {
-    // Local-only like PUT — unbind is a configuration write.
-    let slug = resolve_slug(&state, &q.workdir, q.slug.as_deref(), None).await?;
+    let slug = super::util::resolve_tracker_slug(
+        &state,
+        q.repo_id.as_deref(),
+        &q.workdir,
+        q.slug.as_deref(),
+    )
+    .await?;
     github_projects::remove_binding(&slug).map_err(ApiError::Internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -473,6 +443,32 @@ mod tests {
         assert_eq!(req.project_id, "PVT_1");
         assert_eq!(req.status_mapping.in_progress, "i");
         assert_eq!(req.done_closes_issue, None, "absent knob stays None → ON");
+        // Spec 020 F1: absent repoId deserializes to None — the local
+        // regression pin at the wire (pre-020 requests are byte-identical).
+        assert_eq!(req.repo_id, None);
+
+        let with_repo: PutBindingRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/repo",
+            "repoId": "r-1",
+            "projectId": "PVT_1",
+            "statusFieldId": "PVTSSF_1",
+            "statusMapping": {
+                "todo": "t", "inProgress": "i", "readyToTest": "r",
+                "done": "d", "blocked": "b"
+            }
+        }))
+        .unwrap();
+        assert_eq!(with_repo.repo_id.as_deref(), Some("r-1"));
+
+        // The GET/DELETE query twin: camelCase `repoId`, absent → None.
+        let q: BindingQuery = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/repo", "repoId": "r-1"
+        }))
+        .unwrap();
+        assert_eq!(q.repo_id.as_deref(), Some("r-1"));
+        let q: BindingQuery =
+            serde_json::from_value(serde_json::json!({ "workdir": "/tmp/repo" })).unwrap();
+        assert_eq!(q.repo_id, None);
 
         let discover: DiscoverRequest = serde_json::from_value(serde_json::json!({
             "owner": "acme", "ownerType": "user", "number": 3

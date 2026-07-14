@@ -15,6 +15,7 @@ Spec:    NNN-name  —  "<one-line goal>"
 Role:    <role>
 Phase:   <phase>
 Mode:    <hitl | autonomous>
+Tracker: <`tracker:` URL from the spec frontmatter — omit the line when absent>
 
 Recent decisions:
   - YYYY-MM-DD | <role> | <decision>

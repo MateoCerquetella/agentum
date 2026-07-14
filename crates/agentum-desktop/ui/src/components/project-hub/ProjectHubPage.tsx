@@ -6,11 +6,12 @@
 // into the hub's single project scope), so the hub adds navigation, not a
 // parallel implementation. The rail's Chat / Wiki / Board entries stay the
 // global, cross-project views.
-import React, { lazy, Suspense, useEffect, useMemo } from 'react'
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { ChevronLeft } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import type { AppState } from '@/store/types'
+import type { Repo } from '@/shared/types'
 import { useActiveRepo, useWorktreesForRepo } from '@/store/selectors'
 import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 import { cn } from '@/lib/utils'
@@ -20,6 +21,7 @@ import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 import { getProjectBinding } from '@/runtime/github-projects-client'
 import { ProjectSessionsList } from './ProjectSessionsList'
+import { TrackerIntakePanel } from './TrackerIntakePanel'
 
 // Lazy like App.tsx's page mounts: the hub chunk stays small and each surface
 // loads on first tab visit (Chat/Wiki/TaskPage are already split chunks).
@@ -235,7 +237,7 @@ export default function ProjectHubPage(): React.JSX.Element {
           {tab === 'chat' ? <ChatPage key={repo.id} pinnedRepo={repo} /> : null}
           {tab === 'wiki' ? <WikiPage key={repo.id} pinnedRepoId={repo.id} /> : null}
           {tab === 'tasks' && taskDataSeeded ? <TaskPage key={repo.id} embedded /> : null}
-          {tab === 'tracker' ? <ProjectTrackerConfig key={repo.id} path={repo.path} /> : null}
+          {tab === 'tracker' ? <ProjectTrackerConfig key={repo.id} repo={repo} /> : null}
           {tab === 'sessions' ? <ProjectSessionsList repoId={repo.id} /> : null}
         </Suspense>
       </div>
@@ -249,8 +251,15 @@ export default function ProjectHubPage(): React.JSX.Element {
  * project's workdir — so no repo `<select>` is needed. This is where a project
  * configures which GitHub Project (+ status mapping) tracks its issues; the
  * wizard's issue picker then reads that per-repo binding.
+ *
+ * Spec 015 F3: the config half gains a doing half — `TrackerIntakePanel`, a
+ * SIBLING that turns written intent into a filed GitHub/Linear issue (and,
+ * for a local GitHub issue, a pre-armed gated run). `onBound` bumps
+ * `bindingVersion` so a freshly saved binding re-resolves the panel's provider
+ * without a tab remount.
  */
-function ProjectTrackerConfig({ path }: { path: string | undefined }): React.JSX.Element {
+function ProjectTrackerConfig({ repo }: { repo: Repo }): React.JSX.Element {
+  const [bindingVersion, setBindingVersion] = useState(0)
   return (
     <div className="mx-auto h-full max-w-2xl overflow-y-auto px-6 py-6">
       <div className="rounded-lg border border-border bg-card p-4">
@@ -261,8 +270,12 @@ function ProjectTrackerConfig({ path }: { path: string | undefined }): React.JSX
           open issues.
         </p>
         <div className="mt-3">
-          {path ? (
-            <ProjectBindingEditor workdir={path} />
+          {repo.path ? (
+            <ProjectBindingEditor
+              workdir={repo.path}
+              repoId={repo.id}
+              onBound={() => setBindingVersion((v) => v + 1)}
+            />
           ) : (
             // A project with no resolvable workdir (a remote/unmapped repo)
             // can't bind a board here — bindings resolve through the local `gh`.
@@ -272,6 +285,11 @@ function ProjectTrackerConfig({ path }: { path: string | undefined }): React.JSX
           )}
         </div>
       </div>
+      {repo.path ? (
+        <div className="mt-4">
+          <TrackerIntakePanel repo={repo} bindingVersion={bindingVersion} />
+        </div>
+      ) : null}
     </div>
   )
 }

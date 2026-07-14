@@ -12,6 +12,7 @@
 //! window); everything else — list/add/update/create/clone/remove/reorder and
 //! the base-ref helpers — is here.
 
+use super::board_goals::SlugReason;
 use super::util::now_millis;
 use std::path::{Path as StdPath, PathBuf};
 
@@ -19,6 +20,7 @@ use agentum_core::{Host, LOCAL_HOST_ID};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -38,6 +40,7 @@ pub fn router() -> Router<crate::AppState> {
         .route("/api/repos/{id}/base-ref-default", get(base_ref_default))
         .route("/api/repos/{id}/base-refs", get(base_refs))
         .route("/api/repos/{id}/base-ref-details", get(base_ref_details))
+        .route("/api/repos/{id}/slug", get(repo_slug))
 }
 
 /// Keystone of the repo registry. `extra` round-trips fields this layer doesn't
@@ -83,8 +86,19 @@ fn registry_path() -> Result<PathBuf, ApiError> {
 /// the project identity). Tolerant: an unreadable registry → empty table.
 pub(crate) fn scope_repo_pairs() -> Vec<(String, String)> {
     read_repos()
-        .map(|repos| repos.into_iter().map(|r| (r.id, r.path)).collect())
+        .map(scope_pairs_locals_first)
         .unwrap_or_default()
+}
+
+/// Pure core of [`scope_repo_pairs`]: local entries first (stable), so a
+/// bare-path browser scope on a spec-015 dual entry (same path, local +
+/// remote) resolves to the LOCAL id — a local Chromium can only ever serve
+/// local checkouts, and a registry reorder must not silently migrate which
+/// id keys its profile.
+fn scope_pairs_locals_first(mut repos: Vec<Repo>) -> Vec<(String, String)> {
+    // sort_by_key is stable: locals keep registry order, then remotes in order.
+    repos.sort_by_key(|repo| repo.connection_id.is_some());
+    repos.into_iter().map(|r| (r.id, r.path)).collect()
 }
 
 fn read_repos() -> Result<Vec<Repo>, ApiError> {
@@ -122,17 +136,22 @@ fn basename(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Adds `path` to the registry (idempotent by path) and returns the Repo. Shared
-/// by add/create/clone so registration stays in one place.
-fn append_repo(
+/// Pure core of registration (spec 015 D6): a repo's identity is WHERE it
+/// lives (its desktop connection, `None` = local) plus its path there.
+/// Returns the existing entry for (path, connection_id) or appends a new
+/// one; `true` = appended (the caller persists).
+fn register_repo(
+    repos: &mut Vec<Repo>,
     path: String,
     kind: Option<String>,
     connection_id: Option<String>,
     host_id: Option<Uuid>,
-) -> Result<Repo, ApiError> {
-    let mut repos = read_repos()?;
-    if let Some(existing) = repos.iter().find(|repo| repo.path == path) {
-        return Ok(existing.clone());
+) -> (Repo, bool) {
+    if let Some(existing) = repos
+        .iter()
+        .find(|repo| repo.path == path && repo.connection_id == connection_id)
+    {
+        return (existing.clone(), false);
     }
     // detect_kind probes the LOCAL filesystem, which is meaningless for a remote
     // (connection_id) path. Use the caller's kind, else default remote repos to
@@ -156,7 +175,22 @@ fn append_repo(
         extra: Map::new(),
     };
     repos.push(repo.clone());
-    write_repos(&repos)?;
+    (repo, true)
+}
+
+/// Adds `path` to the registry (idempotent by (path, connection)) and returns
+/// the Repo. Shared by add/create/clone so registration stays in one place.
+fn append_repo(
+    path: String,
+    kind: Option<String>,
+    connection_id: Option<String>,
+    host_id: Option<Uuid>,
+) -> Result<Repo, ApiError> {
+    let mut repos = read_repos()?;
+    let (repo, added) = register_repo(&mut repos, path, kind, connection_id, host_id);
+    if added {
+        write_repos(&repos)?;
+    }
     Ok(repo)
 }
 
@@ -196,7 +230,27 @@ async fn add(Json(body): Json<AddBody>) -> Result<Json<Value>, ApiError> {
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
-/// `PATCH /api/repos/{id}` — apply `updates`; id/path/addedAt are not updatable.
+/// Pure PATCH merge with identity protection: `id`/`path`/`addedAt` were
+/// always immutable, and spec 015 adds `connectionId` — it is half of the
+/// registry's (path, connection) identity key, so an edit could collide two
+/// entries onto one key. `hostId` stays editable (routing metadata,
+/// repairable).
+fn apply_repo_updates(repo: &Repo, updates: Map<String, Value>) -> Result<Repo, ApiError> {
+    let mut object = serde_json::to_value(repo)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .ok_or_else(|| ApiError::Internal("failed to serialize repo".into()))?;
+    for (key, value) in updates {
+        if key == "id" || key == "path" || key == "addedAt" || key == "connectionId" {
+            continue;
+        }
+        object.insert(key, value);
+    }
+    serde_json::from_value(Value::Object(object)).map_err(|e| ApiError::BadRequest(e.to_string()))
+}
+
+/// `PATCH /api/repos/{id}` — apply `updates`; id/path/addedAt/connectionId are
+/// not updatable.
 async fn update(
     Path(repo_id): Path<String>,
     Json(updates): Json<Map<String, Value>>,
@@ -206,19 +260,7 @@ async fn update(
         .iter()
         .position(|repo| repo.id == repo_id)
         .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))?;
-
-    let mut object = serde_json::to_value(&repos[index])
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .ok_or_else(|| ApiError::Internal("failed to serialize repo".into()))?;
-    for (key, value) in updates {
-        if key == "id" || key == "path" || key == "addedAt" {
-            continue;
-        }
-        object.insert(key, value);
-    }
-    let updated: Repo = serde_json::from_value(Value::Object(object))
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let updated = apply_repo_updates(&repos[index], updates)?;
     repos[index] = updated.clone();
     write_repos(&repos)?;
     Ok(Json(updated))
@@ -356,7 +398,15 @@ pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
 /// when the repo carries no `host_id` (a local repo, or one added before
 /// this field existed). `pub(crate)` so the worktrees route shares it.
 pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiError> {
-    read_repos()?
+    host_id_of(&read_repos()?, repo_id)
+}
+
+/// Pure core of [`resolve_repo_host_id`], split out so the repoId→host
+/// contract is testable without the registry file: `Ok(None)` = local,
+/// `Ok(Some(_))` = a server host, `Err(NotFound)` = the id isn't registered —
+/// never a silent local fallback (spec 020 D1).
+fn host_id_of(repos: &[Repo], repo_id: &str) -> Result<Option<Uuid>, ApiError> {
+    repos
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| repo.host_id)
@@ -520,9 +570,358 @@ async fn base_ref_details(
     ))
 }
 
+/// `GET /api/repos/{id}/slug` response. An object, not a bare string, so
+/// future fields stay add-only. No `source` field — the only source is the
+/// `origin` read (the route takes no hint by design), so it would be a
+/// constant.
+#[derive(Debug, Serialize)]
+struct RepoSlugResponse {
+    slug: String,
+}
+
+/// Pure: `SlugReason` → (status, code, message). `NoGithubRemote` is semantic
+/// (422); `HostUnreachable` is transport (502, a gateway problem) — the wire
+/// must never let an SSH failure masquerade as "no origin" (spec 020
+/// invariant), even though the renderer's fail-closed index treats both as
+/// "excluded".
+fn slug_reason_wire(reason: SlugReason) -> (StatusCode, &'static str, &'static str) {
+    match reason {
+        SlugReason::NoGithubRemote => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "no_github_remote",
+            "the repo has no `origin` remote pointing at GitHub",
+        ),
+        SlugReason::HostUnreachable => (
+            StatusCode::BAD_GATEWAY,
+            "host_unreachable",
+            "could not read the repo's git origin — its host is unreachable",
+        ),
+    }
+}
+
+/// Host-aware core of [`repo_slug`], split from the handler so the
+/// with/without-origin contract is testable against a temp git repo without
+/// touching the real `~/.agentum` registry.
+async fn slug_on_host(host: &Host, path: &str) -> Result<RepoSlugResponse, ApiError> {
+    let slug = super::board_goals::resolve_github_slug(host, path, None)
+        .await
+        .map_err(|reason| {
+            let (status, code, message) = slug_reason_wire(reason);
+            ApiError::Custom(
+                status,
+                serde_json::json!({ "error": { "code": code, "message": message } }),
+            )
+        })?;
+    Ok(RepoSlugResponse { slug })
+}
+
+/// `GET /api/repos/{id}/slug` — the repo's GitHub `owner/repo`, resolved by
+/// reading `origin` ON THE REPO'S HOST (spec 020 F2). The renderer's slug
+/// index uses this for SSH repos, which the local-only native read can never
+/// see. Deliberately no hint/workdir params: this route IS how a client
+/// learns the slug, and the server owns id→path consistency (the registry
+/// path, like every `base_ref_*` sibling). Slug case is passed through as
+/// resolved; the client lowercases. Fail-closed: any error excludes the repo
+/// from the client's index.
+async fn repo_slug(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<RepoSlugResponse>, ApiError> {
+    let path = resolve_repo_path(&repo_id)?; // 404 unknown id
+    let host = load_host_for_repo(&state, &repo_id).await?;
+    Ok(Json(slug_on_host(&host, &path).await?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal registry entry for the pure-registration tests (no fs, no env).
+    fn repo_with(path: &str, connection_id: Option<&str>) -> Repo {
+        Repo {
+            id: uuid::Uuid::new_v4().to_string(),
+            path: path.to_string(),
+            display_name: basename(path),
+            badge_color: BADGE_COLORS[0].to_string(),
+            added_at: 1,
+            kind: Some("git".into()),
+            connection_id: connection_id.map(str::to_string),
+            host_id: None,
+            extra: Map::new(),
+        }
+    }
+
+    // ── spec 015 F1: identity is (path, connection_id) ──────────────────────
+
+    #[test]
+    fn same_path_local_then_remote_registers_two_entries() {
+        let mut repos = Vec::new();
+        let host = Uuid::new_v4();
+        let (local, added_local) =
+            register_repo(&mut repos, "/x/proj".into(), Some("git".into()), None, None);
+        assert!(added_local);
+        // AC 1: the remote add must NOT return the pre-existing local entry.
+        let (remote, added_remote) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(host),
+        );
+        assert!(added_remote);
+        assert_eq!(repos.len(), 2);
+        assert_ne!(local.id, remote.id);
+        assert_eq!(remote.connection_id.as_deref(), Some("ssh-1"));
+        assert_eq!(remote.host_id, Some(host));
+        // The pre-existing local entry is untouched.
+        assert_eq!(repos[0].id, local.id);
+        assert!(repos[0].connection_id.is_none());
+        assert!(repos[0].host_id.is_none());
+    }
+
+    #[test]
+    fn same_path_same_connection_is_idempotent() {
+        let mut repos = Vec::new();
+        let (first, added_first) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(Uuid::new_v4()),
+        );
+        assert!(added_first);
+        let (second, added_second) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(Uuid::new_v4()),
+        );
+        assert!(!added_second); // AC 2 remote: no duplicate row, no rewrite
+        assert_eq!(repos.len(), 1);
+        assert_eq!(first.id, second.id);
+    }
+
+    #[test]
+    fn local_readd_stays_idempotent() {
+        let mut repos = Vec::new();
+        let (first, _) =
+            register_repo(&mut repos, "/x/proj".into(), Some("git".into()), None, None);
+        let (second, added) =
+            register_repo(&mut repos, "/x/proj".into(), Some("git".into()), None, None);
+        assert!(!added); // AC 2 local: None == None dedupes
+        assert_eq!(repos.len(), 1);
+        assert_eq!(first.id, second.id);
+    }
+
+    #[test]
+    fn two_connections_same_path_are_two_entries() {
+        // D6: key is connection_id, NOT host_id — two desktop connections to
+        // one server host stay two entries (one per UI host bucket).
+        let mut repos = Vec::new();
+        let host = Uuid::new_v4();
+        let (a, _) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-1".into()),
+            Some(host),
+        );
+        let (b, added) = register_repo(
+            &mut repos,
+            "/x/proj".into(),
+            None,
+            Some("ssh-2".into()),
+            Some(host),
+        );
+        assert!(added);
+        assert_eq!(repos.len(), 2);
+        assert_ne!(a.id, b.id);
+    }
+
+    #[test]
+    fn remote_register_defaults_kind_git() {
+        // detect_kind probes the LOCAL fs, meaningless for a remote path — the
+        // pre-015 default-to-git behavior must survive the refactor.
+        let mut repos = Vec::new();
+        let (repo, _) = register_repo(
+            &mut repos,
+            "/definitely/not/here".into(),
+            None,
+            Some("ssh-1".into()),
+            None,
+        );
+        assert_eq!(repo.kind.as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn update_refuses_connection_id_edit() {
+        // connectionId is half the (path, connection) identity key — a PATCH
+        // must not be able to collide two entries onto one key. hostId stays
+        // editable (routing metadata, repairable).
+        let repo = repo_with("/x/proj", Some("ssh-1"));
+        let host = Uuid::new_v4();
+        let mut updates = Map::new();
+        updates.insert("connectionId".into(), Value::String("ssh-2".into()));
+        updates.insert("displayName".into(), Value::String("renamed".into()));
+        updates.insert("hostId".into(), Value::String(host.to_string()));
+        let updated = apply_repo_updates(&repo, updates).unwrap();
+        assert_eq!(updated.connection_id.as_deref(), Some("ssh-1")); // refused
+        assert_eq!(updated.display_name, "renamed"); // ordinary keys still apply
+        assert_eq!(updated.host_id, Some(host)); // hostId remains editable
+
+        // Nulling it out is refused too (a remote entry can't be made local).
+        let mut null_update = Map::new();
+        null_update.insert("connectionId".into(), Value::Null);
+        let updated = apply_repo_updates(&repo, null_update).unwrap();
+        assert_eq!(updated.connection_id.as_deref(), Some("ssh-1"));
+    }
+
+    #[test]
+    fn scope_pairs_lists_locals_first_stably() {
+        // Dual entries share a path; the browser-scope table must resolve the
+        // LOCAL id first regardless of registry order (and keep relative order
+        // within each partition).
+        let r1 = repo_with("/a", Some("ssh-1"));
+        let l1 = repo_with("/a", None);
+        let r2 = repo_with("/b", Some("ssh-2"));
+        let l2 = repo_with("/c", None);
+        let pairs = scope_pairs_locals_first(vec![r1.clone(), l1.clone(), r2.clone(), l2.clone()]);
+        let ids: Vec<&str> = pairs.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec![&l1.id, &l2.id, &r1.id, &r2.id]);
+    }
+
+    // ── spec 020 F1: repoId → host threading (the pure registry core) ──────
+
+    #[test]
+    fn host_id_of_known_local_is_none() {
+        let local = repo_with("/x/proj", None);
+        let repos = vec![local.clone()];
+        assert_eq!(host_id_of(&repos, &local.id).unwrap(), None);
+    }
+
+    #[test]
+    fn host_id_of_known_remote_is_its_host() {
+        let mut remote = repo_with("/x/proj", Some("ssh-1"));
+        let host = Uuid::new_v4();
+        remote.host_id = Some(host);
+        let repos = vec![remote.clone()];
+        assert_eq!(host_id_of(&repos, &remote.id).unwrap(), Some(host));
+    }
+
+    #[test]
+    fn host_id_of_unknown_id_is_not_found() {
+        // D1: an unknown repoId is a loud NotFound, never a silent local pick.
+        let repos = vec![repo_with("/x/proj", None)];
+        let err = host_id_of(&repos, "no-such-id").unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
+    }
+
+    // ── spec 020 F2: `GET /api/repos/{id}/slug` (host-aware slug route) ────
+
+    /// Minimal local [`Host`] for the slug-route tests (the board_goals test
+    /// pattern): the resolver only reads `host.kind` to pick local vs SSH.
+    fn local_host() -> Host {
+        Host {
+            id: LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: agentum_core::HostKind::Local,
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    /// `git init` + optionally an `origin` remote — enough for
+    /// `remote get-url origin` (the slug read never touches history, so no
+    /// commit is needed).
+    fn init_repo_with_origin(dir: &StdPath, origin: Option<&str>) {
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .expect("git available in test env")
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        if let Some(url) = origin {
+            run(&["remote", "add", "origin", url]);
+        }
+    }
+
+    /// Pure: the transport failure (502 `host_unreachable`) must never
+    /// masquerade as the semantic miss (422 `no_github_remote`) — the spec
+    /// 020 invariant this wire exists to carry.
+    #[test]
+    fn slug_reason_wire_distinguishes_transport_from_semantic() {
+        use super::super::board_goals::SlugReason;
+        let (semantic_status, semantic_code, semantic_msg) =
+            slug_reason_wire(SlugReason::NoGithubRemote);
+        let (transport_status, transport_code, transport_msg) =
+            slug_reason_wire(SlugReason::HostUnreachable);
+        assert_eq!(semantic_status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(semantic_code, "no_github_remote");
+        assert_eq!(transport_status, StatusCode::BAD_GATEWAY);
+        assert_eq!(transport_code, "host_unreachable");
+        assert_ne!(
+            semantic_msg, transport_msg,
+            "reasons must not collapse into one message"
+        );
+    }
+
+    /// The response is `{"slug": "owner/repo"}` — an object so future fields
+    /// stay add-only; slug case is passed through (the client lowercases).
+    #[test]
+    fn repo_slug_response_serializes_slug_only() {
+        let v = serde_json::to_value(RepoSlugResponse {
+            slug: "Owner/Repo".into(),
+        })
+        .unwrap();
+        assert_eq!(v, serde_json::json!({ "slug": "Owner/Repo" }));
+    }
+
+    /// A local repo with a GitHub origin resolves to its slug.
+    #[tokio::test]
+    async fn slug_on_host_reads_github_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo_with_origin(dir.path(), Some("git@github.com:owner/repo.git"));
+        let res = slug_on_host(&local_host(), &dir.path().to_string_lossy())
+            .await
+            .unwrap();
+        assert_eq!(res.slug, "owner/repo");
+    }
+
+    /// A repo with no GitHub origin is the SEMANTIC miss — 422 with code
+    /// `no_github_remote`, never the transport 502.
+    #[tokio::test]
+    async fn slug_on_host_without_origin_is_no_github_remote_422() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo_with_origin(dir.path(), None);
+        let err = slug_on_host(&local_host(), &dir.path().to_string_lossy())
+            .await
+            .unwrap_err();
+        match err {
+            ApiError::Custom(status, body) => {
+                assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+                assert_eq!(body["error"]["code"], "no_github_remote");
+            }
+            other => panic!("expected Custom 422, got {other:?}"),
+        }
+    }
+
+    /// Unknown repo id → the handler's first gate (`resolve_repo_path`) 404s
+    /// before any host/git work. Env-tolerant: a random uuid misses whatever
+    /// `~/.agentum/repos.json` holds (the 015 house rule — no env mutation).
+    #[test]
+    fn repo_slug_unknown_id_is_not_found() {
+        let id = format!("020-no-such-repo-{}", Uuid::new_v4());
+        let err = resolve_repo_path(&id).unwrap_err();
+        assert!(matches!(err, ApiError::NotFound(_)), "{err:?}");
+    }
 
     #[test]
     fn basename_takes_last_segment() {

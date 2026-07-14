@@ -116,4 +116,32 @@ describe('TabGroupPanel SDD bar (issue #313)', () => {
     expect(html).not.toContain('Spec Socratic')
     expect(html).not.toContain('SDD')
   })
+
+  // Issue #349: the bar can be dismissed (X) and restored from a slim chip.
+  it('offers a dismiss control on the expanded bar', async () => {
+    agentForTab.mockReturnValue('claude')
+    const html = await renderPanel()
+    expect(html).toContain('Hide the SDD bar')
+  })
+
+  it('collapses to the restore chip when the preference is set', async () => {
+    agentForTab.mockReturnValue('claude')
+    const store: Record<string, string> = { agentum_sdd_bar_collapsed: '1' }
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => {
+        store[key] = value
+      },
+      removeItem: (key: string) => {
+        delete store[key]
+      }
+    })
+    try {
+      const html = await renderPanel()
+      expect(html).not.toContain('Spec Socratic')
+      expect(html).toContain('Show the SDD bar')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

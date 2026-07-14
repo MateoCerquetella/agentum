@@ -13,10 +13,18 @@ You are drafting a spec directly, without the full Socratic interview. Use this 
 3. **Ask the human for the ask** if they haven't already provided it (in one message — Goal, Users, Acceptance Criteria, Risks). If anything is missing or vague, ask one focused follow-up.
 
 4. **Write** `ai/specs/<NNN>-<name>/spec.md` populated from the ask. Pick the next free `NNN`.
+   If the ask stems from (or is tracked by) a ticket — a GitHub issue URL, Linear
+   ticket, or board card — record it as `tracker: <url>` in the spec's frontmatter.
+   The orchestrator mirrors every phase transition to that tracker (see
+   `/sdd-orchestrate`), so this one line is what makes the ticket's status move.
 
 5. **Run the PM gate** (checklist in `ai/skills/validate_handoff.md`). If anything fails, surface it and iterate once.
 
 6. **Update `ai/STATE.md`**: set `current_spec`, advance phase to `pm`, append a decision line.
+   If the spec has a `tracker:` URL, report the starting phase now: call the
+   `agentum_report_status` MCP tool (for GitHub:
+   `{"provider": "github", "url": "<tracker url>", "phase": "todo"}`). Best-effort —
+   a "skipped" result never blocks the handoff.
 
 7. **Hand off** to the PM. In HITL mode, ask the human: "Spec drafted. Approve handoff to PM?"
 

@@ -10,6 +10,7 @@ import type {
   HostedReviewInfo
 } from '../../../../shared/hosted-review'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
+import { findRepoByPathPreferLocal } from '@/lib/find-repo-by-path'
 import type { AppState } from '../types'
 import {
   getHostedReviewCacheKey,
@@ -174,7 +175,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
     const settings = get().settings
     const target = getActiveRuntimeTarget(settings)
     if (target.kind === 'environment') {
-      const repo = get().repos.find((candidate) => candidate.path === args.repoPath)
+      const repo = findRepoByPathPreferLocal(get().repos, args.repoPath)
       const { repoPath: _repoPath, worktreePath, ...runtimeArgs } = args
       void _repoPath
       return callRuntimeRpc<HostedReviewCreationEligibility>(
@@ -188,7 +189,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
         { timeoutMs: 30_000 }
       )
     }
-    const repo = get().repos.find((candidate) => candidate.path === args.repoPath)
+    const repo = findRepoByPathPreferLocal(get().repos, args.repoPath)
     return api.hostedReview.getCreationEligibility({
       ...args,
       connectionId: repo?.connectionId ?? null
@@ -199,7 +200,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
     const settings = get().settings
     const target = getActiveRuntimeTarget(settings)
     if (target.kind === 'environment') {
-      const repo = get().repos.find((candidate) => candidate.path === repoPath)
+      const repo = findRepoByPathPreferLocal(get().repos, repoPath)
       const { worktreePath, ...runtimeInput } = input
       return callRuntimeRpc<CreateHostedReviewResult>(
         target,
@@ -212,7 +213,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
         { timeoutMs: 60_000 }
       )
     }
-    const repo = get().repos.find((candidate) => candidate.path === repoPath)
+    const repo = findRepoByPathPreferLocal(get().repos, repoPath)
     return api.hostedReview.create({
       repoPath,
       connectionId: repo?.connectionId ?? null,
@@ -227,9 +228,9 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
   ): Promise<HostedReviewInfo | null> => {
     const settings = get().settings
     const target = getActiveRuntimeTarget(settings)
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const cacheKey = getHostedReviewCacheKey(
       repoPath,

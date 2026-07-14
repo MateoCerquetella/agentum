@@ -19,6 +19,7 @@ import {
   hostKeyForRepo,
   pickWorktreeForHost,
   PINNED_GROUP_KEY,
+  sidebarHostStatus,
   type HostTmuxSession,
   type Row,
   type SidebarHost
@@ -1593,5 +1594,28 @@ describe('pickWorktreeForHost', () => {
 
   it('falls back to the first worktree when none is main', () => {
     expect(pickWorktreeForHost(LOCAL_HOST_KEY, [localChild], map, null)?.id).toBe('local-child')
+  })
+})
+
+describe('sidebarHostStatus', () => {
+  it('maps connected to reachable', () => {
+    expect(sidebarHostStatus('connected')).toBe('reachable')
+  })
+
+  it('maps every in-flight transport state to connecting', () => {
+    expect(sidebarHostStatus('connecting')).toBe('connecting')
+    expect(sidebarHostStatus('deploying-relay')).toBe('connecting')
+    expect(sidebarHostStatus('reconnecting')).toBe('connecting')
+  })
+
+  it('maps every not-connected transport state to down — an outage must not render as unknown', () => {
+    expect(sidebarHostStatus('disconnected')).toBe('down')
+    expect(sidebarHostStatus('auth-failed')).toBe('down')
+    expect(sidebarHostStatus('reconnection-failed')).toBe('down')
+    expect(sidebarHostStatus('error')).toBe('down')
+  })
+
+  it('reserves unknown for hosts with no transport record', () => {
+    expect(sidebarHostStatus(undefined)).toBe('unknown')
   })
 })
