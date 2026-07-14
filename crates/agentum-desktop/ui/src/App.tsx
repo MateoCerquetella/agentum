@@ -23,6 +23,7 @@ import {
 import logo from '../resources/logo.svg'
 import { SYNC_FIT_PANES_EVENT, TOGGLE_TERMINAL_PANE_EXPAND_EVENT } from '@/constants/terminal'
 import { syncZoomCSSVar } from '@/lib/ui-zoom'
+import { openBoardSurface } from '@/lib/board-route'
 import { canShowRightSidebarForView } from '@/lib/right-sidebar-visibility'
 import { buildAppFontFamily } from '@/lib/app-font-family'
 import {
@@ -1282,7 +1283,8 @@ function App(): React.JSX.Element {
         if (store.repos.some((repo) => isGitRepoKind(repo))) {
           e.preventDefault()
           notifyTerminalCapture('view.tasks')
-          store.openTaskPage()
+          // Spec 016 D2: the board lives in the hub now — same gate, new body.
+          openBoardSurface()
         }
         return
       }

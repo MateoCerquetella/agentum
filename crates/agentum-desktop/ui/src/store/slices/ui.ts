@@ -498,14 +498,20 @@ export type UISlice = {
     | 'projects'
   previousViewBeforeProjects: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
   /** Which tab the Project Hub shows (ADE redesign: a project opens as a hub
-   *  with per-project Chat / Wiki / Tasks / Sessions). Survives tab switches
-   *  within a session; the repo itself is `activeRepoId`. */
-  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'sessions'
+   *  with per-project Chat / Wiki / Tasks / Tracker / Sessions). Survives tab
+   *  switches within a session; the repo itself is `activeRepoId`. */
+  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
   setProjectHubTab: (tab: UISlice['projectHubTab']) => void
   /** Open the per-project hub for a repo (sidebar project click). Sets the
    *  active repo, seeds the embedded Tasks tab's repo preselection, and
-   *  switches the main view. */
-  openProjectHub: (repoId: string, tab?: UISlice['projectHubTab']) => void
+   *  switches the main view. `seed.taskSource` picks the Tasks tab's tracker
+   *  (spec 016: re-routed bare board openers land a Linear filed-card on the
+   *  Linear tab) — NOT a detail payload; detail opens stay on openTaskPage. */
+  openProjectHub: (
+    repoId: string,
+    tab?: UISlice['projectHubTab'],
+    seed?: { taskSource?: TaskProvider }
+  ) => void
   closeProjectHub: () => void
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
@@ -926,7 +932,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeProjects: 'terminal',
   projectHubTab: 'chat',
   setProjectHubTab: (tab) => set({ projectHubTab: tab }),
-  openProjectHub: (repoId, tab) => {
+  openProjectHub: (repoId, tab, seed) => {
     // Why: the hub's embedded Tasks tab is the full TaskPage seeded from
     // taskPageData at mount — preselect the hub's repo here so it scopes
     // correctly without going through openTaskPage (which would also flip
@@ -935,7 +941,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: 'project',
       projectHubTab: tab ?? state.projectHubTab,
-      taskPageData: { preselectedRepoId: repoId },
+      taskPageData: {
+        preselectedRepoId: repoId,
+        ...(seed?.taskSource ? { taskSource: seed.taskSource } : {})
+      },
       previousViewBeforeProject:
         state.activeView === 'project' ? state.previousViewBeforeProject : state.activeView
     }))

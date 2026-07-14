@@ -33,6 +33,7 @@ import {
 } from 'lucide-react'
 
 import { useAppStore } from '@/store'
+import { openBoardSurface } from '@/lib/board-route'
 import { cn } from '@/lib/utils'
 import { api } from '@/tauri'
 import type { Repo } from '@/shared/types'
@@ -504,8 +505,11 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
         })
         return
       }
-      openTaskPage({
-        preselectedRepoId: filedRepoId,
+      // Spec 016 D2: a bare board open (no detail payload) routes to the hub's
+      // Tasks tab (Projects page when no repo resolves). The taskSource seed
+      // keeps a Linear filed-card landing on the Linear tab.
+      openBoardSurface({
+        preferredRepoId: filedRepoId,
         taskSource: filed.provider === 'linear' ? 'linear' : 'github'
       })
     },
@@ -523,11 +527,10 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
           actions={
             <button
               type="button"
+              // Standalone only (pinnedRepo is null in this branch): route the
+              // bare open through the D2 resolver — hub when a repo resolves.
               onClick={() =>
-                openTaskPage({
-                  preselectedRepoId: pinnedRepo?.id ?? workspaceId ?? undefined,
-                  taskSource: 'github'
-                })
+                openBoardSurface({ preferredRepoId: workspaceId ?? undefined, taskSource: 'github' })
               }
               className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-[12.5px] font-medium hover:border-foreground/30 hover:bg-accent"
             >

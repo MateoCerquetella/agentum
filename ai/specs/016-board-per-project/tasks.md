@@ -84,6 +84,65 @@ writes `projectBindingByRepo` yet → `BINDING_ABSENT` → legacy fallback).
 
 **Deviations:** none.
 
-## F3 — sidebar-board-removal
+## F3 — sidebar-board-removal ✅
 
-_(pending)_
+**Built:**
+
+- `lib/board-route.ts` + `lib/board-route.test.ts` (new) — `resolveBoardRoute`
+  (pure; preferred → active, each guarded live-git-repo, else projects; NO
+  first-git-repo fallback) + `openBoardSurface` dispatcher (reads
+  `useAppStore.getState()`, dispatches `openProjectHub(repoId, 'tasks',
+  {taskSource})` or `openProjectsPage()`). 6 tests: preferred wins, stale
+  preferred → active, stale active → projects, non-git excluded, empty repos →
+  projects, null ids → projects.
+- `store/slices/ui.ts` — `openProjectHub(repoId, tab?, seed?: { taskSource? })`
+  merges the seed into `taskPageData` (§5.2, NOT detail threading);
+  `projectHubTab` union extended with `'tracker'` (PM risk 5 — now matches
+  `ProjectHubPage`'s `HubTab`).
+- `components/sidebar/SidebarNav.tsx` — Board button deleted along with ALL of
+  its machinery: `openTaskPage` selector, `canBrowseTasks`, `showTasksButton`
+  read, the prefetch handler + its `prefetchWorkItems`/`activeRepoId`/
+  `defaultTaskViewPreset` selectors, the task-provider derivation
+  (`visibleTaskProviders`/`resolvedDefaultTaskSource`) and the
+  preflight/linear warm-up effect that existed only to feed the prefetch
+  gate, `tasksActive`, and the now-unused imports (Columns3, useRepoMap,
+  isGitRepoKind, new-workspace + task-providers helpers).
+- `components/settings/AppearancePane.tsx` — dead "Show Tasks Button" toggle
+  deleted; the `showTasksButton` settings field itself KEPT
+  (`shared/types.ts` / `shared/constants.ts` untouched — persisted-settings
+  compat).
+- Re-routes (table rows 2–6, every existing gate + preventDefault kept):
+  `CommandPalette.tsx` `view-board` → `openBoardSurface()` (id/label/icon
+  kept); `App.tsx` `view.tasks` shortcut → gate + preventDefault +
+  notifyTerminalCapture unchanged, body → `openBoardSurface()`;
+  `hooks/useIpcEvents.ts` `onOpenTasks` → gate unchanged, body →
+  `openBoardSurface()`; `ChatPage.tsx` filed-card fallback →
+  `openBoardSurface({ preferredRepoId: filedRepoId, taskSource: linear|github })`;
+  ChatPage "Open Board" header →
+  `openBoardSurface({ preferredRepoId: workspaceId ?? undefined, taskSource: 'github' })`.
+- Rows 7–10 UNTOUCHED: ChatPage detail opener (`:481`, openGitHubWorkItem),
+  WorktreeCard `:530/:540` (detail payloads), TaskPage internal nav,
+  worktree-nav-history.
+
+**Gates:**
+
+- `bun run build` — green, 1m 11s.
+- `bunx vitest run src/lib/board-route.test.ts
+  src/lib/board-project-resolution.test.ts` — 2 files, 21/21 passed.
+- Grep gate: `git grep -n 'openTaskPage(' -- crates/agentum-desktop/ui/src`
+  outside TaskPage.tsx/tests = exactly `ChatPage.tsx:481`,
+  `WorktreeCard.tsx:530`, `WorktreeCard.tsx:540` — all detail-payload; zero
+  bare calls. `git grep -n '"Board"' …/SidebarNav.tsx` — empty.
+
+**Deviations:** none. (The SidebarNav preflight/linear warm-up effect deletion
+is within the table-row-1 mandate "prefetch handler … and its now-unused
+imports" — the effect fed only the prefetch gate; every other consumer
+(TaskPage, hub) triggers the same checks itself on mount.)
+
+## Anchor drift notes (for the tester)
+
+- All architecture `path:line` anchors matched this HEAD after re-location;
+  the only nominal drifts were ±1–2 lines (e.g. ChatPage detail opener now at
+  `:481`, WorktreeCard rows unchanged). No semantic drift found.
+- `shared/*` paths in the architecture resolve to `src/shared/*` in this repo
+  (the `../../../../shared` vite alias); imports in new code use `@/shared/…`.
