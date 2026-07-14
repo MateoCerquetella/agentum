@@ -54,9 +54,35 @@ writes `projectBindingByRepo` yet → `BINDING_ABSENT` → legacy fallback).
 
 **Deviations:** none beyond the import-path note above.
 
-## F2 — hub-binding-retarget
+## F2 — hub-binding-retarget ✅
 
-_(pending)_
+**Built:**
+
+- `components/project-hub/ProjectHubPage.tsx` — the binding effect retargeted
+  per §4. Trigger (`repo`, `tab === 'tasks'`, `isGitRepoKind`) + cancellation
+  pattern kept; body now: `deriveTrackerBindingTarget({ repo, isGit: true })`
+  (import-only from the wizard model — the v0.75.1 host-aware seam, so SSH
+  repos thread `connectionId → hostId`), no-target → `loaded/null`; first visit
+  writes `{status:'loading'}` (an existing 'loaded' entry is kept while
+  refetching — no flicker); `getProjectBinding({ workdir, hostId })` →
+  `loaded` with the raw identity+title subset; fetch failure → fail-closed
+  `loaded/null` (resolver falls to legacy, `pending` can never wedge). The
+  `setTaskResumeState({githubMode:'project'})` and `updateSettings` copy-hack
+  calls are DELETED (the 'project'-mode forcing moved to the embedded TaskPage
+  in F1 §3.3). The incomplete-identity guard moved into the resolver's
+  normalization. `taskDataSeeded` gate/effect and the render gate untouched.
+- Note: the old `repo?.path` trigger guard is subsumed by
+  `deriveTrackerBindingTarget` (empty path → null target → `loaded/null`) —
+  behaviorally identical, one seam instead of two checks.
+
+**Gates:**
+
+- `bun run build` — green, 1m 47s.
+- F1 vitest set — 3 files, 72/72 passed.
+- `git grep -n 'updateSettings\|setTaskResumeState' --
+  src/components/project-hub/ProjectHubPage.tsx` — empty (exit 1).
+
+**Deviations:** none.
 
 ## F3 — sidebar-board-removal
 

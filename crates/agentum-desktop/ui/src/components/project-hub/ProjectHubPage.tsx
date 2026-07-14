@@ -19,6 +19,9 @@ import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
 import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
+// Import-only (must-not-touch): the v0.75.1 host-aware target derivation the
+// wizard's tracker section already uses — one seam for `connectionId → hostId`.
+import { deriveTrackerBindingTarget } from '@/components/new-workspace/create-workspace-wizard-model'
 import { getProjectBinding } from '@/runtime/github-projects-client'
 import { ProjectSessionsList } from './ProjectSessionsList'
 import { TrackerIntakePanel } from './TrackerIntakePanel'
@@ -74,55 +77,53 @@ export default function ProjectHubPage(): React.JSX.Element {
     }))
   }, [repo, tab, taskDataSeeded])
 
-  // When this project is bound to a GitHub Projects v2 board, make that Project
-  // the active one and open the Tasks tab in project mode — so the tab shows the
-  // board's REAL Status columns (Backlog / In progress / QA / …) through the
-  // existing ProjectViewWrapper, instead of the coarse open/closed issue Kanban.
-  // Unbound repos no-op (the binding is null), so their issue board is unchanged.
-  // Relies on the repo-slug resolver (#315) to load the per-repo binding.
+  // Spec 016: load this project's tracker binding into the PER-REPO session
+  // cache (`projectBindingByRepo`) that the embedded board resolves through —
+  // never the global `activeProject` slot (the old copy-hack silently re-keyed
+  // every other board surface). Host-aware: an SSH repo threads its
+  // `connectionId` as `hostId` so the server resolves the slug on the remote
+  // host. The incomplete-identity guard lives in the resolver's normalization
+  // now — this effect stores the raw identity.
+  const setProjectBindingState = useAppStore((s) => s.setProjectBindingState)
   useEffect(() => {
-    if (!repo?.path || tab !== 'tasks' || !isGitRepoKind(repo)) return
+    if (!repo || tab !== 'tasks' || !isGitRepoKind(repo)) return
+    const target = deriveTrackerBindingTarget({ repo, isGit: true })
+    if (!target) {
+      setProjectBindingState(repo.id, { status: 'loaded', binding: null })
+      return
+    }
+    // Keep an existing 'loaded' entry while refetching (no board flicker);
+    // only a first visit shows the loading skeleton.
+    if (!useAppStore.getState().projectBindingByRepo[repo.id]) {
+      setProjectBindingState(repo.id, { status: 'loading' })
+    }
     let cancelled = false
-    void getProjectBinding({ workdir: repo.path })
+    void getProjectBinding({ workdir: target.workdir, hostId: target.hostId })
       .then((res) => {
         if (cancelled) return
         const b = res.binding
-        const owner = b?.projectOwner
-        const ownerType = b?.projectOwnerType
-        const number = b?.projectNumber
-        // A binding with no resolved project ref can't drive the board view.
-        if (!owner || number == null || (ownerType !== 'organization' && ownerType !== 'user')) {
-          return
-        }
-        const s = useAppStore.getState()
-        // Force project mode so the bound board wins over a resumed 'items' view.
-        s.setTaskResumeState({ githubMode: 'project' })
-        const gh = s.settings?.githubProjects ?? {
-          pinned: [],
-          recent: [],
-          lastViewByProject: {},
-          activeProject: null
-        }
-        const active = gh.activeProject
-        if (
-          active &&
-          active.owner === owner &&
-          active.ownerType === ownerType &&
-          active.number === number
-        ) {
-          return // already the active project — skip a redundant settings write
-        }
-        void s.updateSettings({
-          githubProjects: { ...gh, activeProject: { owner, ownerType, number } }
+        setProjectBindingState(repo.id, {
+          status: 'loaded',
+          binding: b
+            ? {
+                projectOwner: b.projectOwner,
+                projectOwnerType: b.projectOwnerType,
+                projectNumber: b.projectNumber,
+                projectTitle: b.projectTitle
+              }
+            : null
         })
       })
       .catch(() => {
-        // A binding-load failure just leaves the default Tasks view (no board).
+        if (cancelled) return
+        // Fail closed to 'loaded/null' so the resolver falls to the legacy
+        // tier instead of wedging on 'pending'.
+        setProjectBindingState(repo.id, { status: 'loaded', binding: null })
       })
     return () => {
       cancelled = true
     }
-  }, [repo, tab])
+  }, [repo, tab, setProjectBindingState])
 
   // Tasks-tab badge (ADE prototype "Tasks <count>"): open-item count from the
   // work-items cache. Null (no badge) until the key is warm — the prefetch
