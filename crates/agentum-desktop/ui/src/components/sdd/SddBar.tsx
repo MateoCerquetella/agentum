@@ -267,19 +267,23 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
 
   const disabled = sessionId === null
 
-  // Dismissed: keep a near-invisible strip with a micro-chip that brings the
-  // bar back — discoverable without eating the terminal's vertical space.
+  // Dismissed: keep a slim strip, but the restore control must read as an
+  // obvious, clickable chip — the original 9px/60%-opacity ghost was
+  // effectively invisible, so a stray X click hid the bar with no findable way
+  // back (issue #349 follow-up). A bordered card pill in the label's usual
+  // left slot stays out of the terminal's way while remaining unmistakable.
   if (collapsed) {
     return (
-      <div className="flex shrink-0 items-center justify-end border-t border-border/60 bg-background px-3">
+      <div className="flex shrink-0 items-center border-t border-border/60 bg-background px-3 py-1">
         <button
-          className="flex items-center gap-1 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-muted-foreground/60 transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           title="Show the SDD bar"
           aria-label="Show the SDD bar"
           onClick={() => setCollapsed(false)}
         >
-          <ChevronUp className="size-3" />
-          SDD
+          <ChevronUp className="size-3.5" />
+          <span className="font-semibold uppercase tracking-widest">SDD</span>
+          <span className="text-muted-foreground/80">Show bar</span>
         </button>
       </div>
     )

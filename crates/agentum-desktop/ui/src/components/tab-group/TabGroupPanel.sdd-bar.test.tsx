@@ -140,6 +140,10 @@ describe('TabGroupPanel SDD bar (issue #313)', () => {
       const html = await renderPanel()
       expect(html).not.toContain('Spec Socratic')
       expect(html).toContain('Show the SDD bar')
+      // The restore chip must be discoverable, not a near-invisible ghost: a
+      // visible label brings the bar back (issue #349 follow-up — a dismissed
+      // bar was effectively unfindable).
+      expect(html).toContain('Show bar')
     } finally {
       vi.unstubAllGlobals()
     }
