@@ -165,6 +165,36 @@ export async function getProjectBinding(input: {
   }
 }
 
+/** `GET /api/github/issue-project-status` — the linked issue's Status column
+ *  on the repo's bound Project (spec 358b). `status: null` = unbound repo /
+ *  issue not on the board / no status set; a classified failure throws (the
+ *  hover-card cache maps ANY throw to silent absence). */
+export async function getIssueProjectStatus(input: {
+  workdir: string
+  number: number
+  slug?: string
+  repoId?: string
+  timeoutMs?: number
+}): Promise<{ status: string | null }> {
+  const params = bindingQuery(input)
+  params.set('number', String(input.number))
+  const url = await apiUrl(`/api/github/issue-project-status?${params.toString()}`)
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 10000)
+  try {
+    const res = await fetch(url, {
+      headers: { ...(await authHeaders()) },
+      signal: controller.signal
+    })
+    if (!res.ok) {
+      await throwClassified(res, 'could not read the issue project status')
+    }
+    return (await res.json()) as { status: string | null }
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
 /**
  * `PUT /api/github/project-binding` — persist the binding. The server
  * re-validates that all five phases carry a non-empty option id (400

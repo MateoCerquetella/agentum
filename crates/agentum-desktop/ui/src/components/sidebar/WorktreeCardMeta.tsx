@@ -19,6 +19,7 @@ import {
 } from './WorktreeCardDetailSection'
 import { IssueStateBadge, LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
 import { TrackerPhaseChip } from './TrackerPhaseChip'
+import { IssueProjectStatusChip } from './IssueProjectStatusChip'
 import type { IssueInfo } from '../../../../shared/types'
 
 export type WorktreeCardIssueDisplay =
@@ -57,6 +58,10 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
    *  row. Optional — callers without a worktree context render no chip. */
   worktreeId?: string
   trackerPhase?: string | null
+  /** Spec 358b: repo identity for the GitHub Project-status chip. Optional —
+   *  callers without a repo context render no chip. */
+  repoPath?: string
+  repoId?: string
   onEditIssue: (event: React.MouseEvent) => void
   onEditComment: (event: React.MouseEvent) => void
   onOpenGitHubIssueInAgentum?: (event: React.MouseEvent) => void
@@ -225,6 +230,8 @@ export function WorktreeCardDetailsHover({
   detailsAfter,
   worktreeId,
   trackerPhase,
+  repoPath,
+  repoId,
   onEditIssue,
   onEditComment,
   onOpenGitHubIssueInAgentum,
@@ -318,6 +325,16 @@ export function WorktreeCardDetailsHover({
                         open/closed badge; renders nothing when unbound. */}
                     {worktreeId && (
                       <TrackerPhaseChip worktreeId={worktreeId} persistedPhase={trackerPhase} />
+                    )}
+                    {/* Spec 358b: the bound GitHub Project's Status column —
+                        mounts only while the card is open (lazy) and renders
+                        nothing when unbound/absent. */}
+                    {repoPath && (
+                      <IssueProjectStatusChip
+                        workdir={repoPath}
+                        repoId={repoId}
+                        issueNumber={issue.number}
+                      />
                     )}
                     {issueLabels.map((label) => (
                       <Badge key={label} variant="outline" className="h-4 px-1.5 text-[9px]">

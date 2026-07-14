@@ -951,6 +951,75 @@ async fn close_or_reopen_for(
     }
 }
 
+// ─── Spec 358b: the read path (issue → bound project's Status name) ─────────
+
+// Single-line like the write-side operations (one fake-gh log line per call).
+// `projectItems(first: 20)`: an issue on >20 boards is beyond plausible use;
+// the bound project missing from the page reads as "not on the board", which
+// is the spec's silent-absence outcome anyway.
+const ISSUE_PROJECT_STATUS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { \
+     repository(owner: $owner, name: $name) { issue(number: $number) { \
+     projectItems(first: 20) { nodes { project { id } fieldValues(first: 30) { nodes { \
+     ... on ProjectV2ItemFieldSingleSelectValue { name field { \
+     ... on ProjectV2SingleSelectField { id } } } } } } } } } }";
+
+/// Pure argv: the hover-card status read (spec 358b).
+fn issue_project_status_query_args(owner: &str, name: &str, number: i64) -> Vec<String> {
+    gh_graphql_argv(
+        ISSUE_PROJECT_STATUS_QUERY,
+        &[("owner", owner), ("name", name)],
+        &[("number", number)],
+    )
+}
+
+/// Pure parse (fixture-tested): among the issue's project items, the one on
+/// `project_id`, then its single-select value whose field id is the binding's
+/// `status_field_id` — ids, never names, so a renamed Status column still
+/// resolves. `None` = not on the board / no status set: the spec's silent
+/// absence, deliberately NOT an error.
+fn parse_issue_project_status(
+    data: &Value,
+    project_id: &str,
+    status_field_id: &str,
+) -> Option<String> {
+    let items = data
+        .pointer("/repository/issue/projectItems/nodes")?
+        .as_array()?;
+    let item = items
+        .iter()
+        .find(|item| item.pointer("/project/id").and_then(Value::as_str) == Some(project_id))?;
+    let values = item.pointer("/fieldValues/nodes")?.as_array()?;
+    values
+        .iter()
+        .find(|v| v.pointer("/field/id").and_then(Value::as_str) == Some(status_field_id))
+        .and_then(|v| v.get("name").and_then(Value::as_str))
+        .map(str::to_string)
+}
+
+/// The issue's Status option NAME on the bound project (spec 358b) — read-only
+/// and cache-free: the hover card caches per session client-side, and unlike
+/// the write path there is no item to ensure onto the board.
+pub async fn issue_status_with(
+    program: &str,
+    binding: &BoardBinding,
+    slug: &str,
+    number: i64,
+) -> Result<Option<String>, ProjectsError> {
+    let (owner, name) = slug
+        .split_once('/')
+        .ok_or_else(|| ProjectsError::new("unknown", format!("malformed repo slug {slug:?}")))?;
+    let data = run_gh_graphql_argv(
+        program,
+        &issue_project_status_query_args(owner, name, number),
+    )
+    .await?;
+    Ok(parse_issue_project_status(
+        &data,
+        &binding.project_id,
+        &binding.status_field_id,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1856,5 +1925,121 @@ mod tests {
                 && !calls.contains("issue reopen"),
             "knob OFF must never probe/close/reopen: {calls}"
         );
+    }
+
+    // ─── Spec 358b: the status read path ───────────────────────────────────
+
+    fn issue_status_fixture(project_id: &str, field_id: &str, name: &str) -> Value {
+        json!({"repository": {"issue": {"projectItems": {"nodes": [
+            // A decoy item on another board, listed first — the parse must
+            // select by project id, not position.
+            {"project": {"id": "PVT_other"}, "fieldValues": {"nodes": [
+                {"name": "Decoy", "field": {"id": field_id}}
+            ]}},
+            {"project": {"id": project_id}, "fieldValues": {"nodes": [
+                {}, // non-single-select values surface as empty objects
+                {"name": "Wrong field", "field": {"id": "PVTSSF_other"}},
+                {"name": name, "field": {"id": field_id}}
+            ]}}
+        ]}}}})
+    }
+
+    /// The happy path: the bound project's item, the bound field's value —
+    /// matched by IDS on both axes (a renamed Status column still resolves).
+    #[test]
+    fn parse_issue_project_status_matches_by_project_and_field_id() {
+        let data = issue_status_fixture("PVT_1", "PVTSSF_1", "In Progress");
+        assert_eq!(
+            parse_issue_project_status(&data, "PVT_1", "PVTSSF_1").as_deref(),
+            Some("In Progress")
+        );
+    }
+
+    /// Every absence shape is `None` — silent, never an error (AC 2): not on
+    /// the bound board, no status set, and an issue with no items at all.
+    #[test]
+    fn parse_issue_project_status_absences_are_none() {
+        let data = issue_status_fixture("PVT_1", "PVTSSF_1", "Todo");
+        // Bound to a project the issue isn't on.
+        assert_eq!(
+            parse_issue_project_status(&data, "PVT_absent", "PVTSSF_1"),
+            None
+        );
+        // On the board, but no value carries the bound field id.
+        assert_eq!(
+            parse_issue_project_status(&data, "PVT_1", "PVTSSF_absent"),
+            None
+        );
+        // No project items at all.
+        let empty = json!({"repository": {"issue": {"projectItems": {"nodes": []}}}});
+        assert_eq!(
+            parse_issue_project_status(&empty, "PVT_1", "PVTSSF_1"),
+            None
+        );
+        // Issue not found → null issue node.
+        let no_issue = json!({"repository": {"issue": null}});
+        assert_eq!(
+            parse_issue_project_status(&no_issue, "PVT_1", "PVTSSF_1"),
+            None
+        );
+    }
+
+    /// The argv rides the shared `-f`/`-F` discipline: strings via `-f`, the
+    /// issue number typed via `-F` so `$number: Int!` binds.
+    #[test]
+    fn issue_project_status_argv_shape() {
+        let argv = issue_project_status_query_args("acme", "widgets", 7);
+        assert_eq!(argv[0], "api");
+        assert_eq!(argv[1], "graphql");
+        assert!(argv.contains(&"owner=acme".to_string()));
+        assert!(argv.contains(&"name=widgets".to_string()));
+        let f_pos = argv.iter().position(|a| a == "-F").unwrap();
+        assert_eq!(argv[f_pos + 1], "number=7");
+        assert!(argv[3].contains("projectItems"), "{}", argv[3]);
+    }
+
+    /// End-to-end through the shared runner with a fake gh: one GraphQL call,
+    /// the parsed option name back.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn issue_status_with_fake_gh_is_one_call() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let body =
+            json!({"data": issue_status_fixture("PVT_1", "PVTSSF_1", "Ready to Test")}).to_string();
+        let script = dir.path().join("gh-fake");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> \"{}\"\nprintf '%s\\n' '{body}'\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let status = issue_status_with(
+            script.to_str().unwrap(),
+            &board_binding(true),
+            "acme/widgets",
+            7,
+        )
+        .await
+        .unwrap();
+        assert_eq!(status.as_deref(), Some("Ready to Test"));
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(calls.lines().count(), 1, "read path is ONE call: {calls}");
+
+        // A malformed slug classifies without ever invoking gh.
+        let err = issue_status_with(
+            script.to_str().unwrap(),
+            &board_binding(true),
+            "notaslug",
+            7,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind, "unknown");
     }
 }

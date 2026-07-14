@@ -37,6 +37,10 @@ pub fn router() -> Router<AppState> {
             "/api/github/project-binding",
             get(get_binding).put(put_binding).delete(delete_binding),
         )
+        .route(
+            "/api/github/issue-project-status",
+            get(issue_project_status),
+        )
 }
 
 /// Map a classified discovery failure onto the wire: `scope_missing` rides the
@@ -371,6 +375,50 @@ async fn put_binding(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct IssueStatusQuery {
+    pub workdir: String,
+    pub number: i64,
+    pub slug: Option<String>,
+    /// Spec 020's host-aware identity, same as [`BindingQuery`].
+    #[serde(default, rename = "repoId")]
+    pub repo_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct IssueStatusResponse {
+    /// The bound project's Status option name, `null` when the repo is
+    /// unbound / the issue isn't on the board / no status is set — the hover
+    /// card's silent-absence contract (spec 358b AC 2).
+    status: Option<String>,
+}
+
+/// `GET /api/github/issue-project-status?workdir=…&number=…&slug=…&repoId=…` —
+/// the linked issue's Status column on the repo's bound Project (spec 358b),
+/// read-only. An unbound repo short-circuits to `{status: null}` with zero gh
+/// calls; a gh failure classifies through the shared mapper (clean message,
+/// never raw stderr) and the client renders it as absence.
+async fn issue_project_status(
+    State(state): State<AppState>,
+    Query(q): Query<IssueStatusQuery>,
+) -> Result<Json<IssueStatusResponse>, ApiError> {
+    let slug = super::util::resolve_tracker_slug(
+        &state,
+        q.repo_id.as_deref(),
+        &q.workdir,
+        q.slug.as_deref(),
+    )
+    .await?;
+    let Some(binding) = github_projects::binding_for_slug(&slug) else {
+        return Ok(Json(IssueStatusResponse { status: None }));
+    };
+    let status =
+        github_projects::issue_status_with(&github_projects::gh_bin(), &binding, &slug, q.number)
+            .await
+            .map_err(projects_error_to_api)?;
+    Ok(Json(IssueStatusResponse { status }))
+}
+
 /// `DELETE /api/github/project-binding?workdir=…&slug=…` — unbind (204 whether
 /// or not a binding existed; delete is idempotent).
 async fn delete_binding(
@@ -496,6 +544,32 @@ mod tests {
         let wire = serde_json::to_value(&dto).unwrap();
         assert_eq!(wire["statusMapping"]["readyToTest"], "r");
         assert_eq!(wire["doneClosesIssue"], true);
+    }
+
+    /// Spec 358b wire pins: the status query takes camelCase `repoId` (absent
+    /// → None, the local arm) and the response is `{status}` with `null` as
+    /// the silent-absence value.
+    #[test]
+    fn issue_status_wire_shapes() {
+        let q: IssueStatusQuery = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/repo", "number": 7, "repoId": "r-1"
+        }))
+        .unwrap();
+        assert_eq!(q.number, 7);
+        assert_eq!(q.repo_id.as_deref(), Some("r-1"));
+        let q: IssueStatusQuery = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/repo", "number": 7
+        }))
+        .unwrap();
+        assert_eq!(q.repo_id, None);
+
+        let wire = serde_json::to_value(IssueStatusResponse {
+            status: Some("In Progress".into()),
+        })
+        .unwrap();
+        assert_eq!(wire["status"], "In Progress");
+        let wire = serde_json::to_value(IssueStatusResponse { status: None }).unwrap();
+        assert!(wire["status"].is_null());
     }
 
     /// The discover response's refusal shape: `resolved: null` +
