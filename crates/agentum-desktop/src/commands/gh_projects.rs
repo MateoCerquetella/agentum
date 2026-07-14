@@ -1088,9 +1088,148 @@ pub async fn gh_clear_project_item_field(
     }
 }
 
+// `gh_issue_project_status` — one issue's Status option name on the repo's
+// bound ProjectV2 (issue #365). A single graphql read: the issue's project
+// items, matched to the bound `project_id`, then the single-select field value
+// whose field id is the bound `status_field_id`. Returns
+// `{ ok:true, status:<name|null> }`; any gh/graphql failure returns the shared
+// error envelope. The renderer treats BOTH a null status and an error envelope
+// as "no chip" (silent absence, spec 018 AC 2), so this never needs to
+// distinguish "not on the project" from "fetch failed".
+#[tauri::command]
+pub async fn gh_issue_project_status(
+    owner: String,
+    repo: String,
+    number: i64,
+    project_id: String,
+    status_field_id: String,
+) -> Value {
+    // owner/repo are bound $vars (never interpolated) per the graphql()
+    // injection contract; number via Scalar::Int so `$number:Int!` binds numeric.
+    let query = r#"
+        query($owner: String!, $repo: String!, $number: Int!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              projectItems(first: 20) {
+                nodes {
+                  project { id }
+                  fieldValues(first: 50) {
+                    nodes {
+                      ... on ProjectV2ItemFieldSingleSelectValue {
+                        name
+                        field { ... on ProjectV2SingleSelectField { id } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+    "#;
+    let data = match graphql(
+        query,
+        &[
+            ("owner", Scalar::Str(owner)),
+            ("repo", Scalar::Str(repo)),
+            ("number", Scalar::Int(number)),
+        ],
+    )
+    .await
+    {
+        Ok(data) => data,
+        Err(err) => return err.envelope(),
+    };
+    json!({ "ok": true, "status": issue_project_status(&data, &project_id, &status_field_id) })
+}
+
+// Pure: pick the issue's project item on `project_id`, then the single-select
+// field value whose field id is `status_field_id`, returning its option name.
+// Any missing hop → None (the issue isn't on that project, or has no Status set).
+fn issue_project_status(data: &Value, project_id: &str, status_field_id: &str) -> Option<String> {
+    let items = data
+        .get("repository")?
+        .get("issue")?
+        .get("projectItems")?
+        .get("nodes")?
+        .as_array()?;
+    for item in items {
+        let on_project = item
+            .get("project")
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_str)
+            == Some(project_id);
+        if !on_project {
+            continue;
+        }
+        let Some(values) = item
+            .get("fieldValues")
+            .and_then(|v| v.get("nodes"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for value in values {
+            let field_matches = value
+                .get("field")
+                .and_then(|f| f.get("id"))
+                .and_then(Value::as_str)
+                == Some(status_field_id);
+            if field_matches {
+                if let Some(name) = value.get("name").and_then(Value::as_str) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn issue_items(project_id: &str, field_id: &str, option: &str) -> Value {
+        json!({
+            "repository": { "issue": { "projectItems": { "nodes": [
+                { "project": { "id": project_id }, "fieldValues": { "nodes": [
+                    {},
+                    { "name": option, "field": { "id": field_id } }
+                ] } }
+            ] } } }
+        })
+    }
+
+    #[test]
+    fn issue_project_status_reads_matching_option() {
+        let data = issue_items("PVT_1", "F_status", "In Progress");
+        assert_eq!(
+            issue_project_status(&data, "PVT_1", "F_status").as_deref(),
+            Some("In Progress")
+        );
+    }
+
+    #[test]
+    fn issue_project_status_none_when_not_on_bound_project() {
+        // Item exists but on a different project than the binding.
+        let data = issue_items("PVT_OTHER", "F_status", "In Progress");
+        assert_eq!(issue_project_status(&data, "PVT_1", "F_status"), None);
+    }
+
+    #[test]
+    fn issue_project_status_none_when_status_field_absent() {
+        // On the project, but the Status field id doesn't match (no value set).
+        let data = issue_items("PVT_1", "F_priority", "High");
+        assert_eq!(issue_project_status(&data, "PVT_1", "F_status"), None);
+    }
+
+    #[test]
+    fn issue_project_status_none_when_no_items() {
+        let data = json!({ "repository": { "issue": { "projectItems": { "nodes": [] } } } });
+        assert_eq!(issue_project_status(&data, "PVT_1", "F_status"), None);
+        // Missing hops (unlinked issue) also degrade to None, never panic.
+        assert_eq!(issue_project_status(&json!({}), "PVT_1", "F_status"), None);
+    }
 
     #[test]
     fn classifies_insufficient_scopes_as_scope_missing() {

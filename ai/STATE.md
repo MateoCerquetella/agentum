@@ -3,13 +3,25 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 020-ssh-host-tracker-plumbing
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (020 **SHIP-READY — Reviewer SIGN-OFF 2026-07-13**, `review.md` @ `cc4bde36`, 0 blockers; spec Status → Done. Commits F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` on `fixes-new-workspace`, on top of ship-ready 015. **RELEASE = HUMAN**: ONE train with 015 (same branch) — PR → develop → staging qa.sh (live dyaus binding, SSH filing + grounding note, Start-work direct launch, host-down 422-flavor vs slug-route 502, gh authed on the remote) → main + tag. Follow-up ticket (reviewer should-fixes): SF1 ProjectHubPage:86 Tasks-tab binding read not repoId-threaded — bound SSH repo's Tasks tab never auto-enters board mode; SF2 SSH-repoId issue FETCH composes local neutral_cwd with remote gh — caller-less today but the live wire will trip the deferred QA leg (fix before/at QA); SF3 tasks.md wording. 015's own release checklist + 010's AC-11 demo stay in Active send-backs.)
+- **current_spec:** 018-issue-hover-project-status-chip
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (018 **SHIP-READY — Reviewer SIGN-OFF 2026-07-14**, `review.md`, 0 blockers; spec Status → Done. Full loop run in one autonomous session (spec→pm→architect→developer→tester→reviewer). One slice: `gh_issue_project_status` desktop command + pure mapper, `getProjectBinding`-cached hook, `IssueProjectStatusChip` in the hover badges row. Gates: UI `bun run build` green, all new vitest green (13; 1 red = proven pre-existing `review`/"PR #456" baseline), standalone tsc green, `cargo fmt --check` green. ⚠️ Rust unit gate CI-deferred (no local webkitgtk; `cargo check` env-blocked in webkit2gtk-sys). **Merged → develop** per Mateo's ask; #365 stays open until it reaches main. Downstream: qa.sh live legs at staging (real Projects v2 board → chip shows column; unbound → no chip; 2nd hover = no refetch).)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **020-ssh-host-tracker-plumbing** — **SHIP-READY** (Reviewer SIGN-OFF
+  2026-07-13, `review.md` @ `cc4bde36`, 0 blockers; spec Status → Done).
+  Commits F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` on `fixes-new-workspace`,
+  on top of ship-ready 015. **RELEASE = HUMAN**: ONE train with 015 (same
+  branch) — PR → develop → staging qa.sh (live dyaus binding, SSH filing +
+  grounding note, Start-work direct launch, host-down 422-flavor vs slug-route
+  502, gh authed on the remote) → main + tag. Follow-up ticket (reviewer
+  should-fixes): SF1 ProjectHubPage:86 Tasks-tab binding read not
+  repoId-threaded — bound SSH repo's Tasks tab never auto-enters board mode;
+  SF2 SSH-repoId issue FETCH composes local neutral_cwd with remote gh —
+  caller-less today but the live wire will trip the deferred QA leg (fix
+  before/at QA); SF3 tasks.md wording.
 - **015-host-aware-start-and-tracker-intake** — **SHIP-READY** (Reviewer
   SIGN-OFF 2026-07-13, `review.md` @ `aa8ce9e3`, 0 blockers). Commits F1
   `ff7290ee` F2 `d7d64f33` F3 `3ec6f028` on `fixes-new-workspace`, unpushed.
@@ -75,77 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-13 | Developer | **020 F3 CODE-COMPLETE + GREEN + COMMITTED
-  `820712d9` → DEVELOPER PHASE DONE, phase → tester** (intake-ssh-honest,
-  AC 8-10; tasks.md F3; handoff `03-developer-to-tester.md`). Server:
-  `DraftedIssue {body, grounded_repo, grounded_wiki}` (chat.rs) →
-  always-present add-only `grounding: {repo, wiki}` on DraftBodyResponse +
-  serde pin (github.rs). Clients: pure `bindingQuery`/`createIssuePayload`;
-  repoId? on binding get/put/delete + issue create/fetch; grounding? on
-  DraftedGithubIssueBody (labels route unwidened per spec). UI:
-  ProjectBindingEditor repoId prop → 4 calls (ProjectHubPage,
-  IntegrationsPane + sanctioned local-filter drop, CreateWorkspaceWizard
-  trackerRepoId — workdir gate NOT relaxed); use-tracker-intake repoId on
-  binding+file, draft stays slug-first (amended AC 8), grounding state +
-  `deriveDraftGroundingNote` (renders ONLY when repo===false) + muted
-  TrackerIntakePanel note. Gates: cargo 701/0/5 held, fmt+clippy clean, vite
-  green, vitest 5 files 53/0 (015's 26 model cases UNMODIFIED, F2 arm-picker
-  held). Test-first RED both sides. 5 deviations documented (top: serde pin
-  amended in place; trackerRepoId extra hop through AgentStep). **All three
-  slices green: F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` → tester re-runs
-  everything independently.**
-- 2026-07-13 | Tester | **020 verdict PASS-WITH-DEFERRALS, 0 defects → phase
-  reviewer** (`verification.md`, artifacts commit `a7275ad1`; handoff
-  `04-tester-to-reviewer.md`). Independently reproduced ALL gates @
-  `820712d9`: cargo 701/0/5 (delta arithmetic corroborated 687+9+5=701, F3
-  one-for-one pin swap), fmt clean, clippy FORCED-recompile clean, vite
-  39.3s, vitest 5 files 53/0 (015's 26 intent-model cases 0-deletion
-  unmodified). Sacred proofs: EMPTY diffs on start-work-repo-match(+test),
-  native gh.rs, the WHOLE board_goals.rs (resolve_github_slug/SlugReason
-  trivially unchanged), task_sink.rs, auth.rs; both duplicate resolvers
-  gone (repo-wide grep 0); wizard gate byte-same; env-RPC/native arms
-  byte-identical bodies; zero serde-alias/is_public code changes. ACs
-  1/2/4/5/7/10 PASS, 3/6/8/9 PASS(deferred live-SSH legs = qa.sh/staging).
-  Key reads: ordering test GENUINELY pins unknown-repoId-beats-valid-hint;
-  zero-I/O hint test sound; `grounding` non-optional on success. 15/15
-  deviations ACCURATE. 6 spot-checks clean (502 hygiene: static messages,
-  payload-free SlugReason; stale connectionId="" routes native/falsy;
-  legacy no-repoId byte-identical). 4 nits non-blocking. Reviewer focus:
-  cross-repo repoId/workdir ruling, file-leg unconditional repoId
-  loud-failure, create_issue failure-ordering move.
-- 2026-07-13 | Reviewer | **020 SIGN-OFF → SHIP-READY, phase → done**
-  (`review.md` @ `cc4bde36`, 0 blockers; full `3ec6f028..820712d9` diff read
-  hunk-by-hunk, sacred empty-diffs re-verified independently). All 10 focus
-  items PASS w/ quoted evidence: mismatch ruling ACCEPTED (coherent pairs by
-  construction — PATCH refuses identity edits, re-add mints new id; F2 route
-  takes no workdir); file-leg loud 404 = D1-correct; create_issue ordering
-  move unobservable (local-host still precedes any gh call, comment-pinned);
-  absent-repoId byte-identical per route, unknown-repoId beats valid hint
-  (test-pinned), only Some(id)→local edge is the 015-sacred no-host_id repo;
-  wire 404/422/502 correct + SlugReason payload-free + &'static str messages
-  → SSH stderr/token structurally can't leak; renderer fail-closed w/
-  immutable cache key; grounding non-Option + note only on repo===false;
-  D5 all 0-line diffs + hint precedence preserved; 6 add-only
-  serde(default) widenings, zero aliases; require_token merge verified
-  (lib.rs:336/349), no polling, no spawn code. 3 should-fixes → ONE
-  follow-up ticket (SF1 Tasks-tab binding read unthreaded = next user
-  dead-end; SF2 fetch's neutral_cwd×remote-gh compose = latent 400 on the
-  caller-less wire, will trip deferred QA; SF3 docs wording). 4 leave-as-is
-  nits. spec.md Status → Done. **RELEASE = HUMAN, one train with 015.**
-- 2026-07-13 | Merge | **origin/develop @ `4a184993` merged into
-  `fixes-new-workspace`** (44 commits, incl. v0.75.0 "015-workspace-harness-
-  autostart" + v0.75.1 #359 SSH-binding wizard fix + sdd-bar/tracker-status
-  work — all merged clean except the 020-overlap files). Reconciliation:
-  #359's GET `host_id` param is SUPERSEDED by 020's `repoId` (D1: wire
-  identity = the repo, never a client-asserted host) — the old
-  `github_projects::resolve_slug` stays deleted; #359's expand-skip-for-SSH
-  folded into `util::resolve_tracker_slug` (new host-aware
-  `util::effective_workdir`, + the same fix in github.rs
-  `fetch_github_issue`; +1 test pin); #359's `deriveTrackerBindingTarget`
-  KEPT (wizard tracker section now reads bindings for SSH repos) but
-  migrated to `{workdir, repoId, local}` — its 5 vitest pins adapted
-  hostId→repoId/local, configure editor stays local-gated, F3
-  `trackerRepoId`→ProjectBindingEditor threading preserved.
 - 2026-07-13 | Release | **merge sync #2 with develop @ 3636d6ac** (PR #367
   "pinned chat repo context" — ANOTHER worktree independently threaded
   repo_id + SSH repo-context gathering through chat.rs; complementary to
@@ -160,3 +101,38 @@
   `phase`|`current_phase` + first-token value; gate re-run 694/0 + fmt. Full
   trail in `.agentum-harness/decisions.md`. F2 rider = spec 358b/#365, NOT
   built, pending its own PM gate. Staging qa.sh covers the loop-stop scenario.)
+- 2026-07-14 | Dev→Review | **018 BUILT + SIGNED-OFF → phase done, merged to develop**
+  (one slice, `tasks`-equivalent in `verification.md`/`review.md`). Landed:
+  `gh_issue_project_status` desktop Tauri command + pure
+  `issue_project_status(&Value,…)->Option<String>` mapper (4 #[cfg(test)]
+  cases) + `lib.rs` reg; `gh.ts`/`contract.ts` `issueProjectStatus`; pure
+  `lib/issue-project-status.ts` (parseIssueRef/statusCacheKey/
+  resolveIssueProjectStatus, never-throws) + 12 vitest; `IssueProjectStatusChip`
+  + `useIssueProjectStatus` (module caches: binding/slug, status/slug#number) +
+  badges-row slot + `workdir`/`repoId` from WorktreeCard + card test. Gates:
+  UI build green, new vitest 13/13, tsc(pure) green, fmt green; Rust compile
+  CI-deferred (webkitgtk absent). 1 red vitest = pre-existing develop baseline
+  (proven via stash-all). AC1 code-verified, AC2/AC3 test-covered; live legs =
+  qa.sh/staging. #365 stays open until main.
+- 2026-07-14 | Architect | **018 ARCHITECT DONE → phase developer**
+  (`architecture.md`; handoffs `01-pm-to-architect.md`, `02-architect-to-developer.md`).
+  Both open Qs pinned: **D1** desktop Tauri command `gh_issue_project_status`
+  (one `gh api graphql` read; owner/repo/number as `$vars`; pure
+  `issue_project_status(&Value, projectId, statusFieldId) -> Option<String>`
+  mapper) NOT a server route; **D2** fresh `getProjectBinding` cached per slug,
+  NOT Project Hub reuse. Data flow: card-open → parse `issue.url` → binding
+  cache/fetch → status cache/fetch → chip; every miss/error → no chip (D6
+  never-throw). Build = 4 commits. Collision sweep clean (nothing built).
+  ⚠️ Flagged the no-webkitgtk build gate for developer/tester: Rust tests
+  CI-only, local verify = UI bun build + 2 targeted vitest files (full
+  suite/tsc = known pre-broken baseline). Phase → developer (SDD loop next
+  step, or delegate via Agent per orchestrate §6).
+- 2026-07-14 | Spec | **018 DRAFTED + PM-GATED → phase pm** (issue **#365**,
+  `ai/specs/018-issue-hover-project-status-chip/spec.md`): the 016 F2 rider /
+  harness stub 358b promoted to its own one-slice SDD spec — hover-card
+  Project-status chip, lazy fetch-on-open + per-issue session cache, silent
+  absence on unbound/off-project/error. Citations line-verified @ develop
+  `d31314b3` (worktree ff'd from stale v0.57.0 main first); 358b stub now
+  points here. Gate: all 9 boxes pass. Carried open Qs for architect:
+  read-path Tauri-vs-server (recommended: desktop command beside
+  `gh_get_project_view_table`), binding-read source. Handoff → PM/architect.
