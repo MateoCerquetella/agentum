@@ -576,6 +576,27 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             },
         },
         {
+            "name": "agentum_sdd_loop",
+            "description": "Check in with the per-session SDD loop that injected the current \
+                step prompt. Call it at the END of every loop step: `done: true` when the work \
+                is complete (the spec's phase is done or there is no actionable next step) — \
+                this stops the loop so no further step prompts are injected; `done: false` to \
+                keep the loop running, with `summary` as a one-line progress note. Always safe \
+                to call: with no active loop on the session (or from an earlier activation) it \
+                returns success and stops nothing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "The session uuid, exactly as given in the step prompt" },
+                    "done": { "type": "boolean", "description": "true = work complete, stop the loop; false = more to do, keep looping" },
+                    "summary": { "type": "string", "description": "One-line progress note; surfaced on the next step event when done is false" },
+                    "generation": { "type": "integer", "description": "The loop generation from the step prompt; a mismatch makes the check-in a no-op" }
+                },
+                "required": ["session", "done"],
+                "additionalProperties": false,
+            },
+        },
+        {
             "name": "agentum_sdd",
             "description": "Fetch a server-owned SDD (spec-driven development) playbook. \
                 Call with no arguments to list the available playbooks (sdd-spec, \
@@ -678,6 +699,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_check" => tool_harness_check(&args).await,
         "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
         "agentum_report_status" => tool_report_status(state, &args).await,
+        "agentum_sdd_loop" => tool_sdd_loop(state, &args).await,
         "agentum_sdd" => tool_sdd(&args),
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
@@ -1243,6 +1265,39 @@ async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<St
     Ok(report_status_text(outcome, &provider, phase))
 }
 
+/// Parse + validate `agentum_sdd_loop` inputs (spec 016 F1). Pure →
+/// unit-testable without AppState. Errors here are CALLER bugs (missing
+/// `session`/`done`, a junk uuid) and DO surface as `isError: true`; everything
+/// downstream — no live loop, a stale generation — is a SUCCESS string by
+/// contract, so the check-in can never fail an agent's turn.
+fn parse_sdd_loop_args(
+    args: &Value,
+) -> anyhow::Result<(uuid::Uuid, Option<u64>, bool, Option<String>)> {
+    let session = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session`"))?;
+    let session = uuid::Uuid::parse_str(session)
+        .map_err(|_| anyhow::anyhow!("`session` is not a uuid: {session}"))?;
+    let done = args
+        .get("done")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("missing `done` (boolean)"))?;
+    let generation = args.get("generation").and_then(Value::as_u64);
+    let summary = args
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok((session, generation, done, summary))
+}
+
+/// SDD-loop check-in — a thin arm over [`super::sdd::agent_checkin`] (spec 016
+/// F1); the loop mechanics stay in `routes/sdd.rs` beside the map they mutate.
+async fn tool_sdd_loop(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let (session, generation, done, summary) = parse_sdd_loop_args(args)?;
+    Ok(super::sdd::agent_checkin(state, session, generation, done, summary).await)
+}
+
 /// Fetch (or list) the server-owned SDD playbooks. This is the universal
 /// delivery path — the bootstrap line the SDD buttons/loop inject tells the
 /// agent to call this; agents whose client renders MCP prompts can use
@@ -1521,6 +1576,50 @@ mod tests {
         }
         assert!(off.contains(&"agentum_list_worktrees".to_string()));
         assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());
+    }
+
+    // --- spec 016 F1: agentum_sdd_loop ---
+
+    #[test]
+    fn sdd_loop_tool_is_advertised_regardless_of_the_orchestration_gate() {
+        // Loop control, not the mailbox/DAG surface: deliberately NOT in
+        // ORCHESTRATION_TOOLS, so it is advertised (and callable) whenever the
+        // MCP server itself is on.
+        assert!(!is_orchestration_tool("agentum_sdd_loop"));
+        assert!(tool_names(true).contains(&"agentum_sdd_loop".to_string()));
+        assert!(tool_names(false).contains(&"agentum_sdd_loop".to_string()));
+    }
+
+    #[test]
+    fn parse_sdd_loop_args_requires_session_and_done() {
+        let u = uuid::Uuid::new_v4();
+
+        // Missing session / missing done / junk uuid → caller errors.
+        assert!(parse_sdd_loop_args(&json!({ "done": true })).is_err());
+        assert!(parse_sdd_loop_args(&json!({ "session": u.to_string() })).is_err());
+        assert!(parse_sdd_loop_args(&json!({ "session": "not-a-uuid", "done": true })).is_err());
+        // A stringly-typed `done` is a caller bug, never coerced.
+        assert!(parse_sdd_loop_args(&json!({ "session": u.to_string(), "done": "true" })).is_err());
+
+        // Minimal valid shape: generation + summary are optional.
+        let (id, generation, done, summary) =
+            parse_sdd_loop_args(&json!({ "session": u.to_string(), "done": false })).unwrap();
+        assert_eq!(id, u);
+        assert_eq!(generation, None);
+        assert!(!done);
+        assert_eq!(summary, None);
+
+        // Full shape.
+        let (_, generation, done, summary) = parse_sdd_loop_args(&json!({
+            "session": u.to_string(),
+            "done": true,
+            "generation": 7,
+            "summary": "F1 green",
+        }))
+        .unwrap();
+        assert_eq!(generation, Some(7));
+        assert!(done);
+        assert_eq!(summary.as_deref(), Some("F1 green"));
     }
 
     // --- spec 005 F4: agentum_report_status ---

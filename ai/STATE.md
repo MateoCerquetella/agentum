@@ -153,3 +153,10 @@
   conflicted, ours kept + this line). PR #368 (specs 015+020) open into
   develop; first merge-reconcile commit b2b19f31 (#359 repoId supersession +
   effective_workdir). Gates re-run post-merge before push.
+- 2026-07-13 | Reviewer | **016 F1 (sdd-loop MCP check-in) REVIEW SIGN-OFF →
+  merged via PR #366** (attempt 5 at `99670cf1` after a 4×-blocked review gate —
+  the AC3 STATE.md belt parser silently deviated from architecture.md and never
+  fired on the real `- **phase:** done <!-- … -->` shape; fixed = both keys
+  `phase`|`current_phase` + first-token value; gate re-run 694/0 + fmt. Full
+  trail in `.agentum-harness/decisions.md`. F2 rider = spec 358b/#365, NOT
+  built, pending its own PM gate. Staging qa.sh covers the loop-stop scenario.)
