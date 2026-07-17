@@ -2833,6 +2833,7 @@ mod tests {
             status_mapping: crate::github_projects::StatusMapping {
                 todo: "opt-todo".into(),
                 in_progress: "opt-inprogress".into(),
+                in_review: "opt-inreview".into(),
                 ready_to_test: "opt-rtt".into(),
                 done: "opt-done".into(),
                 blocked: "opt-blocked".into(),

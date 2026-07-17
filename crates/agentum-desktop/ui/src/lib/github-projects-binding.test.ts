@@ -18,6 +18,8 @@ import {
 const resolvedDefault: ResolvedMappingDto = {
   todo: { optionId: 'o1', name: 'Todo', via: 'matched' },
   inProgress: { optionId: 'o2', name: 'In Progress', via: 'matched' },
+  // #379: no Review/PR column here → in_review falls back to In Progress.
+  inReview: { optionId: 'o2', name: 'In Progress', via: 'fell_back' },
   readyToTest: { optionId: 'o2', name: 'In Progress', via: 'fell_back' },
   done: { optionId: 'o3', name: 'Done', via: 'matched' },
   blocked: { optionId: 'o2', name: 'In Progress', via: 'fell_back' }
@@ -52,10 +54,21 @@ describe('selectionFromResolved', () => {
     expect(sel).toEqual({
       todo: 'o1',
       inProgress: 'o2',
+      // #379: a fell_back in_review is left EMPTY (optional/unmapped), not
+      // pre-picked to the In Progress option.
+      inReview: '',
       readyToTest: 'o2',
       done: 'o3',
       blocked: 'o2'
     })
+  })
+
+  it('#379: a MATCHED in_review is pre-selected to its Review/PR column', () => {
+    const withReview: ResolvedMappingDto = {
+      ...resolvedDefault,
+      inReview: { optionId: 'pr1', name: 'In Review', via: 'matched' }
+    }
+    expect(selectionFromResolved(withReview).inReview).toBe('pr1')
   })
 
   it('a refusal (resolved: null) yields empty selects — never a partial pre-selection', () => {
@@ -100,6 +113,11 @@ describe('mappingComplete (the Save gate)', () => {
     expect(mappingComplete(partial)).toBe(false)
     expect(mappingComplete({ ...partial, blocked: '  ' })).toBe(false)
     expect(mappingComplete(selectionFromResolved(resolvedDefault))).toBe(true)
+  })
+
+  it('#379: stays true with In Review unmapped — it is optional', () => {
+    const sel = { ...selectionFromResolved(resolvedDefault), inReview: '' }
+    expect(mappingComplete(sel)).toBe(true)
   })
 })
 
