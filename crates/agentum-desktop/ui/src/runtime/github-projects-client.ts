@@ -15,6 +15,9 @@ async function authHeaders(): Promise<Record<string, string>> {
 export type StatusMappingWire = {
   todo: string
   inProgress: string
+  /** #379: optional In Review / PR column option. Omitted / empty ⇒ the
+   *  server folds InReview onto the In Progress option (back-compat). */
+  inReview?: string
   readyToTest: string
   done: string
   blocked: string

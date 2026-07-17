@@ -528,6 +528,10 @@ fn mapping_from_resolved(r: &ResolvedMapping) -> StatusMapping {
     StatusMapping {
         todo: r.todo.option_id.clone(),
         in_progress: r.in_progress.option_id.clone(),
+        // #379: auto-provisioning now carries the In Review / PR option too
+        // (a Review/PR column if the board has one, else the In Progress
+        // fallback the resolver picked).
+        in_review: r.in_review.option_id.clone(),
         ready_to_test: r.ready_to_test.option_id.clone(),
         done: r.done.option_id.clone(),
         blocked: r.blocked.option_id.clone(),
@@ -538,6 +542,7 @@ fn names_from_resolved(r: &ResolvedMapping) -> StatusNames {
     StatusNames {
         todo: r.todo.option_name.clone(),
         in_progress: r.in_progress.option_name.clone(),
+        in_review: r.in_review.option_name.clone(),
         ready_to_test: r.ready_to_test.option_name.clone(),
         done: r.done.option_name.clone(),
         blocked: r.blocked.option_name.clone(),
@@ -558,6 +563,7 @@ fn names_for_ids(m: &StatusMapping, options: &[StatusOption]) -> Option<StatusNa
     Some(StatusNames {
         todo: name_of(&m.todo),
         in_progress: name_of(&m.in_progress),
+        in_review: name_of(&m.in_review),
         ready_to_test: name_of(&m.ready_to_test),
         done: name_of(&m.done),
         blocked: name_of(&m.blocked),
@@ -870,6 +876,7 @@ mod tests {
             status_mapping: StatusMapping {
                 todo: "t".into(),
                 in_progress: "i".into(),
+                in_review: String::new(),
                 ready_to_test: "r".into(),
                 done: "d".into(),
                 blocked: "b".into(),

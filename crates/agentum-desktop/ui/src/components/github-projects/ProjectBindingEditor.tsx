@@ -13,11 +13,12 @@ import { Input } from '@/components/ui/input'
 import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import {
-  BOARD_PHASES,
   BOARD_PHASE_LABELS,
+  EDITABLE_BOARD_PHASES,
   EMPTY_SELECTION,
   fallbackHints,
   mappingComplete,
+  OPTIONAL_BOARD_PHASES,
   optionNamesForSelection,
   reduceBindingSelection,
   selectionForRebind,
@@ -359,34 +360,47 @@ export function ProjectBindingEditor({
         </p>
         {error && !authError ? <p className="text-xs text-destructive">{error.message}</p> : null}
         <div className="grid grid-cols-1 gap-2">
-          {BOARD_PHASES.map((phase) => (
-            <div key={phase} className="grid grid-cols-[110px_minmax(0,1fr)] items-center gap-2">
-              <span className="text-[11px] font-medium text-muted-foreground">
-                {BOARD_PHASE_LABELS[phase]}
-              </span>
-              <div className="min-w-0">
-                <select
-                  value={selection[phase]}
-                  onChange={(e) =>
-                    dispatchSelection({ type: 'set', phase, optionId: e.target.value })
-                  }
-                  className="h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-xs text-foreground"
-                >
-                  <option value="">Pick a column…</option>
-                  {discovery.options.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
+          {EDITABLE_BOARD_PHASES.map((phase) => {
+            const optional = OPTIONAL_BOARD_PHASES.includes(phase)
+            return (
+              <div key={phase} className="grid grid-cols-[110px_minmax(0,1fr)] items-center gap-2">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  {BOARD_PHASE_LABELS[phase]}
+                  {optional ? <span className="text-muted-foreground/50"> (opt)</span> : null}
+                </span>
+                <div className="min-w-0">
+                  <select
+                    value={selection[phase]}
+                    onChange={(e) =>
+                      dispatchSelection({ type: 'set', phase, optionId: e.target.value })
+                    }
+                    className="h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+                  >
+                    {/* #379: In Review is optional — an empty pick is valid and
+                        folds onto In Progress, so its placeholder says so. */}
+                    <option value="">
+                      {optional ? 'Not tracked (uses In Progress)' : 'Pick a column…'}
                     </option>
-                  ))}
-                </select>
-                {hints[phase] ? (
-                  <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-300">
-                    {hints[phase]}
-                  </p>
-                ) : null}
+                    {discovery.options.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                  {!optional && hints[phase] ? (
+                    <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-300">
+                      {hints[phase]}
+                    </p>
+                  ) : null}
+                  {optional && phase === 'inReview' ? (
+                    <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+                      Where a card moves when its PR opens. Leave unset to keep it in In Progress.
+                    </p>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
         {doneClosesToggle}
         <div className="flex items-center gap-2">
@@ -446,9 +460,12 @@ export function ProjectBindingEditor({
         </div>
         {mappedNames ? (
           <p className="text-[11px] text-muted-foreground/70">
-            {BOARD_PHASES.map(
-              (phase) => `${BOARD_PHASE_LABELS[phase]} → ${mappedNames[phase] || '?'}`
-            ).join(' · ')}
+            {EDITABLE_BOARD_PHASES
+              // #379: an unmapped optional phase (In Review with no column) is
+              // omitted from the summary rather than shown as "→ ?".
+              .filter((phase) => !OPTIONAL_BOARD_PHASES.includes(phase) || mappedNames[phase])
+              .map((phase) => `${BOARD_PHASE_LABELS[phase]} → ${mappedNames[phase] || '?'}`)
+              .join(' · ')}
           </p>
         ) : null}
         {doneClosesToggle}

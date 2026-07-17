@@ -62,6 +62,13 @@ impl From<crate::task_sink::TrackerPhase> for BoardPhase {
 pub struct StatusMapping {
     pub todo: String,
     pub in_progress: String,
+    /// #379: the "In Review / PR" column option — the card lands here when a
+    /// non-draft PR opens (tracker_sync's PR-open → InReview). `#[serde(default)]`
+    /// (empty) so every pre-#379 binding on disk deserializes and behaves
+    /// EXACTLY as before: `option_id(InReview)` falls back to `in_progress`
+    /// until the binding is re-discovered with a Review/PR column.
+    #[serde(default)]
+    pub in_review: String,
     pub ready_to_test: String,
     pub done: String,
     pub blocked: String,
@@ -74,13 +81,17 @@ impl StatusMapping {
         match phase {
             BoardPhase::Todo => &self.todo,
             BoardPhase::InProgress => &self.in_progress,
-            // Spec 012 F3: InReview folds onto the InProgress option — 010's
-            // nearest-earlier-phase fallback, applied at the write accessor.
-            // A stored binding carries no separate in-review option (backward
-            // compatible with every 010 binding); a distinct "In Review"
-            // Project column is the documented carry-forward (needs the
-            // discovery→persist path to populate it).
-            BoardPhase::InReview => &self.in_progress,
+            // #379: InReview lands on its own "In Review / PR" column when the
+            // binding maps one; an UNMAPPED in_review (empty — every pre-#379
+            // binding) folds back onto InProgress, spec 012 F3's original
+            // behavior, so existing boards are byte-identical until re-bound.
+            BoardPhase::InReview => {
+                if self.in_review.trim().is_empty() {
+                    &self.in_progress
+                } else {
+                    &self.in_review
+                }
+            }
             BoardPhase::ReadyToTest => &self.ready_to_test,
             BoardPhase::Done => &self.done,
             BoardPhase::Blocked => &self.blocked,
@@ -97,6 +108,8 @@ pub struct StatusNames {
     pub todo: String,
     #[serde(default)]
     pub in_progress: String,
+    #[serde(default)]
+    pub in_review: String,
     #[serde(default)]
     pub ready_to_test: String,
     #[serde(default)]
@@ -261,15 +274,26 @@ const IN_PROGRESS_SYNONYMS: &[&str] = &[
     "indevelopment",
     "coding",
 ];
+// #379: a distinct "In Review / PR" phase — the card lands here on PR-open.
+// The review/PR-flavored tokens moved OUT of READY_TO_TEST into here (kept
+// disjoint, pinned by `synonym_lists_are_disjoint`): a "Review"/"PR" column is
+// the PR/review stage, while QA/test columns stay ready_to_test.
+const IN_REVIEW_SYNONYMS: &[&str] = &[
+    "inreview",
+    "review",
+    "readyforreview",
+    "codereview",
+    "reviewing",
+    "pr",
+    "pullrequest",
+    "inpr",
+];
 const READY_TO_TEST_SYNONYMS: &[&str] = &[
     "readytotest",
     "readyfortest",
     "qa",
     "testing",
     "test",
-    "review",
-    "inreview",
-    "readyforreview",
     "verify",
     "verification",
     "staging",
@@ -306,6 +330,7 @@ pub struct ResolvedPhase {
 pub struct ResolvedMapping {
     pub todo: ResolvedPhase,
     pub in_progress: ResolvedPhase,
+    pub in_review: ResolvedPhase,
     pub ready_to_test: ResolvedPhase,
     pub done: ResolvedPhase,
     pub blocked: ResolvedPhase,
@@ -365,6 +390,12 @@ pub fn resolve_status_mapping(options: &[StatusOption]) -> Result<ResolvedMappin
         option_name: in_progress.option_name.clone(),
         via: MatchVia::FellBack,
     };
+    // #379: In Review matches a Review/PR column, else folds onto In Progress
+    // (same nearest-earlier fallback as ready_to_test/blocked — and the exact
+    // pre-#379 InReview→InProgress behavior when no such column exists).
+    let in_review = match_option(options, IN_REVIEW_SYNONYMS)
+        .map(matched)
+        .unwrap_or_else(fell_back_to_in_progress);
     let ready_to_test = match_option(options, READY_TO_TEST_SYNONYMS)
         .map(matched)
         .unwrap_or_else(fell_back_to_in_progress);
@@ -374,6 +405,7 @@ pub fn resolve_status_mapping(options: &[StatusOption]) -> Result<ResolvedMappin
     Ok(ResolvedMapping {
         todo,
         in_progress,
+        in_review,
         ready_to_test,
         done,
         blocked,
@@ -984,9 +1016,10 @@ mod tests {
     /// across phases.
     #[test]
     fn synonym_lists_are_disjoint() {
-        let lists: [(&str, &[&str]); 5] = [
+        let lists: [(&str, &[&str]); 6] = [
             ("todo", TODO_SYNONYMS),
             ("in_progress", IN_PROGRESS_SYNONYMS),
+            ("in_review", IN_REVIEW_SYNONYMS),
             ("ready_to_test", READY_TO_TEST_SYNONYMS),
             ("done", DONE_SYNONYMS),
             ("blocked", BLOCKED_SYNONYMS),
@@ -1027,6 +1060,60 @@ mod tests {
     /// AC 2 fixture (b): a custom board (Backlog / Building / QA / Shipped)
     /// resolves ReadyToTest→"QA" and Done→"Shipped"; Blocked falls back to the
     /// Building option.
+    #[test]
+    #[test]
+    fn option_id_in_review_falls_back_to_in_progress_when_unmapped() {
+        // #379: an empty in_review (every pre-#379 binding) folds onto the In
+        // Progress option — byte-identical to spec 012 F3.
+        let m = StatusMapping {
+            todo: "t".into(),
+            in_progress: "ip".into(),
+            in_review: String::new(),
+            ready_to_test: "rtt".into(),
+            done: "d".into(),
+            blocked: "b".into(),
+        };
+        assert_eq!(m.option_id(BoardPhase::InReview), "ip");
+        // A mapped in_review is used verbatim.
+        let m2 = StatusMapping {
+            in_review: "pr".into(),
+            ..m
+        };
+        assert_eq!(m2.option_id(BoardPhase::InReview), "pr");
+    }
+
+    #[test]
+    fn resolve_maps_review_and_pr_columns_to_in_review_not_ready_to_test() {
+        // #379: a "Review"/"PR" column is the InReview target; QA/Test stays
+        // ready_to_test. (Pre-#379 these folded into ready_to_test.)
+        for review_name in ["Review", "In Review", "PR", "Pull Request", "Code Review"] {
+            let options = opts(&[
+                ("o1", "Todo"),
+                ("o2", "In Progress"),
+                ("o3", review_name),
+                ("o4", "QA"),
+                ("o5", "Done"),
+            ]);
+            let m = resolve_status_mapping(&options).unwrap();
+            assert_eq!(
+                m.in_review.option_id, "o3",
+                "{review_name} should map to in_review"
+            );
+            assert_eq!(m.in_review.via, MatchVia::Matched);
+            assert_eq!(m.ready_to_test.option_id, "o4", "QA stays ready_to_test");
+        }
+    }
+
+    #[test]
+    fn resolve_in_review_falls_back_to_in_progress_without_a_review_column() {
+        // No Review/PR column → in_review folds onto In Progress (the exact
+        // pre-#379 InReview behavior), reported as FellBack for the UI hint.
+        let options = opts(&[("o1", "Todo"), ("o2", "In Progress"), ("o3", "Done")]);
+        let m = resolve_status_mapping(&options).unwrap();
+        assert_eq!(m.in_review.option_id, "o2");
+        assert_eq!(m.in_review.via, MatchVia::FellBack);
+    }
+
     #[test]
     fn resolve_custom_backlog_building_qa_shipped() {
         let options = opts(&[
@@ -1293,6 +1380,7 @@ mod tests {
             status_mapping: StatusMapping {
                 todo: "t".into(),
                 in_progress: "i".into(),
+                in_review: String::new(),
                 ready_to_test: "r".into(),
                 done: "d".into(),
                 blocked: "b".into(),
@@ -1521,6 +1609,7 @@ mod tests {
             status_mapping: StatusMapping {
                 todo: "opt-todo".into(),
                 in_progress: "opt-inprogress".into(),
+                in_review: "opt-inreview".into(),
                 ready_to_test: "opt-rtt".into(),
                 done: "opt-done".into(),
                 blocked: "opt-blocked".into(),

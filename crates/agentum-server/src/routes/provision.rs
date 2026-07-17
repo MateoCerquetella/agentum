@@ -144,6 +144,9 @@ fn project_choice(dto: &ProjectChoiceDto) -> Result<ProjectChoice, String> {
 struct WireStatusMapping {
     todo: String,
     in_progress: String,
+    /// #379: optional In Review / PR column — empty folds onto In Progress.
+    #[serde(default)]
+    in_review: String,
     ready_to_test: String,
     done: String,
     blocked: String,
@@ -171,6 +174,7 @@ fn status_mapping_from_wire(dto: &WireStatusMapping) -> Result<StatusMapping, St
     Ok(StatusMapping {
         todo: dto.todo.trim().to_string(),
         in_progress: dto.in_progress.trim().to_string(),
+        in_review: dto.in_review.trim().to_string(),
         ready_to_test: dto.ready_to_test.trim().to_string(),
         done: dto.done.trim().to_string(),
         blocked: dto.blocked.trim().to_string(),

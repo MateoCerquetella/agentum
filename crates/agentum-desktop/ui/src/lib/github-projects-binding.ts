@@ -2,9 +2,17 @@
 // No DOM, no IPC — vitest'able without jsdom (the UI package ships none).
 // The wire shapes mirror `crates/agentum-server/src/routes/github_projects.rs`.
 
-export type BoardPhaseKey = 'todo' | 'inProgress' | 'readyToTest' | 'done' | 'blocked'
+export type BoardPhaseKey =
+  | 'todo'
+  | 'inProgress'
+  | 'inReview'
+  | 'readyToTest'
+  | 'done'
+  | 'blocked'
 
-/** Canonical render order for the five per-phase selects. */
+/** The REQUIRED phases the Save gate enforces. `inReview` (#379) is optional —
+ *  a repo with no Review/PR column leaves it unmapped and it folds onto In
+ *  Progress server-side — so it is deliberately NOT in this set. */
 export const BOARD_PHASES: readonly BoardPhaseKey[] = [
   'todo',
   'inProgress',
@@ -13,9 +21,24 @@ export const BOARD_PHASES: readonly BoardPhaseKey[] = [
   'blocked'
 ]
 
+/** Every phase to RENDER a select for, in pipeline order — the required five
+ *  plus the optional In Review (#379), which sits after In Progress. */
+export const EDITABLE_BOARD_PHASES: readonly BoardPhaseKey[] = [
+  'todo',
+  'inProgress',
+  'inReview',
+  'readyToTest',
+  'done',
+  'blocked'
+]
+
+/** Phases that are allowed to stay unmapped (Save still enables). */
+export const OPTIONAL_BOARD_PHASES: readonly BoardPhaseKey[] = ['inReview']
+
 export const BOARD_PHASE_LABELS: Record<BoardPhaseKey, string> = {
   todo: 'Todo',
   inProgress: 'In Progress',
+  inReview: 'In Review',
   readyToTest: 'Ready to Test',
   done: 'Done',
   blocked: 'Blocked'
@@ -39,6 +62,7 @@ export type BindingSelection = Record<BoardPhaseKey, string>
 export const EMPTY_SELECTION: BindingSelection = {
   todo: '',
   inProgress: '',
+  inReview: '',
   readyToTest: '',
   done: '',
   blocked: ''
@@ -72,6 +96,9 @@ export function selectionFromResolved(resolved: ResolvedMappingDto | null): Bind
   return {
     todo: resolved.todo.optionId,
     inProgress: resolved.inProgress.optionId,
+    // #379: a FellBack in_review (no Review/PR column) leaves the select empty
+    // so it reads as "unmapped (optional)", not a pre-picked In Progress.
+    inReview: resolved.inReview.via === 'matched' ? resolved.inReview.optionId : '',
     readyToTest: resolved.readyToTest.optionId,
     done: resolved.done.optionId,
     blocked: resolved.blocked.optionId
@@ -95,6 +122,7 @@ export function selectionForRebind(
   return {
     todo: pick('todo'),
     inProgress: pick('inProgress'),
+    inReview: pick('inReview'),
     readyToTest: pick('readyToTest'),
     done: pick('done'),
     blocked: pick('blocked')
@@ -138,6 +166,7 @@ export function optionNamesForSelection(
   return {
     todo: byId.get(selection.todo) ?? '',
     inProgress: byId.get(selection.inProgress) ?? '',
+    inReview: byId.get(selection.inReview) ?? '',
     readyToTest: byId.get(selection.readyToTest) ?? '',
     done: byId.get(selection.done) ?? '',
     blocked: byId.get(selection.blocked) ?? ''

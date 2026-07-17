@@ -81,6 +81,7 @@ struct ResolvedPhaseDto {
 struct ResolvedMappingDto {
     todo: ResolvedPhaseDto,
     in_progress: ResolvedPhaseDto,
+    in_review: ResolvedPhaseDto,
     ready_to_test: ResolvedPhaseDto,
     done: ResolvedPhaseDto,
     blocked: ResolvedPhaseDto,
@@ -101,6 +102,7 @@ fn resolved_mapping_dto(m: &ResolvedMapping) -> ResolvedMappingDto {
     ResolvedMappingDto {
         todo: resolved_phase_dto(&m.todo),
         in_progress: resolved_phase_dto(&m.in_progress),
+        in_review: resolved_phase_dto(&m.in_review),
         ready_to_test: resolved_phase_dto(&m.ready_to_test),
         done: resolved_phase_dto(&m.done),
         blocked: resolved_phase_dto(&m.blocked),
@@ -129,6 +131,10 @@ struct DiscoverResponse {
 struct StatusMappingDto {
     todo: String,
     in_progress: String,
+    /// #379: optional — a client without a Review/PR column omits it, and an
+    /// empty value folds onto In Progress server-side (back-compat).
+    #[serde(default)]
+    in_review: String,
     ready_to_test: String,
     done: String,
     blocked: String,
@@ -155,6 +161,7 @@ fn binding_dto(b: &BoardBinding) -> BindingDto {
         status_mapping: StatusMappingDto {
             todo: b.status_mapping.todo.clone(),
             in_progress: b.status_mapping.in_progress.clone(),
+            in_review: b.status_mapping.in_review.clone(),
             ready_to_test: b.status_mapping.ready_to_test.clone(),
             done: b.status_mapping.done.clone(),
             blocked: b.status_mapping.blocked.clone(),
@@ -167,6 +174,7 @@ fn binding_dto(b: &BoardBinding) -> BindingDto {
         option_names: b.option_names.as_ref().map(|n| StatusMappingDto {
             todo: n.todo.clone(),
             in_progress: n.in_progress.clone(),
+            in_review: n.in_review.clone(),
             ready_to_test: n.ready_to_test.clone(),
             done: n.done.clone(),
             blocked: n.blocked.clone(),
@@ -199,6 +207,10 @@ fn validate_status_mapping(dto: &StatusMappingDto) -> Result<StatusMapping, Stri
     Ok(StatusMapping {
         todo: dto.todo.trim().to_string(),
         in_progress: dto.in_progress.trim().to_string(),
+        // #379: in_review is OPTIONAL — an empty value is valid and folds onto
+        // In Progress at write time (StatusMapping::option_id), so a repo
+        // without a Review/PR column isn't forced to map one.
+        in_review: dto.in_review.trim().to_string(),
         ready_to_test: dto.ready_to_test.trim().to_string(),
         done: dto.done.trim().to_string(),
         blocked: dto.blocked.trim().to_string(),
@@ -359,6 +371,7 @@ async fn put_binding(
         option_names: body.option_names.as_ref().map(|n| StatusNames {
             todo: n.todo.clone(),
             in_progress: n.in_progress.clone(),
+            in_review: n.in_review.clone(),
             ready_to_test: n.ready_to_test.clone(),
             done: n.done.clone(),
             blocked: n.blocked.clone(),
@@ -396,6 +409,7 @@ mod tests {
         StatusMappingDto {
             todo: todo.into(),
             in_progress: "i".into(),
+            in_review: String::new(),
             ready_to_test: "r".into(),
             done: "d".into(),
             blocked: "b".into(),
@@ -482,6 +496,7 @@ mod tests {
             status_mapping: StatusMapping {
                 todo: "t".into(),
                 in_progress: "i".into(),
+                in_review: String::new(),
                 ready_to_test: "r".into(),
                 done: "d".into(),
                 blocked: "b".into(),
