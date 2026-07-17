@@ -275,9 +275,22 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         {
             "name": "agentum_list_sessions",
             "description": "List the agent sessions agentum manages on this machine \
-                (each is one tmux pane running an agent CLI). Returns name, tool, \
-                status, and working directory. Use to see sibling agents/worktrees.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+                (each is one tmux pane running an agent CLI). Returns \
+                {total_matching, returned, truncated, sessions:[{id, name, tool, \
+                status, workdir}]}. A long-lived install accumulates hundreds of \
+                rows, so the page is capped (`limit`, default 50) — filter with \
+                `status` (exact, e.g. Running), `name_contains`, or \
+                `workdir_contains` instead of paging through everything.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "description": "Exact status filter (case-insensitive): Running|Stopped|Crashed|…" },
+                    "name_contains": { "type": "string", "description": "Substring filter on the session name" },
+                    "workdir_contains": { "type": "string", "description": "Substring filter on the working directory" },
+                    "limit": { "type": "integer", "description": "Max sessions to return (default 50, cap 500)" }
+                },
+                "additionalProperties": false,
+            },
         },
         {
             "name": "agentum_spawn_session",
@@ -290,7 +303,11 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 the agent CLI (claude|codex|cursor|gemini|… — default claude); optional \
                 `model`; `flags` are extra CLI args; `yolo` skips permission prompts \
                 (pushed as the canonical marker and translated per tool). Returns the new \
-                session's id, name, tool, status, and workdir.",
+                session's id, name, tool, status, and workdir. Mailbox timing: a message \
+                sent right after spawn can land BEFORE the new agent's first \
+                agentum_check_messages poll — make its bootstrap prompt poll the mailbox \
+                in a retry loop (every ~20s), or push directly with \
+                agentum_inject_prompt. End the session later with agentum_stop_session.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -628,6 +645,63 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 "required": ["workdir", "entry"],
                 "additionalProperties": false,
             },
+        },
+        {
+            "name": "agentum_stop_session",
+            "description": "Stop or kill an agent session by id or name — the lifecycle \
+                END for agentum_spawn_session (#378), the same core as the desktop \
+                stop/kill actions. `mode` 'stop' (default) ends the pane gracefully; \
+                'kill' hard-kills it. An external (user-owned) tmux session is only \
+                detached, never destroyed. The session row and pane log survive as \
+                evidence; the pane is gone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "Session id (uuid) or unique session name" },
+                    "mode": { "type": "string", "enum": ["stop", "kill"], "description": "stop = graceful (default), kill = hard" }
+                },
+                "required": ["session"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_inject_prompt",
+            "description": "Inject a prompt DIRECTLY into a running agent session's REPL \
+                and submit it — the push channel (#378); the mailbox is pull and needs \
+                the recipient to poll. Same robust delivery as the SDD loop / the \
+                `/submit` route: waits for the REPL to go idle (accepting Claude's \
+                one-time workspace-trust dialog), types the text, then submits with a \
+                SEPARATE Enter so a multi-line prompt isn't swallowed as a paste. \
+                Delivery is asynchronous — the tool returns once queued; a busy agent \
+                can take tens of seconds to idle. `session` is an id or name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "Session id (uuid) or unique session name" },
+                    "prompt": { "type": "string", "description": "The prompt to type into the REPL and submit" }
+                },
+                "required": ["session", "prompt"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_run",
+            "description": "Register (or reuse) a project's harness run and kick off the \
+                verify-gated drive loop in the background — the MCP equivalent of \
+                POST /api/harness + POST /{id}/run, completing the Goals surface \
+                (scaffold → plan → check → RUN, #378). Requires a ready \
+                `.agentum-harness/` (probe with agentum_harness_check). Returns \
+                {harness_id, started}: started=false means a driver is already live \
+                (not restarted). Watch progress with agentum_harness_board or the \
+                desktop Harness view.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workdir": { "type": "string", "description": "Project directory containing .agentum-harness/" }
+                },
+                "required": ["workdir"],
+                "additionalProperties": false,
+            },
         }
     ]);
 
@@ -684,8 +758,11 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
     }
 
     let outcome: anyhow::Result<String> = match name {
-        "agentum_list_sessions" => tool_list_sessions(state).await,
+        "agentum_list_sessions" => tool_list_sessions(state, &args).await,
         "agentum_spawn_session" => tool_spawn_session(state, &args).await,
+        "agentum_stop_session" => tool_stop_session(state, &args).await,
+        "agentum_inject_prompt" => tool_inject_prompt(state, &args).await,
+        "agentum_harness_run" => tool_harness_run(state, &args).await,
         "agentum_list_worktrees" => tool_list_worktrees().await,
         "agentum_send_message" => tool_send_message(state, &args).await,
         "agentum_check_messages" => tool_check_messages(state, &args).await,
@@ -774,7 +851,12 @@ async fn tool_spawn_session(state: &AppState, args: &Value) -> anyhow::Result<St
     }))?)
 }
 
-async fn tool_list_sessions(state: &AppState) -> anyhow::Result<String> {
+/// Default page size for `agentum_list_sessions` (#378): the raw table on a
+/// long-lived install runs to hundreds of rows (~93 KB observed), which blows
+/// MCP result limits — so the tool pages by default and reports truncation.
+const DEFAULT_SESSION_PAGE: usize = 50;
+
+async fn tool_list_sessions(state: &AppState, args: &Value) -> anyhow::Result<String> {
     let sessions = state.store.list_sessions(None).await?;
     let rows: Vec<Value> = sessions
         .iter()
@@ -788,7 +870,181 @@ async fn tool_list_sessions(state: &AppState) -> anyhow::Result<String> {
             })
         })
         .collect();
-    Ok(serde_json::to_string_pretty(&Value::Array(rows))?)
+    Ok(serde_json::to_string_pretty(&apply_session_filters(
+        rows, args,
+    ))?)
+}
+
+/// Filter + bound the session listing (#378). Pure over the projected JSON
+/// rows → unit-testable without a store. `status` is an exact (case-insensitive)
+/// match; the `*_contains` filters are substrings; `limit` caps the page (the
+/// envelope's `truncated` says whether anything was cut).
+fn apply_session_filters(rows: Vec<Value>, args: &Value) -> Value {
+    let want = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+    };
+    let (status, name_c, workdir_c) = (
+        want("status"),
+        want("name_contains"),
+        want("workdir_contains"),
+    );
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|l| l.clamp(1, 500) as usize)
+        .unwrap_or(DEFAULT_SESSION_PAGE);
+    let field = |r: &Value, k: &str| {
+        r.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    };
+    let kept: Vec<Value> = rows
+        .into_iter()
+        .filter(|r| {
+            status.as_deref().is_none_or(|s| field(r, "status") == s)
+                && name_c
+                    .as_deref()
+                    .is_none_or(|n| field(r, "name").contains(n))
+                && workdir_c
+                    .as_deref()
+                    .is_none_or(|w| field(r, "workdir").contains(w))
+        })
+        .collect();
+    let total = kept.len();
+    let page: Vec<Value> = kept.into_iter().take(limit).collect();
+    json!({
+        "total_matching": total,
+        "returned": page.len(),
+        "truncated": total > page.len(),
+        "sessions": page,
+    })
+}
+
+/// Resolve a session reference — uuid first, then unique name — for the
+/// lifecycle/injection tools (#378). Agents usually hold the NAME (it's the
+/// mailbox handle); the uuid is what spawn returned.
+async fn resolve_session_ref(
+    state: &AppState,
+    sref: &str,
+) -> anyhow::Result<agentum_core::Session> {
+    if let Ok(id) = uuid::Uuid::parse_str(sref) {
+        if let Some(s) = state.store.get_session_by_id(id).await? {
+            return Ok(s);
+        }
+    }
+    state
+        .store
+        .get_session_by_name(sref)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no session with id or name `{sref}`"))
+}
+
+/// End a session — a thin view over [`super::sessions::stop_session_core`],
+/// the same core the desktop stop/kill routes use (#378: spawn finally has a
+/// lifecycle end on the MCP surface).
+async fn tool_stop_session(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let sref = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session` (id or name)"))?;
+    let mode = args.get("mode").and_then(Value::as_str).unwrap_or("stop");
+    let force_kill = match mode {
+        "stop" => false,
+        "kill" => true,
+        other => anyhow::bail!("unknown `mode` {other:?} (stop|kill)"),
+    };
+    let session = resolve_session_ref(state, sref).await?;
+    let stopped = super::sessions::stop_session_core(state, session.id, force_kill)
+        .await
+        .map_err(|e| anyhow::anyhow!("{mode} session: {e}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "id": stopped.id.to_string(),
+        "name": stopped.name,
+        "status": format!("{:?}", stopped.status),
+        "mode": mode,
+    }))?)
+}
+
+/// Push a prompt into a running session's REPL — a thin view over
+/// [`super::sessions::submit_prompt_core`] (the `/submit` route's core), which
+/// itself reuses the harness's robust two-step `inject_prompt` delivery (#378).
+async fn tool_inject_prompt(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let sref = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session` (id or name)"))?;
+    let prompt = args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `prompt`"))?;
+    let session = resolve_session_ref(state, sref).await?;
+    let name = session.name.clone();
+    super::sessions::submit_prompt_core(state, session, prompt.to_string())
+        .await
+        .map_err(|e| anyhow::anyhow!("inject prompt: {e}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "queued": true,
+        "session": name,
+        "note": "delivery is asynchronous — the prompt is typed once the REPL idles \
+                 (can take tens of seconds on a busy agent) and submitted with a \
+                 separate Enter",
+    }))?)
+}
+
+/// Register (or reuse) + run a project's harness — the MCP equivalent of
+/// `POST /api/harness` + `POST /{id}/run` (#378: Goals were preparable via
+/// scaffold/plan/check but not launchable). Same background kick as the route;
+/// the drive loop owns its own error handling (emits Error + Failed state).
+async fn tool_harness_run(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let workdir =
+        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
+    // Reuse an existing registration for this project: the engine itself does
+    // NOT dedupe by workdir, and without this every MCP call would pile up a
+    // fresh run for the same project.
+    let wd = workdir.to_string_lossy().to_string();
+    let mut harness_id = None;
+    for id in state.harness.list().await {
+        if let Ok(s) = state.harness.status(id).await {
+            if s.workdir == wd {
+                harness_id = Some(id);
+                break;
+            }
+        }
+    }
+    let harness_id = match harness_id {
+        Some(id) => id,
+        None => state
+            .harness
+            .start(workdir)
+            .await
+            .map_err(|e| anyhow::anyhow!("register harness: {e}"))?,
+    };
+    let claimed = state
+        .harness
+        .claim_driver(harness_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("claim driver: {e}"))?;
+    if claimed {
+        let st = state.clone();
+        tokio::spawn(async move { crate::harness::drive(st, harness_id).await });
+    }
+    Ok(serde_json::to_string_pretty(&json!({
+        "harness_id": harness_id.to_string(),
+        "started": claimed,
+        "note": if claimed {
+            "drive loop kicked off in the background — watch agentum_harness_board \
+             (or the desktop Harness view)"
+        } else {
+            "a driver is already running this harness — not restarted"
+        },
+    }))?)
 }
 
 /// Reuses the same registry reader the `/api/worktrees` route uses — a tool is
@@ -1245,24 +1501,63 @@ fn report_status_text(
     }
 }
 
+/// How long `agentum_report_status` waits for the transition seam before
+/// answering with a "still running" note (#377). A COLD first call on the
+/// github arm chains up to 7 sequential `gh` invocations (5 label
+/// ensure-creates + the edit + a Projects write), each individually bounded at
+/// 30s — worst case minutes, which outlives MCP client timeouts and surfaced
+/// to callers as a raw socket close (the best-effort contract violated at the
+/// transport layer). The work is detached, so on deadline it keeps running and
+/// the labels/state still land.
+const REPORT_STATUS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// #377: answer within `deadline` no matter what the seam does. Applied/Skipped
+/// map through [`report_status_text`]; a panic inside the detached transition
+/// becomes a readable note (isolated from the HTTP task, so the response can't
+/// die with it); a deadline overrun reports "still running". Pure over the
+/// JoinHandle → unit-testable with scripted tasks.
+async fn bounded_transition_text(
+    handle: tokio::task::JoinHandle<anyhow::Result<crate::task_sink::TransitionResult>>,
+    deadline: std::time::Duration,
+    provider: &str,
+    phase: crate::task_sink::TrackerPhase,
+) -> String {
+    match tokio::time::timeout(deadline, handle).await {
+        Err(_) => format!(
+            "skipped (tracker still running in the background after {}s — the {provider} \
+             update may still land; re-check the ticket rather than retrying immediately)",
+            deadline.as_secs()
+        ),
+        Ok(Err(join)) => format!("skipped (tracker crashed, non-fatal): {join}"),
+        Ok(Ok(outcome)) => report_status_text(outcome, provider, phase),
+    }
+}
+
 /// Report a work item's pipeline phase to its tracker — a thin arm over
 /// [`crate::task_sink::apply_tracker_transition`] (spec 005 F4), the same seam
 /// the harness's own transitions use. Never reimplements label/state mechanics.
+/// The seam runs DETACHED and deadline-bounded (#377) so a stalled `gh` chain
+/// or a panic can never take the MCP response down with it.
 async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<String> {
     let (provider, id, url, phase) = parse_report_status_args(args)?;
-    let outcome = crate::task_sink::apply_tracker_transition(
-        &state.store,
-        &provider,
-        &id,
-        url.as_deref(),
-        phase,
-        crate::task_sink::TrackerEmit {
-            bus: &state.bus,
-            worktree_id: None,
-        },
-    )
-    .await;
-    Ok(report_status_text(outcome, &provider, phase))
+    let store = state.store.clone();
+    let bus = state.bus.clone();
+    let prov = provider.clone();
+    let handle = tokio::spawn(async move {
+        crate::task_sink::apply_tracker_transition(
+            &store,
+            &prov,
+            &id,
+            url.as_deref(),
+            phase,
+            crate::task_sink::TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+    });
+    Ok(bounded_transition_text(handle, REPORT_STATUS_DEADLINE, &provider, phase).await)
 }
 
 /// Parse + validate `agentum_sdd_loop` inputs (spec 016 F1). Pure →
@@ -1839,5 +2134,170 @@ mod tests {
         .await
         .unwrap();
         assert!(text.starts_with("skipped:"), "got: {text}");
+    }
+
+    // --- #377: the seam can stall or crash; the tool must always answer ---
+
+    /// The transport pin: a stalled tracker chain answers with a "still
+    /// running" note before the client's own timeout, a panic inside the seam
+    /// is isolated to a readable note (the old behavior killed the whole HTTP
+    /// response → the client saw a raw socket close), and a fast outcome still
+    /// reads exactly as before.
+    #[tokio::test]
+    async fn report_status_bounds_a_stalled_or_crashing_tracker() {
+        use crate::task_sink::{TrackerPhase, TransitionResult};
+
+        // Stall: outlives the deadline → note, never a hang or an Err.
+        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            Ok(TransitionResult::Applied)
+        });
+        let text = bounded_transition_text(
+            h,
+            std::time::Duration::from_millis(40),
+            "github",
+            TrackerPhase::InProgress,
+        )
+        .await;
+        assert!(
+            text.starts_with("skipped (tracker still running"),
+            "got: {text}"
+        );
+
+        // Panic inside the seam: isolated into the best-effort note.
+        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> =
+            tokio::spawn(async { panic!("label table hole") });
+        let text = bounded_transition_text(
+            h,
+            std::time::Duration::from_secs(5),
+            "github",
+            TrackerPhase::Done,
+        )
+        .await;
+        assert!(
+            text.starts_with("skipped (tracker crashed, non-fatal):"),
+            "got: {text}"
+        );
+
+        // Fast success is byte-identical to the pre-#377 text.
+        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> =
+            tokio::spawn(async { Ok(TransitionResult::Applied) });
+        let text = bounded_transition_text(
+            h,
+            std::time::Duration::from_secs(5),
+            "board",
+            TrackerPhase::Todo,
+        )
+        .await;
+        assert_eq!(text, "applied: board → Todo");
+    }
+
+    // --- #378: session lifecycle end, pane injection, harness run, bounded list ---
+
+    #[test]
+    fn lifecycle_and_run_tools_are_in_the_catalog_ungated() {
+        // Control-plane verbs like spawn: advertised regardless of the
+        // orchestration gate (they are not the mailbox/DAG surface).
+        for tool in [
+            "agentum_stop_session",
+            "agentum_inject_prompt",
+            "agentum_harness_run",
+        ] {
+            assert!(!is_orchestration_tool(tool));
+            assert!(tool_names(true).contains(&tool.to_string()), "{tool} on");
+            assert!(tool_names(false).contains(&tool.to_string()), "{tool} off");
+        }
+    }
+
+    #[test]
+    fn session_filters_bound_and_select_the_listing() {
+        let rows: Vec<Value> = (0..120)
+            .map(|i| {
+                json!({
+                    "id": format!("id-{i}"),
+                    "name": if i % 2 == 0 { format!("worker-{i}") } else { format!("terminal-{i}") },
+                    "tool": "claude",
+                    "status": if i < 100 { "Stopped" } else { "Running" },
+                    "workdir": if i < 60 { "/projects/alpha" } else { "/projects/beta" },
+                })
+            })
+            .collect();
+
+        // No filters: capped at the default page with the truncation flagged —
+        // the ~93 KB whole-table dump (#378) can't happen again.
+        let out = apply_session_filters(rows.clone(), &json!({}));
+        assert_eq!(out["total_matching"], 120);
+        assert_eq!(out["returned"], 50);
+        assert_eq!(out["truncated"], true);
+
+        // Status is exact + case-insensitive; substring filters compose.
+        let out = apply_session_filters(rows.clone(), &json!({ "status": "running" }));
+        assert_eq!(out["total_matching"], 20);
+        assert_eq!(out["truncated"], false);
+        let out = apply_session_filters(
+            rows.clone(),
+            &json!({ "name_contains": "worker", "workdir_contains": "beta" }),
+        );
+        assert_eq!(out["total_matching"], 30);
+
+        // The limit clamps to something sane in both directions.
+        let out = apply_session_filters(rows.clone(), &json!({ "limit": 0 }));
+        assert_eq!(out["returned"], 1);
+        let out = apply_session_filters(rows, &json!({ "limit": 10 }));
+        assert_eq!(out["returned"], 10);
+        assert_eq!(out["truncated"], true);
+    }
+
+    #[tokio::test]
+    async fn stop_session_rejects_unknown_sessions_and_modes() {
+        let state = fresh_state().await;
+        // Unknown ref (neither uuid nor name) → an actionable caller error.
+        let err = tool_stop_session(&state, &json!({ "session": "nope-123" }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no session"), "got: {err}");
+        // A junk mode is a caller bug, never coerced.
+        let err = tool_stop_session(&state, &json!({ "session": "x", "mode": "vaporize" }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown `mode`"), "got: {err}");
+        // Missing session arg entirely.
+        assert!(tool_stop_session(&state, &json!({})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn inject_prompt_requires_a_live_session() {
+        let state = fresh_state().await;
+        assert!(
+            tool_inject_prompt(&state, &json!({ "prompt": "hi" }))
+                .await
+                .is_err()
+        );
+        assert!(
+            tool_inject_prompt(&state, &json!({ "session": "ghost" }))
+                .await
+                .is_err()
+        );
+        let err = tool_inject_prompt(&state, &json!({ "session": "ghost", "prompt": "hi" }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no session"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn harness_run_fails_fast_without_a_ready_surface() {
+        let state = fresh_state().await;
+        let dir = tempfile::tempdir().unwrap();
+        // No `.agentum-harness/` → the register step fails loudly (the tool
+        // points the caller at agentum_harness_check), nothing is spawned.
+        let err = tool_harness_run(&state, &json!({ "workdir": dir.path().to_string_lossy() }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("register harness"), "got: {err}");
+        assert!(tool_harness_run(&state, &json!({})).await.is_err());
     }
 }

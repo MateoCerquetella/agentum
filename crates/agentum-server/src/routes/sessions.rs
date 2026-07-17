@@ -672,29 +672,7 @@ async fn stop(
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
-    let target = tmux_target(&session);
-    if is_external(&session) {
-        // Detach only: the tmux session belongs to the user. Disarm the
-        // log pipe and keep the target so a later start can reattach.
-        unpipe_external(&state, &host, &session, &target).await;
-        state
-            .store
-            .update_status_and_target(id, Status::Stopped, Some(&target))
-            .await?;
-    } else {
-        crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        state
-            .store
-            .update_status_and_target(id, Status::Stopped, None)
-            .await?;
-    }
-    state.hook_tokens.lock().unwrap().remove(&id);
-    emit_stopped(&state, &session, "stop").await;
-    Ok(Json(load(&state, id).await?))
+    Ok(Json(stop_session_core(&state, id, false).await?))
 }
 
 async fn kill(
@@ -702,29 +680,48 @@ async fn kill(
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
+    Ok(Json(stop_session_core(&state, id, true).await?))
+}
+
+/// Shared core of the `stop`/`kill` routes AND the MCP `agentum_stop_session`
+/// tool — the lifecycle END that `agentum_spawn_session` was missing (#378).
+/// `force_kill` picks kill over graceful stop for agentum-owned panes; an
+/// external (user-owned) tmux session is only ever detached, never destroyed,
+/// regardless of mode.
+pub(crate) async fn stop_session_core(
+    state: &AppState,
+    id: Uuid,
+    force_kill: bool,
+) -> Result<Session, ApiError> {
+    let session = load(state, id).await?;
+    let host = load_host_for_session(state, &session).await?;
     let target = tmux_target(&session);
     if is_external(&session) {
-        // Even a kill must not destroy a user-owned tmux session —
-        // detach (disarm the pipe) and keep the target for reattach.
-        unpipe_external(&state, &host, &session, &target).await;
+        // Detach only: the tmux session belongs to the user. Disarm the
+        // log pipe and keep the target so a later start can reattach.
+        unpipe_external(state, &host, &session, &target).await;
         state
             .store
             .update_status_and_target(id, Status::Stopped, Some(&target))
             .await?;
     } else {
-        crate::host_runtime::kill_session(&host, &target)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if force_kill {
+            crate::host_runtime::kill_session(&host, &target)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        } else {
+            crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        }
         state
             .store
             .update_status_and_target(id, Status::Stopped, None)
             .await?;
     }
     state.hook_tokens.lock().unwrap().remove(&id);
-    emit_stopped(&state, &session, "kill").await;
-    Ok(Json(load(&state, id).await?))
+    emit_stopped(state, &session, if force_kill { "kill" } else { "stop" }).await;
+    load(state, id).await
 }
 
 /// Persist + broadcast a `session.stopped` event so the UI gets a benign
@@ -893,12 +890,26 @@ async fn submit(
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
-    let host = load_host_for_session(&state, &session).await?;
+    submit_prompt_core(&state, session, body.text).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Shared core of the `/submit` route AND the MCP `agentum_inject_prompt` tool
+/// (#378 — the push channel; the mailbox is pull-only): validate the session is
+/// live up front, then deliver in the BACKGROUND. Errors after the checks are
+/// logged, not surfaced — a busy agent can take tens of seconds to idle, and
+/// neither an HTTP response nor an MCP call should block on that.
+pub(crate) async fn submit_prompt_core(
+    state: &AppState,
+    session: Session,
+    text: String,
+) -> Result<(), ApiError> {
+    let host = load_host_for_session(state, &session).await?;
     let target = session
         .tmux_target
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("session is not running".into()))?;
-    let text = body.text.trim().to_string();
+    let text = text.trim().to_string();
     if text.is_empty() {
         return Err(ApiError::BadRequest("`text` must not be empty".into()));
     }
@@ -910,15 +921,14 @@ async fn submit(
             "tmux session not active for this session".into(),
         ));
     }
-    // Robust two-step delivery in the background (see doc comment). Errors are logged,
-    // not surfaced — the up-front checks above already rejected a dead/missing session.
+    // Robust two-step delivery (see the `/submit` doc comment).
     let state = state.clone();
     tokio::spawn(async move {
         if let Err(e) = crate::harness::inject_prompt(&state, &session, &text).await {
             tracing::warn!(target: "agentum::sessions::submit", error = %e, "submit delivery failed");
         }
     });
-    Ok(StatusCode::ACCEPTED)
+    Ok(())
 }
 
 // ---------- WS /stream ----------
