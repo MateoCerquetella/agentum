@@ -631,6 +631,31 @@ fn gh_set_blocked_label_argv<'a>(
     argv
 }
 
+/// #379: strip EVERY configured pipeline status label (+ blocked) with NO add.
+/// Used when the repo is bound to a Projects board — the board's Status field
+/// is the single source of truth, so a `status/*` LABEL duplicates it (Mateo's
+/// screenshot: `status/in-progress` label next to a Projects "In progress"
+/// column). Same foreign-label safety as [`gh_set_status_label_argv`]: only
+/// configured names are ever named, deduped, so `status/qa*` and stale-map
+/// labels are never touched. `gh` treats removing an absent label as a no-op,
+/// so on an already-clean issue this whole edit is a no-op.
+fn gh_clear_status_labels_argv<'a>(
+    number: &'a str,
+    slug: &'a str,
+    map: &'a GithubStateMap,
+) -> Vec<&'a str> {
+    let mut argv = vec!["issue", "edit", number, "--repo", slug];
+    let mut removed: Vec<&str> = Vec::new();
+    for name in all_status_label_names(map) {
+        if !removed.contains(&name) {
+            removed.push(name);
+            argv.push("--remove-label");
+            argv.push(name);
+        }
+    }
+    argv
+}
+
 /// `gh issue comment` argv (spec 008 D6). Pure — the body is a single argv token
 /// (`--body <body>`), never shell-interpolated, so a multi-line comment with
 /// backticks/newlines is passed to `gh` verbatim and can't inject a flag.
@@ -746,14 +771,18 @@ async fn github_transition_with(
     }
 }
 
-/// Label transition + (when bound) the ADDITIVE Projects-board write (spec 010
-/// F2). The label path is the byte-identical [`github_transition_with`]
-/// (AC 8); unbound (`binding: None`) returns its result untouched — today's
-/// behavior byte-for-byte. A board failure can only append to the report,
-/// never alter label behavior, and NEVER becomes an `Err` (AC 7): it folds
-/// into the existing `Skipped(reason)` so `drive.rs`'s `transition_tracker`
-/// log line and the MCP tool's `skipped:` text carry it with zero call-site
-/// edits — loud through today's plumbing (§7.9).
+/// The GitHub pipeline transition. UNBOUND (`binding: None`) is the
+/// byte-identical label path [`github_transition_with`] (spec 010 AC 8) — the
+/// `status/*` label is the only status signal, so it's set as before.
+///
+/// BOUND (Mateo #379): the Projects board's Status field is the single source
+/// of truth, so the redundant `status/*` LABEL is STRIPPED instead of set (his
+/// screenshot showed both a `status/in-progress` label AND a Projects "In
+/// progress" column — the label duplicated the board). The board write decides
+/// `Applied`/`Skipped`; on a board FAILURE we fall back to the label path so
+/// the issue never loses its only status signal, folding the failure into the
+/// existing `Skipped(reason)` (never an `Err`, AC 7) so `drive.rs`'s
+/// `transition_tracker` log and the MCP `skipped:` text carry it unchanged.
 async fn github_transition_with_board(
     program: &str,
     slug: &str,
@@ -762,18 +791,33 @@ async fn github_transition_with_board(
     map: &GithubStateMap,
     binding: Option<&crate::github_projects::BoardBinding>,
 ) -> TransitionResult {
-    let label = github_transition_with(program, slug, number, phase, map).await;
-    let Some(b) = binding else { return label };
+    let Some(b) = binding else {
+        // Unbound: the label IS the status — today's behavior byte-for-byte.
+        return github_transition_with(program, slug, number, phase, map).await;
+    };
     match crate::github_projects::board_write_with(program, b, slug, number, phase.into()).await {
-        Ok(()) => label,
+        Ok(()) => {
+            // The board holds the status now — strip the duplicate `status/*`
+            // label. Best-effort: a strip failure can't undo the moved card,
+            // so it never downgrades `Applied` (the board IS the truth).
+            if let Err(reason) =
+                run_gh(program, &gh_clear_status_labels_argv(number, slug, map)).await
+            {
+                tracing::warn!(slug, number, ?phase, %reason,
+                    "status-label strip failed (non-fatal; Projects card moved)");
+            }
+            TransitionResult::Applied
+        }
         Err(reason) => {
-            tracing::warn!(slug, number, ?phase, %reason, "Projects board write failed (non-fatal)");
-            match label {
+            // Board write failed — fall back to the label as the status signal.
+            tracing::warn!(slug, number, ?phase, %reason,
+                "Projects board write failed; falling back to the status label");
+            match github_transition_with(program, slug, number, phase, map).await {
                 TransitionResult::Applied => TransitionResult::Skipped(format!(
-                    "status label applied; Projects board write failed: {reason}"
+                    "Projects board write failed ({reason}); status label applied as fallback"
                 )),
                 TransitionResult::Skipped(why) => TransitionResult::Skipped(format!(
-                    "{why}; Projects board write failed: {reason}"
+                    "Projects board write failed ({reason}); label fallback skipped: {why}"
                 )),
             }
         }
@@ -1872,16 +1916,19 @@ mod tests {
         let calls = std::fs::read_to_string(&log).unwrap();
         let lines: Vec<&str> = calls.lines().collect();
         assert_eq!(lines.len(), 6, "5 ensure-creates + 1 edit, got: {calls}");
-        assert_eq!(
-            lines[..5],
-            [
-                "label create triage --repo owner/repo --color ededed --force",
-                "label create wip --repo owner/repo --color 1d76db --force",
-                "label create reviewing --repo owner/repo --color 5319e7 --force",
-                "label create qa-ready --repo owner/repo --color fbca04 --force",
-                "label create shipped --repo owner/repo --color 0e8a16 --force",
-            ]
-        );
+        // The ensure-create SET (name+color) is what matters — compare sorted,
+        // not by log order, which is timing-sensitive under a loaded test host.
+        let mut ensures: Vec<&str> = lines[..5].to_vec();
+        ensures.sort_unstable();
+        let mut expected = [
+            "label create triage --repo owner/repo --color ededed --force",
+            "label create wip --repo owner/repo --color 1d76db --force",
+            "label create reviewing --repo owner/repo --color 5319e7 --force",
+            "label create qa-ready --repo owner/repo --color fbca04 --force",
+            "label create shipped --repo owner/repo --color 0e8a16 --force",
+        ];
+        expected.sort_unstable();
+        assert_eq!(ensures, expected);
         assert_eq!(
             lines[5],
             "issue edit 42 --repo owner/repo --add-label qa-ready \
@@ -2844,14 +2891,15 @@ mod tests {
         );
     }
 
-    /// THE AC-7 pin: the label edit succeeds but every GraphQL call fails →
-    /// the transition comes back `Skipped("status label applied; Projects
-    /// board write failed: …")` — a `TransitionResult` the github arm wraps in
-    /// `Ok`, so the failure is loud through existing plumbing yet never an
-    /// `Err`. The classified scope message keeps its remedy mid-run.
+    /// THE AC-7 pin, updated for #379: on a BOUND repo whose board write fails,
+    /// the transition FALLS BACK to the `status/*` label (the issue keeps a
+    /// status signal) and comes back `Skipped("Projects board write failed
+    /// (…); status label applied as fallback")` — a `TransitionResult` the
+    /// github arm wraps in `Ok`, loud through existing plumbing yet never an
+    /// `Err`. The classified scope remedy still rides into the reason.
     #[cfg(unix)]
     #[tokio::test]
-    async fn github_transition_with_board_board_failure_is_skipped_note_still_ok() {
+    async fn github_transition_with_board_board_failure_falls_back_to_label() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("calls.log");
         let script = write_fake_gh(
@@ -2878,7 +2926,8 @@ mod tests {
         match res {
             TransitionResult::Skipped(reason) => {
                 assert!(
-                    reason.starts_with("status label applied; Projects board write failed:"),
+                    reason.starts_with("Projects board write failed (")
+                        && reason.contains("status label applied as fallback"),
                     "got: {reason}"
                 );
                 assert!(
@@ -2888,7 +2937,8 @@ mod tests {
             }
             other => panic!("expected Skipped, got {other:?}"),
         }
-        // The whole label path ran (and succeeded) before the board write.
+        // The board write was attempted FIRST; when it failed the label path
+        // ran as the fallback (5 ensures + the add-label edit).
         let calls = std::fs::read_to_string(&log).unwrap();
         assert_eq!(
             calls
@@ -2896,15 +2946,85 @@ mod tests {
                 .filter(|l| l.starts_with("label create status/"))
                 .count(),
             5,
-            "label ensures untouched: {calls}"
+            "fallback label ensures ran: {calls}"
         );
-        assert!(calls.contains("issue edit 42"), "label edit ran: {calls}");
+        assert!(
+            calls.contains("issue edit 42 --repo acme/seam-fail --add-label status/in-progress"),
+            "fallback add-label edit ran: {calls}"
+        );
     }
 
-    /// Spec 012 F4 (AC 11): the Done transition the poller fires on merge, on a
-    /// BOUND repo with `done_closes_issue` ON, drives the full 010 path — the
-    /// `status/done` label, the Done-mapped Project OPTION, then the probe-then-
-    /// close that closes the still-open issue. Explicit binding (knob ON), no env.
+    /// #379 (Mateo): on a BOUND repo whose board write SUCCEEDS, the transition
+    /// STRIPS the redundant `status/*` label instead of adding one — the board
+    /// column is the single source of truth. The issue edit carries only
+    /// `--remove-label` (every configured pipeline name + blocked), never an
+    /// `--add-label`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn github_transition_with_board_bound_strips_label_no_add() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        // Fake gh: the board write's node lookup + add + field update all
+        // succeed (mirrors done_transition_closes_issue's script).
+        let node_body =
+            serde_json::json!({"data": {"repository": {"issue": {"id": "I_x"}}}}).to_string();
+        let add_body =
+            serde_json::json!({"data": {"addProjectV2ItemById": {"item": {"id": "PVTI_x"}}}})
+                .to_string();
+        let update_body = serde_json::json!(
+            {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_x"}}}}
+        )
+        .to_string();
+        let script = write_fake_gh(
+            dir.path(),
+            &format!(
+                "#!/bin/sh\necho \"$@\" >> \"{log}\"\n\
+                 case \"$*\" in\n  \
+                 *updateProjectV2ItemFieldValue*) printf '%s\\n' '{update_body}' ;;\n  \
+                 *addProjectV2ItemById*) printf '%s\\n' '{add_body}' ;;\n  \
+                 *repository*) printf '%s\\n' '{node_body}' ;;\n  \
+                 *) printf '%s\\n' '{{\"data\":{{}}}}' ;;\n\
+                 esac\nexit 0\n",
+                log = log.display()
+            ),
+        );
+
+        let binding = seam_board_binding();
+        let res = github_transition_with_board(
+            script.to_str().unwrap(),
+            "acme/bound",
+            "42",
+            TrackerPhase::InProgress,
+            &GithubStateMap::default(),
+            Some(&binding),
+        )
+        .await;
+        assert_eq!(res, TransitionResult::Applied);
+
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let edit = calls
+            .lines()
+            .find(|l| l.starts_with("issue edit 42"))
+            .unwrap_or_else(|| panic!("no issue edit in: {calls}"));
+        assert!(
+            !edit.contains("--add-label"),
+            "a bound transition must NOT add a status label: {edit}"
+        );
+        assert!(
+            edit.contains("--remove-label status/in-progress"),
+            "the redundant label is stripped: {edit}"
+        );
+        assert!(
+            calls.contains("api graphql"),
+            "the board card was moved: {calls}"
+        );
+    }
+
+    /// Spec 012 F4 (AC 11), updated for #379: the Done transition the poller
+    /// fires on merge, on a BOUND repo with `done_closes_issue` ON, drives the
+    /// Done-mapped Project OPTION + the probe-then-close — and STRIPS the
+    /// `status/*` label (bound = board is truth) rather than adding
+    /// `status/done`. Explicit binding (knob ON), no env.
     #[cfg(unix)]
     #[tokio::test]
     async fn done_transition_closes_issue_when_knob_on_with_fake_gh() {
@@ -2967,10 +3087,19 @@ mod tests {
             calls.contains("issue close 42 --repo acme/done-closes"),
             "Done closed the issue (010 done_closes_issue): {calls}"
         );
-        // The `status/done` label edit ran too.
+        // #379: bound → the label is STRIPPED, not added. The issue edit
+        // removes the redundant status labels and never adds status/done.
+        let edit = calls
+            .lines()
+            .find(|l| l.starts_with("issue edit 42 --repo acme/done-closes"))
+            .unwrap_or_else(|| panic!("no issue edit in: {calls}"));
         assert!(
-            calls.contains("issue edit 42 --repo acme/done-closes --add-label status/done"),
-            "the status/done label edit ran: {calls}"
+            !edit.contains("--add-label"),
+            "bound Done must not add a status label: {edit}"
+        );
+        assert!(
+            edit.contains("--remove-label status/done"),
+            "the redundant status/done label is stripped: {edit}"
         );
     }
 
