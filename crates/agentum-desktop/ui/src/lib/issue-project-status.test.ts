@@ -77,10 +77,10 @@ describe('resolveIssueProjectStatus', () => {
     const d = deps()
     expect(await resolveIssueProjectStatus(REF, d)).toBe('In Progress')
     expect(d.bindingCache.get('o/r')).toEqual(BINDING)
-    expect(d.statusCache.get('o/r#7')).toBe('In Progress')
+    expect(d.statusCache.get('o/r#7')?.status).toBe('In Progress')
   })
 
-  it('does not refetch on a second call for the same issue (AC 3)', async () => {
+  it('does not refetch inside the freshness window (AC 3)', async () => {
     const d = deps()
     await resolveIssueProjectStatus(REF, d)
     await resolveIssueProjectStatus(REF, d)
@@ -88,11 +88,46 @@ describe('resolveIssueProjectStatus', () => {
     expect(d.getStatus).toHaveBeenCalledTimes(1)
   })
 
+  it('revalidates a stale entry — a moved board column shows up (#379)', async () => {
+    let clock = 0
+    const getStatus = vi.fn(async () => 'Backlog' as string | null)
+    const d = deps({ getStatus, now: () => clock, staleAfterMs: 1000 })
+    expect(await resolveIssueProjectStatus(REF, d)).toBe('Backlog')
+    getStatus.mockResolvedValue('In progress')
+    clock = 999
+    expect(await resolveIssueProjectStatus(REF, d)).toBe('Backlog') // still fresh
+    clock = 1000
+    expect(await resolveIssueProjectStatus(REF, d)).toBe('In progress') // stale → refetched
+    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(d.getBinding).toHaveBeenCalledTimes(1) // bound binding stays cached
+  })
+
+  it('keeps the last-known status when a revalidation fetch fails', async () => {
+    let clock = 0
+    const getStatus = vi.fn(async () => 'In Progress' as string | null)
+    const d = deps({ getStatus, now: () => clock, staleAfterMs: 1000 })
+    await resolveIssueProjectStatus(REF, d)
+    getStatus.mockRejectedValue(new Error('gh flaked'))
+    clock = 2000
+    expect(await resolveIssueProjectStatus(REF, d)).toBe('In Progress')
+  })
+
+  it('re-probes an unbound repo on revalidation — binding later needs no restart', async () => {
+    let clock = 0
+    const getBinding = vi.fn(async () => null as ProjectBindingRef)
+    const d = deps({ getBinding, now: () => clock, staleAfterMs: 1000 })
+    expect(await resolveIssueProjectStatus(REF, d)).toBeNull()
+    getBinding.mockResolvedValue(BINDING)
+    clock = 2000
+    expect(await resolveIssueProjectStatus(REF, d)).toBe('In Progress')
+    expect(getBinding).toHaveBeenCalledTimes(2)
+  })
+
   it('returns null and skips the status fetch when the repo is unbound (AC 2)', async () => {
     const d = deps({ getBinding: vi.fn(async () => null) })
     expect(await resolveIssueProjectStatus(REF, d)).toBeNull()
     expect(d.getStatus).not.toHaveBeenCalled()
-    expect(d.statusCache.get('o/r#7')).toBeNull()
+    expect(d.statusCache.get('o/r#7')?.status).toBeNull()
   })
 
   it('returns null when the issue is not on the project (status null)', async () => {
