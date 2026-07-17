@@ -2678,6 +2678,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           workspaceName,
           preserveWorkspaceNameEdits: branchNameOverridePreservesNameEdits
         })
+        // Spec 021: the wizard's quick create must persist the tracker bind just
+        // like the full submit path — otherwise a wizard-created issue's worktree
+        // shows no status chip in the sidebar (bind dropped on create).
+        const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
         const result = await createWorktree(
           repoId,
           workspaceName,
@@ -2699,7 +2703,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           effectiveBranchNameOverride,
           resolvedInitialWorkspaceStatus,
           linkedGitLabMR ?? undefined,
-          linkedGitLabIssue ?? undefined
+          linkedGitLabIssue ?? undefined,
+          undefined,
+          trackerBind?.trackerProvider,
+          trackerBind?.trackerUrl
         )
         const worktree = result.worktree
 
