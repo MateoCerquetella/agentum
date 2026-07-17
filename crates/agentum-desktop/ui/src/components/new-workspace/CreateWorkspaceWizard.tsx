@@ -129,6 +129,7 @@ export default function CreateWorkspaceWizard({
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
+  const getCachedProjectViewTable = useAppStore((s) => s.getCachedProjectViewTable)
   const addRepoFromStore = useAppStore((s) => s.addRepo)
   const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
   // Spec 011 F2: the issue picker resolves its Project from the selected repo's
@@ -389,7 +390,7 @@ export default function CreateWorkspaceWizard({
     [name, quickAgent, selectedHostLabel, selectedRepo, step]
   )
 
-  const primaryLabel = wizardPrimaryLabel(step)
+  const primaryLabel = wizardPrimaryLabel(step, creating)
   const primaryDisabled =
     step === 3 ? createDisabled || creating : step === 2 ? !canLeaveRepoStep : false
 
@@ -499,6 +500,7 @@ export default function CreateWorkspaceWizard({
               trackerLocal={trackerTarget?.local}
               activeProject={activeProject}
               fetchProjectViewTable={fetchProjectViewTable}
+              getCachedProjectViewTable={getCachedProjectViewTable}
               linkedWorkItem={linkedWorkItem}
               onPickWorkItem={onPickWorkItem}
               createIssue={{
@@ -1361,6 +1363,7 @@ function AgentStep({
   trackerLocal,
   activeProject,
   fetchProjectViewTable,
+  getCachedProjectViewTable,
   linkedWorkItem,
   onPickWorkItem,
   createIssue,
@@ -1385,6 +1388,7 @@ function AgentStep({
   trackerLocal?: boolean
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
+  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
@@ -1411,6 +1415,7 @@ function AgentStep({
         local={trackerLocal}
         activeProject={activeProject}
         fetchProjectViewTable={fetchProjectViewTable}
+        getCachedProjectViewTable={getCachedProjectViewTable}
         linkedWorkItem={linkedWorkItem}
         onPickWorkItem={onPickWorkItem}
         createIssue={createIssue}
@@ -1527,6 +1532,7 @@ function TrackerSection({
   local,
   activeProject,
   fetchProjectViewTable,
+  getCachedProjectViewTable,
   linkedWorkItem,
   onPickWorkItem,
   createIssue,
@@ -1546,6 +1552,7 @@ function TrackerSection({
   local?: boolean
   activeProject: GitHubProjectSettings['activeProject']
   fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
+  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
@@ -1592,13 +1599,24 @@ function TrackerSection({
       setStatus('idle')
       return
     }
-    let cancelled = false
-    setStatus('loading')
-    void fetchProjectViewTable({
+    const args = {
       owner: resolved.owner,
       ownerType: resolved.ownerType,
       projectNumber: resolved.number
-    })
+    }
+    // Paint a fresh cached table synchronously — re-entering step 3 within the
+    // cache TTL no longer re-fires the RPC or flashes the "loading the Project's
+    // issues…" spinner over data that's seconds old (#385). A miss falls
+    // through to the normal fetch below.
+    const cached = getCachedProjectViewTable(args)
+    if (cached) {
+      setTable(cached)
+      setStatus('idle')
+      return
+    }
+    let cancelled = false
+    setStatus('loading')
+    void fetchProjectViewTable(args)
       .then((res) => {
         if (cancelled) return
         if (res.ok) {
@@ -1618,7 +1636,7 @@ function TrackerSection({
     return () => {
       cancelled = true
     }
-  }, [resolved, fetchProjectViewTable])
+  }, [resolved, fetchProjectViewTable, getCachedProjectViewTable])
 
   const options = useMemo(() => deriveIssueOptions(table), [table])
   const selectedUrl = linkedWorkItem?.type === 'issue' ? linkedWorkItem.url : null

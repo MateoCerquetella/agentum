@@ -80,9 +80,15 @@ export function buildWizardRecap(input: {
   return parts.join('  ·  ')
 }
 
-/** Primary button label: "Create workspace" on the last step, else "Continue". */
-export function wizardPrimaryLabel(step: WizardStep): string {
-  return step === 3 ? 'Create workspace' : 'Continue'
+/** Primary button label: "Create workspace" on the last step, else "Continue".
+ *  While the create is in flight the last step reads "Creating…" so the button
+ *  gives honest progress feedback instead of a bare spinner over an unchanged
+ *  label during the (potentially slow) worktree-create + session-start (#385). */
+export function wizardPrimaryLabel(step: WizardStep, creating = false): string {
+  if (step === 3) {
+    return creating ? 'Creating…' : 'Create workspace'
+  }
+  return 'Continue'
 }
 
 /** The label shown on the base-branch combobox trigger: the chosen ref, else
