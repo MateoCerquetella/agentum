@@ -2300,6 +2300,103 @@ mod tests {
         }
     }
 
+    // ---- Spec 021 F4: per-project pin → provider dispatch at the seam --------
+
+    /// Spec 021 F4: the per-project pin — stamped onto each planned
+    /// `Feature.tracker_provider` (F3) and passed verbatim by the harness's
+    /// `transition_tracker` — selects the matching arm at THIS public seam.
+    /// No live credentials: a `"github"` feature drives the `gh issue edit`
+    /// transition (fake `gh` records the argv), a `"linear"` feature enters
+    /// `linear::transition_issue`, proven by its token-gate error — a message
+    /// only the linear module produces. Env-mutating (the `AGENTUM_*` config
+    /// redirects keep a configured dev machine hermetic), so serialised via
+    /// the crate-wide lock.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pinned_provider_dispatches_to_matching_tracker_arm() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store().await;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+        let missing = dir.path().join("nonexistent.json");
+
+        // SAFETY: set_var is unsound under concurrent access; TEST_ENV_LOCK
+        // serialises every env-mutating test in this crate. The three config
+        // redirects point at a missing file so a real github.json / board
+        // binding / Linear token on the host can't leak into the assertions.
+        unsafe {
+            std::env::set_var("AGENTUM_GH_BIN", &script);
+            std::env::set_var("AGENTUM_GITHUB_CONFIG", &missing);
+            std::env::set_var("AGENTUM_GITHUB_PROJECTS_CONFIG", &missing);
+            std::env::set_var("AGENTUM_LINEAR_CREDS", &missing);
+        }
+
+        let bus = test_bus();
+        let github = apply_tracker_transition(
+            &store,
+            "github",
+            "42",
+            Some("https://github.com/owner/repo/issues/42"),
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await;
+        let linear = apply_tracker_transition(
+            &store,
+            "linear",
+            "AG-12",
+            None,
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await;
+
+        unsafe {
+            std::env::remove_var("AGENTUM_GH_BIN");
+            std::env::remove_var("AGENTUM_GITHUB_CONFIG");
+            std::env::remove_var("AGENTUM_GITHUB_PROJECTS_CONFIG");
+            std::env::remove_var("AGENTUM_LINEAR_CREDS");
+        }
+
+        // GitHub pin → the GitHub issue transition ran: the recorded argv ends
+        // with the one `issue edit` against the slug+number parsed from the
+        // ticket URL. (The exact label set is pinned by the transport tests
+        // above — here the claim is which ARM ran.)
+        assert_eq!(github.unwrap(), TransitionResult::Applied);
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let last = calls.lines().last().unwrap();
+        assert!(
+            last.starts_with("issue edit 42 --repo owner/repo --add-label "),
+            "github pin must drive the gh issue transition, got: {last}"
+        );
+
+        // Linear pin → linear::transition_issue: with no creds it fails at
+        // that module's own token gate, and the fake gh saw no new calls —
+        // dispatch is exclusive, never a github fallback.
+        let err = linear.expect_err("linear arm must reach linear::transition_issue");
+        assert!(
+            err.to_string().contains("no Linear token configured"),
+            "got: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            calls,
+            "the linear pin must not touch the gh transport"
+        );
+    }
+
     // ---- Spec 008 D6: the `status/blocked` escalation ------------------------
 
     /// The blocked argv adds `status/blocked` and removes the FIVE pipeline
