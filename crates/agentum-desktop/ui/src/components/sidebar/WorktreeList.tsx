@@ -130,6 +130,7 @@ import { focusActiveSessionSurface } from '@/lib/focus-session-surface'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { SCROLL_TO_CURRENT_WORKSPACE_REVEAL_REQUEST_EVENT } from '@/lib/scroll-to-current-workspace-status'
 import { useRepoHeaderDrag } from './project-header-drag'
+import { loadHostOrder, saveHostOrder } from './sidebar-host-order'
 import WorktreeContextMenu, { CLOSE_ALL_CONTEXT_MENUS_EVENT } from './WorktreeContextMenu'
 import {
   getProjectContextMenuTarget,
@@ -464,6 +465,9 @@ type VirtualizedWorktreeViewportProps = {
   // hidden repos on reorder.
   allRepoIds: string[]
   reorderRepos: (orderedIds: string[]) => void
+  // Commit a new SSH host order (spec 383). Receives the full reordered list of
+  // SSH host keys (`ssh:<connId>`); the local host is pinned first and excluded.
+  reorderHosts: (orderedSshKeys: string[]) => void
   prCache: Record<string, unknown> | null
   workspaceStatuses: readonly WorkspaceStatusDefinition[]
   projectGroups?: readonly ProjectGroup[]
@@ -836,6 +840,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   repoOrder,
   allRepoIds,
   reorderRepos,
+  reorderHosts,
   prCache,
   workspaceStatuses,
   projectGroups = [],
@@ -989,6 +994,26 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     orderedRepoIds: allRepoIds,
     onCommit: reorderRepos,
     getScrollContainer: () => scrollRef.current
+  })
+  // SSH host keys in current display order (host headers only, local excluded).
+  // The reorder controller commits permutations of this list; the local host is
+  // never in it, so it can never be dragged or displaced from first (spec 383).
+  const orderedSshHostKeys = useMemo(
+    () =>
+      rows
+        .filter((row): row is Extract<Row, { type: 'host-header' }> => row.type === 'host-header')
+        .filter((row) => row.host.kind === 'ssh')
+        .map((row) => row.host.key),
+    [rows]
+  )
+  // Reordering is only meaningful with 2+ SSH hosts to shuffle. The controller
+  // is still constructed unconditionally (hook order) but inert otherwise.
+  const canReorderHostHeaders = groupBy === 'host' && orderedSshHostKeys.length > 1
+  const hostDrag = useRepoHeaderDrag({
+    orderedRepoIds: orderedSshHostKeys,
+    onCommit: reorderHosts,
+    getScrollContainer: () => scrollRef.current,
+    headerIdAttr: 'data-host-header-id'
   })
   const worktreeDragGroups = useMemo(() => getWorktreeDragGroups(rows), [rows])
   const worktreeDragUnitGroups = useMemo(() => getWorktreeDragUnitGroups(rows), [rows])
@@ -2852,6 +2877,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               style={{ top: `${repoDrag.state.dropIndicatorY}px` }}
             />
           ) : null}
+          {canReorderHostHeaders &&
+          hostDrag.state.draggingRepoId !== null &&
+          hostDrag.state.dropIndicatorY !== null ? (
+            <div
+              role="presentation"
+              className="pointer-events-none absolute left-2 right-2 z-10 border-t border-dashed border-muted-foreground/70"
+              style={{ top: `${hostDrag.state.dropIndicatorY}px` }}
+            />
+          ) : null}
           {worktreeDragState.draggingWorktreeId !== null &&
           worktreeDragState.dropIndicatorY !== null ? (
             <div
@@ -2914,6 +2948,17 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                           }
                         : undefined
                     }
+                    // SSH hosts only: make the header a reorder handle. The local
+                    // host passes no dragId/handler, so it stays pinned first.
+                    dragId={
+                      canReorderHostHeaders && row.host.kind === 'ssh' ? row.host.key : undefined
+                    }
+                    onHeaderPointerDown={
+                      canReorderHostHeaders && row.host.kind === 'ssh'
+                        ? hostDrag.onHandlePointerDown
+                        : undefined
+                    }
+                    isDragging={hostDrag.state.draggingRepoId === row.host.key}
                   />
                 </div>
               )
@@ -4230,6 +4275,15 @@ const WorktreeList = React.memo(function WorktreeList({
     },
     [reorderReposAction]
   )
+  // Persisted SSH host order (spec 383) — a renderer-only preference in
+  // localStorage, no backend write. Seeded once from storage so a restart
+  // replays the same sequence; a drop updates state (immediate re-render) and
+  // persists in one step.
+  const [hostOrder, setHostOrder] = useState<string[]>(() => loadHostOrder())
+  const handleReorderHosts = useCallback((orderedSshKeys: string[]) => {
+    setHostOrder(orderedSshKeys)
+    saveHostOrder(orderedSshKeys)
+  }, [])
   // Why: host mode is a post-processing layer on top of repo grouping; the
   // inner builder always gets 'repo' so host headers can bucket repo groups.
   const effectiveGroupBy: WorktreeGroupBy = groupBy === 'host' ? 'repo' : groupBy
@@ -4367,7 +4421,9 @@ const WorktreeList = React.memo(function WorktreeList({
       placeholderRepoIds,
       importedWorktreesByRepo
     )
-    return groupBy === 'host' ? groupRowsByHost(built, hostForKey, effectiveCollapsedGroups) : built
+    return groupBy === 'host'
+      ? groupRowsByHost(built, hostForKey, effectiveCollapsedGroups, hostOrder)
+      : built
   }, [
     effectiveGroupBy,
     groupBy,
@@ -4384,7 +4440,8 @@ const WorktreeList = React.memo(function WorktreeList({
     projectGroups,
     placeholderRepoIds,
     importedWorktreesByRepo,
-    hostForKey
+    hostForKey,
+    hostOrder
   ])
   // Why: header/mode changes can shift entire groups, so remount the
   // virtualizer for those broad structure changes. Do not key on rows.length:
@@ -5144,6 +5201,7 @@ const WorktreeList = React.memo(function WorktreeList({
         repoOrder={repoOrder}
         allRepoIds={allRepoIds}
         reorderRepos={handleReorderRepos}
+        reorderHosts={handleReorderHosts}
         prCache={prCache}
         workspaceStatuses={workspaceStatuses}
         projectGroups={projectGroups}

@@ -56,7 +56,10 @@ export function HostGroupHeader({
   collapsed,
   onToggle,
   onOpenTmuxSessions,
-  onReconnect
+  onReconnect,
+  onHeaderPointerDown,
+  dragId,
+  isDragging
 }: {
   host: SidebarHost
   count: number
@@ -69,6 +72,13 @@ export function HostGroupHeader({
    *  on the down-line; the store flips to 'connecting' as soon as the attempt
    *  starts, so this header re-renders into the spinner state on its own. */
   onReconnect?: () => void | Promise<void>
+  /** When `dragId` is set (SSH hosts only), the header becomes a drag handle
+   *  for reordering host groups (spec 383): the root stamps `data-host-header-id`
+   *  and the pointer-down arms the shared reorder controller. The local host
+   *  passes neither, so it is never draggable and stays pinned first. */
+  onHeaderPointerDown?: (event: React.PointerEvent<HTMLElement>, dragId: string) => void
+  dragId?: string
+  isDragging?: boolean
 }): React.JSX.Element {
   const Icon = host.kind === 'ssh' ? Server : Monitor
   const status = host.status ?? 'unknown'
@@ -89,6 +99,10 @@ export function HostGroupHeader({
     <div
       role="button"
       tabIndex={0}
+      data-host-header-id={dragId}
+      onPointerDown={
+        dragId && onHeaderPointerDown ? (e) => onHeaderPointerDown(e, dragId) : undefined
+      }
       onClick={onToggle}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -99,7 +113,10 @@ export function HostGroupHeader({
       // Why: min-h (not fixed h-8) — SSH hosts render a second `detail` line, so
       // a one-line height clipped the two-line content and bled it onto the row
       // below. min-h keeps single-line hosts at 32px while letting SSH headers grow.
-      className="group flex min-h-8 w-full cursor-pointer items-center gap-1.5 px-1 py-0.5 text-left"
+      className={cn(
+        'group flex min-h-8 w-full cursor-pointer items-center gap-1.5 px-1 py-0.5 text-left',
+        isDragging && 'opacity-60'
+      )}
     >
       <ChevronDown
         className={cn(
