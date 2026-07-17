@@ -34,12 +34,12 @@ honored by the server when filing issues, planning goals, and stamping harness f
 
 ## Acceptance criteria
 
-- [ ] `Repo` carries optional `tracker: 'auto' | 'github' | 'linear'` (absent = auto) — `shared/types.ts` + `RepoUpdate` whitelist (`store/slices/repos.ts:77`); persists to `repos.json` via the existing serde-flatten `update()` (zero server schema change, `issueSourcePreference` precedent) and renders again after relaunch.
+- [ ] `Repo` carries optional `trackerProvider: 'auto' | 'github' | 'linear'` (absent = auto) — `shared/types.ts` + `RepoUpdate` whitelist (`store/slices/repos.ts:77`); persists to `repos.json` via the existing serde-flatten `update()` (zero server schema change, `issueSourcePreference` precedent) and renders again after relaunch.
 - [ ] A shared `TrackerSection` component renders in BOTH the New Issue surface (`TaskPage.tsx`, replacing the tab-implied GitHub/Linear dialog split) and Chat's DraftReview filing strip (`ChatPage.tsx:1025-1033`, replacing the ad-hoc `SegButtons` toggle); switching provider swaps provider-specific fields while entered title/body persist.
-- [ ] The section initializes from the selected repo's stored `tracker`; a dialog-local override never writes the store; only the explicit "Remember for this project" affordance persists via `updateRepo`.
-- [ ] Server pinning: `chat.rs::resolve_provider` (`chat.rs:1861`) and goal planning (`board_goals.rs::create_feature_for_goal` / `TaskSink::select`) honor the pin — a `linear`-pinned project files to Linear even when GitHub is available; `AGENTUM_TASK_SINK` still overrides; pinned-but-unconnected returns the existing typed 422, never a silent fallback.
+- [ ] The section initializes from the selected repo's stored `trackerProvider`; a dialog-local override never writes the store; only the explicit "Remember for this project" affordance persists via `updateRepo`.
+- [ ] Server pinning: `chat.rs::resolve_provider` (`chat.rs:1861`) and goal planning (`board_goals.rs::create_feature_for_goal` / `TaskSink::select`) honor the pin — a `linear`-pinned project files to Linear even when GitHub is available; per architecture D3 an explicit pin wins over `AGENTUM_TASK_SINK` (the env keeps governing `auto`/absent — hermetic tests send no field and stay green); pinned-but-unconnected returns the existing typed 422, never a silent fallback.
 - [ ] Harness features planned for a pinned project carry the pinned `tracker_provider` (`harness/types.rs:85`) so `task_sink::apply_tracker_transition` dispatches to the matching arm — asserted by a unit test at that seam (no live credentials); the literal `"github"` in the spec-from-issue scaffold (`routes/harness.rs:421`/`438`) is correct (GitHub issue source) and stays.
-- [ ] `tracker` unset/`auto` behaves exactly as today (GitHub-first heuristic, existing tests stay green); `npm run build --prefix crates/agentum-desktop/ui` and `cargo test --workspace --lib` pass.
+- [ ] `trackerProvider` unset/`auto` behaves exactly as today (GitHub-first heuristic, existing tests stay green); `npm run build --prefix crates/agentum-desktop/ui` and `cargo test --workspace --lib` pass.
 
 ## Out of scope (non-goals)
 

@@ -58,7 +58,7 @@ One `TrackerSection` component, identical in both surfaces:
 └───────────────────────────────────────────────────────┘
 ```
 
-- Provider control defaults from the selected repo's stored `tracker`
+- Provider control defaults from the selected repo's stored `trackerProvider`
   (`Auto` when unset — today's behavior).
 - Switching provider swaps the field set below **without losing title/body**.
 - A one-off override never silently rewrites the stored preference; only the
@@ -66,7 +66,7 @@ One `TrackerSection` component, identical in both surfaces:
 
 ## Acceptance criteria
 
-1. `Repo` carries an optional `tracker: 'auto' | 'github' | 'linear'`
+1. `Repo` carries an optional `trackerProvider: 'auto' | 'github' | 'linear'`
    (absent = auto): added to `shared/types.ts` and the `RepoUpdate` whitelist
    (`store/slices/repos.ts:77` area); `updateRepo` **persists** it to
    `repos.json` via the existing serde-flatten path (`routes/repos.rs::update`,
@@ -81,15 +81,17 @@ One `TrackerSection` component, identical in both surfaces:
    `GitHubIssueLabelSelector`, `GitHubIssueAssigneeSelector`; Linear: team /
    project / state / priority) while entered title/body persist.
 3. When a repo is selected in either surface, the section **initializes** its
-   provider from the repo's stored `tracker`; a dialog-local override does NOT
+   provider from the repo's stored `trackerProvider`; a dialog-local override does NOT
    write the store, and the explicit "Remember for this project" affordance
    **persists** the choice through `updateRepo` (AC 1 path).
 4. Server pinning: chat filing (`chat.rs::resolve_provider`, `chat.rs:1861`)
    and goal planning (`board_goals.rs::create_feature_for_goal`,
    `TaskSink::select`) **honor** the pinned provider — a `linear`-pinned
    project files to Linear even when GitHub is available (inverting the
-   GitHub-first `pick_provider` heuristic for that project) — while
-   `AGENTUM_TASK_SINK` env still **overrides** everything (hermetic tests).
+   GitHub-first `pick_provider` heuristic for that project). Precedence per
+   architecture D3: an explicit per-project pin **wins** over
+   `AGENTUM_TASK_SINK`; the env pin keeps governing `auto`/absent, so every
+   existing env-pinned hermetic test (none send the field) stays green.
    A pinned-but-unconnected provider **returns** the existing typed 422
    (`no_linear` / `no_github_repo`), never a silent fallback.
 5. Harness stamping: features planned for a pinned project **carry** the pinned
@@ -98,14 +100,14 @@ One `TrackerSection` component, identical in both surfaces:
    no call-site changes. The literal `"github"` in the spec-from-issue scaffold
    (`routes/harness.rs:421`/`438`) is CORRECT (the source is a GitHub issue)
    and stays.
-6. Projects with `tracker` unset or `auto` **behave** exactly as today
+6. Projects with `trackerProvider` unset or `auto` **behave** exactly as today
    (availability heuristic, GitHub-first) — regression-guarded by existing +
    new `pick_provider` / `resolve_provider` tests; `bun run build` (UI) and
    `cargo test --workspace --lib` are green.
 
 ## Scope & non-goals (YAGNI)
 
-- **In:** the `Repo.tracker` field + persistence; the shared `TrackerSection`
+- **In:** the `Repo.trackerProvider` field + persistence; the shared `TrackerSection`
   in New Issue + Chat DraftReview; server-side pinning at the three seams
   (chat, goal planning, harness feature stamping).
 - **Out:**
@@ -148,13 +150,19 @@ One `TrackerSection` component, identical in both surfaces:
   (`runtime/chat-client.ts:219`).
 - Chat already sends `provider` + pinned repo context (`createIssuesFromChat`,
   spec 017 repo_id threading) — the transport for the pinned choice exists.
+- Run-379 `architecture.md` (same spec dir in `.agentum-harness/`) — a
+  line-verified server-seam plan at `bb25a97d` (`TrackerChoice` parse,
+  transition arms, request threading, D1–D5). It predates this spec's
+  amendment: reuse its server seams, but reconcile scope (add the shared
+  `TrackerSection` + the chat `resolve_provider` seam; drop the `"none"`
+  machinery; keep D3 precedence and the `trackerProvider` field name).
 
 ### Build new
 
 - `TrackerSection` shared component (provider control + swap-in field sets +
   "Remember for this project") composed from the existing pickers.
-- `tracker` field on `Repo` + `RepoUpdate` whitelist entry.
-- Pin resolution on the server: consult the repo's stored `tracker` at the
+- `trackerProvider` field on `Repo` + `RepoUpdate` whitelist entry.
+- Pin resolution on the server: consult the repo's stored `trackerProvider` at the
   three seams (architect decides UI-sends vs server-reads-`repos.json`;
   recommendation: server reads the registry so there's one source of truth,
   clients just send `repo_id` — chat already does).
@@ -165,13 +173,14 @@ One `TrackerSection` component, identical in both surfaces:
   logged-never-halting; pinning must not introduce a hard failure mid-run. A
   pinned-but-unavailable provider fails *filing* loudly (typed 422) but only
   *logs* during a harness run.
-- **`AGENTUM_TASK_SINK` must keep winning** over the per-repo pin — tests
-  are hermetic because of it.
+- **`AGENTUM_TASK_SINK` keeps governing `auto`/absent** — hermetic tests send
+  no explicit field, so they stay green; an explicit per-project pin
+  deliberately beats the env (architecture D3, documented at the seam).
 - **Chat issues = GitHub/Linear only** — no Board option leaks into the UI.
 - **Don't "fix" `routes/harness.rs:421`** — the spec-from-issue scaffold is
   inherently GitHub; stamping it with a Linear pin would mis-route
   transitions for a GitHub-sourced spec.
-- Old app versions ignore the unknown `tracker` key in `repos.json`
+- Old app versions ignore the unknown `trackerProvider` key in `repos.json`
   (flatten round-trip) — forward/backward safe.
 - Dual-surface regression risk: TaskPage's two dialogs have deep local state;
   replacing their provider plumbing must not break label/assignee fetches
@@ -181,7 +190,7 @@ One `TrackerSection` component, identical in both surfaces:
 
 - **feature_list.json entries** (re-plan of run 379's F1–F6, one gated slice
   each):
-  - F1 — `Repo.tracker` field + whitelist + persistence round-trip.
+  - F1 — `Repo.trackerProvider` field + whitelist + persistence round-trip.
   - F2 — `TrackerSection` component + New Issue adoption.
   - F3 — Chat DraftReview adoption (replace `SegButtons` strip).
   - F4 — server pinning at chat + goal-planning seams (+ env-override guard).
