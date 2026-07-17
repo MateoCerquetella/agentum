@@ -504,6 +504,18 @@ struct PlanGoalHarnessResponse {
     features: crate::harness::FeatureList,
 }
 
+/// Optional body of `POST /api/board/goals/{id}/harness-plan` (spec 021 F3).
+/// Existing callers send no body at all — `Option<Json<…>>` keeps them on
+/// today's detection path structurally.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanGoalHarnessRequest {
+    /// The project's explicit tracker pin: `"auto" | "github" | "linear"`.
+    /// Absent/`auto` = today's env + availability detection.
+    #[serde(default)]
+    tracker: Option<String>,
+}
+
 /// `POST /api/board/goals/{id}/harness-plan` — take the planner-produced child
 /// cards of a goal and write them into the harness backlog (spec 011a).
 ///
@@ -512,10 +524,27 @@ struct PlanGoalHarnessResponse {
 /// registers or runs the harness — the user reviews the board and clicks Run.
 /// The board is the source of truth here (011a fallback); external sinks
 /// (GitHub/Linear) layer in via [`crate::task_sink::TaskSink`] in 011b/011c.
+/// A project with an explicit tracker pin (spec 021 F3) threads it as the
+/// optional `tracker` body field: the pinned sink is forced — bypassing both
+/// `AGENTUM_TASK_SINK` and the availability probe — so every planned feature
+/// is stamped with the pinned `tracker_provider`. An unconfigured pinned sink
+/// fails feature-create loudly (the provider is named in the error), never a
+/// silent fallback.
 async fn plan_goal_harness(
     State(state): State<AppState>,
     Path(goal_id): Path<i64>,
+    body: Option<Json<PlanGoalHarnessRequest>>,
 ) -> Result<Json<PlanGoalHarnessResponse>, ApiError> {
+    // Reject a malformed pin before any store/filesystem work — an unknown
+    // provider must never degrade into auto-detection (spec 021: no silent
+    // fallback).
+    let choice =
+        crate::task_sink::parse_tracker_choice(body.as_ref().and_then(|b| b.tracker.as_deref()))
+            .map_err(|other| {
+                ApiError::BadRequest(format!(
+                    "unknown tracker \"{other}\"; expected \"auto\", \"github\", or \"linear\""
+                ))
+            })?;
     // The goal must exist and actually be a goal — guard against planning the
     // harness off a random feature card.
     let goal = state
@@ -558,13 +587,14 @@ async fn plan_goal_harness(
         ));
     }
 
-    // Pick the destination from what's configured (external manager = source of
-    // truth; the board is the agnostic fallback). For the board the planner's
-    // cards ARE the source, so we reuse their keys; for an external sink we
-    // mirror each card out and use the tracker's id as the harness feature id.
-    // (Re-running against an external sink re-creates issues — idempotent sync
-    // is deferred to 011d.)
-    let sink = crate::task_sink::TaskSink::select(&wd).await;
+    // Pick the destination: an explicit per-project pin forces it (spec 021
+    // F3 — no env, no probe); otherwise detect from what's configured
+    // (external manager = source of truth; the board is the agnostic
+    // fallback). For the board the planner's cards ARE the source, so we
+    // reuse their keys; for an external sink we mirror each card out and use
+    // the tracker's id as the harness feature id. (Re-running against an
+    // external sink re-creates issues — idempotent sync is deferred to 011d.)
+    let sink = choice.resolve_sink(&wd).await;
     let mut feats: Vec<crate::harness::BacklogFeature> = Vec::with_capacity(children.len());
     for c in &children {
         let body = c.body.clone().unwrap_or_default();
@@ -1892,7 +1922,7 @@ mod tests {
         )
         .await;
 
-        let resp = plan_goal_harness(State(state.clone()), Path(goal.id))
+        let resp = plan_goal_harness(State(state.clone()), Path(goal.id), None)
             .await
             .expect("plan must succeed");
         assert_eq!(resp.0.feature_count, 2);
@@ -1925,7 +1955,7 @@ mod tests {
         let goal = make_goal_with_children(&state, &wd, &[("F1", None)]).await;
         let mut rx = state.bus.subscribe();
 
-        let _resp = plan_goal_harness(State(state.clone()), Path(goal.id))
+        let _resp = plan_goal_harness(State(state.clone()), Path(goal.id), None)
             .await
             .unwrap();
 
@@ -1950,7 +1980,7 @@ mod tests {
         let wd = dir.path().to_string_lossy().into_owned();
         let goal = make_goal_with_children(&state, &wd, &[]).await;
 
-        let err = plan_goal_harness(State(state), Path(goal.id))
+        let err = plan_goal_harness(State(state), Path(goal.id), None)
             .await
             .expect_err("a childless goal must be rejected");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
@@ -1977,9 +2007,130 @@ mod tests {
             .await
             .unwrap();
 
-        let err = plan_goal_harness(State(state), Path(card.id))
+        let err = plan_goal_harness(State(state), Path(card.id), None)
             .await
             .expect_err("non-goal must be rejected");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
+    }
+
+    // --- plan_goal_harness tracker pin tests (spec 021 F3) ---
+
+    /// An unknown pin is a 400 carrying the offending value, raised before any
+    /// planning work — it must never degrade into auto-detection.
+    #[tokio::test]
+    async fn plan_goal_harness_unknown_tracker_is_rejected() {
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+        let goal = make_goal_with_children(&state, &wd, &[]).await;
+
+        let err = plan_goal_harness(
+            State(state),
+            Path(goal.id),
+            Some(Json(PlanGoalHarnessRequest {
+                tracker: Some("jira".into()),
+            })),
+        )
+        .await
+        .expect_err("unknown tracker must be rejected");
+        match err {
+            ApiError::BadRequest(msg) => {
+                assert!(msg.contains("jira"), "must name the bad value, got {msg}")
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    /// Spec 021 F3 / architecture D3: an explicit Linear pin forces the Linear
+    /// sink, bypassing BOTH `AGENTUM_TASK_SINK` (pinned to github here) and the
+    /// availability probe. Under `isolate_xdg` the Linear creds point at a
+    /// missing file, so feature-create fails naming linear — the error naming
+    /// the pinned provider (not github, not board) proves detection never ran
+    /// and nothing fell back silently.
+    #[tokio::test]
+    async fn plan_goal_harness_linear_pin_bypasses_env_and_probe() {
+        let _env = isolate_xdg();
+        // SAFETY: serialised by isolate_xdg's TEST_ENV_LOCK.
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "github") };
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+        let goal = make_goal_with_children(&state, &wd, &[("Login screen", None)]).await;
+
+        let err = plan_goal_harness(
+            State(state),
+            Path(goal.id),
+            Some(Json(PlanGoalHarnessRequest {
+                tracker: Some("linear".into()),
+            })),
+        )
+        .await
+        .expect_err("pinned-but-unconnected Linear must fail loudly");
+        unsafe { std::env::remove_var("AGENTUM_TASK_SINK") };
+        match err {
+            ApiError::Internal(msg) => assert!(
+                msg.contains("linear"),
+                "error must name the pinned provider, got {msg}"
+            ),
+            other => panic!("expected Internal naming linear, got {other:?}"),
+        }
+    }
+
+    /// The F3 stamp, end to end: a github pin + a fake `gh` → the plan
+    /// succeeds and EVERY planned feature carries the pinned
+    /// `tracker_provider` and the created issue's URL. `AGENTUM_TASK_SINK` is
+    /// pinned to board so the github stamp can only have come from the
+    /// explicit pin.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plan_goal_harness_github_pin_stamps_every_feature() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env = isolate_xdg();
+        let state = fresh_state().await;
+        let dir = TempDir::new().unwrap();
+        let wd = dir.path().to_string_lossy().into_owned();
+        let goal = make_goal_with_children(
+            &state,
+            &wd,
+            &[("Login screen", Some("user sees a login form"))],
+        )
+        .await;
+
+        // Fake `gh`: every invocation (create + the best-effort Todo
+        // transition) prints the issue URL and exits 0.
+        let url = "https://github.com/acme/widgets/issues/7";
+        let script = dir.path().join("gh-fake");
+        std::fs::write(&script, format!("#!/bin/sh\necho \"{url}\"\n")).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: serialised by isolate_xdg's TEST_ENV_LOCK.
+        unsafe {
+            std::env::set_var("AGENTUM_TASK_SINK", "board");
+            std::env::set_var("AGENTUM_GH_BIN", &script);
+        }
+
+        let resp = plan_goal_harness(
+            State(state),
+            Path(goal.id),
+            Some(Json(PlanGoalHarnessRequest {
+                tracker: Some("github".into()),
+            })),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("AGENTUM_GH_BIN");
+            std::env::remove_var("AGENTUM_TASK_SINK");
+        }
+
+        let resp = resp.expect("pinned github plan with a fake gh must succeed");
+        assert_eq!(resp.0.provider, "github");
+        assert_eq!(resp.0.feature_count, 1);
+        assert!(
+            resp.0.features.features.iter().all(|f| {
+                f.tracker_provider.as_deref() == Some("github")
+                    && f.tracker_url.as_deref() == Some(url)
+            }),
+            "every planned feature must carry the pinned provider + created URL"
+        );
     }
 }
