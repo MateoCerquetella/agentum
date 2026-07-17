@@ -436,7 +436,9 @@ pub async fn set_environment(target: &str, key: &str, value: &str) -> Result<()>
 /// append-redirect operator. Only the path is shell-quoted.
 pub async fn pipe_pane(target: &str, out_path: &Path) -> Result<()> {
     if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        // Async create: this runs on the tokio worker on every local WS connect,
+        // so keep the (usually no-op) mkdir off the blocking path.
+        tokio::fs::create_dir_all(parent).await?;
     }
     let path_str = out_path
         .to_str()
