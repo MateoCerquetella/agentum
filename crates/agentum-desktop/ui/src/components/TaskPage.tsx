@@ -71,6 +71,8 @@ import { GitHubMarkdownComposer } from '@/components/github/GitHubMarkdownCompos
 import { buildGitHubRepoUrl, parseGitHubIssueOrPRLink } from '@/lib/github-links'
 import {
   findGithubWorkItemWorkspaceAttachment,
+  buildGithubWorkItemWorkspaceAttachmentIndex,
+  lookupGithubWorkItemWorkspaceAttachment,
   getGithubWorkItemWorkspaceAttachmentLabel
 } from '@/lib/github-work-item-workspace-attachment'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
@@ -213,6 +215,12 @@ export default function TaskPage({
   const repos = useAppStore((s) => s.repos)
   const repoMap = useRepoMap()
   const allWorktrees = useAllWorktrees()
+  // O(1) work-item → workspace lookup, rebuilt only when worktrees change.
+  // Replaces a per-row worktrees.find() scan in the work-item list render.
+  const workspaceAttachmentIndex = useMemo(
+    () => buildGithubWorkItemWorkspaceAttachmentIndex(allWorktrees),
+    [allWorktrees]
+  )
   const openModal = useAppStore((s) => s.openModal)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const fetchWorkItemsAcrossRepos = useAppStore((s) => s.fetchWorkItemsAcrossRepos)
@@ -4314,8 +4322,8 @@ export default function TaskPage({
                   {!showGitHubTaskSkeletons &&
                     filteredWorkItems.map((item) => {
                       const itemRepo = repoMap.get(item.repoId) ?? null
-                      const attachedWorkspace = findGithubWorkItemWorkspaceAttachment(
-                        allWorktrees,
+                      const attachedWorkspace = lookupGithubWorkItemWorkspaceAttachment(
+                        workspaceAttachmentIndex,
                         item.repoId,
                         item.type,
                         item.number
