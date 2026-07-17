@@ -2274,7 +2274,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         await scaffoldSpecFromIssue({
           workdir: worktree.path,
           number: gate.number,
-          slug: `${gate.slug.owner}/${gate.slug.repo}`
+          slug: `${gate.slug.owner}/${gate.slug.repo}`,
+          // Spec 021 (#379): thread the repo's tracker pin so the planned
+          // backlog stamps the right provider ('auto'/absent = GitHub).
+          ...(selectedRepo?.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
         })
       } catch (error) {
         console.error('Failed to scaffold a spec from the linked issue', error)
@@ -2312,7 +2315,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           workdir: worktree.path,
           number: gate.number,
           slug: `${gate.slug.owner}/${gate.slug.repo}`,
-          ...(agent ? { agentTool: agent } : {})
+          ...(agent ? { agentTool: agent } : {}),
+          // Spec 021 (#379): thread the repo's tracker pin so the run's
+          // features + transitions aim at the right provider.
+          ...(selectedRepo?.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
         })
         if (result.alreadyRunning) {
           // The friendly state (C5), not an error: a live run already owns

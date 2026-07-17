@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
+import { useIssueProjectStatus } from '@/components/sidebar/IssueProjectStatusChip'
 import { useRepoLabels, useRepoAssignees, useImmediateMutation } from '@/hooks/useIssueMetadata'
 import { useRepoLabelsBySlug, useRepoAssigneesBySlug } from '@/hooks/useGitHubSlugMetadata'
 import type { GitHubWorkItem } from '../../../shared/types'
@@ -112,6 +113,16 @@ export function GHEditSection({
   const [labelPopoverOpen, setLabelPopoverOpen] = useState(false)
   const [assigneePopoverOpen, setAssigneePopoverOpen] = useState(false)
   const [localAssignees, setLocalAssignees] = useState<string[]>(assignees)
+  // #379: the tracker's REAL status — the Projects v2 board column — shown in
+  // the sidebar's Status section beside open/closed. The hook live-refreshes
+  // on tracker.phase_changed bus events, so engine/MCP transitions appear
+  // without reopening. Null (unbound / off-project / error) renders nothing.
+  const projectColumn = useIssueProjectStatus({
+    open: layout === 'sidebar' && item.type === 'issue',
+    issueUrl: item.url,
+    workdir: repoPath ?? undefined,
+    repoId: repoId ?? undefined
+  })
   const editedAssigneesItemKeyRef = useRef<string | null>(null)
   const assigneesItemKey = `${item.repoId}\0${item.id}`
   const patchWorkItem = useAppStore((s) => s.patchWorkItem)
@@ -432,6 +443,15 @@ export function GHEditSection({
               </button>
             </PopoverContent>
           </Popover>
+          {projectColumn ? (
+            <div className="mt-2 flex items-center gap-1.5 rounded-md border border-indigo-500/25 bg-indigo-500/5 px-2.5 py-1.5 text-[12px]">
+              <FolderKanban className="size-3.5 text-indigo-500" />
+              <span className="text-muted-foreground">Board</span>
+              <span className="ml-auto font-medium text-indigo-600 dark:text-indigo-300">
+                {projectColumn}
+              </span>
+            </div>
+          ) : null}
         </section>
 
         {/* Assignees */}

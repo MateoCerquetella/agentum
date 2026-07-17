@@ -174,6 +174,9 @@ export function startGatedWork(input: {
   slug?: string
   agentTool?: string
   agentModel?: string
+  /** Spec 021 (#379): the repo's tracker pin (`auto`/`github`/`linear`).
+   *  Absent/`auto` keeps the issue-driven path's GitHub stamping. */
+  tracker?: string
 }): Promise<StartGatedWorkResult> {
   return request('/api/harness/start-work', {
     method: 'POST',
@@ -182,7 +185,8 @@ export function startGatedWork(input: {
       number: String(input.number),
       ...(input.slug ? { slug: input.slug } : {}),
       ...(input.agentTool ? { agentTool: input.agentTool } : {}),
-      ...(input.agentModel ? { agentModel: input.agentModel } : {})
+      ...(input.agentModel ? { agentModel: input.agentModel } : {}),
+      ...(input.tracker ? { tracker: input.tracker } : {})
     })
   })
 }

@@ -268,6 +268,9 @@ export async function scaffoldSpecFromIssue(input: {
   slug?: string
   /** Also derive feature_list.json (server default: true). */
   plan?: boolean
+  /** Spec 021 (#379): the repo's tracker pin (`auto`/`github`/`linear`).
+   *  Absent/`auto` keeps the issue-driven path's GitHub stamping. */
+  tracker?: string
   timeoutMs?: number
 }): Promise<ScaffoldedSpecFromIssue> {
   const url = await apiUrl('/api/harness/spec-from-issue')
@@ -281,7 +284,8 @@ export async function scaffoldSpecFromIssue(input: {
         workdir: input.workdir,
         number: String(input.number),
         ...(input.slug ? { slug: input.slug } : {}),
-        ...(input.plan !== undefined ? { plan: input.plan } : {})
+        ...(input.plan !== undefined ? { plan: input.plan } : {}),
+        ...(input.tracker ? { tracker: input.tracker } : {})
       }),
       signal: controller.signal
     })

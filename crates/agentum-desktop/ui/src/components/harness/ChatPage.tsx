@@ -199,6 +199,16 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     [repos, workspaceId, pinnedRepo]
   )
 
+  // Spec 021 (#379): the filing provider defaults from the project's stored
+  // trackerProvider pin — a Linear-pinned project files to Linear without a
+  // manual toggle every session. 'auto'/absent keeps the GitHub default.
+  // Re-derives on project switch or pin change; a manual toggle within one
+  // project stands until then.
+  useEffect(() => {
+    const pin = workspace?.trackerProvider
+    setProvider(pin === 'linear' || pin === 'github' ? pin : 'github')
+  }, [workspace?.id, workspace?.trackerProvider])
+
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   // Auto-grow the composer with its content. The cap matches the textarea's
