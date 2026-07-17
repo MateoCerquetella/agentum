@@ -144,11 +144,14 @@ impl Store {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
 
         if let Some(existing) = self.board_item_by_external_url(external_url).await? {
-            sqlx::query(
+            // UPDATE ... RETURNING * hands back the refreshed row in one round
+            // trip instead of UPDATE-then-SELECT on the tracker re-sync path.
+            let row = sqlx::query_as::<_, BoardItemRow>(
                 r#"UPDATE board_items
                    SET title = ?, body = ?, status = ?, lbl = ?, external_provider = ?,
                        updated_at = ?
-                   WHERE id = ?"#,
+                   WHERE id = ?
+                   RETURNING *"#,
             )
             .bind(title)
             .bind(body)
@@ -157,11 +160,11 @@ impl Store {
             .bind(external_provider)
             .bind(&now_s)
             .bind(existing.id)
-            .execute(&self.pool)
+            .fetch_optional(&self.pool)
             .await?;
-            return self
-                .get_board_item(existing.id)
-                .await?
+            return row
+                .map(BoardItem::try_from)
+                .transpose()?
                 .ok_or_else(|| StoreError::NotFound(format!("board item {}", existing.id)));
         }
 
