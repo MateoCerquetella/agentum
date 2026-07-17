@@ -136,3 +136,10 @@
   scenario (loop on a done spec stops after step 1 with `agent_completed`)
   goes to staging QA / the release human, per this repo's qa.sh convention.
 - phase: entered done (from review)
+- phase: entered authoring (from executing) [run 379, 2026-07-17]
+- authoring gate PASS (attempt 1) [run 379]: One-slice per-project tracker picker; persona, user value, and non-goals added; ACs made testable and re-grounded (hardcoded "github" in routes/harness.rs + TaskSink::select env/auto-probe are the seams; per-project issue-URL fields dropped as they contradict the per-feature tracker_url flow).
+- phase: entered architecture (from authoring) [run 379]
+- 2026-07-17: worktree was 235 commits stale (v0.57.0) — rebased onto origin/develop v0.78.0 before authoring the repo spec (stale-base lesson, memory). Scaffold commit dropped; develop`s tracked .agentum-harness restored; run-379 live files preserved.
+- architecture gate PASS (attempt 1): Plan grounded at bb25a97d (incl. the TrackerEmit-era transition seam): UI-owned Repo.trackerProvider mirroring issueSourcePreference, request-threaded like agentTool/agentModel into start-work/spec-from-issue/harness-plan, a pure TrackerChoice parse + a logged-skip "none" arm in transition_inner; drive.rs/types.rs/linear.rs untouched; every AC mapped to a named component and test.
+- phase: entered decompose (from architecture)
+- phase: entered executing (from decompose)

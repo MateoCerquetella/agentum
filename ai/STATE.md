@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 018-issue-hover-project-status-chip
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (018 **SHIP-READY — Reviewer SIGN-OFF 2026-07-14**, `review.md`, 0 blockers; spec Status → Done. Full loop run in one autonomous session (spec→pm→architect→developer→tester→reviewer). One slice: `gh_issue_project_status` desktop command + pure mapper, `getProjectBinding`-cached hook, `IssueProjectStatusChip` in the hover badges row. Gates: UI `bun run build` green, all new vitest green (13; 1 red = proven pre-existing `review`/"PR #456" baseline), standalone tsc green, `cargo fmt --check` green. ⚠️ Rust unit gate CI-deferred (no local webkitgtk; `cargo check` env-blocked in webkit2gtk-sys). **Merged → develop** per Mateo's ask; #365 stays open until it reaches main. Downstream: qa.sh live legs at staging (real Projects v2 board → chip shows column; unbound → no chip; 2nd hover = no refetch).)
+- **current_spec:** 021-per-project-tracker-choice
+- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (021 drafted 2026-07-17 from GH **#379** + Mateo's live amendment (tracker-section UX in New Issue/Chat; GitHub-vs-Linear only, no "None"); PM gate run at draft time — all 9 boxes pass. Prior: 018 SHIP-READY + merged → develop 2026-07-14, #365 open until main — see decision log.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,20 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-13 | Release | **merge sync #2 with develop @ 3636d6ac** (PR #367
-  "pinned chat repo context" — ANOTHER worktree independently threaded
-  repo_id + SSH repo-context gathering through chat.rs; complementary to
-  020's grounding flag, auto-merged clean in chat.rs/util.rs; only STATE.md
-  conflicted, ours kept + this line). PR #368 (specs 015+020) open into
-  develop; first merge-reconcile commit b2b19f31 (#359 repoId supersession +
-  effective_workdir). Gates re-run post-merge before push.
-- 2026-07-13 | Reviewer | **016 F1 (sdd-loop MCP check-in) REVIEW SIGN-OFF →
-  merged via PR #366** (attempt 5 at `99670cf1` after a 4×-blocked review gate —
-  the AC3 STATE.md belt parser silently deviated from architecture.md and never
-  fired on the real `- **phase:** done <!-- … -->` shape; fixed = both keys
-  `phase`|`current_phase` + first-token value; gate re-run 694/0 + fmt. Full
-  trail in `.agentum-harness/decisions.md`. F2 rider = spec 358b/#365, NOT
-  built, pending its own PM gate. Staging qa.sh covers the loop-stop scenario.)
 - 2026-07-14 | Dev→Review | **018 BUILT + SIGNED-OFF → phase done, merged to develop**
   (one slice, `tasks`-equivalent in `verification.md`/`review.md`). Landed:
   `gh_issue_project_status` desktop Tauri command + pure
@@ -149,3 +135,19 @@
   Version 0.77.0→0.78.0 (Cargo.toml+lock+tauri.conf.json). qa.sh browser legs
   WAIVED (008/010/014/015 precedent); S1 first-frame legacy flash + S2 ghost
   settings-search entry → follow-up ticket. `Closes #360`.
+- 2026-07-17 | Spec | **021 DRAFTED + PM-GATED → phase pm** (issue **#379**,
+  `ai/specs/021-per-project-tracker-choice/spec.md`; harness run 379's spec slot
+  mirrors it): per-repo `tracker` (`auto|github|linear`) persisted via the
+  `issueSourcePreference` serde-flatten path; ONE shared `TrackerSection` in New
+  Issue (TaskPage) + Chat DraftReview (replaces the ad-hoc SegButtons + tab-implied
+  provider split); server pin at `chat.rs::resolve_provider` /
+  `TaskSink::select` / goal planning; harness features stamped with the pin
+  (`apply_tracker_transition` dispatch test at the seam). Amendment vs run-379
+  authoring draft: Mateo's live ask added the New-Issue/Chat tracker-section UX
+  unification and dropped "None" ("choose between github and linear"); the
+  settings-pane-only picker became the shared section + "Remember for this
+  project". ⚠ Worktree was 235 commits stale (v0.57.0) — rebased onto develop
+  v0.78.0 before authoring; anchors line-verified there. Open Qs carried to
+  architect: pin-resolution seam (UI-sends vs server-reads-repos.json —
+  recommend server), Project-Hub display, "Auto — detected" legibility, the
+  bigger Chat/New-Issue consolidation (follow-up spec). Handoff → PM/architect.
