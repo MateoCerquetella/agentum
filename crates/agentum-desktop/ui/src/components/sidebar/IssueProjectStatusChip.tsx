@@ -8,7 +8,8 @@ import {
   parseIssueRef,
   resolveIssueProjectStatus,
   type IssueRef,
-  type ProjectBindingRef
+  type ProjectBindingRef,
+  type StatusCacheEntry
 } from '@/lib/issue-project-status'
 
 // Spec 018 (#365): the issue hover card's GitHub Project **Status** chip — the
@@ -19,10 +20,12 @@ import {
 // unbound, off-project, or on any fetch error (silent absence, AC 2).
 
 // App-session caches (module-level → shared across every card, survive
-// open/close): binding per repo slug, status per issue. A second hover hits
-// these and issues no network (AC 3).
+// open/close): binding per repo slug, status per issue. Rapid re-hovers hit
+// these with no network (AC 3), but status entries expire after
+// STATUS_STALE_AFTER_MS — the column moves while a run is coding, and a
+// forever-cache showed stale "Backlog" for an In-Progress issue (#379).
 const bindingCache = new Map<string, ProjectBindingRef>()
-const statusCache = new Map<string, string | null>()
+const statusCache = new Map<string, StatusCacheEntry>()
 
 async function fetchBinding(
   ref: IssueRef,
