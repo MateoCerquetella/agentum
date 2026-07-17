@@ -17,7 +17,7 @@ import {
   WorktreeCardDetailSection,
   WorktreeCardDetailSectionContent
 } from './WorktreeCardDetailSection'
-import { IssueStateBadge, LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
+import { LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
 import { TrackerPhaseChip } from './TrackerPhaseChip'
 import { IssueProjectStatusChip, useIssueProjectStatus } from './IssueProjectStatusChip'
 import type { IssueInfo } from '../../../../shared/types'
@@ -238,8 +238,11 @@ export function WorktreeCardDetailsHover({
   onOpenLinearIssueInAgentum
 }: WorktreeCardDetailsHoverProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
+  // #379 perf: `open: true` prefetches the Board status at card RENDER (not
+  // first hover), so the hover paints it instantly; the shared TTL cache +
+  // bus-event invalidation keep the cost to one fetch per issue per window.
   const projectStatus = useIssueProjectStatus({
-    open,
+    open: true,
     issueUrl: issue?.url,
     workdir,
     repoId
@@ -324,11 +327,13 @@ export function WorktreeCardDetailsHover({
                 <div className="text-[13px] font-semibold leading-snug text-foreground break-words">
                   {issue.title}
                 </div>
-                {(issue.state || issueLabels.length > 0 || worktreeId || projectStatus) && (
+                {(issueLabels.length > 0 || worktreeId || projectStatus) && (
                   <div className="flex flex-wrap gap-1">
-                    {issue.state && <IssueStateBadge state={issue.state} />}
-                    {/* Spec 014 F2: the pipeline-phase chip, distinct from the
-                        open/closed badge; renders nothing when unbound. */}
+                    {/* #379 (Mateo): the hover shows the BOARD status + the
+                        labels only — the open/closed state badge was noise
+                        (state is implied by the board column + labels). */}
+                    {/* Spec 014 F2: the pipeline-phase chip; renders nothing
+                        when unbound. */}
                     {worktreeId && (
                       <TrackerPhaseChip worktreeId={worktreeId} persistedPhase={trackerPhase} />
                     )}

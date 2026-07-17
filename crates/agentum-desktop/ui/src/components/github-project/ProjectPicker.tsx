@@ -5,13 +5,13 @@ import { api } from '@/tauri'
 // from `listAccessibleProjects` and is cached for 5 minutes. Paste-to-add
 // accepts org/user project URLs and `owner/number` shorthand.
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, Loader, Pin, Search } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Loader, Pin, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { applyBoardPick } from '@/lib/board-project-resolution'
+import { applyBoardPick, clearBoardPick } from '@/lib/board-project-resolution'
 import { cn } from '@/lib/utils'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
@@ -409,6 +409,24 @@ export default function ProjectPicker({
             {browseError ? <AuthErrorBanner error={browseError} /> : null}
             {!browseError && partialFailures.length > 0 ? (
               <PartialFailuresBanner failures={partialFailures} />
+            ) : null}
+            {/* #379: a wrong per-repo pick (e.g. another repo's board chosen
+                here once) was UNREMOVABLE — the only exit was picking a
+                different board. Clearing re-resolves binding → empty state. */}
+            {repoId != null && activeProject ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void updateProjectSettings((prev) => clearBoardPick(prev, repoId)).then(() => {
+                    setOpen(false)
+                    setQuery('')
+                  })
+                }}
+                className="mx-1 mt-1 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent"
+              >
+                <X className="size-3.5" />
+                No board for this project (clear pick)
+              </button>
             ) : null}
             <div className="max-h-[340px] overflow-y-auto p-1 scrollbar-sleek">
               {projectSettings.pinned.length > 0 ? (

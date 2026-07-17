@@ -48,10 +48,11 @@ function boardWorkItemsQuery(s: AppState): string {
 const TABS: Array<{ id: HubTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'wiki', label: 'Wiki' },
+  // #379 (Mateo): Tracker and Tasks are ONE surface — the board binding +
+  // intake now live in a collapsible strip atop the Tasks tab. The 'tracker'
+  // tab id survives in the store union for deep-link compat; it lands on
+  // Tasks with the strip expanded.
   { id: 'tasks', label: 'Tasks' },
-  // Where this project configures which GitHub Project (+ status mapping) tracks
-  // its issues — sits next to Tasks since it decides what Tasks reads from.
-  { id: 'tracker', label: 'Tracker' },
   { id: 'sessions', label: 'Sessions' }
 ]
 
@@ -71,7 +72,9 @@ export default function ProjectHubPage(): React.JSX.Element {
     repo != null && s.taskPageData.preselectedRepoId === repo.id
   )
   useEffect(() => {
-    if (!repo || tab !== 'tasks' || taskDataSeeded) return
+    // #379: 'tracker' now lands on the Tasks surface too, so it must seed the
+    // same preselection — else a legacy tracker deep link renders blank.
+    if (!repo || (tab !== 'tasks' && tab !== 'tracker') || taskDataSeeded) return
     useAppStore.setState((s) => ({
       taskPageData: { ...s.taskPageData, preselectedRepoId: repo.id }
     }))
@@ -197,7 +200,7 @@ export default function ProjectHubPage(): React.JSX.Element {
         </div>
         <nav className="ml-3 flex items-center gap-0.5" aria-label="Project sections">
           {TABS.map(({ id, label }) => {
-            const isActive = tab === id
+            const isActive = (tab === 'tracker' ? 'tasks' : tab) === id
             return (
               <button
                 key={id}
@@ -240,11 +243,46 @@ export default function ProjectHubPage(): React.JSX.Element {
               transcript state) re-seeds instead of leaking across projects. */}
           {tab === 'chat' ? <ChatPage key={repo.id} pinnedRepo={repo} /> : null}
           {tab === 'wiki' ? <WikiPage key={repo.id} pinnedRepoId={repo.id} /> : null}
-          {tab === 'tasks' && taskDataSeeded ? <TaskPage key={repo.id} embedded /> : null}
-          {tab === 'tracker' ? <ProjectTrackerConfig key={repo.id} repo={repo} /> : null}
+          {(tab === 'tasks' || tab === 'tracker') && taskDataSeeded ? (
+            <div className="flex h-full min-h-0 flex-col">
+              <HubTrackerStrip key={`strip-${repo.id}`} repo={repo} defaultOpen={tab === 'tracker'} />
+              <div className="min-h-0 flex-1">
+                <TaskPage key={repo.id} embedded />
+              </div>
+            </div>
+          ) : null}
           {tab === 'sessions' ? <ProjectSessionsList repoId={repo.id} /> : null}
         </Suspense>
       </div>
+    </div>
+  )
+}
+
+/** #379: Tracker folded INTO the Tasks tab — a slim collapsible strip above
+ *  the board. Collapsed by default; a legacy 'tracker' deep link opens it. */
+function HubTrackerStrip({
+  repo,
+  defaultOpen
+}: {
+  repo: Repo
+  defaultOpen: boolean
+}): React.JSX.Element {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="border-b border-border/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-4 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronLeft className={cn('size-3 transition-transform', open ? 'rotate-90' : '-rotate-90')} />
+        Tracker — board binding &amp; new issue
+      </button>
+      {open ? (
+        <div className="max-h-[55vh] overflow-y-auto scrollbar-sleek">
+          <ProjectTrackerConfig key={repo.id} repo={repo} />
+        </div>
+      ) : null}
     </div>
   )
 }
