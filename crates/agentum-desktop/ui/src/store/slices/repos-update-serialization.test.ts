@@ -128,6 +128,20 @@ describe('repo update serialization', () => {
     }
   })
 
+  it('persists trackerProvider and applies it to state for re-render', async () => {
+    reposUpdate.mockResolvedValueOnce(undefined)
+    const store = createTestStore()
+    store.setState({ repos: [localRepo] })
+
+    await store.getState().updateRepo(localRepo.id, { trackerProvider: 'linear' })
+
+    expect(reposUpdate).toHaveBeenCalledWith({
+      repoId: localRepo.id,
+      updates: { trackerProvider: 'linear' }
+    })
+    expect(store.getState().repos[0]?.trackerProvider).toBe('linear')
+  })
+
   it('does not apply repo icons that fail shared sanitization', async () => {
     reposUpdate.mockResolvedValueOnce(undefined)
     const store = createTestStore()

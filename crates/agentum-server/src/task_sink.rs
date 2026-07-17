@@ -75,6 +75,60 @@ pub enum TaskSink {
     Linear,
 }
 
+/// A project's tracker choice as threaded through a plan request (spec 021).
+/// `Auto` (the absent-field default) keeps today's behavior — env pin +
+/// availability probe via [`TaskSink::select`]; an explicit `Github`/`Linear`
+/// pin forces the sink outright, consulting neither `AGENTUM_TASK_SINK` nor
+/// the probe (architecture D3: an explicit per-project pin outranks the env
+/// var, which keeps governing only `Auto`/absent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackerChoice {
+    Auto,
+    Github,
+    Linear,
+}
+
+/// Parse a request's optional `tracker` field. Absent or blank defaults to
+/// `Auto` (old clients send no field and stay byte-identical); an
+/// unrecognized value is returned as `Err(value)` so the handler can 400 with
+/// the offending string — never a silent fallback. Pure, so the defaulting +
+/// validation is unit-tested without a live request (the
+/// `chat::resolve_provider` pattern).
+pub fn parse_tracker_choice(raw: Option<&str>) -> Result<TrackerChoice, String> {
+    match raw
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("auto")
+    {
+        "auto" => Ok(TrackerChoice::Auto),
+        "github" => Ok(TrackerChoice::Github),
+        "linear" => Ok(TrackerChoice::Linear),
+        other => Err(other.to_string()),
+    }
+}
+
+impl TrackerChoice {
+    /// The sink an explicit pin forces; `None` for `Auto` (the caller falls
+    /// back to [`TaskSink::select`]'s env + probe detection).
+    pub fn forced_sink(self) -> Option<TaskSink> {
+        match self {
+            TrackerChoice::Auto => None,
+            TrackerChoice::Github => Some(TaskSink::Github),
+            TrackerChoice::Linear => Some(TaskSink::Linear),
+        }
+    }
+
+    /// Resolve the destination for a plan request: an explicit pin wins
+    /// outright (D3 — no env, no probe); `Auto` defers to
+    /// [`TaskSink::select`], unchanged.
+    pub async fn resolve_sink(self, workdir: &Path) -> TaskSink {
+        match self.forced_sink() {
+            Some(sink) => sink,
+            None => TaskSink::select(workdir).await,
+        }
+    }
+}
+
 impl TaskSink {
     /// Stable provider id, surfaced to callers and stamped onto [`FeatureRef`].
     pub fn provider(self) -> &'static str {
@@ -107,6 +161,10 @@ impl TaskSink {
     ///
     /// `AGENTUM_TASK_SINK=board|github|linear` forces a provider, overriding
     /// detection — useful to pin a destination (and to keep tests hermetic).
+    /// An explicit per-project pin ([`TrackerChoice::Github`]/`Linear`) never
+    /// reaches this function at all — [`TrackerChoice::resolve_sink`] only
+    /// delegates here for `Auto`/absent, so the env var governs exactly that
+    /// case (spec 021, architecture D3).
     pub async fn select(workdir: &Path) -> TaskSink {
         match std::env::var("AGENTUM_TASK_SINK").as_deref() {
             Ok("board") => return TaskSink::Board,
@@ -1244,6 +1302,54 @@ mod tests {
         assert_eq!(TaskSink::Linear.provider(), "linear");
     }
 
+    /// Spec 021 F3: absent/blank/"auto" all mean Auto (old clients send no
+    /// field); explicit pins parse trimmed; anything else — including "board"
+    /// and the dropped "none" — is a loud Err carrying the offending string.
+    #[test]
+    fn parse_tracker_choice_defaults_pins_and_rejects() {
+        assert_eq!(parse_tracker_choice(None), Ok(TrackerChoice::Auto));
+        assert_eq!(parse_tracker_choice(Some("")), Ok(TrackerChoice::Auto));
+        assert_eq!(parse_tracker_choice(Some("  ")), Ok(TrackerChoice::Auto));
+        assert_eq!(parse_tracker_choice(Some("auto")), Ok(TrackerChoice::Auto));
+        assert_eq!(
+            parse_tracker_choice(Some(" github ")),
+            Ok(TrackerChoice::Github)
+        );
+        assert_eq!(
+            parse_tracker_choice(Some("linear")),
+            Ok(TrackerChoice::Linear)
+        );
+        assert_eq!(parse_tracker_choice(Some("board")), Err("board".into()));
+        assert_eq!(parse_tracker_choice(Some("none")), Err("none".into()));
+        assert_eq!(parse_tracker_choice(Some("jira")), Err("jira".into()));
+    }
+
+    #[test]
+    fn tracker_choice_forces_only_explicit_pins() {
+        assert_eq!(TrackerChoice::Auto.forced_sink(), None);
+        assert_eq!(TrackerChoice::Github.forced_sink(), Some(TaskSink::Github));
+        assert_eq!(TrackerChoice::Linear.forced_sink(), Some(TaskSink::Linear));
+    }
+
+    /// Architecture D3: an explicit pin outranks `AGENTUM_TASK_SINK`; the env
+    /// var keeps full authority over `Auto`. Env-mutating, so serialised via
+    /// the crate-wide lock (the same discipline as routes/board_goals tests).
+    #[tokio::test]
+    async fn explicit_pin_outranks_env_sink_auto_still_honors_it() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: set_var is unsound under concurrent access; TEST_ENV_LOCK
+        // serialises every env-mutating test in this crate.
+        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "github") };
+        let pinned = TrackerChoice::Linear.resolve_sink(dir.path()).await;
+        let auto = TrackerChoice::Auto.resolve_sink(dir.path()).await;
+        unsafe { std::env::remove_var("AGENTUM_TASK_SINK") };
+        assert_eq!(pinned, TaskSink::Linear, "explicit pin must bypass the env");
+        assert_eq!(auto, TaskSink::Github, "Auto must still honor the env pin");
+    }
+
     #[test]
     fn gh_create_argv_is_noninteractive() {
         let argv = gh_create_argv("My title", "My body", &[]);
@@ -2192,6 +2298,103 @@ mod tests {
             }
             other => panic!("expected Skipped, got {other:?}"),
         }
+    }
+
+    // ---- Spec 021 F4: per-project pin → provider dispatch at the seam --------
+
+    /// Spec 021 F4: the per-project pin — stamped onto each planned
+    /// `Feature.tracker_provider` (F3) and passed verbatim by the harness's
+    /// `transition_tracker` — selects the matching arm at THIS public seam.
+    /// No live credentials: a `"github"` feature drives the `gh issue edit`
+    /// transition (fake `gh` records the argv), a `"linear"` feature enters
+    /// `linear::transition_issue`, proven by its token-gate error — a message
+    /// only the linear module produces. Env-mutating (the `AGENTUM_*` config
+    /// redirects keep a configured dev machine hermetic), so serialised via
+    /// the crate-wide lock.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pinned_provider_dispatches_to_matching_tracker_arm() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let store = fresh_store().await;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls.log");
+        let script = write_fake_gh(
+            dir.path(),
+            &format!("#!/bin/sh\necho \"$@\" >> \"{}\"\nexit 0\n", log.display()),
+        );
+        let missing = dir.path().join("nonexistent.json");
+
+        // SAFETY: set_var is unsound under concurrent access; TEST_ENV_LOCK
+        // serialises every env-mutating test in this crate. The three config
+        // redirects point at a missing file so a real github.json / board
+        // binding / Linear token on the host can't leak into the assertions.
+        unsafe {
+            std::env::set_var("AGENTUM_GH_BIN", &script);
+            std::env::set_var("AGENTUM_GITHUB_CONFIG", &missing);
+            std::env::set_var("AGENTUM_GITHUB_PROJECTS_CONFIG", &missing);
+            std::env::set_var("AGENTUM_LINEAR_CREDS", &missing);
+        }
+
+        let bus = test_bus();
+        let github = apply_tracker_transition(
+            &store,
+            "github",
+            "42",
+            Some("https://github.com/owner/repo/issues/42"),
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await;
+        let linear = apply_tracker_transition(
+            &store,
+            "linear",
+            "AG-12",
+            None,
+            TrackerPhase::InProgress,
+            TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await;
+
+        unsafe {
+            std::env::remove_var("AGENTUM_GH_BIN");
+            std::env::remove_var("AGENTUM_GITHUB_CONFIG");
+            std::env::remove_var("AGENTUM_GITHUB_PROJECTS_CONFIG");
+            std::env::remove_var("AGENTUM_LINEAR_CREDS");
+        }
+
+        // GitHub pin → the GitHub issue transition ran: the recorded argv ends
+        // with the one `issue edit` against the slug+number parsed from the
+        // ticket URL. (The exact label set is pinned by the transport tests
+        // above — here the claim is which ARM ran.)
+        assert_eq!(github.unwrap(), TransitionResult::Applied);
+        let calls = std::fs::read_to_string(&log).unwrap();
+        let last = calls.lines().last().unwrap();
+        assert!(
+            last.starts_with("issue edit 42 --repo owner/repo --add-label "),
+            "github pin must drive the gh issue transition, got: {last}"
+        );
+
+        // Linear pin → linear::transition_issue: with no creds it fails at
+        // that module's own token gate, and the fake gh saw no new calls —
+        // dispatch is exclusive, never a github fallback.
+        let err = linear.expect_err("linear arm must reach linear::transition_issue");
+        assert!(
+            err.to_string().contains("no Linear token configured"),
+            "got: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            calls,
+            "the linear pin must not touch the gh transport"
+        );
     }
 
     // ---- Spec 008 D6: the `status/blocked` escalation ------------------------

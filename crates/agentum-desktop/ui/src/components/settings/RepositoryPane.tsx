@@ -367,7 +367,8 @@ export function RepositoryPane({
             </Select>
           </div>
           <p className="text-xs text-muted-foreground">
-            Auto keeps today&apos;s detection. None skips tracker updates for this project.
+            Auto keeps today&apos;s detection. GitHub or Linear pins this project&apos;s ticket
+            transitions to that tracker.
           </p>
         </SearchableSetting>
       </section>

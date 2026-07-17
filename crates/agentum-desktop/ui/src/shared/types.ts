@@ -80,7 +80,7 @@ export type IssueSourcePreference = 'upstream' | 'origin' | 'auto'
  * forward-compat convention as `issueSourcePreference`, so persisted records
  * that predate the field keep today's detection behavior.
  */
-export type TrackerProviderPreference = 'auto' | 'github' | 'linear' | 'none'
+export type TrackerProviderPreference = 'auto' | 'github' | 'linear'
 export type ExternalWorktreeVisibility = 'hide' | 'show'
 
 export type Repo = {
