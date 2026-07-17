@@ -18,12 +18,11 @@ const repo: Repo = {
 }
 
 describe('tracker provider picker model', () => {
-  it('offers exactly Auto (detect), GitHub, Linear, and None', () => {
+  it('offers exactly Auto (detect), GitHub, and Linear', () => {
     expect(TRACKER_PROVIDER_OPTIONS.map((option) => [option.value, option.label])).toEqual([
       ['auto', 'Auto (detect)'],
       ['github', 'GitHub'],
-      ['linear', 'Linear'],
-      ['none', 'None']
+      ['linear', 'Linear']
     ])
   })
 
@@ -34,8 +33,13 @@ describe('tracker provider picker model', () => {
     }
   })
 
+  it('degrades a persisted pre-amendment "none" to auto instead of rendering it', () => {
+    expect(resolveTrackerProviderPreference('none')).toBe('auto')
+  })
+
   it('drops unknown select values instead of saving them', () => {
     expect(parseTrackerProviderPreference('github')).toBe('github')
+    expect(parseTrackerProviderPreference('none')).toBeNull()
     expect(parseTrackerProviderPreference('jira')).toBeNull()
     expect(parseTrackerProviderPreference('')).toBeNull()
   })
