@@ -73,10 +73,8 @@ import {
   type WorkItemOption
 } from '@/components/new-workspace/work-item-picker-model'
 import {
-  canDraftIssue,
   canFileIssue,
   deriveCreateIssueIntentPhase,
-  deriveIntentTitle,
   resolveCreateIssueProvider,
   type CreateIssueProvider
 } from '@/components/new-workspace/create-issue-intent-model'
@@ -358,8 +356,19 @@ export default function CreateWorkspaceWizard({
       if (event.key !== 'Enter' || event.shiftKey) {
         return
       }
+      // Only a plain text input (or an empty focus) should let Enter drive the
+      // wizard's primary action. Elements that own their own Enter semantics —
+      // textareas (newline), buttons (their onClick, e.g. "Draft with AI" or an
+      // agent tile), and selects — must NOT also advance/create the workspace,
+      // or Enter double-fires (the "creates it double" report). The create-issue
+      // panel additionally stops Enter propagation so its title field files the
+      // issue rather than reaching here at all.
       const target = event.target as HTMLElement | null
-      if (target instanceof HTMLTextAreaElement) {
+      if (
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLButtonElement ||
+        target instanceof HTMLSelectElement
+      ) {
         return
       }
       event.preventDefault()
@@ -1731,7 +1740,6 @@ function CreateIssuePanel({
   resolved: PickerProjectRef | null
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const [intent, setIntent] = useState('')
   // F3 Linear arm — probed lazily when the panel opens (best-effort; a failure
   // leaves `linearConnected` false so the panel stays GitHub-only).
   const [linearConnected, setLinearConnected] = useState(false)
@@ -1786,16 +1794,16 @@ function CreateIssuePanel({
   })
   const inlineError = effectiveProvider === 'linear' ? linearError : createIssue.error
 
+  // Draft an SDD-shaped body from the TITLE (optional helper — the title is the
+  // one required field now; a blank body files fine). Provider-agnostic markdown
+  // that files to either tracker.
   const handleDraft = useCallback(() => {
-    if (!canDraftIssue(intent, busy)) {
+    if (!canFileIssue(createIssue.title, busy)) {
       return
     }
     setLinearError(null)
-    // Seed the title from the intent (reuse), then draft the body server-side
-    // (provider-agnostic markdown — the same body files to either tracker).
-    createIssue.onTitleChange(deriveIntentTitle(intent))
     createIssue.onGenerate()
-  }, [busy, createIssue, intent])
+  }, [busy, createIssue])
 
   // F3 Linear file arm: create the issue in Linear, then bind it through the
   // SAME composer seam (`onSmartLinearIssueSelect`) the Linear @-picker uses, so
@@ -1866,10 +1874,23 @@ function CreateIssuePanel({
     )
   }
 
-  const hasDraft = createIssue.body.trim().length > 0 || createIssue.title.trim().length > 0
+  const hasBody = createIssue.body.trim().length > 0
+  const canFile = canFileIssue(createIssue.title, busy)
 
   return (
-    <div className="flex flex-col gap-2.5 rounded-lg border border-border p-3">
+    // Enter inside the panel files the issue (or inserts a newline in the
+    // description) — it must NOT bubble to the wizard's global key handler, which
+    // would otherwise create the whole workspace out from under a half-typed
+    // issue. Stopping propagation here is the fix for the "creates it double"
+    // report: the title <input>'s Enter used to trigger "Create workspace".
+    <div
+      className="flex flex-col gap-2.5 rounded-lg border border-border p-3"
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.stopPropagation()
+        }
+      }}
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="text-[12px] font-medium text-foreground">Create an issue</span>
         <button
@@ -1904,87 +1925,85 @@ function CreateIssuePanel({
         </div>
       ) : null}
 
+      {/* Single required field: the title. Enter files the issue right away — no
+          separate "draft" round-trip stands between typing and creating. */}
       <label className="flex flex-col gap-1.5">
-        <span className="text-[11px] text-muted-foreground">What do you want to do?</span>
-        <textarea
-          value={intent}
-          onChange={(event) => setIntent(event.target.value)}
-          rows={2}
-          placeholder="Describe the work — a title and an SDD-shaped body get drafted from it."
-          className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+        <span className="text-[11px] text-muted-foreground">Title</span>
+        <input
+          autoFocus
+          value={createIssue.title}
+          onChange={(event) => createIssue.onTitleChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && canFile) {
+              event.preventDefault()
+              handleFile()
+            }
+          }}
+          placeholder="What needs doing?"
+          className="h-[34px] rounded-md border border-input bg-secondary px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
         />
       </label>
 
-      <button
-        type="button"
-        onClick={handleDraft}
-        disabled={!canDraftIssue(intent, busy)}
-        className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-[11.5px] text-foreground transition-colors hover:border-muted-foreground/40 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {phase === 'drafting' ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <Sparkles className="size-3.5" />
-        )}
-        {phase === 'drafting' ? 'Drafting…' : hasDraft ? 'Redraft from intent' : 'Draft issue'}
-      </button>
-
-      {hasDraft ? (
-        <>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] text-muted-foreground">Title</span>
-            <input
-              value={createIssue.title}
-              onChange={(event) => createIssue.onTitleChange(event.target.value)}
-              placeholder="Issue title"
-              className="h-[34px] rounded-md border border-input bg-secondary px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
-            />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[11px] text-muted-foreground">Description</span>
-            <textarea
-              value={createIssue.body}
-              onChange={(event) => createIssue.onBodyChange(event.target.value)}
-              rows={6}
-              placeholder="Drafted description — review and edit before filing."
-              className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
-            />
-          </label>
-
-          {/* F3: pick the Linear team when filing into Linear and >1 exists. */}
-          {effectiveProvider === 'linear' && teams.length > 1 ? (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[11px] text-muted-foreground">Linear team</span>
-              <select
-                value={teamId ?? ''}
-                onChange={(event) => setTeamId(event.target.value || null)}
-                className="h-[34px] rounded-md border border-input bg-secondary px-2 text-[12.5px] text-foreground outline-none focus-visible:border-ring"
-              >
-                <option value="">Select a team…</option>
-                {teams.map((team) => (
-                  <option key={team.id} value={team.id}>
-                    {team.name} ({team.key})
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-
+      {/* Description is OPTIONAL. "Draft with AI" fills an SDD-shaped body from
+          the title; the user can also just type, or leave it blank. */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-muted-foreground">Description (optional)</span>
           <button
             type="button"
-            onClick={handleFile}
-            disabled={!canFileIssue(createIssue.title, busy)}
-            className="inline-flex items-center gap-1.5 self-start rounded-full bg-primary px-3.5 py-1.5 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={handleDraft}
+            disabled={!canFile}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {phase === 'filing' ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {phase === 'filing'
-              ? 'Creating…'
-              : effectiveProvider === 'linear'
-                ? 'Create Linear issue'
-                : 'Create issue'}
+            {phase === 'drafting' ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Sparkles className="size-3" />
+            )}
+            {phase === 'drafting' ? 'Drafting…' : hasBody ? 'Redraft' : 'Draft with AI'}
           </button>
-        </>
+        </div>
+        <textarea
+          value={createIssue.body}
+          onChange={(event) => createIssue.onBodyChange(event.target.value)}
+          rows={hasBody ? 6 : 3}
+          placeholder="Add details, or let AI draft an SDD-shaped description from the title."
+          className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+        />
+      </div>
+
+      {/* F3: pick the Linear team when filing into Linear and >1 exists. */}
+      {effectiveProvider === 'linear' && teams.length > 1 ? (
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[11px] text-muted-foreground">Linear team</span>
+          <select
+            value={teamId ?? ''}
+            onChange={(event) => setTeamId(event.target.value || null)}
+            className="h-[34px] rounded-md border border-input bg-secondary px-2 text-[12.5px] text-foreground outline-none focus-visible:border-ring"
+          >
+            <option value="">Select a team…</option>
+            {teams.map((team) => (
+              <option key={team.id} value={team.id}>
+                {team.name} ({team.key})
+              </option>
+            ))}
+          </select>
+        </label>
       ) : null}
+
+      <button
+        type="button"
+        onClick={handleFile}
+        disabled={!canFile}
+        className="inline-flex items-center gap-1.5 self-start rounded-full bg-primary px-3.5 py-1.5 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {phase === 'filing' ? <Loader2 className="size-3.5 animate-spin" /> : null}
+        {phase === 'filing'
+          ? 'Creating…'
+          : effectiveProvider === 'linear'
+            ? 'Create Linear issue'
+            : 'Create issue'}
+      </button>
 
       {inlineError ? <span className="text-[11px] text-destructive">{inlineError}</span> : null}
     </div>
