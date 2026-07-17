@@ -84,7 +84,14 @@ export function useIssueProjectStatus(input: {
   repoId?: string
 }): string | null {
   const { open, issueUrl, workdir, repoId } = input
-  const [status, setStatus] = React.useState<string | null>(null)
+  // #379 perf (stale-while-revalidate): paint the last-known column
+  // IMMEDIATELY from the cache — even a stale entry — and let the resolve
+  // below swap in the fresh value. Blocking on the refetch made every
+  // hover/open past the TTL feel slow (a full `gh` GraphQL round trip).
+  const [status, setStatus] = React.useState<string | null>(() => {
+    const ref = parseIssueRef(issueUrl)
+    return ref ? (statusCache.get(statusCacheKey(ref.slug, ref.number))?.status ?? null) : null
+  })
 
   React.useEffect(() => {
     if (!open) {
@@ -95,6 +102,10 @@ export function useIssueProjectStatus(input: {
       return
     }
     let cancelled = false
+    const peeked = statusCache.get(statusCacheKey(ref.slug, ref.number))
+    if (peeked) {
+      setStatus(peeked.status)
+    }
     const resolve = () => {
       void resolveIssueProjectStatus(ref, {
         bindingCache,

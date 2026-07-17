@@ -54,6 +54,23 @@ export function TrackerIntakePanel({
           </div>
         ) : null}
 
+        {/* #379: always SAY where a filed issue lands + the Linear state —
+            "no Linear sync showing" was the complaint. When only one provider
+            resolves there is no toggle, so this line is the only signal. */}
+        <div className="text-[11px] text-muted-foreground">
+          Files into{' '}
+          <span className="font-medium capitalize text-foreground">{intake.effectiveProvider}</span>
+          {repo.trackerProvider === 'github' || repo.trackerProvider === 'linear' ? (
+            <> · pinned to {repo.trackerProvider === 'linear' ? 'Linear' : 'GitHub'} in settings</>
+          ) : null}
+          {' · '}
+          {intake.linearConnected ? (
+            <span className="text-emerald-600 dark:text-emerald-400">Linear connected</span>
+          ) : (
+            <>Linear not connected — add the API key in Settings → Integrations</>
+          )}
+        </div>
+
         <label className="flex flex-col gap-1.5">
           <span className="text-[11px] text-muted-foreground">What do you want to do?</span>
           <textarea

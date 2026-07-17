@@ -157,8 +157,12 @@ export function useTrackerIntake({
 
   const [providerChoice, setProviderChoice] = useState<CreateIssueProvider | null>(null)
   const provider = resolveCreateIssueProvider({ resolved, linearConnected })
+  // #379: when both providers resolve, the project's trackerProvider pin —
+  // not a hardcoded GitHub — is the default; an explicit toggle still wins.
+  const pin = repo.trackerProvider
+  const pinDefault: CreateIssueProvider = pin === 'linear' || pin === 'github' ? pin : 'github'
   const effectiveProvider: CreateIssueProvider =
-    provider === 'ambiguous' ? (providerChoice ?? 'github') : provider
+    provider === 'ambiguous' ? (providerChoice ?? pinDefault) : provider
 
   // --- Intake state (the useComposerState:1519/:1615 handler shapes).
   const [intent, setIntent] = useState('')
@@ -319,6 +323,8 @@ export function useTrackerIntake({
     provider,
     effectiveProvider,
     setProviderChoice,
+    /** #379: surfaced so the panel can SHOW the Linear connection state. */
+    linearConnected,
     resolved,
     intent,
     setIntent,
