@@ -10,7 +10,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
-import { useIssueProjectStatus } from '@/components/sidebar/IssueProjectStatusChip'
+import {
+  invalidateIssueProjectStatus,
+  useIssueProjectStatus
+} from '@/components/sidebar/IssueProjectStatusChip'
+import { parseIssueRef } from '@/lib/issue-project-status'
+import { getProjectBinding } from '@/runtime/github-projects-client'
 import { useRepoLabels, useRepoAssignees, useImmediateMutation } from '@/hooks/useIssueMetadata'
 import { useRepoLabelsBySlug, useRepoAssigneesBySlug } from '@/hooks/useGitHubSlugMetadata'
 import type { GitHubWorkItem } from '../../../shared/types'
@@ -123,6 +128,84 @@ export function GHEditSection({
     workdir: repoPath ?? undefined,
     repoId: repoId ?? undefined
   })
+  // #379: moving the card from here. Opening the popover lazily loads the
+  // write handle (ProjectV2 item id) + the Status field's options via the
+  // extended gh_issue_project_status read; a successful move overrides the
+  // displayed column immediately and invalidates the shared status cache.
+  const [boardMove, setBoardMove] = useState<{
+    loading: boolean
+    error: string | null
+    projectId: string | null
+    fieldId: string | null
+    itemId: string | null
+    options: { id: string; name: string }[]
+  }>({ loading: false, error: null, projectId: null, fieldId: null, itemId: null, options: [] })
+  const [columnOverride, setColumnOverride] = useState<string | null>(null)
+  useEffect(() => {
+    setColumnOverride(null)
+  }, [item.id])
+  const loadBoardMove = useCallback(async () => {
+    setBoardMove((s) => ({ ...s, loading: true, error: null }))
+    try {
+      const ref = parseIssueRef(item.url)
+      if (!ref || !repoPath) {
+        throw new Error('No GitHub issue URL to resolve.')
+      }
+      const { binding } = await getProjectBinding({
+        workdir: repoPath,
+        slug: ref.slug,
+        repoId: repoId ?? undefined
+      })
+      if (!binding) {
+        throw new Error('This repo has no bound Project board.')
+      }
+      const res = (await api.gh.issueProjectStatus({
+        owner: ref.owner,
+        repo: ref.repo,
+        number: ref.number,
+        projectId: binding.projectId,
+        statusFieldId: binding.statusFieldId
+      })) as {
+        ok?: boolean
+        itemId?: string | null
+        options?: { id: string; name: string }[]
+      } | null
+      if (!res || res.ok !== true || !res.itemId) {
+        throw new Error('This issue is not on the bound Project board.')
+      }
+      setBoardMove({
+        loading: false,
+        error: null,
+        projectId: binding.projectId,
+        fieldId: binding.statusFieldId,
+        itemId: res.itemId,
+        options: res.options ?? []
+      })
+    } catch (error) {
+      setBoardMove((s) => ({ ...s, loading: false, error: String(error) }))
+    }
+  }, [item.url, repoPath, repoId])
+  const moveBoardColumn = useCallback(
+    async (opt: { id: string; name: string }) => {
+      if (!boardMove.projectId || !boardMove.itemId || !boardMove.fieldId) {
+        return
+      }
+      const res = (await api.gh.updateProjectItemField({
+        projectId: boardMove.projectId,
+        itemId: boardMove.itemId,
+        fieldId: boardMove.fieldId,
+        value: { kind: 'single-select', optionId: opt.id }
+      })) as { ok?: boolean; message?: string } | null
+      if (res && res.ok === true) {
+        setColumnOverride(opt.name)
+        invalidateIssueProjectStatus(item.url)
+        toast.success(`Moved to ${opt.name}`)
+      } else {
+        toast.error(res?.message ?? 'Could not move the card.')
+      }
+    },
+    [boardMove, item.url]
+  )
   const editedAssigneesItemKeyRef = useRef<string | null>(null)
   const assigneesItemKey = `${item.repoId}\0${item.id}`
   const patchWorkItem = useAppStore((s) => s.patchWorkItem)
@@ -443,14 +526,53 @@ export function GHEditSection({
               </button>
             </PopoverContent>
           </Popover>
-          {projectColumn ? (
-            <div className="mt-2 flex items-center gap-1.5 rounded-md border border-indigo-500/25 bg-indigo-500/5 px-2.5 py-1.5 text-[12px]">
-              <FolderKanban className="size-3.5 text-indigo-500" />
-              <span className="text-muted-foreground">Board</span>
-              <span className="ml-auto font-medium text-indigo-600 dark:text-indigo-300">
-                {projectColumn}
-              </span>
-            </div>
+          {(columnOverride ?? projectColumn) ? (
+            <Popover
+              onOpenChange={(open) => {
+                if (open) {
+                  void loadBoardMove()
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="mt-2 flex w-full items-center gap-1.5 rounded-md border border-indigo-500/25 bg-indigo-500/5 px-2.5 py-1.5 text-[12px] transition hover:brightness-125 hover:ring-1 hover:ring-white/10"
+                >
+                  <FolderKanban className="size-3.5 text-indigo-500" />
+                  <span className="text-muted-foreground">Board</span>
+                  <span className="ml-auto font-medium text-indigo-600 dark:text-indigo-300">
+                    {columnOverride ?? projectColumn}
+                  </span>
+                  <ChevronDown className="size-3 opacity-60" />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-52 p-1" align="start">
+                {boardMove.loading ? (
+                  <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] text-muted-foreground">
+                    <LoaderCircle className="size-3 animate-spin" /> Loading columns…
+                  </div>
+                ) : boardMove.error ? (
+                  <div className="px-2 py-1.5 text-[12px] text-muted-foreground">
+                    {boardMove.error}
+                  </div>
+                ) : (
+                  boardMove.options.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => void moveBoardColumn(opt)}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-[12px] hover:bg-accent',
+                        (columnOverride ?? projectColumn) === opt.name && 'bg-accent/50'
+                      )}
+                    >
+                      {opt.name}
+                    </button>
+                  ))
+                )}
+              </PopoverContent>
+            </Popover>
           ) : null}
         </section>
 
