@@ -1,5 +1,13 @@
 import type React from 'react'
-import { ChevronDown, Loader2, Monitor, Server, ServerOff, SquareTerminal } from 'lucide-react'
+import {
+  ChevronDown,
+  GripVertical,
+  Loader2,
+  Monitor,
+  Server,
+  ServerOff,
+  SquareTerminal
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { STATUS_LABELS } from '@/components/settings/SshTargetCard'
@@ -114,10 +122,22 @@ export function HostGroupHeader({
       // a one-line height clipped the two-line content and bled it onto the row
       // below. min-h keeps single-line hosts at 32px while letting SSH headers grow.
       className={cn(
-        'group flex min-h-8 w-full cursor-pointer items-center gap-1.5 px-1 py-0.5 text-left',
+        'group flex min-h-8 w-full items-center gap-1.5 px-1 py-0.5 text-left',
+        // A draggable (SSH, 2+) host gets the grab cursor so hovering signals it
+        // can be reordered; the local / single host stays a plain pointer.
+        dragId ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
         isDragging && 'opacity-60'
       )}
     >
+      {/* The recognised drag-handle affordance (spec 383 AC1): a grip that fades
+          in on hover for reorderable hosts. The whole header is the drag target
+          (bigger hit area); this just makes the capability discoverable. */}
+      {dragId ? (
+        <GripVertical
+          className="-mr-0.5 size-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground"
+          aria-hidden
+        />
+      ) : null}
       <ChevronDown
         className={cn(
           'size-3.5 shrink-0 text-muted-foreground transition-transform',
