@@ -73,6 +73,14 @@ type RepoKind = 'git' | 'folder'
  * - `'origin'`: explicit origin. Same precedence.
  */
 export type IssueSourcePreference = 'upstream' | 'origin' | 'auto'
+
+/**
+ * Per-repo choice of which tracker harness runs drive ticket transitions
+ * against. `undefined` is treated identically to `'auto'` (detect) — the same
+ * forward-compat convention as `issueSourcePreference`, so persisted records
+ * that predate the field keep today's detection behavior.
+ */
+export type TrackerProviderPreference = 'auto' | 'github' | 'linear' | 'none'
 export type ExternalWorktreeVisibility = 'hide' | 'show'
 
 export type Repo = {
@@ -97,6 +105,10 @@ export type Repo = {
    *  identically to `'auto'`; writers leave it undefined on creation so
    *  existing persisted records stay forward-compatible. */
   issueSourcePreference?: IssueSourcePreference
+  /** Tracker the harness drives ticket transitions against for this repo.
+   *  `undefined` is treated identically to `'auto'`; writers leave it
+   *  undefined until the user picks in settings. */
+  trackerProvider?: TrackerProviderPreference
   /** Controls whether worktrees Agentum did not create appear in the sidebar. */
   externalWorktreeVisibility?: ExternalWorktreeVisibility
   /** True when the repo predates hidden-by-default external worktrees. */

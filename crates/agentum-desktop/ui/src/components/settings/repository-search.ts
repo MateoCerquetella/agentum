@@ -84,6 +84,22 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
             ]
           },
           {
+            title: 'Tracker',
+            description:
+              'Which tracker harness runs drive ticket transitions against for this project.',
+            keywords: [
+              repo.displayName,
+              'tracker',
+              'github',
+              'linear',
+              'issues',
+              'tickets',
+              'harness',
+              'auto detect',
+              'none'
+            ]
+          },
+          {
             title: 'Worktree Symlinks',
             description: 'Paths to symlink from the primary checkout into newly created worktrees.',
             keywords: [

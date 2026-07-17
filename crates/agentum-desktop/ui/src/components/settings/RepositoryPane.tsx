@@ -5,6 +5,7 @@ import { getRepoKindLabel, isFolderRepo } from '../../../../shared/repo-kind'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Separator } from '../ui/separator'
 import { Trash2 } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
@@ -20,6 +21,11 @@ import { useAppStore } from '../../store'
 import { getRepositoryIconSectionId } from './repository-settings-targets'
 import { RepositoryIconPicker } from './RepositoryIconPicker'
 import { getRepositoryPaneSearchEntries } from './repository-search'
+import {
+  parseTrackerProviderPreference,
+  resolveTrackerProviderPreference,
+  TRACKER_PROVIDER_OPTIONS
+} from './tracker-provider-options'
 export { getRepositoryPaneSearchEntries }
 
 type RepositoryPaneProps = {
@@ -142,6 +148,7 @@ export function RepositoryPane({
   const mcpEntries = allEntries.filter((entry) => entry.title === 'MCP Configs')
   const symlinkEntries = allEntries.filter((entry) => entry.title === 'Worktree Symlinks')
   const sourceControlAiEntries = allEntries.filter((entry) => entry.title === 'Source Control AI')
+  const trackerEntries = allEntries.filter((entry) => entry.title === 'Tracker')
   const removeProjectLabel =
     confirmingRemove === repo.id ? 'Confirm Remove Project' : 'Remove Project'
 
@@ -319,6 +326,51 @@ export function RepositoryPane({
         repo={repo}
         updateRepo={updateRepo}
       />
+    ) : null,
+    !isFolder &&
+    (forceFullPaneForRepoMatch || matchesSettingsSearch(searchQuery, trackerEntries)) ? (
+      <section key="tracker" className="space-y-4">
+        <SearchableSetting
+          title="Tracker"
+          description="Which tracker harness runs drive ticket transitions against for this project."
+          keywords={[repo.displayName, 'tracker', 'github', 'linear', 'issues', 'tickets', 'harness']}
+          className="space-y-2"
+          forceVisible={forceFullPaneForRepoMatch}
+        >
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold">Tracker</h3>
+            <p className="text-xs text-muted-foreground">
+              Which tracker harness runs drive ticket transitions against for this project.
+            </p>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <Label className="text-xs font-medium">Tracker</Label>
+            <Select
+              value={resolveTrackerProviderPreference(repo.trackerProvider)}
+              onValueChange={(value) => {
+                const next = parseTrackerProviderPreference(value)
+                if (next) {
+                  updateRepo(repo.id, { trackerProvider: next })
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="h-8 w-[180px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRACKER_PROVIDER_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Auto keeps today&apos;s detection. None skips tracker updates for this project.
+          </p>
+        </SearchableSetting>
+      </section>
     ) : null,
     !isFolder &&
     !repo.connectionId &&
