@@ -1106,12 +1106,17 @@ pub async fn gh_issue_project_status(
 ) -> Value {
     // owner/repo are bound $vars (never interpolated) per the graphql()
     // injection contract; number via Scalar::Int so `$number:Int!` binds numeric.
+    // #379: the same read also returns the ProjectV2 item id (the write
+    // handle `updateProjectV2ItemFieldValue` needs) and the Status field's
+    // option list (via a root node($fieldId) selection) so the issue-detail
+    // view can offer MOVING the card — still one round trip.
     let query = r#"
-        query($owner: String!, $repo: String!, $number: Int!) {
+        query($owner: String!, $repo: String!, $number: Int!, $fieldId: ID!) {
           repository(owner: $owner, name: $repo) {
             issue(number: $number) {
               projectItems(first: 20) {
                 nodes {
+                  id
                   project { id }
                   fieldValues(first: 50) {
                     nodes {
@@ -1125,6 +1130,9 @@ pub async fn gh_issue_project_status(
               }
             }
           }
+          fieldNode: node(id: $fieldId) {
+            ... on ProjectV2SingleSelectField { options { id name } }
+          }
         }
     "#;
     let data = match graphql(
@@ -1133,6 +1141,7 @@ pub async fn gh_issue_project_status(
             ("owner", Scalar::Str(owner)),
             ("repo", Scalar::Str(repo)),
             ("number", Scalar::Int(number)),
+            ("fieldId", Scalar::Str(status_field_id.clone())),
         ],
     )
     .await
@@ -1140,7 +1149,12 @@ pub async fn gh_issue_project_status(
         Ok(data) => data,
         Err(err) => return err.envelope(),
     };
-    json!({ "ok": true, "status": issue_project_status(&data, &project_id, &status_field_id) })
+    json!({
+        "ok": true,
+        "status": issue_project_status(&data, &project_id, &status_field_id),
+        "itemId": issue_project_item_id(&data, &project_id),
+        "options": status_field_options(&data),
+    })
 }
 
 // Pure: pick the issue's project item on `project_id`, then the single-select
@@ -1185,6 +1199,48 @@ fn issue_project_status(data: &Value, project_id: &str, status_field_id: &str) -
     None
 }
 
+// #379 (pure): the issue's ProjectV2 item id on the bound project — the
+// handle the field-value mutation needs. None when the issue isn't on the
+// bound project (renderer falls back to read-only display).
+fn issue_project_item_id(data: &Value, project_id: &str) -> Option<String> {
+    let items = data
+        .get("repository")?
+        .get("issue")?
+        .get("projectItems")?
+        .get("nodes")?
+        .as_array()?;
+    items.iter().find_map(|item| {
+        let on_project = item
+            .get("project")
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_str)
+            == Some(project_id);
+        if !on_project {
+            return None;
+        }
+        item.get("id").and_then(Value::as_str).map(str::to_string)
+    })
+}
+
+// #379 (pure): the bound Status field's `{id, name}` options from the root
+// fieldNode selection. Empty on any missing hop — never an error, the
+// renderer then simply can't offer a move.
+fn status_field_options(data: &Value) -> Vec<Value> {
+    data.get("fieldNode")
+        .and_then(|n| n.get("options"))
+        .and_then(Value::as_array)
+        .map(|opts| {
+            opts.iter()
+                .filter(|o| {
+                    o.get("id").and_then(Value::as_str).is_some()
+                        && o.get("name").and_then(Value::as_str).is_some()
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1192,12 +1248,39 @@ mod tests {
     fn issue_items(project_id: &str, field_id: &str, option: &str) -> Value {
         json!({
             "repository": { "issue": { "projectItems": { "nodes": [
-                { "project": { "id": project_id }, "fieldValues": { "nodes": [
+                { "id": "ITEM_1", "project": { "id": project_id }, "fieldValues": { "nodes": [
                     {},
                     { "name": option, "field": { "id": field_id } }
                 ] } }
-            ] } } }
+            ] } } },
+            "fieldNode": { "options": [
+                { "id": "OPT_A", "name": "Backlog" },
+                { "id": "OPT_B", "name": "In progress" },
+                { "junk": true }
+            ] }
         })
+    }
+
+    #[test]
+    fn issue_project_item_id_matches_bound_project_only() {
+        let data = issue_items("PVT_1", "F_status", "In Progress");
+        assert_eq!(
+            issue_project_item_id(&data, "PVT_1").as_deref(),
+            Some("ITEM_1")
+        );
+        assert_eq!(issue_project_item_id(&data, "PVT_OTHER"), None);
+        assert_eq!(issue_project_item_id(&json!({}), "PVT_1"), None);
+    }
+
+    #[test]
+    fn status_field_options_reads_fieldnode_and_degrades_empty() {
+        let data = issue_items("PVT_1", "F_status", "In Progress");
+        let opts = status_field_options(&data);
+        // The malformed third entry is filtered; the two real options survive.
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0]["name"], "Backlog");
+        assert_eq!(opts[1]["id"], "OPT_B");
+        assert!(status_field_options(&json!({})).is_empty());
     }
 
     #[test]

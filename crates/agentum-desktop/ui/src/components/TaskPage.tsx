@@ -362,7 +362,16 @@ export default function TaskPage({
   const defaultTaskViewPreset = normalizeGitHubTaskPreset(settings?.defaultTaskViewPreset ?? 'all')
   const initialTaskQuery = getTaskPresetQuery(defaultTaskViewPreset)
 
-  const preferredTaskSource = pageData.taskSource ?? defaultTaskSource
+  // #379: an embedded hub Tasks tab defaults its provider from the repo's
+  // trackerProvider pin — a Linear-pinned project opens on its Linear list.
+  // An explicit sidebar source click (pageData.taskSource) and manual tab
+  // switches still win; 'auto'/absent falls to the saved default.
+  const embeddedPinnedSource = useMemo<TaskSource | null>(() => {
+    if (!embedded || !pageData.preselectedRepoId) return null
+    const pin = repos.find((r) => r.id === pageData.preselectedRepoId)?.trackerProvider
+    return pin === 'linear' || pin === 'github' ? pin : null
+  }, [embedded, pageData.preselectedRepoId, repos])
+  const preferredTaskSource = pageData.taskSource ?? embeddedPinnedSource ?? defaultTaskSource
   const [taskSource, setTaskSource] = useState<TaskSource>(
     resolveVisibleTaskProvider(preferredTaskSource, visibleTaskProviders)
   )
