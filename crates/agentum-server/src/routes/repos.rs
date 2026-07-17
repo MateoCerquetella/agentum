@@ -960,4 +960,47 @@ mod tests {
         assert!(v.get("connectionId").is_none()); // skipped when None
         assert!(v.get("hostId").is_none()); // skipped when None
     }
+
+    /// Spec 379 F2: the per-project tracker choice is persisted by the generic
+    /// PATCH path — this layer has no `trackerProvider` field, so the value
+    /// must land in `extra` and survive the registry's serde round-trip
+    /// (what `write_repos`/`read_repos` do), or a reopened settings surface
+    /// would silently fall back to Auto after relaunch.
+    #[test]
+    fn tracker_provider_update_persists_and_round_trips() {
+        let repo = Repo {
+            id: "r1".into(),
+            path: "/p".into(),
+            display_name: "p".into(),
+            badge_color: "#5b8def".into(),
+            added_at: 42,
+            kind: Some("git".into()),
+            connection_id: None,
+            host_id: None,
+            extra: Map::new(),
+        };
+        let mut updates = Map::new();
+        updates.insert("trackerProvider".into(), Value::String("linear".into()));
+        let updated = apply_repo_updates(&repo, updates).unwrap();
+        assert_eq!(
+            updated.extra.get("trackerProvider"),
+            Some(&Value::String("linear".into()))
+        );
+
+        let raw = serde_json::to_string(&vec![updated]).unwrap();
+        let read: Vec<Repo> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            read[0].extra.get("trackerProvider"),
+            Some(&Value::String("linear".into()))
+        );
+
+        // Re-picking replaces the saved choice rather than duplicating it.
+        let mut updates = Map::new();
+        updates.insert("trackerProvider".into(), Value::String("github".into()));
+        let repicked = apply_repo_updates(&read[0], updates).unwrap();
+        assert_eq!(
+            repicked.extra.get("trackerProvider"),
+            Some(&Value::String("github".into()))
+        );
+    }
 }
