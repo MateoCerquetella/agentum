@@ -9,6 +9,7 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/h
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { CircleDot, ExternalLink, MonitorUp, Pencil, StickyNote } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { api } from '@/tauri'
 import { LinearIcon } from '@/components/icons/LinearIcon'
 import { SelectedTextCopyMenu } from '@/components/SelectedTextCopyMenu'
 import CommentMarkdown from './CommentMarkdown'
@@ -117,28 +118,17 @@ function DetailHeader({
 
 function MetadataActionIcon({
   label,
-  href,
   onClick,
   children
 }: {
   label: string
-  href?: string
   onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void
   children: React.ReactNode
 }): React.JSX.Element {
-  const trigger = href ? (
-    <Button asChild variant="ghost" size="icon-xs" className="size-6">
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        aria-label={label}
-        onClick={(event) => event.stopPropagation()}
-      >
-        {children}
-      </a>
-    </Button>
-  ) : (
+  // Always a real <button>. An <a target="_blank"> is dead inside the Tauri
+  // webview (no window-open handler), so external links route through
+  // api.shell.openUrl via onClick — never an anchor.
+  const trigger = (
     <Button
       type="button"
       variant="ghost"
@@ -310,7 +300,10 @@ export function WorktreeCardDetailsHover({
                       </MetadataActionIcon>
                     )}
                     {issue.url && (
-                      <MetadataActionIcon label="View on GitHub" href={issue.url}>
+                      <MetadataActionIcon
+                        label="View on GitHub"
+                        onClick={() => void api.shell.openUrl(issue.url!)}
+                      >
                         <ExternalLink className="size-3" />
                       </MetadataActionIcon>
                     )}
@@ -362,7 +355,10 @@ export function WorktreeCardDetailsHover({
                       </MetadataActionIcon>
                     )}
                     {linearIssue.url && (
-                      <MetadataActionIcon label="View on Linear" href={linearIssue.url}>
+                      <MetadataActionIcon
+                        label="View on Linear"
+                        onClick={() => void api.shell.openUrl(linearIssue.url!)}
+                      >
                         <ExternalLink className="size-3" />
                       </MetadataActionIcon>
                     )}
