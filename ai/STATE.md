@@ -136,3 +136,16 @@
   points here. Gate: all 9 boxes pass. Carried open Qs for architect:
   read-path Tauri-vs-server (recommended: desktop command beside
   `gh_get_project_view_table`), binding-read source. Handoff → PM/architect.
+- 2026-07-17 | Release | **016-board-per-project (#360) RECONCILED + SHIPPED → v0.78.0**
+  (Mateo: "can you release?"). Board-per-project spec (dir `016-board-per-project`,
+  distinct from the released `016-sdd-loop-checkin-*` — number collision is
+  cosmetic, separate dirs). Stale v0.75.1 branch (11 ahead / 50 behind): a naive
+  `git merge origin/develop` REVERTED develop's v0.76/v0.77 server refactors
+  (multi-base ort merge dragged the stale base over chat.rs/repos.rs/sdd.rs) —
+  ABORTED. Correct path: fresh branch off `origin/develop` v0.77.0 +
+  cherry-pick ONLY the 3 UI feature commits (`f5eda0ee`/`ae4b44d8`/`4b98dd73`,
+  zero server files) → provably no server revert. One conflict each pass:
+  ProjectViewWrapper.tsx import block (kept both — resolver + linked-work-item).
+  Version 0.77.0→0.78.0 (Cargo.toml+lock+tauri.conf.json). qa.sh browser legs
+  WAIVED (008/010/014/015 precedent); S1 first-frame legacy flash + S2 ghost
+  settings-search entry → follow-up ticket. `Closes #360`.
