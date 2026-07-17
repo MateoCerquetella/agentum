@@ -92,6 +92,12 @@ export function resolveBoardProject(input: {
     if (bound) {
       return { source: 'binding', project: bound }
     }
+    // #379 amendment to spec 016 AC 4: an UNBOUND repo never borrows the
+    // global legacy slot — that rendered another repo's board (agentum's
+    // Kanban on backend-ifa) with no hint anything was wrong. 'none' routes
+    // the hub to its honest empty state + picker instead. The legacy slot
+    // remains the standalone (repoId == null) surface's fallback only.
+    return { source: 'none', project: null }
   }
   const legacy = settings?.activeProject ?? null
   if (legacy) {

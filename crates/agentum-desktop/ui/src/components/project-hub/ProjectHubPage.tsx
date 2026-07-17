@@ -98,7 +98,10 @@ export default function ProjectHubPage(): React.JSX.Element {
       setProjectBindingState(repo.id, { status: 'loading' })
     }
     let cancelled = false
-    void getProjectBinding({ workdir: target.workdir, hostId: target.hostId })
+    // SF1 (spec 020): thread repoId so an SSH repo's slug resolves on ITS
+    // host — the old `hostId` here was a dead param getProjectBinding never
+    // accepted (leftover of the #359 hostId→repoId migration).
+    void getProjectBinding({ workdir: target.workdir, repoId: target.repoId })
       .then((res) => {
         if (cancelled) return
         const b = res.binding

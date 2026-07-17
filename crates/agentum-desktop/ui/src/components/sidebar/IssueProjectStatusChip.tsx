@@ -4,9 +4,11 @@ import { LayoutGrid } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { gh } from '@/tauri/gh'
 import { getProjectBinding } from '@/runtime/github-projects-client'
+import { subscribeServerEvents } from '@/runtime/server-events-bus'
 import {
   parseIssueRef,
   resolveIssueProjectStatus,
+  statusCacheKey,
   type IssueRef,
   type ProjectBindingRef,
   type StatusCacheEntry
@@ -26,6 +28,16 @@ import {
 // forever-cache showed stale "Backlog" for an In-Progress issue (#379).
 const bindingCache = new Map<string, ProjectBindingRef>()
 const statusCache = new Map<string, StatusCacheEntry>()
+
+/** Drop the cached Projects status for one issue so the next render refetches
+ *  immediately — callers react to `tracker.phase_changed` bus events, where
+ *  waiting out the 30s TTL would visibly lag the board. */
+export function invalidateIssueProjectStatus(issueUrl: string | undefined | null): void {
+  const ref = parseIssueRef(issueUrl)
+  if (ref) {
+    statusCache.delete(statusCacheKey(ref.slug, ref.number))
+  }
+}
 
 async function fetchBinding(
   ref: IssueRef,
@@ -60,8 +72,11 @@ async function fetchStatus(
   return null
 }
 
-/** Lazily resolve the issue's Project Status when the hover card is open.
- *  Returns the option name or null (unbound / off-project / error / not open). */
+/** Lazily resolve the issue's Project Status while `open`. Returns the option
+ *  name or null (unbound / off-project / error / not open). Live: while open,
+ *  a `tracker.phase_changed`/`tracker.blocked` bus event for THIS issue
+ *  invalidates the cache and refetches, so engine/MCP-driven transitions
+ *  appear without a hover cycle or app restart (#379). */
 export function useIssueProjectStatus(input: {
   open: boolean
   issueUrl?: string
@@ -80,18 +95,36 @@ export function useIssueProjectStatus(input: {
       return
     }
     let cancelled = false
-    void resolveIssueProjectStatus(ref, {
-      bindingCache,
-      statusCache,
-      getBinding: (r) => fetchBinding(r, workdir, repoId),
-      getStatus: fetchStatus
-    }).then((result) => {
-      if (!cancelled) {
-        setStatus(result)
+    const resolve = () => {
+      void resolveIssueProjectStatus(ref, {
+        bindingCache,
+        statusCache,
+        getBinding: (r) => fetchBinding(r, workdir, repoId),
+        getStatus: fetchStatus
+      }).then((result) => {
+        if (!cancelled) {
+          setStatus(result)
+        }
+      })
+    }
+    resolve()
+    const unsubscribe = subscribeServerEvents({
+      onEvent: (ev) => {
+        if (ev.kind !== 'tracker.phase_changed' && ev.kind !== 'tracker.blocked') {
+          return
+        }
+        const url = (ev.payload as { tracker_url?: unknown } | null | undefined)?.tracker_url
+        const evRef = typeof url === 'string' ? parseIssueRef(url) : null
+        if (!evRef || evRef.slug !== ref.slug || evRef.number !== ref.number) {
+          return
+        }
+        invalidateIssueProjectStatus(url as string)
+        resolve()
       }
     })
     return () => {
       cancelled = true
+      unsubscribe()
     }
   }, [open, issueUrl, workdir, repoId])
 

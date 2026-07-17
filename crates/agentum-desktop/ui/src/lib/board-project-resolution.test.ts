@@ -56,10 +56,21 @@ describe('resolveBoardProject', () => {
     expect(res).toEqual({ source: 'binding', project: BOUND })
   })
 
-  // Case 3: legacy fallback (AC 4).
-  it('falls back to the legacy global slot with no pick and a null binding', () => {
+  // Case 3 (#379 amendment to AC 4): an UNBOUND repo never borrows the
+  // legacy global slot — that rendered another repo's board. The legacy
+  // fallback survives ONLY on the standalone (repoId == null) surface.
+  it('an unbound repo resolves none — never the legacy global slot', () => {
     const res = resolveBoardProject({
       repoId: 'repo-A',
+      settings: settings({ activeProject: LEGACY }),
+      bindingState: LOADED_NULL
+    })
+    expect(res).toEqual({ source: 'none', project: null })
+  })
+
+  it('the standalone surface (repoId null) keeps the legacy fallback', () => {
+    const res = resolveBoardProject({
+      repoId: null,
       settings: settings({ activeProject: LEGACY }),
       bindingState: LOADED_NULL
     })
@@ -85,7 +96,7 @@ describe('resolveBoardProject', () => {
         settings: withOtherRepoPick,
         bindingState: LOADED_NULL
       })
-    ).toEqual({ source: 'legacy', project: LEGACY })
+    ).toEqual({ source: 'none', project: null })
   })
 
   // Case 5: no result at all.
@@ -136,14 +147,14 @@ describe('resolveBoardProject', () => {
   })
 
   // Case 9: partial binding ignored.
-  it('ignores an incomplete binding identity and falls to legacy', () => {
+  it('ignores an incomplete binding identity — unbound, so none (#379)', () => {
     for (const partial of [{ projectOwner: null }, { projectNumber: null }]) {
       const res = resolveBoardProject({
         repoId: 'repo-A',
         settings: settings({ activeProject: LEGACY }),
         bindingState: loadedBinding(partial)
       })
-      expect(res).toEqual({ source: 'legacy', project: LEGACY })
+      expect(res).toEqual({ source: 'none', project: null })
     }
   })
 
