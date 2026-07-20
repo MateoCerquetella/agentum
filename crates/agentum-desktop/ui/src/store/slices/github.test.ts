@@ -3481,6 +3481,71 @@ describe('createGitHubSlice.fetchWorkItems source/error envelope', () => {
       vi.useRealTimers()
     }
   })
+
+  it('serves a no-viewId fetch from cache on the second call (#385)', async () => {
+    const store = createTestStore()
+    // The wizard's tracker fetches WITHOUT a viewId — the resolved view id is
+    // only known after the first RPC returns.
+    mockApi.gh.getProjectViewTable.mockResolvedValue({
+      ok: true,
+      data: {
+        project: {
+          id: 'project-777',
+          owner: 'acme',
+          ownerType: 'organization',
+          number: 777,
+          title: 'Roadmap',
+          url: 'https://github.com/orgs/acme/projects/777'
+        },
+        selectedView: {
+          id: 'view-resolved',
+          number: 1,
+          name: 'Table',
+          layout: 'TABLE_LAYOUT',
+          filter: '',
+          fields: [],
+          groupByFields: [],
+          sortByFields: []
+        },
+        rows: [],
+        totalCount: 0,
+        parentFieldDropped: false
+      }
+    })
+
+    const args = { owner: 'acme', ownerType: 'organization' as const, projectNumber: 777 }
+
+    const first = await store.getState().fetchProjectViewTable(args)
+    expect(first.ok).toBe(true)
+    expect(mockApi.gh.getProjectViewTable).toHaveBeenCalledTimes(1)
+
+    // Synchronous read hits the cache even though the caller never supplied the
+    // resolved viewId — this is what lets the wizard paint issues with no
+    // loading flash on step-3 revisit.
+    const cached = store.getState().getCachedProjectViewTable(args)
+    expect(cached?.project.number).toBe(777)
+
+    // A second no-viewId fetch must NOT re-issue the RPC (was the #385 bug: the
+    // result was cached but unreachable without a viewId, so it always refetched).
+    const second = await store.getState().fetchProjectViewTable(args)
+    expect(second.ok).toBe(true)
+    expect(mockApi.gh.getProjectViewTable).toHaveBeenCalledTimes(1)
+
+    // A forcing caller still bypasses the cache.
+    await store.getState().fetchProjectViewTable(args, { force: true })
+    expect(mockApi.gh.getProjectViewTable).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns null from getCachedProjectViewTable on a cold cache (#385)', () => {
+    const store = createTestStore()
+    expect(
+      store.getState().getCachedProjectViewTable({
+        owner: 'nobody',
+        ownerType: 'organization',
+        projectNumber: 4242
+      })
+    ).toBeNull()
+  })
 })
 
 describe('IssueSourceIndicator suppression', () => {

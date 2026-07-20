@@ -106,6 +106,13 @@ describe('footer copy', () => {
     expect(wizardPrimaryLabel(1)).toBe('Continue')
     expect(wizardPrimaryLabel(2)).toBe('Continue')
   })
+
+  it('shows in-flight feedback on the last step while creating', () => {
+    expect(wizardPrimaryLabel(3, true)).toBe('Creating…')
+    // Creating only affects the last step; earlier steps stay "Continue".
+    expect(wizardPrimaryLabel(1, true)).toBe('Continue')
+    expect(wizardPrimaryLabel(2, true)).toBe('Continue')
+  })
 })
 
 describe('wizardBaseBranchTriggerLabel', () => {
