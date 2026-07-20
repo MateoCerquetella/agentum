@@ -26,7 +26,7 @@ type HarnessState =
   | 'failed'
 
 /** SDD phase a run is in, layered above the feature backlog (spec 013). */
-type SpecPhase =
+export type SpecPhase =
   | 'authoring'
   | 'architecture'
   | 'decompose'
@@ -74,7 +74,7 @@ type FeatureList = {
   hitl_on_block?: boolean
 }
 
-type HarnessStatus = {
+export type HarnessStatus = {
   id: string
   workdir: string
   state: HarnessState
@@ -98,7 +98,7 @@ type HarnessFiles = {
 }
 
 // `HarnessEvent` is a serde-tagged enum: `{ "type": "...", ...fields }`.
-type HarnessEvent =
+export type HarnessEvent =
   | { type: 'state_changed'; harness_id: string; state: HarnessState }
   | { type: 'feature_state_changed'; harness_id: string; feature_id: string; state: FeatureState }
   | { type: 'init_started'; harness_id: string }
@@ -273,12 +273,12 @@ export function setHarnessSettings(patch: Partial<HarnessSettings>): Promise<Har
 }
 
 /** `GET /api/harness` — status for every registered run. */
-function listHarnesses(): Promise<HarnessStatus[]> {
+export function listHarnesses(): Promise<HarnessStatus[]> {
   return request('/api/harness')
 }
 
 /** `GET /api/harness/{id}` — one run's status snapshot. */
-function getHarnessStatus(id: string): Promise<HarnessStatus> {
+export function getHarnessStatus(id: string): Promise<HarnessStatus> {
   return request(`/api/harness/${id}`)
 }
 
@@ -311,7 +311,7 @@ function stopHarness(id: string): Promise<void> {
 }
 
 /** Handle for the live harness event stream. */
-type HarnessEventStream = { close: () => void }
+export type HarnessEventStream = { close: () => void }
 
 /**
  * Open `WS /api/harness/events` and forward each parsed `HarnessEvent`. Auto-
@@ -319,7 +319,7 @@ type HarnessEventStream = { close: () => void }
  * is always recoverable). The token rides in `?token=` because browsers can't
  * set headers on a WS upgrade.
  */
-async function openHarnessEventStream(
+export async function openHarnessEventStream(
   onEvent: (ev: HarnessEvent) => void
 ): Promise<HarnessEventStream> {
   const { token } = await getServerEndpoint()

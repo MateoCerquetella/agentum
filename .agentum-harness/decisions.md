@@ -1,0 +1,8 @@
+- phase: entered authoring (from executing)
+- authoring gate PASS (attempt 1): Spec 395 refined into one shippable slice: a live, read-only SDD status strip (phase + n/N feature progress) on every agent session of a gated run — persona named, 5 testable criteria, explicit non-goals, grounded in real files (harness/types.rs, harness/drive.rs, routes/harness.rs, ui harness-client.ts) with reuse of the existing status/event channel.
+- phase: entered architecture (from authoring)
+- architecture gate BLOCKED after 4 attempts: architect agent wrote no verdict at .agentum-harness/roles/architecture.json — gate failed (inconclusive)
+- phase: entered blocked (from architecture)
+- manual completion: the blocked role gate was recovered in-worktree; the desktop now resolves run-owned feature, QA, and role sessions, renders live phase plus executing n/N progress, and refreshes from the existing harness event stream.
+- verification PASS: SddStatusStrip.test.tsx 4/4; Vite production build green; standalone tsc remains project-wide red on pre-existing missing shared modules unrelated to this slice.
+- phase: completed outside the blocked harness role gate; ready to merge into develop.
