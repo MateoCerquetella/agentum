@@ -74,7 +74,10 @@ type FeatureList = {
   hitl_on_block?: boolean
 }
 
-type HarnessStatus = {
+// Exported for the spec-023 surfaces (GatedRunBar / useWorktreeHarnessRun /
+// lib/harness-run.ts): the wire shapes stay faithful to
+// `crates/agentum-server/src/harness.rs` (serde snake_case).
+export type HarnessStatus = {
   id: string
   workdir: string
   state: HarnessState
@@ -98,7 +101,7 @@ type HarnessFiles = {
 }
 
 // `HarnessEvent` is a serde-tagged enum: `{ "type": "...", ...fields }`.
-type HarnessEvent =
+export type HarnessEvent =
   | { type: 'state_changed'; harness_id: string; state: HarnessState }
   | { type: 'feature_state_changed'; harness_id: string; feature_id: string; state: FeatureState }
   | { type: 'init_started'; harness_id: string }
@@ -282,7 +285,7 @@ export function listHarnesses(): Promise<HarnessStatus[]> {
 }
 
 /** `GET /api/harness/{id}` — one run's status snapshot. */
-function getHarnessStatus(id: string): Promise<HarnessStatus> {
+export function getHarnessStatus(id: string): Promise<HarnessStatus> {
   return request(`/api/harness/${id}`)
 }
 
@@ -314,8 +317,18 @@ function stopHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}`, { method: 'DELETE' })
 }
 
+/**
+ * `POST /api/harness/{id}/unlink-issue` — detach the run's tracker issue
+ * (spec 023 Part B, AC 5) WITHOUT deleting the run: the server clears every
+ * feature's `tracker_provider`/`tracker_url` and persists `feature_list.json`,
+ * so later state transitions post nothing to the old issue (AC 6).
+ */
+export function unlinkHarnessIssue(id: string): Promise<void> {
+  return request(`/api/harness/${id}/unlink-issue`, { method: 'POST' })
+}
+
 /** Handle for the live harness event stream. */
-type HarnessEventStream = { close: () => void }
+export type HarnessEventStream = { close: () => void }
 
 /**
  * Open `WS /api/harness/events` and forward each parsed `HarnessEvent`. Auto-
@@ -366,6 +379,18 @@ async function openHarnessEventStream(
       ws?.close()
     }
   }
+}
+
+/**
+ * Subscribe to the FULL harness event stream — every event for every run
+ * (spec 023 Part A). Thin exported wrap over the same auto-reconnecting
+ * events WS: unlike `subscribeHarnessRunErrors` it never self-closes, so the
+ * caller owns the lifecycle through the returned handle's `close()`.
+ */
+export async function subscribeHarnessEvents(
+  onEvent: (ev: HarnessEvent) => void
+): Promise<HarnessEventStream> {
+  return openHarnessEventStream(onEvent)
 }
 
 /**

@@ -54,7 +54,7 @@ import {
   handleSwitchTerminalTab
 } from '../hooks/ipc-tab-switch'
 import TabGroupSplitLayout from './tab-group/TabGroupSplitLayout'
-import WorkspaceAgentLauncher from './WorkspaceAgentLauncher'
+import GatedRunSurface from './gated-run/GatedRunSurface'
 import { shouldRepairActiveTerminalTab } from './terminal/active-terminal-repair'
 import { addBackgroundMountedTerminalWorktree } from './terminal/background-terminal-worktree-mount'
 import {
@@ -65,6 +65,7 @@ import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { appendUniqueOpenFileIds } from './terminal/unsaved-close-queue'
 import CodexRestartChip from './CodexRestartChip'
 import HarnessSpecBanner from './HarnessSpecBanner'
+import GatedRunBar from './gated-run/GatedRunBar'
 import {
   findActivityTerminalPortal,
   useActivityTerminalPortals,
@@ -1579,14 +1580,25 @@ function Terminal(): React.JSX.Element | null {
         <HarnessSpecBanner worktreeId={activeWorktreeId} />
       ) : null}
 
+      {/* Spec 023 Part B: the gated run's persistent workspace strip — live
+          run state + the linked-issue chip with the two-tap "Unlink issue"
+          (AC 7). Same root-strip mount + z-30 paint order as the banner above;
+          renders null unless a run owns this worktree. */}
+      {activeView === 'terminal' && activeWorktreeId ? (
+        <GatedRunBar worktreeId={activeWorktreeId} />
+      ) : null}
+
       {/* Empty-state: an active workspace with no open session shows the agent
           launcher (pick what to start) instead of auto-spawning a blank terminal.
           Rendered as an absolute, viewport-bounded overlay (z-above the empty
           surfaces) so it always fills exactly the content area — never growing it
-          past the window — regardless of sibling flex sizing. */}
+          past the window — regardless of sibling flex sizing.
+          Spec 023 Part A: GatedRunSurface swaps the launcher for a "Gated run
+          starting…" state while an owned gated run boots (AC 1); it renders
+          the launcher itself in every other case. */}
       {activeView === 'terminal' && activeWorktreeId && activeWorktreeHasNoSurface ? (
         <div className="absolute inset-0 z-20">
-          <WorkspaceAgentLauncher worktreeId={activeWorktreeId} />
+          <GatedRunSurface worktreeId={activeWorktreeId} />
         </div>
       ) : null}
 
