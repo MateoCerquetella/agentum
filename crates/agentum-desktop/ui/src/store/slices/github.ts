@@ -144,6 +144,43 @@ const inflightProjectViewRequests = new Map<
   { promise: Promise<GetProjectViewTableResult>; force: boolean }
 >()
 
+// Why: the project-view cache is keyed by the RESOLVED view id, which callers
+// without a `viewId` (the New Workspace wizard's tracker section — #385) can't
+// compute up front, so their fresh result was written but never read back —
+// every step-3 revisit re-issued the RPC and re-flashed the "loading the
+// Project's issues…" spinner. This module-scope index maps the viewId-less
+// request signature to the resolved cache key so a no-viewId caller can serve a
+// fresh cached table synchronously. Mirrors `inflightProjectViewRequests`
+// (module scope, cache-only — safe to survive across store resets in tests).
+const projectViewResolvedKeyByRequest = new Map<string, string>()
+
+// Return a fresh (within TTL) cached project-view table for `args`, or null on
+// miss. Resolves the cache key from `viewId` when present, else via the
+// request→resolved-key index above. Used by both the fetch fast-path and the
+// synchronous `getCachedProjectViewTable` selector so the two never disagree.
+function readFreshProjectViewTable(
+  cache: Record<string, ProjectViewCacheEntry<GitHubProjectTable>>,
+  args: GetProjectViewTableArgs
+): GitHubProjectTable | null {
+  const resolvedKey = args.viewId
+    ? projectViewCacheKey(
+        args.ownerType,
+        args.owner,
+        args.projectNumber,
+        args.viewId,
+        args.queryOverride
+      )
+    : projectViewResolvedKeyByRequest.get(projectViewRequestKey(args))
+  if (!resolvedKey) {
+    return null
+  }
+  const cached = cache[resolvedKey]
+  if (cached?.data && Date.now() - cached.fetchedAt < WORK_ITEMS_CACHE_TTL) {
+    return cached.data
+  }
+  return null
+}
+
 // Why: derive an optimistic GitHubProjectFieldValue from a mutation value so
 // the patched row re-renders immediately. Single-select and iteration lookups
 // consult the field config on the cached table; the result is best-effort and
@@ -1274,6 +1311,11 @@ export type GitHubSlice = {
     args: GetProjectViewTableArgs,
     options?: FetchOptions
   ) => Promise<GetProjectViewTableResult>
+  /** Synchronous read of a fresh (within TTL) cached project-view table for
+   *  `args`, or null on miss. Lets a caller without a `viewId` (the wizard's
+   *  tracker) paint issues immediately on revisit instead of flashing a loader
+   *  while an identical fetch resolves (#385). */
+  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
   updateProjectFieldValue: (
     cacheKey: string,
     rowId: string,
@@ -1327,11 +1369,15 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   setProjectBindingState: (repoId, state) =>
     set((s) => ({ projectBindingByRepo: { ...s.projectBindingByRepo, [repoId]: state } })),
 
+  getCachedProjectViewTable: (args) => readFreshProjectViewTable(get().projectViewCache, args),
+
   fetchProjectViewTable: async (args, options) => {
     const requestKey = projectViewRequestKey(args)
 
-    // Fast path: when the caller supplies `viewId`, we already know the
-    // resolved cache key and can serve a fresh entry directly.
+    // Fast path: serve a fresh cached entry directly. Works whether or not the
+    // caller supplied `viewId` — a no-viewId call resolves its key through the
+    // request→resolved-key index (#385), so the wizard's tracker no longer
+    // re-fetches on every step-3 revisit.
     const maybeKnownKey = args.viewId
       ? projectViewCacheKey(
           args.ownerType,
@@ -1341,10 +1387,10 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
           args.queryOverride
         )
       : null
-    if (!options?.force && maybeKnownKey) {
-      const cached = get().projectViewCache[maybeKnownKey]
-      if (cached?.data && Date.now() - cached.fetchedAt < WORK_ITEMS_CACHE_TTL) {
-        return { ok: true, data: cached.data }
+    if (!options?.force) {
+      const cachedData = readFreshProjectViewTable(get().projectViewCache, args)
+      if (cachedData) {
+        return { ok: true, data: cachedData }
       }
     }
 
@@ -1382,6 +1428,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             table.selectedView.id,
             args.queryOverride
           )
+          // Remember which resolved view this request signature landed on, so a
+          // later no-viewId call for the same Project reads the cache (#385).
+          projectViewResolvedKeyByRequest.set(requestKey, key)
           set((s) => ({
             projectViewCache: withBoundedCacheEntry(s.projectViewCache, key, {
               data: table,
