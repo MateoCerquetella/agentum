@@ -188,6 +188,7 @@ pub(crate) async fn spawn_agent_into_pane(
             crate::mcp_provision::provision(state, &session.tool, &agentum_mcp_url).await
         {
             launch.argv.extend(adapter.mcp_args(&p));
+            launch.env.extend(adapter.mcp_env(&p));
         }
         // File-based agents (Cursor/Gemini/OpenCode) load MCP from a config file
         // in the workdir — write it (no-op for claude/codex).
@@ -247,6 +248,7 @@ pub(crate) async fn spawn_agent_into_pane(
                         };
                         if let Some(p) = provision {
                             launch.argv.extend(adapter.mcp_args(&p));
+                            launch.env.extend(adapter.mcp_env(&p));
                         }
                         // File-based agents: write the config on the HOST in the workdir.
                         crate::mcp_provision::write_agent_project_config(

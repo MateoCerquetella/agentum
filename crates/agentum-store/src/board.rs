@@ -144,11 +144,14 @@ impl Store {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
 
         if let Some(existing) = self.board_item_by_external_url(external_url).await? {
-            sqlx::query(
+            // UPDATE ... RETURNING * hands back the refreshed row in one round
+            // trip instead of UPDATE-then-SELECT on the tracker re-sync path.
+            let row = sqlx::query_as::<_, BoardItemRow>(
                 r#"UPDATE board_items
                    SET title = ?, body = ?, status = ?, lbl = ?, external_provider = ?,
                        updated_at = ?
-                   WHERE id = ?"#,
+                   WHERE id = ?
+                   RETURNING *"#,
             )
             .bind(title)
             .bind(body)
@@ -157,11 +160,11 @@ impl Store {
             .bind(external_provider)
             .bind(&now_s)
             .bind(existing.id)
-            .execute(&self.pool)
+            .fetch_optional(&self.pool)
             .await?;
-            return self
-                .get_board_item(existing.id)
-                .await?
+            return row
+                .map(BoardItem::try_from)
+                .transpose()?
                 .ok_or_else(|| StoreError::NotFound(format!("board item {}", existing.id)));
         }
 
@@ -434,7 +437,12 @@ impl Store {
         // Double-Option: Some(None) → clear, Some(Some(v)) → set, None → leave alone.
         let parent_goal_id_set = patch.parent_goal_id.is_some();
         let parent_goal_id_value: Option<i64> = patch.parent_goal_id.unwrap_or(None);
-        let affected = sqlx::query(
+        // `UPDATE … RETURNING *` returns the patched row in one round trip
+        // instead of UPDATE-then-SELECT. This is the reconciler's per-event
+        // write path (board.updated/created/deleted), so halving its statement
+        // count matters. `RETURNING *` yields the same columns as
+        // `get_board_item`'s `SELECT *`, mapped by name into `BoardItemRow`.
+        let row = sqlx::query_as::<_, BoardItemRow>(
             r#"UPDATE board_items SET
                 title          = COALESCE(?, title),
                 status         = COALESCE(?, status),
@@ -447,7 +455,8 @@ impl Store {
                 session_id     = CASE WHEN ? = 1 THEN ? ELSE session_id     END,
                 parent_goal_id = CASE WHEN ? = 1 THEN ? ELSE parent_goal_id END,
                 updated_at     = ?
-             WHERE id = ?"#,
+             WHERE id = ?
+             RETURNING *"#,
         )
         .bind(&patch.title)
         .bind(&patch.status)
@@ -468,14 +477,10 @@ impl Store {
         .bind(parent_goal_id_value)
         .bind(&now_s)
         .bind(id)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
-        if affected == 0 {
-            return Err(StoreError::NotFound(id.to_string()));
-        }
-        self.get_board_item(id)
-            .await?
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(BoardItem::try_from)
+            .transpose()?
             .ok_or_else(|| StoreError::NotFound(id.to_string()))
     }
 
@@ -496,19 +501,20 @@ impl Store {
     /// to 409).
     pub async fn claim_board_item(&self, id: i64, claimed_by: &str) -> Result<Option<BoardItem>> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let result = sqlx::query(
+        // One round trip: the CAS `WHERE … claimed_by IS NULL` still gates the
+        // update, and `RETURNING *` hands back the claimed row (or no row on a
+        // conflict → `None`), replacing the follow-up `get_board_item`.
+        let row = sqlx::query_as::<_, BoardItemRow>(
             "UPDATE board_items SET claimed_by = ?, updated_at = ?
-             WHERE id = ? AND claimed_by IS NULL",
+             WHERE id = ? AND claimed_by IS NULL
+             RETURNING *",
         )
         .bind(claimed_by)
         .bind(&now_s)
         .bind(id)
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
-        if result.rows_affected() == 0 {
-            return Ok(None);
-        }
-        self.get_board_item(id).await
+        row.map(BoardItem::try_from).transpose()
     }
 
     /// Release a held claim. CAS-style: succeeds only when the current
@@ -525,30 +531,32 @@ impl Store {
             return Ok(Some(existing));
         }
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        let result = if actor.is_empty() {
-            sqlx::query(
+        // `RETURNING *` collapses the release UPDATE + re-fetch into one round
+        // trip. `None` (no row matched the CAS) maps to the same conflict
+        // signal the old `rows_affected() == 0` produced.
+        let row = if actor.is_empty() {
+            sqlx::query_as::<_, BoardItemRow>(
                 "UPDATE board_items SET claimed_by = NULL, updated_at = ?
-                 WHERE id = ?",
+                 WHERE id = ?
+                 RETURNING *",
             )
             .bind(&now_s)
             .bind(id)
-            .execute(&self.pool)
+            .fetch_optional(&self.pool)
             .await?
         } else {
-            sqlx::query(
+            sqlx::query_as::<_, BoardItemRow>(
                 "UPDATE board_items SET claimed_by = NULL, updated_at = ?
-                 WHERE id = ? AND claimed_by = ?",
+                 WHERE id = ? AND claimed_by = ?
+                 RETURNING *",
             )
             .bind(&now_s)
             .bind(id)
             .bind(actor)
-            .execute(&self.pool)
+            .fetch_optional(&self.pool)
             .await?
         };
-        if result.rows_affected() == 0 {
-            return Ok(None);
-        }
-        self.get_board_item(id).await
+        row.map(BoardItem::try_from).transpose()
     }
 
     /// List comments for a board item, oldest first so the thread
