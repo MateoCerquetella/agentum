@@ -145,7 +145,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** `POST /api/harness` — register a run from a project dir containing `.harness/`. */
-function startHarness(workdir: string): Promise<{ harness_id: string }> {
+export function startHarness(workdir: string): Promise<{ harness_id: string }> {
   return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
 }
 
@@ -174,6 +174,9 @@ export function startGatedWork(input: {
   slug?: string
   agentTool?: string
   agentModel?: string
+  /** Spec 021 (#379): the repo's tracker pin (`auto`/`github`/`linear`).
+   *  Absent/`auto` keeps the issue-driven path's GitHub stamping. */
+  tracker?: string
 }): Promise<StartGatedWorkResult> {
   return request('/api/harness/start-work', {
     method: 'POST',
@@ -182,7 +185,8 @@ export function startGatedWork(input: {
       number: String(input.number),
       ...(input.slug ? { slug: input.slug } : {}),
       ...(input.agentTool ? { agentTool: input.agentTool } : {}),
-      ...(input.agentModel ? { agentModel: input.agentModel } : {})
+      ...(input.agentModel ? { agentModel: input.agentModel } : {}),
+      ...(input.tracker ? { tracker: input.tracker } : {})
     })
   })
 }
@@ -273,7 +277,7 @@ export function setHarnessSettings(patch: Partial<HarnessSettings>): Promise<Har
 }
 
 /** `GET /api/harness` — status for every registered run. */
-function listHarnesses(): Promise<HarnessStatus[]> {
+export function listHarnesses(): Promise<HarnessStatus[]> {
   return request('/api/harness')
 }
 
@@ -283,7 +287,7 @@ function getHarnessStatus(id: string): Promise<HarnessStatus> {
 }
 
 /** `POST /api/harness/{id}/run` — kick off the end-to-end drive loop. */
-function runHarness(id: string): Promise<void> {
+export function runHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}/run`, { method: 'POST' })
 }
 

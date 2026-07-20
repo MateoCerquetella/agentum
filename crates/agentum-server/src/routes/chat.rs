@@ -124,6 +124,12 @@ struct ChatRequest {
     /// Optional repo context to ground the interview.
     #[serde(default)]
     workdir: Option<String>,
+    /// Spec 009 (#361): the selected workspace's repo id, so the server can
+    /// resolve the repo's HOST and gather context over SSH when the project is
+    /// remote — `workdir` alone is a path on that host, unreadable locally.
+    /// Serde-default so old clients (workdir-only) are unchanged.
+    #[serde(default)]
+    repo_id: Option<String>,
     #[serde(default)]
     repo_slug: Option<String>,
     /// Optional model override.
@@ -180,26 +186,41 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
+/// Guide candidates, first hit wins — CLAUDE.md is the codebase guide,
+/// AGENTS.md the agent-instructions equivalent, README a fallback. Shared by
+/// the local collector and the remote script so the arms can't drift.
+const GUIDE_CANDIDATES: [&str; 3] = ["CLAUDE.md", "AGENTS.md", "README.md"];
+/// Root build manifests probed in this order (same both arms).
+const MANIFEST_NAMES: [&str; 10] = [
+    "Cargo.toml",
+    "package.json",
+    "pyproject.toml",
+    "go.mod",
+    "Gemfile",
+    "pom.xml",
+    "build.gradle",
+    "composer.json",
+    "requirements.txt",
+    "tsconfig.json",
+];
+
 /// Read the first existing, non-empty file among `candidates` (relative to
-/// `root`), truncated to `budget`. Returns `(name, content)`.
-fn read_first_file(
-    root: &std::path::Path,
-    candidates: &[&str],
-    budget: usize,
-) -> Option<(String, String)> {
+/// `root`), RAW — truncation is the assembler's job (double-truncating would
+/// stack `…[truncated]` markers). Returns `(name, content)`.
+fn read_first_file(root: &std::path::Path, candidates: &[&str]) -> Option<(String, String)> {
     for name in candidates {
         if let Ok(content) = std::fs::read_to_string(root.join(name)) {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
-                return Some(((*name).to_string(), truncate_chars(trimmed, budget)));
+                return Some(((*name).to_string(), trimmed.to_string()));
             }
         }
     }
     None
 }
 
-/// The git-tracked file tree (so the interviewer knows what already exists),
-/// capped at [`TREE_MAX_FILES`]. `None` when `root` isn't a git repo.
+/// The RAW git-tracked file tree — the assembler owns the [`TREE_MAX_FILES`]
+/// cap so the remote arm gets it for free. `None` when `root` isn't a git repo.
 fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -211,10 +232,87 @@ fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
         return None;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let total = text.lines().count();
-    if total == 0 {
+    if text.trim().is_empty() {
         return None;
     }
+    Some(text.into_owned())
+}
+
+/// The sections a repo-context snapshot is built from — ONE shape for both
+/// arms (local fs reads, remote script output), so the prompt format and every
+/// budget live in a single function.
+struct RepoContextParts {
+    /// `(filename, body)` of the first guide candidate found.
+    guide: Option<(String, String)>,
+    harness_agents: Option<String>,
+    feature_list: Option<String>,
+    /// `(filename, body)` in [`MANIFEST_NAMES`] order.
+    manifests: Vec<(String, String)>,
+    /// Raw `git ls-files` output; capped here, not at the collectors.
+    tree: Option<String>,
+}
+
+/// Assemble the system-prompt snapshot from collected parts. Owns ALL budgets
+/// and the section headers — the local/remote arms only collect. Empty or
+/// whitespace-only parts are dropped, so a sparse remote parse degrades to a
+/// smaller snapshot, never a malformed one.
+fn assemble_repo_context(parts: RepoContextParts) -> Option<String> {
+    let mut out = String::new();
+
+    if let Some((name, body)) = parts.guide {
+        let body = truncate_chars(body.trim(), GUIDE_BUDGET);
+        if !body.is_empty() {
+            out.push_str(&format!("## Repo guide ({name})\n{body}\n\n"));
+        }
+    }
+
+    // The harness contract — so the breakdown fits the verification-gated
+    // pipeline: the harness AGENTS.md + the current feature backlog.
+    if let Some(body) = parts.harness_agents {
+        let body = truncate_chars(body.trim(), HARNESS_AGENTS_BUDGET);
+        if !body.is_empty() {
+            out.push_str(&format!("## .harness/AGENTS.md\n{body}\n\n"));
+        }
+    }
+    if let Some(body) = parts.feature_list {
+        let body = truncate_chars(body.trim(), FEATURE_LIST_BUDGET);
+        if !body.is_empty() {
+            out.push_str(&format!(
+                "## .harness/feature_list.json (current backlog)\n{body}\n\n"
+            ));
+        }
+    }
+
+    // Root build manifests — so the spec imitates the real stack + deps.
+    let mut manifests = String::new();
+    for (name, body) in parts.manifests {
+        let body = truncate_chars(body.trim(), MANIFEST_BUDGET);
+        if !body.is_empty() {
+            manifests.push_str(&format!("### {name}\n{body}\n\n"));
+        }
+    }
+    if !manifests.is_empty() {
+        out.push_str("## Root manifests\n");
+        out.push_str(&manifests);
+    }
+
+    // The file tree so it can reference real files/areas.
+    if let Some(tree) = parts.tree.and_then(|t| capped_tree(&t)) {
+        out.push_str(&format!("## Repo file tree (git-tracked)\n{tree}\n"));
+    }
+
+    let out = truncate_chars(out.trim(), CONTEXT_BUDGET);
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Cap the tree at [`TREE_MAX_FILES`] lines with the `…(+N more files)`
+/// suffix. `None` for an empty (or blank-lines-only) tree — a header with no
+/// files under it would read as grounding without being any.
+fn capped_tree(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        return None;
+    }
+    let total = text.lines().count();
     let mut joined = text
         .lines()
         .take(TREE_MAX_FILES)
@@ -233,69 +331,222 @@ fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
 /// (CLAUDE.md/AGENTS.md), the `.harness/` contract (AGENTS.md + the feature
 /// backlog), and a git-tracked file tree. A missing/remote/empty workdir → None.
 pub(crate) fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    local_repo_context(workdir, home.as_deref())
+}
+
+/// The local arm with the home dir explicit — the tilde-expansion test seam
+/// (mutating `HOME` in a test races the parallel suite). Expansion happens
+/// BEFORE the dir check because repo paths arrive user-spelled (`~/projects/x`
+/// from the picker/registry) and `Path::is_dir("~/…")` is always false —
+/// tilde is a shell concern, not an OS one. Chat grounding is best-effort, so
+/// an expansion error degrades to `None`, never a 4xx.
+fn local_repo_context(workdir: Option<&str>, home: Option<&std::path::Path>) -> Option<String> {
     let wd = workdir.map(str::trim).filter(|s| !s.is_empty())?;
-    let root = std::path::Path::new(wd);
+    let root = super::util::expand_with_home(wd, home).ok()?;
     if !root.is_dir() {
         return None;
     }
+    let root = root.as_path();
 
-    let mut out = String::new();
+    // `.harness/*` reads stay gated on the dir existing — a repo with a FILE
+    // named `.harness` must not surface it as the contract.
+    let harness = root.join(".harness").is_dir();
+    let parts = RepoContextParts {
+        guide: read_first_file(root, &GUIDE_CANDIDATES),
+        harness_agents: harness
+            .then(|| read_first_file(root, &[".harness/AGENTS.md"]))
+            .flatten()
+            .map(|(_, body)| body),
+        feature_list: harness
+            .then(|| read_first_file(root, &[".harness/feature_list.json"]))
+            .flatten()
+            .map(|(_, body)| body),
+        manifests: MANIFEST_NAMES
+            .iter()
+            .filter_map(|name| read_first_file(root, &[name]))
+            .collect(),
+        tree: git_tracked_tree(root),
+    };
+    assemble_repo_context(parts)
+}
 
-    // The curated repo guide — CLAUDE.md is the codebase guide; AGENTS.md the
-    // agent-instructions equivalent; README a fallback.
-    if let Some((name, body)) =
-        read_first_file(root, &["CLAUDE.md", "AGENTS.md", "README.md"], GUIDE_BUDGET)
+/// Sentinel the remote script prints before each section; the parser splits on
+/// it. A repo file containing this exact line garbles that one snapshot
+/// section at worst — never an error (accepted, documented risk).
+const REMOTE_CTX_SENTINEL: &str = "===AGENTUM-CTX ";
+/// Hard bound on the ONE SSH round trip the remote arm makes. A wedged
+/// ControlMaster must degrade the chat to honest-blind (+ warning event), not
+/// hang the reply (spec 009 AC 5).
+const SSH_CONTEXT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The one-round-trip script the remote arm runs: emit every context section
+/// sentinel-delimited. `head -c` caps are coarse transport bounds (~2× the
+/// char budgets — bytes ≥ chars); [`assemble_repo_context`] enforces the real
+/// budgets. `exit 42` on a bad workdir so the transport reports a clean
+/// non-zero instead of streaming an empty snapshot.
+fn remote_context_script(workdir: &str) -> Option<String> {
+    let wd = shlex::try_quote(workdir).ok()?;
+    let guides = GUIDE_CANDIDATES.join(" ");
+    let manifests = MANIFEST_NAMES.join(" ");
+    Some(format!(
+        r#"cd {wd} 2>/dev/null || exit 42
+for f in {guides}; do
+  if [ -f "$f" ]; then printf '===AGENTUM-CTX guide %s===\n' "$f"; head -c 80000 "$f"; printf '\n'; break; fi
+done
+if [ -f .harness/AGENTS.md ]; then printf '===AGENTUM-CTX harness-agents===\n'; head -c 40000 .harness/AGENTS.md; printf '\n'; fi
+if [ -f .harness/feature_list.json ]; then printf '===AGENTUM-CTX feature-list===\n'; head -c 24000 .harness/feature_list.json; printf '\n'; fi
+for f in {manifests}; do
+  if [ -f "$f" ]; then printf '===AGENTUM-CTX manifest %s===\n' "$f"; head -c 16000 "$f"; printf '\n'; fi
+done
+printf '===AGENTUM-CTX tree===\n'
+git ls-files 2>/dev/null | head -c 120000
+"#
+    ))
+}
+
+/// Split the script's sentinel-delimited output back into parts. Unknown
+/// section names are skipped, so script/parser version skew degrades to a
+/// smaller snapshot rather than failing the gather.
+fn parse_remote_context_output(out: &str) -> RepoContextParts {
+    fn flush(header: &str, body: String, parts: &mut RepoContextParts) {
+        if let Some(name) = header.strip_prefix("guide ") {
+            if parts.guide.is_none() {
+                parts.guide = Some((name.to_string(), body));
+            }
+        } else if header == "harness-agents" {
+            parts.harness_agents = Some(body);
+        } else if header == "feature-list" {
+            parts.feature_list = Some(body);
+        } else if let Some(name) = header.strip_prefix("manifest ") {
+            parts.manifests.push((name.to_string(), body));
+        } else if header == "tree" {
+            parts.tree = Some(body);
+        }
+    }
+
+    let mut parts = RepoContextParts {
+        guide: None,
+        harness_agents: None,
+        feature_list: None,
+        manifests: Vec::new(),
+        tree: None,
+    };
+    let mut current: Option<(String, String)> = None;
+    for line in out.lines() {
+        if let Some(header) = line
+            .strip_prefix(REMOTE_CTX_SENTINEL)
+            .and_then(|rest| rest.strip_suffix("==="))
+        {
+            if let Some((h, b)) = current.take() {
+                flush(&h, b, &mut parts);
+            }
+            current = Some((header.to_string(), String::new()));
+        } else if let Some((_, buf)) = current.as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    if let Some((h, b)) = current.take() {
+        flush(&h, b, &mut parts);
+    }
+    parts
+}
+
+/// The remote arm: ONE `sh -c` round trip over the pooled SSH transport (the
+/// `git_fs` precedent — the login shell may be fish, which rejects the POSIX
+/// we build), hard-bounded by [`SSH_CONTEXT_TIMEOUT`]. Best-effort by
+/// contract: any transport error, non-zero exit, or timeout → warn + `None`
+/// (the reply must always stream; the F3 warning event tells the user).
+async fn gather_repo_context_ssh(host: &agentum_core::Host, workdir: &str) -> Option<String> {
+    let script = remote_context_script(workdir)?;
+    let cmd = format!("sh -c {}", shlex::try_quote(&script).ok()?);
+    match tokio::time::timeout(
+        SSH_CONTEXT_TIMEOUT,
+        crate::host_runtime::ssh_stdout(host, &cmd),
+    )
+    .await
     {
-        out.push_str(&format!("## Repo guide ({name})\n{body}\n\n"));
-    }
-
-    // The harness contract — so the breakdown fits the verification-gated
-    // pipeline: the harness AGENTS.md + the current feature backlog.
-    if root.join(".harness").is_dir() {
-        if let Some((_, body)) =
-            read_first_file(root, &[".harness/AGENTS.md"], HARNESS_AGENTS_BUDGET)
-        {
-            out.push_str(&format!("## .harness/AGENTS.md\n{body}\n\n"));
+        Ok(Ok(out)) => assemble_repo_context(parse_remote_context_output(&out)),
+        Ok(Err(e)) => {
+            tracing::warn!(host = %host.name, workdir, error = %e, "chat: remote repo-context gather failed");
+            None
         }
-        if let Some((_, body)) =
-            read_first_file(root, &[".harness/feature_list.json"], FEATURE_LIST_BUDGET)
-        {
-            out.push_str(&format!(
-                "## .harness/feature_list.json (current backlog)\n{body}\n\n"
-            ));
+        Err(_) => {
+            tracing::warn!(host = %host.name, workdir, timeout_s = SSH_CONTEXT_TIMEOUT.as_secs(), "chat: remote repo-context gather timed out");
+            None
         }
     }
+}
 
-    // Root build manifests — so the spec imitates the real stack + deps.
-    let mut manifests = String::new();
-    for name in [
-        "Cargo.toml",
-        "package.json",
-        "pyproject.toml",
-        "go.mod",
-        "Gemfile",
-        "pom.xml",
-        "build.gradle",
-        "composer.json",
-        "requirements.txt",
-        "tsconfig.json",
-    ] {
-        if let Some((n, body)) = read_first_file(root, &[name], MANIFEST_BUDGET) {
-            manifests.push_str(&format!("### {n}\n{body}\n\n"));
+/// Resolve which arm grounds this request and run it. `repo_id` (when the
+/// client has a workspace selected) names the repo's host: `Local` → the
+/// local arm, `Ssh` → the remote arm. A stale `repo_id` (repo or host record
+/// deleted) must not blind a still-valid local workdir, so lookup failures
+/// fall through to the local arm. Returns the arm name for the diagnostic log.
+async fn gather_repo_context_for(
+    state: &AppState,
+    workdir: Option<&str>,
+    repo_id: Option<&str>,
+) -> (Option<String>, &'static str) {
+    if let Some(rid) = repo_id.map(str::trim).filter(|s| !s.is_empty()) {
+        match super::repos::load_host_for_repo(state, rid).await {
+            Ok(host) => match &host.kind {
+                agentum_core::HostKind::Local => {
+                    return (gather_repo_context(workdir), "local");
+                }
+                agentum_core::HostKind::Ssh { .. } => {
+                    let Some(wd) = workdir.map(str::trim).filter(|s| !s.is_empty()) else {
+                        return (None, "ssh");
+                    };
+                    return (gather_repo_context_ssh(&host, wd).await, "ssh");
+                }
+            },
+            Err(e) => {
+                tracing::warn!(repo_id = rid, error = ?e, "chat: repo host lookup failed; trying the local arm");
+            }
         }
     }
-    if !manifests.is_empty() {
-        out.push_str("## Root manifests\n");
-        out.push_str(&manifests);
-    }
+    let arm = if workdir.map(str::trim).filter(|s| !s.is_empty()).is_some() {
+        "local"
+    } else {
+        "none"
+    };
+    (gather_repo_context(workdir), arm)
+}
 
-    // The file tree so it can reference real files/areas.
-    if let Some(tree) = git_tracked_tree(root) {
-        out.push_str(&format!("## Repo file tree (git-tracked)\n{tree}\n"));
+/// The `context` SSE event's payload — `None` when the request carried no
+/// repo identity (nothing to warn about: the user never selected a
+/// workspace). Stream-only by design; the non-stream route grounds but has no
+/// side channel. Pure so the emit-or-not decision is directly unit-testable.
+fn context_event_json(repo_id_present: bool, has_context: bool) -> Option<String> {
+    if !repo_id_present {
+        return None;
     }
+    let state = if has_context { "ok" } else { "missing" };
+    Some(json!({ "type": "context", "state": state }).to_string())
+}
 
-    let out = truncate_chars(out.trim(), CONTEXT_BUDGET);
-    if out.is_empty() { None } else { Some(out) }
+/// One line per chat request saying whether grounding happened and why not —
+/// the #361 diagnostic. A pinned chat that goes blind used to be invisible
+/// server-side (the model apologized, nothing logged); this line is the first
+/// thing to read when a user reports "no workspace selected".
+fn log_repo_context_outcome(
+    route: &str,
+    workdir: Option<&str>,
+    repo_id: Option<&str>,
+    arm: &'static str,
+    ctx: Option<&str>,
+) {
+    tracing::info!(
+        route,
+        workdir = workdir.unwrap_or("<none>"),
+        repo_id = repo_id.unwrap_or("<none>"),
+        arm,
+        context_len = ctx.map(str::len).unwrap_or(0),
+        grounded = ctx.is_some(),
+        "chat repo-context gather"
+    );
 }
 
 /// The grounding blocks BOTH intake modes prepend (spec 008 F2): the
@@ -355,15 +606,101 @@ retrieved for the user's latest message — prefer these as ground truth about t
     (ctx, repo_block, access_rule, wiki_block)
 }
 
+/// One pass of the shared feature-intake interview — the SINGLE SOURCE OF TRUTH
+/// both the Fast prompt and the staged Socratic passes derive from, so the two
+/// modes can never drift (issue #257). Ported from the SDD `write_spec_socratic`
+/// skill: each pass carries its reflect-back opener, the concrete probes, and —
+/// crucially — the ANTI-PATTERN that makes the interview sharp instead of a
+/// checklist (reject "everyone", reject solution-shaped answers, reject vague
+/// verbs, …). Sharpen a pass here and BOTH modes inherit it.
+struct InterviewPass {
+    /// Uppercase topic marker rendered in the pass header (test-pinned).
+    topic: &'static str,
+    /// The one-sentence reflect-back opener for this pass. Pass 1 has nothing to
+    /// reflect yet; the exact "reflect … back" phrasing is test-pinned.
+    reflect: &'static str,
+    /// What the pass draws out + the concrete probes to actually ask.
+    probe: &'static str,
+    /// The known weak answer and how to push past it — the skill's edge.
+    anti_pattern: &'static str,
+}
+
+/// The five interview passes (WHO → WHAT → WHY → done-criteria → risks/scope),
+/// each with the skill's probes + anti-patterns. Fast flattens the coverage +
+/// anti-patterns into its single prompt; Socratic emits one entry per turn.
+const INTERVIEW_PASSES: [InterviewPass; 5] = [
+    InterviewPass {
+        topic: "WHO",
+        reflect: "This is the opening pass, so there is nothing to reflect back yet.",
+        probe: "Open the interview: draw out WHO this feature is for — the specific persona or \
+role — and the concrete problem they hit TODAY, and how often (daily? once a quarter?). Don't \
+propose a solution yet.",
+        anti_pattern: "If they say \"everyone\" or \"all users\", push back and make them name a \
+specific role. If they answer with a solution (\"I want a button that…\"), redirect to the \
+underlying pain: what would that relieve, and for whom?",
+    },
+    InterviewPass {
+        topic: "WHAT",
+        reflect: "First, in ONE sentence, reflect the user's previous answer back (the WHO and \
+their problem) so they know you heard it.",
+        probe: "Then draw out WHAT: the smallest observable change that would mean the problem is \
+solved — what the user would DO differently once it works, and the smallest version still worth \
+shipping.",
+        anti_pattern: "Flag scope creep (\"…and also it should…\"): park the extras in a separate \
+\"future ideas\" note and bring focus back to the smallest useful slice.",
+    },
+    InterviewPass {
+        topic: "WHY",
+        reflect: "First, in ONE sentence, reflect the previous answer back (the desired WHAT / \
+outcome).",
+        probe: "Then draw out WHY it matters: why now, what changed, and the cost of NOT solving \
+it this iteration — and whose measure of success this moves.",
+        anti_pattern: "If the only reason is \"someone asked for it\", probe one level deeper: \
+what outcome are they actually trying to drive?",
+    },
+    InterviewPass {
+        topic: "DONE CRITERIA",
+        reflect: "First, in ONE sentence, reflect the previous answer back (the WHY / value).",
+        probe: "Then draw out the acceptance criteria: concrete, testable, checkbox-shaped \
+conditions — how we'll KNOW the user can now do the thing, and the manual or automated test that \
+proves each one.",
+        anti_pattern: "Reject vague verbs (improve, enhance, support, handle) — force concrete, \
+observable ones: create, save, return, display, reject, log.",
+    },
+    InterviewPass {
+        topic: "RISKS & SCOPE",
+        reflect: "First, in ONE sentence, reflect the previous answer back (the acceptance \
+criteria).",
+        probe: "Then draw out the risks and scope: the most fragile part of the idea, what it \
+depends on that we don't control, the untested assumption, and what is explicitly OUT of scope \
+(the non-goals).",
+        anti_pattern: "If they say \"nothing\" or \"should be straightforward\", press once: if a \
+developer asked what's HARD about this, what would you say?",
+    },
+];
+
+/// The convergence bar BOTH modes must clear before proposing the breakdown —
+/// the skill's self-check, distilled. Fast folds it into "converge only when…";
+/// Socratic's final pass runs it before pointing at "Preview issues". This is
+/// what makes the interview converge on a WELL-DEFINED feature instead of a
+/// fixed number of turns (issue #257, AC "converges only when well-defined").
+const CONVERGENCE_SELFCHECK: &str = "the feature names a concrete USER ACTION (not just a \
+feature label), every acceptance criterion is observable/testable, at least one real risk is \
+named, there are NO vague verbs (improve/enhance/support) left in the criteria, and what's OUT \
+of scope is explicit";
+
 /// The interviewer instructions (the second `system` block). Kept separate from
 /// the Claude Code identity block so the identity stays byte-exact. When a
 /// `repo_context` snapshot is present the interviewer is told to GROUND
 /// everything in it (agentum's philosophy: agents work with repo context); when
 /// absent (no local workspace) it falls back to honest blind Q&A.
 ///
-/// Spec 008 F2: this is the **Fast** intake prompt, kept byte-identical (the
-/// grounding assembly moved into [`intake_grounding_blocks`] with no change to
-/// the emitted string — pinned by `build_intake_instructions_fast_*`).
+/// Spec 008 F2 / #257: this is the **Fast** intake prompt. It shares the same
+/// interview discipline as Socratic — the [`INTERVIEW_PASSES`] anti-patterns and
+/// the [`CONVERGENCE_SELFCHECK`] — folded into ONE single-turn prompt (no
+/// staging), so Fast stays fast but no longer reads as a shallow checklist. The
+/// Fast/router equality is still pinned by `build_intake_instructions_fast_*`
+/// (delegation, not byte-content).
 fn interviewer_instructions(
     workdir: Option<&str>,
     repo_slug: Option<&str>,
@@ -372,6 +709,15 @@ fn interviewer_instructions(
 ) -> String {
     let (ctx, repo_block, access_rule, wiki_block) =
         intake_grounding_blocks(workdir, repo_slug, repo_context, wiki_context);
+
+    // Single-source the interview discipline: Fast carries the SAME anti-patterns
+    // as the staged Socratic passes, flattened into one turn (issue #257). Built
+    // from INTERVIEW_PASSES so the two modes can't drift.
+    let anti_patterns = INTERVIEW_PASSES
+        .iter()
+        .map(|p| p.anti_pattern)
+        .collect::<Vec<_>>()
+        .join(" ");
 
     // "Preview issues" below is the UI button label (ChatPage.tsx composer
     // strip) — if that button is renamed again, rename it here too, or the
@@ -386,18 +732,30 @@ Rules:\n\
 - Ask ONE focused clarifying question at a time (two only if tightly related). Keep each \
 turn short and concrete, like a sharp staff engineer who knows this codebase — no filler, \
 no \"great question!\".\n\
-- Cover only what's genuinely unclear: the problem and who it's for, the desired outcome, \
-scope boundaries (in/out), hard constraints, and acceptance criteria. Never re-ask what \
-the user — or the repo context — already answers.\n\
-- When the feature is defined well enough to build, STOP asking questions and propose a \
-breakdown: a one-line feature title, then 3–7 concrete tasks (each an issue-style title \
-plus one sentence of detail), each pointing at the real files/areas it touches. Then tell \
-the user to click the \"Preview issues\" button below the chat to review and file them.\n\
+- Write like a person, not a product brief: plain sentences, no marketing adjectives, no \
+\"This feature will empower/streamline…\" openers, no bullet lists where a sentence does, \
+no restating the user's words back as filler, and no closing summaries of what you just \
+said. Vary how you phrase things; if a template is creeping in, break it.\n\
+- Cover only what's genuinely unclear, in roughly this order: WHO it's for and the problem \
+they hit today, WHAT the smallest useful change is, WHY it matters now, the acceptance \
+criteria, and the risks + what's OUT of scope. Never re-ask what the user — or the repo \
+context — already answers.\n\
+- Reject weak answers instead of banking them — this is what keeps the interview sharp \
+rather than a checklist: {anti_patterns}\n\
+- Converge only when the feature is genuinely well-defined: {selfcheck}. If any of those is \
+still fuzzy, ask ONE more sharpening question on just that gap first. Once it clears that \
+bar, STOP asking questions and propose a breakdown: a one-line feature title, then exactly \
+as many concrete tasks as the scope needs — a trivial fix is ONE task, a small feature two \
+or three, and only a genuinely broad feature more; never pad to a fixed count. Each task is \
+an issue-style title plus one sentence of detail, pointing at the real files/areas it \
+touches. Then tell the user to click the \"Preview issues\" button below the chat to review \
+and file them.\n\
 {access_rule}\n\
 - You do not create the issues yourself, and no other agent will: the \"Preview issues\" \
 button opens a review of the drafted issues, and confirming there files them directly. \
 When the user is ready, point them at that button — never tell them to \"confirm with \
-the system\" or that someone else will take it from there."
+the system\" or that someone else will take it from there.",
+        selfcheck = CONVERGENCE_SELFCHECK,
     )
 }
 
@@ -425,14 +783,18 @@ fn build_intake_instructions(
     }
 }
 
-/// One Socratic pass (spec 008 F2). Reuses the SAME grounding blocks as
-/// [`interviewer_instructions`] (context line / repo snapshot / access rule /
-/// wiki) but swaps the "job/Rules" body for a SINGLE-topic pass: the model
-/// (a) reflects the user's previous answer back in one sentence, then (b) asks
-/// ONLY this stage's question. Stage 5 stops asking and points the user at
-/// "Preview issues" (the same convergence Fast uses). The server owns NO stage
-/// state — this is a pure `(stage, grounding) → prompt` function; the CLIENT
-/// advances the stage one pass per turn (D-B/D1). `stage` is clamped defensively.
+/// One Socratic pass (spec 008 F2, made adaptive by #257). Reuses the SAME
+/// grounding blocks as [`interviewer_instructions`] (context line / repo
+/// snapshot / access rule / wiki) but swaps the "job/Rules" body for a
+/// SINGLE-topic pass: the model (a) validates the user's previous answer
+/// against the pass topic (re-asking when it was vague — depth adapts to
+/// answer quality), then (b) asks ONLY this stage's question. Every reply ends
+/// with a machine-read control marker (`[[socratic:advance|stay|done]]`) the
+/// CLIENT moves the stage machine on; `done` is gated on the spec actually
+/// being well-defined (the convergence gate), and only stage 5 may emit it and
+/// point the user at "Preview issues" (the same convergence Fast uses). The
+/// server owns NO stage state — this is a pure `(stage, grounding) → prompt`
+/// function (D-B/D1). `stage` is clamped defensively.
 fn socratic_stage_instructions(
     stage: u8,
     workdir: Option<&str>,
@@ -447,57 +809,67 @@ fn socratic_stage_instructions(
 
     // The frame + Rules are shared across passes; `pass` is the one thing this
     // turn does. "Preview issues" (in pass 5) is the UI button label — keep it in
-    // sync with the ChatPage composer, same as the Fast prompt above.
+    // sync with the ChatPage composer, same as the Fast prompt above. The
+    // control-marker spelling is parsed by the client's socratic-intake.ts —
+    // keep the two in sync.
     format!(
         "You are running inside agentum (a control plane for AI coding agents) as the \
-feature-intake interviewer on the Chat screen, running a STAGED Socratic interview — one \
-focused pass per turn, five passes total (WHO → WHAT → WHY → done-criteria → risks). This is \
+feature-intake interviewer on the Chat screen, running an ADAPTIVE Socratic interview — one \
+focused pass per turn across five topics (WHO → WHAT → WHY → done-criteria → risks). This is \
 pass {stage} of 5.{ctx}{repo_block}{wiki_block}\n\n\
 Your job THIS TURN, and nothing else:\n\
 {pass}\n\n\
 Rules:\n\
-- Do EXACTLY this one pass. Ask ONE question (two only if tightly related), short and concrete \
+- First judge whether the user's previous answer actually covered THIS pass's topic. If it \
+was vague, contradictory, or missing, re-ask this topic more concretely (offer a sharp \
+candidate answer to react to) instead of moving on — depth adapts to answer quality, not a \
+fixed script.\n\
+- Ask ONE question (two only if tightly related), short and concrete \
 like a sharp staff engineer who knows this codebase — no filler, no \"great question!\".\n\
 - Never re-ask what the user — or the repo context — already answered. Do NOT jump ahead to a \
-later pass, and do NOT draft the task breakdown before the final pass.\n\
-{access_rule}"
+later pass, and do NOT draft the task breakdown before the interview converges.\n\
+{access_rule}\n\
+- End EVERY reply with exactly one control line, alone on the final line with nothing after \
+it: [[socratic:advance]] when this pass's topic is now well covered, [[socratic:stay]] when \
+it still needs another round, or [[socratic:done]] ONLY on the final pass AND only when the \
+problem, outcome, acceptance criteria, and scope boundaries are all concrete enough to draft \
+from — that is the convergence gate. The line is machine-read and stripped from the UI; never \
+mention or explain it."
     )
 }
 
-/// The single-topic instruction for one Socratic pass (spec 008 F2). Each pass
-/// (except the first, which has nothing to reflect yet) begins by reflecting the
-/// previous answer back in one sentence, then asks only its own topic. The five:
-/// 1 WHO, 2 WHAT, 3 WHY, 4 done-criteria, 5 risks+scope (then converge on
-/// "Preview issues"). Pinned per-stage by unit test (AC 7). `stage` is already
-/// clamped to 1..=5 by the caller, so the `_` arm is pass 5.
-fn socratic_pass_body(stage: u8) -> &'static str {
-    match stage {
-        1 => {
-            "PASS 1 — WHO. This is the opening pass, so there is nothing to reflect back yet. \
-Open the interview: draw out WHO this feature is for (the specific persona / user) and the \
-concrete problem they hit today. Don't propose a solution yet."
-        }
-        2 => {
-            "PASS 2 — WHAT. First, in ONE sentence, reflect the user's previous answer back (the \
-WHO and their problem) so they know you heard it. Then ask about WHAT: the desired outcome or \
-behavior — what the feature actually does when it works."
-        }
-        3 => {
-            "PASS 3 — WHY. First, in ONE sentence, reflect the previous answer back (the desired \
-WHAT / outcome). Then ask about WHY it matters: the value, why now, and what breaks or stays \
-painful without it."
-        }
-        4 => {
-            "PASS 4 — DONE CRITERIA. First, in ONE sentence, reflect the previous answer back (the \
-WHY / value). Then draw out the acceptance criteria: how we'll know it's done, as concrete, \
-testable, checkbox-shaped statements."
-        }
-        _ => {
-            "PASS 5 — RISKS & SCOPE. First, in ONE sentence, reflect the previous answer back (the \
-acceptance criteria). Then draw out the risks and the scope boundaries / non-goals (what is \
-explicitly OUT). This is the FINAL pass: after the user answers, STOP asking questions and tell \
-them to click the \"Preview issues\" button below the chat to review and file the drafted issues."
-        }
+/// The single-topic instruction for one Socratic pass, built from the shared
+/// [`INTERVIEW_PASSES`] source of truth (spec 008 F2; enriched for #257 with the
+/// skill's probes + anti-patterns). Each pass reflects the previous answer back
+/// (pass 1 has nothing to reflect yet), draws out its one topic, and names the
+/// weak answer to push past. The FINAL pass runs the [`CONVERGENCE_SELFCHECK`]
+/// before stopping and pointing at "Preview issues" — so it converges only when
+/// the feature is actually well-defined, not just because it's turn five.
+/// `stage` is clamped 1..=5 by the caller; clamped again here so indexing is safe.
+fn socratic_pass_body(stage: u8) -> String {
+    let stage = stage.clamp(1, 5);
+    let p = &INTERVIEW_PASSES[(stage - 1) as usize];
+    if stage == 5 {
+        format!(
+            "PASS 5 — {topic}. {reflect} {probe} {anti_pattern}\n\
+Then CONVERGE — but only if the feature is genuinely well-defined: {selfcheck}. If any of \
+those is still fuzzy, ask ONE more sharpening question on just that gap instead of finishing. \
+Otherwise this is the FINAL pass: STOP asking questions and tell the user to click the \
+\"Preview issues\" button below the chat to review and file the drafted issues.",
+            topic = p.topic,
+            reflect = p.reflect,
+            probe = p.probe,
+            anti_pattern = p.anti_pattern,
+            selfcheck = CONVERGENCE_SELFCHECK,
+        )
+    } else {
+        format!(
+            "PASS {stage} — {topic}. {reflect} {probe} {anti_pattern}",
+            topic = p.topic,
+            reflect = p.reflect,
+            probe = p.probe,
+            anti_pattern = p.anti_pattern,
+        )
     }
 }
 
@@ -512,16 +884,18 @@ fn chat_auth_gate(auth: Option<Auth>) -> Result<Auth, ApiError> {
     auth.ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))
 }
 
-/// Retrieve query-relevant AutoWiki excerpts (spec 003 RAG) for the latest user
-/// turn, off the async runtime (`retrieve_context` is blocking fs + CPU math).
-/// Best-effort by contract: no user turn / no wiki / no sidecar / a model
-/// mismatch → `None`, and the interview grounds on the static snapshot alone.
-async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Option<String> {
-    let query = messages
-        .iter()
-        .rev()
-        .find(|m| m.role == "user")
-        .map(|m| m.content.clone())?;
+/// Retrieve query-relevant AutoWiki excerpts (spec 003 RAG) for a free-text
+/// query, off the async runtime (`retrieve_context` is blocking fs + CPU math).
+/// Best-effort by contract (spec 013 inv. 6): a blank query / no wiki / no
+/// sidecar / a model mismatch → `None`; the caller grounds on whatever else it
+/// has and never wedges. Shared by `retrieve_wiki` (the chat interview's last
+/// user turn) and `draft_issue_body` (the issue title).
+async fn retrieve_wiki_for_query(workdir: Option<&str>, query: &str) -> Option<String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let query = query.to_string();
     let workdir = workdir.map(str::to_string);
     tokio::task::spawn_blocking(move || {
         crate::wiki_rag::retrieve_context(
@@ -535,8 +909,21 @@ async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Optio
     .flatten()
 }
 
+/// Retrieve query-relevant AutoWiki excerpts for the latest user turn. Extracts
+/// the query (the last user message) and delegates to `retrieve_wiki_for_query`
+/// — zero behavior change for `chat()`. No user turn → `None`.
+async fn retrieve_wiki(workdir: Option<&str>, messages: &[ChatMessage]) -> Option<String> {
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")?
+        .content
+        .clone();
+    retrieve_wiki_for_query(workdir, &query).await
+}
+
 async fn chat(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, ApiError> {
     if body.messages.is_empty() {
@@ -568,7 +955,15 @@ async fn chat(
     // mode ⇒ Fast (byte-identical to today); the client owns stage advancement.
     let mode = body.mode.unwrap_or(IntakeMode::Fast);
     let stage = body.stage.unwrap_or(1);
-    let repo_context = gather_repo_context(body.workdir.as_deref());
+    let (repo_context, ctx_arm) =
+        gather_repo_context_for(&state, body.workdir.as_deref(), body.repo_id.as_deref()).await;
+    log_repo_context_outcome(
+        "chat",
+        body.workdir.as_deref(),
+        body.repo_id.as_deref(),
+        ctx_arm,
+        repo_context.as_deref(),
+    );
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
     let instructions = build_intake_instructions(
         mode,
@@ -641,7 +1036,7 @@ fn build_stream_payload(
 /// credential, bad model) is returned as a normal typed error BEFORE the stream
 /// opens, so the client sees a clean failure rather than a 200 that errors.
 async fn chat_stream(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<ChatRequest>,
 ) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, ApiError> {
     if body.messages.is_empty() {
@@ -680,7 +1075,15 @@ async fn chat_stream(
     // to today; Socratic runs the staged pass. The client owns stage advancement.
     let mode = body.mode.unwrap_or(IntakeMode::Fast);
     let stage = body.stage.unwrap_or(1);
-    let repo_context = gather_repo_context(body.workdir.as_deref());
+    let (repo_context, ctx_arm) =
+        gather_repo_context_for(&state, body.workdir.as_deref(), body.repo_id.as_deref()).await;
+    log_repo_context_outcome(
+        "chat_stream",
+        body.workdir.as_deref(),
+        body.repo_id.as_deref(),
+        ctx_arm,
+        repo_context.as_deref(),
+    );
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
     let instructions = build_intake_instructions(
         mode,
@@ -755,11 +1158,23 @@ model's thinking._"
         None
     };
 
+    // Spec 009 (#361): tell the client up front whether this workspace-backed
+    // request actually grounded, so a blind pinned chat surfaces as a UI
+    // warning instead of the model apologizing for a wiring bug. Emitted only
+    // when the request carried a repo_id — non-workspace chats see zero wire
+    // change.
+    let context_event = context_event_json(body.repo_id.is_some(), repo_context.is_some());
+
     // Proxy: parse Anthropic's SSE frames as they arrive and re-emit our compact
     // events. We buffer raw bytes and decode only whole frames (delimited by the
     // ASCII `\n\n`) so a multi-byte char split across a chunk is never mangled.
     // `resp`/`secret` are moved into the generator, making the stream `'static`.
     let stream = async_stream::stream! {
+        // Context status FIRST — the banner must precede (and outlive) the
+        // reply tokens.
+        if let Some(ev) = context_event {
+            yield Ok(Event::default().data(ev));
+        }
         // Lead with the redacted-thinking notice (OAuth path) so the reasoning
         // panel explains the blank trace instead of showing nothing.
         if let Some(note) = redacted_thinking_notice {
@@ -1035,7 +1450,7 @@ async fn call_anthropic(
 /// (a parent feature + ordered, prioritised sub-tasks) — not a flat list of
 /// separate issues. Kept byte-exact; the lenient parser ([`extract_feature_plan`])
 /// tolerates a model that still wraps it in prose or fences.
-const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Output ONLY the raw JSON object, no prose, no markdown code fences.";
+const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed feature as a SINGLE JSON object: {\"title\": string, \"summary\": string, \"problem\": string, \"goal\": string, \"tasks\": [{\"title\": string, \"detail\": string, \"priority\": \"high\" | \"medium\" | \"low\"}]}. title = a concise feature title; summary = 1–2 sentences describing the feature; tasks = the sub-tasks needed to build it, each with a short title, a 1–2 sentence detail, and a priority. The task COUNT must match the scope actually discussed: a trivial ask is a SINGLE task, a small feature two or three — never pad to a fixed number, and never invent tasks the conversation didn't call for. Order the tasks by priority and logical sequence (most important / earliest first). problem = 1–3 sentences naming the user-felt problem this feature solves (no solution language); goal = ONE sentence naming the concrete user outcome. Write every string in a plain engineer's voice: name concrete behaviors, files, and surfaces; no marketing adjectives, no 'This feature will…' openers, no filler like 'improve the user experience', and don't restate the title inside summary/problem/goal. Output ONLY the raw JSON object, no prose, no markdown code fences.";
 
 /// The final user turn appended to the transcript for the extraction call. Ends
 /// the history on a `user` turn (Anthropic rejects a trailing-assistant array —
@@ -1210,7 +1625,6 @@ fn compose_issue_body(plan: &FeaturePlan) -> String {
         }
         body.push('\n');
     }
-    body.push_str("\n_Created from an agentum Chat feature breakdown._");
     body
 }
 
@@ -1284,7 +1698,6 @@ fn compose_task_body(plan: &FeaturePlan, task: &SubTask, priority: Priority) -> 
     if !feature.is_empty() {
         body.push_str(&format!("**Feature:** {feature}\n"));
     }
-    body.push_str("\n_Created from an agentum Chat feature breakdown._");
     body
 }
 
@@ -1684,11 +2097,18 @@ fn draft_body_user_message(title: &str) -> String {
 }
 
 /// Assemble the drafting system instructions: the pinned section contract plus
-/// the repo snapshot (when a local workdir is available) and the slug hint.
-fn draft_body_instructions(repo_slug: Option<&str>, repo_context: Option<&str>) -> String {
+/// the repo snapshot (when a local workdir is available), the slug hint, and the
+/// repo's AutoWiki excerpts (spec 013 F2, when a wiki retrieval succeeds).
+/// Best-effort (inv. 6): a `None` wiki appends nothing — the drafter still
+/// grounds on the repo context — and never throws.
+fn draft_body_instructions(
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+    wiki: Option<&str>,
+) -> String {
     let mut out = String::from(DRAFT_BODY_INSTRUCTIONS);
     if let Some(slug) = repo_slug {
-        out.push_str(&format!("\n\nThe GitHub repository is `{slug}`."));
+        out.push_str(&format!("\n\nThe repository is `{slug}`."));
     }
     match repo_context {
         Some(ctx) => out.push_str(&format!(
@@ -1697,6 +2117,11 @@ fn draft_body_instructions(repo_slug: Option<&str>, repo_context: Option<&str>) 
         None => out.push_str(
             "\n\nNo repo snapshot is available; keep the body honest and generic — do not invent project details.",
         ),
+    }
+    if let Some(wiki) = wiki {
+        out.push_str(&format!(
+            "\n\n=== WIKI CONTEXT (project knowledge base excerpts — prefer these for domain facts) ===\n{wiki}\n=== END WIKI ===",
+        ));
     }
     out
 }
@@ -1718,6 +2143,17 @@ fn sanitize_draft_body(raw: &str) -> String {
     truncate_chars(unfenced, DRAFT_BODY_MAX_CHARS)
 }
 
+/// A drafted issue body plus the grounding facts (spec 020 F3, D4): whether
+/// the LOCAL repo snapshot and the wiki sidecar actually contributed. Both
+/// reads are local-by-design ("Chat never SSHes"), so an SSH repo's draft is
+/// ungrounded — the route surfaces these booleans so the client can say so
+/// honestly instead of presenting a generic draft as grounded.
+pub(crate) struct DraftedIssue {
+    pub body: String,
+    pub grounded_repo: bool,
+    pub grounded_wiki: bool,
+}
+
 /// Draft an SDD-shaped issue body from a title + local repo context. Shared
 /// plumbing with `/api/chat`: same credential resolution (loud, actionable
 /// error naming both recovery paths when absent), same repo snapshot, same
@@ -1726,7 +2162,7 @@ pub(crate) async fn draft_issue_body(
     workdir: Option<&str>,
     repo_slug: Option<&str>,
     title: &str,
-) -> Result<String, ApiError> {
+) -> Result<DraftedIssue, ApiError> {
     let title = title.trim();
     if title.is_empty() {
         return Err(ApiError::BadRequest(
@@ -1736,7 +2172,15 @@ pub(crate) async fn draft_issue_body(
     let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
 
     let repo_context = gather_repo_context(workdir);
-    let instructions = draft_body_instructions(repo_slug, repo_context.as_deref());
+    // Spec 013 F2 (inv. 6): ground the body in the repo's AutoWiki too. This is
+    // best-effort — a wiki miss (no sidecar, model mismatch, blank title) yields
+    // `None` and the draft still proceeds from the repo snapshot alone.
+    let wiki = retrieve_wiki_for_query(workdir, title).await;
+    // Captured before the contexts move into the prompt: these are the D4
+    // grounding facts the response reports (a non-local dir → `None` → false).
+    let grounded_repo = repo_context.is_some();
+    let grounded_wiki = wiki.is_some();
+    let instructions = draft_body_instructions(repo_slug, repo_context.as_deref(), wiki.as_deref());
     let system = build_system(&auth, &instructions);
     let messages = vec![json!({ "role": "user", "content": draft_body_user_message(title) })];
 
@@ -1749,7 +2193,11 @@ pub(crate) async fn draft_issue_body(
             "the model returned an empty issue body".into(),
         ));
     }
-    Ok(body)
+    Ok(DraftedIssue {
+        body,
+        grounded_repo,
+        grounded_wiki,
+    })
 }
 
 #[cfg(test)]
@@ -2010,8 +2458,7 @@ mod tests {
              ## Sub-tasks (priority order)\n\n\
              - [ ] **[High]** A high — aa\n\
              - [ ] **[Medium]** B med\n\
-             - [ ] **[Low]** C low — cc\n\n\
-             _Created from an agentum Chat feature breakdown._"
+             - [ ] **[Low]** C low — cc\n"
         );
     }
 
@@ -2048,8 +2495,7 @@ mod tests {
              ## Sub-tasks (priority order)\n\n\
              - [ ] **[High]** A high — aa\n\
              - [ ] **[Medium]** B med\n\
-             - [ ] **[Low]** C low — cc\n\n\
-             _Created from an agentum Chat feature breakdown._",
+             - [ ] **[Low]** C low — cc\n",
             "blank problem/goal must render the pre-006 body byte-identically"
         );
     }
@@ -2095,7 +2541,11 @@ mod tests {
             !body.contains("## Sub-tasks (priority order)"),
             "SDD shape replaces the legacy heading: {body}"
         );
-        assert!(body.ends_with("_Created from an agentum Chat feature breakdown._"));
+        // #256: no boilerplate footer — the body ends with real content.
+        assert!(
+            !body.contains("_Created from an agentum Chat"),
+            "no templated footer: {body}"
+        );
     }
 
     /// Spec 006 F2: the new fields are serde-default — an old client's plan and
@@ -2415,6 +2865,25 @@ mod tests {
             p5.contains("reflect the previous answer back"),
             "stage 5 reflects: {p5}"
         );
+        // #257 — the adaptive protocol: every pass carries the control-marker
+        // rules (validate-then-re-ask + the three markers), and only pass 5's
+        // BODY may gate on `done` (the convergence gate).
+        for (stage, prompt) in [(1u8, &p1), (2, &p2), (3, &p3), (4, &p4)] {
+            assert!(
+                prompt.contains("[[socratic:advance]]")
+                    && prompt.contains("[[socratic:stay]]")
+                    && prompt.contains("[[socratic:done]]"),
+                "stage {stage} carries the control-marker protocol"
+            );
+            assert!(
+                prompt.contains("re-ask this topic"),
+                "stage {stage} validates the previous answer adaptively"
+            );
+        }
+        assert!(
+            p5.contains("[[socratic:done]]") && p5.contains("[[socratic:stay]]"),
+            "stage 5's body gates convergence on done-vs-stay: {p5}"
+        );
         assert!(
             p5.contains("STOP asking questions"),
             "stage 5 stops asking: {p5}"
@@ -2422,6 +2891,21 @@ mod tests {
         assert!(
             p5.contains("Preview issues"),
             "stage 5 converges on Preview issues (AC 7): {p5}"
+        );
+
+        // #257: each pass now carries the skill's anti-pattern, and the final
+        // pass gates convergence on the self-check (not just "it's turn five").
+        assert!(
+            p1.contains("everyone"),
+            "pass 1 rejects the \"everyone\" answer: {p1}"
+        );
+        assert!(
+            p4.contains("vague verbs"),
+            "pass 4 rejects vague verbs: {p4}"
+        );
+        assert!(
+            p5.contains("well-defined") && p5.contains("USER ACTION"),
+            "pass 5 gates convergence on the self-check: {p5}"
         );
     }
 
@@ -2469,6 +2953,40 @@ mod tests {
         assert!(
             blind.contains("no repo snapshot for this chat"),
             "blind access rule"
+        );
+    }
+
+    /// #257: Fast and Socratic draw their sharpness from the SAME
+    /// [`INTERVIEW_PASSES`] table, so the two modes can't drift. Fast flattens
+    /// every pass's anti-pattern into its single prompt and folds in the
+    /// convergence self-check; Socratic emits the same anti-patterns one pass at
+    /// a time and runs the same self-check on the final pass.
+    #[test]
+    fn intake_quality_is_single_sourced_across_fast_and_socratic() {
+        let fast = interviewer_instructions(Some("/p"), Some("o/r"), None, None);
+        for pass in INTERVIEW_PASSES.iter() {
+            assert!(
+                fast.contains(pass.anti_pattern),
+                "Fast must carry the {} anti-pattern verbatim (single source)",
+                pass.topic
+            );
+            let stage = 1 + INTERVIEW_PASSES
+                .iter()
+                .position(|p| p.topic == pass.topic)
+                .unwrap();
+            let body = socratic_stage_instructions(stage as u8, None, None, None, None);
+            assert!(
+                body.contains(pass.anti_pattern),
+                "Socratic pass {stage} carries its anti-pattern"
+            );
+        }
+        assert!(
+            fast.contains(CONVERGENCE_SELFCHECK),
+            "Fast folds in the convergence self-check"
+        );
+        assert!(
+            socratic_stage_instructions(5, None, None, None, None).contains(CONVERGENCE_SELFCHECK),
+            "Socratic pass 5 runs the convergence self-check"
         );
     }
 
@@ -2541,6 +3059,91 @@ mod tests {
         assert!(gather_repo_context(None).is_none());
         assert!(gather_repo_context(Some("")).is_none());
         assert!(gather_repo_context(Some("/nonexistent/xyzzy-agentum-chat-test")).is_none());
+    }
+
+    /// #361: a `~`-spelled workdir (how the picker/registry stores repo paths)
+    /// must ground, not silently go blind. Explicit home = the test seam — no
+    /// env mutation (racy under the parallel suite).
+    #[test]
+    fn local_repo_context_expands_tilde_workdir() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(home.path().join("proj")).unwrap();
+        std::fs::write(
+            home.path().join("proj").join("CLAUDE.md"),
+            "# Guide\nTilde-expanded repo.",
+        )
+        .unwrap();
+        let ctx = local_repo_context(Some("~/proj"), Some(home.path())).expect("context");
+        assert!(ctx.contains("Repo guide (CLAUDE.md)"));
+        assert!(ctx.contains("Tilde-expanded repo."));
+        // Absolute paths still pass through expansion unchanged, so the
+        // missing-dir contract above holds identically.
+        assert!(local_repo_context(Some("/nonexistent/xyzzy"), Some(home.path())).is_none());
+    }
+
+    /// #361 F2: absent `repo_id` must deserialize as `None` so old
+    /// (workdir-only) clients keep the exact wire contract.
+    #[test]
+    fn chat_request_repo_id_is_serde_default() {
+        let req: ChatRequest = serde_json::from_str(r#"{"messages":[]}"#).expect("minimal request");
+        assert!(req.repo_id.is_none());
+        let req: ChatRequest =
+            serde_json::from_str(r#"{"messages":[],"repo_id":"r-1"}"#).expect("with repo_id");
+        assert_eq!(req.repo_id.as_deref(), Some("r-1"));
+    }
+
+    /// #361 F2: the remote script quotes the workdir (spaces must survive the
+    /// `sh -c` hop) and fails loudly on a bad cd so the transport reports
+    /// non-zero instead of an empty snapshot.
+    #[test]
+    fn remote_context_script_quotes_workdir_and_guards_cd() {
+        let script = remote_context_script("/home/u/my repo").expect("script");
+        let first = script.lines().next().expect("cd line");
+        let tokens =
+            shlex::split(first.trim_end_matches("|| exit 42").trim()).expect("cd line splits");
+        assert_eq!(tokens[0], "cd");
+        assert_eq!(tokens[1], "/home/u/my repo");
+        assert!(first.ends_with("|| exit 42"));
+        // Both shared name lists reach the script, so the arms can't drift.
+        assert!(script.contains("CLAUDE.md AGENTS.md README.md"));
+        assert!(script.contains("Cargo.toml package.json"));
+    }
+
+    /// #361 F2: simulated remote output → parts → assembled snapshot carries
+    /// the same section headers as the local arm.
+    #[test]
+    fn remote_context_output_round_trips_to_snapshot() {
+        let out = "===AGENTUM-CTX guide CLAUDE.md===\n# G\nRemote guide body.\n\
+===AGENTUM-CTX manifest Cargo.toml===\n[package]\nname = \"rdemo\"\n\
+===AGENTUM-CTX tree===\nsrc/main.rs\nCargo.toml\n";
+        let ctx = assemble_repo_context(parse_remote_context_output(out)).expect("ctx");
+        assert!(ctx.contains("Repo guide (CLAUDE.md)"));
+        assert!(ctx.contains("Remote guide body."));
+        assert!(ctx.contains("## Root manifests") && ctx.contains("### Cargo.toml"));
+        assert!(ctx.contains("Repo file tree (git-tracked)") && ctx.contains("src/main.rs"));
+        // A tree-only output (empty repo dir) still grounds on the tree alone;
+        // fully empty output is honest-blind.
+        assert!(
+            assemble_repo_context(parse_remote_context_output("===AGENTUM-CTX tree===\n\n"))
+                .is_none()
+        );
+    }
+
+    /// #361 F3: the context event fires exactly when a workspace-backed
+    /// request is involved — never for plain (no-repo) chats, `ok` vs
+    /// `missing` tracking whether grounding succeeded.
+    #[test]
+    fn context_event_only_for_repo_backed_requests() {
+        assert!(context_event_json(false, false).is_none());
+        assert!(context_event_json(false, true).is_none());
+        assert_eq!(
+            context_event_json(true, true).as_deref(),
+            Some(r#"{"state":"ok","type":"context"}"#)
+        );
+        assert_eq!(
+            context_event_json(true, false).as_deref(),
+            Some(r#"{"state":"missing","type":"context"}"#)
+        );
     }
 
     #[test]
@@ -2749,7 +3352,7 @@ mod tests {
         let user = draft_body_user_message("Fix the sidebar flicker");
         assert!(user.contains("Fix the sidebar flicker"));
 
-        let instructions = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"));
+        let instructions = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"), None);
         assert!(instructions.contains("## Problem"));
         assert!(instructions.contains("## Goal"));
         assert!(instructions.contains("## Acceptance criteria"));
@@ -2758,8 +3361,53 @@ mod tests {
         assert!(instructions.contains("## Repo guide\nstuff"));
 
         // Without a snapshot the prompt says so instead of inviting invention.
-        let blind = draft_body_instructions(None, None);
+        let blind = draft_body_instructions(None, None, None);
         assert!(blind.contains("No repo snapshot is available"));
+    }
+
+    // ── Spec 013 F2: wiki-grounded issue drafting ────────────────────────
+
+    #[test]
+    fn draft_body_instructions_includes_wiki_block_when_present() {
+        // With a wiki retrieval, the drafting system prompt gains a WIKI block
+        // (in addition to the repo context) so the body grounds on both.
+        let with_wiki = draft_body_instructions(
+            Some("o/r"),
+            Some("## Repo guide\nstuff"),
+            Some("Domain fact: sessions are (name, workdir, tool)."),
+        );
+        assert!(with_wiki.contains("=== WIKI CONTEXT"));
+        assert!(with_wiki.contains("Domain fact: sessions are (name, workdir, tool)."));
+        assert!(with_wiki.contains("=== END WIKI ==="));
+        // The repo context still rides alongside it (both groundings present).
+        assert!(with_wiki.contains("## Repo guide\nstuff"));
+
+        // Best-effort (inv. 6): a `None` wiki appends NO wiki block, yet the
+        // body still drafts from the repo context — never wedges on a miss.
+        let no_wiki = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"), None);
+        assert!(!no_wiki.contains("WIKI CONTEXT"));
+        assert!(no_wiki.contains("## Repo guide\nstuff"));
+    }
+
+    #[test]
+    fn draft_body_instructions_is_provider_neutral() {
+        // Open question 1: the body is provider-agnostic (reused for Linear), so
+        // the drafting instructions must not hard-code "GitHub".
+        let instructions = draft_body_instructions(Some("o/r"), Some("ctx"), Some("wiki"));
+        assert!(instructions.contains("The repository is `o/r`."));
+        assert!(!instructions.contains("GitHub repository"));
+    }
+
+    #[tokio::test]
+    async fn retrieve_wiki_for_query_is_none_without_a_workdir() {
+        // Non-fatal by contract: no workdir (and a blank query) yield `None`,
+        // never a panic — the drafter proceeds from repo context alone.
+        assert!(retrieve_wiki_for_query(None, "anything").await.is_none());
+        assert!(
+            retrieve_wiki_for_query(Some("/nonexistent/path"), "   ")
+                .await
+                .is_none()
+        );
     }
 
     #[test]

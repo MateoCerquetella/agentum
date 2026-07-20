@@ -119,8 +119,16 @@ async fn screencast(ws: WebSocketUpgrade, Query(q): Query<ScreencastQuery>) -> i
     if let Ok((_, port)) = &resolved {
         cdp_browser::set_foreground_cdp_port(*port);
     }
+    // Count this pane against its project's browser for as long as the stream
+    // lives, so a sibling workspace's release can't kill it mid-screencast
+    // (spec 014 AC 2). The guard MUST ride inside run()'s future — its Drop is
+    // the decrement, firing exactly when the WS task ends.
+    let attach_guard = match (&resolved, worktree) {
+        (Ok(_), Some(wt)) => cdp_browser::register_browser_attach(wt).await,
+        _ => cdp_browser::BrowserAttachGuard::inert(),
+    };
     let base = resolved.map(|(endpoint, _)| endpoint);
-    ws.on_upgrade(move |socket| run(socket, base, opts))
+    ws.on_upgrade(move |socket| run(socket, base, opts, attach_guard))
 }
 
 /// Input channel depth. Input is tiny and bursty; 64 is ample. (Frames use a
@@ -129,7 +137,15 @@ async fn screencast(ws: WebSocketUpgrade, Query(q): Query<ScreencastQuery>) -> i
 /// bridge acks each frame immediately. See `run` and `cdp_screencast::run_screencast_bridge`.)
 const INPUT_CHANNEL_DEPTH: usize = 64;
 
-async fn run(socket: WebSocket, cdp_http_base: Result<String, String>, opts: ScreencastOptions) {
+async fn run(
+    socket: WebSocket,
+    cdp_http_base: Result<String, String>,
+    opts: ScreencastOptions,
+    attach_guard: cdp_browser::BrowserAttachGuard,
+) {
+    // Held for the whole stream; dropping it (any exit path, incl. panic
+    // unwind) releases this pane's claim on the project browser.
+    let _attach_guard = attach_guard;
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // A failed on-demand launch (no system Chrome AND no Playwright build)

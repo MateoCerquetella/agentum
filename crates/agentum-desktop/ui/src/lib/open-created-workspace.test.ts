@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Worktree } from '../../../shared/types'
 import { useAppStore } from '@/store'
 import { takePendingSessionPrompt } from '@/lib/pending-session-prompt'
+import { maybeOfferWorkspaceHarnessRun } from '@/lib/workspace-harness-offer'
 import { openCreatedWorkspace, planCreatedWorkspaceOpen } from './open-created-workspace'
+
+// Spec 015: the harness-offer runner is fire-and-forget IO — mock it so these
+// tests stay network/fs-free and pin only the trigger contract.
+vi.mock('@/lib/workspace-harness-offer', () => ({
+  maybeOfferWorkspaceHarnessRun: vi.fn(() => Promise.resolve())
+}))
 
 const initialAppStoreState = useAppStore.getState()
 
@@ -122,6 +129,38 @@ describe('openCreatedWorkspace', () => {
     expect(tabs).toHaveLength(0)
     // …and no prompt stashed for the picker either.
     expect(takePendingSessionPrompt(worktree.id)).toBeUndefined()
+  })
+})
+
+// Spec 015 (D2): every create fires the harness-spec detection runner exactly
+// once, with the creation context it needs for the D6 gate.
+describe('openCreatedWorkspace → harness offer trigger (spec 015)', () => {
+  it('fires the runner once per create with { worktreeId, gatedRun: false }', () => {
+    const worktree = makeWorktree()
+    seedStore(worktree)
+    vi.mocked(maybeOfferWorkspaceHarnessRun).mockClear()
+
+    openCreatedWorkspace({ worktreeId: worktree.id, agent: 'codex' })
+
+    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledTimes(1)
+    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledWith({
+      worktreeId: worktree.id,
+      gatedRun: false
+    })
+  })
+
+  it('passes gatedRun: true through to the runner (D6 input)', () => {
+    const worktree = makeWorktree()
+    seedStore(worktree)
+    vi.mocked(maybeOfferWorkspaceHarnessRun).mockClear()
+
+    openCreatedWorkspace({ worktreeId: worktree.id, agent: 'codex', gatedRun: true })
+
+    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledTimes(1)
+    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledWith({
+      worktreeId: worktree.id,
+      gatedRun: true
+    })
   })
 })
 

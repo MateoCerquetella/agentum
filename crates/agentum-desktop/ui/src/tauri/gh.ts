@@ -17,6 +17,7 @@ export const gh = defineNamespace('gh', {
   enqueuePRRefresh: (...args: any[]) => call('gh_enqueue_pr_refresh', args),
   getProjectViewTable: (...args: any[]) => call('gh_get_project_view_table', args),
   issue: (...args: any[]) => call('gh_issue', args),
+  issueProjectStatus: (...args: any[]) => call('gh_issue_project_status', args),
   listAccessibleProjects: (...args: any[]) => call('gh_list_accessible_projects', args),
   listAssignableUsersBySlug: (...args: any[]) => call('gh_list_assignable_users_by_slug', args),
   listIssueTypesBySlug: (...args: any[]) => call('gh_list_issue_types_by_slug', args),

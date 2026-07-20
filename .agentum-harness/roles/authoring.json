@@ -1,0 +1,1 @@
+{"passed": true, "summary": "One-slice per-project tracker picker; persona, user value, and non-goals added; ACs made testable and re-grounded (hardcoded \"github\" in routes/harness.rs + TaskSink::select env/auto-probe are the seams; per-project issue-URL fields dropped as they contradict the per-feature tracker_url flow)."}

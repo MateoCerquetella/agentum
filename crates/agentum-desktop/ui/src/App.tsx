@@ -23,6 +23,7 @@ import {
 import logo from '../resources/logo.svg'
 import { SYNC_FIT_PANES_EVENT, TOGGLE_TERMINAL_PANE_EXPAND_EVENT } from '@/constants/terminal'
 import { syncZoomCSSVar } from '@/lib/ui-zoom'
+import { openBoardSurface } from '@/lib/board-route'
 import { canShowRightSidebarForView } from '@/lib/right-sidebar-visibility'
 import { buildAppFontFamily } from '@/lib/app-font-family'
 import {
@@ -43,6 +44,7 @@ import { useAppStore } from './store'
 import { useShallow } from 'zustand/react/shallow'
 import { isRemoteWorkspaceSnapshotApplyInProgress, useIpcEvents } from './hooks/useIpcEvents'
 import { useServerWorktreeActivity } from './hooks/useServerWorktreeActivity'
+import { useTrackerPhaseSync } from './hooks/useTrackerPhaseSync'
 import RetainedAgentsSyncGate from './components/dashboard/RetainedAgentsSyncGate'
 import Sidebar from './components/Sidebar'
 import { shutdownBufferCaptures } from './components/terminal-pane/shutdown-buffer-captures'
@@ -116,11 +118,7 @@ import {
 import type { VirtualizedScrollAnchor } from './hooks/useVirtualizedScrollAnchor'
 import type { RemoteWorkspacePatchResult } from '../../shared/remote-workspace-types'
 import type { OnboardingState } from '../../shared/types'
-import {
-  getFeatureTipsAppOpenDecision,
-  isCliFeatureTipCompleted
-} from './components/feature-tips/feature-tip-startup-gate'
-import { trackAgentumCliFeatureTipShown } from './components/feature-tips/feature-tip-telemetry'
+import { getFeatureTipsAppOpenDecision } from './components/feature-tips/feature-tip-startup-gate'
 import {
   keybindingMatchesAction,
   type KeybindingActionId,
@@ -229,10 +227,11 @@ const Terminal = lazy(() => import('./components/Terminal'))
 // removed; Chat creates GitHub issues that show up here.
 const TaskPage = lazy(() => import('./components/TaskPage'))
 const MissionControlPage = lazy(() => import('./components/mission-control/MissionControlPage'))
-const WikiPage = lazy(() => import('./components/wiki/WikiPage'))
 // Project Hub (ADE redesign): per-project Chat / Wiki / Tasks / Sessions tabs,
-// opened by clicking a project header in the sidebar.
+// opened by clicking a project header in the sidebar. The Wiki lives ONLY here
+// now (spec 009 D1) — the standalone wiki view was deleted.
 const ProjectHubPage = lazy(() => import('./components/project-hub/ProjectHubPage'))
+const ProjectsPage = lazy(() => import('./components/projects/ProjectsPage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
 const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
@@ -393,7 +392,6 @@ function App(): React.JSX.Element {
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null)
   const featureTipsPromptedThisSessionRef = useRef(false)
   const featureTipsSuppressedByOnboardingThisSessionRef = useRef(false)
-  const [featureTipCliInstalled, setFeatureTipCliInstalled] = useState<boolean | null>(null)
   const [onboardingSettingsDetour, setOnboardingSettingsDetour] = useState(false)
   const shouldRenderOnboarding = onboarding !== null && shouldShowOnboarding(onboarding)
   const onboardingSettingsDetourActive =
@@ -410,6 +408,9 @@ function App(): React.JSX.Element {
   // server (alive sessions + watchdog activity), so agents don't read as idle
   // after an app relaunch before their pane is opened.
   useServerWorktreeActivity()
+  // Spec 014 F2: route tracker.phase_changed / tracker.blocked events into the
+  // tracker-phase slice so the workspace card's phase chip updates live.
+  useTrackerPhaseSync()
   // Why: retention must run at App level so the inline per-card agents list
   // always sees retained entries. If retention ran inside the sidebar-card
   // subtree, "done" agents would vanish any time the user collapsed a card's
@@ -438,34 +439,8 @@ function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
-    if (!persistedUIReady) {
-      return
-    }
-
-    let cancelled = false
-    void api.cli
-      .getInstallStatus()
-      .then((status) => {
-        if (cancelled) {
-          return
-        }
-        setFeatureTipCliInstalled(isCliFeatureTipCompleted(status))
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setFeatureTipCliInstalled(true)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [persistedUIReady])
-
-  useEffect(() => {
     const featureTipsDecision = getFeatureTipsAppOpenDecision({
       activeModal,
-      cliInstalled: featureTipCliInstalled,
       featureTipsSeenIds,
       featureInteractions,
       onboarding,
@@ -487,9 +462,6 @@ function App(): React.JSX.Element {
     }
 
     featureTipsPromptedThisSessionRef.current = true
-    if (featureTipsDecision.tipId === 'agentum-cli') {
-      trackAgentumCliFeatureTipShown('app_open')
-    }
     // Why: once a tip is visible, app quit/crash should not make it reappear
     // on the next launch just because the user never clicked a dismiss button.
     actions.markFeatureTipsSeen([featureTipsDecision.tipId])
@@ -497,7 +469,6 @@ function App(): React.JSX.Element {
   }, [
     activeModal,
     actions,
-    featureTipCliInstalled,
     featureInteractions,
     featureTipsSeenIds,
     onboarding,
@@ -1312,7 +1283,8 @@ function App(): React.JSX.Element {
         if (store.repos.some((repo) => isGitRepoKind(repo))) {
           e.preventDefault()
           notifyTerminalCapture('view.tasks')
-          store.openTaskPage()
+          // Spec 016 D2: the board lives in the hub now — same gate, new body.
+          openBoardSurface()
         }
         return
       }
@@ -1784,8 +1756,8 @@ function App(): React.JSX.Element {
                           {activeView === 'tasks' ? <TaskPage /> : null}
                           {activeView === 'activity' ? <MissionControlPage /> : null}
                           {activeView === 'harness' ? <ChatPage /> : null}
-                          {activeView === 'wiki' ? <WikiPage /> : null}
                           {activeView === 'project' ? <ProjectHubPage /> : null}
+                          {activeView === 'projects' ? <ProjectsPage /> : null}
                           {/* No workspace selected on the terminal view → fall back to
                               Mission Control (Landing.tsx removed; the dashboard needs no
                               workspace) so the user is never stranded on a blank pane. */}

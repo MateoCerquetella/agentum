@@ -5,12 +5,13 @@ import { api } from '@/tauri'
 // from `listAccessibleProjects` and is cached for 5 minutes. Paste-to-add
 // accepts org/user project URLs and `owner/number` shorthand.
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, Loader, Pin, Search } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Loader, Pin, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { applyBoardPick, clearBoardPick } from '@/lib/board-project-resolution'
 import { cn } from '@/lib/utils'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
@@ -40,6 +41,10 @@ type Props = {
     number: number
     title?: string
   } | null
+  /** Spec 016: repoId set = commits write the per-repo pick
+   *  (activeProjectByRepo[repoId]); null/absent = the standalone surface,
+   *  which keeps writing the legacy global activeProject verbatim. */
+  repoId?: string | null
   onSelect: (selection: ResolvedProjectSelection) => void
 }
 
@@ -91,7 +96,11 @@ async function resolveProjectRefForRuntime(
     : api.gh.resolveProjectRef({ input })
 }
 
-export default function ProjectPicker({ activeProject, onSelect }: Props): React.JSX.Element {
+export default function ProjectPicker({
+  activeProject,
+  repoId = null,
+  onSelect
+}: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const mountedRef = useMountedRef()
@@ -190,32 +199,17 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
 
   const commitSelection = useCallback(
     async (selection: ResolvedProjectSelection, title: string | null) => {
-      const key = `${selection.ownerType}:${selection.owner}:${selection.projectNumber}`
-      await updateProjectSettings((prev) => {
-        const recent = [
-          {
-            owner: selection.owner,
-            ownerType: selection.ownerType,
-            number: selection.projectNumber,
-            lastOpenedAt: new Date().toISOString()
-          },
-          ...prev.recent.filter((r) => `${r.ownerType}:${r.owner}:${r.number}` !== key)
-        ].slice(0, 10)
-        const lastViewByProject = { ...prev.lastViewByProject }
-        if (selection.viewId) {
-          lastViewByProject[key] = { viewId: selection.viewId }
-        }
-        return {
-          ...prev,
-          recent,
-          lastViewByProject,
-          activeProject: {
-            owner: selection.owner,
-            ownerType: selection.ownerType,
-            number: selection.projectNumber
-          }
-        }
-      })
+      // Spec 016: `applyBoardPick` owns the split — per-repo active slot when
+      // repoId is set, the pre-016 legacy write when standalone; recent +
+      // lastViewByProject stay global in both branches.
+      await updateProjectSettings((prev) =>
+        applyBoardPick(prev, repoId, {
+          owner: selection.owner,
+          ownerType: selection.ownerType,
+          number: selection.projectNumber,
+          ...(selection.viewId ? { viewId: selection.viewId } : {})
+        })
+      )
       if (!mountedRef.current) {
         return
       }
@@ -225,7 +219,7 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
       setViewPickFor(null)
       void title
     },
-    [mountedRef, onSelect, updateProjectSettings]
+    [mountedRef, onSelect, repoId, updateProjectSettings]
   )
 
   const handleChooseProject = useCallback(
@@ -415,6 +409,24 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
             {browseError ? <AuthErrorBanner error={browseError} /> : null}
             {!browseError && partialFailures.length > 0 ? (
               <PartialFailuresBanner failures={partialFailures} />
+            ) : null}
+            {/* #379: a wrong per-repo pick (e.g. another repo's board chosen
+                here once) was UNREMOVABLE — the only exit was picking a
+                different board. Clearing re-resolves binding → empty state. */}
+            {repoId != null && activeProject ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void updateProjectSettings((prev) => clearBoardPick(prev, repoId)).then(() => {
+                    setOpen(false)
+                    setQuery('')
+                  })
+                }}
+                className="mx-1 mt-1 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent"
+              >
+                <X className="size-3.5" />
+                No board for this project (clear pick)
+              </button>
             ) : null}
             <div className="max-h-[340px] overflow-y-auto p-1 scrollbar-sleek">
               {projectSettings.pinned.length > 0 ? (
@@ -656,7 +668,8 @@ function ViewPickStep({
           <div className="px-2 py-2 text-xs text-muted-foreground">No views found.</div>
         ) : (
           views.map((v) => {
-            const supported = v.layout === 'TABLE_LAYOUT'
+            // Table and Board (Kanban) both render in-app; Roadmap does not.
+            const supported = v.layout === 'TABLE_LAYOUT' || v.layout === 'BOARD_LAYOUT'
             return (
               <button
                 key={v.id}
@@ -673,7 +686,7 @@ function ViewPickStep({
                   {v.layout === 'TABLE_LAYOUT'
                     ? 'Table'
                     : v.layout === 'BOARD_LAYOUT'
-                      ? 'Board (unsupported)'
+                      ? 'Board'
                       : 'Roadmap (unsupported)'}
                 </span>
               </button>

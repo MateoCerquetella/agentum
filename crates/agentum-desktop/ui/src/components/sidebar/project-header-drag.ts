@@ -29,6 +29,10 @@ export type UseRepoHeaderDragArgs = {
   // rects are read from this element so insertion-bar Y values stay correct
   // when the sidebar is resized.
   getScrollContainer: () => HTMLElement | null
+  // The DOM attribute the draggable headers stamp their id on. Defaults to the
+  // repo-header attribute; host headers pass `'data-host-header-id'` so the same
+  // pointer mechanics reorder SSH host groups (spec 383) without duplication.
+  headerIdAttr?: string
 }
 
 type HeaderRect = {
@@ -56,7 +60,8 @@ const DRAG_THRESHOLD_PX = 4
 export function useRepoHeaderDrag({
   orderedRepoIds,
   onCommit,
-  getScrollContainer
+  getScrollContainer,
+  headerIdAttr = 'data-repo-header-id'
 }: UseRepoHeaderDragArgs): RepoHeaderDragController {
   const [state, setState] = useState<RepoDragState>(INITIAL_STATE)
   // Tracks whether a press has begun (armed) regardless of promotion. Used
@@ -75,6 +80,10 @@ export function useRepoHeaderDrag({
   onCommitRef.current = onCommit
   const getContainerRef = useRef(getScrollContainer)
   getContainerRef.current = getScrollContainer
+  // Read via ref so onHandlePointerDown keeps its stable `[]` deps (the attr is
+  // effectively constant per call site, but this matches the surrounding pattern).
+  const headerIdAttrRef = useRef(headerIdAttr)
+  headerIdAttrRef.current = headerIdAttr
 
   const dragSessionRef = useRef<{
     repoId: string
@@ -297,10 +306,11 @@ export function useRepoHeaderDrag({
       // computation does not depend on those rows still being mounted —
       // critical because react-virtual will unmount them as the user scrolls.
       const containerRect = container.getBoundingClientRect()
-      const headerEls = container.querySelectorAll<HTMLElement>('[data-repo-header-id]')
+      const attr = headerIdAttrRef.current
+      const headerEls = container.querySelectorAll<HTMLElement>(`[${attr}]`)
       const headerRects: HeaderRect[] = []
       headerEls.forEach((el) => {
-        const id = el.getAttribute('data-repo-header-id')
+        const id = el.getAttribute(attr)
         if (!id) {
           return
         }

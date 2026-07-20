@@ -64,6 +64,13 @@ export function reposReorder(orderedIds: string[]): Promise<{ status: string }> 
   return postJson('/api/repos/reorder', { orderedIds })
 }
 
+/** `GET /api/repos/{id}/slug` — the repo's GitHub `owner/repo`, resolved on
+ *  the repo's OWN host (spec 020 F2). Throws on any non-2xx (unknown repo /
+ *  no GitHub origin / host unreachable) — callers fail closed. */
+export function getServerRepoSlug(repoId: string): Promise<{ slug: string }> {
+  return getJson<{ slug: string }>(`/api/repos/${encodeURIComponent(repoId)}/slug`)
+}
+
 export type ServerRepoBaseRefDefault = {
   defaultBaseRef: string | null
   remoteCount: number

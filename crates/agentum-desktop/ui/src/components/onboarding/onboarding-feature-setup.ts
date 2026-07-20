@@ -1,5 +1,4 @@
 import { api } from '@/tauri'
-import type { CliInstallStatus } from '../../../../shared/cli-install-types'
 import type {
   ComputerUsePermissionSetupResult,
   ComputerUsePermissionStatusResult
@@ -8,7 +7,6 @@ import { buildAgentFeatureSkillInstallCommand } from '@/lib/agent-feature-instal
 import { setOrchestrationSettings } from '@/runtime/agentum-server-client'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import { e2eConfig } from '@/lib/e2e-config'
-import { showAgentumCliRegistrationPromptToast } from '@/lib/agent-skill-cli-prerequisite'
 import {
   ORCHESTRATION_ENABLED_STORAGE_KEY,
   ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY,
@@ -54,12 +52,14 @@ const FEATURE_TELEMETRY_IDS: Record<
 }
 
 type OnboardingFeatureSetupWarning = {
-  featureId: OnboardingFeatureSetupId | 'cli' | 'skills'
+  featureId: OnboardingFeatureSetupId | 'skills'
   message: string
 }
 
 export type OnboardingFeatureSetupResult = {
   selectedIds: OnboardingFeatureSetupId[]
+  /** Always false since the Agentum CLI moved out of this app (#260); kept so
+   *  the onboarding telemetry contract (`cli_touched`) stays stable. */
   cliTouched: boolean
   skillCommandsCopied: boolean
   skillInstallCommand: string | null
@@ -68,9 +68,6 @@ export type OnboardingFeatureSetupResult = {
 }
 
 export type OnboardingFeatureSetupDeps = {
-  getCliStatus: () => Promise<CliInstallStatus>
-  showCliRegistrationPrompt?: () => Promise<void>
-  installCli: () => Promise<CliInstallStatus>
   writeClipboardText: (text: string) => Promise<void>
   getComputerUsePermissionStatus: () => Promise<ComputerUsePermissionStatusResult>
   openComputerUsePermissionSetup: () => Promise<ComputerUsePermissionSetupResult>
@@ -149,9 +146,6 @@ function createOnboardingFeatureSetupDeps(): OnboardingFeatureSetupDeps {
   }
 
   return {
-    getCliStatus: () => api.cli.getInstallStatus(),
-    showCliRegistrationPrompt: showAgentumCliRegistrationPromptToast,
-    installCli: () => api.cli.install(),
     writeClipboardText: (text) => api.ui.writeClipboardText(text),
     getComputerUsePermissionStatus: () => api.computerUsePermissions.getStatus(),
     openComputerUsePermissionSetup: () => api.computerUsePermissions.openSetup(),
@@ -180,7 +174,7 @@ export async function runOnboardingFeatureSetup(
 ): Promise<OnboardingFeatureSetupResult> {
   const selectedIds = selectedOnboardingFeatureSetupIds(selection)
   const warnings: OnboardingFeatureSetupWarning[] = []
-  let cliTouched = false
+  const cliTouched = false
   let skillCommandsCopied = false
   const skillInstallCommand = buildOnboardingFeatureSetupSkillCommand(selection)
   let computerUsePermissionsOpened = false
@@ -208,35 +202,6 @@ export async function runOnboardingFeatureSetup(
       skillInstallCommand,
       computerUsePermissionsOpened,
       warnings
-    }
-  }
-
-  // CLI registration only matters for skill-backed features (Browser Use /
-  // Computer Use). Orchestration is an MCP and needs no CLI, so skip this when
-  // nothing is being installed.
-  if (skillInstallCommand !== null) {
-    try {
-      const status = await deps.getCliStatus()
-      if (!status.supported) {
-        warnings.push({
-          featureId: 'cli',
-          message: status.detail ?? 'Agentum CLI registration is not available on this platform.'
-        })
-      } else if (status.state !== 'installed' || !status.pathConfigured) {
-        await deps.showCliRegistrationPrompt?.()
-        const next = await deps.installCli()
-        cliTouched = true
-        if (next.state !== 'installed') {
-          warnings.push({
-            featureId: 'cli',
-            message: next.detail ?? 'Agentum CLI registration needs attention.'
-          })
-        } else if (!next.pathConfigured && next.detail) {
-          warnings.push({ featureId: 'cli', message: next.detail })
-        }
-      }
-    } catch (error) {
-      warnings.push({ featureId: 'cli', message: formatFeatureSetupError(error) })
     }
   }
 

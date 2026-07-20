@@ -39,18 +39,49 @@ fn webview_label(browser_page_id: &str) -> String {
     format!("{LABEL_PREFIX}{safe}")
 }
 
-/// Stable 16-byte WKWebView data-store id for a worktree, so each worktree's
-/// native browser keeps its OWN cookies / logins / storage instead of sharing
-/// one global session (the root cause of "worktree B shows worktree A's
-/// browser"). Derived from the worktree id via SHA-256 (first 16 bytes) so it's
-/// deterministic across launches. All browser tabs in the same worktree share
-/// this store; a different worktree gets a different one.
+/// The store token a worktree id hashes into — the native mirror of the
+/// server's `BrowserScope` keying (spec 014 D1/H). A `<repoId>::<path>` UI id
+/// or a bare repo UUID keys the PROJECT (`project-<repoId>`), so every
+/// workspace/worktree of one repo shares one persistent store while different
+/// repos never do; anything else (floating/orphan synthetic ids, pseudo-keys)
+/// keeps today's per-key store. The `project-` domain prefix guarantees the new
+/// ids can never collide with a legacy per-worktree store id (legacy inputs
+/// were raw ids/paths, never `project-*`).
+fn project_store_token(worktree_id: &str) -> String {
+    let raw = worktree_id.trim();
+    if let Some((repo_id, _)) = raw.split_once("::") {
+        return format!("project-{repo_id}");
+    }
+    if uuid::Uuid::parse_str(raw).is_ok() {
+        return format!("project-{raw}");
+    }
+    raw.to_string()
+}
+
+/// Stable 16-byte WKWebView data-store id for a browser context, so each
+/// project's native browser keeps its OWN cookies / logins / storage instead of
+/// sharing one global session (the root cause of "worktree B shows worktree
+/// A's browser"). Hashes the PROJECT store token (spec 014: worktrees of one
+/// repo share the store; different repos get different ones) via SHA-256
+/// (first 16 bytes) so it's deterministic across launches — logins persist.
 fn worktree_data_store_id(worktree_id: &str) -> [u8; 16] {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(worktree_id.as_bytes());
+    let digest = Sha256::digest(project_store_token(worktree_id).as_bytes());
     let mut id = [0u8; 16];
     id.copy_from_slice(&digest[..16]);
     id
+}
+
+/// `webview label → project store token` for every browser-page webview opened
+/// this run, so the project-scoped clear can find a LIVE webview on the
+/// project's shared store — wry/tauri expose no remove-data-store-by-identifier
+/// API (verified against tauri 2.11 / wry 0.55), so clearing must go THROUGH a
+/// webview via `clear_all_browsing_data()`. Stale labels are filtered by
+/// `get_webview` liveness at read; `browser_webview_close` also prunes eagerly.
+fn store_tokens() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -153,9 +184,15 @@ pub fn browser_webview_open(
         .ok_or_else(|| "main window not found".to_string())?;
     let label = webview_label(&browser_page_id);
     let event_page_id = browser_page_id.clone();
-    // Per-worktree session: this worktree's own WKWebView data store, so its
-    // browser doesn't share cookies / logins / storage with other worktrees.
+    // Per-project session (spec 014): this workspace's PROJECT WKWebView data
+    // store, so its browser doesn't share cookies / logins / storage with other
+    // projects — while sibling workspaces of the same repo share the login.
     let data_store_id = worktree_data_store_id(&worktree_id);
+    // Track the page's store token so the project-scoped clear can find a live
+    // webview on this store (see `store_tokens`).
+    if let Ok(mut tokens) = store_tokens().lock() {
+        tokens.insert(label.clone(), project_store_token(&worktree_id));
+    }
 
     // Webview creation must run on the main thread on macOS; commands execute
     // on the async runtime, so hop over and relay the result back.
@@ -163,8 +200,8 @@ pub fn browser_webview_open(
     app.run_on_main_thread(move || {
         let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(parsed))
             .user_agent(BROWSER_USER_AGENT)
-            // Each worktree gets its OWN data store (macOS/iOS >= 14/17; a no-op
-            // on other OSes) so two worktrees never share one browser session.
+            // Each PROJECT gets its own data store (macOS/iOS >= 14/17; a no-op
+            // on other OSes) so two projects never share one browser session.
             .data_store_identifier(data_store_id)
             .on_page_load(move |webview, payload| {
                 let event = match payload.event() {
@@ -307,10 +344,65 @@ pub fn browser_webview_set_visible(
 
 #[tauri::command]
 pub fn browser_webview_close(app: AppHandle, browser_page_id: String) -> Result<(), String> {
+    // Prune the store-token entry regardless of webview liveness (the liveness
+    // filter in the clear path is the backstop; this keeps the map small).
+    if let Ok(mut tokens) = store_tokens().lock() {
+        tokens.remove(&webview_label(&browser_page_id));
+    }
     let Some(webview) = get_browser_webview(&app, &browser_page_id) else {
         return Ok(());
     };
     webview.close().map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeClearResult {
+    pub cleared: bool,
+    pub warning: Option<String>,
+}
+
+/// Clear the native (WKWebView) browsing data for one PROJECT's store — the
+/// native half of spec 014's "Clear browser data" (AC 5). Flat named params per
+/// the repo's hard Tauri rule. wry/tauri have no remove-data-store-by-identifier
+/// API, so the clear must go THROUGH a live webview on the store; with none
+/// open it degrades to an OBSERVABLE warning — never the silent hardcoded
+/// success of the legacy stub (`browser_session_delete_profile`).
+#[tauri::command]
+pub fn browser_clear_project_data(app: AppHandle, repo_id: String) -> NativeClearResult {
+    let repo_id = repo_id.trim();
+    if repo_id.is_empty() {
+        return NativeClearResult {
+            cleared: false,
+            warning: Some("native store not cleared — no project id".into()),
+        };
+    }
+    let token = format!("project-{repo_id}");
+    let live = store_tokens().lock().ok().and_then(|tokens| {
+        tokens
+            .iter()
+            .filter(|(_, t)| **t == token)
+            .find_map(|(label, _)| app.get_webview(label))
+    });
+    match live {
+        Some(webview) => match webview.clear_all_browsing_data() {
+            Ok(()) => NativeClearResult {
+                cleared: true,
+                warning: None,
+            },
+            Err(e) => NativeClearResult {
+                cleared: false,
+                warning: Some(format!("native store not cleared: {e}")),
+            },
+        },
+        None => NativeClearResult {
+            cleared: false,
+            warning: Some(
+                "native store not cleared — open a native browser tab in this project and retry"
+                    .into(),
+            ),
+        },
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -427,3 +519,63 @@ const INPAGE_ANNOTATE_JS: &str = r#"(function(){
   window.__agentumAnnotate={ on:function(){state.on=true;toolbar.style.display='block';}, teardown:function(){state.on=false;document.removeEventListener('mousemove',onMove,true);document.removeEventListener('click',onClick,true);document.removeEventListener('keydown',onKey,true);if(root)root.remove();window.__agentumAnnotate=null;} };
   state.on=true;
 })();"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_store_token_prefix_uuid_and_fallback() {
+        // Pane id `<repoId>::<path>` → the project token (spec 014 H).
+        assert_eq!(
+            project_store_token("repo-abc::/Users/x/.agentum/worktrees/feat"),
+            "project-repo-abc"
+        );
+        // Folder-project instance suffix — the prefix still wins.
+        assert_eq!(
+            project_store_token(
+                "repo-abc::/folder::workspace:0123abcd-0000-0000-0000-000000000000"
+            ),
+            "project-repo-abc"
+        );
+        // A bare repo UUID (path-less project surfaces) keys the project too.
+        assert_eq!(
+            project_store_token("0123abcd-0000-0000-0000-000000000000"),
+            "project-0123abcd-0000-0000-0000-000000000000"
+        );
+        // Synthetic/pseudo contexts keep their own per-key store.
+        assert_eq!(
+            project_store_token("global-floating-terminal"),
+            "global-floating-terminal"
+        );
+        assert_eq!(
+            project_store_token("github-pr:repo:42"),
+            "github-pr:repo:42"
+        );
+    }
+
+    #[test]
+    fn project_store_ids_stable_and_distinct_per_repo() {
+        // Two worktrees of ONE repo share the store (logins shared + persistent).
+        let a = worktree_data_store_id("repo-a::/w/one");
+        let b = worktree_data_store_id("repo-a::/w/two");
+        assert_eq!(a, b);
+        // …and the bare repo id lands on the same store.
+        assert_eq!(a, worktree_data_store_id("repo-a::anything"));
+        // Different repos never share.
+        assert_ne!(a, worktree_data_store_id("repo-b::/w/one"));
+        // Deterministic across calls (persists across launches).
+        assert_eq!(a, worktree_data_store_id("repo-a::/w/one"));
+    }
+
+    #[test]
+    fn project_store_id_never_equals_legacy_worktree_id() {
+        // The domain prefix keeps new project stores disjoint from every legacy
+        // per-worktree store (which hashed the raw id) — a re-keyed workspace
+        // can never accidentally open an old worktree store.
+        let full_id = "repo-a::/w/one";
+        use sha2::{Digest, Sha256};
+        let legacy = &Sha256::digest(full_id.as_bytes())[..16];
+        assert_ne!(worktree_data_store_id(full_id).as_slice(), legacy);
+    }
+}

@@ -268,6 +268,21 @@ fn default_true() -> bool {
     true
 }
 
+/// Spec 021 (#379): map a request's optional `tracker` pin to the provider
+/// stamped on this issue-driven path. D4: `Auto`/absent stays `"github"` (the
+/// source IS a GitHub issue — probing to Linear would stamp a provider whose
+/// id space doesn't match the URL); an explicit `linear` overrides; an
+/// unknown value 400s, never a silent fallback.
+fn resolve_tracker_pin(raw: Option<&str>) -> Result<&'static str, ApiError> {
+    match crate::task_sink::parse_tracker_choice(raw) {
+        Ok(crate::task_sink::TrackerChoice::Linear) => Ok("linear"),
+        Ok(_) => Ok("github"),
+        Err(other) => Err(ApiError::BadRequest(format!(
+            "unknown tracker '{other}' — expected auto, github, or linear"
+        ))),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpecFromIssueRequest {
@@ -281,6 +296,11 @@ struct SpecFromIssueRequest {
     /// Also derive + write `feature_list.json` (default true).
     #[serde(default = "default_true")]
     plan: bool,
+    /// Spec 021 (#379): optional explicit tracker pin (`auto`/`github`/
+    /// `linear`). Absent/`auto` keeps this issue-driven path's GitHub
+    /// stamping (D4); `linear` overrides.
+    #[serde(default)]
+    tracker: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,17 +340,27 @@ async fn spec_from_issue(
 
     // Server-authoritative fetch (validates the digits-only number). The
     // worktree shares the parent repo's `origin`, so it resolves the slug.
-    let issue =
-        super::github::fetch_github_issue(&state, &workdir_str, &req.number, req.slug.as_deref())
-            .await?;
+    // No repoId: the workdir is an is_dir-gated LOCAL worktree (spec 020
+    // byte-identical pin).
+    let issue = super::github::fetch_github_issue(
+        &state,
+        None,
+        &workdir_str,
+        &req.number,
+        req.slug.as_deref(),
+    )
+    .await?;
 
+    let provider = resolve_tracker_pin(req.tracker.as_deref())?;
     let ensured = ensure_spec_and_plan(
         &state.store,
+        &state.bus,
         &workdir,
         req.number.trim(),
         &issue,
         req.plan,
         /* converge_existing */ false,
+        provider,
     )
     .await?;
 
@@ -366,12 +396,19 @@ struct EnsuredSpec {
 /// `types.rs`) because it needs `&Store` and the fs-only plan helpers don't.
 async fn ensure_spec_and_plan(
     store: &agentum_store::Store,
+    // Spec 014 F1: the seam's TrackerEmit needs a bus; threaded from the
+    // route handlers' `state.bus` (tests pass a throwaway channel).
+    bus: &tokio::sync::broadcast::Sender<agentum_core::Event>,
     // Fully qualified: `Path` in this module is the axum extractor.
     workdir: &std::path::Path,
     number: &str,
     issue: &super::github::FetchedIssue,
     plan: bool,
     converge_existing: bool,
+    // Spec 021: the resolved tracker provider stamped into every planned
+    // feature + the initial Todo transition. Callers map the request's
+    // `tracker` pin per D4 (Auto/absent → "github" on this issue-driven path).
+    provider: &str,
 ) -> Result<EnsuredSpec, ApiError> {
     // Idempotent: existing contract files are kept; only missing ones written.
     let scaffold = crate::harness::scaffold_harness(workdir)
@@ -407,7 +444,7 @@ async fn ensure_spec_and_plan(
     // (a converged human-edited spec with no checkboxes also surfaces here).
     let features = if plan {
         let list =
-            crate::harness::plan_from_spec_with_tracker(workdir, &spec_id, "github", &issue.url)
+            crate::harness::plan_from_spec_with_tracker(workdir, &spec_id, provider, &issue.url)
                 .await
                 .map_err(|e| ApiError::Internal(format!("could not plan from the spec: {e}")))?;
         let backlog = format!("{}/feature_list.json", crate::harness::HARNESS_DIR);
@@ -424,10 +461,14 @@ async fn ensure_spec_and_plan(
         let _ = list; // planned OK → start the label trail at Todo (idempotent flip)
         match crate::task_sink::apply_tracker_transition(
             store,
-            "github",
+            provider,
             number,
             Some(&issue.url),
             crate::task_sink::TrackerPhase::Todo,
+            crate::task_sink::TrackerEmit {
+                bus,
+                worktree_id: None,
+            },
         )
         .await
         {
@@ -462,6 +503,11 @@ struct StartWorkRequest {
     agent_tool: Option<String>,
     #[serde(default)]
     agent_model: Option<String>,
+    /// Spec 021 (#379): optional explicit tracker pin (`auto`/`github`/
+    /// `linear`). Absent/`auto` keeps this issue-driven path's GitHub
+    /// stamping (D4); `linear` overrides.
+    #[serde(default)]
+    tracker: Option<String>,
 }
 
 /// start_work's post-plan knobs in one pure, pinned place (spec 006 F3).
@@ -560,18 +606,28 @@ async fn start_work(
 
     // Fetch — needed even when the spec exists, because
     // `spec_id = issue_spec_id(number, title)` needs the title.
-    let issue =
-        super::github::fetch_github_issue(&state, &workdir_str, &req.number, req.slug.as_deref())
-            .await?;
+    // No repoId: the workdir is an is_dir-gated LOCAL worktree (spec 020
+    // byte-identical pin).
+    let issue = super::github::fetch_github_issue(
+        &state,
+        None,
+        &workdir_str,
+        &req.number,
+        req.slug.as_deref(),
+    )
+    .await?;
 
     // Converge-scaffold + plan (forced ON, AC 1) + Todo-at-plan (AC 4).
+    let provider = resolve_tracker_pin(req.tracker.as_deref())?;
     let ensured = ensure_spec_and_plan(
         &state.store,
+        &state.bus,
         &workdir,
         req.number.trim(),
         &issue,
         /* plan */ true,
         /* converge_existing */ true,
+        provider,
     )
     .await?;
 
@@ -689,6 +745,12 @@ mod tests {
             .unwrap()
     }
 
+    /// A throwaway bus for the seam's required `TrackerEmit` (spec 014 F1) —
+    /// these tests assert planning behavior, not emission.
+    fn test_bus() -> tokio::sync::broadcast::Sender<agentum_core::Event> {
+        tokio::sync::broadcast::channel(8).0
+    }
+
     /// A synthetic already-fetched issue — exactly what makes
     /// `ensure_spec_and_plan` unit-testable without `gh` (it takes the issue
     /// instead of fetching). Two checkboxes → two planned features.
@@ -712,9 +774,18 @@ mod tests {
         let url = "https://example.com/acme/widgets/issues/42";
         let issue = synthetic_issue(url);
 
-        let ensured = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, false)
-            .await
-            .unwrap();
+        let ensured = ensure_spec_and_plan(
+            &store,
+            &test_bus(),
+            dir.path(),
+            "42",
+            &issue,
+            true,
+            false,
+            "github",
+        )
+        .await
+        .unwrap();
         assert!(!ensured.spec_existed);
         assert_eq!(ensured.spec_id, "42-add-widget");
         assert_eq!(
@@ -737,6 +808,22 @@ mod tests {
         }));
     }
 
+    /// Spec 021 (#379): the request-pin mapping — D4: absent/`auto` stays
+    /// `"github"` on this issue-driven path, explicit `linear` overrides,
+    /// unknown values 400 (never a silent fallback).
+    #[test]
+    fn resolve_tracker_pin_maps_d4() {
+        assert_eq!(resolve_tracker_pin(None).unwrap(), "github");
+        assert_eq!(resolve_tracker_pin(Some("")).unwrap(), "github");
+        assert_eq!(resolve_tracker_pin(Some("auto")).unwrap(), "github");
+        assert_eq!(resolve_tracker_pin(Some("github")).unwrap(), "github");
+        assert_eq!(resolve_tracker_pin(Some("linear")).unwrap(), "linear");
+        assert!(matches!(
+            resolve_tracker_pin(Some("jira")),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
     /// Spec 005 AC 1 convergence: an existing spec is not a failure for
     /// start-work (`converge_existing: true` re-plans from the existing file,
     /// never overwriting it) while the 004 route contract stays pinned
@@ -754,15 +841,33 @@ mod tests {
         std::fs::create_dir_all(&spec_dir).unwrap();
         std::fs::write(spec_dir.join("spec.md"), "# Edited\n\n- [ ] Only one\n").unwrap();
 
-        let err = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, false)
-            .await
-            .err()
-            .expect("never-overwrite 400 without converge");
+        let err = ensure_spec_and_plan(
+            &store,
+            &test_bus(),
+            dir.path(),
+            "42",
+            &issue,
+            true,
+            false,
+            "github",
+        )
+        .await
+        .err()
+        .expect("never-overwrite 400 without converge");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
 
-        let ensured = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, true)
-            .await
-            .unwrap();
+        let ensured = ensure_spec_and_plan(
+            &store,
+            &test_bus(),
+            dir.path(),
+            "42",
+            &issue,
+            true,
+            true,
+            "github",
+        )
+        .await
+        .unwrap();
         assert!(ensured.spec_existed);
         let list = ensured.features.unwrap();
         assert_eq!(list.features.len(), 1, "planned from the existing spec");
@@ -816,7 +921,17 @@ mod tests {
         // dev machine would rename the asserted default `status/todo` label.
         unsafe { std::env::set_var("AGENTUM_GH_BIN", &script) };
         unsafe { std::env::set_var("AGENTUM_GITHUB_CONFIG", dir.path().join("github.json")) };
-        let result = ensure_spec_and_plan(&store, dir.path(), "42", &issue, true, false).await;
+        let result = ensure_spec_and_plan(
+            &store,
+            &test_bus(),
+            dir.path(),
+            "42",
+            &issue,
+            true,
+            false,
+            "github",
+        )
+        .await;
         unsafe { std::env::remove_var("AGENTUM_GH_BIN") };
         unsafe { std::env::remove_var("AGENTUM_GITHUB_CONFIG") };
         drop(guard);

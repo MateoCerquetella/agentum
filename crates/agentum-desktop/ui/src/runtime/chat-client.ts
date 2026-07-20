@@ -4,6 +4,7 @@
 // `/api/chat` contract. The endpoint is a Socratic interviewer — it asks
 // clarifying questions, then proposes a task breakdown the user can file into
 // GitHub or Linear. This client is conversation-only; it never creates tasks.
+import { buildChatBody, buildChatStreamBody } from '../lib/chat-body'
 import type { IntakeMode } from '../lib/socratic-intake'
 import { apiUrl, getServerEndpoint } from './server-endpoint'
 
@@ -31,10 +32,14 @@ export function resolveChatModel(id: string | null | undefined): ChatModel {
   return CHAT_MODELS.find((m) => m.id === id) ?? CHAT_MODELS.find((m) => m.id === DEFAULT_CHAT_MODEL) ?? CHAT_MODELS[0]
 }
 
-/** One delta from `/api/chat/stream` — mirrors the server's compact SSE events. */
+/** One delta from `/api/chat/stream` — mirrors the server's compact SSE events.
+ *  `context` (spec 009 #361) leads the stream on workspace-backed requests:
+ *  `missing` means the server could not gather the repo snapshot and the UI
+ *  should warn instead of leaving the model to apologize. */
 export type ChatStreamDelta =
   | { type: 'text'; text: string }
   | { type: 'thinking'; text: string }
+  | { type: 'context'; state: 'ok' | 'missing' }
   | { type: 'error'; message: string }
   | { type: 'done' }
 
@@ -52,7 +57,7 @@ async function authHeaders(): Promise<Record<string, string>> {
  */
 async function sendChat(
   messages: ChatTurn[],
-  opts?: { workdir?: string; repoSlug?: string; mode?: IntakeMode; stage?: number }
+  opts?: { workdir?: string; repoId?: string; repoSlug?: string; mode?: IntakeMode; stage?: number }
 ): Promise<string> {
   const url = await apiUrl('/api/chat')
   const res = await fetch(url, {
@@ -61,15 +66,7 @@ async function sendChat(
       'Content-Type': 'application/json',
       ...(await authHeaders())
     },
-    body: JSON.stringify({
-      messages,
-      workdir: opts?.workdir,
-      repo_slug: opts?.repoSlug,
-      // Spec 008 F2: intake mode + socratic pass (both serde-default server-side,
-      // so omitting them is the byte-identical Fast path).
-      mode: opts?.mode,
-      stage: opts?.stage
-    })
+    body: JSON.stringify(buildChatBody(messages, opts))
   })
   const text = await res.text()
   if (res.ok) {
@@ -111,6 +108,9 @@ export async function streamChat(
   messages: ChatTurn[],
   opts: {
     workdir?: string
+    /** Spec 009 (#361): selected workspace's repo id — the server resolves the
+     *  repo's host from it and gathers context over SSH for remote projects. */
+    repoId?: string
     repoSlug?: string
     model?: string
     thinking?: boolean
@@ -130,19 +130,14 @@ export async function streamChat(
       'Content-Type': 'application/json',
       ...(await authHeaders())
     },
-    body: JSON.stringify({
-      // Send only the wire shape; any UI-only fields (e.g. stored `thinking`) are
-      // dropped so the server gets a clean `{role, content}[]`.
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      workdir: opts.workdir,
-      repo_slug: opts.repoSlug,
-      model: opts.model,
-      thinking: opts.thinking ?? false,
-      // Spec 008 F2: drive the server's per-stage prompt. Both are serde-default,
-      // so an old client / the Fast path stays byte-identical on the wire.
-      mode: opts.mode,
-      stage: opts.stage
-    }),
+    // Send only the wire shape; any UI-only fields (e.g. stored `thinking`) are
+    // dropped so the server gets a clean `{role, content}[]`.
+    body: JSON.stringify(
+      buildChatStreamBody(
+        messages.map((m) => ({ role: m.role, content: m.content })),
+        opts
+      )
+    ),
     signal: opts.signal
   })
 
@@ -180,6 +175,9 @@ export async function streamChat(
       opts.onDelta?.(ev)
     } else if (ev.type === 'thinking') {
       thinking += ev.text
+      opts.onDelta?.(ev)
+    } else if (ev.type === 'context') {
+      // Status signal only — nothing to accumulate; the store owns the state.
       opts.onDelta?.(ev)
     } else if (ev.type === 'error') {
       throw new Error(ev.message || 'the model stream errored')

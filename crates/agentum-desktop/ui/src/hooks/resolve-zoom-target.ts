@@ -11,8 +11,8 @@ export function resolveZoomTarget(args: {
     | 'skills'
     | 'mobile'
     | 'harness'
-    | 'wiki'
     | 'project'
+    | 'projects'
   activeTabType: 'terminal' | 'editor' | 'browser'
   activeElement: unknown
 }): 'terminal' | 'editor' | 'ui' {

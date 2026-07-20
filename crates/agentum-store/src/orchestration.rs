@@ -207,17 +207,25 @@ impl Store {
     /// True when every id in `deps` refers to a `completed` task. An empty list
     /// is vacuously true (a task with no deps is immediately ready).
     async fn orch_deps_all_completed(&self, deps: &[i64]) -> Result<bool> {
-        for dep in deps {
-            let status: Option<String> =
-                sqlx::query_scalar("SELECT status FROM orchestration_tasks WHERE id = ?")
-                    .bind(dep)
-                    .fetch_optional(&self.pool)
-                    .await?;
-            if status.as_deref() != Some("completed") {
-                return Ok(false);
-            }
+        if deps.is_empty() {
+            return Ok(true);
         }
-        Ok(true)
+        // One query instead of one `SELECT status` per dep. Counts how many of
+        // the *distinct* dep ids resolve to a `completed` task; equals the
+        // distinct count iff every dep exists AND is completed — the same
+        // semantics as the old loop (a missing dep id ≠ completed → false).
+        let distinct: std::collections::HashSet<i64> = deps.iter().copied().collect();
+        let placeholders = vec!["?"; distinct.len()].join(",");
+        let sql = format!(
+            "SELECT COUNT(*) FROM orchestration_tasks \
+             WHERE id IN ({placeholders}) AND status = 'completed'"
+        );
+        let mut q = sqlx::query_scalar::<_, i64>(&sql);
+        for dep in &distinct {
+            q = q.bind(dep);
+        }
+        let completed: i64 = q.fetch_one(&self.pool).await?;
+        Ok(completed as usize == distinct.len())
     }
 
     async fn orch_task_deps(&self, task_id: i64) -> Result<Vec<i64>> {
@@ -247,8 +255,29 @@ impl Store {
             q = q.bind(s);
         }
         let mut tasks = q.fetch_all(&self.pool).await?;
-        for t in &mut tasks {
-            t.deps = self.orch_task_deps(t.id).await?;
+        if !tasks.is_empty() {
+            // Fill every task's `deps` with a single grouped query instead of a
+            // `SELECT dep_id` per task (N+1). `ORDER BY task_id, dep_id` keeps
+            // each task's dep order identical to the old per-task query.
+            let ids: Vec<i64> = tasks.iter().map(|t| t.id).collect();
+            let placeholders = vec!["?"; ids.len()].join(",");
+            let sql = format!(
+                "SELECT task_id, dep_id FROM orchestration_task_deps \
+                 WHERE task_id IN ({placeholders}) ORDER BY task_id, dep_id"
+            );
+            let mut q2 = sqlx::query_as::<_, (i64, i64)>(&sql);
+            for id in &ids {
+                q2 = q2.bind(id);
+            }
+            let pairs = q2.fetch_all(&self.pool).await?;
+            let mut by_task: std::collections::HashMap<i64, Vec<i64>> =
+                std::collections::HashMap::new();
+            for (task_id, dep_id) in pairs {
+                by_task.entry(task_id).or_default().push(dep_id);
+            }
+            for t in &mut tasks {
+                t.deps = by_task.remove(&t.id).unwrap_or_default();
+            }
         }
         Ok(tasks)
     }

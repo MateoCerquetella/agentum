@@ -525,9 +525,19 @@ mod tests {
         // pipe, and routes raw pane output into the home-relative session log.
         assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
         assert!(script.contains("mkdir -p"), "no mkdir: {script}");
+        // Idempotence = probe `#{pane_pipe}` and skip when live; the arm
+        // itself must NOT use `-o` (it toggles a live pipe off — issue #270).
         assert!(
-            script.contains("tmux pipe-pane -o -t"),
-            "no idempotent pipe-pane: {script}"
+            script.contains("#{pane_pipe}"),
+            "no pane_pipe guard: {script}"
+        );
+        assert!(
+            script.contains("tmux pipe-pane -t"),
+            "no pipe-pane arm: {script}"
+        );
+        assert!(
+            !script.contains("pipe-pane -o"),
+            "toggling -o arm crept back in: {script}"
         );
         assert!(script.contains("agentum-demo"), "target missing: {script}");
         assert!(
@@ -627,12 +637,22 @@ mod tests {
         // `capture-pane`, so the tail resumes past what the snapshot painted and
         // never replays a byte — the fix for cursor-agent's relative-redraw
         // stacking. The cursor is sampled with the capture to anchor the grid.
+        let guard = script.find("#{pane_pipe}").expect("no pane_pipe guard");
         let pipe = script.find("pipe-pane").expect("no pipe-pane arm");
-        let cur = script.find("display-message").expect("no cursor sample");
+        // The cursor sample is anchored by its format string — the guard also
+        // uses `display-message`, so that token no longer identifies it.
+        let cur = script.find("cursor_x").expect("no cursor sample");
         let cap = script.find("capture-pane").expect("no grid capture");
         let wc = script.find("wc -c").expect("no size probe");
-        // pipe-pane armed first (folded into this exec to save a round trip),
-        // then cursor+capture, then the size LAST (no-overlap ordering).
+        // pipe-pane armed first (folded into this exec to save a round trip)
+        // behind the pane_pipe probe — `-o` TOGGLES a live pipe off (issue
+        // #270), so the guard is what makes the re-arm idempotent — then
+        // cursor+capture, then the size LAST (no-overlap ordering).
+        assert!(guard < pipe, "arm not guarded by pane_pipe probe: {script}");
+        assert!(
+            !script.contains("pipe-pane -o"),
+            "toggling -o arm crept back in: {script}"
+        );
         assert!(pipe < cur, "pipe-pane not armed before capture: {script}");
         assert!(
             cap < wc,

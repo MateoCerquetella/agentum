@@ -10,7 +10,7 @@ import type { LinkedWorkItemContext } from '@/lib/linked-work-item-context'
 import type { AgentumHooks, TaskViewPresetId } from '../../../shared/types'
 import { resolveHookCommandSourcePolicy } from '../../../shared/hook-command-source-policy'
 import { isExpectedAgentProcess } from '../../../shared/agent-process-recognition'
-import { slugifyForWorkspaceName } from '../../../shared/workspace-name'
+import { getLinkedWorkItemSuggestedName, slugifyForWorkspaceName } from '../../../shared/workspace-name'
 export { getLinkedWorkItemSuggestedName } from '../../../shared/workspace-name'
 
 /**
@@ -220,15 +220,27 @@ export function getWorkspaceSeedName(args: {
   prompt: string
   linkedIssueNumber: number | null
   linkedPR: number | null
+  /** The linked work item's title, when one is attached. Preferred over the
+   *  bare `pr-N`/`issue-N` fallbacks so the worktree/branch carries the same
+   *  name as the issue it implements. */
+  linkedTitle?: string | null
   /** Why: when none of the other seed sources produce a name, the composer
    *  supplies a repo-scoped unique marine-creature name so blank submissions
    *  still get a distinct, readable workspace rather than a collision-prone
    *  "workspace" literal that git would append numeric suffixes to. */
   fallbackName?: string
 }): string {
-  const { explicitName, prompt, linkedIssueNumber, linkedPR, fallbackName } = args
+  const { explicitName, prompt, linkedIssueNumber, linkedPR, linkedTitle, fallbackName } = args
   if (explicitName.trim()) {
     return explicitName.trim()
+  }
+  // Why: a title like "🚀!!!" can slug to empty — keep pr-N/issue-N as the
+  // guaranteed-nonempty fallback below.
+  if (linkedTitle?.trim()) {
+    const slug = getLinkedWorkItemSuggestedName({ title: linkedTitle })
+    if (slug) {
+      return slug
+    }
   }
   if (linkedPR !== null) {
     return `pr-${linkedPR}`

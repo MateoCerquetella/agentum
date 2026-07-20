@@ -34,6 +34,10 @@ export function worktreesCreate(args: {
   linkedIssue?: number
   linkedPR?: number
   linkedLinearIssue?: string
+  // Spec 021: the per-project tracker bind (github -> url, linear -> url). The
+  // server's CreateBody accepts these; the remote RPC path already sent them.
+  trackerProvider?: string
+  trackerUrl?: string
 }): Promise<unknown> {
   return postJson('/api/worktrees/create', args)
 }

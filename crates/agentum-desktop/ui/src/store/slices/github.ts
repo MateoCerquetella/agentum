@@ -36,9 +36,11 @@ import {
   sortWorkItemsByUpdatedAt,
   PER_REPO_FETCH_LIMIT
 } from '../../../../shared/work-items'
+import type { BoardBindingState } from '@/lib/board-project-resolution'
 import { deriveCheckStatusFromChecks, syncPRChecksStatus } from './github-checks'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 import { rightSidebarShowsPullRequestData } from '@/lib/right-sidebar-visibility'
+import { findRepoByPathPreferLocal } from '@/lib/find-repo-by-path'
 import { hostedReviewInfoFromGitHubPRInfo } from '../../../../shared/hosted-review-github'
 import { getHostedReviewCacheKey, linkedReviewHintKey } from './hosted-review-cache-identity'
 import { getGitHubPRCacheKey, getGitHubRepoCacheKey } from './github-cache-key'
@@ -104,7 +106,7 @@ function getRuntimeRepoTarget(
   if (target.kind !== 'environment') {
     return null
   }
-  const repo = state.repos.find((candidate) => candidate.path === repoPath)
+  const repo = findRepoByPathPreferLocal(state.repos, repoPath)
   return repo ? { target, repo } : null
 }
 
@@ -142,6 +144,43 @@ const inflightProjectViewRequests = new Map<
   { promise: Promise<GetProjectViewTableResult>; force: boolean }
 >()
 
+// Why: the project-view cache is keyed by the RESOLVED view id, which callers
+// without a `viewId` (the New Workspace wizard's tracker section — #385) can't
+// compute up front, so their fresh result was written but never read back —
+// every step-3 revisit re-issued the RPC and re-flashed the "loading the
+// Project's issues…" spinner. This module-scope index maps the viewId-less
+// request signature to the resolved cache key so a no-viewId caller can serve a
+// fresh cached table synchronously. Mirrors `inflightProjectViewRequests`
+// (module scope, cache-only — safe to survive across store resets in tests).
+const projectViewResolvedKeyByRequest = new Map<string, string>()
+
+// Return a fresh (within TTL) cached project-view table for `args`, or null on
+// miss. Resolves the cache key from `viewId` when present, else via the
+// request→resolved-key index above. Used by both the fetch fast-path and the
+// synchronous `getCachedProjectViewTable` selector so the two never disagree.
+function readFreshProjectViewTable(
+  cache: Record<string, ProjectViewCacheEntry<GitHubProjectTable>>,
+  args: GetProjectViewTableArgs
+): GitHubProjectTable | null {
+  const resolvedKey = args.viewId
+    ? projectViewCacheKey(
+        args.ownerType,
+        args.owner,
+        args.projectNumber,
+        args.viewId,
+        args.queryOverride
+      )
+    : projectViewResolvedKeyByRequest.get(projectViewRequestKey(args))
+  if (!resolvedKey) {
+    return null
+  }
+  const cached = cache[resolvedKey]
+  if (cached?.data && Date.now() - cached.fetchedAt < WORK_ITEMS_CACHE_TTL) {
+    return cached.data
+  }
+  return null
+}
+
 // Why: derive an optimistic GitHubProjectFieldValue from a mutation value so
 // the patched row re-renders immediately. Single-select and iteration lookups
 // consult the field config on the cached table; the result is best-effort and
@@ -151,7 +190,15 @@ function optimisticFieldValueFromMutation(
   fieldId: string,
   value: GitHubProjectFieldMutationValue
 ): GitHubProjectTable['rows'][number]['fieldValuesByFieldId'][string] | null {
-  const field = table.selectedView.fields.find((f) => f.id === fieldId)
+  // Why: a Board drop writes the column field (verticalGroupByFields, usually
+  // Status), which is not always among the view's visible `fields` — search
+  // the group-by fields too so the optimistic value keeps its name/color.
+  const view = table.selectedView
+  const field = [
+    ...view.fields,
+    ...(view.verticalGroupByFields ?? []),
+    ...view.groupByFields
+  ].find((f) => f.id === fieldId)
   switch (value.kind) {
     case 'single-select': {
       if (field?.kind === 'single-select') {
@@ -1264,6 +1311,11 @@ export type GitHubSlice = {
     args: GetProjectViewTableArgs,
     options?: FetchOptions
   ) => Promise<GetProjectViewTableResult>
+  /** Synchronous read of a fresh (within TTL) cached project-view table for
+   *  `args`, or null on miss. Lets a caller without a `viewId` (the wizard's
+   *  tracker) paint issues immediately on revisit instead of flashing a loader
+   *  while an identical fetch resolves (#385). */
+  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
   updateProjectFieldValue: (
     cacheKey: string,
     rowId: string,
@@ -1292,6 +1344,14 @@ export type GitHubSlice = {
    *  until the next refresh. The actual write is dispatched separately via
    *  the slug-addressed update IPCs. */
   patchProjectRowContent: (cacheKey: string, rowId: string, patch: ProjectRowContentPatch) => void
+  // ── Per-repo tracker binding (spec 016) ───────────────────────────────
+  /** Session-only cache of each repo's board-binding identity, keyed by
+   *  Repo.id. The hub's Tasks-tab effect is the only writer (hostId-aware);
+   *  ProjectViewWrapper/TaskPage read it through `resolveBoardProject`. Not
+   *  persisted — the server's slug-keyed bindings.json is the durable source
+   *  and a UI mirror would invite drift. */
+  projectBindingByRepo: Record<string, BoardBindingState>
+  setProjectBindingState: (repoId: string, state: BoardBindingState) => void
 }
 
 export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (set, get) => ({
@@ -1305,12 +1365,19 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   workItemsCache: {},
   workItemsInvalidationNonce: 0,
   projectViewCache: {},
+  projectBindingByRepo: {},
+  setProjectBindingState: (repoId, state) =>
+    set((s) => ({ projectBindingByRepo: { ...s.projectBindingByRepo, [repoId]: state } })),
+
+  getCachedProjectViewTable: (args) => readFreshProjectViewTable(get().projectViewCache, args),
 
   fetchProjectViewTable: async (args, options) => {
     const requestKey = projectViewRequestKey(args)
 
-    // Fast path: when the caller supplies `viewId`, we already know the
-    // resolved cache key and can serve a fresh entry directly.
+    // Fast path: serve a fresh cached entry directly. Works whether or not the
+    // caller supplied `viewId` — a no-viewId call resolves its key through the
+    // request→resolved-key index (#385), so the wizard's tracker no longer
+    // re-fetches on every step-3 revisit.
     const maybeKnownKey = args.viewId
       ? projectViewCacheKey(
           args.ownerType,
@@ -1320,10 +1387,10 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
           args.queryOverride
         )
       : null
-    if (!options?.force && maybeKnownKey) {
-      const cached = get().projectViewCache[maybeKnownKey]
-      if (cached?.data && Date.now() - cached.fetchedAt < WORK_ITEMS_CACHE_TTL) {
-        return { ok: true, data: cached.data }
+    if (!options?.force) {
+      const cachedData = readFreshProjectViewTable(get().projectViewCache, args)
+      if (cachedData) {
+        return { ok: true, data: cachedData }
       }
     }
 
@@ -1361,6 +1428,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
             table.selectedView.id,
             args.queryOverride
           )
+          // Remember which resolved view this request signature landed on, so a
+          // later no-viewId call for the same Project reads the cache (#385).
+          projectViewResolvedKeyByRequest.set(requestKey, key)
           set((s) => ({
             projectViewCache: withBoundedCacheEntry(s.projectViewCache, key, {
               data: table,
@@ -1974,9 +2044,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchPRForBranch: async (repoPath, branch, options): Promise<PRInfo | null> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = prCacheKey(repoPath, repoId, branch, requestSettings, repo?.connectionId)
@@ -2138,7 +2208,7 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchIssue: async (repoPath, number, options) => {
-    const repoId = options?.repoId ?? get().repos?.find((repo) => repo.path === repoPath)?.id
+    const repoId = options?.repoId ?? findRepoByPathPreferLocal(get().repos, repoPath)?.id
     const cacheKey = repoScopedCacheKey(repoPath, repoId, String(number))
     const cached = get().issueCache[cacheKey]
     if (isFresh(cached)) {
@@ -2188,9 +2258,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
     prRepo,
     options
   ): Promise<PRCheckDetail[]> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2309,9 +2379,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchPRCheckDetails: async (repoPath, args, options): Promise<PRCheckRunDetails | null> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const runtimeRepo = getRuntimeRepoTarget(get(), repoPath, requestSettings)
@@ -2341,9 +2411,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   fetchPRComments: async (repoPath, prNumber, options): Promise<PRComment[]> => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2405,9 +2475,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   addPRConversationComment: async (repoPath, prNumber, body, options) => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2461,9 +2531,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   addPRReviewCommentReply: async (repoPath, prNumber, commentId, body, options) => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(
@@ -2529,9 +2599,9 @@ export const createGitHubSlice: StateCreator<AppState, [], [], GitHubSlice> = (s
   },
 
   resolveReviewThread: async (repoPath, prNumber, threadId, resolve, options) => {
-    const repo = get().repos?.find((candidate) =>
-      options?.repoId ? candidate.id === options.repoId : candidate.path === repoPath
-    )
+    const repo = options?.repoId
+      ? get().repos?.find((candidate) => candidate.id === options.repoId)
+      : findRepoByPathPreferLocal(get().repos, repoPath)
     const repoId = options?.repoId ?? repo?.id
     const requestSettings = get().settings
     const cacheKey = runtimeScopedRepoCacheKey(

@@ -300,3 +300,35 @@ export async function stopWorktreeCdpBrowser(worktreeId: string): Promise<void> 
     // Ignore — the startup reaper is the backstop.
   }
 }
+
+/** Result of the project-scoped "Clear browser data" server call (spec 014). */
+export type ClearProjectCdpDataResult = { ok: true } | { ok: false; error: string }
+
+/**
+ * Delete ONE project's persistent CDP browser profile (cookies / logins /
+ * storage) on the server — the explicit deleter behind "Clear browsing data
+ * for this project"; every other project's profile is untouched. NOT
+ * fire-and-forget: failures surface to the caller so the UI can show them
+ * (silent success is the failure mode spec 014 removes).
+ */
+export async function clearProjectCdpData(repoId: string): Promise<ClearProjectCdpDataResult> {
+  try {
+    const { token } = await getServerEndpoint()
+    const url = await apiUrl('/api/cdp-browser/clear-project-data')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({ repoId })
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      return { ok: false, error: detail || `server responded ${res.status}` }
+    }
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}

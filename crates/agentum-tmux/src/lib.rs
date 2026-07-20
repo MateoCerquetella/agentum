@@ -419,14 +419,26 @@ pub async fn set_environment(target: &str, key: &str, value: &str) -> Result<()>
     run_checked(&mut c).await
 }
 
-/// Pipe the pane's output to `out_path` (append). Uses `-o`: noop if a pipe
-/// is already active for this pane.
+/// Pipe the pane's output to `out_path` (append), idempotently: a pane whose
+/// pipe is already live is left untouched.
+///
+/// IMPORTANT: `pipe-pane -o` is NOT "no-op if a pipe exists" — it TOGGLES.
+/// tmux always closes the existing pipe first; `-o` then merely skips opening
+/// the replacement. A blind `-o` re-arm therefore DISARMED live streams every
+/// other call (issue #270): a fresh agent session spawned armed, and the tab's
+/// connect-time re-arm switched the pipe off before the agent printed a byte —
+/// a permanently blank terminal. So probe `#{pane_pipe}` and skip when armed;
+/// when arming, use plain `pipe-pane` (no `-o`) so a lost race between two
+/// concurrent connects still ends with a live pipe rather than a toggled-off
+/// one.
 ///
 /// tmux interprets the shell-command via `/bin/sh -c`, so `>>` is the shell's
 /// append-redirect operator. Only the path is shell-quoted.
 pub async fn pipe_pane(target: &str, out_path: &Path) -> Result<()> {
     if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        // Async create: this runs on the tokio worker on every local WS connect,
+        // so keep the (usually no-op) mkdir off the blocking path.
+        tokio::fs::create_dir_all(parent).await?;
     }
     let path_str = out_path
         .to_str()
@@ -434,12 +446,19 @@ pub async fn pipe_pane(target: &str, out_path: &Path) -> Result<()> {
     let quoted_path = shlex::try_quote(path_str).map_err(|_| TmuxError::Quote)?;
     let cmd_str = format!("cat >> {quoted_path}");
 
-    let mut c = Command::new("tmux");
-    c.arg("pipe-pane")
-        .arg("-o")
-        .arg("-t")
+    let probe = Command::new("tmux")
+        .args(["display-message", "-p", "-t"])
         .arg(target)
-        .arg(cmd_str);
+        .arg("#{pane_pipe}")
+        .output()
+        .await?;
+    check(&probe)?;
+    if String::from_utf8_lossy(&probe.stdout).trim() == "1" {
+        return Ok(());
+    }
+
+    let mut c = Command::new("tmux");
+    c.arg("pipe-pane").arg("-t").arg(target).arg(cmd_str);
     run_checked(&mut c).await
 }
 
@@ -673,6 +692,53 @@ mod tests {
     #[test]
     fn target_format() {
         assert_eq!(target_for("alpha"), "agentum-alpha");
+    }
+
+    /// Regression for issue #270: `tmux pipe-pane -o` TOGGLES — tmux closes a
+    /// live pipe first, and `-o` merely skips opening the replacement — so a
+    /// blind `-o` re-arm disarmed the stream on every other call. Freshly
+    /// spawned agent sessions went permanently blank: spawn armed the pipe,
+    /// the tab's connect-time self-heal toggled it off, and the agent's
+    /// output had nowhere to go. `pipe_pane` must be truly idempotent:
+    /// re-arming an armed pane leaves the pipe live.
+    ///
+    /// Drives a REAL tmux server (same convention as the other live tests
+    /// here: default socket, `agentum-test-*` session, kill on both ends);
+    /// skips where tmux isn't installed so bare CI runners stay green.
+    #[tokio::test]
+    async fn pipe_pane_is_idempotent_against_live_tmux() {
+        // Skip if tmux isn't available in CI.
+        if Command::new("tmux").arg("-V").status().await.is_err() {
+            return;
+        }
+        let target = "agentum-test-pipe-toggle";
+        let _ = kill_session(target).await;
+        let workdir = std::env::temp_dir();
+        new_session(target, &workdir, &["sleep".into(), "3600".into()], &[])
+            .await
+            .unwrap();
+
+        let log = std::env::temp_dir().join("agentum-test-pipe-toggle.log");
+        let mut states = Vec::new();
+        // Arm, then re-arm twice (spawn + connect + reconnect in real life).
+        for _ in 0..3 {
+            pipe_pane(target, &log).await.unwrap();
+            let probe = Command::new("tmux")
+                .args(["display-message", "-p", "-t", target, "#{pane_pipe}"])
+                .output()
+                .await
+                .unwrap();
+            states.push(String::from_utf8_lossy(&probe.stdout).trim().to_string());
+        }
+        // Tear down before asserting so a red run doesn't leak the session.
+        kill_session(target).await.unwrap();
+        let _ = std::fs::remove_file(&log);
+
+        assert_eq!(
+            states,
+            ["1", "1", "1"],
+            "a re-arm toggled the pipe off (issue #270)"
+        );
     }
 
     #[test]
