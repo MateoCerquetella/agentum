@@ -14,7 +14,7 @@
 //! tool can declare its own (Claude has `redacted_thinking`, etc.).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use agentum_core::{Event, LOCAL_HOST_ID, Session, Status};
@@ -33,6 +33,14 @@ mod comment_bridge;
 mod reconciler;
 pub use comment_bridge::run_session_comment_bridge;
 pub use reconciler::run_goal_reconciler;
+
+/// The "context low" compact trigger, compiled once for the whole process.
+/// Every session-watch task consulted this pattern; compiling it per spawn
+/// (once per running session, re-paid on each reconcile that re-spawns a
+/// watch task) was needless — the pattern is a fixed valid literal. Mirrors
+/// the `LazyLock<Regex>` caches in `agentum-server`'s `usage.rs`.
+static CONTEXT_LOW_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"Context low.*<\s*50%").expect("context-low regex is valid"));
 
 /// How often each session's pane is sampled for activity / crash
 /// signatures. Was 5 s; halved to 1 s so the sidebar dot follows the
@@ -245,13 +253,8 @@ async fn watch_session(
     let awaiting_sigs = adapter.awaiting_input_signatures();
     let is_agent = adapter.is_agent();
 
-    let context_low = match Regex::new(r"Context low.*<\s*50%") {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "context-low regex compile failed");
-            return;
-        }
-    };
+    // Compiled once process-wide (see CONTEXT_LOW_RE), not per session spawn.
+    let context_low = &*CONTEXT_LOW_RE;
 
     let _ = emit(
         &bus,
