@@ -4,6 +4,18 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.57.1] — 2026-07-20
+
+### Fixed
+
+- **Codex MCP bearer token rejection.** Codex CLI no longer supports the inline
+  `bearer_token` field on streamable HTTP MCP servers — it is now rejected at
+  config parse time with `bearer_token is not supported for streamable_http`.
+  Replaced with `bearer_token_env_var = "AGENTUM_MCP_TOKEN"` and the token is
+  exported as an environment variable in the pane before launch. The
+  `ToolAdapter` trait gained a new `mcp_env()` method for adapters that need to
+  inject environment variables alongside MCP args. (openai/codex#5011, #4904)
+
 ## [0.31.0] — 2026-06-25
 
 ### Added

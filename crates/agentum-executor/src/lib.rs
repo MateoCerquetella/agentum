@@ -89,6 +89,14 @@ pub trait ToolAdapter: Send + Sync {
         Vec::new()
     }
 
+    /// Environment variable entries needed by this adapter's MCP wiring
+    /// (e.g. Codex's `bearer_token_env_var` requires the token to be
+    /// exported in the pane's environment). Returns pairs to append to
+    /// [`LaunchCommand::env`].
+    fn mcp_env(&self, _p: &McpProvision) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     /// Tool-specific watchdog "compact context" command, if any. Watchdog
     /// sends this verbatim followed by Enter when context-low signatures appear.
     fn compact_trigger(&self) -> Option<&'static str> {
