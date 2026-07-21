@@ -11,6 +11,8 @@ pub mod cdp_screencast;
 pub mod cert;
 pub mod channels;
 pub mod chat;
+pub mod chat_agent;
+pub mod chat_openai;
 pub mod clipboard;
 pub mod computer;
 pub mod doctor;

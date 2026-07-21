@@ -155,3 +155,9 @@
   status/event channel; ordinary sessions are excluded. Focused Vitest 4/4 and
   Vite production build green; standalone tsc remains baseline-red on unrelated
   missing shared modules.
+- 2026-07-20 [run 394]: resumed the existing Chat-agent scaffolding and completed
+  the Settings picker, global persistence, installed-agent default resolution,
+  Codex Responses backend, and typed unavailable-agent errors.
+- 2026-07-20 [run 394 integration]: reconciled the feature with current develop's
+  remote repo-context SSE events, control-marker intake advancement, and
+  repo/wiki-grounded draft response without dropping either behavior.
