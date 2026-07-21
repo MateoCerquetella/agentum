@@ -496,7 +496,12 @@ async fn ensure_spec_and_plan(
         )
         .await
         {
-            Ok(_) => {}
+            Ok(crate::task_sink::TransitionResult::Applied) => {}
+            Ok(crate::task_sink::TransitionResult::Skipped(reason)) => tracing::warn!(
+                number,
+                %reason,
+                "initial Todo transition not acknowledged; session lifecycle will retry"
+            ),
             Err(e) => {
                 tracing::warn!(number, error = %e, "initial Todo transition failed (non-fatal)")
             }
