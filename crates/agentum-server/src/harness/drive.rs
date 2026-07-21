@@ -406,7 +406,7 @@ async fn transition_tracker(
         return;
     };
     let engine = &state.harness;
-    match crate::task_sink::apply_tracker_transition(
+    let result = crate::task_sink::apply_tracker_transition(
         &state.store,
         provider,
         &feature.id,
@@ -417,8 +417,8 @@ async fn transition_tracker(
             worktree_id: None,
         },
     )
-    .await
-    {
+    .await;
+    match &result {
         Ok(crate::task_sink::TransitionResult::Applied) => {
             engine.log(harness_id, Some(&feature.id), format!("ticket → {phase:?}"))
         }
@@ -433,6 +433,62 @@ async fn transition_tracker(
             format!("ticket transition to {phase:?} failed (non-fatal): {e}"),
         ),
     }
+    if !matches!(result, Ok(crate::task_sink::TransitionResult::Applied)) {
+        spawn_tracker_transition_retry(state, harness_id, feature, phase);
+    }
+}
+
+/// Keep an unacknowledged lifecycle write pending without stalling the harness.
+/// Five capped-backoff attempts cover transient auth/network/Projects failures;
+/// every failure emits `tracker.sync_pending`, and later lifecycle observers
+/// (session/PR/merge) remain able to retry beyond this bounded worker.
+fn spawn_tracker_transition_retry(
+    state: &AppState,
+    harness_id: Uuid,
+    feature: &Feature,
+    phase: crate::task_sink::TrackerPhase,
+) {
+    let Some(provider) = feature.tracker_provider.clone() else {
+        return;
+    };
+    let tracker_id = feature.id.clone();
+    let tracker_url = feature.tracker_url.clone();
+    let store = state.store.clone();
+    let bus = state.bus.clone();
+    let engine = state.harness.clone();
+    tokio::spawn(async move {
+        for attempt in 1..=5u32 {
+            let delay = std::time::Duration::from_secs(2u64.saturating_pow(attempt).min(60));
+            tokio::time::sleep(delay).await;
+            let result = crate::task_sink::apply_tracker_transition(
+                &store,
+                &provider,
+                &tracker_id,
+                tracker_url.as_deref(),
+                phase,
+                crate::task_sink::TrackerEmit {
+                    bus: &bus,
+                    worktree_id: None,
+                },
+            )
+            .await;
+            if matches!(result, Ok(crate::task_sink::TransitionResult::Applied)) {
+                engine.log(
+                    harness_id,
+                    Some(&tracker_id),
+                    format!("ticket → {phase:?} (sync retry {attempt})"),
+                );
+                return;
+            }
+            tracing::warn!(
+                feature = %tracker_id,
+                ?phase,
+                attempt,
+                ?result,
+                "tracker transition remains pending"
+            );
+        }
+    });
 }
 
 /// A per-SPAWN unique, tmux-safe session name: `harness-<kind>-<run8>-<nonce4>`.

@@ -2,12 +2,28 @@ import { api } from '@/tauri'
 import type { GitHubItemDialogProjectOrigin } from './github-item-types'
 import { getStateLabel, getStateTone } from '@/lib/github-work-item-state'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, ChevronDown, CircleDashed, CircleDot, ExternalLink, FolderKanban, LoaderCircle, Pencil, Plus, Settings } from 'lucide-react'
+import {
+  ArrowRight,
+  ChevronDown,
+  CircleDashed,
+  CircleDot,
+  ExternalLink,
+  FolderKanban,
+  LoaderCircle,
+  Pencil,
+  Plus,
+  Settings
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import {
@@ -122,12 +138,13 @@ export function GHEditSection({
   // the sidebar's Status section beside open/closed. The hook live-refreshes
   // on tracker.phase_changed bus events, so engine/MCP transitions appear
   // without reopening. Null (unbound / off-project / error) renders nothing.
-  const projectColumn = useIssueProjectStatus({
+  const projectStatus = useIssueProjectStatus({
     open: layout === 'sidebar' && item.type === 'issue',
     issueUrl: item.url,
     workdir: repoPath ?? undefined,
     repoId: repoId ?? undefined
   })
+  const projectColumn = projectStatus.status
   // #379: moving the card from here. Opening the popover lazily loads the
   // write handle (ProjectV2 item id) + the Status field's options via the
   // extended gh_issue_project_status read; a successful move overrides the
@@ -139,7 +156,14 @@ export function GHEditSection({
     fieldId: string | null
     itemId: string | null
     options: { id: string; name: string }[]
-  }>({ loading: false, error: null, projectId: null, fieldId: null, itemId: null, options: [] })
+  }>({
+    loading: false,
+    error: null,
+    projectId: null,
+    fieldId: null,
+    itemId: null,
+    options: []
+  })
   const [columnOverride, setColumnOverride] = useState<string | null>(null)
   useEffect(() => {
     setColumnOverride(null)

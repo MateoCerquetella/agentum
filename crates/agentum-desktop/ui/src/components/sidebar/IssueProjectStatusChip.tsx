@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { gh } from '@/tauri/gh'
 import { getProjectBinding } from '@/runtime/github-projects-client'
 import { subscribeServerEvents } from '@/runtime/server-events-bus'
+import { worktreesReconcileGithubStatus } from '@/runtime/server-worktree-client'
 import {
   parseIssueRef,
   resolveIssueProjectStatus,
@@ -16,10 +17,9 @@ import {
 
 // Spec 018 (#365): the issue hover card's GitHub Project **Status** chip — the
 // board column (Todo / In Progress / …) for the linked issue when its repo has
-// a Projects v2 binding. Distinct from the open/closed IssueStateBadge and from
-// the internal TrackerPhaseChip (agentum's own pipeline phase). Fetched lazily
-// on card open + cached per issue for the app session; renders NOTHING when
-// unbound, off-project, or on any fetch error (silent absence, AC 2).
+// a Projects v2 binding. GitHub is the single source of lifecycle truth for a
+// linked worktree (#399); local trackerPhase is only a cache/retry guard and is
+// never rendered beside this chip.
 
 // App-session caches (module-level → shared across every card, survive
 // open/close): binding per repo slug, status per issue. Rapid re-hovers hit
@@ -46,7 +46,11 @@ async function fetchBinding(
 ): Promise<ProjectBindingRef> {
   // Pass the slug hint (zero git I/O server-side) + repoId (SSH-repo binding,
   // spec 020). null binding = unbound repo.
-  const { binding } = await getProjectBinding({ workdir, slug: ref.slug, repoId })
+  const { binding } = await getProjectBinding({
+    workdir,
+    slug: ref.slug,
+    repoId
+  })
   if (!binding) {
     return null
   }
@@ -56,41 +60,51 @@ async function fetchBinding(
 async function fetchStatus(
   ref: IssueRef,
   binding: NonNullable<ProjectBindingRef>
-): Promise<string | null> {
-  // `gh_issue_project_status` → { ok:true, status:<name|null> } | { ok:false, error }.
-  // Both a null status and an error envelope mean "no chip".
+): Promise<{ status: string | null; statusOptionId: string | null }> {
   const res = (await gh.issueProjectStatus({
     owner: ref.owner,
     repo: ref.repo,
     number: ref.number,
     projectId: binding.projectId,
     statusFieldId: binding.statusFieldId
-  })) as { ok?: boolean; status?: unknown } | null
-  if (res && res.ok === true && typeof res.status === 'string') {
-    return res.status
+  })) as {
+    ok?: boolean
+    status?: unknown
+    statusOptionId?: unknown
+    error?: { message?: unknown }
+  } | null
+  if (res?.ok === true) {
+    return {
+      status: typeof res.status === 'string' ? res.status : null,
+      statusOptionId: typeof res.statusOptionId === 'string' ? res.statusOptionId : null
+    }
   }
-  return null
+  const message = res?.error?.message
+  throw new Error(
+    typeof message === 'string' && message.trim() ? message : 'GitHub status read failed'
+  )
 }
 
-/** Lazily resolve the issue's Project Status while `open`. Returns the option
- *  name or null (unbound / off-project / error / not open). Live: while open,
- *  a `tracker.phase_changed`/`tracker.blocked` bus event for THIS issue
- *  invalidates the cache and refetches, so engine/MCP-driven transitions
- *  appear without a hover cycle or app restart (#379). */
+/** Resolve the issue's Project Status while `open`. Returns GitHub's option
+ *  name plus any sync warning. Tracker events invalidate and refetch this
+ *  issue; `sync_pending` preserves the warning until an acknowledged
+ *  `phase_changed` confirms the transition (#399). */
 export function useIssueProjectStatus(input: {
   open: boolean
   issueUrl?: string
   workdir?: string
   repoId?: string
-}): string | null {
-  const { open, issueUrl, workdir, repoId } = input
+  worktreeId?: string
+}): { status: string | null; warning: string | null } {
+  const { open, issueUrl, workdir, repoId, worktreeId } = input
   // #379 perf (stale-while-revalidate): paint the last-known column
   // IMMEDIATELY from the cache — even a stale entry — and let the resolve
   // below swap in the fresh value. Blocking on the refetch made every
   // hover/open past the TTL feel slow (a full `gh` GraphQL round trip).
-  const [status, setStatus] = React.useState<string | null>(() => {
+  const [result, setResult] = React.useState(() => {
     const ref = parseIssueRef(issueUrl)
-    return ref ? (statusCache.get(statusCacheKey(ref.slug, ref.number))?.status ?? null) : null
+    const cached = ref ? statusCache.get(statusCacheKey(ref.slug, ref.number)) : null
+    return { status: cached?.status ?? null, warning: cached?.warning ?? null }
   })
 
   React.useEffect(() => {
@@ -104,24 +118,45 @@ export function useIssueProjectStatus(input: {
     let cancelled = false
     const peeked = statusCache.get(statusCacheKey(ref.slug, ref.number))
     if (peeked) {
-      setStatus(peeked.status)
+      setResult({ status: peeked.status, warning: peeked.warning })
     }
-    const resolve = () => {
-      void resolveIssueProjectStatus(ref, {
-        bindingCache,
-        statusCache,
-        getBinding: (r) => fetchBinding(r, workdir, repoId),
-        getStatus: fetchStatus
-      }).then((result) => {
+    let firstResolve = true
+    const resolve = (forceRefresh = false, pendingWarning: string | null = null) => {
+      void resolveIssueProjectStatus(
+        ref,
+        {
+          bindingCache,
+          statusCache,
+          getBinding: (r) => fetchBinding(r, workdir, repoId),
+          getStatus: fetchStatus
+        },
+        { forceRefresh: forceRefresh || firstResolve }
+      ).then((next) => {
+        firstResolve = false
         if (!cancelled) {
-          setStatus(result)
+          setResult({ status: next.status, warning: next.warning ?? pendingWarning })
+        }
+        if (worktreeId && next.statusOptionId) {
+          void worktreesReconcileGithubStatus(worktreeId, next.statusOptionId).catch((error) => {
+            if (!cancelled) {
+              const detail = error instanceof Error ? error.message : String(error)
+              setResult((current) => ({
+                ...current,
+                warning: `GitHub status is live, but Agentum could not reconcile its local cache: ${detail}. Reload after checking file permissions.`
+              }))
+            }
+          })
         }
       })
     }
     resolve()
     const unsubscribe = subscribeServerEvents({
       onEvent: (ev) => {
-        if (ev.kind !== 'tracker.phase_changed' && ev.kind !== 'tracker.blocked') {
+        if (
+          ev.kind !== 'tracker.phase_changed' &&
+          ev.kind !== 'tracker.blocked' &&
+          ev.kind !== 'tracker.sync_pending'
+        ) {
           return
         }
         const url = (ev.payload as { tracker_url?: unknown } | null | undefined)?.tracker_url
@@ -130,16 +165,22 @@ export function useIssueProjectStatus(input: {
           return
         }
         invalidateIssueProjectStatus(url as string)
-        resolve()
+        let pendingWarning: string | null = null
+        if (ev.kind === 'tracker.sync_pending') {
+          const reason = (ev.payload as { reason?: unknown } | null | undefined)?.reason
+          pendingWarning = `GitHub status sync pending: ${typeof reason === 'string' ? reason : 'transition was not acknowledged'}. Check gh authentication and the Project binding; Agentum will retry.`
+          setResult((current) => ({ ...current, warning: pendingWarning }))
+        }
+        resolve(true, pendingWarning)
       }
     })
     return () => {
       cancelled = true
       unsubscribe()
     }
-  }, [open, issueUrl, workdir, repoId])
+  }, [open, issueUrl, workdir, repoId, worktreeId])
 
-  return status
+  return result
 }
 
 export function IssueProjectStatusChip({

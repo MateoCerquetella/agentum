@@ -23,6 +23,16 @@ export function worktreesUpdateMeta(
   return postJson('/api/worktrees/update-meta', { worktreeId, updates })
 }
 
+export function worktreesReconcileGithubStatus(
+  worktreeId: string,
+  statusOptionId: string
+): Promise<unknown> {
+  return postJson('/api/worktrees/reconcile-github-status', {
+    worktreeId,
+    statusOptionId
+  })
+}
+
 export function worktreesCreate(args: {
   repoId: string
   name: string

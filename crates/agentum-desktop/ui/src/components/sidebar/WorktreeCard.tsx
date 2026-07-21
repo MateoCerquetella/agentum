@@ -468,12 +468,8 @@ const WorktreeCard = React.memo(function WorktreeCard({
   )
 
   const unreadTooltip = worktree.isUnread ? 'Mark read' : 'Mark unread'
-  const childWorkspaceLabel = `${lineageChildCount} child ${
-    lineageChildCount === 1 ? 'workspace' : 'workspaces'
-  }`
-  const childWorkspaceShortLabel = `${lineageChildCount} ${
-    lineageChildCount === 1 ? 'child' : 'children'
-  }`
+  const childWorkspaceLabel = `${lineageChildCount} child ${lineageChildCount === 1 ? 'workspace' : 'workspaces'}`
+  const childWorkspaceShortLabel = `${lineageChildCount} ${lineageChildCount === 1 ? 'child' : 'children'}`
   const showLineageChildChip = lineageChildCount > 0 && onLineageToggle !== undefined
 
   const handleDragStart = useCallback(
@@ -527,7 +523,11 @@ const WorktreeCard = React.memo(function WorktreeCard({
         author: null,
         repoId: repo.id
       }
-      openTaskPage({ taskSource: 'github', preselectedRepoId: repo.id, openGitHubWorkItem: item })
+      openTaskPage({
+        taskSource: 'github',
+        preselectedRepoId: repo.id,
+        openGitHubWorkItem: item
+      })
     },
     [metaIssue, openTaskPage, repo]
   )
@@ -605,13 +605,14 @@ const WorktreeCard = React.memo(function WorktreeCard({
         comment={metaComment}
         detailsAfter={hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
         worktreeId={worktree.id}
-        trackerPhase={worktree.trackerPhase}
         workdir={repo?.path}
         repoId={repo?.id}
         onEditIssue={handleEditIssue}
         onEditComment={handleEditComment}
         onOpenGitHubIssueInAgentum={
-          metaIssue && 'url' in metaIssue && metaIssue.url ? handleOpenGitHubIssueInAgentum : undefined
+          metaIssue && 'url' in metaIssue && metaIssue.url
+            ? handleOpenGitHubIssueInAgentum
+            : undefined
         }
         onOpenLinearIssueInAgentum={linearIssue?.url ? handleOpenLinearIssueInAgentum : undefined}
       >
@@ -932,7 +933,9 @@ const WorktreeCard = React.memo(function WorktreeCard({
         {showLineageChildChip && (
           <div
             className="relative mt-1 flex min-w-0 justify-start"
-            style={{ color: 'color-mix(in srgb, var(--muted-foreground) 42%, var(--sidebar))' }}
+            style={{
+              color: 'color-mix(in srgb, var(--muted-foreground) 42%, var(--sidebar))'
+            }}
           >
             <Tooltip>
               <TooltipTrigger asChild>

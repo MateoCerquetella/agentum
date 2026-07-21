@@ -50,16 +50,20 @@ describe('statusCacheKey', () => {
 })
 
 const REF: IssueRef = { owner: 'o', repo: 'r', number: 7, slug: 'o/r' }
-const BINDING: NonNullable<ProjectBindingRef> = { projectId: 'PVT_1', statusFieldId: 'F_status' }
+const BINDING: NonNullable<ProjectBindingRef> = {
+  projectId: 'PVT_1',
+  statusFieldId: 'F_status'
+}
 
-function deps(
-  over: Partial<IssueProjectStatusDeps> = {}
-): IssueProjectStatusDeps & {
+function deps(over: Partial<IssueProjectStatusDeps> = {}): IssueProjectStatusDeps & {
   getBinding: ReturnType<typeof vi.fn>
   getStatus: ReturnType<typeof vi.fn>
 } {
   const getBinding = vi.fn(async () => BINDING as ProjectBindingRef)
-  const getStatus = vi.fn(async () => 'In Progress' as string | null)
+  const getStatus = vi.fn(async () => ({
+    status: 'In Progress',
+    statusOptionId: 'OPT_PROGRESS'
+  }))
   return {
     bindingCache: new Map(),
     statusCache: new Map(),
@@ -75,7 +79,7 @@ function deps(
 describe('resolveIssueProjectStatus', () => {
   it('returns the Status option for a bound repo, filling both caches', async () => {
     const d = deps()
-    expect(await resolveIssueProjectStatus(REF, d)).toBe('In Progress')
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBe('In Progress')
     expect(d.bindingCache.get('o/r')).toEqual(BINDING)
     expect(d.statusCache.get('o/r#7')?.status).toBe('In Progress')
   })
@@ -90,49 +94,62 @@ describe('resolveIssueProjectStatus', () => {
 
   it('revalidates a stale entry — a moved board column shows up (#379)', async () => {
     let clock = 0
-    const getStatus = vi.fn(async () => 'Backlog' as string | null)
+    const getStatus = vi.fn(async () => ({
+      status: 'Backlog',
+      statusOptionId: 'OPT_BACKLOG'
+    }))
     const d = deps({ getStatus, now: () => clock, staleAfterMs: 1000 })
-    expect(await resolveIssueProjectStatus(REF, d)).toBe('Backlog')
-    getStatus.mockResolvedValue('In progress')
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBe('Backlog')
+    getStatus.mockResolvedValue({
+      status: 'In progress',
+      statusOptionId: 'OPT_PROGRESS'
+    })
     clock = 999
-    expect(await resolveIssueProjectStatus(REF, d)).toBe('Backlog') // still fresh
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBe('Backlog') // still fresh
     clock = 1000
-    expect(await resolveIssueProjectStatus(REF, d)).toBe('In progress') // stale → refetched
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBe('In progress') // stale → refetched
     expect(getStatus).toHaveBeenCalledTimes(2)
     expect(d.getBinding).toHaveBeenCalledTimes(1) // bound binding stays cached
   })
 
   it('keeps the last-known status when a revalidation fetch fails', async () => {
     let clock = 0
-    const getStatus = vi.fn(async () => 'In Progress' as string | null)
+    const getStatus = vi.fn(async () => ({
+      status: 'In Progress',
+      statusOptionId: 'OPT_PROGRESS'
+    }))
     const d = deps({ getStatus, now: () => clock, staleAfterMs: 1000 })
     await resolveIssueProjectStatus(REF, d)
     getStatus.mockRejectedValue(new Error('gh flaked'))
     clock = 2000
-    expect(await resolveIssueProjectStatus(REF, d)).toBe('In Progress')
+    const result = await resolveIssueProjectStatus(REF, d)
+    expect(result.status).toBe('In Progress')
+    expect(result.warning).toContain('GitHub status sync pending')
   })
 
   it('re-probes an unbound repo on revalidation — binding later needs no restart', async () => {
     let clock = 0
     const getBinding = vi.fn(async () => null as ProjectBindingRef)
     const d = deps({ getBinding, now: () => clock, staleAfterMs: 1000 })
-    expect(await resolveIssueProjectStatus(REF, d)).toBeNull()
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBeNull()
     getBinding.mockResolvedValue(BINDING)
     clock = 2000
-    expect(await resolveIssueProjectStatus(REF, d)).toBe('In Progress')
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBe('In Progress')
     expect(getBinding).toHaveBeenCalledTimes(2)
   })
 
   it('returns null and skips the status fetch when the repo is unbound (AC 2)', async () => {
     const d = deps({ getBinding: vi.fn(async () => null) })
-    expect(await resolveIssueProjectStatus(REF, d)).toBeNull()
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBeNull()
     expect(d.getStatus).not.toHaveBeenCalled()
     expect(d.statusCache.get('o/r#7')?.status).toBeNull()
   })
 
   it('returns null when the issue is not on the project (status null)', async () => {
-    const d = deps({ getStatus: vi.fn(async () => null) })
-    expect(await resolveIssueProjectStatus(REF, d)).toBeNull()
+    const d = deps({
+      getStatus: vi.fn(async () => ({ status: null, statusOptionId: null }))
+    })
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBeNull()
   })
 
   it('treats a binding fetch error as unbound — never throws (AC 2)', async () => {
@@ -141,7 +158,9 @@ describe('resolveIssueProjectStatus', () => {
         throw new Error('network')
       })
     })
-    await expect(resolveIssueProjectStatus(REF, d)).resolves.toBeNull()
+    const result = await resolveIssueProjectStatus(REF, d)
+    expect(result.status).toBeNull()
+    expect(result.warning).toContain('network')
   })
 
   it('treats a status fetch error as no-status — never throws (AC 2)', async () => {
@@ -150,12 +169,16 @@ describe('resolveIssueProjectStatus', () => {
         throw new Error('gh failed')
       })
     })
-    await expect(resolveIssueProjectStatus(REF, d)).resolves.toBeNull()
+    const result = await resolveIssueProjectStatus(REF, d)
+    expect(result.status).toBeNull()
+    expect(result.warning).toContain('gh failed')
   })
 
   it('normalizes a blank option name to null', async () => {
-    const d = deps({ getStatus: vi.fn(async () => '   ') })
-    expect(await resolveIssueProjectStatus(REF, d)).toBeNull()
+    const d = deps({
+      getStatus: vi.fn(async () => ({ status: '   ', statusOptionId: null }))
+    })
+    expect((await resolveIssueProjectStatus(REF, d)).status).toBeNull()
   })
 
   it('reuses a cached binding across different issues of the same repo', async () => {
@@ -163,6 +186,13 @@ describe('resolveIssueProjectStatus', () => {
     await resolveIssueProjectStatus(REF, d)
     await resolveIssueProjectStatus({ ...REF, number: 8 }, d)
     expect(d.getBinding).toHaveBeenCalledTimes(1)
+    expect(d.getStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('force-refreshes on linked issue load even inside the cache freshness window', async () => {
+    const d = deps()
+    await resolveIssueProjectStatus(REF, d)
+    await resolveIssueProjectStatus(REF, d, { forceRefresh: true })
     expect(d.getStatus).toHaveBeenCalledTimes(2)
   })
 })

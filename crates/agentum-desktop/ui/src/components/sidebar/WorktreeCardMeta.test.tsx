@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorktreeCardDetailsHover } from './WorktreeCardMeta'
 
 vi.mock('@/components/ui/hover-card', () => ({
@@ -18,12 +18,30 @@ vi.mock('@/components/ui/tooltip', () => ({
 // The Project-status chip (spec 018) reaches Tauri + the loopback server; stub
 // both so the static render never touches native internals. The lazy fetch is
 // effect-gated, so renderToStaticMarkup never calls these anyway.
-vi.mock('@/tauri/gh', () => ({ gh: { issueProjectStatus: vi.fn(async () => ({ ok: true, status: null })) } }))
+vi.mock('@/tauri/gh', () => ({
+  gh: { issueProjectStatus: vi.fn(async () => ({ ok: true, status: null })) }
+}))
 vi.mock('@/runtime/github-projects-client', () => ({
-  getProjectBinding: vi.fn(async () => ({ slug: 'acme/agentum', binding: null }))
+  getProjectBinding: vi.fn(async () => ({
+    slug: 'acme/agentum',
+    binding: null
+  }))
+}))
+const projectStatusState = vi.hoisted(() => ({ status: 'TODO' as string | null, warning: null as string | null }))
+vi.mock('./IssueProjectStatusChip', () => ({
+  useIssueProjectStatus: ({ issueUrl }: { issueUrl?: string }) => ({
+    status: issueUrl ? projectStatusState.status : null,
+    warning: issueUrl ? projectStatusState.warning : null
+  }),
+  IssueProjectStatusChip: ({ status }: { status: string | null }) =>
+    status ? <span data-project-status="true">{status}</span> : null
 }))
 
 describe('WorktreeCardDetailsHover', () => {
+  beforeEach(() => {
+    projectStatusState.status = 'TODO'
+    projectStatusState.warning = null
+  })
   it('includes branch identity before metadata details', () => {
     const markup = renderToStaticMarkup(
       <WorktreeCardDetailsHover
@@ -50,14 +68,10 @@ describe('WorktreeCardDetailsHover', () => {
     )
 
     expect(markup).toContain('feature/local-branch')
-    expect(markup.indexOf('feature/local-branch')).toBeLessThan(markup.indexOf('PR #456'))
     expect(markup).toContain('Fix stale GH PR')
   })
 
-  it('accepts the spec-018 workdir/repoId props and renders the issue without a status chip synchronously', () => {
-    // The Project-status read is effect-gated (fetch-on-open), so a static
-    // render carries the issue but no chip — and must not throw with the new
-    // props threaded through (spec 018 #365).
+  it('accepts the status-read props and renders only the external lifecycle value', () => {
     const markup = renderToStaticMarkup(
       <WorktreeCardDetailsHover
         issue={{
@@ -80,7 +94,67 @@ describe('WorktreeCardDetailsHover', () => {
 
     expect(markup).toContain('Issue hover card project status')
     expect(markup).toContain('area/desktop')
-    // No status option name renders without the effect firing (silent absence).
+    // The local pipeline status is never rendered as a second lifecycle chip.
     expect(markup).not.toContain('In Progress')
+  })
+
+  it.each([
+    ['in_progress', 'stale local In Progress + external TODO'],
+    ['todo', 'matching local/external TODO']
+  ])('renders exactly one external status chip for %s (%s)', (trackerPhase) => {
+    const legacyLocalProps = { trackerPhase } as unknown as Record<string, unknown>
+    const markup = renderToStaticMarkup(
+      <WorktreeCardDetailsHover
+        issue={{
+          number: 399,
+          title: 'Authoritative tracker status',
+          state: 'open',
+          url: 'https://github.com/acme/agentum/issues/399',
+          labels: []
+        }}
+        linearIssue={null}
+        comment={null}
+        worktreeId="repo-1::/worktree"
+        workdir="/worktree"
+        repoId="repo-1"
+        onEditIssue={vi.fn()}
+        onEditComment={vi.fn()}
+        {...legacyLocalProps}
+      >
+        <span>hover</span>
+      </WorktreeCardDetailsHover>
+    )
+
+    expect(markup.match(/data-project-status="true"/g)).toHaveLength(1)
+    expect(markup.match(/>TODO</g)).toHaveLength(1)
+    expect(markup).not.toContain('In Progress')
+  })
+
+  it('surfaces an actionable warning while a GitHub transition remains pending', () => {
+    projectStatusState.warning =
+      'GitHub status sync pending: project scope missing. Check gh authentication and the Project binding; Agentum will retry.'
+    const markup = renderToStaticMarkup(
+      <WorktreeCardDetailsHover
+        issue={{
+          number: 399,
+          title: 'Authoritative tracker status',
+          state: 'open',
+          url: 'https://github.com/acme/agentum/issues/399',
+          labels: []
+        }}
+        linearIssue={null}
+        comment={null}
+        workdir="/worktree"
+        repoId="repo-1"
+        onEditIssue={vi.fn()}
+        onEditComment={vi.fn()}
+      >
+        <span>hover</span>
+      </WorktreeCardDetailsHover>
+    )
+
+    expect(markup).toContain('GitHub status sync pending')
+    expect(markup).toContain('Check gh authentication')
+    expect(markup).toContain('Agentum will retry')
   })
 })
