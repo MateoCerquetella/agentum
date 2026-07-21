@@ -795,6 +795,28 @@ async fn github_transition_with_board(
         // Unbound: the label IS the status — today's behavior byte-for-byte.
         return github_transition_with(program, slug, number, phase, map).await;
     };
+    let refreshed_binding;
+    let b = if phase == TrackerPhase::InReview && b.status_mapping.in_review.trim().is_empty() {
+        match crate::github_projects::ensure_in_review_mapping(program, slug, b).await {
+            Ok(upgraded) => {
+                refreshed_binding = upgraded;
+                &refreshed_binding
+            }
+            Err(reason) => {
+                tracing::warn!(slug, number, %reason, "InReview project mapping refresh failed");
+                return match github_transition_with(program, slug, number, phase, map).await {
+                    TransitionResult::Applied => TransitionResult::Skipped(format!(
+                        "Projects board write deferred ({reason}); status label applied as fallback"
+                    )),
+                    TransitionResult::Skipped(why) => TransitionResult::Skipped(format!(
+                        "Projects board write deferred ({reason}); label fallback skipped: {why}"
+                    )),
+                };
+            }
+        }
+    } else {
+        b
+    };
     match crate::github_projects::board_write_with(program, b, slug, number, phase.into()).await {
         Ok(()) => {
             // The board holds the status now — strip the duplicate `status/*`

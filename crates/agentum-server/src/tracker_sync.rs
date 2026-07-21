@@ -13,22 +13,79 @@
 //!   `InReview` on the first non-draft PR and `Done` on merge. No webhooks
 //!   (invariant #6) → poll only.
 //!
-//! Every transition is idempotent, best-effort, and never-halt (invariant #3):
-//! a failed transition logs and the session/poll proceeds. Advancement is guarded
-//! by the pure monotonic [`next_phase_write`] (invariant #4) so status never
+//! Every transition is idempotent and never halts the agent (invariant #3), but
+//! delivery is acknowledgement-based: `Skipped`/`Err` are logged and retried,
+//! and only `Applied` advances the persisted phase. Advancement is guarded by
+//! the pure monotonic [`next_phase_write`] (invariant #4) so status never
 //! regresses (a reopened Done workspace does not drag the card back), the
 //! session-start `InProgress` converges with the harness's own `InProgress`, and
 //! the poller's `Done` is a restart-safe terminal (the persisted `tracker_phase`
 //! excludes a merged workspace from the next tick).
 
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 use agentum_core::Event;
 use agentum_store::Store;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::task_sink::{TrackerEmit, TrackerPhase, apply_tracker_transition, parse_tracker_phase};
+use crate::task_sink::{
+    TrackerEmit, TrackerPhase, TransitionResult, apply_tracker_transition, parse_tracker_phase,
+};
+
+/// Retry a tracker write without blocking the agent or the lifecycle event
+/// subscriber. The cap prevents an outage from producing a hot loop; retries
+/// continue until GitHub/Linear acknowledges the write or another transition
+/// advances the worktree beyond this target.
+const TRACKER_RETRY_BASE_SECS: u64 = 2;
+const TRACKER_RETRY_MAX_SECS: u64 = 60;
+
+/// At most one session-start reconciliation loop per worktree. Multiple tabs
+/// can emit `session.started` together; the tracker write is idempotent, but a
+/// single owner avoids multiplying retry traffic during an outage.
+static SESSION_RECONCILIATIONS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+struct SessionReconciliationClaim(String);
+
+impl SessionReconciliationClaim {
+    fn acquire(worktree_id: &str) -> Option<Self> {
+        let mut active = SESSION_RECONCILIATIONS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        active
+            .insert(worktree_id.to_string())
+            .then(|| Self(worktree_id.to_string()))
+    }
+}
+
+impl Drop for SessionReconciliationClaim {
+    fn drop(&mut self) {
+        SESSION_RECONCILIATIONS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.0);
+    }
+}
+
+fn tracker_retry_delay(failed_attempts: u32) -> Duration {
+    let multiplier = 2u64.saturating_pow(failed_attempts.saturating_sub(1).min(5));
+    Duration::from_secs(
+        TRACKER_RETRY_BASE_SECS
+            .saturating_mul(multiplier)
+            .min(TRACKER_RETRY_MAX_SECS),
+    )
+}
+
+/// The one acknowledgement rule shared by session-start and PR/merge sync.
+/// A partial/failed external write is never allowed to poison the monotonic
+/// guard by pretending the target phase landed.
+fn acknowledged_phase(result: &TransitionResult, target: TrackerPhase) -> Option<&'static str> {
+    matches!(result, TransitionResult::Applied).then(|| tracker_phase_wire(target))
+}
 
 /// The canonical monotonic rank of a pipeline phase (spec 012 §4):
 ///
@@ -127,51 +184,88 @@ fn tracker_id_for(provider: &str, url: &str, linked_linear_issue: Option<&str>) 
 }
 
 /// React to one `session.started` event: map the session to its worktree by
-/// workdir, and — if bound and not already advanced — fire `InProgress` and
-/// persist the phase. Best-effort/never-halt (invariant #3): every miss is a
-/// quiet return, every transport failure logs and is dropped.
+/// workdir, and — if bound and not already advanced — fire `InProgress`.
+/// Skipped/failed writes remain unpersisted and retry with capped exponential
+/// backoff; the agent keeps running independently.
 async fn react_to_session_start(store: &Store, bus: &broadcast::Sender<Event>, session_id: Uuid) {
     let Ok(Some(session)) = store.get_session_by_id(session_id).await else {
         return;
     };
     let workdir = session.workdir;
-    let Some(worktree) = crate::routes::worktrees::find_tracker_worktree_by_path(&workdir) else {
+    let Some(initial_worktree) = crate::routes::worktrees::find_tracker_worktree_by_path(&workdir)
+    else {
         return; // a plain, non-registered workdir — silent no-op (AC 7)
     };
-    let Some((provider, url, target)) = session_start_decision(
-        worktree.tracker_provider.as_deref(),
-        worktree.tracker_url.as_deref(),
-        worktree.tracker_phase.as_deref(),
-    ) else {
-        return; // unbound, or already ≥ InProgress (converges / no regress)
+    let Some(_claim) = SessionReconciliationClaim::acquire(&initial_worktree.id) else {
+        return;
     };
-    let tracker_id = tracker_id_for(&provider, &url, worktree.linked_linear_issue.as_deref());
-    let emit = TrackerEmit {
-        bus,
-        worktree_id: Some(&worktree.id),
-    };
-    match apply_tracker_transition(store, &provider, &tracker_id, Some(&url), target, emit).await {
-        Ok(result) => {
-            tracing::info!(
-                workdir = %workdir,
-                provider = %provider,
-                ?target,
-                ?result,
-                "session-start tracker transition"
-            );
-            // Persist the phase so the guard dedupes re-starts and the poller's
-            // terminal-stop survives a reboot. A registry miss is a no-op.
-            if let Err(e) = crate::routes::worktrees::persist_tracker_progress(
-                &worktree.id,
-                Some(tracker_phase_wire(target)),
-                None,
-            ) {
-                tracing::warn!(error = %e, "persisting tracker_phase failed (non-fatal)");
+
+    let mut failed_attempts = 0u32;
+    loop {
+        // Refresh on every attempt. Another lifecycle path may have advanced
+        // the phase while this task slept, or the worktree may have been
+        // removed/unbound; both conditions end reconciliation cleanly.
+        let Some(worktree) = crate::routes::worktrees::find_tracker_worktree_by_path(&workdir)
+        else {
+            return;
+        };
+        let Some((provider, url, target)) = session_start_decision(
+            worktree.tracker_provider.as_deref(),
+            worktree.tracker_url.as_deref(),
+            worktree.tracker_phase.as_deref(),
+        ) else {
+            return; // unbound, or already ≥ InProgress (converges / no regress)
+        };
+        let tracker_id = tracker_id_for(&provider, &url, worktree.linked_linear_issue.as_deref());
+        let emit = TrackerEmit {
+            bus,
+            worktree_id: Some(&worktree.id),
+        };
+        match apply_tracker_transition(store, &provider, &tracker_id, Some(&url), target, emit)
+            .await
+        {
+            Ok(result) => {
+                tracing::info!(
+                    workdir = %workdir,
+                    provider = %provider,
+                    ?target,
+                    ?result,
+                    "session-start tracker transition"
+                );
+                if let Some(phase) = acknowledged_phase(&result, target) {
+                    // Persist only after the tracker acknowledges the write.
+                    // A local persistence failure also remains retryable.
+                    match crate::routes::worktrees::persist_tracker_progress(
+                        &worktree.id,
+                        Some(phase),
+                        None,
+                    ) {
+                        Ok(()) => return,
+                        Err(error) => tracing::warn!(
+                            worktree = %worktree.id,
+                            %error,
+                            "tracker write applied but local acknowledgement failed; retrying"
+                        ),
+                    }
+                } else if let TransitionResult::Skipped(reason) = result {
+                    tracing::warn!(
+                        worktree = %worktree.id,
+                        ?target,
+                        %reason,
+                        "tracker transition not acknowledged; retrying"
+                    );
+                }
             }
+            Err(error) => tracing::warn!(
+                worktree = %worktree.id,
+                ?target,
+                %error,
+                "tracker transition failed; retrying"
+            ),
         }
-        Err(e) => {
-            tracing::warn!(workdir = %workdir, error = %e, "session-start tracker transition failed (non-fatal)");
-        }
+
+        failed_attempts = failed_attempts.saturating_add(1);
+        tokio::time::sleep(tracker_retry_delay(failed_attempts)).await;
     }
 }
 
@@ -186,7 +280,11 @@ pub async fn run_session_start_reactor(store: Arc<Store>, bus: broadcast::Sender
             Ok(event) => {
                 if event.kind == "session.started" {
                     if let Some(session_id) = event.session_id {
-                        react_to_session_start(&store, &bus, session_id).await;
+                        let store = Arc::clone(&store);
+                        let bus = bus.clone();
+                        tokio::spawn(async move {
+                            react_to_session_start(&store, &bus, session_id).await;
+                        });
                     }
                 }
             }
@@ -207,7 +305,7 @@ pub async fn run_session_start_reactor(store: Arc<Store>, bus: broadcast::Sender
 const DEFAULT_POLL_SECS: u64 = 45;
 /// Per-tick worktree cap so a large registry never fans out an unbounded burst.
 const MAX_WORKTREES_PER_TICK: usize = 50;
-/// Per-`gh`-call timeout so a hung request degrades to a skip, never a stall.
+/// Per-`gh`-call timeout so a hung request degrades to a later retry, never a stall.
 /// 30s matches the other `gh` runners — generous enough that a delayed spawn
 /// under a saturated test run never trips it.
 const GH_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -276,7 +374,7 @@ fn pr_list_argv<'a>(slug: &'a str, branch: &'a str) -> [&'a str; 8] {
 /// One bounded `gh` call capturing stdout (the poller's runner; the binary comes
 /// from the shared `github_projects::gh_bin` seam so tests inject a fake — no
 /// fourth `gh_bin` dup, invariant #8). `Err` on timeout / spawn failure /
-/// non-zero exit — the caller logs and skips, never halts.
+/// non-zero exit — the caller logs and retries on the next poll, never halts.
 async fn run_gh_capture(program: &str, args: &[&str]) -> Result<String, String> {
     // Pin the cwd to the always-present neutral dir ($HOME), like every other
     // `gh` runner: the `--repo` calls don't need the repo cwd, and inheriting a
@@ -300,7 +398,7 @@ async fn run_gh_capture(program: &str, args: &[&str]) -> Result<String, String> 
 }
 
 /// `gh pr list` for a branch → the first PR (if any). `Ok(None)` = no PR yet;
-/// `Err` = a `gh` failure the caller logs and skips (never-halt).
+/// `Err` = a `gh` failure the caller logs and retries (never-halt).
 async fn pr_list_via_gh(program: &str, slug: &str, branch: &str) -> Result<Option<PrInfo>, String> {
     let out = run_gh_capture(program, &pr_list_argv(slug, branch)).await?;
     Ok(parse_pr_list(&out))
@@ -356,16 +454,16 @@ fn pr_view_argv<'a>(number: &'a str, slug: &'a str) -> [&'a str; 7] {
 }
 
 /// `gh pr view <n>` → the PR's merge state. `Err` = a `gh` failure the caller
-/// logs and skips (never-halt).
+/// logs and retries on the next poll (never-halt).
 async fn pr_view_via_gh(program: &str, slug: &str, number: i64) -> Result<PrView, String> {
     let number = number.to_string();
     let out = run_gh_capture(program, &pr_view_argv(&number, slug)).await?;
     parse_pr_view(&out).ok_or_else(|| format!("could not parse `gh pr view` output: {out}"))
 }
 
-/// One transition + persist for a poller-detected phase (github). Best-effort:
-/// a transport failure logs and is dropped; the phase is persisted on success so
-/// the guard/terminal-stop survives a reboot.
+/// One transition + persist for a poller-detected phase (github). Returns true
+/// only when the external write was acknowledged and the local phase persisted.
+/// A skipped/failed write stays pending so the next poll retries it.
 async fn drive_and_persist(
     store: &Store,
     bus: &broadcast::Sender<Event>,
@@ -373,7 +471,7 @@ async fn drive_and_persist(
     tracker_url: &str,
     linked_linear_issue: Option<&str>,
     target: TrackerPhase,
-) {
+) -> bool {
     let tracker_id = tracker_id_for("github", tracker_url, linked_linear_issue);
     let emit = TrackerEmit {
         bus,
@@ -389,23 +487,30 @@ async fn drive_and_persist(
     )
     .await
     {
-        Ok(result) => {
-            tracing::info!(worktree = %worktree_id, ?target, ?result, "poller tracker transition");
+        Ok(TransitionResult::Applied) => {
+            tracing::info!(worktree = %worktree_id, ?target, "poller tracker transition applied");
             if let Err(e) = crate::routes::worktrees::persist_tracker_progress(
                 worktree_id,
                 Some(tracker_phase_wire(target)),
                 None,
             ) {
-                tracing::warn!(error = %e, "persisting tracker_phase failed (non-fatal)");
+                tracing::warn!(error = %e, "tracker write applied but local acknowledgement failed; retrying next poll");
+                return false;
             }
+            true
         }
-        Err(e) => {
-            tracing::warn!(worktree = %worktree_id, error = %e, "poller tracker transition failed (non-fatal)");
+        Ok(TransitionResult::Skipped(reason)) => {
+            tracing::warn!(worktree = %worktree_id, ?target, %reason, "poller tracker transition not acknowledged; retrying next poll");
+            false
+        }
+        Err(error) => {
+            tracing::warn!(worktree = %worktree_id, ?target, %error, "poller tracker transition failed; retrying next poll");
+            false
         }
     }
 }
 
-/// One tick's `gh`-call accounting, so the loop can back off a wholly-failed tick.
+/// One tick's external-call accounting, so the loop can back off a wholly-failed tick.
 #[derive(Debug, Default)]
 struct PollTick {
     attempted: usize,
@@ -416,6 +521,13 @@ impl PollTick {
     /// Every `gh` call this tick failed (and there was at least one) — back off.
     fn all_failed(&self) -> bool {
         self.attempted > 0 && self.failed == self.attempted
+    }
+
+    fn record_transition(&mut self, applied: bool) {
+        self.attempted += 1;
+        if !applied {
+            self.failed += 1;
+        }
     }
 }
 
@@ -468,7 +580,7 @@ async fn poll_pr_lifecycle_once(
                         Some(pr.number),
                     );
                     if poll_pr_open_decision(w.tracker_phase.as_deref(), &pr).is_some() {
-                        drive_and_persist(
+                        let applied = drive_and_persist(
                             store,
                             bus,
                             &w.id,
@@ -477,6 +589,7 @@ async fn poll_pr_lifecycle_once(
                             TrackerPhase::InReview,
                         )
                         .await;
+                        tick.record_transition(applied);
                     }
                 }
                 Ok(_) => {} // no PR, or a draft PR — not a trigger yet
@@ -486,9 +599,25 @@ async fn poll_pr_lifecycle_once(
                 }
             }
         } else if let Some(pr_number) = w.linked_pr {
+            // A detected PR is durable even when its first status write was
+            // skipped. Retry InReview on every tick until it is acknowledged;
+            // without this branch, persisting `linked_pr` first permanently
+            // bypassed the only InReview write attempt.
+            if next_phase_write(w.tracker_phase.as_deref(), TrackerPhase::InReview).is_some() {
+                let applied = drive_and_persist(
+                    store,
+                    bus,
+                    &w.id,
+                    url,
+                    w.linked_linear_issue.as_deref(),
+                    TrackerPhase::InReview,
+                )
+                .await;
+                tick.record_transition(applied);
+            }
+
             // F4: a PR was seen — check for merge → Done (terminal). The
-            // `tracker_phase != "done"` filter already excludes a done workspace,
-            // so this only runs for an InReview one awaiting its merge.
+            // `tracker_phase != "done"` filter already excludes a done workspace.
             tick.attempted += 1;
             match pr_view_via_gh(program, &slug, pr_number).await {
                 Ok(view) => {
@@ -496,7 +625,7 @@ async fn poll_pr_lifecycle_once(
                         // Done moves the label + Project option to done and, per
                         // 010's `done_closes_issue`, closes the issue. Persisting
                         // "done" makes the terminal-stop restart-safe.
-                        drive_and_persist(
+                        let applied = drive_and_persist(
                             store,
                             bus,
                             &w.id,
@@ -505,6 +634,7 @@ async fn poll_pr_lifecycle_once(
                             TrackerPhase::Done,
                         )
                         .await;
+                        tick.record_transition(applied);
                     }
                 }
                 Err(reason) => {
@@ -587,11 +717,52 @@ mod tests {
         for phase in [
             TrackerPhase::Todo,
             TrackerPhase::InProgress,
+            TrackerPhase::InReview,
             TrackerPhase::ReadyToTest,
             TrackerPhase::Done,
         ] {
             assert_eq!(parse_tracker_phase(tracker_phase_wire(phase)), Some(phase));
         }
+    }
+
+    #[test]
+    fn only_applied_transitions_acknowledge_local_progress() {
+        assert_eq!(
+            acknowledged_phase(&TransitionResult::Applied, TrackerPhase::InProgress),
+            Some("in_progress")
+        );
+        assert_eq!(
+            acknowledged_phase(
+                &TransitionResult::Skipped("GitHub unavailable".into()),
+                TrackerPhase::InProgress
+            ),
+            None,
+            "a skipped provider write must remain retryable"
+        );
+    }
+
+    #[test]
+    fn tracker_retry_delay_is_exponential_and_capped() {
+        assert_eq!(tracker_retry_delay(1), Duration::from_secs(2));
+        assert_eq!(tracker_retry_delay(2), Duration::from_secs(4));
+        assert_eq!(tracker_retry_delay(5), Duration::from_secs(32));
+        assert_eq!(tracker_retry_delay(6), Duration::from_secs(60));
+        assert_eq!(tracker_retry_delay(u32::MAX), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn session_reconciliation_claim_deduplicates_worktree_retries() {
+        let key = "tracker-sync-test-worktree";
+        let first = SessionReconciliationClaim::acquire(key).expect("first owner claims retry");
+        assert!(
+            SessionReconciliationClaim::acquire(key).is_none(),
+            "a second session must not start a duplicate retry loop"
+        );
+        drop(first);
+        assert!(
+            SessionReconciliationClaim::acquire(key).is_some(),
+            "dropping the owner makes a later lifecycle event retryable"
+        );
     }
 
     #[test]
@@ -725,6 +896,20 @@ mod tests {
     }
 
     #[test]
+    fn detected_pr_status_stays_retryable_until_inreview_is_acknowledged() {
+        assert_eq!(
+            next_phase_write(Some("in_progress"), TrackerPhase::InReview),
+            Some(TrackerPhase::InReview),
+            "a linked PR with no acknowledged InReview write retries next poll"
+        );
+        assert_eq!(
+            next_phase_write(Some("in_review"), TrackerPhase::InReview),
+            None,
+            "an acknowledged InReview write is idempotent"
+        );
+    }
+
+    #[test]
     fn pr_list_argv_shape() {
         assert_eq!(
             pr_list_argv("o/r", "feat/x"),
@@ -770,7 +955,7 @@ mod tests {
     }
 
     /// F3 AC10: a `gh` that exits non-zero surfaces as `Err` (the poller logs +
-    /// skips it) — the loop never halts.
+    /// retries it) — the loop never halts.
     #[cfg(unix)]
     #[tokio::test]
     async fn pr_list_via_gh_failure_is_err_never_halts() {
@@ -780,7 +965,7 @@ mod tests {
             "#!/bin/sh\necho 'boom: gh failed' >&2\nexit 1\n",
         );
         let result = pr_list_via_gh(script.to_str().unwrap(), "o/r", "feat/x").await;
-        let err = result.expect_err("a gh failure is an Err the poller skips");
+        let err = result.expect_err("a gh failure is an Err the poller retries");
         assert!(err.contains("boom: gh failed"), "unexpected err: {err}");
     }
 
@@ -860,7 +1045,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("pr_view_via_gh errored: {e}"));
         assert!(view.merged);
 
-        // A gh failure surfaces as Err (poller logs + skips, never halts).
+        // A gh failure surfaces as Err (poller logs + retries, never halts).
         let fail = write_fake_gh(dir.path(), "#!/bin/sh\necho 'boom' >&2\nexit 1\n");
         assert!(
             pr_view_via_gh(fail.to_str().unwrap(), "o/r", 42)
@@ -889,5 +1074,11 @@ mod tests {
             }
             .all_failed()
         );
+
+        let mut transition_tick = PollTick::default();
+        transition_tick.record_transition(false);
+        assert!(transition_tick.all_failed());
+        transition_tick.record_transition(true);
+        assert!(!transition_tick.all_failed());
     }
 }

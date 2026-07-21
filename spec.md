@@ -50,13 +50,21 @@ observable from creation through completion or intervention.
    launch path is introduced.
 7. Existing non-ownership fallback, issue unlink, tracker transitions, gate
    semantics, and teardown of successfully completed sessions remain unchanged.
+8. A tracker phase is persisted locally only after the provider returns
+   `Applied`. `Skipped` and transport failures remain pending, are visible in
+   logs, and retry with bounded backoff; detecting a pull request never consumes
+   the only attempt to move its issue into In Review.
+9. When a legacy project binding has no In Review option ID, the first PR
+   transition re-discovers the bound Status field. A matching `In Review`
+   option is persisted and used automatically; boards without one retain their
+   documented In Progress fallback.
 
 ## Scope & non-goals (YAGNI)
 
 - **In:** tracker picker clarity; harness current-session attribution for all
   agent-played stages; persistent SDD/task progress; blocker explanation; SDD
   toolbar identity on attached gated-run tabs.
-- **Out:** changing retry limits or gate verdict rules; adding a new tracker;
+- **Out:** changing gate retry limits or gate verdict rules; adding a new tracker;
   editing/reordering backlog tasks from the strip; retaining sessions after a
   successful stage; replacing the terminal or SDD playbooks.
 
