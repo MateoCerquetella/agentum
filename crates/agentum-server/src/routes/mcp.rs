@@ -593,6 +593,20 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             },
         },
         {
+            "name": "agentum_sdd_loop_control",
+            "description": "Start, stop, or inspect the server-owned SDD loop for an agentum session. This is the control-plane companion to `agentum_sdd_loop`, which is only the end-of-step agent check-in. Use `agentum_list_sessions` to obtain the session UUID, then call action `start` to inject autonomous `sdd-orchestrate` steps, `status` to inspect progress, or `stop` to cancel further injections. Starting is idempotent and uses the same generation/event/step-cap machinery as the desktop Loop toggle.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "Agentum session UUID (obtain from agentum_list_sessions)" },
+                    "action": { "type": "string", "enum": ["start", "stop", "status"] },
+                    "max_steps": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Optional unattended step cap for action=start (default 10)" }
+                },
+                "required": ["session", "action"],
+                "additionalProperties": false,
+            },
+        },
+        {
             "name": "agentum_sdd_loop",
             "description": "Check in with the per-session SDD loop that injected the current \
                 step prompt. Call it at the END of every loop step: `done: true` when the work \
@@ -776,6 +790,7 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_check" => tool_harness_check(&args).await,
         "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
         "agentum_report_status" => tool_report_status(state, &args).await,
+        "agentum_sdd_loop_control" => tool_sdd_loop_control(state, &args).await,
         "agentum_sdd_loop" => tool_sdd_loop(state, &args).await,
         "agentum_sdd" => tool_sdd(&args),
         other => return Err((-32602, format!("unknown tool: {other}"))),
@@ -1586,6 +1601,81 @@ fn parse_sdd_loop_args(
     Ok((session, generation, done, summary))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SddLoopControlAction {
+    Start,
+    Stop,
+    Status,
+}
+
+/// Parse the MCP control-plane shape separately from the agent check-in shape.
+/// Keeping the verbs distinct is a safety property: a controller cannot
+/// accidentally stop a loop by being interpreted as `done:true`.
+fn parse_sdd_loop_control_args(
+    args: &Value,
+) -> anyhow::Result<(uuid::Uuid, SddLoopControlAction, Option<u32>)> {
+    let session = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session`"))?;
+    let session = uuid::Uuid::parse_str(session)
+        .map_err(|_| anyhow::anyhow!("`session` is not a uuid: {session}"))?;
+    let action = match args.get("action").and_then(Value::as_str) {
+        Some("start") => SddLoopControlAction::Start,
+        Some("stop") => SddLoopControlAction::Stop,
+        Some("status") => SddLoopControlAction::Status,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "unknown `action` {other:?} (expected start, stop, or status)"
+            ));
+        }
+        None => return Err(anyhow::anyhow!("missing `action`")),
+    };
+    let max_steps = match args.get("max_steps") {
+        None => None,
+        Some(value) => {
+            let raw = value
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("`max_steps` must be an integer from 1 to 100"))?;
+            if !(1..=100).contains(&raw) {
+                return Err(anyhow::anyhow!(
+                    "`max_steps` must be an integer from 1 to 100"
+                ));
+            }
+            Some(raw as u32)
+        }
+    };
+    if max_steps.is_some() && action != SddLoopControlAction::Start {
+        return Err(anyhow::anyhow!(
+            "`max_steps` is only valid when `action` is `start`"
+        ));
+    }
+    Ok((session, action, max_steps))
+}
+
+/// MCP start/stop/status over the same server-owned loop seam as the desktop
+/// toggle. The response is compact JSON text so agents can reliably read the
+/// authoritative active/step/max_steps tuple from a normal MCP tool result.
+async fn tool_sdd_loop_control(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let (session, action, max_steps) = parse_sdd_loop_control_args(args)?;
+    let loop_state = match action {
+        SddLoopControlAction::Status => super::sdd::read_loop_state(state, session),
+        SddLoopControlAction::Start => {
+            super::sdd::set_loop_active(state, session, true, max_steps).await?
+        }
+        SddLoopControlAction::Stop => {
+            super::sdd::set_loop_active(state, session, false, None).await?
+        }
+    };
+    Ok(json!({
+        "session": session,
+        "active": loop_state.active,
+        "step": loop_state.step,
+        "max_steps": loop_state.max_steps,
+    })
+    .to_string())
+}
+
 /// SDD-loop check-in — a thin arm over [`super::sdd::agent_checkin`] (spec 016
 /// F1); the loop mechanics stay in `routes/sdd.rs` beside the map they mutate.
 async fn tool_sdd_loop(state: &AppState, args: &Value) -> anyhow::Result<String> {
@@ -1886,6 +1976,53 @@ mod tests {
     }
 
     #[test]
+    fn sdd_loop_control_is_advertised_regardless_of_the_orchestration_gate() {
+        assert!(!is_orchestration_tool("agentum_sdd_loop_control"));
+        assert!(tool_names(true).contains(&"agentum_sdd_loop_control".to_string()));
+        assert!(tool_names(false).contains(&"agentum_sdd_loop_control".to_string()));
+    }
+
+    #[test]
+    fn parse_sdd_loop_control_args_separates_control_from_checkin() {
+        let u = uuid::Uuid::new_v4();
+        assert!(parse_sdd_loop_control_args(&json!({})).is_err());
+        assert!(
+            parse_sdd_loop_control_args(&json!({ "session": "nope", "action": "start" })).is_err()
+        );
+        assert!(
+            parse_sdd_loop_control_args(&json!({ "session": u.to_string(), "action": "continue" }))
+                .is_err()
+        );
+        assert!(
+            parse_sdd_loop_control_args(
+                &json!({ "session": u.to_string(), "action": "status", "max_steps": 4 })
+            )
+            .is_err(),
+            "step caps only make sense for start"
+        );
+        assert!(
+            parse_sdd_loop_control_args(
+                &json!({ "session": u.to_string(), "action": "start", "max_steps": 0 })
+            )
+            .is_err()
+        );
+
+        let (id, action, max_steps) = parse_sdd_loop_control_args(
+            &json!({ "session": u.to_string(), "action": "start", "max_steps": 12 }),
+        )
+        .unwrap();
+        assert_eq!(id, u);
+        assert_eq!(action, SddLoopControlAction::Start);
+        assert_eq!(max_steps, Some(12));
+
+        let (_, action, max_steps) =
+            parse_sdd_loop_control_args(&json!({ "session": u.to_string(), "action": "status" }))
+                .unwrap();
+        assert_eq!(action, SddLoopControlAction::Status);
+        assert_eq!(max_steps, None);
+    }
+
+    #[test]
     fn parse_sdd_loop_args_requires_session_and_done() {
         let u = uuid::Uuid::new_v4();
 
@@ -2083,6 +2220,58 @@ mod tests {
             sdd_loops: Default::default(),
             events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    #[tokio::test]
+    async fn sdd_loop_control_delegates_to_the_shared_loop_state() {
+        let state = fresh_state().await;
+        let session = state
+            .store
+            .create_session(agentum_core::NewSession {
+                name: "mcp-loop-control".into(),
+                workdir: "/tmp/mcp-loop-control".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+
+        let status = tool_sdd_loop_control(
+            &state,
+            &json!({ "session": session.id.to_string(), "action": "status" }),
+        )
+        .await
+        .unwrap();
+        let status: Value = serde_json::from_str(&status).unwrap();
+        assert_eq!(status["session"], session.id.to_string());
+        assert_eq!(status["active"], false);
+        assert_eq!(status["step"], 0);
+        assert_eq!(status["max_steps"], 0);
+
+        let stopped = tool_sdd_loop_control(
+            &state,
+            &json!({ "session": session.id.to_string(), "action": "stop" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&stopped).unwrap()["active"],
+            false
+        );
+
+        let err = tool_sdd_loop_control(
+            &state,
+            &json!({ "session": session.id.to_string(), "action": "start" }),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("session is not running"), "got: {err}");
     }
 
     /// Wire-level delegation (board arm, no subprocess): the tool moves a real

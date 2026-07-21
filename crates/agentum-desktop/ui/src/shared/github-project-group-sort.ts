@@ -14,6 +14,8 @@ export type ProjectGroup = {
   key: string
   /** Human-readable label used in the group header. */
   label: string
+  /** Single-select option color when the group maps to one; null otherwise. */
+  color: string | null
   /** Iteration metadata for headers that render a date range + Current pill. */
   iteration: {
     startDate: string
@@ -33,12 +35,19 @@ const UNKNOWN_INDEX_SENTINEL = Number.MAX_SAFE_INTEGER
 function getFieldValueForGrouping(
   row: GitHubProjectRow,
   field: GitHubProjectField
-): { key: string; label: string; orderHint: number; iteration: ProjectGroup['iteration'] } {
+): {
+  key: string
+  label: string
+  color: string | null
+  orderHint: number
+  iteration: ProjectGroup['iteration']
+} {
   const value = row.fieldValuesByFieldId[field.id]
   if (!value) {
     return {
       key: EMPTY_GROUP_KEY,
       label: labelForEmpty(field),
+      color: null,
       orderHint: UNKNOWN_INDEX_SENTINEL,
       iteration: null
     }
@@ -49,6 +58,7 @@ function getFieldValueForGrouping(
     return {
       key: value.iterationId,
       label: value.title || meta?.title || 'Iteration',
+      color: null,
       orderHint: idx === -1 ? UNKNOWN_INDEX_SENTINEL - 1 : idx,
       iteration: meta
         ? { startDate: meta.startDate, duration: meta.duration, completed: meta.completed }
@@ -59,13 +69,15 @@ function getFieldValueForGrouping(
     const idx = field.options.findIndex((o) => o.id === value.optionId)
     return {
       key: value.optionId,
-      label: value.name,
+      label: field.options.find((option) => option.id === value.optionId)?.name || value.name,
+      color:
+        field.options.find((option) => option.id === value.optionId)?.color || value.color || null,
       orderHint: idx === -1 ? UNKNOWN_INDEX_SENTINEL - 1 : idx,
       iteration: null
     }
   }
   const label = deriveStringValue(value)
-  return { key: `raw:${label}`, label, orderHint: 0, iteration: null }
+  return { key: `raw:${label}`, label, color: null, orderHint: 0, iteration: null }
 }
 
 function labelForEmpty(field: GitHubProjectField): string {
@@ -101,27 +113,28 @@ export function groupRows(
 // Why: Table grouping and Board columns bucket rows identically but are driven
 // by different view fields (`groupByFields` vs `verticalGroupByFields`), so the
 // bucketing takes the field explicitly instead of reading it off the view.
-function groupRowsByField(
+export function groupRowsByField(
   groupField: GitHubProjectField | null,
   rowsInOrder: GitHubProjectRow[]
 ): ProjectGroup[] {
   if (!groupField) {
-    return [{ key: 'all', label: '', iteration: null, rows: rowsInOrder }]
+    return [{ key: 'all', label: '', color: null, iteration: null, rows: rowsInOrder }]
   }
   const buckets = new Map<
     string,
     {
       label: string
+      color: string | null
       orderHint: number
       iteration: ProjectGroup['iteration']
       rows: GitHubProjectRow[]
     }
   >()
   for (const row of rowsInOrder) {
-    const { key, label, orderHint, iteration } = getFieldValueForGrouping(row, groupField)
+    const { key, label, color, orderHint, iteration } = getFieldValueForGrouping(row, groupField)
     let bucket = buckets.get(key)
     if (!bucket) {
-      bucket = { label, orderHint, iteration, rows: [] }
+      bucket = { label, color, orderHint, iteration, rows: [] }
       buckets.set(key, bucket)
     }
     bucket.rows.push(row)
@@ -143,6 +156,7 @@ function groupRowsByField(
   return entries.map(([key, v]) => ({
     key,
     label: v.label,
+    color: v.color,
     iteration: v.iteration,
     rows: v.rows
   }))

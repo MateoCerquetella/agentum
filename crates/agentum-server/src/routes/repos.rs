@@ -111,6 +111,21 @@ fn read_repos() -> Result<Vec<Repo>, ApiError> {
     Ok(serde_json::from_str(&raw).unwrap_or_default())
 }
 
+/// Legacy provider preference for deterministic tracker migration. This reads
+/// only the requested registry row; it never consults UI/global settings.
+pub(crate) fn legacy_tracker_provider(repo_id: &str) -> Result<Option<String>, ApiError> {
+    let repo = read_repos()?
+        .into_iter()
+        .find(|repo| repo.id == repo_id)
+        .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))?;
+    Ok(repo
+        .extra
+        .get("trackerProvider")
+        .and_then(Value::as_str)
+        .filter(|provider| matches!(*provider, "github" | "linear"))
+        .map(str::to_string))
+}
+
 fn write_repos(repos: &[Repo]) -> Result<(), ApiError> {
     let path = registry_path()?;
     if let Some(parent) = path.parent() {
@@ -345,7 +360,16 @@ async fn clone(Json(body): Json<CloneBody>) -> Result<Json<Repo>, ApiError> {
 }
 
 /// `DELETE /api/repos/{id}` — drop from the registry.
-async fn remove(Path(repo_id): Path<String>) -> Result<Json<Value>, ApiError> {
+async fn remove(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if let Some(config) = state.store.get_project_tracker_config(&repo_id).await? {
+        let _ = state
+            .store
+            .delete_project_tracker_config(&repo_id, Some(config.revision))
+            .await?;
+    }
     let mut repos = read_repos()?;
     repos.retain(|repo| repo.id != repo_id);
     write_repos(&repos)?;

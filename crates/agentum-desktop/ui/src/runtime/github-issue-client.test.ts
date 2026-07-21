@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { createIssuePayload, extractServerErrorMessage } from './github-issue-client'
+import {
+  createIssuePayload,
+  draftIssueBodyPayload,
+  extractServerErrorMessage
+} from './github-issue-client'
 
 // Spec 007: the "Generate description" form surfaces server errors inline —
 // most importantly the no-credentials message from /api/github/issues/draft-body
@@ -64,5 +68,38 @@ describe('createIssuePayload', () => {
   it('omits an empty labels array (the pre-006 wire shape stays byte-identical)', () => {
     const payload = createIssuePayload({ title: 't', workdir: '/p', labels: [] })
     expect(payload).toEqual({ title: 't', workdir: '/p' })
+  })
+})
+
+describe('draftIssueBodyPayload', () => {
+  it('preserves the legacy request when no LLM choice is supplied', () => {
+    expect(draftIssueBodyPayload({ title: 'Draft it', workdir: '/repo' })).toEqual({
+      title: 'Draft it',
+      workdir: '/repo'
+    })
+  })
+
+  it('carries an explicit agent and model', () => {
+    expect(
+      draftIssueBodyPayload({
+        title: 'Draft it',
+        workdir: '/repo',
+        slug: 'acme/widgets',
+        agent: 'claude',
+        model: 'claude-opus-4-8'
+      })
+    ).toEqual({
+      title: 'Draft it',
+      workdir: '/repo',
+      slug: 'acme/widgets',
+      agent: 'claude',
+      model: 'claude-opus-4-8'
+    })
+  })
+
+  it('allows an agent to use its server-side default model', () => {
+    expect(
+      draftIssueBodyPayload({ title: 'Draft it', workdir: '/repo', agent: 'codex' })
+    ).toEqual({ title: 'Draft it', workdir: '/repo', agent: 'codex' })
   })
 })

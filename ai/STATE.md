@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 023-gated-run-surfacing-and-issue-unlink
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (023 switched-in 2026-07-20 — this worktree's own spec, issue **#387**: PM + Architect complete (spec.md/architecture.md on develop). The ⛔ stale-base blocker self-resolved: `origin/develop` was merged into this branch and `git diff origin/develop HEAD` is EMPTY (tree byte-identical to develop tip `b5322848`), so the Developer phase runs here per the architecture's fresh-develop-worktree constraint. 021 stays parked at **pm**.)
+- **current_spec:** 026-new-workspace-tracker-fidelity
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (026 REVIEWER SIGN-OFF: all eight acceptance criteria are supported, required gates are green, and no blocker remains; live desktop/SSH QA and release stay human-gated.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,60 +87,31 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-14 | Architect | **018 ARCHITECT DONE → phase developer**
-  (`architecture.md`; handoffs `01-pm-to-architect.md`, `02-architect-to-developer.md`).
-  Both open Qs pinned: **D1** desktop Tauri command `gh_issue_project_status`
-  (one `gh api graphql` read; owner/repo/number as `$vars`; pure
-  `issue_project_status(&Value, projectId, statusFieldId) -> Option<String>`
-  mapper) NOT a server route; **D2** fresh `getProjectBinding` cached per slug,
-  NOT Project Hub reuse. Data flow: card-open → parse `issue.url` → binding
-  cache/fetch → status cache/fetch → chip; every miss/error → no chip (D6
-  never-throw). Build = 4 commits. Collision sweep clean (nothing built).
-  ⚠️ Flagged the no-webkitgtk build gate for developer/tester: Rust tests
-  CI-only, local verify = UI bun build + 2 targeted vitest files (full
-  suite/tsc = known pre-broken baseline). Phase → developer (SDD loop next
-  step, or delegate via Agent per orchestrate §6).
-- 2026-07-14 | Spec | **018 DRAFTED + PM-GATED → phase pm** (issue **#365**,
-  `ai/specs/018-issue-hover-project-status-chip/spec.md`): the 016 F2 rider /
-  harness stub 358b promoted to its own one-slice SDD spec — hover-card
-  Project-status chip, lazy fetch-on-open + per-issue session cache, silent
-  absence on unbound/off-project/error. Citations line-verified @ develop
-  `d31314b3` (worktree ff'd from stale v0.57.0 main first); 358b stub now
-  points here. Gate: all 9 boxes pass. Carried open Qs for architect:
-  read-path Tauri-vs-server (recommended: desktop command beside
-  `gh_get_project_view_table`), binding-read source. Handoff → PM/architect.
-- 2026-07-17 | Release | **016-board-per-project (#360) RECONCILED + SHIPPED → v0.78.0**
-  (Mateo: "can you release?"). Board-per-project spec (dir `016-board-per-project`,
-  distinct from the released `016-sdd-loop-checkin-*` — number collision is
-  cosmetic, separate dirs). Stale v0.75.1 branch (11 ahead / 50 behind): a naive
-  `git merge origin/develop` REVERTED develop's v0.76/v0.77 server refactors
-  (multi-base ort merge dragged the stale base over chat.rs/repos.rs/sdd.rs) —
-  ABORTED. Correct path: fresh branch off `origin/develop` v0.77.0 +
-  cherry-pick ONLY the 3 UI feature commits (`f5eda0ee`/`ae4b44d8`/`4b98dd73`,
-  zero server files) → provably no server revert. One conflict each pass:
-  ProjectViewWrapper.tsx import block (kept both — resolver + linked-work-item).
-  Version 0.77.0→0.78.0 (Cargo.toml+lock+tauri.conf.json). qa.sh browser legs
-  WAIVED (008/010/014/015 precedent); S1 first-frame legacy flash + S2 ghost
-  settings-search entry → follow-up ticket. `Closes #360`.
-- 2026-07-17 | Spec | **021 DRAFTED + PM-GATED → phase pm** (issue **#379**,
-  `ai/specs/021-per-project-tracker-choice/spec.md`; harness run 379's spec slot
-  mirrors it): per-repo `tracker` (`auto|github|linear`) persisted via the
-  `issueSourcePreference` serde-flatten path; ONE shared `TrackerSection` in New
-  Issue (TaskPage) + Chat DraftReview (replaces the ad-hoc SegButtons + tab-implied
-  provider split); server pin at `chat.rs::resolve_provider` /
-  `TaskSink::select` / goal planning; harness features stamped with the pin
-  (`apply_tracker_transition` dispatch test at the seam). Amendment vs run-379
-  authoring draft: Mateo's live ask added the New-Issue/Chat tracker-section UX
-  unification and dropped "None" ("choose between github and linear"); the
-  settings-pane-only picker became the shared section + "Remember for this
-  project". ⚠ Worktree was 235 commits stale (v0.57.0) — rebased onto develop
-  v0.78.0 before authoring; anchors line-verified there. Open Qs carried to
-  architect: pin-resolution seam (UI-sends vs server-reads-repos.json —
-  recommend server), Project-Hub display, "Auto — detected" legibility, the
-  bigger Chat/New-Issue consolidation (follow-up spec). Handoff → PM/architect.
-- 2026-07-20 | Developer/Tester | **ISSUE #395 STATUS STRIP COMPLETE + GREEN.**
-  Every run-owned feature, QA, and role terminal now shows live SDD phase and
-  executing n/N progress through the existing harness status/event channel;
-  ordinary sessions are excluded and burst events retain a final refresh.
-  Focused Vitest 4/4 and Vite production build PASS. Standalone tsc remains
-  baseline-red on unrelated missing shared modules. Spec 021 remains active.
+- 2026-07-21 | Tester | **026 TESTER PASS → phase reviewer** (autonomous loop
+  step 6, iteration 2; handoff `handoffs/04-tester-to-reviewer.md`). Independently
+  reran both harness verify IDs green, confirmed AC 4/8 production-seam tests and
+  honest pending QA exits, and mapped all eight criteria to executable evidence
+  or the explicit current-build desktop/SSH release gate.
+- 2026-07-21 | Reviewer | **026 SEND-BACK → phase developer** (autonomous loop
+  step 7, Reviewer iteration 1/2; handoff
+  `handoffs/05-reviewer-to-developer.md`). Inline unbind deletes the canonical
+  row but never invalidates the mounted wizard parent, so stale connected status
+  and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
+  unbind callback and regression.
+- 2026-07-21 | Developer | **026 REVIEWER RETRY PASS → phase tester**
+  (autonomous loop step 8, Reviewer iteration 2/2; updated handoff
+  `handoffs/03-developer-to-tester.md`). Successful inline unbind now projects
+  canonical absence into the mounted wizard synchronously, clears tracker rows,
+  and rejects late old-scope completions. Focused regression, 71-test harness,
+  Vite build, and diff check are green.
+- 2026-07-21 | Tester | **026 TESTER RETRY PASS → phase reviewer** (autonomous
+  loop step 9; updated `verification.md` and
+  `handoffs/04-tester-to-reviewer.md`). Independently confirmed the inline
+  unbind fix, both harness routes, 71 focused UI tests, the exact worktree test,
+  fresh Vite build, syntax checks, and diff check. Live desktop/SSH QA remains
+  an explicit pending release gate.
+- 2026-07-21 | Reviewer | **026 SIGN-OFF → phase done** (autonomous loop step
+  10, Reviewer iteration 2/2; `review.md`). Confirmed B1 fixed, all eight ACs
+  supported, both harness routes and final focused regression green, and no
+  architecture/isolation blocker remaining. Corrected stale review-only
+  comments; live desktop/SSH QA, merge, and release remain human-gated.
