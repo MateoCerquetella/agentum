@@ -201,6 +201,7 @@ function makeRefreshState(
 function makeToolbar(overrides: Partial<Parameters<typeof FileExplorerToolbar>[0]> = {}) {
   return FileExplorerToolbar({
     repoName: 'agentum',
+    repoColor: '#22c55e',
     worktreePath: '/tmp/agentum',
     connectionId: null,
     refresh: makeRefreshState(),

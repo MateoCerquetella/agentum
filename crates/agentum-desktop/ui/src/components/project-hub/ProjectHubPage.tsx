@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
 import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
+import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 // Import-only (must-not-touch): the v0.75.1 host-aware target derivation the
 // wizard's tracker section already uses — one seam for `connectionId → hostId`.
@@ -196,6 +197,7 @@ export default function ProjectHubPage(): React.JSX.Element {
             className="size-4 shrink-0 text-muted-foreground"
             iconClassName="size-3.5"
           />
+          <RepoBadgeMark color={repo.badgeColor} className="size-1.5 rounded-full" />
           <h1 className="truncate text-[14px] font-semibold tracking-tight">{repo.displayName}</h1>
         </div>
         <nav className="ml-3 flex items-center gap-0.5" aria-label="Project sections">

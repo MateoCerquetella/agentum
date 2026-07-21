@@ -445,6 +445,7 @@ function FileExplorerInner(): React.JSX.Element {
       >
         <FileExplorerToolbar
           repoName={repoName}
+          repoColor={activeRepo?.badgeColor}
           worktreePath={worktreePath}
           connectionId={activeRepo?.connectionId ?? null}
           refresh={manualRefresh}
