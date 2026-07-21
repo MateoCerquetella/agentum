@@ -131,12 +131,19 @@ function ProjectCard({
       onClick={onOpen}
       className={cn(
         'flex w-full flex-col gap-2 rounded-lg border border-border bg-card p-4 text-left',
+        repo && 'border-l-[3px]',
         'transition-colors hover:border-border/80 hover:bg-accent/50',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
       )}
+      style={repo ? { borderLeftColor: repo.badgeColor } : undefined}
     >
       <div className="flex items-center gap-2.5">
-        <RepoIconGlyph repoIcon={repo?.repoIcon} className="size-7 shrink-0" iconClassName="size-5" />
+        <RepoIconGlyph
+          repoIcon={repo?.repoIcon}
+          color={repo?.badgeColor}
+          className="size-7 shrink-0"
+          iconClassName="size-5"
+        />
         <span className="truncate text-sm font-medium text-foreground">{row.name}</span>
       </div>
       <span className="truncate text-xs text-muted-foreground" title={row.path}>
