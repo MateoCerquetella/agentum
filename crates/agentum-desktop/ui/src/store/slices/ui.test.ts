@@ -69,6 +69,9 @@ function createUIStore(): StoreApi<AppState> {
   return createStore<any>()((...args: any[]) => ({
     repos: [],
     worktreesByRepo: {},
+    activeRepoId: null,
+    projectBindingByRepo: {},
+    setActiveRepo: (repoId: string | null) => args[0]({ activeRepoId: repoId }),
     rightSidebarOpen: false,
     rightSidebarWidth: 280,
     ...createSettingsSearchState(args[0]),
@@ -1313,6 +1316,46 @@ describe('createUISlice new workspace draft', () => {
       number: 42,
       title: 'Legacy issue',
       url: 'https://github.com/acme/repo/issues/42'
+    })
+  })
+})
+
+describe('createUISlice project hub scoping', () => {
+  it('atomically invalidates only the target repo binding when switching projects', () => {
+    const store = createUIStore()
+    const agentumBinding = {
+      status: 'loaded' as const,
+      binding: {
+        projectOwner: 'MateoCerquetella',
+        projectOwnerType: 'user',
+        projectNumber: 2
+      }
+    }
+
+    // Model the dangerous runtime state directly: Freebee has a stale cached
+    // Agentum binding before the sidebar switch begins.
+    store.setState({
+      activeRepoId: 'agentum',
+      activeView: 'project',
+      projectHubTab: 'tasks',
+      taskPageData: { preselectedRepoId: 'agentum' },
+      projectBindingByRepo: {
+        agentum: agentumBinding,
+        freebee: agentumBinding
+      }
+    })
+
+    store.getState().openProjectHub('freebee', 'tasks')
+
+    expect(store.getState()).toMatchObject({
+      activeRepoId: 'freebee',
+      activeView: 'project',
+      projectHubTab: 'tasks',
+      taskPageData: { preselectedRepoId: 'freebee' },
+      projectBindingByRepo: {
+        agentum: agentumBinding,
+        freebee: { status: 'loading' }
+      }
     })
   })
 })

@@ -4,6 +4,18 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.88.0] — 2026-07-21
+
+### Fixed
+
+- **GitHub Project boards are isolated per repository.** Switching from Agentum
+  to another repository such as Freebee now invalidates the target repository's
+  binding atomically and waits for verification. An unbound or still-loading
+  repository shows its own project picker or loading state and can never reuse
+  the previous repository's project identity, table, or cached board.
+- **Legacy Tasks routes use the same repository-scoped binding loader,** so the
+  isolation guarantee also holds when navigating through the `tracker` alias.
+
 ## [0.87.0] — 2026-07-20
 
 ### Added

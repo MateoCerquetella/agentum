@@ -72,10 +72,12 @@ type Props = {
 
 const AGENTUM_FEATURE_REQUEST_URL = 'https://github.com/mateocerquetella/agentum/issues/new'
 
-// Stable identity for "no binding entry" so the resolver memo doesn't churn.
-// Standalone (repoId=null) always resolves through this; an embedded repo only
-// hits it in the frame before the hub effect writes its loading/loaded entry.
-const BINDING_ABSENT: BoardBindingState = { status: 'loaded', binding: null }
+// Stable identities for the two meanings of "no binding entry". The global
+// surface has no binding lifecycle, so absence is loaded/null and may resolve
+// its legacy project. An embedded repo has not been verified yet, so absence
+// is pending and must not render any project identity.
+const STANDALONE_BINDING_ABSENT: BoardBindingState = { status: 'loaded', binding: null }
+const EMBEDDED_BINDING_PENDING: BoardBindingState = { status: 'loading' }
 
 function listProjectViewsForRuntime(
   settings: Parameters<typeof getActiveRuntimeTarget>[0],
@@ -106,7 +108,8 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
   // downstream of `activeProject` (view-list cache, cache keys, live refresh)
   // is already project-keyed, so only this read changes.
   const bindingEntry = useAppStore((s) => (repoId ? s.projectBindingByRepo[repoId] : undefined))
-  const bindingState = bindingEntry ?? BINDING_ABSENT
+  const bindingState =
+    bindingEntry ?? (repoId ? EMBEDDED_BINDING_PENDING : STANDALONE_BINDING_ABSENT)
   const resolution = useMemo(
     () => resolveBoardProject({ repoId, settings: settings?.githubProjects, bindingState }),
     [repoId, settings?.githubProjects, bindingState]
