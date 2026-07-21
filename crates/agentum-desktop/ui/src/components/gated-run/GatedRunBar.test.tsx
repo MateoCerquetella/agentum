@@ -34,6 +34,13 @@ function makeRun(overrides: Partial<HarnessStatus> = {}): HarnessStatus {
           attempts: 1,
           tracker_provider: 'github',
           tracker_url: 'https://github.com/o/r/issues/42'
+        },
+        {
+          id: 'F2',
+          name: 'Ship the thing',
+          description: '',
+          state: 'pending',
+          attempts: 0
         }
       ],
       max_retries: 2,
@@ -75,7 +82,7 @@ describe('GatedRunBar (host)', () => {
     const { default: GatedRunBar } = await importBar()
     const html = renderToStaticMarkup(<GatedRunBar worktreeId="wt-1" />)
     expect(html).toContain('Gated run')
-    expect(html).toContain('running · executing · Build the thing')
+    expect(html).toContain('running · executing · Build the thing · 1/2')
     expect(html).toContain('#42')
     expect(html).toContain('Unlink issue')
     // Load-bearing vs the launcher overlay's z-20: the strip must paint above.
@@ -114,6 +121,7 @@ describe('GatedRunBarView', () => {
         state="running"
         phase={null}
         currentFeature={null}
+        featureProgress={null}
         issueLabel="#42"
         busy={false}
         arming={true}
@@ -130,6 +138,7 @@ describe('GatedRunBarView', () => {
         state="running"
         phase={null}
         currentFeature={null}
+        featureProgress={null}
         issueLabel="#42"
         busy={true}
         arming={false}

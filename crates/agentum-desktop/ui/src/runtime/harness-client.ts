@@ -26,7 +26,7 @@ type HarnessState =
   | 'failed'
 
 /** SDD phase a run is in, layered above the feature backlog (spec 013). */
-type SpecPhase =
+export type SpecPhase =
   | 'authoring'
   | 'architecture'
   | 'decompose'
@@ -336,7 +336,7 @@ export type HarnessEventStream = { close: () => void }
  * is always recoverable). The token rides in `?token=` because browsers can't
  * set headers on a WS upgrade.
  */
-async function openHarnessEventStream(
+export async function openHarnessEventStream(
   onEvent: (ev: HarnessEvent) => void
 ): Promise<HarnessEventStream> {
   const { token } = await getServerEndpoint()

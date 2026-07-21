@@ -1827,6 +1827,11 @@ export type TuiAgent =
 
 export type TaskViewPresetId = 'all' | 'issues' | 'review' | 'my-issues' | 'my-prs' | 'prs'
 
+/** The agents the Chat / create-issues pipeline can run (a subset of TuiAgent —
+ *  the server has a backend for exactly these; see `routes/chat_agent.rs`).
+ *  `claude` is the default; the pick persists in `GlobalSettings.chatAgent`. */
+export type ChatAgentId = 'claude' | 'codex'
+
 /** Where the repo setup script runs when a worktree is created.
  *  - 'new-tab': open a background tab titled "Setup" and leave focus on the first tab (default).
  *  - 'split-vertical': split the initial terminal pane with a vertical divider.
@@ -2238,6 +2243,11 @@ export type GlobalSettings = {
    *  landed won't have the key; `getDefaultSettings()` hydrates the empty
    *  default via the persistence merge. */
   githubProjects?: GitHubProjectSettings
+  /** Which agent powers the Chat intake + the issue-creation AI calls
+   *  (`/api/chat*`, `/api/github/issues/draft-body`). `null`/absent ⇒ the
+   *  server default (`claude`) — same null-means-factory-default pattern as
+   *  `defaultTuiAgent`, so existing profiles need no migration. */
+  chatAgent?: ChatAgentId | null
   /** AI-generated commit messages: agent + model + per-model thinking +
    *  user-customizable prompt suffix. Optional so existing profiles do not
    *  require a migration step before this feature lands. */
@@ -2468,6 +2478,15 @@ export type StatusBarItem =
   | 'io'
 type FloatingTerminalTriggerLocation = 'floating-button' | 'status-bar'
 
+export type TaskLinearContext = {
+  kind: 'project' | 'view'
+  id: string
+  workspaceId: LinearConcreteWorkspaceId
+  model?: LinearCustomViewModel
+}
+
+export const GLOBAL_TASK_PROJECT_SCOPE = 'global'
+
 export type TaskResumeState = {
   githubMode?: 'items' | 'project'
   githubItemsPreset?: TaskViewPresetId | null
@@ -2476,12 +2495,13 @@ export type TaskResumeState = {
   linearMode?: 'issues' | 'projects' | 'views'
   linearPreset?: 'assigned' | 'created' | 'all' | 'completed'
   linearQuery?: string
-  linearContext?: {
-    kind: 'project' | 'view'
-    id: string
-    workspaceId: LinearConcreteWorkspaceId
-    model?: LinearCustomViewModel
-  }
+  linearContext?: TaskLinearContext
+  /** Spec 009: per-repo Linear project/view bindings, keyed by repo id (or the
+   *  reserved GLOBAL_TASK_PROJECT_SCOPE bucket when no repo is active). The
+   *  legacy global `linearContext` above is still sanitized for backward-compat
+   *  hydration but is never read for resolution (hard-cut migration, spec 009
+   *  architecture D2). */
+  linearContextByRepo?: Record<string, TaskLinearContext>
 }
 
 export type RightSidebarTab = 'explorer' | 'search' | 'source-control' | 'checks' | 'ports'

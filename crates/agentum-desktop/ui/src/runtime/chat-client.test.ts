@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeRepoSlug } from './chat-client'
+import { normalizeRepoSlug, pickChatAgent } from './chat-client'
+
+describe('pickChatAgent', () => {
+  it('defaults to Claude when it is installed', () => {
+    expect(pickChatAgent(null, ['codex', 'claude'])).toBe('claude')
+  })
+
+  it('falls back to Codex for an untouched setting when Claude is absent', () => {
+    expect(pickChatAgent(null, ['codex'])).toBe('codex')
+  })
+
+  it('preserves an explicit unavailable preference for a typed server error', () => {
+    expect(pickChatAgent('codex', ['claude'])).toBe('codex')
+  })
+})
 
 describe('normalizeRepoSlug', () => {
   it('passes a bare owner/repo through (preserving case)', () => {

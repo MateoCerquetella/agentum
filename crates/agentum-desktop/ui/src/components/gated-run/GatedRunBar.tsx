@@ -20,6 +20,8 @@ export type GatedRunBarViewProps = {
   phase: string | null
   /** Current feature's display name, when the drive loop is on one. */
   currentFeature: string | null
+  /** Executing backlog position (`n/N`), null outside an identified feature. */
+  featureProgress: string | null
   /** Short linked-issue label (`#42`), null once unlinked/never stamped. */
   issueLabel: string | null
   busy: boolean
@@ -35,12 +37,13 @@ export function GatedRunBarView({
   state,
   phase,
   currentFeature,
+  featureProgress,
   issueLabel,
   busy,
   arming,
   onUnlink
 }: GatedRunBarViewProps): React.JSX.Element {
-  const detail = [state, phase, currentFeature].filter(Boolean).join(' · ')
+  const detail = [state, phase, currentFeature, featureProgress].filter(Boolean).join(' · ')
   return (
     <div className="relative z-30 flex shrink-0 items-center gap-3 border-b border-border bg-card px-3 py-1.5">
       {state === 'blocked' ? (
@@ -140,11 +143,17 @@ export default function GatedRunBar({
   const issue = runLinkedIssue(run)
   const currentFeature =
     run.features.features.find((f) => f.id === run.current_feature)?.name ?? null
+  const currentFeatureIndex = run.features.features.findIndex((f) => f.id === run.current_feature)
+  const featureProgress =
+    run.phase === 'executing' && currentFeatureIndex >= 0
+      ? `${currentFeatureIndex + 1}/${run.features.features.length}`
+      : null
   return (
     <GatedRunBarView
       state={run.state}
       phase={run.phase ?? null}
       currentFeature={currentFeature}
+      featureProgress={featureProgress}
       issueLabel={issue !== null ? linkedIssueLabel(issue) : null}
       busy={busy}
       arming={arming}

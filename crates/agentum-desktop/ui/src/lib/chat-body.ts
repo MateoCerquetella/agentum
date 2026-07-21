@@ -3,6 +3,7 @@
 // carries workdir + repo_id" is a plain model test instead of a fetch mock.
 // Keep these free of runtime imports: they must stay loadable in bare vitest.
 import type { IntakeMode } from './socratic-intake'
+import type { ChatAgentId } from '../shared/types'
 
 export type ChatBodyTurn = { role: 'user' | 'assistant'; content: string }
 
@@ -15,6 +16,8 @@ export type ChatBodyOpts = {
   repoSlug?: string
   mode?: IntakeMode
   stage?: number
+  /** Agent selected in global Chat settings. Absent preserves Claude. */
+  agent?: ChatAgentId
 }
 
 /** Body for `POST /api/chat` — exactly the pre-009 shape plus `repo_id`.
@@ -28,7 +31,8 @@ export function buildChatBody(messages: ChatBodyTurn[], opts?: ChatBodyOpts): Re
     // Spec 008 F2: intake mode + socratic pass (both serde-default server-side,
     // so omitting them is the byte-identical Fast path).
     mode: opts?.mode,
-    stage: opts?.stage
+    stage: opts?.stage,
+    agent: opts?.agent
   }
 }
 
@@ -47,6 +51,7 @@ export function buildChatStreamBody(
     model: opts?.model,
     thinking: opts?.thinking ?? false,
     mode: opts?.mode,
-    stage: opts?.stage
+    stage: opts?.stage,
+    agent: opts?.agent
   }
 }

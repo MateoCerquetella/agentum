@@ -8,10 +8,12 @@
 // "launch" reverse-entry) share `buildBindPayload`, so a board-launched
 // workspace drives status exactly like a wizard-picked one.
 import type {
+  GitHubProjectField,
   GitHubProjectOwnerType,
   GitHubProjectRow,
   GitHubProjectTable
 } from '../../shared/github-project-types'
+import { groupRowsByField, sortRows } from '../../shared/github-project-group-sort'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 
 /** One pickable Project item — an OPEN issue only. The Project item id is kept
@@ -65,14 +67,22 @@ export function isPickableIssueRow(row: GitHubProjectRow): boolean {
  * throw.
  */
 export function deriveIssueOptions(
-  table: GitHubProjectTable | null | undefined
+  table: GitHubProjectTable | null | undefined,
+  repositorySlug?: string
 ): WorkItemOption[] {
   const rows = table?.rows
   if (!rows || rows.length === 0) return []
   const seen = new Set<string>()
   const out: WorkItemOption[] = []
+  const normalizedRepositorySlug = repositorySlug?.trim().toLowerCase()
   for (const row of rows) {
     if (!isPickableIssueRow(row)) continue
+    if (
+      normalizedRepositorySlug &&
+      row.content.repository?.trim().toLowerCase() !== normalizedRepositorySlug
+    ) {
+      continue
+    }
     const url = row.content.url as string
     if (seen.has(url)) continue
     seen.add(url)
@@ -105,6 +115,39 @@ export type PickerBindingIdentity = {
   projectNumber: number | null
 }
 
+export type PickerBindingResolution =
+  | { kind: 'loading'; targetKey: string }
+  | {
+      kind: 'resolved'
+      targetKey: string
+      repositorySlug: string
+      binding: PickerBindingIdentity
+    }
+  | { kind: 'absent'; targetKey: string }
+  | { kind: 'failed'; targetKey: string; errorCode?: string }
+
+/** Stable identity used to reject late binding completions after a repo switch. */
+export function pickerBindingTargetKey(input: {
+  workdir: string
+  repoId?: string
+}): string {
+  return `${input.repoId ?? ''}:${input.workdir.trim()}`
+}
+
+/** Stable identity used to make a table ineligible immediately on Project change. */
+export function pickerProjectKey(project: PickerProjectRef): string {
+  return `${project.ownerType}:${project.owner.toLowerCase()}:${project.number}`
+}
+
+/** Full repo + resolved origin + Project identity used for table eligibility. */
+export function pickerScopeKey(input: {
+  targetKey: string
+  repositorySlug: string
+  project: PickerProjectRef
+}): string {
+  return `${input.targetKey}:${input.repositorySlug.trim().toLowerCase()}:${pickerProjectKey(input.project)}`
+}
+
 /**
  * Resolve which GitHub Project the New Workspace issue picker lists from (spec
  * 011 F2). Precedence, fail-closed:
@@ -118,22 +161,115 @@ export type PickerBindingIdentity = {
  * `ProjectBindingEditor`'s re-discover normalization), else `user`.
  */
 export function resolvePickerProject(input: {
-  binding: PickerBindingIdentity | null | undefined
+  binding: PickerBindingResolution | null
   activeProject: PickerProjectRef | null | undefined
+  selectedGitRepo: boolean
 }): PickerProjectRef | null {
-  const b = input.binding
-  if (b && b.projectOwner && b.projectNumber != null) {
+  // A selected git repo is a closed scope: only its resolved binding may
+  // identify a Project. Loading/absent/failed must never borrow global state.
+  if (input.selectedGitRepo && input.binding?.kind !== 'resolved') return null
+  const b = input.binding?.kind === 'resolved' ? input.binding.binding : null
+  if (b?.projectOwner && b.projectNumber != null) {
     return {
       owner: b.projectOwner,
       ownerType: b.projectOwnerType === 'organization' ? 'organization' : 'user',
       number: b.projectNumber
     }
   }
+  if (input.selectedGitRepo) return null
   const active = input.activeProject
   if (active) {
     return { owner: active.owner, ownerType: active.ownerType, number: active.number }
   }
   return null
+}
+
+export type TrackerIssueGroup = {
+  key: string
+  label: string | null
+  color: string | null
+  options: WorkItemOption[]
+}
+
+export type TrackerIssueViewModel = {
+  statusField: GitHubProjectField | null
+  groups: TrackerIssueGroup[]
+  options: WorkItemOption[]
+  issueCount: number
+}
+
+function statusFieldFromReferences(table: GitHubProjectTable): GitHubProjectField | null {
+  const references: GitHubProjectField[] = [
+    ...(table.selectedView.verticalGroupByFields ?? []),
+    ...table.selectedView.groupByFields,
+    ...table.selectedView.sortByFields.map((sort) => sort.field),
+    ...table.selectedView.fields
+  ]
+  const referenced = references.find(
+    (field) => field.kind === 'single-select' && field.name.trim().toLowerCase() === 'status'
+  )
+  if (referenced) return referenced
+
+  const byId = new Map<string, GitHubProjectField>()
+  for (const field of table.selectedView.fields) {
+    if (field.kind === 'single-select' && field.name.trim().toLowerCase() === 'status') {
+      byId.set(field.id, field)
+    }
+  }
+  return byId.size === 1 ? [...byId.values()][0] : null
+}
+
+/** The architect-pinned canonical Status selection rule. */
+export function resolveCanonicalStatusField(
+  table: GitHubProjectTable
+): GitHubProjectField | null {
+  return statusFieldFromReferences(table)
+}
+
+function queryMatches(option: WorkItemOption, query: string): boolean {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return true
+  const number = String(option.number)
+  return (
+    option.title.toLowerCase().includes(normalized) || normalized === number || normalized === `#${number}`
+  )
+}
+
+/**
+ * Build the complete picker list from Project metadata. Sort first, then keep
+ * only unique pickable issues, then filter and derive non-empty Status groups.
+ */
+export function deriveTrackerIssueViewModel(
+  table: GitHubProjectTable | null | undefined,
+  query = '',
+  repositorySlug?: string
+): TrackerIssueViewModel {
+  if (!table) return { statusField: null, groups: [], options: [], issueCount: 0 }
+  const sortedRows = sortRows(table, table.rows)
+  const optionByItemId = new Map(
+    deriveIssueOptions({ ...table, rows: sortedRows }, repositorySlug).map((o) => [o.itemId, o])
+  )
+  const filteredRows = sortedRows.filter((row) => {
+    const option = optionByItemId.get(row.id)
+    return option ? queryMatches(option, query) : false
+  })
+  const statusField = statusFieldFromReferences(table)
+  const options = filteredRows.map((row) => optionByItemId.get(row.id) as WorkItemOption)
+  if (!statusField) {
+    return {
+      statusField: null,
+      groups: options.length ? [{ key: 'all', label: null, color: null, options }] : [],
+      options,
+      issueCount: options.length
+    }
+  }
+  const groups = groupRowsByField(statusField, filteredRows).map((group) => ({
+    key: group.key,
+    label: group.key === '__empty__' ? 'No status' : group.label,
+    color: group.color,
+    options: group.rows.map((row) => optionByItemId.get(row.id) as WorkItemOption)
+  }))
+  return { statusField, groups, options, issueCount: options.length }
 }
 
 /**
