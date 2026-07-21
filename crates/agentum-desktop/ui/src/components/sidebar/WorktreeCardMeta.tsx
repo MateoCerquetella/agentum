@@ -326,9 +326,13 @@ export function WorktreeCardDetailsHover({
                         labels only — the open/closed state badge was noise
                         (state is implied by the board column + labels). */}
                     {/* Spec 014 F2: the pipeline-phase chip; renders nothing
-                        when unbound. */}
+                        when unbound or redundant with the Board status. */}
                     {worktreeId && (
-                      <TrackerPhaseChip worktreeId={worktreeId} persistedPhase={trackerPhase} />
+                      <TrackerPhaseChip
+                        worktreeId={worktreeId}
+                        persistedPhase={trackerPhase}
+                        projectStatus={projectStatus}
+                      />
                     )}
                     {/* Spec 018 (#365): the bound GitHub Project's Status column
                         for this issue; renders nothing when unbound / off-project. */}
