@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 021-per-project-tracker-choice
-- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (021 drafted 2026-07-17 from GH **#379** + Mateo's live amendment (tracker-section UX in New Issue/Chat; GitHub-vs-Linear only, no "None"); PM gate run at draft time — all 9 boxes pass. Prior: 018 SHIP-READY + merged → develop 2026-07-14, #365 open until main — see decision log.)
+- **current_spec:** 023-gated-run-surfacing-and-issue-unlink
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (023 switched-in 2026-07-20 — this worktree's own spec, issue **#387**: PM + Architect complete (spec.md/architecture.md on develop). The ⛔ stale-base blocker self-resolved: `origin/develop` was merged into this branch and `git diff origin/develop HEAD` is EMPTY (tree byte-identical to develop tip `b5322848`), so the Developer phase runs here per the architecture's fresh-develop-worktree constraint. 021 stays parked at **pm**.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 

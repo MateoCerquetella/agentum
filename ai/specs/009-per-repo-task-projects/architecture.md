@@ -80,4 +80,3 @@ alone would fix only Linear. The plan below scopes both real homes.
 **Gate:** `npx vitest run` (vitest 4.1.5; no `test` script in package.json) +
 `npm run build --prefix crates/agentum-desktop/ui`. `qa.sh`: bind on X → switch
 to Y (picker) → switch back (X returns) → reload (persists).
-
