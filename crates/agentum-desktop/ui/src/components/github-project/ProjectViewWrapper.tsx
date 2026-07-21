@@ -34,6 +34,7 @@ import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-cl
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { projectViewCacheKey } from '@/store/slices/github'
+import { resolveActiveProjectForRepo } from '../../../../shared/task-project-scope'
 import type {
   GetProjectViewTableResult,
   GitHubIssueType,
@@ -71,6 +72,7 @@ function listProjectViewsForRuntime(
 
 export default function ProjectViewWrapper(_props: Props = {} as Props): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
+  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const projectViewCache = useAppStore((s) => s.projectViewCache)
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
   const updateProjectFieldValue = useAppStore((s) => s.updateProjectFieldValue)
@@ -82,7 +84,7 @@ export default function ProjectViewWrapper(_props: Props = {} as Props): React.J
   const { lookupSlug, ready: slugIndexReady } = useRepoSlugIndex()
   const mountedRef = useMountedRef()
 
-  const activeProject = settings?.githubProjects?.activeProject ?? null
+  const activeProject = resolveActiveProjectForRepo(settings?.githubProjects, activeRepoId)
   const lastViewByProject = useMemo(
     () => settings?.githubProjects?.lastViewByProject ?? {},
     [settings?.githubProjects?.lastViewByProject]

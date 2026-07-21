@@ -5,7 +5,7 @@ import { api } from '@/tauri'
 // from `listAccessibleProjects` and is cached for 5 minutes. Paste-to-add
 // accepts org/user project URLs and `owner/number` shorthand.
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ChevronDown, Loader, Pin, Search } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Loader, Pin, Search, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { taskProjectScopeKey } from '../../../../shared/task-project-scope'
 import type {
   GitHubProjectOwnerType,
   GitHubProjectSettings,
@@ -94,6 +95,7 @@ async function resolveProjectRefForRuntime(
 export default function ProjectPicker({ activeProject, onSelect }: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
+  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const mountedRef = useMountedRef()
   const projectSettings: GitHubProjectSettings = useMemo(
     () =>
@@ -178,14 +180,19 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
 
   const updateProjectSettings = useCallback(
     async (mutate: (prev: GitHubProjectSettings) => GitHubProjectSettings) => {
-      const prev = projectSettings
+      const prev = useAppStore.getState().settings?.githubProjects ?? {
+        pinned: [],
+        recent: [],
+        lastViewByProject: {},
+        activeProject: null
+      }
       const next = mutate(prev)
       // Why: settings deep-merges only notifications; write the full
       // githubProjects object so sibling fields (pinned/recent/lastView/active)
       // are not clobbered by a partial write.
       await updateSettings({ githubProjects: next })
     },
-    [projectSettings, updateSettings]
+    [updateSettings]
   )
 
   const commitSelection = useCallback(
@@ -209,10 +216,14 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
           ...prev,
           recent,
           lastViewByProject,
-          activeProject: {
-            owner: selection.owner,
-            ownerType: selection.ownerType,
-            number: selection.projectNumber
+          activeProject: null,
+          activeProjectByRepo: {
+            ...prev.activeProjectByRepo,
+            [taskProjectScopeKey(activeRepoId)]: {
+              owner: selection.owner,
+              ownerType: selection.ownerType,
+              number: selection.projectNumber
+            }
           }
         }
       })
@@ -225,8 +236,19 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
       setViewPickFor(null)
       void title
     },
-    [mountedRef, onSelect, updateProjectSettings]
+    [activeRepoId, mountedRef, onSelect, updateProjectSettings]
   )
+
+  const clearSelection = useCallback(async () => {
+    await updateProjectSettings((prev) => {
+      const activeProjectByRepo = { ...prev.activeProjectByRepo }
+      delete activeProjectByRepo[taskProjectScopeKey(activeRepoId)]
+      return { ...prev, activeProject: null, activeProjectByRepo }
+    })
+    if (mountedRef.current) {
+      setOpen(false)
+    }
+  }, [activeRepoId, mountedRef, updateProjectSettings])
 
   const handleChooseProject = useCallback(
     async (selection: {
@@ -411,6 +433,17 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
                   className="h-8 pl-7 text-xs"
                 />
               </div>
+              {activeProject ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 h-7 w-full justify-start gap-2 text-xs text-muted-foreground"
+                  onClick={() => void clearSelection()}
+                >
+                  <X className="size-3.5" />
+                  Clear project for this repo
+                </Button>
+              ) : null}
             </div>
             {browseError ? <AuthErrorBanner error={browseError} /> : null}
             {!browseError && partialFailures.length > 0 ? (

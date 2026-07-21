@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 008-finish-the-loop
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **current_spec:** 009-per-repo-task-projects
+- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (009 **DONE 2026-07-20**; tracker issue **#396**. GitHub Project + Linear project/view bindings persist by live `activeRepoId`, use a reserved no-repo bucket, clear in isolation, and hard-cut legacy global resolution. Focused Vitest: **6 passed / 0 failed**; `git diff --check` clean. Full UI slice run: 69 passed with 4 unrelated baseline failures (legacy pet + navigation). Vite/tsc verification could not complete in this worktree after dependency recovery; both remained in transform/type analysis until manually stopped. See `verification.md`. Prev: 008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 

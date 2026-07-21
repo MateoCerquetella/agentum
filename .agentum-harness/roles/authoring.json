@@ -1,0 +1,1 @@
+{"passed": true, "summary": "Refined issue #396 into one UI slice — per-repo tracker-project binding in the Tasks view: user-felt problem, named persona, 4 testable ACs (persists/renders/removes/hydrates), explicit non-goals, grounded in real code (types.ts:2452/2470, ui.ts:1006, TaskPage.tsx:976/1082), no invariant conflicts."}

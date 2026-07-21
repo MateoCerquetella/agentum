@@ -226,6 +226,15 @@ export type GitHubProjectSettings = {
   }[]
   lastViewByProject: Record<string, { viewId: string }>
   activeProject: { owner: string; ownerType: GitHubProjectOwnerType; number: number } | null
+  /** Spec 009: per-repo project bindings, keyed by repo id (or the reserved
+   *  GLOBAL_TASK_PROJECT_SCOPE bucket when no repo is active). The legacy
+   *  global `activeProject` above is kept for backward-compat hydration but is
+   *  never read for resolution (hard-cut migration, spec 009 architecture D2).
+   *  Optional so profiles written before this field existed hydrate as-is. */
+  activeProjectByRepo?: Record<
+    string,
+    { owner: string; ownerType: GitHubProjectOwnerType; number: number }
+  >
 }
 
 // ─── Classified errors ─────────────────────────────────────────────────

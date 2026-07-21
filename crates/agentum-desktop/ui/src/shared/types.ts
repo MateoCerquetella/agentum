@@ -2449,6 +2449,15 @@ export type StatusBarItem =
   | 'io'
 type FloatingTerminalTriggerLocation = 'floating-button' | 'status-bar'
 
+export type TaskLinearContext = {
+  kind: 'project' | 'view'
+  id: string
+  workspaceId: LinearConcreteWorkspaceId
+  model?: LinearCustomViewModel
+}
+
+export const GLOBAL_TASK_PROJECT_SCOPE = 'global'
+
 export type TaskResumeState = {
   githubMode?: 'items' | 'project'
   githubItemsPreset?: TaskViewPresetId | null
@@ -2457,12 +2466,13 @@ export type TaskResumeState = {
   linearMode?: 'issues' | 'projects' | 'views'
   linearPreset?: 'assigned' | 'created' | 'all' | 'completed'
   linearQuery?: string
-  linearContext?: {
-    kind: 'project' | 'view'
-    id: string
-    workspaceId: LinearConcreteWorkspaceId
-    model?: LinearCustomViewModel
-  }
+  linearContext?: TaskLinearContext
+  /** Spec 009: per-repo Linear project/view bindings, keyed by repo id (or the
+   *  reserved GLOBAL_TASK_PROJECT_SCOPE bucket when no repo is active). The
+   *  legacy global `linearContext` above is still sanitized for backward-compat
+   *  hydration but is never read for resolution (hard-cut migration, spec 009
+   *  architecture D2). */
+  linearContextByRepo?: Record<string, TaskLinearContext>
 }
 
 export type RightSidebarTab = 'explorer' | 'search' | 'source-control' | 'checks' | 'ports'
