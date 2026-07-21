@@ -211,6 +211,9 @@ const MAX_WORKTREES_PER_TICK: usize = 50;
 /// 30s matches the other `gh` runners — generous enough that a delayed spawn
 /// under a saturated test run never trips it.
 const GH_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// Local git probes should be effectively instant, but remain bounded like the
+/// network runner so a broken filesystem mount cannot stall the lifecycle loop.
+const GIT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The one PR a bound branch cares about, parsed from `gh pr list`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +307,68 @@ async fn run_gh_capture(program: &str, args: &[&str]) -> Result<String, String> 
 async fn pr_list_via_gh(program: &str, slug: &str, branch: &str) -> Result<Option<PrInfo>, String> {
     let out = run_gh_capture(program, &pr_list_argv(slug, branch)).await?;
     Ok(parse_pr_list(&out))
+}
+
+/// True when a worktree contains commits beyond its creation tip and its
+/// feature-branch tip has been incorporated into the local `develop` branch.
+///
+/// The initial-tip inequality is essential: a newly created, unchanged branch
+/// points at the same commit as `develop` and must remain In Progress. Missing
+/// refs/non-local paths are errors that the best-effort caller logs and skips.
+async fn branch_integrated_into_local_develop(
+    worktree_path: &str,
+    branch: &str,
+    initial_head: &str,
+) -> Result<bool, String> {
+    let branch_ref = format!("refs/heads/{branch}");
+    let output = tokio::time::timeout(
+        GIT_CALL_TIMEOUT,
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(worktree_path)
+            .args(["rev-parse", "--verify", &branch_ref])
+            .output(),
+    )
+    .await
+    .map_err(|_| "git rev-parse timed out".to_string())?
+    .map_err(|e| format!("failed to run git rev-parse: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(branch_tip) = stdout
+        .lines()
+        .next()
+        .map(str::trim)
+        .filter(|tip| !tip.is_empty())
+    else {
+        return Err("git rev-parse returned no feature branch tip".into());
+    };
+    if branch_tip == initial_head {
+        return Ok(false);
+    }
+
+    let status = tokio::time::timeout(
+        GIT_CALL_TIMEOUT,
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(worktree_path)
+            .args([
+                "merge-base",
+                "--is-ancestor",
+                &branch_ref,
+                "refs/heads/develop",
+            ])
+            .status(),
+    )
+    .await
+    .map_err(|_| "git merge-base timed out".to_string())?
+    .map_err(|e| format!("failed to run git merge-base: {e}"))?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(format!("git merge-base exited with {status}")),
+    }
 }
 
 /// A known PR's merge state, from `gh pr view <n> --json state,mergedAt`.
@@ -456,6 +521,35 @@ async fn poll_pr_lifecycle_once(
         };
 
         if w.linked_pr.is_none() {
+            // A local fast-forward/merge into develop creates no GitHub event
+            // and therefore no PR for `gh pr list` to discover. Observe local
+            // ref ancestry as a second sanctioned integration signal. This is
+            // monotonic and requires a commit beyond the worktree's creation
+            // tip, so an unchanged fresh branch cannot jump to InReview.
+            if next_phase_write(w.tracker_phase.as_deref(), TrackerPhase::InReview).is_some() {
+                if let (Some(path), Some(initial_head)) =
+                    (w.path.as_deref(), w.initial_head.as_deref())
+                {
+                    match branch_integrated_into_local_develop(path, branch, initial_head).await {
+                        Ok(true) => {
+                            drive_and_persist(
+                                store,
+                                bus,
+                                &w.id,
+                                url,
+                                w.linked_linear_issue.as_deref(),
+                                TrackerPhase::InReview,
+                            )
+                            .await;
+                            continue;
+                        }
+                        Ok(false) => {}
+                        Err(reason) => {
+                            tracing::debug!(worktree = %w.id, %reason, "local develop integration probe skipped");
+                        }
+                    }
+                }
+            }
             // F3: no PR seen yet — probe for the first non-draft PR → InReview.
             tick.attempted += 1;
             match pr_list_via_gh(program, &slug, branch).await {
@@ -782,6 +876,80 @@ mod tests {
         let result = pr_list_via_gh(script.to_str().unwrap(), "o/r", "feat/x").await;
         let err = result.expect_err("a gh failure is an Err the poller skips");
         assert!(err.contains("boom: gh failed"), "unexpected err: {err}");
+    }
+
+    /// A local integration is a second InReview signal when a shell-driven
+    /// merge/fast-forward has no GitHub PR for the regular poller to observe.
+    /// The recorded creation tip prevents an unchanged branch from triggering.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_develop_integration_requires_new_commit_then_ancestry() {
+        use std::process::Command;
+
+        fn git(dir: &std::path::Path, args: &[&str]) -> String {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "develop"]);
+        git(dir.path(), &["config", "user.email", "test@example.com"]);
+        git(dir.path(), &["config", "user.name", "Agentum Test"]);
+        std::fs::write(dir.path().join("file.txt"), "base\n").unwrap();
+        git(dir.path(), &["add", "file.txt"]);
+        git(dir.path(), &["commit", "-m", "base"]);
+        let initial = git(dir.path(), &["rev-parse", "HEAD"]);
+        git(dir.path(), &["checkout", "-b", "feature/local-merge"]);
+
+        assert!(
+            !branch_integrated_into_local_develop(
+                dir.path().to_str().unwrap(),
+                "feature/local-merge",
+                &initial,
+            )
+            .await
+            .unwrap(),
+            "an unchanged fresh branch must not advance"
+        );
+
+        std::fs::write(dir.path().join("file.txt"), "feature\n").unwrap();
+        git(dir.path(), &["add", "file.txt"]);
+        git(dir.path(), &["commit", "-m", "feature"]);
+        assert!(
+            !branch_integrated_into_local_develop(
+                dir.path().to_str().unwrap(),
+                "feature/local-merge",
+                &initial,
+            )
+            .await
+            .unwrap(),
+            "an unmerged feature commit must remain In Progress"
+        );
+
+        git(
+            dir.path(),
+            &["branch", "-f", "develop", "feature/local-merge"],
+        );
+        assert!(
+            branch_integrated_into_local_develop(
+                dir.path().to_str().unwrap(),
+                "feature/local-merge",
+                &initial,
+            )
+            .await
+            .unwrap(),
+            "once develop contains the feature tip it should advance to In Review"
+        );
     }
 
     // ─── F4: merge → Done ───────────────────────────────────────────────────
