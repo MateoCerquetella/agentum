@@ -187,7 +187,11 @@ const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
 // Spec 016: stable "no binding entry yet" identity so the embedded resolver
 // memo doesn't churn while the hub effect is still writing the store entry.
-const EMBEDDED_BINDING_ABSENT: BoardBindingState = { status: 'loaded', binding: null }
+// An absent embedded entry means the hub has not verified this repo yet. It
+// must never mean "verified unbound": treating it as loaded/null briefly
+// rendered an honest picker before the binding request, and—more importantly—
+// made an uninitialized cache indistinguishable from a completed lookup.
+const EMBEDDED_BINDING_PENDING: BoardBindingState = { status: 'loading' }
 
 export default function TaskPage({
   embedded = false
@@ -460,7 +464,7 @@ export default function TaskPage({
     return resolveBoardProject({
       repoId: embeddedRepoId,
       settings: settings?.githubProjects,
-      bindingState: embeddedBindingEntry ?? EMBEDDED_BINDING_ABSENT
+      bindingState: embeddedBindingEntry ?? EMBEDDED_BINDING_PENDING
     })
   }, [embeddedRepoId, settings?.githubProjects, embeddedBindingEntry])
   // Re-fire only when the resolution identity CHANGES — a user's manual
