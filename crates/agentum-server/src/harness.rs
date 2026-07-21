@@ -109,11 +109,14 @@ impl HarnessEngine {
             features: config.features.clone(),
             current_feature: None,
             current_session: None,
+            current_agent_tool: None,
             started_at: Instant::now(),
             agent_instructions: config.agent_instructions.clone(),
             driving: false,
             phase,
             phase_attempts: 0,
+            blocked_phase: None,
+            gate_summary: None,
         };
 
         self.runs
@@ -440,10 +443,13 @@ impl HarnessEngine {
             features: r.features.clone(),
             current_feature: r.current_feature.clone(),
             current_session: r.current_session,
+            current_agent_tool: r.current_agent_tool.clone(),
             elapsed_secs: r.started_at.elapsed().as_secs(),
             agent_instructions: r.agent_instructions.clone(),
             phase: r.phase,
             phase_attempts: r.phase_attempts,
+            blocked_phase: r.blocked_phase,
+            gate_summary: r.gate_summary.clone(),
         })
     }
 
@@ -521,6 +527,7 @@ impl HarnessEngine {
             let mut r = run.write().await;
             r.current_feature = None;
             r.current_session = None;
+            r.current_agent_tool = None;
         }
     }
 
@@ -542,12 +549,14 @@ impl HarnessEngine {
         harness_id: Uuid,
         session_id: Uuid,
         feature_id: &str,
+        agent_tool: &str,
     ) -> anyhow::Result<()> {
         {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             r.current_session = Some(session_id);
             r.current_feature = Some(feature_id.to_string());
+            r.current_agent_tool = Some(agent_tool.to_string());
         }
         self.set_feature_state(harness_id, feature_id, FeatureState::Coding)
             .await?;
@@ -555,6 +564,33 @@ impl HarnessEngine {
             harness_id,
             feature_id: feature_id.to_string(),
             session_id,
+        });
+        Ok(())
+    }
+
+    /// Publish an interactive role/QA session without changing feature state.
+    /// Feature agents use `set_session`; PM/architect/reviewer and QA agents
+    /// still need the same observable current-session pointer so the owning
+    /// workspace can attach to every stage, not only the coding stage.
+    async fn set_current_session(
+        &self,
+        harness_id: Uuid,
+        session_id: Uuid,
+        agent_tool: &str,
+        feature_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        {
+            let run = self.get_run(harness_id).await?;
+            let mut r = run.write().await;
+            r.current_session = Some(session_id);
+            r.current_agent_tool = Some(agent_tool.to_string());
+            r.current_feature = feature_id.map(str::to_string);
+        }
+        self.emit(HarnessEvent::CurrentSessionChanged {
+            harness_id,
+            session_id,
+            feature_id: feature_id.map(str::to_string),
+            agent_tool: agent_tool.to_string(),
         });
         Ok(())
     }
@@ -659,8 +695,16 @@ impl HarnessEngine {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             let from = r.phase;
+            if matches!(to, SpecPhase::Blocked | SpecPhase::AwaitingConfirm) {
+                r.blocked_phase = Some(from);
+            } else {
+                r.blocked_phase = None;
+                r.gate_summary = None;
+            }
             r.phase = to;
-            r.phase_attempts = 0;
+            if !matches!(to, SpecPhase::Blocked | SpecPhase::AwaitingConfirm) {
+                r.phase_attempts = 0;
+            }
             (r.workdir.clone(), from)
         };
         if from != to {
@@ -692,6 +736,18 @@ impl HarnessEngine {
         let mut r = run.write().await;
         r.phase_attempts += 1;
         Ok(r.phase_attempts)
+    }
+
+    /// Retain the latest role verdict alongside the status snapshot. Events
+    /// remain the live transport; this field closes the reload/reconnect gap.
+    async fn set_gate_summary(
+        &self,
+        harness_id: Uuid,
+        summary: impl Into<String>,
+    ) -> anyhow::Result<()> {
+        let run = self.get_run(harness_id).await?;
+        run.write().await.gate_summary = Some(summary.into());
+        Ok(())
     }
 
     /// Reload the in-memory backlog from disk after `decompose` rewrites
@@ -727,6 +783,8 @@ pub struct HarnessStatus {
     pub features: FeatureList,
     pub current_feature: Option<String>,
     pub current_session: Option<Uuid>,
+    #[serde(default)]
+    pub current_agent_tool: Option<String>,
     pub elapsed_secs: u64,
     pub agent_instructions: String,
     /// Current SDD phase (spec 013). `executing` for a plain feature run.
@@ -735,6 +793,10 @@ pub struct HarnessStatus {
     /// Role-gate retry counter for the current phase (spec 013).
     #[serde(default)]
     pub phase_attempts: u32,
+    #[serde(default)]
+    pub blocked_phase: Option<SpecPhase>,
+    #[serde(default)]
+    pub gate_summary: Option<String>,
 }
 
 #[cfg(test)]
@@ -1340,14 +1402,40 @@ mod tests {
         let engine = HarnessEngine::new();
         let id = engine.start(wd).await.unwrap();
         engine
-            .set_session(id, Uuid::new_v4(), "feat-1")
+            .set_session(id, Uuid::new_v4(), "feat-1", "claude")
             .await
             .unwrap();
-        assert!(engine.status(id).await.unwrap().current_feature.is_some());
+        let active = engine.status(id).await.unwrap();
+        assert!(active.current_feature.is_some());
+        assert_eq!(active.current_agent_tool.as_deref(), Some("claude"));
         engine.clear_current(id).await;
         let s = engine.status(id).await.unwrap();
         assert!(s.current_feature.is_none());
         assert!(s.current_session.is_none());
+        assert!(s.current_agent_tool.is_none());
+    }
+
+    #[tokio::test]
+    async fn blocked_role_status_retains_stage_attempt_and_summary() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+        engine.set_phase(id, SpecPhase::Authoring).await.unwrap();
+        assert_eq!(engine.bump_phase_attempt(id).await.unwrap(), 1);
+        engine
+            .set_gate_summary(id, "goal is missing an observable outcome")
+            .await
+            .unwrap();
+        engine.set_phase(id, SpecPhase::Blocked).await.unwrap();
+
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.phase, SpecPhase::Blocked);
+        assert_eq!(status.blocked_phase, Some(SpecPhase::Authoring));
+        assert_eq!(status.phase_attempts, 1);
+        assert_eq!(
+            status.gate_summary.as_deref(),
+            Some("goal is missing an observable outcome")
+        );
     }
 
     #[tokio::test]

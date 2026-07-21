@@ -44,6 +44,134 @@ export function linkedIssueLabel(url: string): string {
   return m ? `#${m[1]}` : url
 }
 
+export type GatedRunStageStatus = 'complete' | 'active' | 'blocked' | 'paused' | 'upcoming'
+
+export type GatedRunStage = {
+  id: 'authoring' | 'architecture' | 'decompose' | 'executing' | 'review'
+  label: string
+  status: GatedRunStageStatus
+}
+
+const STAGES: Array<Pick<GatedRunStage, 'id' | 'label'>> = [
+  { id: 'authoring', label: 'PM spec' },
+  { id: 'architecture', label: 'Architecture' },
+  { id: 'decompose', label: 'Plan tasks' },
+  { id: 'executing', label: 'Build' },
+  { id: 'review', label: 'Review' }
+]
+
+export function gatedRunPhaseLabel(phase: HarnessStatus['phase'] | null | undefined): string {
+  switch (phase) {
+    case 'authoring':
+      return 'PM spec gate'
+    case 'architecture':
+      return 'architecture gate'
+    case 'decompose':
+      return 'task planning'
+    case 'executing':
+      return 'build'
+    case 'review':
+      return 'review gate'
+    case 'awaiting_confirm':
+      return 'human confirmation'
+    case 'done':
+      return 'complete'
+    case 'blocked':
+      return 'blocked gate'
+    default:
+      return 'gated run'
+  }
+}
+
+/** The SDD role rail. Plain harness runs omit it rather than pretending they
+ * completed PM/architecture phases that were disabled. */
+export function deriveGatedRunStages(status: HarnessStatus): GatedRunStage[] {
+  if (!status.features.roles) return []
+  if (status.phase === 'done') {
+    return STAGES.map((stage) => ({ ...stage, status: 'complete' }))
+  }
+  const effective =
+    status.phase === 'blocked' || status.phase === 'awaiting_confirm'
+      ? status.blocked_phase
+      : status.phase
+  const activeIndex = STAGES.findIndex((stage) => stage.id === effective)
+  return STAGES.map((stage, index) => ({
+    ...stage,
+    status:
+      activeIndex < 0
+        ? 'upcoming'
+        : index < activeIndex
+          ? 'complete'
+          : index > activeIndex
+            ? 'upcoming'
+            : status.phase === 'blocked'
+              ? 'blocked'
+              : status.phase === 'awaiting_confirm'
+                ? 'paused'
+                : 'active'
+  }))
+}
+
+export function currentHarnessFeature(status: HarnessStatus) {
+  return status.features.features.find((feature) => feature.id === status.current_feature) ?? null
+}
+
+/** Human status copy for the workspace strip. Raw enum concatenation caused
+ * the `blocked · blocked` failure this surface replaces. */
+export function gatedRunHeadline(status: HarnessStatus): string {
+  const feature = currentHarnessFeature(status)
+  if (status.state === 'blocked') {
+    if (feature?.state === 'blocked') return `Blocked on ${feature.name}`
+    return `${gatedRunPhaseLabel(status.blocked_phase)} needs attention`
+  }
+  if (status.state === 'awaiting_confirmation') {
+    return `${gatedRunPhaseLabel(status.blocked_phase ?? status.phase)} is waiting for you`
+  }
+  if (status.state === 'failed') return 'Gated run failed'
+  if (status.state === 'done') return 'Gated run complete'
+  if (status.state === 'init_verifying') return 'Checking the workspace environment'
+  if (status.state === 'verifying') {
+    return feature ? `Verifying ${feature.name}` : 'Running the verification gate'
+  }
+  switch (status.phase) {
+    case 'authoring':
+      return 'PM is shaping the spec'
+    case 'architecture':
+      return 'Architect is designing the approach'
+    case 'decompose':
+      return 'Turning the spec into tasks'
+    case 'review':
+      return 'Reviewer is checking the completed work'
+    case 'executing':
+      return feature ? `Working on ${feature.name}` : 'Preparing the next task'
+    default:
+      return status.state === 'idle' ? 'Gated run queued' : 'Gated run active'
+  }
+}
+
+export function gatedRunBlocker(status: HarnessStatus): string | null {
+  const feature = currentHarnessFeature(status)
+  if (feature?.state === 'blocked' && feature.last_error) return feature.last_error
+  return status.gate_summary?.trim() || null
+}
+
+/** Short title for each engine session tab. */
+export function gatedRunSessionTitle(status: HarnessStatus): string {
+  const feature = currentHarnessFeature(status)
+  if (feature?.state === 'ready_to_test') return `QA · ${feature.id}`
+  if (feature) return `${feature.id} · Gated run`
+  switch (status.phase) {
+    case 'authoring':
+      return 'PM · Gated run'
+    case 'architecture':
+      return 'Architect · Gated run'
+    case 'review':
+      return 'Review · Gated run'
+    default:
+      return 'Gated run'
+  }
+}
+
 /** What the workspace view shows while an owned gated run boots (AC 1). */
 export type GatedRunSurface = 'starting' | 'session' | 'picker'
 

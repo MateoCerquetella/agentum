@@ -3,8 +3,12 @@
 import { describe, expect, it } from 'vitest'
 import type { HarnessStatus } from '@/runtime/harness-client'
 import {
+  deriveGatedRunStages,
   deriveGatedRunSurface,
   findHarnessRunForWorkdir,
+  gatedRunBlocker,
+  gatedRunHeadline,
+  gatedRunSessionTitle,
   linkedIssueLabel,
   runLinkedIssue
 } from './harness-run'
@@ -101,6 +105,83 @@ describe('linkedIssueLabel', () => {
 
   it('keeps non-issue identifiers readable as-is', () => {
     expect(linkedIssueLabel('ENG-123')).toBe('ENG-123')
+  })
+})
+
+describe('gated-run progress presentation', () => {
+  it('shows the concrete blocked role phase and verdict instead of blocked · blocked', () => {
+    const run = makeRun({
+      state: 'blocked',
+      phase: 'blocked',
+      blocked_phase: 'authoring',
+      phase_attempts: 2,
+      gate_summary: 'The goal does not name an observable user outcome.',
+      features: { ...makeRun().features, roles: true }
+    })
+    expect(gatedRunHeadline(run)).toBe('PM spec gate needs attention')
+    expect(gatedRunHeadline(run)).not.toContain('blocked · blocked')
+    expect(gatedRunBlocker(run)).toContain('observable user outcome')
+    expect(deriveGatedRunStages(run).map((stage) => stage.status)).toEqual([
+      'blocked',
+      'upcoming',
+      'upcoming',
+      'upcoming',
+      'upcoming'
+    ])
+    expect(gatedRunSessionTitle(run)).toBe('Gated run')
+  })
+
+  it('shows completed/current SDD stages and uses the current task in session copy', () => {
+    const run = makeRun({
+      phase: 'executing',
+      current_feature: 'F1',
+      features: {
+        ...makeRun().features,
+        roles: true,
+        features: [
+          {
+            id: 'F1',
+            name: 'Build the tracker surface',
+            description: '',
+            state: 'coding',
+            attempts: 0
+          }
+        ]
+      }
+    })
+    expect(gatedRunHeadline(run)).toBe('Working on Build the tracker surface')
+    expect(gatedRunSessionTitle(run)).toBe('F1 · Gated run')
+    expect(deriveGatedRunStages(run).map((stage) => stage.status)).toEqual([
+      'complete',
+      'complete',
+      'complete',
+      'active',
+      'upcoming'
+    ])
+  })
+
+  it('prefers a blocked feature error over a role-gate summary', () => {
+    const run = makeRun({
+      state: 'blocked',
+      phase: 'executing',
+      current_feature: 'F1',
+      gate_summary: 'old role summary',
+      features: {
+        ...makeRun().features,
+        features: [
+          {
+            id: 'F1',
+            name: 'Run tests',
+            description: '',
+            state: 'blocked',
+            attempts: 3,
+            last_error: 'npm test failed'
+          }
+        ]
+      }
+    })
+    expect(gatedRunHeadline(run)).toBe('Blocked on Run tests')
+    expect(gatedRunBlocker(run)).toBe('npm test failed')
   })
 })
 
