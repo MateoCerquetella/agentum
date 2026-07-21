@@ -180,6 +180,7 @@ import {
 import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
 import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
 import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
+import { embeddedGithubModeForResolution } from './task-page/embedded-github-mode'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
@@ -479,9 +480,10 @@ export default function TaskPage({
       return
     }
     lastAppliedEmbeddedResolutionRef.current = identity
-    // pick|binding|legacy → the bound/picked board; none → the plain issue
-    // Kanban (the 'project' forcing must never leak into an unbound repo).
-    setGithubMode(embeddedResolution.source === 'none' ? 'items' : 'project')
+    // Bound repos render their board; unbound repos stay on this same surface
+    // and render the repo-scoped picker. Never hide an honest `none` result by
+    // falling through to the unrelated Items/Kanban view.
+    setGithubMode(embeddedGithubModeForResolution(embeddedResolution))
   }, [embeddedResolution])
 
   // ── GitLab task-source state ──────────────────────────────────────
