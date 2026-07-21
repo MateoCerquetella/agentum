@@ -120,9 +120,17 @@ fn write_worktrees(worktrees: &[Worktree]) -> Result<(), ApiError> {
 #[derive(Debug, Clone)]
 pub(crate) struct TrackerWorktree {
     pub id: String,
+    /// Local/remote worktree path. The lifecycle poller uses it for a
+    /// best-effort local `develop` ancestry probe; remote-only paths simply
+    /// fail closed and retain the GitHub PR polling path.
+    pub path: Option<String>,
     /// The worktree's branch, when known and not detached — the poller's
     /// `gh pr list --head <branch>` key.
     pub branch: Option<String>,
+    /// The branch tip recorded when Agentum created the worktree. This lets the
+    /// local integration detector distinguish a real feature commit from a
+    /// fresh, unchanged branch that naturally equals `develop`.
+    pub initial_head: Option<String>,
     pub tracker_provider: Option<String>,
     pub tracker_url: Option<String>,
     pub tracker_phase: Option<String>,
@@ -135,15 +143,30 @@ pub(crate) struct TrackerWorktree {
 /// create handler stamped, so no git subprocess runs here (spec 009's
 /// no-N×remote-sweep discipline).
 fn tracker_view(wt: &Worktree) -> TrackerWorktree {
+    let path = wt
+        .extra
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|p| !p.is_empty())
+        .or_else(|| wt.id.split_once("::").map(|(_, p)| p.to_string()));
     let branch = wt
         .extra
         .get("branch")
         .and_then(Value::as_str)
         .map(str::to_string)
         .filter(|b| !b.is_empty() && b != "HEAD");
+    let initial_head = wt
+        .extra
+        .get("head")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|head| !head.is_empty());
     TrackerWorktree {
         id: wt.id.clone(),
+        path,
         branch,
+        initial_head,
         tracker_provider: wt.tracker_provider.clone(),
         tracker_url: wt.tracker_url.clone(),
         tracker_phase: wt.tracker_phase.clone(),
@@ -1366,6 +1389,8 @@ prunable gitdir file points to non-existent location
             tracker_view(&worktrees[0]).branch.as_deref(),
             Some("feat/a")
         );
+        assert_eq!(tracker_view(&worktrees[0]).path.as_deref(), Some("/a"));
+        assert_eq!(tracker_view(&worktrees[0]).initial_head, None);
     }
 
     #[test]
