@@ -1808,6 +1808,11 @@ export type TuiAgent =
 
 export type TaskViewPresetId = 'all' | 'issues' | 'review' | 'my-issues' | 'my-prs' | 'prs'
 
+/** The agents the Chat / create-issues pipeline can run (a subset of TuiAgent —
+ *  the server has a backend for exactly these; see `routes/chat_agent.rs`).
+ *  `claude` is the default; the pick persists in `GlobalSettings.chatAgent`. */
+export type ChatAgentId = 'claude' | 'codex'
+
 /** Where the repo setup script runs when a worktree is created.
  *  - 'new-tab': open a background tab titled "Setup" and leave focus on the first tab (default).
  *  - 'split-vertical': split the initial terminal pane with a vertical divider.
@@ -2219,6 +2224,11 @@ export type GlobalSettings = {
    *  landed won't have the key; `getDefaultSettings()` hydrates the empty
    *  default via the persistence merge. */
   githubProjects?: GitHubProjectSettings
+  /** Which agent powers the Chat intake + the issue-creation AI calls
+   *  (`/api/chat*`, `/api/github/issues/draft-body`). `null`/absent ⇒ the
+   *  server default (`claude`) — same null-means-factory-default pattern as
+   *  `defaultTuiAgent`, so existing profiles need no migration. */
+  chatAgent?: ChatAgentId | null
   /** AI-generated commit messages: agent + model + per-model thinking +
    *  user-customizable prompt suffix. Optional so existing profiles do not
    *  require a migration step before this feature lands. */

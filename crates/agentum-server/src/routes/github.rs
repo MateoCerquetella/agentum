@@ -287,6 +287,11 @@ struct DraftBodyRequest {
     /// Optional `owner/repo` hint, threaded into the prompt for grounding.
     #[serde(default)]
     slug: Option<String>,
+    /// Spec 394: which agent drafts the body (`"claude"` default, `"codex"`) —
+    /// the desktop sends the Settings chat-agent pick; absent ⇒ `chat.toml`
+    /// → Claude (back-compat).
+    #[serde(default)]
+    agent: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -316,6 +321,7 @@ async fn draft_issue_body(
             .map(str::trim)
             .filter(|s| !s.is_empty()),
         &body.title,
+        body.agent.as_deref(),
     )
     .await?;
     Ok(Json(DraftBodyResponse { body: drafted }))

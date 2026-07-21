@@ -20,9 +20,16 @@
 //! makes Anthropic reject the token (401, "only authorized for Claude Code").
 //!
 //! `/api/chat` is **non-streaming** (request → full reply); `/api/chat/stream`
-//! proxies Anthropic's token-by-token SSE through to the desktop and supports
+//! proxies the model's token-by-token SSE through to the desktop and supports
 //! **extended thinking** (the reasoning is streamed as `thinking` deltas). Both
 //! accept an optional `model` override and share the auth/system/sanitize logic.
+//!
+//! **Agent selection:** every chat/issue endpoint takes an optional `agent`
+//! (`"claude"` default, `"codex"`). The picked agent only swaps the LLM call —
+//! Claude keeps the Anthropic path documented above; Codex goes through the
+//! OpenAI Responses backend in [`super::chat_openai`]. Intake prompts, repo
+//! grounding, sanitizing, and issue filing are shared verbatim. Resolution
+//! (request → `chat.toml` → default) lives in [`super::chat_agent`].
 
 use std::convert::Infallible;
 use std::time::Duration;
@@ -37,6 +44,8 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::chat_agent::{ChatAgent, resolve_chat_agent, resolve_chat_model};
+use super::chat_openai::{self, OpenAiAuth};
 use crate::AppState;
 use crate::error::ApiError;
 use crate::task_sink::{NewFeature, SinkCtx, TaskSink};
@@ -61,8 +70,6 @@ const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
 const CLAUDE_CODE_USER_AGENT: &str = "claude-code/2.1.0";
 /// The identity block an OAuth token requires (see module docs). Must be exact.
 const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
-/// Default interview model — a fast, capable Sonnet for back-and-forth.
-const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// `max_tokens` for a plain (non-thinking) chat reply — interview turns are short.
 const MAX_TOKENS_REPLY: u32 = 1024;
@@ -94,6 +101,60 @@ fn resolve_auth() -> Option<Auth> {
         }
     }
     crate::usage::read_claude_oauth_token().map(Auth::Oauth)
+}
+
+/// The resolved credential for whichever agent the request picked — one enum
+/// so the handlers (chat / stream / issues / draft-body) share the
+/// resolve-then-gate shape regardless of provider.
+enum ChatCreds {
+    Claude(Auth),
+    Codex(OpenAiAuth),
+}
+
+impl ChatCreds {
+    /// The bearer/API token, kept so it can be scrubbed from any error —
+    /// both providers redact before anything reaches a log or the client.
+    fn secret(&self) -> &str {
+        match self {
+            ChatCreds::Claude(Auth::ApiKey(k)) => k,
+            ChatCreds::Claude(Auth::Oauth(t)) => t,
+            ChatCreds::Codex(a) => a.secret(),
+        }
+    }
+}
+
+/// Resolve the picked agent's credentials, or the agent's loud, actionable
+/// no-creds error (each agent names ITS two recovery paths). The Claude arm
+/// rides the SAME shared gate spec 008 F2 pinned (`chat_auth_gate` +
+/// NO_CREDS_MSG) — exactly the pre-agent-selection behavior.
+fn resolve_chat_creds(agent: ChatAgent) -> Result<ChatCreds, ApiError> {
+    match agent {
+        ChatAgent::Claude => Ok(ChatCreds::Claude(chat_auth_gate(resolve_auth())?)),
+        ChatAgent::Codex => {
+            if which::which("codex").is_err() {
+                return Err(agent_unavailable(
+                    agent,
+                    "install the Codex CLI and make sure `codex` is on PATH",
+                ));
+            }
+            chat_openai::resolve_openai_auth()
+                .map(ChatCreds::Codex)
+                .ok_or_else(|| agent_unavailable(agent, agent.no_creds_message()))
+        }
+    }
+}
+
+fn agent_unavailable(agent: ChatAgent, fix: &str) -> ApiError {
+    ApiError::Custom(
+        StatusCode::BAD_REQUEST,
+        json!({
+            "error": {
+                "code": "agent_unavailable",
+                "agent": agent.as_str(),
+                "message": format!("{} chat agent is unavailable: {fix}", agent.label()),
+            }
+        }),
+    )
 }
 
 #[derive(Deserialize)]
@@ -144,6 +205,10 @@ struct ChatRequest {
     /// (D-B/D1) with NO stage state of its own.
     #[serde(default)]
     stage: Option<u8>,
+    /// Which agent runs the interview (`"claude"` default, `"codex"`). Absent
+    /// ⇒ resolved from `chat.toml` → Claude — old clients are unchanged.
+    #[serde(default)]
+    agent: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -545,18 +610,12 @@ async fn chat(
         ));
     }
 
-    // Auth: prefer an explicit ANTHROPIC_API_KEY (clean API billing, terms-safe);
-    // else reuse the Claude Code OAuth token (user-authorized). Absent → loud,
-    // actionable error naming BOTH paths. Shared gate (spec 008 F2) so Fast and
-    // Complex surface the no-creds message identically, upstream of the mode.
-    let auth = chat_auth_gate(resolve_auth())?;
-
-    let model = body
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_MODEL);
+    // Agent + credentials first (spec 394): the picked agent's no-creds error
+    // surfaces upstream of any prompt build — the SAME shared-gate rule spec
+    // 008 F2 pinned for Fast/Complex (NO_CREDS_MSG is Claude's variant of it).
+    let resolved = resolve_chat_agent(body.agent.as_deref())?;
+    let creds = resolve_chat_creds(resolved.agent)?;
+    let model = resolve_chat_model(body.model.as_deref(), &resolved);
 
     let messages: Vec<serde_json::Value> = body
         .messages
@@ -578,14 +637,42 @@ async fn chat(
         repo_context.as_deref(),
         wiki_context.as_deref(),
     );
-    let system = build_system(&auth, &instructions);
 
-    let text = call_anthropic(&auth, model, system, &messages, MAX_TOKENS_REPLY).await?;
+    let text = call_chat_model(&creds, &model, &instructions, &messages, MAX_TOKENS_REPLY).await?;
 
     Ok(Json(ChatResponse {
         role: "assistant",
         content: text,
     }))
+}
+
+/// One non-streaming reply from the picked agent's backend. Claude wraps the
+/// instructions in the byte-exact OAuth identity gate ([`build_system`]) and
+/// posts `/v1/messages`; Codex sends the SAME instructions verbatim to the
+/// Responses API. Both share the sanitize-then-call ordering so a converged
+/// transcript can never 400 either upstream.
+async fn call_chat_model(
+    creds: &ChatCreds,
+    model: &str,
+    instructions: &str,
+    messages: &[serde_json::Value],
+    max_tokens: u32,
+) -> Result<String, ApiError> {
+    match creds {
+        ChatCreds::Claude(auth) => {
+            let system = build_system(auth, instructions);
+            call_anthropic(auth, model, system, messages, max_tokens).await
+        }
+        ChatCreds::Codex(auth) => {
+            let messages = sanitize_messages(messages);
+            if messages.is_empty() {
+                return Err(ApiError::BadRequest(
+                    "chat: no user message to send to the model".into(),
+                ));
+            }
+            chat_openai::call_responses(auth, model, instructions, &messages).await
+        }
+    }
 }
 
 /// Apply the auth-specific headers to an Anthropic request and return the secret
@@ -649,17 +736,12 @@ async fn chat_stream(
             "chat: messages cannot be empty".into(),
         ));
     }
-    // Shared credential gate (spec 008 F2): Complex (socratic) rides the SAME gate
-    // as Fast, so NO_CREDS_MSG surfaces on Complex's first turn by construction.
-    let auth = chat_auth_gate(resolve_auth())?;
-
-    let model = body
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_MODEL)
-        .to_string();
+    // Shared credential gate (spec 008 F2 + spec 394): Complex (socratic) rides
+    // the SAME gate as Fast, so the picked agent's no-creds message surfaces on
+    // its first turn by construction — never a silent dead button.
+    let resolved = resolve_chat_agent(body.agent.as_deref())?;
+    let creds = resolve_chat_creds(resolved.agent)?;
+    let model = resolve_chat_model(body.model.as_deref(), &resolved);
     let thinking = body.thinking.unwrap_or(false);
 
     let raw: Vec<serde_json::Value> = body
@@ -690,79 +772,131 @@ async fn chat_stream(
         repo_context.as_deref(),
         wiki_context.as_deref(),
     );
-    let system = build_system(&auth, &instructions);
-    let payload = build_stream_payload(&model, system, &messages, thinking);
-
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|e| ApiError::Internal(format!("build http client: {e}")))?;
-
-    let (req, secret) = apply_auth(
-        client
-            .post(MESSAGES_URL)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&payload),
-        &auth,
+    // Spec 394: branch ONLY on the upstream call. Claude posts `/v1/messages`
+    // under its auth/identity rules; Codex posts the Responses API (its own
+    // typed pre-stream error guard lives in `open_responses_stream`). Both
+    // arms yield `(resp, secret, lead_notice, parse)` so the SSE proxy below
+    // is shared verbatim.
+    type ChatStreamSetup = (
+        reqwest::Response,
+        String,
+        Option<String>,
+        fn(&str) -> Option<serde_json::Value>,
     );
+    let (resp, secret, lead_notice, parse): ChatStreamSetup = match &creds {
+        ChatCreds::Claude(auth) => {
+            let system = build_system(auth, &instructions);
+            let payload = build_stream_payload(&model, system, &messages, thinking);
 
-    let resp = req.send().await.map_err(|e| {
-        ApiError::Internal(format!(
-            "anthropic request failed: {}",
-            redact(&e.to_string(), &secret)
-        ))
-    })?;
+            let client = reqwest::Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .map_err(|e| ApiError::Internal(format!("build http client: {e}")))?;
 
-    let status = resp.status();
-    if !status.is_success() {
-        // Resolve the credential complaint to an actionable hint BEFORE opening the
-        // stream — the client gets a clean typed error, not a 200 SSE that errors.
-        let raw = resp.text().await.unwrap_or_default();
-        let hint = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            match auth {
-                Auth::ApiKey(_) => " (check ANTHROPIC_API_KEY)",
-                Auth::Oauth(_) => {
-                    " (your Claude login may have expired — run `claude` to refresh it, or set ANTHROPIC_API_KEY)"
-                }
+            let (req, secret) = apply_auth(
+                client
+                    .post(MESSAGES_URL)
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .header(reqwest::header::ACCEPT, "text/event-stream")
+                    .json(&payload),
+                auth,
+            );
+
+            let resp = req.send().await.map_err(|e| {
+                ApiError::Internal(format!(
+                    "anthropic request failed: {}",
+                    redact(&e.to_string(), &secret)
+                ))
+            })?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                // Resolve the credential complaint to an actionable hint BEFORE opening the
+                // stream — the client gets a clean typed error, not a 200 SSE that errors.
+                let raw = resp.text().await.unwrap_or_default();
+                let hint = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN
+                {
+                    match auth {
+                        Auth::ApiKey(_) => " (check ANTHROPIC_API_KEY)",
+                        Auth::Oauth(_) => {
+                            " (your Claude login may have expired — run `claude` to refresh it, or set ANTHROPIC_API_KEY)"
+                        }
+                    }
+                } else {
+                    ""
+                };
+                let detail = redact(raw.trim(), &secret);
+                let detail = detail.chars().take(300).collect::<String>();
+                return Err(ApiError::Custom(
+                    StatusCode::BAD_GATEWAY,
+                    json!({ "error": { "code": "llm_failed", "message": format!("chat model returned {status}{hint}: {detail}") } }),
+                ));
             }
-        } else {
-            ""
-        };
-        let detail = redact(raw.trim(), &secret);
-        let detail = detail.chars().take(300).collect::<String>();
-        return Err(ApiError::Custom(
-            StatusCode::BAD_GATEWAY,
-            json!({ "error": { "code": "llm_failed", "message": format!("chat model returned {status}{hint}: {detail}") } }),
-        ));
-    }
 
-    // On the OAuth (subscription/login) path, extended-thinking reasoning is
-    // returned ENCRYPTED — Anthropic emits a `signature_delta` (a redacted
-    // thinking block), never the plaintext `thinking_delta` we forward — so the
-    // reasoning trace would be silently blank. Surface why, once, in the trace
-    // itself, and how to get it. The API-key path returns plaintext and is
-    // unaffected (so no notice there).
-    let redacted_thinking_notice: Option<String> = if thinking && matches!(auth, Auth::Oauth(_)) {
-        Some(
-            "_Extended reasoning ran, but Claude subscription (login) tokens return it \
+            // On the OAuth (subscription/login) path, extended-thinking reasoning is
+            // returned ENCRYPTED — Anthropic emits a `signature_delta` (a redacted
+            // thinking block), never the plaintext `thinking_delta` we forward — so the
+            // reasoning trace would be silently blank. Surface why, once, in the trace
+            // itself, and how to get it. The API-key path returns plaintext and is
+            // unaffected (so no notice there).
+            let notice: Option<String> = if thinking && matches!(auth, Auth::Oauth(_)) {
+                Some(
+                    "_Extended reasoning ran, but Claude subscription (login) tokens return it \
 encrypted — the reasoning text can't be shown here. Set `ANTHROPIC_API_KEY` to view the \
 model's thinking._"
-                .to_string(),
-        )
-    } else {
-        None
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            (
+                resp,
+                secret,
+                notice,
+                parse_sse_delta as fn(&str) -> Option<serde_json::Value>,
+            )
+        }
+        ChatCreds::Codex(auth) => {
+            let (resp, secret) = chat_openai::open_responses_stream(
+                auth,
+                &model,
+                &instructions,
+                &messages,
+                thinking,
+            )
+            .await?;
+            (
+                resp,
+                secret,
+                None,
+                chat_openai::parse_responses_sse as fn(&str) -> Option<serde_json::Value>,
+            )
+        }
     };
 
-    // Proxy: parse Anthropic's SSE frames as they arrive and re-emit our compact
-    // events. We buffer raw bytes and decode only whole frames (delimited by the
-    // ASCII `\n\n`) so a multi-byte char split across a chunk is never mangled.
-    // `resp`/`secret` are moved into the generator, making the stream `'static`.
-    let stream = async_stream::stream! {
-        // Lead with the redacted-thinking notice (OAuth path) so the reasoning
-        // panel explains the blank trace instead of showing nothing.
-        if let Some(note) = redacted_thinking_notice {
+    let stream = proxy_llm_stream(resp, secret, lead_notice, parse);
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// The SSE proxy BOTH chat backends share (spec 394): lead with the optional
+/// notice (Claude-OAuth's redacted-thinking explainer; `None` for Codex), then
+/// re-emit the upstream's frames as our compact one-line `data:` JSON via
+/// `parse` — the per-provider frame mapper (`parse_sse_delta` for Anthropic,
+/// `chat_openai::parse_responses_sse` for Responses). We buffer raw bytes and
+/// decode only whole frames (delimited by the ASCII `\n\n`) so a multi-byte
+/// char split across a chunk is never mangled. `resp`/`secret` are moved into
+/// the generator, making the stream `'static`. Terminal = the first
+/// `done`/`error` event; a silent upstream close still yields a final `done`
+/// so the client finalizes the turn without socket-close detection.
+fn proxy_llm_stream(
+    resp: reqwest::Response,
+    secret: String,
+    lead_notice: Option<String>,
+    parse: fn(&str) -> Option<serde_json::Value>,
+) -> impl futures_util::Stream<Item = Result<Event, Infallible>> {
+    async_stream::stream! {
+        if let Some(note) = lead_notice {
             yield Ok(Event::default().data(json!({ "type": "thinking", "text": note }).to_string()));
         }
         let mut bytes = resp.bytes_stream();
@@ -787,7 +921,7 @@ model's thinking._"
                     if data.is_empty() {
                         continue;
                     }
-                    if let Some(ev) = parse_sse_delta(data) {
+                    if let Some(ev) = parse(data) {
                         let terminal = matches!(
                             ev.get("type").and_then(|t| t.as_str()),
                             Some("done") | Some("error")
@@ -803,9 +937,7 @@ model's thinking._"
         // Stream closed without an explicit terminal — emit `done` so the client
         // finalizes the turn without depending on socket-close detection.
         yield Ok(Event::default().data(json!({ "type": "done" }).to_string()));
-    };
-
-    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+    }
 }
 
 /// Index of the first `\n\n` (SSE frame separator) in `buf`, or `None`. `\n` is
@@ -1076,6 +1208,12 @@ struct ChatIssuesRequest {
     /// Linear is a documented v1 no-op. Empty = none.
     #[serde(default)]
     labels: Vec<String>,
+    /// Spec 394: which agent runs the extraction (`"claude"` default,
+    /// `"codex"`). Absent ⇒ `chat.toml` → Claude — same resolution as the
+    /// interview routes, so Preview/Confirm run on the SAME agent the
+    /// conversation ran on.
+    #[serde(default)]
+    agent: Option<String>,
 }
 
 /// One sub-task of the feature. `detail`/`priority` are optional so a terse model
@@ -1290,10 +1428,13 @@ fn compose_task_body(plan: &FeaturePlan, task: &SubTask, priority: Priority) -> 
 
 /// Run the extraction LLM call over a transcript and parse a [`FeaturePlan`].
 /// Shared by the preview endpoint and the create endpoint (when the client did
-/// NOT supply an already-edited plan). Byte-identical to the call it was extracted
-/// from, so the OAuth identity block + trailing-user-turn invariants hold.
+/// NOT supply an already-edited plan). Routes through [`call_chat_model`] so the
+/// request's picked agent (spec 394) runs the extraction; the Claude arm is
+/// byte-identical to the call this was extracted from (the OAuth identity block
+/// + trailing-user-turn invariants hold).
 async fn extract_plan(
-    auth: &Auth,
+    creds: &ChatCreds,
+    model: &str,
     transcript: &[ChatMessage],
     workdir: Option<&str>,
 ) -> Result<FeaturePlan, ApiError> {
@@ -1316,8 +1457,7 @@ name the actual files/modules each task touches:\n\
         ),
         None => EXTRACT_INSTRUCTIONS.to_string(),
     };
-    let system = build_system(auth, &extract_system);
-    let text = call_anthropic(auth, DEFAULT_MODEL, system, &messages, 2048).await?;
+    let text = call_chat_model(creds, model, &extract_system, &messages, 2048).await?;
 
     // Parse leniently (fences/prose tolerated). No object / no tasks → 422.
     extract_feature_plan(&text).ok_or_else(|| {
@@ -1346,13 +1486,12 @@ async fn chat_issues(
         ));
     }
 
-    // Same credential resolution + actionable error as the chat handler.
-    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
+    // Same agent + credential resolution as the chat handler (spec 394): the
+    // extraction runs on the SAME agent the conversation ran on.
+    let resolved = resolve_chat_agent(body.agent.as_deref())?;
+    let creds = resolve_chat_creds(resolved.agent)?;
     // The bearer/API token, kept so it can be scrubbed from any per-task error.
-    let secret = match &auth {
-        Auth::ApiKey(k) => k.clone(),
-        Auth::Oauth(t) => t.clone(),
-    };
+    let secret = creds.secret().to_string();
 
     // Spec 003: Confirm files the CLIENT's edited plan VERBATIM (what-you-see-is-
     // what-you-file); only when none is supplied do we extract from the transcript
@@ -1368,7 +1507,10 @@ async fn chat_issues(
             }
             p
         }
-        None => extract_plan(&auth, &body.messages, body.workdir.as_deref()).await?,
+        None => {
+            let model = resolve_chat_model(None, &resolved);
+            extract_plan(&creds, &model, &body.messages, body.workdir.as_deref()).await?
+        }
     };
 
     let split = SplitMode::parse(body.split.as_deref());
@@ -1403,8 +1545,12 @@ async fn chat_issues_preview(
             "chat issues preview: messages cannot be empty".into(),
         ));
     }
-    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
-    let plan = extract_plan(&auth, &body.messages, body.workdir.as_deref()).await?;
+    // Same agent + credential resolution as the chat handler (spec 394): the
+    // previewed plan is produced by the SAME agent the conversation ran on.
+    let resolved = resolve_chat_agent(body.agent.as_deref())?;
+    let creds = resolve_chat_creds(resolved.agent)?;
+    let model = resolve_chat_model(None, &resolved);
+    let plan = extract_plan(&creds, &model, &body.messages, body.workdir.as_deref()).await?;
 
     // Normalise each task's priority to a canonical `high|medium|low` so the UI has
     // a stable value to bind its per-task selector to.
@@ -1719,13 +1865,15 @@ fn sanitize_draft_body(raw: &str) -> String {
 }
 
 /// Draft an SDD-shaped issue body from a title + local repo context. Shared
-/// plumbing with `/api/chat`: same credential resolution (loud, actionable
-/// error naming both recovery paths when absent), same repo snapshot, same
-/// Anthropic call. `pub(crate)` — the HTTP surface lives in `routes::github`.
+/// plumbing with `/api/chat`: same agent + credential resolution (spec 394 —
+/// loud, actionable error naming both recovery paths when absent), same repo
+/// snapshot, same [`call_chat_model`] backend fan-out. `pub(crate)` — the HTTP
+/// surface lives in `routes::github`.
 pub(crate) async fn draft_issue_body(
     workdir: Option<&str>,
     repo_slug: Option<&str>,
     title: &str,
+    agent: Option<&str>,
 ) -> Result<String, ApiError> {
     let title = title.trim();
     if title.is_empty() {
@@ -1733,16 +1881,17 @@ pub(crate) async fn draft_issue_body(
             "issue `title` must not be blank".into(),
         ));
     }
-    let auth = resolve_auth().ok_or_else(|| ApiError::BadRequest(NO_CREDS_MSG.into()))?;
+    let resolved = resolve_chat_agent(agent)?;
+    let creds = resolve_chat_creds(resolved.agent)?;
+    let model = resolve_chat_model(None, &resolved);
 
     let repo_context = gather_repo_context(workdir);
     let instructions = draft_body_instructions(repo_slug, repo_context.as_deref());
-    let system = build_system(&auth, &instructions);
     let messages = vec![json!({ "role": "user", "content": draft_body_user_message(title) })];
 
     // 2048 output tokens: a full Problem/Goal/ACs body comfortably fits; the
     // interview's 1024 reply cap is tuned for short turns, not a document.
-    let text = call_anthropic(&auth, DEFAULT_MODEL, system, &messages, 2048).await?;
+    let text = call_chat_model(&creds, &model, &instructions, &messages, 2048).await?;
     let body = sanitize_draft_body(&text);
     if body.is_empty() {
         return Err(ApiError::Internal(
@@ -2513,6 +2662,36 @@ mod tests {
         }
         assert!(chat_auth_gate(Some(Auth::ApiKey("sk-ant-test".into()))).is_ok());
         assert!(chat_auth_gate(Some(Auth::Oauth("sk-ant-oat-test".into()))).is_ok());
+    }
+
+    /// Spec 394: the `agent` wire field is serde-default so old clients (and the
+    /// Fast path) stay byte-identical; a present value round-trips to the
+    /// resolver. The ChatIssuesRequest half is pinned here too.
+    #[test]
+    fn chat_requests_default_and_decode_agent() {
+        let old: ChatRequest = serde_json::from_str(r#"{"messages":[]}"#).unwrap();
+        assert!(
+            old.agent.is_none(),
+            "absent agent ⇒ None (⇒ resolution chain)"
+        );
+        let picked: ChatRequest =
+            serde_json::from_str(r#"{"messages":[],"agent":"codex"}"#).unwrap();
+        assert_eq!(picked.agent.as_deref(), Some("codex"));
+
+        let old_issues: ChatIssuesRequest = serde_json::from_str(r#"{"messages":[]}"#).unwrap();
+        assert!(old_issues.agent.is_none());
+        let picked_issues: ChatIssuesRequest =
+            serde_json::from_str(r#"{"messages":[],"agent":"codex"}"#).unwrap();
+        assert_eq!(picked_issues.agent.as_deref(), Some("codex"));
+    }
+
+    /// Spec 394 drift net: the Claude arm of `resolve_chat_creds` surfaces
+    /// NO_CREDS_MSG (via `chat_auth_gate`), while `ChatAgent::no_creds_message`
+    /// is the copy other call sites name — they must stay byte-identical or the
+    /// "each agent names ITS two recovery paths" contract forks.
+    #[test]
+    fn claude_no_creds_message_matches_no_creds_msg() {
+        assert_eq!(ChatAgent::Claude.no_creds_message(), NO_CREDS_MSG);
     }
 
     #[test]

@@ -5,18 +5,58 @@
 // clarifying questions, then proposes a task breakdown the user can file into
 // GitHub or Linear. This client is conversation-only; it never creates tasks.
 import type { IntakeMode } from '../lib/socratic-intake'
+import type { ChatAgentId, TuiAgent } from '../shared/types'
 import { apiUrl, getServerEndpoint } from './server-endpoint'
+
+export type { ChatAgentId }
 
 /** One conversation turn — matches the server's `{role, content}` message shape. */
 export type ChatTurn = { role: 'user' | 'assistant'; content: string }
+
+/** A chat agent the user can pick in Settings (spec 394). `label` is the
+ *  visible name; `blurb` names where its credentials come from. The server has
+ *  a backend for exactly these ids (`ChatAgent` in `routes/chat_agent.rs`). */
+export type ChatAgent = { id: ChatAgentId; label: string; blurb: string }
+
+/** The agents the Settings → Chat picker offers. Order = display order; the
+ *  first entry is the default (Claude — the pre-setting behavior). */
+export const CHAT_AGENTS: readonly ChatAgent[] = [
+  { id: 'claude', label: 'Claude', blurb: 'Default · ANTHROPIC_API_KEY or Claude sign-in' },
+  { id: 'codex', label: 'Codex', blurb: 'OPENAI_API_KEY or Codex sign-in' }
+] as const
+
+export const DEFAULT_CHAT_AGENT: ChatAgentId = 'claude'
+
+/** Resolve a stored/unknown agent id to a supported {@link ChatAgentId},
+ *  falling back to the default so a stale setting never breaks the composer. */
+export function resolveChatAgent(id: string | null | undefined): ChatAgentId {
+  return CHAT_AGENTS.find((a) => a.id === id)?.id ?? DEFAULT_CHAT_AGENT
+}
+
+/** Resolve the global preference against the installed-agent probe. An explicit
+ * preference is preserved even when unavailable so the server can return its
+ * typed, actionable error. Only an untouched setting auto-picks Claude (when
+ * present) or the first installed Chat-capable agent. */
+export function pickChatAgent(
+  preferred: ChatAgentId | null | undefined,
+  detectedAgents: readonly TuiAgent[] | null
+): ChatAgentId {
+  if (preferred) return resolveChatAgent(preferred)
+  if (detectedAgents) {
+    return CHAT_AGENTS.find((candidate) => detectedAgents.includes(candidate.id))?.id ?? DEFAULT_CHAT_AGENT
+  }
+  return DEFAULT_CHAT_AGENT
+}
 
 /** A model offered in the Chat model picker. `id` is the Anthropic model id sent
  *  to `/api/chat/stream`; `label`/`blurb` are display-only. */
 export type ChatModel = { id: string; label: string; blurb: string }
 
-/** The models the Chat picker offers. All current Claude models support extended
- *  thinking, so the thinking toggle applies to any of them. Default = Sonnet, the
- *  server's own default (`DEFAULT_MODEL` in `routes/chat.rs`). */
+/** The models the Chat picker offers — CLAUDE-only (spec 394: non-Claude agents
+ *  run their own server-side default model, so this picker is hidden when
+ *  another agent is selected). All current Claude models support extended
+ *  thinking, so the thinking toggle applies to any of them. Default = Sonnet,
+ *  the server's own default (`ChatAgent::Claude.default_model()`). */
 export const CHAT_MODELS: readonly ChatModel[] = [
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', blurb: 'Most capable' },
   { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', blurb: 'Balanced · default' },
@@ -52,7 +92,7 @@ async function authHeaders(): Promise<Record<string, string>> {
  */
 async function sendChat(
   messages: ChatTurn[],
-  opts?: { workdir?: string; repoSlug?: string; mode?: IntakeMode; stage?: number }
+  opts?: { workdir?: string; repoSlug?: string; mode?: IntakeMode; stage?: number; agent?: ChatAgentId }
 ): Promise<string> {
   const url = await apiUrl('/api/chat')
   const res = await fetch(url, {
@@ -68,7 +108,9 @@ async function sendChat(
       // Spec 008 F2: intake mode + socratic pass (both serde-default server-side,
       // so omitting them is the byte-identical Fast path).
       mode: opts?.mode,
-      stage: opts?.stage
+      stage: opts?.stage,
+      // Spec 394: which agent runs the turn (serde-default server-side ⇒ Claude).
+      agent: opts?.agent
     })
   })
   const text = await res.text()
@@ -114,6 +156,9 @@ export async function streamChat(
     repoSlug?: string
     model?: string
     thinking?: boolean
+    /** Spec 394: which agent runs the turn. Omitting it ⇒ the server resolves
+     *  `chat.toml` → Claude (the pre-setting behavior). */
+    agent?: ChatAgentId
     /** Spec 008 F2: which intake this turn runs — `'fast'` (default) or
      *  `'socratic'`. Omitting it is the byte-identical Fast path. */
     mode?: IntakeMode
@@ -138,6 +183,7 @@ export async function streamChat(
       repo_slug: opts.repoSlug,
       model: opts.model,
       thinking: opts.thinking ?? false,
+      agent: opts.agent,
       // Spec 008 F2: drive the server's per-stage prompt. Both are serde-default,
       // so an old client / the Fast path stays byte-identical on the wire.
       mode: opts.mode,
@@ -263,7 +309,7 @@ function decodeError(text: string, fallback: string): string {
  */
 export async function previewIssuesFromChat(
   messages: ChatTurn[],
-  opts?: { workdir?: string; repoSlug?: string }
+  opts?: { workdir?: string; repoSlug?: string; agent?: ChatAgentId }
 ): Promise<DraftPlan> {
   const url = await apiUrl('/api/chat/issues/preview')
   const res = await fetch(url, {
@@ -275,7 +321,9 @@ export async function previewIssuesFromChat(
     body: JSON.stringify({
       messages,
       workdir: opts?.workdir,
-      repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined
+      repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined,
+      // Spec 394: the SAME agent that ran the conversation extracts the plan.
+      agent: opts?.agent
     })
   })
   const text = await res.text()
@@ -351,6 +399,9 @@ export async function createIssuesFromChat(
     split?: IssueSplit
     /** Spec 003: labels for the created issue(s) (GitHub only for now). */
     labels?: string[]
+    /** Spec 394: agent for the transcript-extraction fallback (Confirm usually
+     *  sends an edited `plan`, which skips the LLM entirely). */
+    agent?: ChatAgentId
   }
 ): Promise<CreatedIssues> {
   const url = await apiUrl('/api/chat/issues')
@@ -382,7 +433,8 @@ export async function createIssuesFromChat(
           }
         : undefined,
       split: opts?.split,
-      labels: opts?.labels && opts.labels.length > 0 ? opts.labels : undefined
+      labels: opts?.labels && opts.labels.length > 0 ? opts.labels : undefined,
+      agent: opts?.agent
     })
   })
   const text = await res.text()

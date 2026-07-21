@@ -33,6 +33,7 @@ import {
 } from 'lucide-react'
 
 import { useAppStore } from '@/store'
+import { useDetectedAgents } from '@/hooks/useDetectedAgents'
 import { cn } from '@/lib/utils'
 import { api } from '@/tauri'
 import type { Repo } from '@/shared/types'
@@ -40,6 +41,7 @@ import { DrillInHeader } from '@/components/nav/DrillInHeader'
 import { AgentumMark } from '@/components/icons/AgentumMark'
 import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
 import {
+  CHAT_AGENTS,
   CHAT_MODELS,
   createIssuesFromChat,
   DEFAULT_CHAT_MODEL,
@@ -48,6 +50,7 @@ import {
   type IssueProvider,
   type IssueSplit,
   previewIssuesFromChat,
+  pickChatAgent,
   resolveChatModel
 } from '@/runtime/chat-client'
 import { clampStage, type IntakeMode, normalizeIntake } from '@/lib/socratic-intake'
@@ -137,6 +140,13 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   // conversation so reopening one restores what it last ran with).
   const [model, setModel] = useState<string>(readStoredModel)
   const [thinking, setThinking] = useState<boolean>(readStoredThinking)
+
+  // Spec 394: the global Chat agent pick (Settings → Tasks). Claude keeps the
+  // model/thinking pickers below; any other agent runs its server-side default
+  // model, so those Claude-only controls hide and the turn carries `agent`.
+  const chatAgentSetting = useAppStore((s) => s.settings?.chatAgent)
+  const { detectedIds: detectedAgentIds } = useDetectedAgents()
+  const agent = pickChatAgent(chatAgentSetting, detectedAgentIds)
   useEffect(() => {
     try {
       localStorage.setItem(MODEL_KEY, model)
@@ -299,6 +309,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
         text,
         model,
         thinking,
+        agent,
         workdir: workspace?.path,
         // Scope new threads to the project that grounded them, so the Project
         // Hub's per-project history can filter without a migration.
@@ -309,7 +320,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
       setActiveId(id)
       setDraft('')
     },
-    [draft, busy, model, thinking, workspace]
+    [draft, busy, model, thinking, agent, workspace]
   )
 
   // Enter / the arrow button — the quick default. A NEW chat goes Fast (the
@@ -348,7 +359,8 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
       const plan = await previewIssuesFromChat(
         messages.map((m) => ({ role: m.role, content: m.content })),
         // The server infers the GitHub repo from the workspace's `origin`.
-        { workdir: workspace?.path }
+        // Spec 394: the SAME agent that ran the conversation extracts the plan.
+        { workdir: workspace?.path, agent }
       )
       setDraftPlan(plan)
       setDraftDirty(false)
@@ -357,7 +369,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     } finally {
       setPreviewing(false)
     }
-  }, [busy, previewing, creating, active, messages, workspace])
+  }, [busy, previewing, creating, active, messages, workspace, agent])
 
   // Re-extract, replacing the draft. Unsaved edits are discarded (confirmed
   // first) — the regenerated plan is authoritative.
@@ -382,7 +394,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     try {
       const result = await createIssuesFromChat(
         messages.map((m) => ({ role: m.role, content: m.content })),
-        { workdir: workspace?.path, provider, plan, split, labels: parseLabels(labelsInput) }
+        { workdir: workspace?.path, provider, plan, split, labels: parseLabels(labelsInput), agent }
       )
       const where = result.repo
         ? `\`${result.repo}\``
@@ -421,7 +433,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     } finally {
       setCreating(false)
     }
-  }, [active, draftPlan, creating, messages, workspace, provider, split, labelsInput])
+  }, [active, draftPlan, creating, messages, workspace, provider, split, labelsInput, agent])
 
   // Draft edit helpers — every edit marks the draft dirty (Regenerate then warns).
   const patchPlan = useCallback((patch: Partial<DraftPlan>) => {
@@ -592,7 +604,9 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                         ) : null}
                         <span>{timeAgo(c.updatedAt)}</span>
                         <span aria-hidden>·</span>
-                        <span className="truncate">{shortModel(c.model)}</span>
+                        {/* Spec 394: a Codex-run thread shows its agent, not a
+                            misleading Claude model label. */}
+                        <span className="truncate">{shortModelLabel(c)}</span>
                         {c.thinking ? (
                           <Brain className="size-3 text-primary/70" aria-label="thinking" />
                         ) : null}
@@ -628,8 +642,24 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
                 disabled={busy}
               />
             )}
-            <ModelPicker model={model} onChange={setModel} disabled={busy} />
-            <ThinkingToggle on={thinking} onToggle={setThinking} disabled={busy} />
+            {/* Spec 394: the model + thinking pickers are CLAUDE-only — a
+                non-Claude agent runs its server-side default model, so instead
+                of a misleading Claude picker we show the picked agent (changed
+                globally in Settings → Tasks). */}
+            {agent === 'claude' ? (
+              <>
+                <ModelPicker model={model} onChange={setModel} disabled={busy} />
+                <ThinkingToggle on={thinking} onToggle={setThinking} disabled={busy} />
+              </>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-foreground/90"
+                title="Chat agent — change it in Settings → Tasks"
+              >
+                {CHAT_AGENTS.find((a) => a.id === agent)?.label ?? agent}
+                <span className="text-[11px] font-normal text-muted-foreground">default model</span>
+              </span>
+            )}
           </div>
 
           {/* transcript */}
@@ -1503,6 +1533,15 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
 /** A short, theme-free label for a model id used in the history list. */
 function shortModel(id: string): string {
   return resolveChatModel(id).label.replace(/^Claude\s+/, '')
+}
+
+/** Spec 394: the history row label — the agent name for a non-Claude thread
+ *  (its model isn't a stored Claude id), else the Claude model as today. */
+function shortModelLabel(c: Conversation): string {
+  if (c.agent && c.agent !== 'claude') {
+    return CHAT_AGENTS.find((a) => a.id === c.agent)?.label ?? c.agent
+  }
+  return shortModel(c.model)
 }
 
 /** Compact relative time for the history list. */

@@ -268,6 +268,9 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     terminalScopeHistoryByWorktree: true,
     defaultTuiAgent: null,
     disabledTuiAgents: [],
+    // Why: null ⇒ the server's built-in default (Claude) — a profile that
+    // never opened the picker behaves exactly as before the setting existed.
+    chatAgent: null,
     skipDeleteWorktreeConfirm: false,
     skipRunningTerminalCloseConfirm: false,
     defaultTaskViewPreset: 'all',
