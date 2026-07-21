@@ -4,6 +4,32 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.87.0] — 2026-07-20
+
+### Added
+
+- **Harness sessions show their live SDD-loop status.** The desktop now exposes
+  the active SDD phase and state directly in a harness session, making progress
+  and required attention visible while an agent works.
+- **Chat and issue creation can target a selected agent.**
+- **Tracker projects are scoped per repository,** preventing projects from one
+  repository leaking into another repository's task intake.
+
+### Changed
+
+- **Gated runs are surfaced and can be unlinked** from their workspace so the
+  harness state stays understandable and recoverable.
+- **Workspace and board synchronization is faster.** The store uses returning
+  upserts, backend query round-trips are reduced, and the desktop uses constant-
+  time workspace lookups and memoized status synchronization.
+
+### Fixed
+
+- **Codex MCP HTTP authentication uses `bearer_token_env_var`,** restoring
+  compatibility with current Codex configuration.
+- **The New Workspace tracker no longer reloads issues on each return to step
+  three.**
+
 ## [0.57.1] — 2026-07-20
 
 ### Fixed
