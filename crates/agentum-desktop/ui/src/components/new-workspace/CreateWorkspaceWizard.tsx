@@ -802,6 +802,7 @@ function RepoStep({
                         ? 'border-muted-foreground/40 bg-secondary'
                         : 'border-border hover:border-muted-foreground/25 hover:bg-secondary/50'
                   )}
+                  style={{ boxShadow: `inset 3px 0 0 ${repo.badgeColor}` }}
                 >
                   <span
                     className={cn(
