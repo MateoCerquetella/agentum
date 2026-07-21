@@ -90,6 +90,10 @@ function offers(): Record<string, unknown> {
   return useAppStore.getState().harnessOfferByWorktreeId
 }
 
+function starting(): Record<string, unknown> {
+  return useAppStore.getState().gatedRunStartingByWorktreeId
+}
+
 describe('maybeOfferWorkspaceHarnessRun', () => {
   it('remote repo (connectionId set): zero fs calls, no offer (D5)', async () => {
     seedStore({ connectionId: 'c1' })
@@ -98,11 +102,28 @@ describe('maybeOfferWorkspaceHarnessRun', () => {
     expect(offers()).toEqual({})
   })
 
-  it('gated run: zero fs calls, no offer (D6)', async () => {
+  it('gated run: zero fs calls, no offer (D6) — but the starting slice is set (spec 023 AC 1)', async () => {
     seedStore()
     await maybeOfferWorkspaceHarnessRun({ worktreeId: WT_ID, gatedRun: true })
     expect(fsListEntries).not.toHaveBeenCalled()
     expect(offers()).toEqual({})
+    // The owned gated run surfaces as "starting" in the workspace view.
+    expect(starting()).toEqual({
+      [WT_ID]: { worktreeId: WT_ID, workdir: '/workspace/feature' }
+    })
+  })
+
+  it('gated run on an unknown worktree fails closed (no starting slice)', async () => {
+    seedStore()
+    await maybeOfferWorkspaceHarnessRun({ worktreeId: 'repo-1::/gone', gatedRun: true })
+    expect(starting()).toEqual({})
+  })
+
+  it('purges a stale STARTING slice for the same worktree id at runner start', async () => {
+    seedStore()
+    useAppStore.getState().setGatedRunStarting({ worktreeId: WT_ID, workdir: '/workspace/feature' })
+    await maybeOfferWorkspaceHarnessRun({ worktreeId: WT_ID, gatedRun: false })
+    expect(starting()).toEqual({})
   })
 
   it('purges a stale offer for the same worktree id at runner start', async () => {

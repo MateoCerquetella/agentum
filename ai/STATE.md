@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 021-per-project-tracker-choice
-- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (021 drafted 2026-07-17 from GH **#379** + Mateo's live amendment (tracker-section UX in New Issue/Chat; GitHub-vs-Linear only, no "None"); PM gate run at draft time — all 9 boxes pass. Prior: 018 SHIP-READY + merged → develop 2026-07-14, #365 open until main — see decision log.)
+- **current_spec:** 023-gated-run-surfacing-and-issue-unlink
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (023 switched-in 2026-07-20 — this worktree's own spec, issue **#387**: PM + Architect complete (spec.md/architecture.md on develop). The ⛔ stale-base blocker self-resolved: `origin/develop` was merged into this branch and `git diff origin/develop HEAD` is EMPTY (tree byte-identical to develop tip `b5322848`), so the Developer phase runs here per the architecture's fresh-develop-worktree constraint. 021 stays parked at **pm**.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,19 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-14 | Dev→Review | **018 BUILT + SIGNED-OFF → phase done, merged to develop**
-  (one slice, `tasks`-equivalent in `verification.md`/`review.md`). Landed:
-  `gh_issue_project_status` desktop Tauri command + pure
-  `issue_project_status(&Value,…)->Option<String>` mapper (4 #[cfg(test)]
-  cases) + `lib.rs` reg; `gh.ts`/`contract.ts` `issueProjectStatus`; pure
-  `lib/issue-project-status.ts` (parseIssueRef/statusCacheKey/
-  resolveIssueProjectStatus, never-throws) + 12 vitest; `IssueProjectStatusChip`
-  + `useIssueProjectStatus` (module caches: binding/slug, status/slug#number) +
-  badges-row slot + `workdir`/`repoId` from WorktreeCard + card test. Gates:
-  UI build green, new vitest 13/13, tsc(pure) green, fmt green; Rust compile
-  CI-deferred (webkitgtk absent). 1 red vitest = pre-existing develop baseline
-  (proven via stash-all). AC1 code-verified, AC2/AC3 test-covered; live legs =
-  qa.sh/staging. #365 stays open until main.
 - 2026-07-14 | Architect | **018 ARCHITECT DONE → phase developer**
   (`architecture.md`; handoffs `01-pm-to-architect.md`, `02-architect-to-developer.md`).
   Both open Qs pinned: **D1** desktop Tauri command `gh_issue_project_status`
@@ -151,3 +138,9 @@
   architect: pin-resolution seam (UI-sends vs server-reads-repos.json —
   recommend server), Project-Hub display, "Auto — detected" legibility, the
   bigger Chat/New-Issue consolidation (follow-up spec). Handoff → PM/architect.
+- 2026-07-20 | Developer/Tester | **ISSUE #395 STATUS STRIP COMPLETE + GREEN.**
+  Every run-owned feature, QA, and role terminal now shows live SDD phase and
+  executing n/N progress through the existing harness status/event channel;
+  ordinary sessions are excluded and burst events retain a final refresh.
+  Focused Vitest 4/4 and Vite production build PASS. Standalone tsc remains
+  baseline-red on unrelated missing shared modules. Spec 021 remains active.

@@ -94,6 +94,13 @@ pub fn planner_config_path() -> Result<PathBuf, PathError> {
     Ok(config_dir()?.join("planner.toml"))
 }
 
+/// Path to the per-server chat config: `$XDG_CONFIG_HOME/agentum/chat.toml`.
+/// Holds the Chat screen's agent pick (`[chat] agent = "claude" | "codex"`) —
+/// the daemon-side answer to "select which agent powers chat / issue creation".
+pub fn chat_config_path() -> Result<PathBuf, PathError> {
+    Ok(config_dir()?.join("chat.toml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +131,27 @@ mod tests {
             p.parent().unwrap(),
             cfg.as_path(),
             "planner_config_path must be a direct child of config_dir()"
+        );
+    }
+
+    #[test]
+    fn chat_config_path_under_config_dir() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: serialised by TEST_LOCK — only one thread mutates env at a time.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        }
+        let p = chat_config_path().expect("chat_config_path should succeed");
+        let cfg = config_dir().expect("config_dir should succeed");
+        assert!(
+            p.ends_with("chat.toml"),
+            "expected path to end with chat.toml, got {p:?}"
+        );
+        assert_eq!(
+            p.parent().unwrap(),
+            cfg.as_path(),
+            "chat_config_path must be a direct child of config_dir()"
         );
     }
 }

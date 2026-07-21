@@ -99,6 +99,10 @@ import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import {
+  resolveLinearContextForRepo,
+  taskProjectScopeKey
+} from '../../../shared/task-project-scope'
+import {
   buildTaskPageRepoSourceState,
   deriveTaskPageGitHubWorkItemsFetchOptions,
   findTaskPageDialogWorkItem,
@@ -198,6 +202,7 @@ export default function TaskPage({
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
   const taskResumeState = useAppStore((s) => s.taskResumeState)
   const setTaskResumeState = useAppStore((s) => s.setTaskResumeState)
+  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const pageData = useAppStore((s) => s.taskPageData)
   const routedOpenTaskPage = useAppStore((s) => s.openTaskPage)
   const openTaskPage = useMemo(() => {
@@ -1013,7 +1018,7 @@ export default function TaskPage({
   >(() => new Set())
   const lastLinearRequestRef = useRef<{ nonce: number; signature: string } | null>(null)
   const landingLinearRefreshKeysRef = useRef<ReadonlySet<string>>(new Set())
-  const linearContextResumeAttemptedRef = useRef(false)
+  const linearContextResumeAttemptedRef = useRef<string | null>(null)
 
   const patchScopedLinearIssue = useCallback((issueId: string, patch: Partial<LinearIssue>) => {
     const patchResult = (result: LinearCollectionResult<LinearIssue>) => ({
@@ -1151,17 +1156,26 @@ export default function TaskPage({
   ])
 
   useEffect(() => {
-    const context = taskResumeState?.linearContext
+    const context = resolveLinearContextForRepo(taskResumeState, activeRepoId)
+    const scopeKey = taskProjectScopeKey(activeRepoId)
+    const attemptKey = context ? `${scopeKey}:${context.kind}:${context.id}` : scopeKey
     if (
-      linearContextResumeAttemptedRef.current ||
+      linearContextResumeAttemptedRef.current === attemptKey ||
       !taskResumeApplied ||
       taskSource !== 'linear' ||
-      !linearStatus.connected ||
-      !context
+      !linearStatus.connected
     ) {
       return
     }
-    linearContextResumeAttemptedRef.current = true
+    linearContextResumeAttemptedRef.current = attemptKey
+    if (!context) {
+      clearSelectedLinearIssue()
+      setSelectedLinearProject(null)
+      setSelectedLinearProjectDetail(null)
+      setSelectedLinearCustomView(null)
+      setLinearProjectParentView(null)
+      return
+    }
     let cancelled = false
 
     if (context.kind === 'project') {
@@ -1234,10 +1248,12 @@ export default function TaskPage({
     fetchLinearCustomView,
     fetchLinearProject,
     listLinearCustomViews,
+    activeRepoId,
+    clearSelectedLinearIssue,
     linearStatus.connected,
     setTaskResumeState,
     taskResumeApplied,
-    taskResumeState?.linearContext,
+    taskResumeState,
     taskSource
   ])
 
@@ -3211,7 +3227,7 @@ export default function TaskPage({
         linearMode,
         linearContext: undefined
       })
-      linearContextResumeAttemptedRef.current = false
+      linearContextResumeAttemptedRef.current = null
       setLinearIssues([])
       setLinearError(null)
       setLinearLoading(true)

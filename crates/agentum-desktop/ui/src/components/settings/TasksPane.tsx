@@ -1,5 +1,5 @@
 import { Check, Github, Gitlab } from 'lucide-react'
-import type { GlobalSettings, TaskProvider } from '../../../../shared/types'
+import type { ChatAgentId, GlobalSettings, TaskProvider } from '../../../../shared/types'
 import {
   TASK_PROVIDERS,
   normalizeVisibleTaskProviders,
@@ -10,6 +10,9 @@ import { LinearIcon } from '@/components/icons/LinearIcon'
 import { Label } from '../ui/label'
 import { SearchableSetting } from './SearchableSetting'
 import { SettingsSubsectionHeader } from './SettingsFormControls'
+import { useDetectedAgents } from '@/hooks/useDetectedAgents'
+import { AgentIcon } from '@/lib/agent-catalog'
+import { CHAT_AGENTS, pickChatAgent } from '@/runtime/chat-client'
 
 type TasksPaneProps = {
   settings: GlobalSettings
@@ -44,6 +47,9 @@ const TASK_PROVIDER_OPTIONS: readonly {
 
 export function TasksPane({ settings, updateSettings }: TasksPaneProps): React.JSX.Element {
   const visibleProviders = normalizeVisibleTaskProviders(settings.visibleTaskProviders)
+  const { detectedIds, isLoading } = useDetectedAgents()
+  const installedChatAgents = CHAT_AGENTS.filter((agent) => detectedIds?.includes(agent.id))
+  const selectedChatAgent = pickChatAgent(settings.chatAgent, detectedIds)
 
   const toggleProvider = (provider: TaskProvider): void => {
     const isVisible = visibleProviders.includes(provider)
@@ -63,6 +69,49 @@ export function TasksPane({ settings, updateSettings }: TasksPaneProps): React.J
 
   return (
     <div className="space-y-6">
+      <section className="space-y-3">
+        <SettingsSubsectionHeader
+          title="Chat Agent"
+          description="Choose the installed agent that powers Chat interviews and issue-plan previews."
+        />
+
+        <SearchableSetting
+          title="Chat agent"
+          description="The selected agent is saved globally and uses its existing sign-in or API key."
+          keywords={['chat', 'agent', 'claude', 'codex', 'issues', 'preview']}
+          className="flex flex-wrap gap-2 py-2"
+        >
+          {installedChatAgents.map((agent) => {
+            const active = selectedChatAgent === agent.id
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => updateSettings({ chatAgent: agent.id as ChatAgentId })}
+                className={cn(
+                  'inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors',
+                  active
+                    ? 'border-muted-foreground/40 bg-accent font-medium text-accent-foreground'
+                    : 'border-border bg-background/50 text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <AgentIcon agent={agent.id} size={14} />
+                {agent.label}
+                {active ? <Check className="size-3.5" /> : null}
+              </button>
+            )
+          })}
+          {isLoading ? (
+            <span className="text-xs text-muted-foreground">Detecting installed agents…</span>
+          ) : installedChatAgents.length === 0 ? (
+            <span className="text-xs text-destructive">
+              Install Claude or Codex, then refresh agent detection in Settings → Agents.
+            </span>
+          ) : null}
+        </SearchableSetting>
+      </section>
+
       <section className="space-y-3">
         <SettingsSubsectionHeader
           title="Task Sources"

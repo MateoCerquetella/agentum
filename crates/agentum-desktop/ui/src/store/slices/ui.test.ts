@@ -1072,6 +1072,65 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(setUI).toHaveBeenCalledWith({ taskResumeState: expected })
   })
 
+  it('persists and clears Linear contexts under only the active repo', () => {
+    const setUI = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('window', { api: { ui: { set: setUI } } })
+    const store = createUIStore()
+    const contextX = { kind: 'project' as const, id: 'project-x', workspaceId: 'workspace-1' }
+    const contextY = { kind: 'view' as const, id: 'view-y', workspaceId: 'workspace-1' }
+
+    store.setState({ activeRepoId: 'repo-x' })
+    store.getState().setTaskResumeState({ linearContext: contextX })
+    store.setState({ activeRepoId: 'repo-y' })
+    store.getState().setTaskResumeState({ linearContext: contextY })
+    store.setState({ activeRepoId: 'repo-x' })
+    store.getState().setTaskResumeState({ linearContext: undefined })
+
+    expect(store.getState().taskResumeState).toMatchObject({
+      linearContextByRepo: { 'repo-y': contextY }
+    })
+    expect(store.getState().taskResumeState?.linearContextByRepo?.['repo-x']).toBeUndefined()
+    expect(store.getState().taskResumeState?.linearContext).toBeUndefined()
+  })
+
+  it('hydrates legacy Linear context safely without treating it as repo-scoped', () => {
+    const store = createUIStore()
+    store.setState({ repos: [{ id: 'repo-x' }] as AppState['repos'] })
+
+    expect(() =>
+      store.getState().hydratePersistedUI(
+        makePersistedUI({
+          taskResumeState: {
+            linearContext: { kind: 'project', id: 'legacy', workspaceId: 'workspace-1' }
+          }
+        })
+      )
+    ).not.toThrow()
+    expect(store.getState().taskResumeState?.linearContext?.id).toBe('legacy')
+    expect(store.getState().taskResumeState?.linearContextByRepo).toBeUndefined()
+  })
+
+  it('sanitizes scoped Linear contexts and prunes deleted repos on hydrate', () => {
+    const store = createUIStore()
+    store.setState({ repos: [{ id: 'repo-x' }] as AppState['repos'] })
+    store.getState().hydratePersistedUI(
+      makePersistedUI({
+        taskResumeState: {
+          linearContextByRepo: {
+            'repo-x': { kind: 'project', id: 'project-x', workspaceId: 'workspace-1' },
+            'repo-deleted': { kind: 'project', id: 'stale', workspaceId: 'workspace-1' },
+            global: { kind: 'view', id: 'global-view', workspaceId: 'workspace-1', model: 'issue' }
+          }
+        }
+      })
+    )
+
+    expect(store.getState().taskResumeState?.linearContextByRepo).toEqual({
+      'repo-x': { kind: 'project', id: 'project-x', workspaceId: 'workspace-1' },
+      global: { kind: 'view', id: 'global-view', workspaceId: 'workspace-1', model: 'issue' }
+    })
+  })
+
   it('keeps fixed card properties when toggling Agent activity', () => {
     const setUI = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', { api: { ui: { set: setUI } } })

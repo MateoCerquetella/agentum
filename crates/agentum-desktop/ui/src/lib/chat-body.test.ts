@@ -9,9 +9,14 @@ const turns = [{ role: 'user' as const, content: 'how does the sidebar work?' }]
 
 describe('buildChatBody', () => {
   it('includes workdir + repo_id when a workspace is selected', () => {
-    const body = buildChatBody(turns, { workdir: '~/projects/agentum', repoId: 'repo-1' })
+    const body = buildChatBody(turns, {
+      workdir: '~/projects/agentum',
+      repoId: 'repo-1',
+      agent: 'codex'
+    })
     expect(body.workdir).toBe('~/projects/agentum')
     expect(body.repo_id).toBe('repo-1')
+    expect(body.agent).toBe('codex')
     expect(body.messages).toBe(turns)
   })
 
@@ -31,7 +36,8 @@ describe('buildChatStreamBody', () => {
       model: 'm',
       thinking: true,
       mode: 'socratic',
-      stage: 3
+      stage: 3,
+      agent: 'codex'
     })
     expect(body.repo_id).toBe('repo-2')
     expect(body.workdir).toBe('/home/u/proj')
@@ -39,6 +45,7 @@ describe('buildChatStreamBody', () => {
     expect(body.thinking).toBe(true)
     expect(body.mode).toBe('socratic')
     expect(body.stage).toBe(3)
+    expect(body.agent).toBe('codex')
   })
 
   it('defaults thinking to false and drops absent repo identity', () => {
