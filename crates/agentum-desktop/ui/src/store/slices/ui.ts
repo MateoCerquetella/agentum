@@ -973,10 +973,18 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     // taskPageData at mount — preselect the hub's repo here so it scopes
     // correctly without going through openTaskPage (which would also flip
     // activeView to 'tasks' and record Board history).
-    get().setActiveRepo(repoId)
     set((state) => ({
+      activeRepoId: repoId,
       activeView: 'project',
       projectHubTab: tab ?? state.projectHubTab,
+      // Invalidate the target repo's session binding in the SAME store write
+      // that seeds its TaskPage. A previously cached/corrupt identity must not
+      // get one render under the newly opened repo while ProjectHubPage's
+      // async binding fetch is still starting. Other repos stay cached.
+      projectBindingByRepo: {
+        ...state.projectBindingByRepo,
+        [repoId]: { status: 'loading' }
+      },
       taskPageData: {
         preselectedRepoId: repoId,
         ...(seed?.taskSource ? { taskSource: seed.taskSource } : {})
