@@ -97,6 +97,29 @@ impl StatusMapping {
             BoardPhase::Blocked => &self.blocked,
         }
     }
+
+    /// Convert a status value GitHub just returned into Agentum's canonical
+    /// cache phase. Ambiguous duplicate option ids deliberately return `None`:
+    /// the external option remains display-authoritative, and a local cache
+    /// must never guess which lifecycle phase a shared/fallback column means.
+    pub fn tracker_phase_for_option_id(
+        &self,
+        option_id: &str,
+    ) -> Option<crate::task_sink::TrackerPhase> {
+        use crate::task_sink::TrackerPhase;
+        let candidates = [
+            (&self.todo, TrackerPhase::Todo),
+            (&self.in_progress, TrackerPhase::InProgress),
+            (&self.in_review, TrackerPhase::InReview),
+            (&self.ready_to_test, TrackerPhase::ReadyToTest),
+            (&self.done, TrackerPhase::Done),
+        ];
+        let mut matches = candidates
+            .into_iter()
+            .filter(|(id, _)| !id.trim().is_empty() && id.as_str() == option_id);
+        let (_, phase) = matches.next()?;
+        matches.next().is_none().then_some(phase)
+    }
 }
 
 /// The same five-field shape carrying option *names* — display/round-trip
@@ -1148,6 +1171,40 @@ mod tests {
             ..m
         };
         assert_eq!(m2.option_id(BoardPhase::InReview), "pr");
+    }
+
+    #[test]
+    fn confirmed_status_option_maps_to_cache_phase_without_guessing() {
+        let mapping = StatusMapping {
+            todo: "todo-id".into(),
+            in_progress: "progress-id".into(),
+            in_review: "review-id".into(),
+            ready_to_test: "test-id".into(),
+            done: "done-id".into(),
+            blocked: "blocked-id".into(),
+        };
+        assert_eq!(
+            mapping.tracker_phase_for_option_id("todo-id"),
+            Some(crate::task_sink::TrackerPhase::Todo)
+        );
+        assert_eq!(
+            mapping.tracker_phase_for_option_id("review-id"),
+            Some(crate::task_sink::TrackerPhase::InReview)
+        );
+        assert_eq!(
+            mapping.tracker_phase_for_option_id("renamed-or-unknown"),
+            None
+        );
+
+        let ambiguous = StatusMapping {
+            in_review: "progress-id".into(),
+            ..mapping
+        };
+        assert_eq!(
+            ambiguous.tracker_phase_for_option_id("progress-id"),
+            None,
+            "a shared fallback column must not invent a local phase"
+        );
     }
 
     #[test]

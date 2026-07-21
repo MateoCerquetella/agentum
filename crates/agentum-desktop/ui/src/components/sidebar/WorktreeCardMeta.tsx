@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
-import { CircleDot, ExternalLink, MonitorUp, Pencil, StickyNote } from 'lucide-react'
+import { AlertTriangle, CircleDot, ExternalLink, MonitorUp, Pencil, StickyNote } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/tauri'
 import { LinearIcon } from '@/components/icons/LinearIcon'
@@ -19,7 +19,6 @@ import {
   WorktreeCardDetailSectionContent
 } from './WorktreeCardDetailSection'
 import { LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
-import { TrackerPhaseChip } from './TrackerPhaseChip'
 import { IssueProjectStatusChip, useIssueProjectStatus } from './IssueProjectStatusChip'
 import type { IssueInfo } from '../../../../shared/types'
 
@@ -55,10 +54,8 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
   branchName?: string
   workspaceTitle?: string
   detailsAfter?: React.ReactNode
-  /** Spec 014 F2: coords for the live tracker-phase chip in the issue badge
-   *  row. Optional — callers without a worktree context render no chip. */
+  /** Worktree id lets a confirmed GitHub option reconcile the local cache. */
   worktreeId?: string
-  trackerPhase?: string | null
   /** Spec 018 (#365): the repo the linked issue lives in, for the on-open
    *  Project-status read (binding lookup). Optional — no chip without them. */
   workdir?: string
@@ -219,7 +216,6 @@ export function WorktreeCardDetailsHover({
   workspaceTitle,
   detailsAfter,
   worktreeId,
-  trackerPhase,
   workdir,
   repoId,
   onEditIssue,
@@ -235,7 +231,8 @@ export function WorktreeCardDetailsHover({
     open: true,
     issueUrl: issue?.url,
     workdir,
-    repoId
+    repoId,
+    worktreeId
   })
   const dismissAndRun = React.useCallback(
     (handler: ((event: React.MouseEvent) => void) | undefined) => (event: React.MouseEvent) => {
@@ -320,28 +317,28 @@ export function WorktreeCardDetailsHover({
                 <div className="text-[13px] font-semibold leading-snug text-foreground break-words">
                   {issue.title}
                 </div>
-                {(issueLabels.length > 0 || worktreeId || projectStatus) && (
+                {(issueLabels.length > 0 || projectStatus.status) && (
                   <div className="flex flex-wrap gap-1">
                     {/* #379 (Mateo): the hover shows the BOARD status + the
                         labels only — the open/closed state badge was noise
                         (state is implied by the board column + labels). */}
-                    {/* Spec 014 F2: the pipeline-phase chip; renders nothing
-                        when unbound or redundant with the Board status. */}
-                    {worktreeId && (
-                      <TrackerPhaseChip
-                        worktreeId={worktreeId}
-                        persistedPhase={trackerPhase}
-                        projectStatus={projectStatus}
-                      />
-                    )}
-                    {/* Spec 018 (#365): the bound GitHub Project's Status column
-                        for this issue; renders nothing when unbound / off-project. */}
-                    <IssueProjectStatusChip status={projectStatus} />
+                    {/* #399: GitHub Project Status is the sole lifecycle chip.
+                        Never render the local TrackerPhaseChip beside it. */}
+                    <IssueProjectStatusChip status={projectStatus.status} />
                     {issueLabels.map((label) => (
                       <Badge key={label} variant="outline" className="h-4 px-1.5 text-[9px]">
                         {label}
                       </Badge>
                     ))}
+                  </div>
+                )}
+                {projectStatus.warning && (
+                  <div
+                    role="status"
+                    className="flex gap-1.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-snug text-amber-700 dark:text-amber-300"
+                  >
+                    <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+                    <span>{projectStatus.warning}</span>
                   </div>
                 )}
               </WorktreeCardDetailSectionContent>
