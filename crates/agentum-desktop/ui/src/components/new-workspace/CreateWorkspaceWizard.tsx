@@ -68,6 +68,7 @@ import {
 import {
   buildBindPayload,
   deriveIssueOptions,
+  filterWorkItemOptions,
   resolvePickerProject,
   type PickerProjectRef,
   type WorkItemOption
@@ -1562,6 +1563,7 @@ function TrackerSection({
   const [table, setTable] = useState<GitHubProjectTable | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
   const [configureOpen, setConfigureOpen] = useState(false)
+  const [issueQuery, setIssueQuery] = useState('')
 
   // Read the selected repo's per-repo Projects binding — host-aware via the
   // repo's registry id (spec 020: the server resolves the repo's own host, so
@@ -1639,7 +1641,17 @@ function TrackerSection({
   }, [resolved, fetchProjectViewTable, getCachedProjectViewTable])
 
   const options = useMemo(() => deriveIssueOptions(table), [table])
+  const filteredOptions = useMemo(
+    () => filterWorkItemOptions(options, issueQuery),
+    [options, issueQuery]
+  )
   const selectedUrl = linkedWorkItem?.type === 'issue' ? linkedWorkItem.url : null
+
+  // A Project switch changes the search universe. Clear the old query so a
+  // term from tracker A cannot make tracker B look incorrectly empty.
+  useEffect(() => {
+    setIssueQuery('')
+  }, [resolved?.owner, resolved?.number])
 
   // Spec 013 F1: the ONE status, from the ONE resolved Project the list reads.
   const trackerStatus = useMemo<UnifiedTrackerStatus>(
@@ -1687,33 +1699,86 @@ function TrackerSection({
       </div>
 
       {/* Status line — driven SOLELY by the resolved Project (AC 2). */}
-      <TrackerStatusLine status={trackerStatus} hasWorkdir={Boolean(workdir)} />
+      <TrackerStatusLine
+        status={trackerStatus}
+        hasWorkdir={Boolean(workdir)}
+        trackerLabel={resolved ? `${resolved.owner} · Project #${resolved.number}` : null}
+      />
 
       {/* Issue list — only when a Project resolved and has open issues. */}
       {trackerStatus.kind === 'connected' ? (
-        <div className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-lg border border-border p-1">
-          {options.map((option) => {
-            const selected = selectedUrl === option.url
-            return (
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
+          <label className="flex items-center gap-2 border-b border-border/70 bg-secondary/35 px-3 py-2">
+            <Search className="size-3.5 flex-none text-muted-foreground" aria-hidden />
+            <input
+              value={issueQuery}
+              onChange={(event) => setIssueQuery(event.target.value)}
+              placeholder={`Find an issue by number or title…`}
+              aria-label="Find a tracker issue"
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground/70"
+            />
+            {issueQuery ? (
               <button
-                key={option.itemId}
                 type="button"
-                onClick={() => onPickWorkItem(option)}
-                className={cn(
-                  'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
-                  selected
-                    ? 'bg-secondary text-foreground'
-                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
-                )}
+                onClick={() => setIssueQuery('')}
+                className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="Clear issue search"
               >
-                <Check className={cn('size-3 flex-none', selected ? 'opacity-70' : 'opacity-0')} />
-                <span className="flex-none font-mono text-[11px] text-muted-foreground">
-                  #{option.number}
-                </span>
-                <span className="truncate">{option.title}</span>
+                <X className="size-3.5" />
               </button>
-            )
-          })}
+            ) : null}
+          </label>
+          <div className="flex max-h-52 flex-col gap-1 overflow-y-auto p-1.5">
+            {filteredOptions.map((option) => {
+              const selected = selectedUrl === option.url
+              return (
+                <button
+                  key={option.itemId}
+                  type="button"
+                  onClick={() => onPickWorkItem(option)}
+                  aria-pressed={selected}
+                  className={cn(
+                    'group flex items-start gap-2.5 rounded-md border px-2.5 py-2 text-left transition-colors',
+                    selected
+                      ? 'border-emerald-500/45 bg-emerald-500/8 text-foreground shadow-[inset_3px_0_0_rgb(16_185_129_/_0.7)]'
+                      : 'border-transparent text-muted-foreground hover:border-border hover:bg-secondary/55 hover:text-foreground'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'mt-0.5 flex size-4 flex-none items-center justify-center rounded-full border transition-colors',
+                      selected
+                        ? 'border-emerald-500 bg-emerald-500 text-white'
+                        : 'border-muted-foreground/35 group-hover:border-muted-foreground/60'
+                    )}
+                  >
+                    <Check className={cn('size-2.5', selected ? 'opacity-100' : 'opacity-0')} />
+                  </span>
+                  <span className="flex-none rounded bg-secondary px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground">
+                    #{option.number}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[12px] leading-4">{option.title}</span>
+                    {option.repository ? (
+                      <span className="mt-0.5 block font-mono text-[9.5px] text-muted-foreground/70">
+                        {option.repository}
+                      </span>
+                    ) : null}
+                  </span>
+                  {selected ? (
+                    <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-emerald-500">
+                      Selected
+                    </span>
+                  ) : null}
+                </button>
+              )
+            })}
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-5 text-center text-[11.5px] text-muted-foreground">
+                No open issue matches “{issueQuery.trim()}”.
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -1725,9 +1790,16 @@ function TrackerSection({
       ) : null}
 
       {linkedWorkItem ? (
-        <span className="text-[11px] text-emerald-500">
-          Linked · #{linkedWorkItem.number} {linkedWorkItem.title}
-        </span>
+        <div className="flex items-start gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/8 px-3 py-2">
+          <Check className="mt-0.5 size-3.5 flex-none text-emerald-500" aria-hidden />
+          <span className="min-w-0 text-[11.5px] text-foreground">
+            <span className="font-semibold text-emerald-500">Selected for this workspace</span>
+            <span className="ml-1.5 font-mono text-muted-foreground">
+              #{linkedWorkItem.number}
+            </span>{' '}
+            {linkedWorkItem.title}
+          </span>
+        </div>
       ) : null}
     </div>
   )
@@ -2033,10 +2105,12 @@ function CreateIssuePanel({
  *  tracker", and it renders only when no Project resolved (AC 3). */
 function TrackerStatusLine({
   status,
-  hasWorkdir
+  hasWorkdir,
+  trackerLabel
 }: {
   status: UnifiedTrackerStatus
   hasWorkdir: boolean
+  trackerLabel: string | null
 }): React.JSX.Element {
   switch (status.kind) {
     case 'connecting':
@@ -2059,8 +2133,13 @@ function TrackerStatusLine({
       return (
         <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
           <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            Tracker connected — no open issues in this Project. Link one later (optional).
+          <span className="min-w-0 flex-1">
+            <span className="block text-[11.5px] font-medium text-foreground">
+              {trackerLabel ?? 'GitHub Project'}
+            </span>
+            <span className="block text-[10.5px] text-muted-foreground">
+              No open issues. You can create one below or link one later.
+            </span>
           </span>
           <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
             connected
@@ -2071,8 +2150,13 @@ function TrackerStatusLine({
       return (
         <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
           <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            Tracker connected — pick the issue you're about to work (optional).
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[11.5px] font-medium text-foreground">
+              {trackerLabel ?? 'GitHub Project'}
+            </span>
+            <span className="block text-[10.5px] text-muted-foreground">
+              Choose the work this workspace will track. Optional.
+            </span>
           </span>
           <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
             {status.issueCount} open

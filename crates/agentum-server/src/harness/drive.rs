@@ -222,10 +222,23 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             let qa_mode = resolve_qa_mode(&config, agent_qa_capable);
             let (qa_ok, qa_out) = match qa_mode {
                 QaMode::Agent => {
-                    run_qa_agent_gate(
+                    let result = run_qa_agent_gate(
                         state, harness_id, &workdir, &config, &feature, grace, timeout,
                     )
-                    .await?
+                    .await?;
+                    // The QA pane is intentionally torn down once its verdict
+                    // lands. Restore the still-live coding session as current
+                    // so retries/SDD controls return to the agent that receives
+                    // gate feedback.
+                    engine
+                        .set_current_session(
+                            harness_id,
+                            session.id,
+                            &config.features.agent_tool,
+                            Some(&feature.id),
+                        )
+                        .await?;
+                    result
                 }
                 _ => engine.run_qa_once(harness_id, &feature.id).await?,
             };
@@ -482,7 +495,12 @@ async fn spawn_feature_agent(
 
     state
         .harness
-        .set_session(harness_id, session.id, &feature.id)
+        .set_session(
+            harness_id,
+            session.id,
+            &feature.id,
+            &config.features.agent_tool,
+        )
         .await?;
 
     let target = agentum_tmux::target_for(&session.name);
@@ -574,6 +592,10 @@ async fn spawn_qa_agent(
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn QA agent: {e}"))?;
+    state
+        .harness
+        .set_current_session(harness_id, session.id, &session.tool, Some(&feature.id))
+        .await?;
     info!(%harness_id, feature = %feature.id, session = %session.id, "harness spawned QA agent");
     Ok(session)
 }
@@ -714,6 +736,10 @@ async fn spawn_role_agent(
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn role agent: {e}"))?;
+    state
+        .harness
+        .set_current_session(harness_id, session.id, &session.tool, None)
+        .await?;
     info!(%harness_id, role = %role.as_str(), session = %session.id, "harness spawned role agent");
     Ok(session)
 }
@@ -783,8 +809,6 @@ async fn run_role_gate(
         {
             engine.log(harness_id, None, settle_timeout_message(timeout));
         }
-        teardown_session(state, &session).await;
-
         let (passed, summary) = match tokio::fs::read_to_string(&verdict_abs).await {
             Ok(raw) => match parse_role_verdict(&raw) {
                 Ok(v) => v,
@@ -803,6 +827,7 @@ async fn run_role_gate(
         };
 
         let attempt = engine.bump_phase_attempt(harness_id).await?;
+        engine.set_gate_summary(harness_id, summary.clone()).await?;
         engine.emit(HarnessEvent::GateResult {
             harness_id,
             role,
@@ -818,6 +843,8 @@ async fn run_role_gate(
             config.features.hitl_on_block,
         ) {
             GateDecision::Advance => {
+                teardown_session(state, &session).await;
+                engine.clear_current(harness_id).await;
                 let _ = append_decision(
                     workdir,
                     &format!("{} gate PASS (attempt {attempt}): {summary}", phase.slug()),
@@ -831,6 +858,8 @@ async fn run_role_gate(
                 return Ok(true);
             }
             GateDecision::Retry => {
+                teardown_session(state, &session).await;
+                engine.clear_current(harness_id).await;
                 engine.log(
                     harness_id,
                     None,
