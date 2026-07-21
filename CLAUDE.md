@@ -397,7 +397,11 @@ One registry, three delivery paths (all in-repo consumers read `crate::sdd`):
   toggle renders whatever the server says, so it survives reloads and shows
   loops started by anyone. The worker stops on toggle-off, session
   stop/kill/crash, settle timeout, or step cap — every exit reason lands in
-  the `sdd.loop.stopped` payload.
+  the `sdd.loop.stopped` payload. MCP exposes the same control seam as
+  `agentum_sdd_loop_control` (`start` / `stop` / `status`, session UUID from
+  `agentum_list_sessions`); the separate `agentum_sdd_loop` tool remains the
+  end-of-step agent check-in (`done` / progress summary), so control and
+  completion cannot be confused.
 
 ---
 
@@ -618,4 +622,3 @@ cargo run -p agentum-desktop
 cargo test -p agentum-executor -p agentum-server --lib
 npm run build --prefix crates/agentum-desktop/ui
 ```
-

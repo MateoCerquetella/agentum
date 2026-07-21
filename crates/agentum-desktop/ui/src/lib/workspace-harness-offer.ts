@@ -53,16 +53,34 @@ export async function maybeOfferWorkspaceHarnessRun(opts: {
     // close-then-recreate at the same path reuses the id — without this, a
     // pre-close offer could leak into a new gated creation (D6 violation).
     state.clearWorkspaceHarnessOffer(opts.worktreeId)
+    // Spec 023 Part A: same purge for the gated-run-starting slice.
+    state.clearGatedRunStarting(opts.worktreeId)
 
     // Resolve worktree + connectionId from the store (the
     // WorkspaceAgentLauncher pattern). `undefined` = not found → fail closed.
     const worktree = Object.values(state.worktreesByRepo ?? {})
       .flat()
       .find((w) => w.id === opts.worktreeId)
-    const connectionId = worktree
-      ? (state.repos?.find((r) => r.id === worktree.repoId)?.connectionId ?? null)
-      : undefined
-    if (!worktree || !shouldDetectHarnessSpec({ gatedRun: opts.gatedRun, connectionId })) {
+    if (!worktree) {
+      return
+    }
+
+    // Spec 023 Part A (AC 1): a gated-run creation — the composer passes
+    // `gatedRun` ONLY when the engine took ownership
+    // (`gatedRunResultOwnsWorktree` → true) — surfaces the starting run
+    // instead of the bare picker. Set SYNCHRONOUSLY (before any await below)
+    // so the workspace never flashes the launcher; the offer detection is
+    // skipped for gated runs anyway (`shouldDetectHarnessSpec` D6), and the
+    // `subscribeHarnessRunErrors` toast still covers a mid-spawn failure
+    // (AC 3). Cleared by the GatedRunSurface once the session is attachable.
+    if (opts.gatedRun) {
+      state.setGatedRunStarting({ worktreeId: opts.worktreeId, workdir: worktree.path })
+      return
+    }
+
+    const connectionId =
+      state.repos?.find((r) => r.id === worktree.repoId)?.connectionId ?? null
+    if (!shouldDetectHarnessSpec({ gatedRun: false, connectionId })) {
       return
     }
 

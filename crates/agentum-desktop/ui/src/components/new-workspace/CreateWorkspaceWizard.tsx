@@ -12,6 +12,7 @@ import {
   Loader2,
   PlugZap,
   Plus,
+  RefreshCw,
   Search,
   Server,
   Sparkles,
@@ -37,6 +38,7 @@ import { searchRuntimeRepoBaseRefs } from '@/runtime/runtime-repo-client'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
+import { useDetectedAgents } from '@/hooks/useDetectedAgents'
 import { RemoteFileBrowser } from '@/components/sidebar/RemoteFileBrowser'
 import { useComposerState } from '@/hooks/useComposerState'
 import {
@@ -67,11 +69,21 @@ import {
 } from '@/components/new-workspace/create-workspace-wizard-model'
 import {
   buildBindPayload,
-  deriveIssueOptions,
+  deriveTrackerIssueViewModel,
+  pickerBindingTargetKey,
+  pickerProjectKey,
+  pickerScopeKey,
   resolvePickerProject,
+  type PickerBindingResolution,
   type PickerProjectRef,
   type WorkItemOption
 } from '@/components/new-workspace/work-item-picker-model'
+import {
+  isCurrentTrackerSectionScope,
+  trackerConfigureActionLabel,
+  trackerSectionAfterSuccessfulUnbind,
+  trackerSectionTableForScope
+} from '@/components/new-workspace/tracker-section-scope'
 import {
   canFileIssue,
   deriveCreateIssueIntentPhase,
@@ -86,8 +98,20 @@ import {
 } from '@/runtime/runtime-linear-client'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 import {
+  CHAT_AGENTS,
+  CHAT_MODELS,
+  pickChatAgent,
+  resolveChatModel,
+  type ChatAgentId
+} from '@/runtime/chat-client'
+import {
+  readChatModelPreference,
+  writeChatModelPreference
+} from '@/runtime/chat-preferences'
+import type { DraftLlmChoice } from '@/runtime/github-issue-client'
+import {
   getProjectBinding,
-  type ProjectBindingDto
+  GithubProjectsBindingError
 } from '@/runtime/github-projects-client'
 import type {
   GetProjectViewTableArgs,
@@ -132,10 +156,9 @@ export default function CreateWorkspaceWizard({
   const getCachedProjectViewTable = useAppStore((s) => s.getCachedProjectViewTable)
   const addRepoFromStore = useAppStore((s) => s.addRepo)
   const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
-  // Spec 011 F2: the issue picker resolves its Project from the selected repo's
-  // per-repo binding first; the globally-active Project
-  // (settings.githubProjects.activeProject) is the fallback (spec 012 behavior,
-  // preserved when there's no per-repo binding).
+  // Spec 011 F2: the issue picker can use the globally-active Project only
+  // when there is no selected git repo. A selected repo is a closed scope and
+  // must resolve through its own binding.
   const activeProject = settings?.githubProjects?.activeProject ?? null
 
   // Spec 013 F4: seed the SAME `useComposerState` from the full modal-open data
@@ -399,10 +422,9 @@ export default function CreateWorkspaceWizard({
   // that could disagree with the picker's issue list. Any GIT repo carries a
   // binding target now (#356, shipped v0.75.1): SSH repos resolve their slug
   // on their own host via spec 020's `repoId` (#359's hostId param, migrated
-  // to the repoId wire at the develop merge). Reading is host-aware;
-  // CONFIGURING the binding stays local-gated inside the section (product
-  // choice, unchanged). A non-git selection resolves nothing and falls back
-  // to the global activeProject.
+  // to the repoId wire at the develop merge). Reading and configuration are
+  // both host-aware. A non-git selection resolves nothing and may use the
+  // legacy global activeProject.
   const trackerTarget = deriveTrackerBindingTarget({
     repo: selectedRepo,
     isGit: selectedRepoIsGit
@@ -801,6 +823,7 @@ function RepoStep({
                         ? 'border-muted-foreground/40 bg-secondary'
                         : 'border-border hover:border-muted-foreground/25 hover:bg-secondary/50'
                   )}
+                  style={{ boxShadow: `inset 3px 0 0 ${repo.badgeColor}` }}
                 >
                   <span
                     className={cn(
@@ -1323,7 +1346,7 @@ type CreateIssueSeams = {
   body: string
   onBodyChange: (value: string) => void
   generating: boolean
-  onGenerate: () => void
+  onGenerate: (choice?: DraftLlmChoice) => void
   submitting: boolean
   error: string | null
   onSubmit: () => void
@@ -1383,11 +1406,14 @@ function AgentStep({
   /** Spec 020 F3: the repo's registry id — the binding resolves on the repo's
    *  own host (#356: SSH repos included). */
   trackerRepoId?: string
-  /** False when the repo lives on an SSH host — reading works there (#356),
-   *  configuring the binding stays local-gated. */
+  /** False when the repo lives on an SSH host; the same repoId-aware binding
+   *  read/write path supports both host kinds. */
   trackerLocal?: boolean
   activeProject: GitHubProjectSettings['activeProject']
-  fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
+  fetchProjectViewTable: (
+    args: GetProjectViewTableArgs,
+    options?: { force?: boolean }
+  ) => Promise<GetProjectViewTableResult>
   getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
@@ -1508,10 +1534,11 @@ function AgentStep({
 
 /**
  * Spec 011 F2 / 012 F1 / 013 F1: the New Workspace tracker section — ONE honest
- * section. It resolves its Project from the selected repo's per-repo binding
- * first, falling back to the globally-active Project (spec 012, no regression),
- * then lists that Project's OPEN issues (PRs/closed excluded, via
- * `deriveIssueOptions`) so the operator binds the card they're about to work.
+ * section. A selected git repo resolves only its repo-owned binding; absent or
+ * failed resolution exposes no Project rows. Legacy callers without a selected
+ * git repo may still use the globally-active Project. It then lists that
+ * Project's OPEN issues (PRs/closed excluded, via `deriveIssueOptions`) so the
+ * operator binds the card they're about to work.
  *
  * Spec 013 F1: the "Change / Configure tracker" control lives in this section's
  * TOP header, and the status line is driven SOLELY by the resolved Project
@@ -1547,58 +1574,123 @@ function TrackerSection({
    *  #359's hostId, migrated to the repoId wire). Gated exactly like
    *  `workdir`; also threaded to the binding editor. */
   repoId?: string
-  /** False for SSH repos. Configuring the binding stays local-only (the
-   *  editor is gated below); reading is host-aware via `repoId`. */
+  /** False for SSH repos. Reading and configuration both remain host-aware via
+   *  the selected registry `repoId`. */
   local?: boolean
   activeProject: GitHubProjectSettings['activeProject']
-  fetchProjectViewTable: (args: GetProjectViewTableArgs) => Promise<GetProjectViewTableResult>
+  fetchProjectViewTable: (
+    args: GetProjectViewTableArgs,
+    options?: { force?: boolean }
+  ) => Promise<GetProjectViewTableResult>
   getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
   linkedWorkItem: LinkedWorkItemSummary | null
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
 }): React.JSX.Element {
-  const [binding, setBinding] = useState<ProjectBindingDto | null>(null)
-  const [table, setTable] = useState<GitHubProjectTable | null>(null)
-  const [status, setStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  const [binding, setBinding] = useState<PickerBindingResolution | null>(null)
+  const [tableState, setTableState] = useState<{
+    scopeKey: string
+    table: GitHubProjectTable
+  } | null>(null)
+  const [status, setStatus] = useState<'idle' | 'loading' | 'refreshing' | 'failed'>('idle')
   const [configureOpen, setConfigureOpen] = useState(false)
+  const [query, setQuery] = useState('')
+
+  const bindingTargetKey = workdir ? pickerBindingTargetKey({ workdir, repoId }) : null
+  const currentBinding: PickerBindingResolution | null = bindingTargetKey
+    ? binding?.targetKey === bindingTargetKey
+      ? binding
+      : { kind: 'loading', targetKey: bindingTargetKey }
+    : null
+  const latestBindingTargetRef = useRef(bindingTargetKey)
+  latestBindingTargetRef.current = bindingTargetKey
 
   // Read the selected repo's per-repo Projects binding — host-aware via the
   // repo's registry id (spec 020: the server resolves the repo's own host, so
   // SSH repos resolve the same slug-keyed binding their local clone
   // configured). Fail-closed — a missing binding, an unreachable host, or gh
-  // being unavailable leaves `binding` null so resolution falls back to the
-  // global activeProject (spec 012).
+  // being unavailable leaves the selected repo fail-closed with no Project.
   useEffect(() => {
     if (!workdir) {
       setBinding(null)
       return
     }
+    const targetKey = pickerBindingTargetKey({ workdir, repoId })
+    setBinding({ kind: 'loading', targetKey })
     let cancelled = false
     void getProjectBinding({ workdir, repoId })
       .then((res) => {
-        if (!cancelled) setBinding(res.binding)
+        if (cancelled || latestBindingTargetRef.current !== targetKey) return
+        setBinding(
+          res.binding
+            ? {
+                kind: 'resolved',
+                targetKey,
+                repositorySlug: res.slug,
+                binding: res.binding
+              }
+            : { kind: 'absent', targetKey }
+        )
       })
-      .catch(() => {
-        if (!cancelled) setBinding(null)
+      .catch((error: unknown) => {
+        if (!cancelled && latestBindingTargetRef.current === targetKey) {
+          setBinding({
+            kind: 'failed',
+            targetKey,
+            ...(error instanceof GithubProjectsBindingError && error.code
+              ? { errorCode: error.code }
+              : {})
+          })
+        }
       })
     return () => {
       cancelled = true
     }
   }, [workdir, repoId])
 
-  // Per-repo binding wins; else the global activeProject; else null.
+  // Selected repos resolve only their own binding. The global activeProject is
+  // retained solely for legacy callers without a selected git repo.
   const resolved = useMemo(
-    () => resolvePickerProject({ binding, activeProject }),
-    [binding, activeProject]
+    () =>
+      resolvePickerProject({
+        binding: currentBinding,
+        activeProject,
+        selectedGitRepo: Boolean(workdir)
+      }),
+    [currentBinding, activeProject, workdir]
   )
+  const repositorySlug = currentBinding?.kind === 'resolved' ? currentBinding.repositorySlug : null
+  const scopeKey = resolved
+    ? bindingTargetKey && repositorySlug
+      ? pickerScopeKey({ targetKey: bindingTargetKey, repositorySlug, project: resolved })
+      : `global:${pickerProjectKey(resolved)}`
+    : null
+  const latestScopeKeyRef = useRef(scopeKey)
+  latestScopeKeyRef.current = scopeKey
+  // Read the matching cache during render so the first frame after binding
+  // resolution already contains rows. The effect below owns revalidation, not
+  // first paint; a table from another Project remains ineligible by key.
+  const cachedTable = useMemo(
+    () =>
+      resolved
+        ? getCachedProjectViewTable({
+            owner: resolved.owner,
+            ownerType: resolved.ownerType,
+            projectNumber: resolved.number
+          })
+        : null,
+    [resolved, getCachedProjectViewTable]
+  )
+  const table = trackerSectionTableForScope(tableState, scopeKey, cachedTable)
 
   useEffect(() => {
     if (!resolved) {
-      setTable(null)
       setStatus('idle')
       return
     }
+    if (!scopeKey) return
+    const capturedKey = scopeKey
     const args = {
       owner: resolved.owner,
       ownerType: resolved.ownerType,
@@ -1609,50 +1701,81 @@ function TrackerSection({
     // issues…" spinner over data that's seconds old (#385). A miss falls
     // through to the normal fetch below.
     const cached = getCachedProjectViewTable(args)
-    if (cached) {
-      setTable(cached)
-      setStatus('idle')
-      return
-    }
     let cancelled = false
-    setStatus('loading')
-    void fetchProjectViewTable(args)
+    if (cached) {
+      setTableState({ scopeKey: capturedKey, table: cached })
+      setStatus('refreshing')
+    } else {
+      setStatus('loading')
+    }
+    void fetchProjectViewTable(args, cached ? { force: true } : undefined)
       .then((res) => {
-        if (cancelled) return
+        if (cancelled || !isCurrentTrackerSectionScope(capturedKey, latestScopeKeyRef.current)) return
         if (res.ok) {
-          setTable(res.data)
+          setTableState({ scopeKey: capturedKey, table: res.data })
           setStatus('idle')
         } else {
-          setTable(null)
           setStatus('failed')
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          setTable(null)
+        if (!cancelled && isCurrentTrackerSectionScope(capturedKey, latestScopeKeyRef.current)) {
           setStatus('failed')
         }
       })
     return () => {
       cancelled = true
     }
-  }, [resolved, fetchProjectViewTable, getCachedProjectViewTable])
+  }, [resolved, scopeKey, fetchProjectViewTable, getCachedProjectViewTable])
 
-  const options = useMemo(() => deriveIssueOptions(table), [table])
+  useEffect(() => setQuery(''), [scopeKey])
+
+  const issueView = useMemo(
+    () => deriveTrackerIssueViewModel(table, query, repositorySlug ?? undefined),
+    [table, query, repositorySlug]
+  )
   const selectedUrl = linkedWorkItem?.type === 'issue' ? linkedWorkItem.url : null
+
+  const refresh = useCallback(() => {
+    if (!resolved || !scopeKey) return
+    const args = {
+      owner: resolved.owner,
+      ownerType: resolved.ownerType,
+      projectNumber: resolved.number
+    }
+    setStatus(table ? 'refreshing' : 'loading')
+    void fetchProjectViewTable(args, { force: true })
+      .then((res) => {
+        if (!isCurrentTrackerSectionScope(scopeKey, latestScopeKeyRef.current)) return
+        if (res.ok) {
+          setTableState({ scopeKey, table: res.data })
+          setStatus('idle')
+        } else {
+          setStatus('failed')
+        }
+      })
+      .catch(() => {
+        if (isCurrentTrackerSectionScope(scopeKey, latestScopeKeyRef.current)) setStatus('failed')
+      })
+  }, [fetchProjectViewTable, scopeKey, resolved, table])
 
   // Spec 013 F1: the ONE status, from the ONE resolved Project the list reads.
   const trackerStatus = useMemo<UnifiedTrackerStatus>(
-    () => deriveUnifiedTrackerStatus({ resolved, status, optionCount: options.length }),
-    [resolved, status, options.length]
+    () =>
+      deriveUnifiedTrackerStatus({
+        resolved,
+        binding: currentBinding,
+        selectedGitRepo: Boolean(workdir),
+        status,
+        optionCount: issueView.issueCount,
+        hasTable: Boolean(table)
+      }),
+    [resolved, currentBinding, workdir, status, issueView.issueCount, table]
   )
 
-  // The compact configure/switch affordance — configuring a binding stays a
-  // LOCAL-repo affordance (product choice, kept at the #359/020 merge), so an
-  // SSH repo (`local` false) reads its slug-keyed binding but doesn't
-  // configure it here. Reuses the SAME editor as the hub / Settings; onBound
-  // refreshes the section so it re-resolves to the freshly-bound Project.
-  const configureControl = workdir && local ? (
+  // The compact repo-scoped configure/switch affordance. The shared editor and
+  // server resolve both local and SSH repositories through workdir + repoId.
+  const configureControl = workdir ? (
     <Popover open={configureOpen} onOpenChange={setConfigureOpen}>
       <PopoverTrigger asChild>
         <button
@@ -1660,15 +1783,32 @@ function TrackerSection({
           className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
         >
           <KanbanSquare className="size-3" />
-          {resolved ? 'Change tracker' : 'Configure tracker'}
+          {trackerConfigureActionLabel(Boolean(resolved))}
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="max-h-[420px] w-[360px] overflow-y-auto p-3">
         <ProjectBindingEditor
           workdir={workdir}
           repoId={repoId}
-          onBound={(next) => {
-            setBinding(next)
+          onBound={(next, nextRepositorySlug) => {
+            if (bindingTargetKey) {
+              setBinding({
+                kind: 'resolved',
+                targetKey: bindingTargetKey,
+                repositorySlug: nextRepositorySlug,
+                binding: next
+              })
+            }
+            setConfigureOpen(false)
+          }}
+          onUnbound={() => {
+            if (!bindingTargetKey) return
+            const unbound = trackerSectionAfterSuccessfulUnbind(bindingTargetKey)
+            latestScopeKeyRef.current = unbound.scopeKey
+            setBinding(unbound.binding)
+            setTableState(null)
+            setStatus('idle')
+            setQuery('')
             setConfigureOpen(false)
           }}
         />
@@ -1687,33 +1827,107 @@ function TrackerSection({
       </div>
 
       {/* Status line — driven SOLELY by the resolved Project (AC 2). */}
-      <TrackerStatusLine status={trackerStatus} hasWorkdir={Boolean(workdir)} />
+      <TrackerStatusLine
+        status={trackerStatus}
+        hasWorkdir={Boolean(workdir)}
+        onRetry={resolved ? refresh : undefined}
+      />
 
-      {/* Issue list — only when a Project resolved and has open issues. */}
-      {trackerStatus.kind === 'connected' ? (
-        <div className="flex max-h-44 flex-col gap-1 overflow-y-auto rounded-lg border border-border p-1">
-          {options.map((option) => {
-            const selected = selectedUrl === option.url
-            return (
-              <button
-                key={option.itemId}
-                type="button"
-                onClick={() => onPickWorkItem(option)}
-                className={cn(
-                  'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
-                  selected
-                    ? 'bg-secondary text-foreground'
-                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
-                )}
-              >
-                <Check className={cn('size-3 flex-none', selected ? 'opacity-70' : 'opacity-0')} />
-                <span className="flex-none font-mono text-[11px] text-muted-foreground">
-                  #{option.number}
-                </span>
-                <span className="truncate">{option.title}</span>
-              </button>
-            )
-          })}
+      {table ? (
+        <div className="overflow-hidden rounded-lg border border-border bg-card/30">
+          <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+            <Search className="size-3.5 flex-none text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="Filter Project issues"
+              placeholder="Filter by title or #number"
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground/70"
+            />
+            <span className="flex-none font-mono text-[10.5px] text-muted-foreground">
+              {issueView.issueCount} {issueView.issueCount === 1 ? 'issue' : 'issues'}
+            </span>
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={status === 'refreshing'}
+              aria-label="Refresh Project issues"
+              className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
+            >
+              <RefreshCw className={cn('size-3.5', status === 'refreshing' && 'animate-spin')} />
+            </button>
+          </div>
+          <div className="max-h-52 overflow-y-auto p-1">
+            {issueView.groups.length ? (
+              issueView.groups.map((group) => (
+                <div key={group.key} className="mb-1 last:mb-0">
+                  {group.label ? (
+                    <div className="sticky top-0 z-[1] flex items-center gap-2 bg-card/95 px-2.5 py-1.5 backdrop-blur-sm">
+                      <span
+                        className="size-2 rounded-full"
+                        style={{ backgroundColor: trackerStatusColor(group.color) }}
+                      />
+                      <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                        {group.label}
+                      </span>
+                      <span className="font-mono text-[10px] text-muted-foreground/70">
+                        {group.options.length}
+                      </span>
+                    </div>
+                  ) : null}
+                  {group.options.map((option) => {
+                    const selected = selectedUrl === option.url
+                    return (
+                      <button
+                        key={option.itemId}
+                        type="button"
+                        aria-pressed={selected}
+                        aria-label={`Link issue #${option.number}: ${option.title}`}
+                        onClick={() => onPickWorkItem(option)}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-md border-l-2 px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                          selected
+                            ? 'border-l-primary bg-secondary text-foreground'
+                            : 'border-l-transparent text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                        )}
+                      >
+                        <Check
+                          className={cn('size-3 flex-none', selected ? 'opacity-70' : 'opacity-0')}
+                        />
+                        <span className="flex-none font-mono text-[11px] text-muted-foreground">
+                          #{option.number}
+                        </span>
+                        <span className="truncate">{option.title}</span>
+                        {group.label ? (
+                          <span className="ml-auto inline-flex max-w-28 flex-none items-center gap-1 truncate rounded-full border border-border px-1.5 py-0.5 text-[9.5px] text-muted-foreground">
+                            <span
+                              className="size-1.5 flex-none rounded-full"
+                              style={{ backgroundColor: trackerStatusColor(group.color) }}
+                            />
+                            <span className="truncate">{group.label}</span>
+                          </span>
+                        ) : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              ))
+            ) : (
+              <div className="px-3 py-5 text-center text-[11.5px] text-muted-foreground">
+                {query.trim()
+                  ? `No open issues match “${query.trim()}”.`
+                  : 'No open issues in this Project.'}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-between border-t border-border px-2.5 py-1.5 text-[10.5px] text-muted-foreground">
+            <span className="truncate">
+              {table.project.title || `${table.project.owner} · Project ${table.project.number}`}
+            </span>
+            <span className="flex-none font-mono">
+              {table.project.owner} · #{table.project.number}
+            </span>
+          </div>
         </div>
       ) : null}
 
@@ -1758,6 +1972,31 @@ function CreateIssuePanel({
   resolved: PickerProjectRef | null
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const savedChatAgent = useAppStore((state) => state.settings?.chatAgent)
+  const updateSettings = useAppStore((state) => state.updateSettings)
+  const { detectedIds: detectedChatAgentIds } = useDetectedAgents()
+  const preferredDraftAgent = pickChatAgent(savedChatAgent, detectedChatAgentIds)
+  const [draftAgent, setDraftAgent] = useState<ChatAgentId>(preferredDraftAgent)
+  const [draftModel, setDraftModel] = useState(
+    () => resolveChatModel(readChatModelPreference()).id
+  )
+  const draftPreferenceTouched = useRef(false)
+
+  useEffect(() => {
+    if (!draftPreferenceTouched.current) setDraftAgent(preferredDraftAgent)
+  }, [preferredDraftAgent])
+
+  const availableDraftAgents = useMemo(
+    () =>
+      detectedChatAgentIds === null
+        ? CHAT_AGENTS
+        : CHAT_AGENTS.filter((agent) => detectedChatAgentIds.includes(agent.id)),
+    [detectedChatAgentIds]
+  )
+  const effectiveDraftAgent =
+    availableDraftAgents.find((agent) => agent.id === draftAgent)?.id ??
+    availableDraftAgents[0]?.id ??
+    draftAgent
   // F3 Linear arm — probed lazily when the panel opens (best-effort; a failure
   // leaves `linearConnected` false so the panel stays GitHub-only).
   const [linearConnected, setLinearConnected] = useState(false)
@@ -1820,8 +2059,26 @@ function CreateIssuePanel({
       return
     }
     setLinearError(null)
-    createIssue.onGenerate()
-  }, [busy, createIssue])
+    const choice: DraftLlmChoice = {
+      agent: effectiveDraftAgent,
+      ...(effectiveDraftAgent === 'claude' ? { model: draftModel } : {})
+    }
+    createIssue.onGenerate(choice)
+  }, [busy, createIssue, draftModel, effectiveDraftAgent])
+
+  const handleDraftAgentChange = useCallback(
+    (agent: ChatAgentId) => {
+      draftPreferenceTouched.current = true
+      setDraftAgent(agent)
+      void updateSettings({ chatAgent: agent })
+    },
+    [updateSettings]
+  )
+
+  const handleDraftModelChange = useCallback((model: string) => {
+    setDraftModel(model)
+    writeChatModelPreference(model)
+  }, [])
 
   // F3 Linear file arm: create the issue in Linear, then bind it through the
   // SAME composer seam (`onSmartLinearIssueSelect`) the Linear @-picker uses, so
@@ -1965,21 +2222,68 @@ function CreateIssuePanel({
       {/* Description is OPTIONAL. "Draft with AI" fills an SDD-shaped body from
           the title; the user can also just type, or leave it blank. */}
       <div className="flex flex-col gap-1.5">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-end justify-between gap-2">
           <span className="text-[11px] text-muted-foreground">Description (optional)</span>
-          <button
-            type="button"
-            onClick={handleDraft}
-            disabled={!canFile}
-            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {phase === 'drafting' ? (
-              <Loader2 className="size-3 animate-spin" />
+          <div className="flex flex-wrap items-end gap-1.5">
+            <label className="flex flex-col gap-0.5">
+              <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
+                Engine
+              </span>
+              <select
+                aria-label="Drafting engine"
+                value={effectiveDraftAgent}
+                disabled={availableDraftAgents.length === 0 || busy}
+                onChange={(event) => handleDraftAgentChange(event.target.value as ChatAgentId)}
+                className="h-6 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+              >
+                {availableDraftAgents.length === 0 ? (
+                  <option value={effectiveDraftAgent}>No detected engine</option>
+                ) : null}
+                {availableDraftAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {effectiveDraftAgent === 'claude' ? (
+              <label className="flex flex-col gap-0.5">
+                <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
+                  Model
+                </span>
+                <select
+                  aria-label="Drafting model"
+                  value={draftModel}
+                  disabled={busy}
+                  onChange={(event) => handleDraftModelChange(event.target.value)}
+                  className="h-6 max-w-44 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                >
+                  {CHAT_MODELS.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : (
-              <Sparkles className="size-3" />
+              <span className="inline-flex h-6 items-center rounded-md border border-border bg-secondary px-2 text-[10.5px] text-muted-foreground">
+                default model
+              </span>
             )}
-            {phase === 'drafting' ? 'Drafting…' : hasBody ? 'Redraft' : 'Draft with AI'}
-          </button>
+            <button
+              type="button"
+              onClick={handleDraft}
+              disabled={!canFile || availableDraftAgents.length === 0}
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {phase === 'drafting' ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Sparkles className="size-3" />
+              )}
+              {phase === 'drafting' ? 'Drafting…' : hasBody ? 'Redraft' : 'Draft with AI'}
+            </button>
+          </div>
         </div>
         <textarea
           value={createIssue.body}
@@ -2028,17 +2332,63 @@ function CreateIssuePanel({
   )
 }
 
+const TRACKER_STATUS_COLORS: Record<string, string> = {
+  GRAY: '#8b949e',
+  RED: '#f85149',
+  ORANGE: '#db6d28',
+  YELLOW: '#d29922',
+  GREEN: '#3fb950',
+  BLUE: '#58a6ff',
+  PURPLE: '#bc8cff',
+  PINK: '#db61a2'
+}
+
+function trackerStatusColor(color: string | null): string {
+  if (!color) return 'var(--muted-foreground)'
+  const keyword = TRACKER_STATUS_COLORS[color.toUpperCase()]
+  if (keyword) return keyword
+  if (/^#?[0-9a-fA-F]{6}$/.test(color)) return color.startsWith('#') ? color : `#${color}`
+  return 'var(--muted-foreground)'
+}
+
 /** The single status line for the unified tracker section — a pure view of
  *  `deriveUnifiedTrackerStatus`. "none" is the ONLY state that reads "no
  *  tracker", and it renders only when no Project resolved (AC 3). */
 function TrackerStatusLine({
   status,
-  hasWorkdir
+  hasWorkdir,
+  onRetry
 }: {
   status: UnifiedTrackerStatus
   hasWorkdir: boolean
+  onRetry?: () => void
 }): React.JSX.Element {
   switch (status.kind) {
+    case 'resolving':
+      return (
+        <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
+          <Loader2 className="size-3.5 animate-spin" />
+          Resolving this repository&apos;s Project…
+        </div>
+      )
+    case 'binding-unavailable':
+      return (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
+          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
+          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+            Couldn&apos;t resolve this repository&apos;s tracker. Workspace creation is still available.
+          </span>
+        </div>
+      )
+    case 'binding-mismatch':
+      return (
+        <div className="flex items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5">
+          <KanbanSquare className="size-[15px] flex-none text-destructive" />
+          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+            This tracker belongs to a different repository. Reconfigure it before selecting an issue.
+          </span>
+        </div>
+      )
     case 'connecting':
       return (
         <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
@@ -2053,6 +2403,15 @@ function TrackerStatusLine({
           <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
             Tracker connected, but its issues couldn't load — pick or link one later (optional).
           </span>
+          {onRetry ? (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-md border border-border px-2 py-1 text-[10.5px] hover:text-foreground"
+            >
+              Retry
+            </button>
+          ) : null}
         </div>
       )
     case 'connected-empty':
@@ -2060,7 +2419,11 @@ function TrackerStatusLine({
         <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
           <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
           <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            Tracker connected — no open issues in this Project. Link one later (optional).
+            {status.refreshing
+              ? 'Refreshing Project issues…'
+              : status.stale
+                ? 'Refresh failed — showing the last saved Project data.'
+                : 'Tracker connected — no open issues in this Project. Link one later (optional).'}
           </span>
           <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
             connected
@@ -2072,7 +2435,11 @@ function TrackerStatusLine({
         <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
           <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
           <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            Tracker connected — pick the issue you're about to work (optional).
+            {status.refreshing
+              ? 'Refreshing Project issues — cached rows remain available.'
+              : status.stale
+                ? 'Refresh failed — showing the last saved Project data.'
+                : "Tracker connected — pick the issue you're about to work (optional)."}
           </span>
           <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
             {status.issueCount} open

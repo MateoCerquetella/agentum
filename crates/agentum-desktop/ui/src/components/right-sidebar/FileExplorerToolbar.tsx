@@ -10,9 +10,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { WorktreeOpenInMenuItems } from '@/components/sidebar/WorktreeOpenInMenu'
+import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 
 type FileExplorerToolbarProps = {
   repoName: string
+  repoColor?: string | null
   worktreePath: string
   connectionId?: string | null
   refresh: {
@@ -31,6 +33,7 @@ type FileExplorerToolbarProps = {
 
 export function FileExplorerToolbar({
   repoName,
+  repoColor,
   worktreePath,
   connectionId,
   refresh,
@@ -44,6 +47,7 @@ export function FileExplorerToolbar({
 }: FileExplorerToolbarProps): React.JSX.Element {
   return (
     <div className="flex h-8 min-h-8 items-center gap-2 border-b border-border px-2">
+      <RepoBadgeMark color={repoColor} className="size-2 rounded-[2px]" />
       <span
         className="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
         title={repoName}

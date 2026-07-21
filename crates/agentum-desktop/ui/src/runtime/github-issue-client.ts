@@ -5,6 +5,12 @@
 // into linked context (spec 002, Option B). Wire shape is faithful to
 // `crates/agentum-server/src/routes/github.rs::IssueBody`.
 import { apiUrl, getServerEndpoint } from './server-endpoint'
+import type { ChatAgentId } from './chat-client'
+
+export type DraftLlmChoice = {
+  agent: ChatAgentId
+  model?: string
+}
 
 export type GithubIssueBody = {
   title: string
@@ -212,10 +218,28 @@ export type DraftedGithubIssueBody = {
  * the form can render it inline (including the "set ANTHROPIC_API_KEY / sign
  * in to Claude" no-credentials message).
  */
+export function draftIssueBodyPayload(input: {
+  workdir: string
+  title: string
+  slug?: string
+  agent?: ChatAgentId
+  model?: string
+}): Record<string, string> {
+  return {
+    workdir: input.workdir,
+    title: input.title,
+    ...(input.slug ? { slug: input.slug } : {}),
+    ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.model ? { model: input.model } : {})
+  }
+}
+
 export async function draftGithubIssueBody(input: {
   workdir: string
   title: string
   slug?: string
+  agent?: ChatAgentId
+  model?: string
   /** Abort budget — a full LLM draft; generous but bounded. */
   timeoutMs?: number
 }): Promise<DraftedGithubIssueBody> {
@@ -226,11 +250,7 @@ export async function draftGithubIssueBody(input: {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-      body: JSON.stringify({
-        workdir: input.workdir,
-        title: input.title,
-        ...(input.slug ? { slug: input.slug } : {})
-      }),
+      body: JSON.stringify(draftIssueBodyPayload(input)),
       signal: controller.signal
     })
     if (!res.ok) {

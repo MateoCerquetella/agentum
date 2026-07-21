@@ -3,7 +3,7 @@
 // the planner-tool pick and connection profiles already use. One key holds the
 // whole list; chat transcripts are small text, so this stays well within quota.
 import type { IntakeState } from '../lib/socratic-intake'
-import type { ChatTurn } from './chat-client'
+import type { ChatAgentId, ChatTurn } from './chat-client'
 
 const STORAGE_KEY = 'agentum.chat.conversations.v1'
 /** Hard cap on stored conversations — old ones are pruned (newest kept) so the
@@ -41,6 +41,12 @@ export type Conversation = {
   createdAt: number
   updatedAt: number
   repoId?: string
+  /** Spec 394: which agent the thread last ran on — DISPLAY metadata only (the
+   *  history row shows "Codex" instead of a misleading Claude model label).
+   *  The agent itself is the global Settings pick, never a per-conversation
+   *  override (spec non-goal), so reopening does NOT restore this. Absent on
+   *  pre-394 threads ⇒ Claude. */
+  agent?: ChatAgentId
   /** Spec 008 F2: the Fast/Complex intake this thread runs, with the socratic
    *  pass the NEXT turn will use. Persisted here (D1: no new store table) so a
    *  reload resumes a Complex interview at the right pass; absent on pre-008

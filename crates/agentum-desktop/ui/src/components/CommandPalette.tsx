@@ -21,6 +21,7 @@ import {
 import { openBoardSurface } from '@/lib/board-route'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { branchName } from '@/lib/git-utils'
+import RepoBadgeLabel from '@/components/repo/RepoBadgeLabel'
 import {
   getSettingsTargetFromSectionId,
   useSettingsNavigationMetadata
@@ -238,9 +239,12 @@ export default function CommandPalette(): React.JSX.Element {
                   <span className="truncate font-medium">{worktree.displayName}</span>
                   <span className="truncate text-[12px] text-muted-foreground">{branch}</span>
                   {repo?.displayName ? (
-                    <span className="ml-auto truncate pl-3 text-[12px] text-muted-foreground">
-                      {repo.displayName}
-                    </span>
+                    <RepoBadgeLabel
+                      name={repo.displayName}
+                      color={repo.badgeColor}
+                      className="ml-auto max-w-[42%] pl-3 text-[12px] text-muted-foreground"
+                      badgeClassName="size-2 rounded-[2px]"
+                    />
                   ) : null}
                 </CommandItem>
               )

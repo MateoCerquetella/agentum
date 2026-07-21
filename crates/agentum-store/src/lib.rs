@@ -21,6 +21,8 @@ mod events;
 mod hosts;
 mod messages;
 mod notes;
+mod project_trackers;
+pub use project_trackers::ProjectTrackerWrite;
 mod sessions;
 mod settings;
 mod users;

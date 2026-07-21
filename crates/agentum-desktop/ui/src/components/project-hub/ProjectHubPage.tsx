@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
 import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
+import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 // Import-only (must-not-touch): the v0.75.1 host-aware target derivation the
 // wizard's tracker section already uses — one seam for `connectionId → hostId`.
@@ -89,14 +90,19 @@ export default function ProjectHubPage(): React.JSX.Element {
   // now — this effect stores the raw identity.
   const setProjectBindingState = useAppStore((s) => s.setProjectBindingState)
   useEffect(() => {
-    if (!repo || tab !== 'tasks' || !isGitRepoKind(repo)) return
+    // `tracker` is a legacy deep-link alias for the same embedded Tasks
+    // surface. It must drive the same binding lifecycle; otherwise a freshly
+    // invalidated entry stays pending forever when that alias is opened.
+    if (!repo || (tab !== 'tasks' && tab !== 'tracker') || !isGitRepoKind(repo)) return
     const target = deriveTrackerBindingTarget({ repo, isGit: true })
     if (!target) {
       setProjectBindingState(repo.id, { status: 'loaded', binding: null })
       return
     }
-    // Keep an existing 'loaded' entry while refetching (no board flicker);
-    // only a first visit shows the loading skeleton.
+    // `openProjectHub` invalidates this repo atomically with navigation, so
+    // TaskPage cannot paint an old identity while this request is in flight.
+    // Keep this fallback for non-standard callers that mutate activeRepoId
+    // directly while the hub is mounted.
     if (!useAppStore.getState().projectBindingByRepo[repo.id]) {
       setProjectBindingState(repo.id, { status: 'loading' })
     }
@@ -122,8 +128,8 @@ export default function ProjectHubPage(): React.JSX.Element {
       })
       .catch(() => {
         if (cancelled) return
-        // Fail closed to 'loaded/null' so the resolver falls to the legacy
-        // tier instead of wedging on 'pending'.
+        // Fail closed to this repo's honest unbound state instead of wedging
+        // on pending or retaining any previously cached project identity.
         setProjectBindingState(repo.id, { status: 'loaded', binding: null })
       })
     return () => {
@@ -196,6 +202,7 @@ export default function ProjectHubPage(): React.JSX.Element {
             className="size-4 shrink-0 text-muted-foreground"
             iconClassName="size-3.5"
           />
+          <RepoBadgeMark color={repo.badgeColor} className="size-1.5 rounded-full" />
           <h1 className="truncate text-[14px] font-semibold tracking-tight">{repo.displayName}</h1>
         </div>
         <nav className="ml-3 flex items-center gap-0.5" aria-label="Project sections">
