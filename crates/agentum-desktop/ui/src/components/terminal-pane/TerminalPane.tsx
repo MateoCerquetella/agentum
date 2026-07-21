@@ -88,6 +88,7 @@ import {
 import { getCachedTerminalTabForWorktree } from './terminal-tab-lookup'
 import { getCachedTerminalGroupIdForWorktree } from './terminal-unified-tab-lookup'
 import { useRepoById } from '@/store/selectors'
+import { SddStatusStrip } from './SddStatusStrip'
 
 type TerminalPaneProps = {
   tabId: string
@@ -1641,6 +1642,10 @@ export default function TerminalPane({
           // not reach the pty — #978.
           pane.terminal.focus()
         }}
+      />
+      <SddStatusStrip
+        serverSessionId={terminalTab?.serverSessionId}
+        visible={isVisible && !shouldMeasureHiddenStartup}
       />
       {terminalError && isActive && (
         <TerminalErrorToast

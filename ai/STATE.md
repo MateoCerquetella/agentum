@@ -87,19 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-14 | Dev→Review | **018 BUILT + SIGNED-OFF → phase done, merged to develop**
-  (one slice, `tasks`-equivalent in `verification.md`/`review.md`). Landed:
-  `gh_issue_project_status` desktop Tauri command + pure
-  `issue_project_status(&Value,…)->Option<String>` mapper (4 #[cfg(test)]
-  cases) + `lib.rs` reg; `gh.ts`/`contract.ts` `issueProjectStatus`; pure
-  `lib/issue-project-status.ts` (parseIssueRef/statusCacheKey/
-  resolveIssueProjectStatus, never-throws) + 12 vitest; `IssueProjectStatusChip`
-  + `useIssueProjectStatus` (module caches: binding/slug, status/slug#number) +
-  badges-row slot + `workdir`/`repoId` from WorktreeCard + card test. Gates:
-  UI build green, new vitest 13/13, tsc(pure) green, fmt green; Rust compile
-  CI-deferred (webkitgtk absent). 1 red vitest = pre-existing develop baseline
-  (proven via stash-all). AC1 code-verified, AC2/AC3 test-covered; live legs =
-  qa.sh/staging. #365 stays open until main.
 - 2026-07-14 | Architect | **018 ARCHITECT DONE → phase developer**
   (`architecture.md`; handoffs `01-pm-to-architect.md`, `02-architect-to-developer.md`).
   Both open Qs pinned: **D1** desktop Tauri command `gh_issue_project_status`
@@ -151,3 +138,9 @@
   architect: pin-resolution seam (UI-sends vs server-reads-repos.json —
   recommend server), Project-Hub display, "Auto — detected" legibility, the
   bigger Chat/New-Issue consolidation (follow-up spec). Handoff → PM/architect.
+- 2026-07-20 | Developer/Tester | **ISSUE #395 STATUS STRIP COMPLETE + GREEN.**
+  Every run-owned feature, QA, and role terminal now shows live SDD phase and
+  executing n/N progress through the existing harness status/event channel;
+  ordinary sessions are excluded and burst events retain a final refresh.
+  Focused Vitest 4/4 and Vite production build PASS. Standalone tsc remains
+  baseline-red on unrelated missing shared modules. Spec 021 remains active.
