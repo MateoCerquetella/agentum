@@ -157,11 +157,14 @@ pub async fn capture_pane_with_log_offset(
 /// Output is three sections: the pane-log byte size, the cursor sample, then
 /// the raw ANSI grid (rest of stdout).
 ///
-/// This ALSO (idempotently) arms `pipe-pane` first — folding what used to be a
-/// separate connect-time round-trip into this one. On a distant host each SSH
-/// exec is ~450 ms even over the warm master, so doing arm-then-capture as two
+/// This ALSO arms `pipe-pane` first — folding what used to be a separate
+/// connect-time round-trip into this one. On a distant host each SSH exec is
+/// ~450 ms even over the warm master, so doing arm-then-capture as two
 /// sequential calls cost ~900 ms of blank screen before the first paint; one
-/// combined exec halves that. A pipe-pane failure here is swallowed (the
+/// combined exec halves that. The arm is guarded by a `#{pane_pipe}` probe
+/// because `pipe-pane -o` TOGGLES (it is not the no-op-when-live the old
+/// comment claimed — issue #270): a blind re-arm here disarmed the live
+/// stream on every other connect. A pipe-pane failure is swallowed (the
 /// snapshot still paints; only live updates would be missing) rather than
 /// failing the connect.
 ///
@@ -177,7 +180,8 @@ pub(crate) fn snapshot_with_offset_script(target: &str, out_path: &Path) -> Resu
     let log = remote_pane_log_expr(out_path)?;
     let pipe = q(&format!("cat >> {log}"))?.into_owned();
     let inner = format!(
-        "mkdir -p \"{REMOTE_PANE_DIR}\" 2>/dev/null; tmux pipe-pane -o -t {t} {pipe} 2>/dev/null; \
+        "mkdir -p \"{REMOTE_PANE_DIR}\" 2>/dev/null; \
+         [ \"$(tmux display-message -p -t {t} '#{{pane_pipe}}' 2>/dev/null)\" = 1 ] || tmux pipe-pane -t {t} {pipe} 2>/dev/null; \
          c=$(tmux display-message -p -t {t} {fmt} 2>/dev/null || echo X); \
          f=$(mktemp 2>/dev/null || echo /tmp/agentum-snap.$$); \
          tmux capture-pane -p -e -t {t} > \"$f\" 2>/dev/null || true; \
@@ -320,7 +324,9 @@ pub async fn pipe_pane(host: &Host, target: &str, out_path: &Path) -> Result<()>
             // the *remote* host, which `spawn_remote_pane_tail` follows over one
             // persistent SSH channel. This replaces the old capture-pane polling
             // (700 ms full-screen snapshots), which was the source of the remote
-            // terminal lag and flicker. `-o` makes re-arming idempotent.
+            // terminal lag and flicker. Re-arming is made idempotent by a
+            // `#{pane_pipe}` probe inside the script — NOT by `-o`, which
+            // toggles the pipe off when one is live (issue #270).
             ssh_checked(host, &remote_pipe_script(target, out_path)?).await
         }
     }
@@ -353,10 +359,14 @@ pub(crate) fn remote_pipe_script(target: &str, out_path: &Path) -> Result<String
     // tmux runs this command via `/bin/sh -c` on every flush; single-quoting it
     // keeps `$HOME` unexpanded through the outer shells so it resolves there.
     let pipe = format!("cat >> {log}");
+    // Guard on `#{pane_pipe}` instead of trusting `pipe-pane -o`: `-o` toggles
+    // a live pipe off (issue #270), so re-running this script against an armed
+    // pane must be a true no-op. Arming uses plain `pipe-pane` so a lost race
+    // still ends armed.
     let inner = format!(
-        "mkdir -p \"{REMOTE_PANE_DIR}\" && tmux pipe-pane -o -t {} {}",
-        q(target)?,
-        q(&pipe)?
+        "mkdir -p \"{REMOTE_PANE_DIR}\" && [ \"$(tmux display-message -p -t {t} '#{{pane_pipe}}' 2>/dev/null)\" = 1 ] || tmux pipe-pane -t {t} {pipe}",
+        t = q(target)?,
+        pipe = q(&pipe)?
     );
     // Wrap in `sh -c` so a fish/zsh remote login shell still runs POSIX syntax.
     Ok(format!("sh -c {}", q(&inner)?))

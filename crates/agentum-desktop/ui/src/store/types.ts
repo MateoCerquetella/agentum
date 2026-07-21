@@ -26,6 +26,8 @@ import type { DictationSlice } from './slices/dictation'
 import type { WorkspaceCleanupSlice } from './slices/workspace-cleanup'
 import type { HostsSlice } from './slices/hosts'
 import type { ServerWorktreeActivitySlice } from './slices/server-worktree-activity'
+import type { TrackerPhaseSlice } from './slices/tracker-phase'
+import type { WorkspaceHarnessOfferSlice } from './slices/workspace-harness-offer'
 
 export type AppState = RepoSlice &
   SparsePresetsSlice &
@@ -54,4 +56,6 @@ export type AppState = RepoSlice &
   DictationSlice &
   WorkspaceCleanupSlice &
   HostsSlice &
-  ServerWorktreeActivitySlice
+  ServerWorktreeActivitySlice &
+  TrackerPhaseSlice &
+  WorkspaceHarnessOfferSlice

@@ -1,5 +1,5 @@
 //! External (non-agentum) tmux session discovery and parsing.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use agentum_core::Host;
 
@@ -59,6 +59,11 @@ pub async fn list_all_tmux_sessions(host: &Host) -> Result<Vec<DiscoveredTmuxSes
 /// the `agentum-*` naming convention.
 fn parse_tmux_panes_all(stdout: &str) -> Vec<DiscoveredTmuxSession> {
     let mut sessions: Vec<DiscoveredTmuxSession> = Vec::new();
+    // name → index into `sessions`, so grouping panes by session is O(1) rather
+    // than an `iter_mut().find()` scan per line (O(panes × sessions)). Keys
+    // borrow from `stdout`, which outlives the loop, so this adds no allocation.
+    // `sessions` still grows in tmux's first-seen order.
+    let mut index: HashMap<&str, usize> = HashMap::new();
     for line in stdout.lines() {
         let line = line.trim_end_matches('\r');
         if line.is_empty() {
@@ -74,18 +79,21 @@ fn parse_tmux_panes_all(stdout: &str) -> Vec<DiscoveredTmuxSession> {
             command: command.to_string(),
             cwd: cwd.to_string(),
         };
-        match sessions.iter_mut().find(|s| s.name == name) {
-            Some(s) => s.panes.push(pane),
-            None => sessions.push(DiscoveredTmuxSession {
-                name: name.to_string(),
-                attached: attached
-                    .trim()
-                    .parse::<u32>()
-                    .map(|n| n > 0)
-                    .unwrap_or(false),
-                created_at: created.trim().parse().ok(),
-                panes: vec![pane],
-            }),
+        match index.get(name) {
+            Some(&i) => sessions[i].panes.push(pane),
+            None => {
+                index.insert(name, sessions.len());
+                sessions.push(DiscoveredTmuxSession {
+                    name: name.to_string(),
+                    attached: attached
+                        .trim()
+                        .parse::<u32>()
+                        .map(|n| n > 0)
+                        .unwrap_or(false),
+                    created_at: created.trim().parse().ok(),
+                    panes: vec![pane],
+                });
+            }
         }
     }
     sessions
@@ -150,6 +158,8 @@ pub(crate) fn parse_tmux_panes_managed(stdout: &str) -> Vec<DiscoveredTmuxSessio
 /// of trailing `\r` and malformed lines.
 fn parse_tmux_panes_filtered(stdout: &str, managed: bool) -> Vec<DiscoveredTmuxSession> {
     let mut sessions: Vec<DiscoveredTmuxSession> = Vec::new();
+    // name → index into `sessions` for O(1) grouping (see parse_tmux_panes_all).
+    let mut index: HashMap<&str, usize> = HashMap::new();
     for line in stdout.lines() {
         let line = line.trim_end_matches('\r');
         if line.is_empty() {
@@ -169,19 +179,22 @@ fn parse_tmux_panes_filtered(stdout: &str, managed: bool) -> Vec<DiscoveredTmuxS
             command: command.to_string(),
             cwd: cwd.to_string(),
         };
-        match sessions.iter_mut().find(|s| s.name == name) {
-            Some(s) => s.panes.push(pane),
-            None => sessions.push(DiscoveredTmuxSession {
-                name: name.to_string(),
-                // `session_attached` is the count of attached clients.
-                attached: attached
-                    .trim()
-                    .parse::<u32>()
-                    .map(|n| n > 0)
-                    .unwrap_or(false),
-                created_at: created.trim().parse().ok(),
-                panes: vec![pane],
-            }),
+        match index.get(name) {
+            Some(&i) => sessions[i].panes.push(pane),
+            None => {
+                index.insert(name, sessions.len());
+                sessions.push(DiscoveredTmuxSession {
+                    name: name.to_string(),
+                    // `session_attached` is the count of attached clients.
+                    attached: attached
+                        .trim()
+                        .parse::<u32>()
+                        .map(|n| n > 0)
+                        .unwrap_or(false),
+                    created_at: created.trim().parse().ok(),
+                    panes: vec![pane],
+                });
+            }
         }
     }
     sessions

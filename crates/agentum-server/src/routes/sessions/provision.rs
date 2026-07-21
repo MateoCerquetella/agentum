@@ -188,6 +188,7 @@ pub(crate) async fn spawn_agent_into_pane(
             crate::mcp_provision::provision(state, &session.tool, &agentum_mcp_url).await
         {
             launch.argv.extend(adapter.mcp_args(&p));
+            launch.env.extend(adapter.mcp_env(&p));
         }
         // File-based agents (Cursor/Gemini/OpenCode) load MCP from a config file
         // in the workdir — write it (no-op for claude/codex).
@@ -247,6 +248,7 @@ pub(crate) async fn spawn_agent_into_pane(
                         };
                         if let Some(p) = provision {
                             launch.argv.extend(adapter.mcp_args(&p));
+                            launch.env.extend(adapter.mcp_env(&p));
                         }
                         // File-based agents: write the config on the HOST in the workdir.
                         crate::mcp_provision::write_agent_project_config(
@@ -569,6 +571,110 @@ pub(crate) async fn boot_drift_rescan(state: AppState) {
     }
 }
 
+/// Which sessions the boot revival sweep may respawn. Pure so it's
+/// unit-testable without a store or tmux. A session qualifies when ALL hold:
+///
+/// - its status says it owned a live pane when the daemon last died
+///   (`Running`/`Idle` — mirrors [`crate::pane_repair`]'s notion of a
+///   plausibly-live row);
+/// - it lives on the LOCAL host: an OS reboot/logout only kills the local
+///   tmux server, SSH panes run on the remote host and survive it — and a
+///   probe against an offline host would stall boot;
+/// - it is not an EXTERNAL binding (that tmux session is user-owned; there
+///   is nothing of ours to respawn);
+/// - a respawn brings it back *faithfully*: `claude` resumes its
+///   conversation via the transcript-aware adapter (`--session-id` →
+///   `--resume`, see `ClaudeAdapter::launch`), and a shell (`terminal`/
+///   `bash`) is stateless. Tools with no resume path (codex, cursor,
+///   gemini, …) are deliberately excluded — a silently-fresh instance
+///   dressed up as the old session would hide the context loss; the
+///   watchdog marks them crashed instead, which the UI can surface.
+fn revives_at_boot(session: &Session) -> bool {
+    matches!(session.status, Status::Running | Status::Idle)
+        && session.host_id.unwrap_or(LOCAL_HOST_ID) == LOCAL_HOST_ID
+        && !is_external(session)
+        && matches!(session.tool.as_str(), "claude" | "terminal" | "bash")
+}
+
+/// Boot revival: respawn local sessions whose tmux pane died with the OS
+/// (issue #267). A reboot kills the tmux server that hosts every local pane
+/// while the store still says `running`; without this sweep those rows rot —
+/// the watchdog marks them crashed and the desktop's restored tabs bind dead
+/// streams (which quietly fall back to a bare local shell). Respawning goes
+/// through [`spawn_agent_into_pane`], the one shared launch path, so a Claude
+/// session comes back with its conversation resumed.
+///
+/// MUST complete BEFORE the watchdog's first reconcile — the watchdog samples
+/// every running session's pane and would flip these to `crashed` first.
+/// [`crate::spawn_background_workers`] awaits this ahead of starting the
+/// watchdog. Every leg is best-effort: a session that can't be revived
+/// (missing workdir, tmux failure, lost spawn race against an early UI
+/// `/start`) is logged and left for the watchdog to reconcile exactly as
+/// before this sweep existed.
+pub(crate) async fn boot_revive_dead_sessions(state: &AppState) {
+    let all = match state.store.list_sessions(None).await {
+        Ok(all) => all,
+        Err(e) => {
+            tracing::warn!(error = ?e, "boot revival: session listing failed; skipping sweep");
+            return;
+        }
+    };
+
+    for session in all.iter().filter(|s| revives_at_boot(s)) {
+        let host = match load_host_for_session(state, session).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(session = %session.id, "boot revival: host load failed: {e}");
+                continue;
+            }
+        };
+        // `revives_at_boot` gated on the local host *id*; keep the kind check
+        // so a mislabeled host row can't route tmux calls somewhere remote.
+        if !matches!(host.kind, HostKind::Local) {
+            continue;
+        }
+
+        let target = tmux_target(session);
+        match crate::host_runtime::has_session(&host, &target).await {
+            // Pane survived (plain app restart, not a reboot) — leave it be;
+            // `start` reattaches lazily when a client connects.
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(session = %session.id, "boot revival: has_session probe failed: {e}");
+                continue;
+            }
+        }
+
+        let workdir = match crate::routes::util::expand_workdir(session.effective_cwd()) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!(session = %session.id, "boot revival: bad workdir: {e}");
+                continue;
+            }
+        };
+        if let Err(e) = self_heal_local_workdir(&workdir).await {
+            tracing::warn!(session = %session.id, "boot revival: workdir gone: {e}");
+            continue;
+        }
+
+        match spawn_agent_into_pane(state, session, &host, &target, &workdir).await {
+            Ok(()) => {
+                tracing::info!(
+                    session = %session.id, name = %session.name, tool = %session.tool,
+                    "boot revival: respawned session whose pane died with the tmux server"
+                );
+                let _ = state
+                    .bus
+                    .send(Event::new("session.revived").with_session(session.id, &session.name));
+            }
+            Err(e) => {
+                tracing::warn!(session = %session.id, "boot revival: respawn failed: {e}")
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,5 +826,71 @@ mod tests {
         // Recorded base matches but no recorded hash → treat as drift (re-sync to
         // be safe rather than leave a half-recorded row stale).
         assert!(endpoint_drifted(live_base, None, live_base, live_hash));
+    }
+
+    /// Build a `Session` through serde so the helper stays valid as optional
+    /// fields are added to the struct (same approach as `pane_repair`'s tests).
+    fn sess(tool: &str, status: &str, host: Option<&str>, external: bool) -> Session {
+        serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::new_v4(),
+            "name": "some-session",
+            "workdir": "/tmp",
+            "tool": tool,
+            "model": null,
+            "flags": if external { vec![agentum_core::EXTERNAL_TMUX_FLAG.to_string()] } else { vec![] },
+            "status": status,
+            "tmux_target": null,
+            "host_id": host,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_activity_at": null,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn boot_revival_targets_local_claude_and_shell_sessions() {
+        // The reboot case this sweep exists for: a local Claude session whose
+        // row still says running — revive (the adapter resumes its transcript).
+        assert!(revives_at_boot(&sess("claude", "running", None, false)));
+        // Shells are stateless; a respawned pane IS the session, faithfully.
+        assert!(revives_at_boot(&sess("terminal", "running", None, false)));
+        assert!(revives_at_boot(&sess("bash", "running", None, false)));
+        // `Idle` also plausibly owned a live pane (pane_repair's notion too).
+        assert!(revives_at_boot(&sess("claude", "idle", None, false)));
+    }
+
+    #[test]
+    fn boot_revival_never_fakes_a_non_resumable_agent() {
+        // codex/cursor/gemini have no conversation-resume path: a fresh
+        // instance silently dressed up as the old session would hide the
+        // context loss. Leave them for the watchdog to mark crashed.
+        assert!(!revives_at_boot(&sess("codex", "running", None, false)));
+        assert!(!revives_at_boot(&sess("cursor", "running", None, false)));
+        assert!(!revives_at_boot(&sess("gemini", "running", None, false)));
+    }
+
+    #[test]
+    fn boot_revival_skips_remote_external_and_settled_sessions() {
+        // SSH panes live on the remote host and survive a Mac reboot.
+        assert!(!revives_at_boot(&sess(
+            "claude",
+            "running",
+            Some("4bfb2ccf-cdd0-4a82-8793-5d87906da5e0"),
+            false
+        )));
+        // External tmux sessions are user-owned — nothing of ours to respawn.
+        assert!(!revives_at_boot(&sess("terminal", "running", None, true)));
+        // Stopped/crashed rows settled deliberately (or a prior boot already
+        // reconciled them) — reviving those is the user's explicit call.
+        assert!(!revives_at_boot(&sess("claude", "stopped", None, false)));
+        assert!(!revives_at_boot(&sess("claude", "crashed", None, false)));
+        // An explicit LOCAL_HOST_ID is equivalent to no host id.
+        assert!(revives_at_boot(&sess(
+            "claude",
+            "running",
+            Some("00000000-0000-0000-0000-000000000000"),
+            false
+        )));
     }
 }

@@ -53,6 +53,7 @@ import {
   shouldSuppressInheritedTerminalStatus
 } from '../../../shared/agent-status-identity'
 import { isGitRepoKind } from '../../../shared/repo-kind'
+import { openBoardSurface } from '@/lib/board-route'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
 import { focusRuntimeTerminalSurface } from '@/runtime/sync-runtime-graph'
@@ -820,7 +821,8 @@ export function useIpcEvents(): void {
         if (store.activeView === 'settings' || !store.repos.some((repo) => isGitRepoKind(repo))) {
           return
         }
-        store.openTaskPage()
+        // Spec 016 D2: the board lives in the hub now — same gate, new body.
+        openBoardSurface()
       })
     )
 

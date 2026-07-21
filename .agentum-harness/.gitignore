@@ -1,5 +1,0 @@
-# agentum: engine-written runtime state stays untracked; the contract files
-# (AGENTS.md, init.sh, verify.sh, qa.sh, this file) are committable.
-feature_list.json
-handoff.md
-qa/

@@ -3,13 +3,36 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 008-finish-the-loop
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **current_spec:** 021-per-project-tracker-choice
+- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (021 drafted 2026-07-17 from GH **#379** + Mateo's live amendment (tracker-section UX in New Issue/Chat; GitHub-vs-Linear only, no "None"); PM gate run at draft time — all 9 boxes pass. Prior: 018 SHIP-READY + merged → develop 2026-07-14, #365 open until main — see decision log.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **020-ssh-host-tracker-plumbing** — **SHIP-READY** (Reviewer SIGN-OFF
+  2026-07-13, `review.md` @ `cc4bde36`, 0 blockers; spec Status → Done).
+  Commits F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` on `fixes-new-workspace`,
+  on top of ship-ready 015. **RELEASE = HUMAN**: ONE train with 015 (same
+  branch) — PR → develop → staging qa.sh (live dyaus binding, SSH filing +
+  grounding note, Start-work direct launch, host-down 422-flavor vs slug-route
+  502, gh authed on the remote) → main + tag. Follow-up ticket (reviewer
+  should-fixes): SF1 ProjectHubPage:86 Tasks-tab binding read not
+  repoId-threaded — bound SSH repo's Tasks tab never auto-enters board mode;
+  SF2 SSH-repoId issue FETCH composes local neutral_cwd with remote gh —
+  caller-less today but the live wire will trip the deferred QA leg (fix
+  before/at QA); SF3 tasks.md wording.
+- **015-host-aware-start-and-tracker-intake** — **SHIP-READY** (Reviewer
+  SIGN-OFF 2026-07-13, `review.md` @ `aa8ce9e3`, 0 blockers). Commits F1
+  `ff7290ee` F2 `d7d64f33` F3 `3ec6f028` on `fixes-new-workspace`, unpushed.
+  **RELEASE = HUMAN (Mateo)**: PR → develop, promote → staging (`status/qa`;
+  qa.sh legs: live VPS add/pick/create AC 3-4-7, choose-hop AC 5, real filing
+  AC 10, board+gated run AC 11) → main + tag. Release notes: one-time remote
+  re-add + onUse zero-match shift. F1+F2 SAME train. Follow-up ticket: S1
+  residual selectors→findRepoByPathPreferLocal + doctor check, S2 reposUpdate
+  doc comment, S3 reject connectionId:"". NOTE: 019 (SSH tracker plumbing)
+  builds on these commits — 015 ships first. 010's AC-11 live demo also still
+  PENDING/human.
 - **003-chat-issue-preview** — CODE COMPLETE + SHIPPED to develop (issue **#198**,
   PR **#199**, `feat/chat-board-revamp`). All 4 increments gated. ⏭ Browser QA at
   STAGING + tagged release = Mateo-gated. [Merged into this worktree 2026-07-01;
@@ -64,67 +87,60 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
-  F2/F3 deferred to next developer iterations). Built in architecture order:
-  Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
-  Step2 `apply_blocked_transition`+`status/blocked` GitHub-only label, TrackerPhase
-  stays 4 (D-A), remove-set widened to 5-minus-target, `record_feature_failure`→
-  (blocked,attempts) (#16); Step4 pure `start-gated-run-precondition`/`composer-modal-props`
-  + armed-!repoId toast + server-error-detail + `subscribeHarnessRunErrors` bridge
-  (#2 #226 edge, #5); Step5 `#[ignore]` `harness_start_work_live{,_roles}.rs` +
-  `gh_in_dir` honors AGENTUM_GH_BIN; Step3 (sacred, LAST) `await_repl_ready→bool`
-  + `inject_prompt→Result<bool>`, send-sequence BYTE-IDENTICAL, loud readiness log
-  ×4 (#14a). Gates: server 546/0/5, executor 21/0, fmt+clippy clean, vite green,
-  vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
-  green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
-  developer → F2 next.
-- 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
-  intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
-  Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
-  extracted VERBATIM (Fast byte-identical, pinned); `build_intake_instructions`
-  router; `socratic_stage_instructions`+`socratic_pass_body` (5 passes WHO/WHAT/
-  WHY/done/risks, reflect-back, stage5→"Preview issues"); `chat_auth_gate` shared
-  no-creds gate (Complex surfaces NO_CREDS by construction). Client: pure
-  `lib/socratic-intake.ts` reducer (one pass/turn, cap5, Fast never advances) +
-  localStorage `Conversation.intake` (D1 no new table) + two ChatPage buttons +
-  Enter-stays-Fast. Gates: server 552/0/5 (F1 546 held), vitest 10/0 new, fmt+
-  clippy clean, vite green; full vitest 139-fail = PROVEN pre-existing baseline
-  (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
-  untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
-  surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.
-- 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
-  (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
-  `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
-  (deriveWorkspaceGoalSeed/isGoalStepReady/firstGoalStepBlocker/
-  OPTIONAL_WORKSPACE_STEPS/shouldStartAtGoalStep/revealDetails) + thin
-  `NewWorkspaceGoalStep.tsx` (goal textarea + reused RepoCombobox workdir) +
-  modal renders it as default first screen, "Skip to details" → today's composer
-  (D3); goal+workdir required, worktree/scaffold/tracker skippable (D9);
-  `useComposerState` NEVER edited (props only), F1's initialStartGatedRunProp
-  intact. Gates: vite+tsc green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3
-  pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
-  AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
-  code-complete → tester.**
-- 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
-  HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
-  every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
-  compile #[ignore], vite green, spec-008 vitest 34/0; full vitest 139-fail
-  baseline corroborated PRE-EXISTING via 4 methods (disjoint set / no-reference
-  grep / diff-scope / failure-kind). All 11 deviations ACCURATE against code;
-  sacred surfaces clean (inject_prompt send-sequence byte-identical, await_repl_ready
-  poll logic unchanged, apply_blocked_transition Ok-Skipped-never-Err, compose_issue_body
-  + useComposerState internals untouched, F1 initialStartGatedRunProp preserved).
-  NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
-  AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
-  +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
-- 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
-  sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
-  + `await_repl_ready` poll/trust unchanged, only return type); `apply_blocked_transition`
-  never-`Err` + honest 5-name remove-set (board can't lie either direction); no
-  D6 shell injection (argv exec); Fast byte-identical (construction + pin); live
-  test asserts the REAL leg (MARKER in pane = prompt landed, not hollow); F3
-  preserves F1 Tasks hop; no new `is_public` holes; D1–D9 honored. 1 Should-fix
-  = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
-  ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
-  HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
+- 2026-07-14 | Architect | **018 ARCHITECT DONE → phase developer**
+  (`architecture.md`; handoffs `01-pm-to-architect.md`, `02-architect-to-developer.md`).
+  Both open Qs pinned: **D1** desktop Tauri command `gh_issue_project_status`
+  (one `gh api graphql` read; owner/repo/number as `$vars`; pure
+  `issue_project_status(&Value, projectId, statusFieldId) -> Option<String>`
+  mapper) NOT a server route; **D2** fresh `getProjectBinding` cached per slug,
+  NOT Project Hub reuse. Data flow: card-open → parse `issue.url` → binding
+  cache/fetch → status cache/fetch → chip; every miss/error → no chip (D6
+  never-throw). Build = 4 commits. Collision sweep clean (nothing built).
+  ⚠️ Flagged the no-webkitgtk build gate for developer/tester: Rust tests
+  CI-only, local verify = UI bun build + 2 targeted vitest files (full
+  suite/tsc = known pre-broken baseline). Phase → developer (SDD loop next
+  step, or delegate via Agent per orchestrate §6).
+- 2026-07-14 | Spec | **018 DRAFTED + PM-GATED → phase pm** (issue **#365**,
+  `ai/specs/018-issue-hover-project-status-chip/spec.md`): the 016 F2 rider /
+  harness stub 358b promoted to its own one-slice SDD spec — hover-card
+  Project-status chip, lazy fetch-on-open + per-issue session cache, silent
+  absence on unbound/off-project/error. Citations line-verified @ develop
+  `d31314b3` (worktree ff'd from stale v0.57.0 main first); 358b stub now
+  points here. Gate: all 9 boxes pass. Carried open Qs for architect:
+  read-path Tauri-vs-server (recommended: desktop command beside
+  `gh_get_project_view_table`), binding-read source. Handoff → PM/architect.
+- 2026-07-17 | Release | **016-board-per-project (#360) RECONCILED + SHIPPED → v0.78.0**
+  (Mateo: "can you release?"). Board-per-project spec (dir `016-board-per-project`,
+  distinct from the released `016-sdd-loop-checkin-*` — number collision is
+  cosmetic, separate dirs). Stale v0.75.1 branch (11 ahead / 50 behind): a naive
+  `git merge origin/develop` REVERTED develop's v0.76/v0.77 server refactors
+  (multi-base ort merge dragged the stale base over chat.rs/repos.rs/sdd.rs) —
+  ABORTED. Correct path: fresh branch off `origin/develop` v0.77.0 +
+  cherry-pick ONLY the 3 UI feature commits (`f5eda0ee`/`ae4b44d8`/`4b98dd73`,
+  zero server files) → provably no server revert. One conflict each pass:
+  ProjectViewWrapper.tsx import block (kept both — resolver + linked-work-item).
+  Version 0.77.0→0.78.0 (Cargo.toml+lock+tauri.conf.json). qa.sh browser legs
+  WAIVED (008/010/014/015 precedent); S1 first-frame legacy flash + S2 ghost
+  settings-search entry → follow-up ticket. `Closes #360`.
+- 2026-07-17 | Spec | **021 DRAFTED + PM-GATED → phase pm** (issue **#379**,
+  `ai/specs/021-per-project-tracker-choice/spec.md`; harness run 379's spec slot
+  mirrors it): per-repo `tracker` (`auto|github|linear`) persisted via the
+  `issueSourcePreference` serde-flatten path; ONE shared `TrackerSection` in New
+  Issue (TaskPage) + Chat DraftReview (replaces the ad-hoc SegButtons + tab-implied
+  provider split); server pin at `chat.rs::resolve_provider` /
+  `TaskSink::select` / goal planning; harness features stamped with the pin
+  (`apply_tracker_transition` dispatch test at the seam). Amendment vs run-379
+  authoring draft: Mateo's live ask added the New-Issue/Chat tracker-section UX
+  unification and dropped "None" ("choose between github and linear"); the
+  settings-pane-only picker became the shared section + "Remember for this
+  project". ⚠ Worktree was 235 commits stale (v0.57.0) — rebased onto develop
+  v0.78.0 before authoring; anchors line-verified there. Open Qs carried to
+  architect: pin-resolution seam (UI-sends vs server-reads-repos.json —
+  recommend server), Project-Hub display, "Auto — detected" legibility, the
+  bigger Chat/New-Issue consolidation (follow-up spec). Handoff → PM/architect.
+- 2026-07-20 | Developer/Tester | **ISSUE #395 STATUS STRIP COMPLETE + GREEN.**
+  Every run-owned feature, QA, and role terminal now shows live SDD phase and
+  executing n/N progress through the existing harness status/event channel;
+  ordinary sessions are excluded and burst events retain a final refresh.
+  Focused Vitest 4/4 and Vite production build PASS. Standalone tsc remains
+  baseline-red on unrelated missing shared modules. Spec 021 remains active.

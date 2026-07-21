@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   getRemoteBrowserKeypressKey,
-  getRemoteBrowserKeyboardShortcut
+  getRemoteBrowserKeyboardShortcut,
+  getRemoteBrowserInsertText,
+  isRemoteBrowserPasteShortcut
 } from './remote-browser-keyboard'
 
 function keyboardEvent(
@@ -34,5 +36,29 @@ describe('remote browser keyboard serialization', () => {
 
     expect(getRemoteBrowserKeyboardShortcut(event)).toBeNull()
     expect(getRemoteBrowserKeypressKey(event)).toBe('R')
+  })
+
+  it('detects the paste chord (Cmd/Ctrl+V) so onKeyDown can defer to onPaste', () => {
+    // Cmd+V and Ctrl+V serialize to the paste shortcut…
+    expect(getRemoteBrowserKeyboardShortcut(keyboardEvent({ key: 'v', metaKey: true }))).toBe(
+      'Meta+v'
+    )
+    expect(getRemoteBrowserKeyboardShortcut(keyboardEvent({ key: 'v', ctrlKey: true }))).toBe(
+      'Control+v'
+    )
+    expect(isRemoteBrowserPasteShortcut('Meta+v')).toBe(true)
+    expect(isRemoteBrowserPasteShortcut('Control+v')).toBe(true)
+    // …but a plain 'v' or reload is NOT a paste chord.
+    expect(isRemoteBrowserPasteShortcut('Meta+r')).toBe(false)
+    expect(isRemoteBrowserPasteShortcut(null)).toBe(false)
+  })
+
+  it('builds a browser.insertText message for pasted text (empty text is dropped)', () => {
+    expect(getRemoteBrowserInsertText('hello world')).toEqual({
+      method: 'browser.insertText',
+      params: { text: 'hello world' }
+    })
+    // Empty clipboard → no message (never a stray browser.keypress {key:"v"}).
+    expect(getRemoteBrowserInsertText('')).toBeNull()
   })
 })

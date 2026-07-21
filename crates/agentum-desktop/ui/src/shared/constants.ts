@@ -324,7 +324,8 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
       pinned: [],
       recent: [],
       lastViewByProject: {},
-      activeProject: null
+      activeProject: null,
+      activeProjectByRepo: {}
     },
     // Why: default-on uses the user's default agent when it supports
     // non-interactive commit-message generation. Keep agent/model maps empty

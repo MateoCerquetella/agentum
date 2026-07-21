@@ -2,6 +2,7 @@ import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
+import { viewAfterWorktreeClose } from './worktree-close-view'
 import type {
   DetectedWorktreeListResult,
   TerminalLayoutSnapshot,
@@ -726,6 +727,7 @@ function buildWorktreePurgeState(s: AppState, worktreeIds: string[]): Partial<Ap
     everActivatedWorktreeIds: nextEverActivatedWorktreeIds,
     lastVisitedAtByWorktreeId: omitByWorktree(s.lastVisitedAtByWorktreeId),
     activeWorktreeId: removedActive ? null : s.activeWorktreeId,
+    activeView: viewAfterWorktreeClose(removedActive, s.activeView),
     activeFileId: activeFileCleared ? null : s.activeFileId,
     activeBrowserTabId: removedActive ? null : s.activeBrowserTabId,
     activeTabId: activeTabCleared ? null : s.activeTabId,
@@ -1026,7 +1028,9 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     workspaceStatus,
     linkedGitLabMR,
     linkedGitLabIssue,
-    startup
+    startup,
+    trackerProvider,
+    trackerUrl
   ) => {
     const retryableConflictPatterns = [
       /already exists locally/i,
@@ -1069,7 +1073,10 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             ...(manualOrder !== undefined ? { manualOrder } : {}),
             ...(workspaceStatus !== undefined ? { workspaceStatus } : {}),
             ...(linkedGitLabMR !== undefined ? { linkedGitLabMR } : {}),
-            ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {})
+            ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {}),
+            // Spec 012: only a fully-formed bind (provider + url) is persisted;
+            // a partial one is dropped (fail-closed, no wrong-issue coord).
+            ...(trackerProvider && trackerUrl ? { trackerProvider, trackerUrl } : {})
           }
           const target = getActiveRuntimeTarget(get().settings)
           const result =
@@ -1096,6 +1103,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
                     ...(workspaceStatus !== undefined ? { workspaceStatus } : {}),
                     ...(linkedGitLabMR !== undefined ? { linkedGitLabMR } : {}),
                     ...(linkedGitLabIssue !== undefined ? { linkedGitLabIssue } : {}),
+                    ...(trackerProvider && trackerUrl ? { trackerProvider, trackerUrl } : {}),
                     ...(startup
                       ? {
                           startupCommand: startup.command,
@@ -1347,6 +1355,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
             return nextSearch
           })(),
           activeWorktreeId: removedActiveWorktree ? null : s.activeWorktreeId,
+          activeView: viewAfterWorktreeClose(removedActiveWorktree, s.activeView),
           activeTabId: s.activeTabId && tabIds.has(s.activeTabId) ? null : s.activeTabId,
           openFiles: newOpenFiles,
           browserTabsByWorktree: nextBrowserTabsByWorktree,
@@ -1975,7 +1984,8 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
     set((s) => {
       if (!worktreeId) {
         return {
-          activeWorktreeId: null
+          activeWorktreeId: null,
+          activeView: viewAfterWorktreeClose(true, s.activeView)
         }
       }
 

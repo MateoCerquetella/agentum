@@ -1,16 +1,20 @@
 import React from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, WifiOff } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { isHostUnreachableFsError } from './file-explorer-error'
 
 type FileExplorerTreeStatusProps = {
   isLoading: boolean
   error: string | null
   isEmpty: boolean
+  onRetry?: () => void
 }
 
 export function FileExplorerTreeStatus({
   isLoading,
   error,
-  isEmpty
+  isEmpty,
+  onRetry
 }: FileExplorerTreeStatusProps): React.JSX.Element | null {
   if (isLoading) {
     return (
@@ -21,6 +25,26 @@ export function FileExplorerTreeStatus({
   }
 
   if (error) {
+    // Why: an unreachable SSH host is an environment state, not a bug — the raw
+    // transport error (URL-encoded path, host UUID, JSON envelope) reads like a
+    // crash. Other errors keep their message so path/auth bugs stay diagnosable.
+    if (isHostUnreachableFsError(error)) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-1.5 px-4 text-center">
+          <WifiOff className="size-6 text-muted-foreground opacity-50" />
+          <div className="text-xs font-medium">Host unreachable</div>
+          <div className="text-[11px] text-muted-foreground">
+            Could not connect to the SSH host for this workspace. Files will load again once the
+            connection is back.
+          </div>
+          {onRetry && (
+            <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onRetry}>
+              Retry
+            </Button>
+          )}
+        </div>
+      )
+    }
     return (
       <div className="flex h-full items-center justify-center px-4 text-center text-[11px] text-muted-foreground">
         Could not load files for this workspace: {error}

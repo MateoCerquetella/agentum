@@ -33,6 +33,7 @@ pub mod cdp_screencast;
 pub mod endpoint;
 mod error;
 pub mod git;
+pub mod github_projects;
 pub mod harness;
 mod headers;
 pub mod host_install_hints;
@@ -45,11 +46,15 @@ mod pane_repair;
 pub mod planner;
 pub mod playwright_mcp;
 mod port_wait;
+pub mod provision;
 pub mod ratelimit;
 mod routes;
 mod rules;
+pub mod sdd;
 pub mod task_sink;
 pub mod tls;
+pub mod tracker_attention;
+pub mod tracker_sync;
 mod transcript_store;
 pub mod usage;
 pub(crate) mod wiki;
@@ -85,6 +90,14 @@ pub struct StreamCheckpoint {
 /// stall, etc.) won't drop a state-change event the user is staring
 /// at.
 const EVENT_BUS_CAPACITY: usize = 1024;
+
+/// The composite key for [`AppState::wiki_keys`]: `(repo_id, path, host_id)` —
+/// `host_id` is `LOCAL_HOST_ID` (the nil UUID) for local repos. A change to any
+/// component (repo re-added, moved, re-homed to another host) builds a
+/// *different* key → cache miss → re-resolve; that lookup-time
+/// self-invalidation is the whole staleness story (spec 009 D-A3), no
+/// mutation hooks.
+pub type WikiKeyCacheKey = (String, String, uuid::Uuid);
 
 /// Login + register attempts per remote IP per window.
 const AUTH_RATE_LIMIT_ATTEMPTS: usize = 8;
@@ -123,6 +136,18 @@ pub struct AppState {
     /// a full snapshot.
     pub stream_positions:
         Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, StreamCheckpoint>>>,
+    /// repo→wiki-key cache (spec 009 D-A3): a hit skips the per-call
+    /// `git remote get-url` subprocess in `routes::wiki::resolve_target` — the
+    /// macOS TCC-prompt trigger (and, over SSH, a network round trip). Keyed by
+    /// `(repo_id, path, host_id)` (`LOCAL_HOST_ID` = the nil UUID for local
+    /// repos) so a moved or re-homed repo builds a *different* key and
+    /// self-invalidates on lookup — no repo-mutation hook needed. Positive-only:
+    /// only a successful, non-empty remote resolution (a `git__…` key) is ever
+    /// cached; the `path__<hash>` fallback never is (over SSH a transport
+    /// failure is indistinguishable from "no origin", and caching it would pin
+    /// the repo to the wrong wiki until restart). `std::sync::Mutex` like
+    /// `stream_positions`: never held across an `.await`.
+    pub wiki_keys: Arc<std::sync::Mutex<std::collections::HashMap<WikiKeyCacheKey, String>>>,
     /// Short hostname of the box this daemon runs on. Cached once at
     /// boot so the `/api/health` reads are zero-cost. Clients use it to
     /// label the "this server" row with a meaningful identity (e.g.
@@ -186,6 +211,10 @@ pub struct AppState {
     /// background [`harness::drive`] task operate on the same in-memory runs +
     /// event bus. Cheap to construct; always present.
     pub harness: Arc<harness::HarnessEngine>,
+    /// Live per-session SDD loops (issue #313). Server-owned so the desktop's
+    /// Loop toggle renders one truth across clients/reloads; workers remove
+    /// their own entry when they end and announce it as `sdd.loop.stopped`.
+    pub sdd_loops: routes::sdd::SddLoops,
     /// Live `/api/events` WebSocket client count. The host-metrics ticker
     /// gates its sysinfo sampling on THIS, not `bus.receiver_count()`: the
     /// goal reconciler and comment bridge hold permanent bus subscriptions,
@@ -221,6 +250,7 @@ impl AppState {
             cert_fingerprint: Arc::new(cert_fingerprint),
             transcripts,
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: detect_short_hostname(),
             no_auth: false,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -234,6 +264,7 @@ impl AppState {
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
             harness: Arc::new(harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
             events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
@@ -306,8 +337,13 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::worktrees::router())
         .merge(routes::forge::router())
         .merge(routes::github::router())
+        // Spec 010 F1: Projects v2 board bindings (discover/bind/read/unbind).
+        .merge(routes::github_projects::router())
+        // Spec 010 F3: workspace provisioning (repo-from-template + the ensure).
+        .merge(routes::provision::router())
         .merge(routes::usage::router())
         .merge(routes::harness::router())
+        .merge(routes::sdd::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::require_token,
@@ -429,8 +465,22 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         }
     });
 
-    let watchdog = agentum_watchdog::Watchdog::new(bus.clone(), state.store.clone());
-    tokio::spawn(watchdog.run());
+    // Boot revival, then the watchdog — strictly in that order, on one task.
+    // An OS reboot kills the local tmux server while the store still says
+    // `running`; the sweep respawns those panes (Claude resumes its
+    // conversation via the transcript-aware adapter). It must finish before
+    // the watchdog's first reconcile, which samples every running session's
+    // pane and would mark the not-yet-revived ones crashed (issue #267).
+    {
+        let state = state.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            routes::sessions::boot_revive_dead_sessions(&state).await;
+            agentum_watchdog::Watchdog::new(bus, state.store.clone())
+                .run()
+                .await;
+        });
+    }
 
     // Goal-status auto-progression reconciler: enforces `goal.status = max(child
     // statuses)` and fires the planner auto-stop on first child arrival.
@@ -449,6 +499,44 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         let bus = bus.clone();
         tokio::spawn(async move {
             agentum_watchdog::run_session_comment_bridge(store, bus).await;
+        });
+    }
+
+    // Spec 012 F2: session-start → tracker InProgress. A bus subscriber (never
+    // inline in the launch path — invariant #2) that, on `session.started` in a
+    // bound worktree, drives the linked item to In Progress via the one existing
+    // write seam. Best-effort/monotonic — an unbound or already-advanced
+    // worktree is a no-op.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            tracker_sync::run_session_start_reactor(store, bus).await;
+        });
+    }
+
+    // Spec 012 F3/F4: the PR/merge poller. No inbound webhooks on a self-hosted
+    // daemon (invariant #6) → a bounded, backed-off `gh` loop drives InReview on
+    // the first non-draft PR and Done on merge for each bound github worktree.
+    // The bus rides in so an applied transition emits `tracker.phase_changed`
+    // (spec 014 F1).
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            tracker_sync::run_pr_merge_poller(store, bus).await;
+        });
+    }
+
+    // Spec 014 F4: the watchdog→tracker attention worker. Crashed or
+    // sustained-awaiting sessions in a bound worktree flag the issue with the
+    // existing `status/blocked` escalation; recovery re-applies the persisted
+    // phase (which clears the label). Best-effort, per-worktree episode dedupe.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            tracker_attention::run_tracker_attention_worker(store, bus).await;
         });
     }
 

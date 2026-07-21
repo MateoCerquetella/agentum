@@ -190,6 +190,7 @@ mod tests {
             cert_fingerprint: Arc::new(String::new()),
             transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: "test".to_string(),
             no_auth: true,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -199,6 +200,7 @@ mod tests {
             api_base_url: None,
             desktop_bridge: None,
             harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
             events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
