@@ -1,4 +1,4 @@
-# Spec 399 — Observable issue-driven gated workspace
+# Spec 399 — Observable issue-driven gated workspace and authoritative tracker status
 
 - **Number:** 399
 - **Status:** In progress
@@ -14,13 +14,18 @@ run, the handoff from issue selection to autonomous execution is opaque. The
 selected issue is easy to miss, role/QA sessions are not attached to the
 workspace, the run collapses to labels such as `blocked · blocked` without its
 stage, tasks, or blocker, and the SDD toolbar can disappear because the attached
-tab does not carry the engine's agent identity.
+tab does not carry the engine's agent identity. For GitHub-linked worktrees the
+sidebar also presents two competing lifecycle states: the live GitHub Project
+Status and Agentum's persisted `trackerPhase`. A stale local `In Progress` can
+therefore render beside an authoritative external `TODO`, making neither status
+trustworthy.
 
 ## Goal
 
-Keep an issue-driven gated workspace visibly tied to its work and make its live
-SDD stage, agent session, task progress, blocker, and controls continuously
-observable from creation through completion or intervention.
+Keep an issue-driven gated workspace visibly tied to its work, make its live SDD
+stage, agent session, task progress, blocker, and controls continuously
+observable, and make GitHub Project Status the sole displayed and authoritative
+lifecycle state for GitHub-linked worktrees.
 
 ## Users / personas
 
@@ -58,15 +63,36 @@ observable from creation through completion or intervention.
    transition re-discovers the bound Status field. A matching `In Review`
    option is persisted and used automatically; boards without one retain their
    documented In Progress fallback.
+10. A GitHub-linked issue's sidebar hover card renders exactly one lifecycle
+    chip: the current Status option name read from the bound GitHub Project. It
+    never renders `TrackerPhaseChip`, even when local and external values match.
+11. Opening/loading a linked GitHub issue revalidates its Project Status instead
+    of trusting a session-long snapshot. A stale registry `trackerPhase` is
+    ignored for presentation and reconciled from the external value; in
+    particular local `in_progress` plus external `TODO` renders only `TODO` and
+    cannot preserve a false local success.
+12. GitHub lifecycle writes target configured Project option IDs and preserve
+    their option names: work start → In Progress, PR open/link → In Review,
+    testing → Ready to Test when configured, and merge/completion → Done.
+13. A lifecycle transition is acknowledged and cached locally only after GitHub
+    returns `Applied`. `Skipped` and errors trigger an external-status refetch,
+    remain pending for bounded retry, and surface an actionable sync warning;
+    the UI never invents the requested local status.
+14. Regression coverage proves: stale local In Progress + external TODO renders
+    one TODO chip; matching local/external values still render one chip; a
+    skipped/failed transition cannot persist false success; PR open/link writes
+    In Review; and stale registry records reconcile from GitHub.
 
 ## Scope & non-goals (YAGNI)
 
 - **In:** tracker picker clarity; harness current-session attribution for all
   agent-played stages; persistent SDD/task progress; blocker explanation; SDD
-  toolbar identity on attached gated-run tabs.
+  toolbar identity on attached gated-run tabs; authoritative GitHub Project
+  Status reads/writes, stale-registry reconciliation, and visible sync failure.
 - **Out:** changing gate retry limits or gate verdict rules; adding a new tracker;
   editing/reordering backlog tasks from the strip; retaining sessions after a
-  successful stage; replacing the terminal or SDD playbooks.
+  successful stage; replacing the terminal or SDD playbooks; using the local
+  pipeline phase as a second GitHub lifecycle state.
 
 ## Reuse vs build (ground in code)
 
@@ -83,6 +109,13 @@ observable from creation through completion or intervention.
   continues to target a real server session.
 - `GatedRunBar`, `GatedRunSurface`, and the existing pinned server-session tab
   path are extended rather than replaced.
+- `gh_issue_project_status` and `getProjectBinding`
+  (`crates/agentum-desktop/src/commands/gh_projects.rs` and
+  `crates/agentum-desktop/ui/src/runtime/github-projects-client.ts`) remain the
+  external read path; their result, not `trackerPhase`, drives the GitHub chip.
+- `apply_tracker_transition` and the configured `StatusMapping`
+  (`crates/agentum-server/src/task_sink.rs` and `github_projects.rs`) remain the
+  only GitHub Projects write path and preserve renamed option IDs/names.
 
 ### Build new
 
@@ -91,6 +124,13 @@ observable from creation through completion or intervention.
   `gate_summary`) and current-session publication for role/QA agents.
 - A compact SDD phase/task ledger and continuous current-session tab sync in
   the existing gated-run workspace strip.
+- A single external-status view model with explicit loading/synced/warning
+  outcomes, cache invalidation on linked-issue open and tracker events, and no
+  GitHub rendering dependency on `deriveTrackerChip` or `TrackerPhaseChip`.
+- Registry reconciliation that accepts the option ID from the live desktop
+  GitHub read, validates it against the server-owned binding, persists only the
+  confirmed phase, and emits enough pending/error context for the sidebar to
+  explain how to retry authentication, binding, or status-option failures.
 
 ## Risks & invariants
 
@@ -104,17 +144,32 @@ observable from creation through completion or intervention.
   tools degrade to normal live process/title detection.
 - The run owns process teardown. Closing or switching a UI tab only detaches the
   view and must not kill the harness session.
+- **Single source of truth:** for `trackerProvider === "github"`, Project Status
+  is authoritative. `trackerPhase` may remain as an implementation/cache field
+  for retry guards, but cannot be rendered, cannot override a fetched status,
+  and cannot advance unless the matching external status is confirmed.
+- A failed refetch must retain the last externally confirmed value and mark it
+  stale/warning; it must not fall back to the desired local transition.
+- Configured Project option IDs are authoritative, so renamed labels such as
+  `In Review` are displayed exactly as GitHub returns them rather than rebuilt
+  from Agentum's canonical phase names.
 
 ## Harness wiring (the gate)
 
 - **feature_list.json entries:** `tracker-picker-clarity`,
-  `all-stage-session-surfacing`, `gated-run-mission-control`.
+  `all-stage-session-surfacing`, `gated-run-mission-control`,
+  `authoritative-github-tracker-status`.
 - **`verify.sh` asserts:** tracker filtering/selection helpers; phase and blocker
   derivation; session attribution/status serialization; gated-run markup and
-  agent identity; TypeScript build; focused Rust harness tests.
+  agent identity; single GitHub status chip and warning states; stale registry
+  reconciliation; confirmed-only transition persistence; PR→In Review; TypeScript
+  build; focused UI and Rust tracker/harness tests.
 - **`qa.sh` asserts:** create a workspace with a linked issue and gated SDD run,
   observe tracker selection, live role session + SDD bar, task transitions, and
-  a useful blocked-state explanation without a blank workspace.
+  a useful blocked-state explanation without a blank workspace; force local
+  `in_progress` while the bound Project says `TODO` and observe only `TODO`;
+  simulate a rejected Projects write and observe a sync warning with no false
+  local phase.
 
 ## Open questions
 

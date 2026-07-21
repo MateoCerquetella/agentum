@@ -30,6 +30,10 @@ pub fn router() -> Router<crate::AppState> {
         .route("/api/worktrees/detected", get(detected))
         .route("/api/worktrees/lineage", get(lineage))
         .route("/api/worktrees/update-meta", post(update_meta))
+        .route(
+            "/api/worktrees/reconcile-github-status",
+            post(reconcile_github_status),
+        )
         .route("/api/worktrees/create", post(create))
         .route("/api/worktrees/remove", post(remove))
         .route("/api/worktrees/prune", post(prune))
@@ -225,6 +229,77 @@ pub(crate) fn persist_tracker_progress(
         wt.linked_pr = Some(pr);
     }
     write_worktrees(&worktrees)
+}
+
+fn apply_confirmed_tracker_phase(
+    worktrees: &mut [Worktree],
+    worktree_id: &str,
+    phase: &str,
+) -> bool {
+    let Some(wt) = worktrees.iter_mut().find(|w| w.id == worktree_id) else {
+        return false;
+    };
+    if wt.tracker_phase.as_deref() == Some(phase) {
+        return false;
+    }
+    // Reconciliation is intentionally allowed to move backward: GitHub has
+    // just confirmed the external value, so a stale local In Progress must be
+    // replaced when the Project says TODO.
+    wt.tracker_phase = Some(phase.to_string());
+    true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReconcileGithubStatusBody {
+    worktree_id: String,
+    status_option_id: String,
+}
+
+/// Persist an implementation/cache phase only after the desktop's live GitHub
+/// read returned the bound Status option id. The option id is checked against
+/// the server-owned binding before any registry write; unknown/ambiguous ids
+/// leave the cache untouched while the UI continues to show GitHub's name.
+async fn reconcile_github_status(
+    Json(body): Json<ReconcileGithubStatusBody>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = read_worktrees()?;
+    let wt = rows
+        .iter()
+        .find(|wt| wt.id == body.worktree_id)
+        .ok_or_else(|| ApiError::BadRequest("worktree is not registered".into()))?;
+    if wt.tracker_provider.as_deref() != Some("github") {
+        return Err(ApiError::BadRequest(
+            "worktree is not linked to GitHub".into(),
+        ));
+    }
+    let url = wt
+        .tracker_url
+        .as_deref()
+        .ok_or_else(|| ApiError::BadRequest("worktree has no GitHub issue URL".into()))?;
+    let (slug, _) = crate::task_sink::github_slug_and_number_from_issue_url(url)
+        .ok_or_else(|| ApiError::BadRequest("worktree has an invalid GitHub issue URL".into()))?;
+    let binding = crate::github_projects::binding_for_slug(&slug)
+        .ok_or_else(|| ApiError::BadRequest("repository has no GitHub Project binding".into()))?;
+    let Some(phase) = binding
+        .status_mapping
+        .tracker_phase_for_option_id(&body.status_option_id)
+    else {
+        return Ok(Json(serde_json::json!({
+            "reconciled": false,
+            "phase": null,
+        })));
+    };
+    let wire = phase.wire_str();
+    let mut rows = rows;
+    let changed = apply_confirmed_tracker_phase(&mut rows, &body.worktree_id, wire);
+    if changed {
+        write_worktrees(&rows)?;
+    }
+    Ok(Json(serde_json::json!({
+        "reconciled": changed,
+        "phase": wire,
+    })))
 }
 
 /// Backfill the GitWorktreeInfo fields the UI's `Worktree` type requires
@@ -1305,6 +1380,30 @@ prunable gitdir file points to non-existent location
         let obj = v.as_object().unwrap();
         assert!(!obj.contains_key("tracker_provider"));
         assert!(!obj.contains_key("tracker_url"));
+    }
+
+    #[test]
+    fn confirmed_external_todo_reconciles_stale_local_in_progress() {
+        let mut rows = vec![Worktree {
+            id: "r1::/p".into(),
+            repo_id: "r1".into(),
+            display_name: "p".into(),
+            comment: String::new(),
+            linked_issue: Some(42),
+            linked_pr: None,
+            linked_linear_issue: None,
+            tracker_provider: Some("github".into()),
+            tracker_url: Some("https://github.com/o/r/issues/42".into()),
+            tracker_phase: Some("in_progress".into()),
+            is_archived: false,
+            is_unread: false,
+            is_pinned: false,
+            sort_order: 0,
+            last_activity_at: 0,
+            extra: Map::new(),
+        }];
+        assert!(apply_confirmed_tracker_phase(&mut rows, "r1::/p", "todo"));
+        assert_eq!(rows[0].tracker_phase.as_deref(), Some("todo"));
     }
 
     /// Spec 014 F2 (AC 4): a `detected` row for a BOUND worktree carries the
