@@ -6,8 +6,11 @@ import type {
 import {
   buildBindPayload,
   deriveIssueOptions,
+  deriveTrackerIssueViewModel,
   deriveTrackerBindCoords,
   isPickableIssueRow,
+  pickerProjectKey,
+  pickerScopeKey,
   resolvePickerProject
 } from './work-item-picker-model'
 
@@ -143,6 +146,18 @@ describe('deriveIssueOptions', () => {
     )
     expect(options[0].repository).toBe('other/repo')
   })
+
+  it('filters a mixed Project to the server-resolved repository slug', () => {
+    const options = deriveIssueOptions(
+      table([
+        row({ id: 'agentum', number: 1, repository: 'Mateo/Agentum' }),
+        row({ id: 'xcode', number: 2, repository: ' mateo/xcode-theme ' }),
+        row({ id: 'missing', number: 3, repository: null })
+      ]),
+      'MATEO/XCODE-THEME'
+    )
+    expect(options.map((option) => option.itemId)).toEqual(['xcode'])
+  })
 })
 
 describe('isPickableIssueRow', () => {
@@ -188,14 +203,25 @@ describe('resolvePickerProject', () => {
     number?: number | null
   }) {
     return {
-      projectOwner: overrides.owner === undefined ? 'repoorg' : overrides.owner,
-      projectOwnerType: overrides.ownerType === undefined ? 'organization' : overrides.ownerType,
-      projectNumber: overrides.number === undefined ? 3 : overrides.number
+      kind: 'resolved' as const,
+      targetKey: 'repo-1:/repo',
+      repositorySlug: 'repoorg/repo',
+      binding: {
+        projectOwner: overrides.owner === undefined ? 'repoorg' : overrides.owner,
+        projectOwnerType: overrides.ownerType === undefined ? 'organization' : overrides.ownerType,
+        projectNumber: overrides.number === undefined ? 3 : overrides.number
+      }
     }
   }
 
   it('prefers the per-repo binding over the global activeProject', () => {
-    expect(resolvePickerProject({ binding: binding({}), activeProject: active })).toEqual({
+    expect(
+      resolvePickerProject({
+        binding: binding({}),
+        activeProject: active,
+        selectedGitRepo: true
+      })
+    ).toEqual({
       owner: 'repoorg',
       ownerType: 'organization',
       number: 3
@@ -203,42 +229,85 @@ describe('resolvePickerProject', () => {
   })
 
   it('falls back to activeProject when there is no binding (spec 012, no regression)', () => {
-    expect(resolvePickerProject({ binding: null, activeProject: active })).toEqual(active)
-    expect(resolvePickerProject({ binding: undefined, activeProject: active })).toEqual(active)
+    expect(
+      resolvePickerProject({ binding: null, activeProject: active, selectedGitRepo: false })
+    ).toEqual(active)
+  })
+
+  it('never borrows activeProject while a selected repo binding is unresolved', () => {
+    for (const kind of ['loading', 'absent', 'failed'] as const) {
+      expect(
+        resolvePickerProject({
+          binding: { kind, targetKey: 'repo-1:/repo' },
+          activeProject: active,
+          selectedGitRepo: true
+        })
+      ).toBeNull()
+    }
   })
 
   it('falls back to activeProject when the binding is partial (missing owner or number)', () => {
     expect(
-      resolvePickerProject({ binding: binding({ owner: null }), activeProject: active })
+      resolvePickerProject({
+        binding: binding({ owner: null }),
+        activeProject: active,
+        selectedGitRepo: false
+      })
     ).toEqual(active)
     expect(
-      resolvePickerProject({ binding: binding({ number: null }), activeProject: active })
+      resolvePickerProject({
+        binding: binding({ number: null }),
+        activeProject: active,
+        selectedGitRepo: false
+      })
     ).toEqual(active)
   })
 
   it('returns null with neither a binding nor an activeProject (honest empty state)', () => {
-    expect(resolvePickerProject({ binding: null, activeProject: null })).toBeNull()
     expect(
-      resolvePickerProject({ binding: binding({ owner: null }), activeProject: null })
+      resolvePickerProject({ binding: null, activeProject: null, selectedGitRepo: false })
+    ).toBeNull()
+    expect(
+      resolvePickerProject({
+        binding: binding({ owner: null }),
+        activeProject: null,
+        selectedGitRepo: false
+      })
     ).toBeNull()
   })
 
   it('normalizes the binding ownerType: only an exact "organization" stays org, else user', () => {
     expect(
-      resolvePickerProject({ binding: binding({ ownerType: 'organization' }), activeProject: null })
+      resolvePickerProject({
+        binding: binding({ ownerType: 'organization' }),
+        activeProject: null,
+        selectedGitRepo: true
+      })
         ?.ownerType
     ).toBe('organization')
     expect(
-      resolvePickerProject({ binding: binding({ ownerType: 'user' }), activeProject: null })
+      resolvePickerProject({
+        binding: binding({ ownerType: 'user' }),
+        activeProject: null,
+        selectedGitRepo: true
+      })
         ?.ownerType
     ).toBe('user')
     // A legacy/garbled ownerType collapses to user rather than leaking a bad value.
     expect(
-      resolvePickerProject({ binding: binding({ ownerType: 'USER' }), activeProject: null })
+      resolvePickerProject({
+        binding: binding({ ownerType: 'USER' }),
+        activeProject: null,
+        selectedGitRepo: true
+      })
         ?.ownerType
     ).toBe('user')
     expect(
-      resolvePickerProject({ binding: binding({ ownerType: null }), activeProject: null })
+      resolvePickerProject({
+        binding: binding({ ownerType: null }),
+        activeProject: null,
+        selectedGitRepo: true
+      })
         ?.ownerType
     ).toBe('user')
   })
@@ -247,8 +316,111 @@ describe('resolvePickerProject', () => {
     // projectNumber 0 is unusual but valid — the guard checks `!= null`, not
     // truthiness, so a #0 board still wins over the fallback.
     expect(
-      resolvePickerProject({ binding: binding({ number: 0 }), activeProject: active })
+      resolvePickerProject({
+        binding: binding({ number: 0 }),
+        activeProject: active,
+        selectedGitRepo: true
+      })
     ).toEqual({ owner: 'repoorg', ownerType: 'organization', number: 0 })
+  })
+})
+
+describe('deriveTrackerIssueViewModel', () => {
+  it('uses configured Status order, keeps position, and puts No status last', () => {
+    const statusField = {
+      id: 'status',
+      name: 'Status',
+      kind: 'single-select' as const,
+      dataType: 'SINGLE_SELECT' as const,
+      options: [
+        { id: 'todo', name: 'Todo', color: 'GRAY' },
+        { id: 'doing', name: 'In progress', color: 'YELLOW' }
+      ]
+    }
+    const todo = row({
+      id: 'todo-row',
+      number: 2,
+      title: 'Second',
+      url: 'https://github.com/o/r/issues/2'
+    })
+    todo.position = 2
+    todo.fieldValuesByFieldId.status = {
+      kind: 'single-select',
+      fieldId: 'status',
+      optionId: 'todo',
+      name: 'Todo',
+      color: 'GRAY'
+    }
+    const doing = row({
+      id: 'doing-row',
+      number: 1,
+      title: 'First',
+      url: 'https://github.com/o/r/issues/1'
+    })
+    doing.position = 1
+    doing.fieldValuesByFieldId.status = {
+      kind: 'single-select',
+      fieldId: 'status',
+      optionId: 'doing',
+      name: 'In progress',
+      color: 'YELLOW'
+    }
+    const none = row({
+      id: 'none-row',
+      number: 3,
+      title: 'Unassigned',
+      url: 'https://github.com/o/r/issues/3'
+    })
+    none.position = 0
+    const value = table([none, doing, todo])
+    value.selectedView.fields = [statusField]
+    value.selectedView.groupByFields = [statusField]
+
+    const view = deriveTrackerIssueViewModel(value)
+    expect(view.groups.map((group) => group.label)).toEqual(['Todo', 'In progress', 'No status'])
+    expect(view.groups.map((group) => group.color)).toEqual(['GRAY', 'YELLOW', null])
+    expect(view.groups.flatMap((group) => group.options.map((option) => option.number))).toEqual([
+      2, 1, 3
+    ])
+  })
+
+  it('filters by title or exact issue number and exposes a stable project key', () => {
+    const value = table([
+      row({ id: 'a', number: 12, title: 'Refresh tracker' }),
+      row({ id: 'b', number: 120, title: 'Unrelated' })
+    ])
+    expect(deriveTrackerIssueViewModel(value, 'refresh').options.map((item) => item.number)).toEqual([
+      12
+    ])
+    expect(deriveTrackerIssueViewModel(value, '#12').options.map((item) => item.number)).toEqual([12])
+    expect(pickerProjectKey({ owner: 'Acme', ownerType: 'organization', number: 7 })).toBe(
+      'organization:acme:7'
+    )
+    expect(
+      pickerScopeKey({
+        targetKey: 'repo-a:/work',
+        repositorySlug: ' Acme/Widgets ',
+        project: { owner: 'Acme', ownerType: 'organization', number: 7 }
+      })
+    ).toBe('repo-a:/work:acme/widgets:organization:acme:7')
+    expect(
+      pickerScopeKey({
+        targetKey: 'repo-b:/work',
+        repositorySlug: 'acme/other',
+        project: { owner: 'Acme', ownerType: 'organization', number: 7 }
+      })
+    ).not.toBe('repo-a:/work:acme/widgets:organization:acme:7')
+  })
+
+  it('filters groups and counts before rendering a mixed-repository Project', () => {
+    const value = table([
+      row({ id: 'a', number: 1, repository: 'acme/agentum' }),
+      row({ id: 'x', number: 2, repository: 'ACME/XCODE-THEME' }),
+      row({ id: 'none', number: 3, repository: null })
+    ])
+    const view = deriveTrackerIssueViewModel(value, '', 'acme/xcode-theme')
+    expect(view.issueCount).toBe(1)
+    expect(view.options.map((option) => option.itemId)).toEqual(['x'])
   })
 })
 

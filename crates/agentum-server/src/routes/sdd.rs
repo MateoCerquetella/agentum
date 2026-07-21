@@ -193,10 +193,10 @@ struct LoopBody {
 }
 
 #[derive(Serialize)]
-struct LoopState {
-    active: bool,
-    step: u32,
-    max_steps: u32,
+pub(crate) struct LoopState {
+    pub(crate) active: bool,
+    pub(crate) step: u32,
+    pub(crate) max_steps: u32,
 }
 
 /// `GET /api/sessions/{id}/sdd/loop` — the authoritative toggle state (what a
@@ -209,7 +209,7 @@ async fn loop_state(
     Ok(Json(read_loop_state(&state, id)))
 }
 
-fn read_loop_state(state: &AppState, id: Uuid) -> LoopState {
+pub(crate) fn read_loop_state(state: &AppState, id: Uuid) -> LoopState {
     let map = state.sdd_loops.lock().expect("sdd_loops lock");
     match map.get(&id) {
         Some(h) if !h.abort.is_finished() => LoopState {
@@ -234,18 +234,33 @@ async fn loop_toggle(
     Json(body): Json<LoopBody>,
 ) -> Result<Json<LoopState>, ApiError> {
     let id = parse_uuid(&id)?;
+    Ok(Json(
+        set_loop_active(&state, id, body.active, body.max_steps).await?,
+    ))
+}
+
+/// Shared SDD-loop control seam used by both REST (`loop_toggle`) and MCP
+/// (`agentum_sdd_loop_control`). Keeping activation here means session
+/// validation, idempotence, generation ownership, events, and the step cap can
+/// never drift between clients.
+pub(crate) async fn set_loop_active(
+    state: &AppState,
+    id: Uuid,
+    active: bool,
+    max_steps: Option<u32>,
+) -> Result<LoopState, ApiError> {
     let session = state
         .store
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
 
-    if !body.active {
+    if !active {
         let removed = state.sdd_loops.lock().expect("sdd_loops lock").remove(&id);
         if let Some(h) = removed {
             abort_and_announce(&state, id, h, "toggled_off").await;
         }
-        return Ok(Json(read_loop_state(&state, id)));
+        return Ok(read_loop_state(state, id));
     }
 
     if session.status != Status::Running || session.tmux_target.is_none() {
@@ -258,16 +273,16 @@ async fn loop_toggle(
         let map = state.sdd_loops.lock().expect("sdd_loops lock");
         if let Some(h) = map.get(&id) {
             if !h.abort.is_finished() {
-                return Ok(Json(LoopState {
+                return Ok(LoopState {
                     active: true,
                     step: h.step.load(Ordering::Relaxed),
                     max_steps: h.max_steps,
-                }));
+                });
             }
         }
     }
 
-    let max_steps = body.max_steps.unwrap_or(DEFAULT_MAX_STEPS).clamp(1, 100);
+    let max_steps = max_steps.unwrap_or(DEFAULT_MAX_STEPS).clamp(1, 100);
     let generation = LOOP_GENERATION.fetch_add(1, Ordering::Relaxed);
     let step = Arc::new(AtomicU32::new(0));
     let summary = Arc::new(std::sync::Mutex::new(None));
@@ -294,11 +309,11 @@ async fn loop_toggle(
             .with_session(id, session.name.clone())
             .with_payload(json!({ "max_steps": max_steps })),
     );
-    Ok(Json(LoopState {
+    Ok(LoopState {
         active: true,
         step: 0,
         max_steps,
-    }))
+    })
 }
 
 fn emit_loop_stopped(state: &AppState, id: Uuid, name: &str, reason: &str, steps: u32) {

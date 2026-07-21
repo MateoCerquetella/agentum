@@ -4,6 +4,39 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.90.0] — 2026-07-21
+
+### Added
+
+- **Tracker configuration is owned by each Agentum project.** GitHub Project
+  bindings, Linear targets, task preferences, and migration provenance now live
+  behind the registered repository identity instead of a globally active board.
+- **Local and SSH repositories use the same configuration path.** The server
+  resolves the selected repository on its registered host and keeps writes,
+  deletes, migrations, and issue intake scoped to that project.
+- **Chat and issue drafting can use a selected installed AI engine,** with the
+  Claude model preference retained when Claude is chosen.
+- **Agentum's SDD control plane includes the gated PM → Architect → Developer →
+  Tester → Reviewer orchestration playbooks and handoff contracts.**
+
+### Changed
+
+- **New Workspace shows only the selected project's tracker and issues.** Rows
+  are filtered to the server-resolved repository, grouped by Project status,
+  searchable, refreshable, and guarded by a repository + slug + Project scope.
+- **Legacy tracker state migrates deterministically.** Migrated mismatches can
+  repair from the exact repository origin; explicit configurations remain
+  user-owned and surface a reconfigure error instead of being overwritten.
+
+### Fixed
+
+- **Wrong-project issues can no longer leak into New Workspace.** Unbound,
+  loading, failed, or mismatched selected projects never borrow the globally
+  active Project or its cached rows.
+- **Project switches and inline unbinds invalidate tracker data immediately.**
+  Late responses from the previous scope are rejected, the connected state is
+  cleared, and linked workspace coordinates always come from the visible issue.
+
 ## [0.89.0] — 2026-07-21
 
 ### Added

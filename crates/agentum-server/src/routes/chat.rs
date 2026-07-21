@@ -2295,6 +2295,7 @@ pub(crate) async fn draft_issue_body(
     repo_slug: Option<&str>,
     title: &str,
     agent: Option<&str>,
+    model: Option<&str>,
 ) -> Result<DraftedIssue, ApiError> {
     let title = title.trim();
     if title.is_empty() {
@@ -2304,7 +2305,7 @@ pub(crate) async fn draft_issue_body(
     }
     let resolved = resolve_chat_agent(agent)?;
     let creds = resolve_chat_creds(resolved.agent)?;
-    let model = resolve_chat_model(None, &resolved);
+    let model = resolve_chat_model(model, &resolved);
 
     let repo_context = gather_repo_context(workdir);
     // Spec 013 F2 (inv. 6): ground the body in the repo's AutoWiki too. This is
