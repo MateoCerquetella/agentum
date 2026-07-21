@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   deriveTrackerChip,
+  isTrackerChipRedundantWithProjectStatus,
   matchEventToWorktree,
   parseTrackerPhaseWire,
   trackerEventFromFrame,
@@ -160,5 +161,26 @@ describe('deriveTrackerChip', () => {
       label: 'In Progress',
       attention: false
     })
+  })
+})
+
+describe('isTrackerChipRedundantWithProjectStatus', () => {
+  const chip = { phase: 'in_progress' as const, label: 'In Progress', attention: false }
+
+  it('deduplicates equivalent pipeline and Project status labels', () => {
+    expect(isTrackerChipRedundantWithProjectStatus(chip, 'In progress')).toBe(true)
+    expect(isTrackerChipRedundantWithProjectStatus(chip, '  IN PROGRESS  ')).toBe(true)
+  })
+
+  it('keeps the pipeline chip when the statuses differ or no Project status exists', () => {
+    expect(isTrackerChipRedundantWithProjectStatus(chip, 'In Review')).toBe(false)
+    expect(isTrackerChipRedundantWithProjectStatus(chip, null)).toBe(false)
+    expect(isTrackerChipRedundantWithProjectStatus(chip, '   ')).toBe(false)
+  })
+
+  it('keeps attention visible even when the labels match', () => {
+    expect(
+      isTrackerChipRedundantWithProjectStatus({ ...chip, attention: true }, 'In Progress')
+    ).toBe(false)
   })
 })

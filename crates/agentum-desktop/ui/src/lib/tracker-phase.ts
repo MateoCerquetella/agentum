@@ -112,6 +112,20 @@ export type TrackerChipState = {
   attention: boolean
 }
 
+/** Keep the internal pipeline chip only when it adds information beyond the
+ *  bound GitHub Project status. Board option names are user-controlled, so
+ *  compare conservatively (case + surrounding whitespace only). An attention
+ *  chip is never redundant because it also communicates a blocked run. */
+export function isTrackerChipRedundantWithProjectStatus(
+  chip: TrackerChipState,
+  projectStatus: string | null | undefined
+): boolean {
+  if (chip.attention || !projectStatus?.trim()) {
+    return false
+  }
+  return chip.label.trim().toLocaleLowerCase() === projectStatus.trim().toLocaleLowerCase()
+}
+
 const PHASE_LABELS: Record<TrackerPhaseWire, string> = {
   todo: 'Todo',
   in_progress: 'In Progress',
