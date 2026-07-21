@@ -153,13 +153,14 @@ export const FEATURE_WALL_TILES: readonly FeatureWallTile[] = [
   {
     id: 'tile-09',
     kind: 'media',
-    title: 'Agentum CLI',
-    caption: 'Agents can drive Agentum too: create workspaces, snapshot screens, click, and fill.',
+    title: 'Agents drive Agentum',
+    caption:
+      'Every agent gets the agentum MCP tools: create workspaces, snapshot screens, click, and fill.',
     gifPath: 'tile-09.gif',
     posterPath: 'tile-09.poster.jpg',
     recordedAtPath: 'tile-09.recorded-at.json',
-    owner: 'agentum-cli',
-    docsUrl: 'https://www.onagentum.dev/docs/cli/overview'
+    owner: 'agent-mcp',
+    docsUrl: 'https://www.onagentum.dev/docs/agents/supported'
   },
   {
     id: 'tile-10',

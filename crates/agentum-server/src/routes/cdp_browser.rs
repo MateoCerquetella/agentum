@@ -31,6 +31,12 @@ pub fn router() -> Router<AppState> {
         // Tear down ONE worktree's browser — called when the user closes the last
         // browser tab in a worktree so its per-worktree Chromium doesn't linger.
         .route("/api/cdp-browser/stop-worktree", post(stop_worktree))
+        // Delete ONE project's persistent browser profile — the explicit,
+        // project-scoped "Clear browser data" action (spec 014 AC 5).
+        .route(
+            "/api/cdp-browser/clear-project-data",
+            post(clear_project_data),
+        )
         // The in-pane annotate picker hit-tests the shared CDP page here.
         .route("/api/cdp-browser/node-at-point", post(node_at_point))
 }
@@ -94,6 +100,24 @@ async fn stop_worktree(Json(body): Json<Value>) -> Result<Json<Value>, ApiError>
             .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
     }
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `POST /api/cdp-browser/clear-project-data` — the project-scoped "Clear
+/// browser data" action (spec 014 AC 5): force-stop the project's browser and
+/// delete ONLY its profile dir, leaving every other project's profile intact.
+/// Body `{repoId}` (the registry `Repo.id`, D2). Errors surface in the
+/// response body — never a silent success.
+async fn clear_project_data(Json(body): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let repo_id = body
+        .get("repoId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("repoId is required".into()))?;
+    cdp_browser::clear_project_browser_data(repo_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("{e:#}")))?;
+    Ok(Json(serde_json::json!({ "ok": true, "clearedCdp": true })))
 }
 
 /// `POST /api/cdp-browser/node-at-point` — hit-test the CDP page at a viewport

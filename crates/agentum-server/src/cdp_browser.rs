@@ -228,41 +228,260 @@ fn launch_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-// --- per-worktree browsers (isolation) ---------------------------------------
+// --- per-project browsers (isolation + persistence, spec 014) -----------------
 //
-// Each worktree gets its OWN Chromium (own port + tmux session + profile) so
-// opening a browser in worktree B no longer shows worktree A's tabs. Both the
-// user's screencast pane AND the worktree's agent resolve the SAME per-worktree
-// browser by `worktree_id` (the agent side via the MCP `worktree` hint), so they
-// still watch/drive one instance — just one PER worktree. An empty `worktree_id`
-// falls back to the shared default browser, so callers without worktree context
-// (and the existing tests) behave exactly as before.
+// Each PROJECT (registry `Repo.id`) gets its OWN Chromium (own port + tmux
+// session + profile) so opening a browser in project B never shows project A's
+// tabs or cookies, while every workspace/worktree of ONE project shares a single
+// PERSISTENT profile — logins survive tab close, worktree teardown, and app
+// relaunch. Both the user's screencast pane AND the project's agents resolve the
+// SAME browser via [`resolve_browser_scope`], so they still watch/drive one
+// instance. Pseudo-worktrees with no repo (`github-pr:repo:42`, unresolvable
+// paths) keep the old per-key ephemeral behavior (`BrowserScope::Adhoc`); an
+// empty context falls back to the shared project-less browser.
 
-/// A launched per-worktree browser. The port is allocated once (via the OS) and
-/// reused for that worktree's lifetime; tmux + profile are derived from its id.
-struct WorktreeBrowser {
+/// Which browser a raw caller-supplied context resolves to (spec 014 D1/D2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BrowserScope {
+    /// Truly project-less (empty context) → the shared root browser.
+    Shared,
+    /// A registered project, keyed by the registry `Repo.id` UUID.
+    Project { repo_id: String },
+    /// A pseudo-worktree with no repo root (e.g. `github-pr:repo:42`) or an
+    /// unresolvable bare path — keeps per-key isolated, ephemeral behavior.
+    Adhoc { key: String },
+}
+
+impl BrowserScope {
+    /// Filesystem/tmux-safe token; also the registry + attach-count key. `None`
+    /// for `Shared`. The `project-` prefix is applied AFTER sanitization so the
+    /// 48-char tail bound in `sanitize_worktree_token` can never truncate it
+    /// away — a UUID passes sanitization unchanged, so the profile dir is
+    /// literally `project-<uuid>`. The prefix is what lets the boot sweep tell
+    /// persistent project dirs from legacy/adhoc ones.
+    fn profile_token(&self) -> Option<String> {
+        match self {
+            BrowserScope::Shared => None,
+            BrowserScope::Project { repo_id } => {
+                Some(format!("project-{}", sanitize_worktree_token(repo_id)))
+            }
+            BrowserScope::Adhoc { key } => Some(sanitize_worktree_token(key)),
+        }
+    }
+}
+
+/// Resolve a raw browser context (pane `<repoId>::<path>` id, bare agent path,
+/// bare repo id, pseudo-key, or empty) to its scope — the pure, table-only core
+/// of the chain. `None` means "an absolute path the tables don't know", which
+/// the async wrapper follows up with a git probe. Tables: `worktrees` =
+/// `(repo_id, full registry id)` rows; `repos` = `(id, path)`.
+fn resolve_scope_from_tables(
+    raw: &str,
+    worktrees: &[(String, String)],
+    repos: &[(String, String)],
+) -> Option<BrowserScope> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Some(BrowserScope::Shared);
+    }
+    // Pane id `<repoId>::<path>` (folder projects append `::workspace:<uuid>`):
+    // the prefix IS the identity (D2) — trusted without a registry read, so a
+    // stale-but-real repoId still reaches its profile.
+    if let Some((repo_id, _)) = raw.split_once("::") {
+        return Some(BrowserScope::Project {
+            repo_id: repo_id.to_string(),
+        });
+    }
+    // A bare UUID: project-scoped surfaces with a repo but no worktree path
+    // (plain workspace / project hub) send the repo id directly. A filesystem
+    // path can never collide with a UUID. Unregistered UUIDs stay isolated.
+    if uuid::Uuid::parse_str(raw).is_ok() {
+        if repos.iter().any(|(id, _)| id == raw) {
+            return Some(BrowserScope::Project {
+                repo_id: raw.to_string(),
+            });
+        }
+        return Some(BrowserScope::Adhoc {
+            key: raw.to_string(),
+        });
+    }
+    // A bare absolute path (the agent/MCP side): a registered worktree first,
+    // then a session running in a repo's main checkout. Use `Path::is_absolute`
+    // (not `starts_with('/')`) so Windows drive/UNC paths (`C:\…`, `\\…`) also
+    // reach the worktree/repo match + git fallback instead of being misfiled as
+    // an Adhoc key.
+    if Path::new(raw).is_absolute() {
+        if let Some((repo_id, _)) = worktrees
+            .iter()
+            .find(|(_, id)| canonical_worktree_key(id) == raw)
+        {
+            return Some(BrowserScope::Project {
+                repo_id: repo_id.clone(),
+            });
+        }
+        if let Some((id, _)) = repos.iter().find(|(_, path)| path == raw) {
+            return Some(BrowserScope::Project {
+                repo_id: id.clone(),
+            });
+        }
+        return None; // unknown path → git probe, then Adhoc
+    }
+    // Anything else (github-pr pseudo-keys, …) keeps its own isolated browser.
+    Some(BrowserScope::Adhoc {
+        key: raw.to_string(),
+    })
+}
+
+/// Git fallback for an absolute path the tables don't know: a worktree created
+/// outside agentum still maps via its main repo root to a registered project.
+async fn resolve_path_via_git(path: &str, repos: &[(String, String)]) -> Option<BrowserScope> {
+    let out = tokio::process::Command::new("git")
+        .args(["-C", path, "rev-parse", "--git-common-dir"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let common = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if common.is_empty() {
+        return None;
+    }
+    let git_dir = if Path::new(&common).is_absolute() {
+        PathBuf::from(common)
+    } else {
+        PathBuf::from(path).join(common)
+    };
+    let root = git_dir.parent()?.to_path_buf();
+    // Compare canonicalized on both sides — git reports realpaths while the
+    // registry stores what the user typed (macOS `/var` vs `/private/var`).
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    let hit = repos.iter().find(|(_, p)| {
+        Path::new(p) == root || std::fs::canonicalize(p).map(|c| c == root).unwrap_or(false)
+    })?;
+    Some(BrowserScope::Project {
+        repo_id: hit.0.clone(),
+    })
+}
+
+/// Full scope resolution against injected tables (pure chain + git fallback).
+/// An unresolvable context stays ISOLATED (`Adhoc`), never the shared profile —
+/// dumping strangers into one cookie jar is the exact leak spec 014 kills.
+async fn resolve_scope_with(
+    raw: &str,
+    worktrees: &[(String, String)],
+    repos: &[(String, String)],
+) -> BrowserScope {
+    match resolve_scope_from_tables(raw, worktrees, repos) {
+        Some(scope) => scope,
+        None => match resolve_path_via_git(raw.trim(), repos).await {
+            Some(scope) => scope,
+            None => BrowserScope::Adhoc {
+                key: raw.trim().to_string(),
+            },
+        },
+    }
+}
+
+/// Resolve a raw browser context against the live worktree/repo registries.
+pub(crate) async fn resolve_browser_scope(raw: &str) -> BrowserScope {
+    let worktrees = crate::routes::worktrees::scope_worktree_pairs();
+    let repos = crate::routes::repos::scope_repo_pairs();
+    resolve_scope_with(raw, &worktrees, &repos).await
+}
+
+/// A launched scoped browser. The port is allocated once (via the OS) and
+/// reused for that scope's lifetime; tmux + profile are derived from its token.
+struct ScopedBrowser {
     port: u16,
     tmux: String,
     // Kept so a registry entry fully describes its Chromium (port + tmux +
-    // profile). Reap currently re-derives the profile path from the key; this
+    // profile). Teardown re-derives the profile path from the token; this
     // field keeps the entry self-contained for a future direct-path teardown.
     #[allow(dead_code)]
     profile: PathBuf,
 }
 
-/// `worktree_id → WorktreeBrowser`. A `std` mutex (never held across `.await`):
-/// every access reads/writes a field and drops the guard before any I/O.
-fn worktree_registry() -> &'static std::sync::Mutex<HashMap<String, WorktreeBrowser>> {
-    static REG: OnceLock<std::sync::Mutex<HashMap<String, WorktreeBrowser>>> = OnceLock::new();
+/// `profile token → ScopedBrowser`. Keyed by the TOKEN (not the raw context) so
+/// two contexts that sanitize to one profile dir can never race two Chromiums
+/// onto it — Chromium allows exactly one process per `--user-data-dir`. A `std`
+/// mutex (never held across `.await`): every access reads/writes a field and
+/// drops the guard before any I/O.
+fn browser_registry() -> &'static std::sync::Mutex<HashMap<String, ScopedBrowser>> {
+    static REG: OnceLock<std::sync::Mutex<HashMap<String, ScopedBrowser>>> = OnceLock::new();
     REG.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-/// Reduce a browser worktree key to the bare filesystem path that BOTH the
-/// user's pane and the worktree's agent agree on. The desktop sends the full UI
-/// worktree id `<repoId>::<path>` (folder projects append a `::workspace:<uuid>`
-/// instance suffix); the agent sends the bare `worktree_path`. Both MUST map to
-/// one registry key, or the agent drives a different Chromium than the user
-/// watches. Mirrors the desktop's `splitWorktreeIdForFilesystem`: drop the
+/// `token → live screencast attach count` (spec 014 AC 2). Ground truth for
+/// "some pane is watching this project's browser": incremented per screencast
+/// WS, decremented by the guard's Drop when the WS task ends (close/drop/panic).
+fn attach_counts() -> &'static std::sync::Mutex<HashMap<String, usize>> {
+    static C: OnceLock<std::sync::Mutex<HashMap<String, usize>>> = OnceLock::new();
+    C.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// RAII attach marker for one screencast connection. MUST be moved into the WS
+/// task's future so the Drop decrement fires exactly when the stream ends —
+/// dropped at handler scope it would zero the count while panes still stream,
+/// resurrecting the "worktree A's close kills worktree B's browser" bug.
+pub(crate) struct BrowserAttachGuard(Option<String>);
+
+impl BrowserAttachGuard {
+    /// A guard that counts nothing (shared / explicit-port / adhoc attaches).
+    pub(crate) fn inert() -> Self {
+        BrowserAttachGuard(None)
+    }
+}
+
+impl Drop for BrowserAttachGuard {
+    fn drop(&mut self) {
+        if let Some(token) = self.0.take() {
+            if let Ok(mut counts) = attach_counts().lock() {
+                match counts.get_mut(&token) {
+                    Some(c) if *c > 1 => *c -= 1,
+                    Some(_) => {
+                        counts.remove(&token);
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+}
+
+/// Register a live screencast attach for `raw`'s browser. Counts only Project
+/// scopes: Adhoc keeps kill-always teardown and Shared's stop is explicit-only,
+/// so neither needs a refcount — those get an inert guard.
+pub(crate) async fn register_browser_attach(raw: &str) -> BrowserAttachGuard {
+    let scope = resolve_browser_scope(raw).await;
+    match &scope {
+        BrowserScope::Project { .. } => {
+            let token = scope.profile_token().expect("project scope has a token");
+            if let Ok(mut counts) = attach_counts().lock() {
+                *counts.entry(token.clone()).or_insert(0) += 1;
+            }
+            BrowserAttachGuard(Some(token))
+        }
+        _ => BrowserAttachGuard::inert(),
+    }
+}
+
+/// Live screencast attaches for a token (0 when untracked).
+fn project_attach_count(token: &str) -> usize {
+    attach_counts()
+        .lock()
+        .ok()
+        .map(|c| c.get(token).copied().unwrap_or(0))
+        .unwrap_or(0)
+}
+
+/// Reduce a full worktree id to its bare filesystem path. The desktop's UI ids
+/// are `<repoId>::<path>` (folder projects append a `::workspace:<uuid>`
+/// instance suffix); agents send the bare `worktree_path`. Scope resolution
+/// (`resolve_scope_from_tables`) uses this to match an agent's bare path
+/// against registry rows, so BOTH sides land on the same project browser —
+/// otherwise the agent would drive a different Chromium than the user watches.
+/// Mirrors the desktop's `splitWorktreeIdForFilesystem`: drop the
 /// `<repoId>::` prefix, then any `::workspace:<uuid>` suffix.
 ///
 /// Assumes a worktree path contains no `::` (true for agentum-managed worktrees,
@@ -303,73 +522,75 @@ fn sanitize_worktree_token(worktree_id: &str) -> String {
     }
 }
 
-/// Per-worktree profile dir: `…/cdp-browser/<token>` (sibling of the shared one).
-fn worktree_profile_dir(token: &str) -> Result<PathBuf> {
+/// Profile dir for a scoped browser: `…/cdp-browser/<token>` (sibling of
+/// `shared`). `project-*` tokens persist across teardown/relaunch (spec 014);
+/// everything else is ephemeral.
+fn profile_dir_for_token(token: &str) -> Result<PathBuf> {
     let dir = agentum_store::paths::state_dir()
         .context("resolve agentum state dir")?
         .join("cdp-browser")
         .join(token);
     std::fs::create_dir_all(&dir)
-        .with_context(|| format!("create per-worktree CDP profile dir {}", dir.display()))?;
+        .with_context(|| format!("create scoped CDP profile dir {}", dir.display()))?;
     Ok(dir)
 }
 
-/// The registered port for a worktree, if its browser is still serving.
-async fn registered_listening_port(worktree_id: &str) -> Option<u16> {
-    let port = worktree_registry()
-        .lock()
-        .ok()?
-        .get(worktree_id)
-        .map(|b| b.port)?;
+/// The registered port for a scope token, if its browser is still serving.
+async fn registered_listening_port(token: &str) -> Option<u16> {
+    let port = browser_registry().lock().ok()?.get(token).map(|b| b.port)?;
     port_listening(port).await.then_some(port)
 }
 
-/// Ensure a per-WORKTREE CDP browser and return `(endpoint, port)`. Idempotent per
-/// worktree (reuses the registered, still-serving port). A `worktree_id` with no
-/// worktree path falls back to the shared default browser so contextless callers
-/// don't regress.
+/// Ensure the CDP browser for this context and return `(endpoint, port)`.
+/// Contexts resolving to a project share ONE persistent browser per project
+/// (spec 014 D1) — the pane's `<repoId>::<path>` id, an agent's bare worktree
+/// path, and a bare repo id all land on the same instance; pseudo/unknown keys
+/// get their own ephemeral browser; an empty context falls back to the shared
+/// default so contextless callers don't regress. Idempotent per scope (reuses
+/// the registered, still-serving port).
 pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, u16)> {
-    // Canonical key: the user's pane sends the full UI worktree id
-    // `<repoId>::<path>` (folder projects append `::workspace:<uuid>`), while the
-    // worktree's agent sends the bare `worktree_path`. Reduce BOTH to the same
-    // filesystem path so they resolve to ONE browser — otherwise the agent would
-    // drive a different Chromium than the user watches (see `canonical_worktree_key`).
-    let key = canonical_worktree_key(worktree_id.trim());
-    // Per-worktree isolation is ON by default; set `AGENTUM_BROWSER_PER_WORKTREE=0`
-    // to opt out (every worktree shares one browser, the pre-v0.27 behavior).
+    let raw = worktree_id.trim();
+    // Keyed isolation is ON by default; `AGENTUM_BROWSER_PER_WORKTREE=0` opts
+    // out (every context shares one browser — the pre-v0.27 behavior; the
+    // historical name predates project keying). Checked before resolution so
+    // the opt-out never reads the registries.
     let enabled = std::env::var("AGENTUM_BROWSER_PER_WORKTREE")
         .map(|v| v.trim() != "0")
         .unwrap_or(true);
-    if key.is_empty() || !enabled {
+    let scope = if enabled && !raw.is_empty() {
+        resolve_browser_scope(raw).await
+    } else {
+        BrowserScope::Shared
+    };
+    let Some(token) = scope.profile_token() else {
         let endpoint = ensure_local_cdp_browser().await?;
         return Ok((endpoint, cdp_port()));
-    }
+    };
 
-    if let Some(port) = registered_listening_port(key).await {
+    if let Some(port) = registered_listening_port(&token).await {
         return Ok((cdp_endpoint_for(port), port));
     }
 
     let _guard = launch_lock().lock().await;
-    if let Some(port) = registered_listening_port(key).await {
+    if let Some(port) = registered_listening_port(&token).await {
         return Ok((cdp_endpoint_for(port), port));
     }
 
     let exe = chromium_executable()?;
-    let token = sanitize_worktree_token(key);
     let tmux = format!("{CDP_TMUX_TARGET}-{token}");
-    let profile = worktree_profile_dir(&token)?;
-    // Reuse this worktree's previously-allocated port (re-launch on the same port
+    let profile = profile_dir_for_token(&token)?;
+    // Reuse this scope's previously-allocated port (re-launch on the same port
     // after a crash) or take a fresh one from the OS.
-    let port = worktree_registry()
+    let port = browser_registry()
         .lock()
         .ok()
-        .and_then(|reg| reg.get(key).map(|b| b.port))
+        .and_then(|reg| reg.get(&token).map(|b| b.port))
         .map_or_else(free_local_port, Ok)?;
 
     // A leftover-but-not-listening session is either booting or dead.
     if agentum_tmux::has_session(&tmux).await.unwrap_or(false) {
         if wait_until_listening(port, cdp_leftover_grace()).await {
-            register_worktree_browser(key, port, &tmux, &profile);
+            register_scoped_browser(&token, port, &tmux, &profile);
             return Ok((cdp_endpoint_for(port), port));
         }
         let _ = agentum_tmux::kill_session(&tmux).await;
@@ -378,26 +599,26 @@ pub async fn ensure_local_cdp_browser_for(worktree_id: &str) -> Result<(String, 
     let argv = build_chrome_argv(&exe, port, &profile);
     agentum_tmux::new_session(&tmux, &home_dir(), &argv, &[])
         .await
-        .with_context(|| format!("start CDP-Chromium for worktree `{key}`"))?;
+        .with_context(|| format!("start CDP-Chromium for browser context `{raw}`"))?;
 
     let ready = cdp_ready_timeout();
     if wait_until_listening(port, ready).await {
-        register_worktree_browser(key, port, &tmux, &profile);
+        register_scoped_browser(&token, port, &tmux, &profile);
         Ok((cdp_endpoint_for(port), port))
     } else {
         anyhow::bail!(
-            "Chromium for worktree `{key}` did not expose CDP on 127.0.0.1:{port} within {}s \
+            "Chromium for `{raw}` did not expose CDP on 127.0.0.1:{port} within {}s \
              (tmux `{tmux}`). Set AGENTUM_CDP_READY_TIMEOUT_SECS to allow more time.",
             ready.as_secs()
         )
     }
 }
 
-fn register_worktree_browser(worktree_id: &str, port: u16, tmux: &str, profile: &Path) {
-    if let Ok(mut reg) = worktree_registry().lock() {
+fn register_scoped_browser(token: &str, port: u16, tmux: &str, profile: &Path) {
+    if let Ok(mut reg) = browser_registry().lock() {
         reg.insert(
-            worktree_id.to_string(),
-            WorktreeBrowser {
+            token.to_string(),
+            ScopedBrowser {
                 port,
                 tmux: tmux.to_string(),
                 profile: profile.to_path_buf(),
@@ -439,31 +660,111 @@ pub async fn reap_orphaned_cdp_browsers() {
     if let Ok(state) = agentum_store::paths::state_dir() {
         pkill_by_signature(&state.join("cdp-browser").to_string_lossy()).await;
     }
-    if let Ok(mut reg) = worktree_registry().lock() {
+    if let Ok(mut reg) = browser_registry().lock() {
         reg.clear();
     }
 }
 
-/// Tear down a worktree's browser (kill its Chromium + tmux session, drop its
-/// profile + registry entry). Idempotent; safe for an unknown worktree. Called on
-/// worktree removal AND when the user closes the last browser tab in the worktree.
+/// Boot sweep (spec 014 D4): delete every TOP-LEVEL entry under `cdp-browser/`
+/// that is neither the `shared` profile nor a persistent `project-*` dir —
+/// legacy per-worktree profiles (deleted-on-close under the old contract, so
+/// nothing durable ever lived there), pre-relocation shared-profile internals
+/// (`Default/`, `Local State`, …), and leftover adhoc dirs. Idempotent — runs
+/// every boot; a second pass finds nothing legacy. MUST run strictly AFTER
+/// [`reap_orphaned_cdp_browsers`] so no profile is ripped out from under a live
+/// process. Never recurses into (or deletes) `project-*` or `shared`, and never
+/// touches anything outside `cdp-browser/`.
+pub async fn sweep_legacy_profile_dirs() {
+    let Ok(state) = agentum_store::paths::state_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(state.join("cdp-browser")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "shared" || name.starts_with("project-") {
+            continue;
+        }
+        let path = entry.path();
+        let _ = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+    }
+}
+
+/// Release one context's claim on its browser. Scope-aware (spec 014 AC 2): a
+/// PROJECT browser is stopped (tmux + process killed) only when no screencast
+/// pane anywhere is still attached to it, and its profile dir is NEVER deleted
+/// here — the explicit clear action is the only deleter (D3), so logins persist
+/// across tab close / worktree removal / relaunch. An ADHOC (pseudo-key or
+/// unresolvable) browser keeps the old contract: kill + delete. Shared is a
+/// no-op (it has its own explicit stop route). Idempotent; safe for an unknown
+/// context. Called on worktree removal, prune, and when the user closes the
+/// last browser tab in a workspace.
 pub async fn stop_local_cdp_browser_for(worktree_id: &str) -> Result<()> {
-    let key = canonical_worktree_key(worktree_id.trim());
-    let entry = worktree_registry()
+    let scope = resolve_browser_scope(worktree_id.trim()).await;
+    let Some(token) = scope.profile_token() else {
+        return Ok(()); // Shared: never stopped from a per-workspace signal
+    };
+    let is_project = matches!(scope, BrowserScope::Project { .. });
+    // Another workspace of this project still has a live pane → releasing this
+    // one must not kill the browser it is mid-screencasting (AC 2).
+    if is_project && project_attach_count(&token) > 0 {
+        return Ok(());
+    }
+    let entry = browser_registry()
         .lock()
         .ok()
-        .and_then(|mut reg| reg.remove(key));
+        .and_then(|mut reg| reg.remove(&token));
     if let Some(b) = &entry {
         let _ = agentum_tmux::kill_session(&b.tmux).await;
     }
     // Kill the Chromium by its profile dir even without a live registry entry (it
     // may have been launched in a previous run) — the browser can outlive its
-    // tmux session, so killing the session alone leaks it. Derive the SAME
-    // per-worktree profile path used at launch, then drop the dir.
+    // tmux session, so killing the session alone leaks it.
     if let Ok(state) = agentum_store::paths::state_dir() {
-        let profile = state.join("cdp-browser").join(sanitize_worktree_token(key));
+        let profile = state.join("cdp-browser").join(&token);
         pkill_by_signature(&profile.to_string_lossy()).await;
-        let _ = std::fs::remove_dir_all(&profile);
+        // Project profiles PERSIST (the point of spec 014); adhoc dirs keep
+        // their ephemeral delete-on-stop contract.
+        if !is_project {
+            let _ = std::fs::remove_dir_all(&profile);
+        }
+    }
+    Ok(())
+}
+
+/// Explicit project-scoped clear (spec 014 AC 5) — the ONLY deleter of a
+/// project profile (D3). Force-stops the project's browser — attach counts
+/// deliberately IGNORED: a clear is explicit user intent, and a live pane's WS
+/// dies and reconnects onto a fresh, empty profile — then deletes ONLY that
+/// project's dir. Errors propagate to the caller; silent success is the stub
+/// failure mode this action replaces.
+pub async fn clear_project_browser_data(repo_id: &str) -> Result<()> {
+    let repo_id = repo_id.trim();
+    if repo_id.is_empty() {
+        anyhow::bail!("a repo id is required to clear a project's browser data");
+    }
+    let scope = BrowserScope::Project {
+        repo_id: repo_id.to_string(),
+    };
+    let token = scope.profile_token().expect("project scope has a token");
+    let entry = browser_registry()
+        .lock()
+        .ok()
+        .and_then(|mut reg| reg.remove(&token));
+    if let Some(b) = &entry {
+        let _ = agentum_tmux::kill_session(&b.tmux).await;
+    }
+    let state = agentum_store::paths::state_dir().context("resolve agentum state dir")?;
+    let profile = state.join("cdp-browser").join(&token);
+    pkill_by_signature(&profile.to_string_lossy()).await;
+    if profile.exists() {
+        std::fs::remove_dir_all(&profile)
+            .with_context(|| format!("delete project browser profile {}", profile.display()))?;
     }
     Ok(())
 }
@@ -770,11 +1071,17 @@ fn playwright_browsers_root() -> PathBuf {
     }
 }
 
-/// Isolated profile dir for the agent browser, under agentum's state dir.
+/// Isolated profile dir for the SHARED (project-less) agent browser, under
+/// agentum's state dir. Nested at `cdp-browser/shared` — a SIBLING of the
+/// persistent `project-<repoId>` dirs — so `stop_local_cdp_browser`'s existing
+/// `remove_dir_all` is structurally incapable of touching a project profile,
+/// and the boot sweep can tell legacy top-level entries from live ones
+/// (spec 014, Decision G).
 fn user_data_dir() -> Result<PathBuf> {
     let dir = agentum_store::paths::state_dir()
         .context("resolve agentum state dir")?
-        .join("cdp-browser");
+        .join("cdp-browser")
+        .join("shared");
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("create CDP browser profile dir {}", dir.display()))?;
     Ok(dir)
@@ -791,6 +1098,11 @@ fn home_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    // Why: `isolate_home()` hands each test a `TEST_ENV_LOCK` guard that must
+    // span the whole test body — including awaits — to serialize AGENTUM_HOME
+    // mutation across the crate's tests. Each #[tokio::test] runs on its own
+    // single-thread runtime, so blocking peers on the std mutex is safe.
+    #![allow(clippy::await_holding_lock)]
     use super::*;
     use std::path::Path;
 
@@ -943,5 +1255,360 @@ mod tests {
         let found = find_chrome_exe_in(&tmp).expect("should discover the legacy Chromium exe");
         assert_eq!(found, exe);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // --- spec 014: browser scope resolution + per-project persistence --------
+
+    fn tbl(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+
+    /// Serialize + isolate env-mutating tests (AGENTUM_HOME is process-global).
+    /// Mirrors `routes/profiles.rs::isolate_xdg`, incl. the escape assertion —
+    /// every asserted profile path must sit under the temp home so a test's
+    /// pkill signature can never match a real process.
+    fn isolate_home() -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
+        let guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        // SAFETY: `set_var` is unsound under concurrent env access;
+        // TEST_ENV_LOCK serializes every env-mutating test in the crate.
+        unsafe {
+            std::env::set_var("AGENTUM_HOME", dir.path());
+        }
+        let state = agentum_store::paths::state_dir().expect("state_dir resolves");
+        assert!(
+            state.starts_with(dir.path()),
+            "AGENTUM_HOME isolation broken: {state:?} escaped {:?}",
+            dir.path()
+        );
+        (dir, guard)
+    }
+
+    #[test]
+    fn scope_pane_id_and_agent_path_resolve_to_same_project() {
+        // The per-project contract: the user's pane (full UI id) and the
+        // worktree's agent (bare path) MUST collapse to the SAME project scope,
+        // or the agent drives a different browser than the user is watching.
+        let path = "/Users/x/.agentum/worktrees/feat";
+        let full = format!("repo-abc::{path}");
+        let wts = tbl(&[("repo-abc", full.as_str())]);
+        let a = resolve_scope_from_tables(&full, &wts, &[]).unwrap();
+        let b = resolve_scope_from_tables(path, &wts, &[]).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(
+            a,
+            BrowserScope::Project {
+                repo_id: "repo-abc".into()
+            }
+        );
+        assert_eq!(a.profile_token(), b.profile_token());
+    }
+
+    #[test]
+    fn scope_bare_repo_id_workspace_suffix_and_repo_main_path() {
+        let uuid = "0123abcd-0000-0000-0000-000000000000";
+        let repos = tbl(&[(uuid, "/repo/main")]);
+        // Bare registered repo id (plain-workspace / project-hub surfaces).
+        assert_eq!(
+            resolve_scope_from_tables(uuid, &[], &repos).unwrap(),
+            BrowserScope::Project {
+                repo_id: uuid.into()
+            }
+        );
+        // Folder-project instance id — the `<repoId>::` prefix wins.
+        assert_eq!(
+            resolve_scope_from_tables(&format!("{uuid}::/folder::workspace:{uuid}"), &[], &repos)
+                .unwrap(),
+            BrowserScope::Project {
+                repo_id: uuid.into()
+            }
+        );
+        // A session running in the repo's main checkout (bare path, repos hit).
+        assert_eq!(
+            resolve_scope_from_tables("/repo/main", &[], &repos).unwrap(),
+            BrowserScope::Project {
+                repo_id: uuid.into()
+            }
+        );
+    }
+
+    #[test]
+    fn scope_pseudo_keys_and_unknown_uuid_are_adhoc_empty_is_shared() {
+        assert_eq!(
+            resolve_scope_from_tables("", &[], &[]).unwrap(),
+            BrowserScope::Shared
+        );
+        assert_eq!(
+            resolve_scope_from_tables("github-pr:repo:42", &[], &[]).unwrap(),
+            BrowserScope::Adhoc {
+                key: "github-pr:repo:42".into()
+            }
+        );
+        // A bare UUID nobody registered stays isolated — never Project/Shared.
+        assert_eq!(
+            resolve_scope_from_tables("9999abcd-0000-0000-0000-000000000000", &[], &[]).unwrap(),
+            BrowserScope::Adhoc {
+                key: "9999abcd-0000-0000-0000-000000000000".into()
+            }
+        );
+        // An unknown absolute path defers to the git probe (None) — NOT Shared.
+        assert_eq!(resolve_scope_from_tables("/no/such/path", &[], &[]), None);
+    }
+
+    #[test]
+    fn project_profile_token_is_prefixed_fs_safe_and_uncollidable() {
+        // A UUID passes sanitization unchanged → the dir is literally
+        // `project-<uuid>` (spec 014 AC 1).
+        let uuid = "0123abcd-0000-0000-0000-000000000000";
+        let p = BrowserScope::Project {
+            repo_id: uuid.into(),
+        };
+        assert_eq!(p.profile_token().unwrap(), format!("project-{uuid}"));
+        // The prefix is applied AFTER sanitization: a pathological repo id long
+        // enough to hit the 48-char tail bound still keeps the prefix (it is
+        // what the boot sweep keys persistence on).
+        let p = BrowserScope::Project {
+            repo_id: "x".repeat(200),
+        };
+        assert!(p.profile_token().unwrap().starts_with("project-"));
+        // Adhoc path tokens never land in the project namespace; Shared has none.
+        let a = BrowserScope::Adhoc {
+            key: "/some/legacy/path".into(),
+        };
+        assert!(!a.profile_token().unwrap().starts_with("project-"));
+        assert!(BrowserScope::Shared.profile_token().is_none());
+    }
+
+    #[tokio::test]
+    async fn scope_miss_is_adhoc_never_shared() {
+        // A path that is in no table and not a registered repo's git tree stays
+        // ISOLATED — dumping unknown contexts into the shared cookie jar is the
+        // exact leak spec 014 kills.
+        let tmp = std::env::temp_dir().join(format!("agentum-scope-miss-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let raw = tmp.to_string_lossy().into_owned();
+        let scope = resolve_scope_with(&raw, &[], &[]).await;
+        assert_eq!(scope, BrowserScope::Adhoc { key: raw });
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn scope_git_common_dir_fallback_maps_foreign_worktree_to_project() {
+        // A git worktree agentum didn't create (absent from worktrees.json)
+        // still resolves to its registered main repo via `--git-common-dir`.
+        let base = std::env::temp_dir().join(format!("agentum-scope-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let main = base.join("main");
+        let wt = base.join("wt");
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |args: &[&str], cwd: &std::path::Path| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .expect("git runs")
+        };
+        assert!(git(&["init", "-q"], &main).status.success());
+        assert!(
+            git(
+                &[
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "user.name=t",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "x",
+                    "-q"
+                ],
+                &main
+            )
+            .status
+            .success()
+        );
+        assert!(
+            git(&["worktree", "add", "-q", wt.to_str().unwrap()], &main)
+                .status
+                .success()
+        );
+
+        // Register the MAIN repo path (canonicalized — git reports realpaths).
+        let main_c = std::fs::canonicalize(&main).unwrap();
+        let repos = tbl(&[("rid-1", main_c.to_str().unwrap())]);
+        let scope = resolve_scope_with(wt.to_str().unwrap(), &[], &repos).await;
+        assert_eq!(
+            scope,
+            BrowserScope::Project {
+                repo_id: "rid-1".into()
+            }
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    // `isolate_home()` holds `TEST_ENV_LOCK` across the awaits below BY DESIGN:
+    // it serializes `AGENTUM_HOME` mutation (`set_var` is unsound under
+    // concurrent env access) and the code under test reads `AGENTUM_HOME` while
+    // awaiting. Dropping the guard before the await would break isolation, so
+    // the `await_holding_lock` lint is a false positive for these env-scoped
+    // tests. Same rationale applies to every `isolate_home()` test below.
+    #[allow(clippy::await_holding_lock)]
+    async fn stop_project_scope_never_deletes_profile_dir() {
+        let (home, _guard) = isolate_home();
+        let raw = "repo-keep::/tmp/agentum-test-wt-keep";
+        let token = "project-repo-keep";
+        let profile = agentum_store::paths::state_dir()
+            .unwrap()
+            .join("cdp-browser")
+            .join(token);
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("Cookies"), b"c").unwrap();
+        assert!(profile.starts_with(home.path()));
+        register_scoped_browser(token, 1, "agentum-cdp-browser-test-keep", &profile);
+
+        stop_local_cdp_browser_for(raw).await.unwrap();
+
+        assert!(
+            !browser_registry().lock().unwrap().contains_key(token),
+            "release must drop the registry entry"
+        );
+        assert!(
+            profile.join("Cookies").exists(),
+            "a project profile must PERSIST across stop (spec 014 AC 2)"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
+    async fn stop_adhoc_scope_deletes_profile_dir() {
+        let (home, _guard) = isolate_home();
+        let raw = "github-pr:repo:42";
+        let token = sanitize_worktree_token(raw);
+        let profile = agentum_store::paths::state_dir()
+            .unwrap()
+            .join("cdp-browser")
+            .join(&token);
+        std::fs::create_dir_all(&profile).unwrap();
+        assert!(profile.starts_with(home.path()));
+
+        stop_local_cdp_browser_for(raw).await.unwrap();
+        assert!(
+            !profile.exists(),
+            "adhoc profiles keep the ephemeral delete-on-stop contract"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
+    async fn release_is_noop_while_project_attached() {
+        let (home, _guard) = isolate_home();
+        let raw = "repo-att::/tmp/agentum-test-wt-att";
+        let token = "project-repo-att";
+        let profile = agentum_store::paths::state_dir()
+            .unwrap()
+            .join("cdp-browser")
+            .join(token);
+        std::fs::create_dir_all(&profile).unwrap();
+        assert!(profile.starts_with(home.path()));
+        register_scoped_browser(token, 1, "agentum-cdp-browser-test-att", &profile);
+
+        let attach = register_browser_attach(raw).await;
+        stop_local_cdp_browser_for(raw).await.unwrap();
+        assert!(
+            browser_registry().lock().unwrap().contains_key(token),
+            "a live attach anywhere in the project makes release a no-op (AC 2)"
+        );
+        assert!(profile.exists());
+
+        drop(attach);
+        stop_local_cdp_browser_for(raw).await.unwrap();
+        assert!(
+            !browser_registry().lock().unwrap().contains_key(token),
+            "the last release stops the browser"
+        );
+        assert!(profile.exists(), "…but the profile still persists");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
+    async fn sweep_deletes_only_legacy_entries() {
+        let (_home, _guard) = isolate_home();
+        let root = agentum_store::paths::state_dir()
+            .unwrap()
+            .join("cdp-browser");
+        std::fs::create_dir_all(root.join("old-worktree-token")).unwrap();
+        std::fs::create_dir_all(root.join("Default")).unwrap();
+        std::fs::write(root.join("Local State"), b"{}").unwrap();
+        std::fs::create_dir_all(root.join("project-a")).unwrap();
+        std::fs::write(root.join("project-a").join("Cookies"), b"c").unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+
+        sweep_legacy_profile_dirs().await;
+        assert!(!root.join("old-worktree-token").exists());
+        assert!(!root.join("Default").exists());
+        assert!(!root.join("Local State").exists());
+        assert!(root.join("project-a").join("Cookies").exists());
+        assert!(root.join("shared").exists());
+
+        // Idempotent: a second sweep changes nothing.
+        sweep_legacy_profile_dirs().await;
+        assert!(root.join("project-a").exists() && root.join("shared").exists());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // env-lock held across await by design (see note above)
+    async fn clear_project_browser_data_deletes_only_that_project() {
+        let (home, _guard) = isolate_home();
+        let root = agentum_store::paths::state_dir()
+            .unwrap()
+            .join("cdp-browser");
+        let a = root.join("project-repo-p");
+        let b = root.join("project-repo-q");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("Cookies"), b"a").unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join("Cookies"), b"b").unwrap();
+        assert!(a.starts_with(home.path()));
+        register_scoped_browser("project-repo-p", 1, "agentum-cdp-browser-test-clr", &a);
+        // Even a LIVE attach doesn't block an explicit clear (user intent).
+        let _attach = register_browser_attach("repo-p::/tmp/agentum-test-wt-clr").await;
+
+        clear_project_browser_data("repo-p").await.unwrap();
+
+        assert!(!a.exists(), "the cleared project's profile must be deleted");
+        assert!(
+            b.join("Cookies").exists(),
+            "every OTHER project's profile must be untouched (AC 5)"
+        );
+        assert!(
+            !browser_registry()
+                .lock()
+                .unwrap()
+                .contains_key("project-repo-p")
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_project_browser_data_requires_a_repo_id() {
+        // An empty id would sanitize into a junk token — refuse loudly instead.
+        assert!(clear_project_browser_data("  ").await.is_err());
+    }
+
+    #[test]
+    fn shared_user_data_dir_is_nested_shared_subdir() {
+        let (home, _guard) = isolate_home();
+        let dir = user_data_dir().unwrap();
+        assert!(dir.starts_with(home.path()));
+        assert!(
+            dir.ends_with("cdp-browser/shared"),
+            "the shared profile must be a SIBLING of project-* dirs, so its \
+             delete-on-stop can never touch them (spec 014 G): {dir:?}"
+        );
     }
 }

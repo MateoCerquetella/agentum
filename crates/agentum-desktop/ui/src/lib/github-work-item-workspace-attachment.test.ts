@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildGithubWorkItemWorkspaceAttachmentIndex,
   findGithubIssueWorkspaceAttachment,
   findGithubPrWorkspaceAttachment,
   findGithubWorkItemWorkspaceAttachment,
   getGithubWorkItemWorkspaceAttachmentLabel,
-  getGithubPrWorkspaceAttachmentLabel
+  getGithubPrWorkspaceAttachmentLabel,
+  lookupGithubWorkItemWorkspaceAttachment
 } from './github-work-item-workspace-attachment'
 import type { Worktree } from '../../../shared/types'
 
@@ -94,6 +96,40 @@ describe('GitHub work-item workspace attachment', () => {
 
     expect(findGithubPrWorkspaceAttachment([gitlabOnly], 'repo-1', 42)).toBeNull()
     expect(findGithubIssueWorkspaceAttachment([gitlabOnly], 'repo-1', 42)).toBeNull()
+  })
+
+  it('index lookup is behaviorally identical to the linear find', () => {
+    // The index (used to render large work-item lists) must return exactly what
+    // findGithubWorkItemWorkspaceAttachment returns for every case: first-wins,
+    // archived-skip, repo scoping, PR/issue slot separation, null repo.
+    const worktrees: Worktree[] = [
+      worktree({ id: 'pr-first', linkedPR: 42 }),
+      worktree({ id: 'pr-second', linkedPR: 42 }),
+      worktree({ id: 'issue-first', linkedIssue: 42 }),
+      worktree({ id: 'archived', linkedPR: 7, linkedIssue: 7, isArchived: true }),
+      worktree({ id: 'other-repo', repoId: 'repo-2', linkedPR: 99, linkedIssue: 99 }),
+      worktree({ id: 'both-slots', linkedPR: 100, linkedIssue: 200 })
+    ]
+    const index = buildGithubWorkItemWorkspaceAttachmentIndex(worktrees)
+
+    const cases: Array<['pr' | 'issue', string | null | undefined, number]> = [
+      ['pr', 'repo-1', 42],
+      ['issue', 'repo-1', 42],
+      ['pr', 'repo-1', 7], // archived → null
+      ['issue', 'repo-1', 7], // archived → null
+      ['pr', 'repo-2', 99],
+      ['pr', 'repo-1', 99], // wrong repo → null
+      ['pr', 'repo-1', 100],
+      ['issue', 'repo-1', 100], // wrong slot → null
+      ['issue', 'repo-1', 200],
+      ['pr', 'repo-1', 999], // no match → null
+      ['pr', null, 42] // no repo → null
+    ]
+    for (const [type, repoId, number] of cases) {
+      expect(lookupGithubWorkItemWorkspaceAttachment(index, repoId, type, number)).toBe(
+        findGithubWorkItemWorkspaceAttachment(worktrees, repoId, type, number)
+      )
+    }
   })
 
   it('labels attachments without exposing a full path when display or branch is available', () => {

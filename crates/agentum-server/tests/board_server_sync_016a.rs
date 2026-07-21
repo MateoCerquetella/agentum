@@ -53,6 +53,7 @@ async fn make_state(dir: &std::path::Path) -> AppState {
         cert_fingerprint: Arc::new(String::new()),
         transcripts: agentum_server::TranscriptStore::new(broadcast::channel(16).0),
         stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         hostname: "test".to_string(),
         no_auth: true,
         clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -62,6 +63,7 @@ async fn make_state(dir: &std::path::Path) -> AppState {
         api_base_url: None,
         desktop_bridge: None,
         harness: Arc::new(agentum_server::harness::HarnessEngine::new()),
+        sdd_loops: Default::default(),
         events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     }
 }

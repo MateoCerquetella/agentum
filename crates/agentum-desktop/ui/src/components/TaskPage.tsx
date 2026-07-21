@@ -55,6 +55,11 @@ import IssueSourceSelector, { issueSourceChipClass } from '@/components/github/I
 import { TaskKanbanBoard } from '@/components/tasks/TaskKanbanBoard'
 import { TWO_COLUMNS, githubColumn } from '@/components/tasks/task-kanban'
 import { transitionGithubIssue } from '@/components/tasks/task-kanban-github'
+import {
+  resolveBoardProject,
+  type BoardBindingState
+} from '@/lib/board-project-resolution'
+import { useKanbanPointerDrag } from '@/lib/use-kanban-pointer-drag'
 import { reconcileLinearTeamSelection } from '@/components/task-page-linear-team-selection'
 import { parseTaskQuery, stripRepoQualifiers, withQualifier } from '../../../shared/task-query'
 import {
@@ -66,6 +71,8 @@ import { GitHubMarkdownComposer } from '@/components/github/GitHubMarkdownCompos
 import { buildGitHubRepoUrl, parseGitHubIssueOrPRLink } from '@/lib/github-links'
 import {
   findGithubWorkItemWorkspaceAttachment,
+  buildGithubWorkItemWorkspaceAttachmentIndex,
+  lookupGithubWorkItemWorkspaceAttachment,
   getGithubWorkItemWorkspaceAttachmentLabel
 } from '@/lib/github-work-item-workspace-attachment'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
@@ -156,7 +163,6 @@ import {
   groupLinearIssues,
   type LinearDisplayProperty,
   type LinearGroupBy,
-  type LinearGroupSection,
   type LinearOrderBy
 } from './task-page/linear-helpers'
 import { formatRelativeTime } from '@/lib/relative-time'
@@ -171,13 +177,16 @@ import {
   GITHUB_TASK_STICKY_ID_CELL_CLASS,
   GITHUB_TASK_STICKY_TITLE_CELL_CLASS
 } from './task-page/github-grid-styles'
-import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_BOARD_DRAG_ISSUE_MIME, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
+import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
 import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
 import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
+// Spec 016: stable "no binding entry yet" identity so the embedded resolver
+// memo doesn't churn while the hub effect is still writing the store entry.
+const EMBEDDED_BINDING_ABSENT: BoardBindingState = { status: 'loaded', binding: null }
 
 export default function TaskPage({
   embedded = false
@@ -211,6 +220,12 @@ export default function TaskPage({
   const repos = useAppStore((s) => s.repos)
   const repoMap = useRepoMap()
   const allWorktrees = useAllWorktrees()
+  // O(1) work-item → workspace lookup, rebuilt only when worktrees change.
+  // Replaces a per-row worktrees.find() scan in the work-item list render.
+  const workspaceAttachmentIndex = useMemo(
+    () => buildGithubWorkItemWorkspaceAttachmentIndex(allWorktrees),
+    [allWorktrees]
+  )
   const openModal = useAppStore((s) => s.openModal)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const fetchWorkItemsAcrossRepos = useAppStore((s) => s.fetchWorkItemsAcrossRepos)
@@ -360,7 +375,16 @@ export default function TaskPage({
   const defaultTaskViewPreset = normalizeGitHubTaskPreset(settings?.defaultTaskViewPreset ?? 'all')
   const initialTaskQuery = getTaskPresetQuery(defaultTaskViewPreset)
 
-  const preferredTaskSource = pageData.taskSource ?? defaultTaskSource
+  // #379: an embedded hub Tasks tab defaults its provider from the repo's
+  // trackerProvider pin — a Linear-pinned project opens on its Linear list.
+  // An explicit sidebar source click (pageData.taskSource) and manual tab
+  // switches still win; 'auto'/absent falls to the saved default.
+  const embeddedPinnedSource = useMemo<TaskSource | null>(() => {
+    if (!embedded || !pageData.preselectedRepoId) return null
+    const pin = repos.find((r) => r.id === pageData.preselectedRepoId)?.trackerProvider
+    return pin === 'linear' || pin === 'github' ? pin : null
+  }, [embedded, pageData.preselectedRepoId, repos])
+  const preferredTaskSource = pageData.taskSource ?? embeddedPinnedSource ?? defaultTaskSource
   const [taskSource, setTaskSource] = useState<TaskSource>(
     resolveVisibleTaskProvider(preferredTaskSource, visibleTaskProviders)
   )
@@ -409,10 +433,56 @@ export default function TaskPage({
   // the user is on the GitHub task source — actual entry into Project mode is
   // gated on a non-null `activeProject` once they pick one.
   const projectModeVisible = taskSource === 'github'
-  const [githubMode, setGithubMode] = useState<'items' | 'project'>('items')
+  // Default the Board to the GitHub Projects (Projects v2) view rather than the
+  // Issues list. A user's explicit switch to Issues persists via
+  // `taskResumeState.githubMode` (see the resume effect below), so this only
+  // sets the first-open default; when no project is linked, Project mode shows
+  // its "Choose a project" prompt.
+  const [githubMode, setGithubMode] = useState<'items' | 'project'>('project')
   // Tasks-as-Kanban (#2): the GitHub issues view can render as a board where
   // dragging a card between Open/Done pushes the new state back to GitHub.
   const [taskViewMode, setTaskViewMode] = useState<'list' | 'kanban'>('list')
+
+  // Spec 016 (§3.3): the embedded hub board derives its GitHub mode from the
+  // per-repo resolution, applied to LOCAL state only — the global
+  // taskResumeState slot is never written from inside a hub, so stale-mode
+  // leaks in either direction (hub→global, global→hub) are structurally
+  // impossible.
+  const embeddedRepoId = embedded ? (pageData.preselectedRepoId ?? null) : null
+  const embeddedBindingEntry = useAppStore((s) =>
+    embeddedRepoId ? s.projectBindingByRepo[embeddedRepoId] : undefined
+  )
+  const embeddedResolution = useMemo(() => {
+    if (!embeddedRepoId) {
+      return null
+    }
+    return resolveBoardProject({
+      repoId: embeddedRepoId,
+      settings: settings?.githubProjects,
+      bindingState: embeddedBindingEntry ?? EMBEDDED_BINDING_ABSENT
+    })
+  }, [embeddedRepoId, settings?.githubProjects, embeddedBindingEntry])
+  // Re-fire only when the resolution identity CHANGES — a user's manual
+  // Projects/Issues toggle inside the hub must not be fought by re-asserting
+  // the same resolution on every render.
+  const lastAppliedEmbeddedResolutionRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!embeddedResolution || embeddedResolution.source === 'pending') {
+      // pending: the initial 'project' state shows the wrapper skeleton — no
+      // flash, nothing to apply yet.
+      return
+    }
+    const identity = embeddedResolution.project
+      ? `${embeddedResolution.source}:${embeddedResolution.project.ownerType}:${embeddedResolution.project.owner}:${embeddedResolution.project.number}`
+      : embeddedResolution.source
+    if (lastAppliedEmbeddedResolutionRef.current === identity) {
+      return
+    }
+    lastAppliedEmbeddedResolutionRef.current = identity
+    // pick|binding|legacy → the bound/picked board; none → the plain issue
+    // Kanban (the 'project' forcing must never leak into an unbound repo).
+    setGithubMode(embeddedResolution.source === 'none' ? 'items' : 'project')
+  }, [embeddedResolution])
 
   // ── GitLab task-source state ──────────────────────────────────────
   // Why: parallel to Linear's slim per-source state. Skips workItemsCache
@@ -943,8 +1013,6 @@ export default function TaskPage({
   const [linearCustomViewContentsError, setLinearCustomViewContentsError] = useState<string | null>(
     null
   )
-  const [linearBoardDraggingIssueId, setLinearBoardDraggingIssueId] = useState<string | null>(null)
-  const [linearBoardDragOverKey, setLinearBoardDragOverKey] = useState<string | null>(null)
   const [linearBoardUpdatingIssueIds, setLinearBoardUpdatingIssueIds] = useState<
     ReadonlySet<string>
   >(() => new Set())
@@ -1046,7 +1114,11 @@ export default function TaskPage({
     )
     setRepoSelection(resolvedInitialSelection)
 
-    const nextGithubMode = taskResumeState?.githubMode ?? 'items'
+    // Embedded (spec 016 §3.3): skip the global resume slot — a stale 'items'
+    // from a standalone visit must not leak into a bound repo's hub. The
+    // initial 'project' holds the wrapper skeleton until the per-repo
+    // resolution effect above applies.
+    const nextGithubMode = embedded ? 'project' : (taskResumeState?.githubMode ?? 'project')
     setGithubMode(nextGithubMode)
 
     const preset = taskResumeState?.githubItemsPreset
@@ -1579,48 +1651,9 @@ export default function TaskPage({
   )
   const linearStatusBoardEnabled = linearGroupBy === 'none' || linearGroupBy === 'status'
 
-  const handleLinearBoardCardDragStart = useCallback(
-    (issue: LinearIssue, event: React.DragEvent<HTMLDivElement>) => {
-      if (!linearStatusBoardEnabled || linearBoardUpdatingIssueIds.has(issue.id)) {
-        event.preventDefault()
-        return
-      }
-      event.dataTransfer.effectAllowed = 'move'
-      event.dataTransfer.setData(LINEAR_BOARD_DRAG_ISSUE_MIME, issue.id)
-      event.dataTransfer.setData('text/plain', issue.id)
-      setLinearBoardDraggingIssueId(issue.id)
-    },
-    [linearBoardUpdatingIssueIds, linearStatusBoardEnabled]
-  )
-
-  const handleLinearBoardDragOver = useCallback(
-    (section: LinearGroupSection, event: React.DragEvent<HTMLElement>) => {
-      if (!linearStatusBoardEnabled || !getLinearStatusSectionState(section)) {
-        return
-      }
-      event.preventDefault()
-      event.dataTransfer.dropEffect = 'move'
-      setLinearBoardDragOverKey(section.key)
-    },
-    [linearStatusBoardEnabled]
-  )
-
-  const handleLinearBoardDrop = useCallback(
-    async (section: LinearGroupSection, event: React.DragEvent<HTMLElement>) => {
-      event.preventDefault()
-      event.stopPropagation()
-      setLinearBoardDragOverKey(null)
-
-      const targetState = getLinearStatusSectionState(section)
-      if (!linearStatusBoardEnabled || !targetState) {
-        return
-      }
-
-      const issueId =
-        event.dataTransfer.getData(LINEAR_BOARD_DRAG_ISSUE_MIME) || linearBoardDraggingIssueId
-      const issue = filteredLinearIssues.find((item) => item.id === issueId)
+  const moveLinearIssueToState = useCallback(
+    async (issue: LinearIssue, targetState: LinearIssue['state']) => {
       if (
-        !issue ||
         linearBoardUpdatingIssueIds.has(issue.id) ||
         (issue.state.name === targetState.name && issue.state.type === targetState.type)
       ) {
@@ -1683,16 +1716,25 @@ export default function TaskPage({
         })
       }
     },
-    [
-      filteredLinearIssues,
-      linearBoardDraggingIssueId,
-      linearBoardUpdatingIssueIds,
-      linearStatusBoardEnabled,
-      patchScopedLinearIssue,
-      patchLinearIssue,
-      settings
-    ]
+    [linearBoardUpdatingIssueIds, patchScopedLinearIssue, patchLinearIssue, settings]
   )
+
+  const linearBoardRef = useRef<HTMLDivElement>(null)
+  const {
+    dragCardId: linearBoardDraggingIssueId,
+    overColumnKey: linearBoardDragOverKey,
+    onBoardPointerDownCapture: onLinearBoardPointerDownCapture
+  } = useKanbanPointerDrag({
+    boardRef: linearBoardRef,
+    onDrop: (cardId, columnKey) => {
+      const section = linearBoardSections.find((s) => s.key === columnKey)
+      const targetState = section ? getLinearStatusSectionState(section) : null
+      const issue = filteredLinearIssues.find((item) => item.id === cardId)
+      if (linearStatusBoardEnabled && issue && targetState) {
+        void moveLinearIssueToState(issue, targetState)
+      }
+    }
+  })
 
   const toggleLinearDisplayProperty = useCallback((property: LinearDisplayProperty): void => {
     if (property === 'team') {
@@ -3369,13 +3411,21 @@ export default function TaskPage({
                               key={mode.id}
                               type="button"
                               onClick={() => {
+                                // Embedded: local mode only — the global resume
+                                // slot stays untouched from inside a per-project
+                                // view (same discipline as the repo combobox's
+                                // updateSettings gate below).
                                 if (mode.id === 'project') {
                                   setGithubMode('project')
-                                  setTaskResumeState({ githubMode: 'project' })
+                                  if (!embedded) {
+                                    setTaskResumeState({ githubMode: 'project' })
+                                  }
                                   return
                                 }
                                 setGithubMode('items')
-                                setTaskResumeState({ githubMode: 'items' })
+                                if (!embedded) {
+                                  setTaskResumeState({ githubMode: 'items' })
+                                }
                                 handleSelectGithubTaskKind(mode.id)
                               }}
                               className={cn(
@@ -4102,7 +4152,7 @@ export default function TaskPage({
             )
           ) : taskSource === 'github' && githubMode === 'project' ? (
             <div className="mt-3 flex min-h-0 min-w-0 max-h-full flex-col overflow-hidden rounded-md border border-border/50 bg-muted/50 shadow-sm">
-              <ProjectViewWrapper />
+              <ProjectViewWrapper repoId={embeddedRepoId} />
             </div>
           ) : taskSource === 'github' &&
             taskViewMode === 'kanban' &&
@@ -4288,8 +4338,8 @@ export default function TaskPage({
                   {!showGitHubTaskSkeletons &&
                     filteredWorkItems.map((item) => {
                       const itemRepo = repoMap.get(item.repoId) ?? null
-                      const attachedWorkspace = findGithubWorkItemWorkspaceAttachment(
-                        allWorktrees,
+                      const attachedWorkspace = lookupGithubWorkItemWorkspaceAttachment(
+                        workspaceAttachmentIndex,
                         item.repoId,
                         item.type,
                         item.number
@@ -5228,12 +5278,20 @@ export default function TaskPage({
                 ) : null}
 
                 {linearViewMode === 'board' ? (
-                  <div className="grid min-w-0 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div
+                    ref={linearBoardRef}
+                    onPointerDownCapture={onLinearBoardPointerDownCapture}
+                    className="grid min-w-0 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3"
+                  >
                     {linearBoardSections.map((section) => (
                       <section
                         key={section.key}
-                        onDragOver={(event) => handleLinearBoardDragOver(section, event)}
-                        onDrop={(event) => void handleLinearBoardDrop(section, event)}
+                        data-kanban-column-key={section.key}
+                        data-kanban-column-droppable={
+                          linearStatusBoardEnabled && getLinearStatusSectionState(section)
+                            ? undefined
+                            : 'false'
+                        }
                         className={cn(
                           'min-h-0 rounded-md border border-border/50 bg-muted/20 transition-[border-color,box-shadow]',
                           linearBoardDragOverKey === section.key &&
@@ -5263,17 +5321,12 @@ export default function TaskPage({
                                 key={issue.id}
                                 role="button"
                                 tabIndex={0}
-                                draggable={linearStatusBoardEnabled && !updating}
+                                data-kanban-card-id={
+                                  linearStatusBoardEnabled && !updating ? issue.id : undefined
+                                }
                                 aria-current={selected ? 'true' : undefined}
                                 data-current={selected ? 'true' : undefined}
                                 aria-disabled={updating ? 'true' : undefined}
-                                onDragStart={(event) =>
-                                  handleLinearBoardCardDragStart(issue, event)
-                                }
-                                onDragEnd={() => {
-                                  setLinearBoardDraggingIssueId(null)
-                                  setLinearBoardDragOverKey(null)
-                                }}
                                 onClick={() => openLinearDetailPage(issue)}
                                 onKeyDown={(e) => {
                                   if (e.target !== e.currentTarget) {
@@ -5303,7 +5356,12 @@ export default function TaskPage({
                                       {issue.title}
                                     </h3>
                                   </div>
-                                  <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                                  {/* Action buttons opt out of drag so a jittery
+                                      click never gets eaten. */}
+                                  <div
+                                    data-kanban-no-drag=""
+                                    className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100"
+                                  >
                                     <Button
                                       variant="ghost"
                                       size="icon-xs"

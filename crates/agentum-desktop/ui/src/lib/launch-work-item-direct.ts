@@ -19,6 +19,7 @@ import {
   type LinkedWorkItemContext
 } from '@/lib/linked-work-item-context'
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
+import { deriveTrackerBindCoords } from '@/components/new-workspace/work-item-picker-model'
 import { checkRuntimeHooks } from '@/runtime/runtime-hooks-client'
 import { track, tuiAgentToAgentKind } from '@/lib/telemetry'
 import type {
@@ -244,6 +245,7 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
   let effectiveAgent: TuiAgent | null = null
   let draftLaunchedNatively = false
   const draftContent = getDirectDraftContent(item)
+  const trackerBind = deriveTrackerBindCoords(item)
   try {
     const result = await store.createWorktree(
       repoId,
@@ -261,7 +263,12 @@ export async function launchWorkItemDirect(args: LaunchWorkItemDirectArgs): Prom
       resolvedBranchNameOverride,
       undefined,
       item.type === 'mr' && item.number ? item.number : undefined,
-      item.type === 'issue' && item.number && isGitLabIssueUrl(item.url) ? item.number : undefined
+      item.type === 'issue' && item.number && isGitLabIssueUrl(item.url) ? item.number : undefined,
+      undefined,
+      // Spec 012: a board-launched workspace binds its tracker item the same
+      // way a wizard-picked one does (shared `deriveTrackerBindCoords`).
+      trackerBind?.trackerProvider,
+      trackerBind?.trackerUrl
     )
     worktreeId = result.worktree.id
     const worktreePath = result.worktree.path

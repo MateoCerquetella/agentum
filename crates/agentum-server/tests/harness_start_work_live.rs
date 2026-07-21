@@ -1,3 +1,4 @@
+#![cfg(unix)] // Drives a real claude CLI in tmux via sh scripts; Unix-only (#265).
 //! LIVE: the start-work ROUTE drives a real agent from an issue (roles OFF).
 //!
 //! `#[ignore]` — spawns a real `claude` CLI in a real tmux pane, so it never

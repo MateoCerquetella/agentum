@@ -101,7 +101,7 @@ export function formatBrowserAnnotationsAsMarkdown(annotations: BrowserPageAnnot
     '',
     `**URL:** ${first.page.sanitizedUrl}`,
     `**Browser tab id:** ${firstAnnotation.browserPageId}`,
-    `**Agentum CLI:** Use ${inlineCode(`--page ${firstAnnotation.browserPageId}`)} to target this browser tab.`,
+    `**Target:** pass ${inlineCode(`page: ${firstAnnotation.browserPageId}`)} to the agentum_browser tool to drive this tab.`,
     `**Viewport:** ${first.page.viewportWidth}x${first.page.viewportHeight}`,
     ''
   ]

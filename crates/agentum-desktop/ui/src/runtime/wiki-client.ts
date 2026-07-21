@@ -24,7 +24,9 @@ export type WikiPageMeta = {
  */
 export type WikiIndexResponse =
   | { state: 'empty' }
-  | { state: 'running'; sessionId: string }
+  // `pages` = slugs already written to the wiki dir mid-run (spec 009 AC-8,
+  // the progressive TOC). Optional: pre-009 servers omit it.
+  | { state: 'running'; sessionId: string; pages?: string[] }
   | { state: 'failed'; error: string }
   | { state: 'ready'; schemaVersion: number; generatedAt: number; pages: WikiPageMeta[] }
 

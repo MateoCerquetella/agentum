@@ -14,6 +14,7 @@ import {
   normalizeGitHubLinkQuery
 } from '@/lib/github-links'
 import { openCreatedWorkspace } from '@/lib/open-created-workspace'
+import { gatedRunResultOwnsWorktree } from '@/lib/gated-run-ownership'
 import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../shared/tui-agent-selection'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
@@ -87,6 +88,7 @@ import {
 } from '@/lib/new-workspace-ssh-gate'
 import { getSuggestedCreatureName } from '@/components/sidebar/worktree-name-suggestions'
 import type { SmartWorkspaceNameSelection } from '@/components/new-workspace/SmartWorkspaceNameField'
+import { deriveTrackerBindCoords } from '@/components/new-workspace/work-item-picker-model'
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { normalizeSparseDirectoryLines, sparseDirectoriesMatch } from '@/lib/sparse-paths'
 import { joinPath } from '@/lib/path'
@@ -194,6 +196,13 @@ type ComposerCardProps = {
   onRemoveAttachment: (pathValue: string) => void
   linkedWorkItem: LinkedWorkItemSummary | null
   onRemoveLinkedWorkItem: () => void
+  /** Bind an existing work item (spec 012 New Workspace issue picker). The one
+   *  attach seam — setting the composer's `linkedWorkItem` so the create path
+   *  persists the tracker bind (see `deriveTrackerBindCoords`). */
+  applyLinkedWorkItem: (
+    item: GitHubWorkItem,
+    options?: { preserveBranchNameOverride?: boolean }
+  ) => void
   /** True when the composer should offer "Create GitHub issue": nothing is
    *  linked yet and the selected repo is a local git repo (spec 004 F3). */
   canCreateGithubIssue: boolean
@@ -906,9 +915,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         prompt: agentPrompt,
         linkedIssueNumber: parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       }),
-    [agentPrompt, fallbackCreatureName, linkedPR, name, parsedLinkedIssueNumber]
+    [agentPrompt, fallbackCreatureName, linkedPR, linkedWorkItem, name, parsedLinkedIssueNumber]
   )
   // Why: when the user links an issue/PR but has not typed any prompt text
   // (attachments don't count), swap the generic "Linked work items:" context
@@ -2265,7 +2275,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         await scaffoldSpecFromIssue({
           workdir: worktree.path,
           number: gate.number,
-          slug: `${gate.slug.owner}/${gate.slug.repo}`
+          slug: `${gate.slug.owner}/${gate.slug.repo}`,
+          // Spec 021 (#379): thread the repo's tracker pin so the planned
+          // backlog stamps the right provider ('auto'/absent = GitHub).
+          ...(selectedRepo?.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
         })
       } catch (error) {
         console.error('Failed to scaffold a spec from the linked issue', error)
@@ -2286,9 +2299,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       worktree: { path: string },
       item: LinkedWorkItemSummary | null | undefined,
       agent: TuiAgent | null
-    ): Promise<void> => {
+    ): Promise<boolean> => {
+      // Returns whether the engine actually took ownership of the worktree. The
+      // caller uses this to decide whether to suppress the plain agent delivery:
+      // a run that never started must NOT suppress it, or the worktree strands
+      // on the empty "Start a session" picker with nothing driving it.
       if (!startGatedRun) {
-        return
+        return false
       }
       // Re-derive the gate from the submitted item: github.com issues only,
       // local targets only (the start-work route writes to a local path).
@@ -2296,20 +2313,35 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
       if (gate.eligible === false) {
         toast.warning(describeIssueSideEffectSkip('start-gated-run', gate.reason))
-        return
+        return false
       }
       try {
         const result = await startGatedWork({
           workdir: worktree.path,
           number: gate.number,
           slug: `${gate.slug.owner}/${gate.slug.repo}`,
-          ...(agent ? { agentTool: agent } : {})
+          ...(agent ? { agentTool: agent } : {}),
+          // Spec 021 (#379): thread the repo's tracker pin so the run's
+          // features + transitions aim at the right provider.
+          ...(selectedRepo?.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
         })
+        // Only suppress the plain session when the engine actually took
+        // ownership (a live run, or a fresh one with ≥1 planned feature). A
+        // zero-feature plan has nothing to drive and would strand the worktree.
+        const owns = gatedRunResultOwnsWorktree(result)
         if (result.alreadyRunning) {
           // The friendly state (C5), not an error: a live run already owns
           // this worktree and was left untouched.
           toast.info('A gated run is already driving this workspace.')
-        } else if (result.harnessId) {
+        } else if (!owns) {
+          // The plan produced no features, so the engine has nothing to spawn
+          // and would leave the worktree stranded on the empty "Start a
+          // session" picker with no error. Fall back to a normal agent instead
+          // of a silent empty worktree.
+          toast.warning(
+            'The gated run planned no work from this issue — opening a normal session instead.'
+          )
+        } else {
           // Spec 008 F1 §B.5: the composer navigates to the session view after
           // a successful start, so a drive-phase failure on the harness event
           // bus (init.sh, spawn, the readiness/settle timeouts) would otherwise
@@ -2320,6 +2352,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
             toast.error(`Gated run failed: ${message}`)
           })
         }
+        return owns
       } catch (error) {
         console.error('Failed to start the gated run', error)
         // Spec 008 F1 #5: surface the server's ApiError detail — request()
@@ -2329,9 +2362,12 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         const detail = error instanceof Error ? error.message.trim() : ''
         toast.error(
           detail
-            ? `Workspace created, but the gated run could not start: ${detail}`
-            : 'Workspace created, but the gated run could not start.'
+            ? `Workspace created, but the gated run could not start — opening a normal session instead: ${detail}`
+            : 'Workspace created, but the gated run could not start — opening a normal session instead.'
         )
+        // The engine did NOT take ownership: fall back to a plain agent so the
+        // worktree isn't stranded empty (the "stuck on Start a session" bug).
+        return false
       }
     },
     [startGatedRun, selectedRepo]
@@ -2455,6 +2491,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         workspaceName,
         preserveWorkspaceNameEdits: branchNameOverridePreservesNameEdits
       })
+      // Spec 012: persist the tracker bind so the session-start reactor + PR
+      // poller can drive the linked item's status. GitHub issue → URL; Linear →
+      // identifier; PR/MR-linked or unlinked create binds nothing.
+      const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
       const result = await createWorktree(
         repoId,
         workspaceName,
@@ -2476,7 +2516,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         effectiveBranchNameOverride,
         resolvedInitialWorkspaceStatus,
         linkedGitLabMR ?? undefined,
-        linkedGitLabIssue ?? undefined
+        linkedGitLabIssue ?? undefined,
+        undefined,
+        trackerBind?.trackerProvider,
+        trackerBind?.trackerUrl
       )
       const worktree = result.worktree
 
@@ -2484,13 +2527,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // Why: linked source metadata is already included in createWorktree.
       // Re-saving it here can trigger slow post-create PR push-target lookups.
       await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
+      // Track whether the engine actually took ownership. Only a real start
+      // suppresses the plain delivery below — a failed start-work falls back to
+      // a normal session so the worktree isn't stranded on "Start a session".
+      let gatedRunStarted = false
       if (startGatedRun) {
         // Spec 005 F1 (AC 1): the server converge-scaffolds + plans + runs the
         // engine — the D5 scaffold call is skipped when the toggle is armed.
         // Spec 007: routed on the ARMED state (not eligibility) so an
         // ineligible-but-armed run surfaces its skip reason instead of
         // falling into the scaffold branch as a silent no-op (bug 2).
-        await maybeStartGatedRun(worktree, submitLinkedWorkItem, tuiAgent)
+        gatedRunStarted = await maybeStartGatedRun(worktree, submitLinkedWorkItem, tuiAgent)
       } else {
         // Spec 004 F4 (opt-in): write the linked issue's spec into the new
         // worktree before the agent opens, so it can start from the spec.
@@ -2521,7 +2568,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         setup: result.setup,
         defaultTabs: result.defaultTabs,
         issueCommand: submitGatedRun ? undefined : issueCommand,
-        gatedRun: submitGatedRun
+        gatedRun: gatedRunStarted
       })
       setSidebarOpen(true)
       if (persistDraft) {
@@ -2594,6 +2641,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         prompt: '',
         linkedIssueNumber: parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       })
       if (
@@ -2661,6 +2709,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           workspaceName,
           preserveWorkspaceNameEdits: branchNameOverridePreservesNameEdits
         })
+        // Spec 021: the wizard's quick create must persist the tracker bind just
+        // like the full submit path — otherwise a wizard-created issue's worktree
+        // shows no status chip in the sidebar (bind dropped on create).
+        const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
         const result = await createWorktree(
           repoId,
           workspaceName,
@@ -2682,26 +2734,28 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           effectiveBranchNameOverride,
           resolvedInitialWorkspaceStatus,
           linkedGitLabMR ?? undefined,
-          linkedGitLabIssue ?? undefined
+          linkedGitLabIssue ?? undefined,
+          undefined,
+          trackerBind?.trackerProvider,
+          trackerBind?.trackerUrl
         )
         const worktree = result.worktree
 
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
-        // Spec 005 F1: armed AND eligible for the submitted item (github.com
-        // issue, local repo) — mirrors the full submit path's derivation
-        // (spec 007: shared pure gate).
-        const submitGatedRun =
-          startGatedRun &&
-          deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo?.connectionId)
-            .eligible
+        // Spec 005 F1: only a gated run that ACTUALLY started suppresses the
+        // plain session — a failed/ineligible start falls back to a normal
+        // agent so the worktree isn't stranded on "Start a session" with
+        // nothing driving it (spec 007: the pure gate is re-derived inside
+        // maybeStartGatedRun, which returns whether the engine took ownership).
+        let gatedRunStarted = false
         if (startGatedRun) {
           // The server converge-scaffolds + plans + runs the engine; the D5
           // scaffold call is skipped when the toggle is armed (AC 1). Runs
           // before the skip-session branch so the gated run starts either way.
           // Spec 007: routed on the ARMED state so an ineligible-but-armed
           // run warns instead of silently no-oping (bug 2).
-          await maybeStartGatedRun(worktree, submitLinkedWorkItem, agent)
+          gatedRunStarted = await maybeStartGatedRun(worktree, submitLinkedWorkItem, agent)
         } else {
           // Spec 004 F4 (opt-in): shared with the full submit path — runs before
           // the skip-session branch so the spec lands either way.
@@ -2736,9 +2790,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           prompt: quickDraftPrompt || quickPrompt,
           setup: result.setup,
           defaultTabs: result.defaultTabs,
-          // Spec 005 D2: a gated run suppresses the plain deliveries — the
-          // engine's sessions are the only agents in the worktree.
-          gatedRun: submitGatedRun
+          // Spec 005 D2: a gated run that took ownership suppresses the plain
+          // deliveries — the engine's sessions are the only agents in the
+          // worktree. A failed start falls through to a normal session.
+          gatedRun: gatedRunStarted
         })
         setSidebarOpen(true)
         if (persistDraft) {
@@ -2869,6 +2924,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setAttachmentPaths((current) => current.filter((currentPath) => currentPath !== pathValue)),
     linkedWorkItem,
     onRemoveLinkedWorkItem: handleRemoveLinkedWorkItem,
+    applyLinkedWorkItem,
     canCreateGithubIssue,
     createIssueOpen,
     onCreateIssueOpenChange: handleCreateIssueOpenChange,

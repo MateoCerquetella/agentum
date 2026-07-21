@@ -9,6 +9,7 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/h
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { CircleDot, ExternalLink, MonitorUp, Pencil, StickyNote } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { api } from '@/tauri'
 import { LinearIcon } from '@/components/icons/LinearIcon'
 import { SelectedTextCopyMenu } from '@/components/SelectedTextCopyMenu'
 import CommentMarkdown from './CommentMarkdown'
@@ -17,7 +18,9 @@ import {
   WorktreeCardDetailSection,
   WorktreeCardDetailSectionContent
 } from './WorktreeCardDetailSection'
-import { IssueStateBadge, LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
+import { LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
+import { TrackerPhaseChip } from './TrackerPhaseChip'
+import { IssueProjectStatusChip, useIssueProjectStatus } from './IssueProjectStatusChip'
 import type { IssueInfo } from '../../../../shared/types'
 
 export type WorktreeCardIssueDisplay =
@@ -52,6 +55,14 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
   branchName?: string
   workspaceTitle?: string
   detailsAfter?: React.ReactNode
+  /** Spec 014 F2: coords for the live tracker-phase chip in the issue badge
+   *  row. Optional — callers without a worktree context render no chip. */
+  worktreeId?: string
+  trackerPhase?: string | null
+  /** Spec 018 (#365): the repo the linked issue lives in, for the on-open
+   *  Project-status read (binding lookup). Optional — no chip without them. */
+  workdir?: string
+  repoId?: string
   onEditIssue: (event: React.MouseEvent) => void
   onEditComment: (event: React.MouseEvent) => void
   onOpenGitHubIssueInAgentum?: (event: React.MouseEvent) => void
@@ -107,28 +118,17 @@ function DetailHeader({
 
 function MetadataActionIcon({
   label,
-  href,
   onClick,
   children
 }: {
   label: string
-  href?: string
   onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void
   children: React.ReactNode
 }): React.JSX.Element {
-  const trigger = href ? (
-    <Button asChild variant="ghost" size="icon-xs" className="size-6">
-      <a
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        aria-label={label}
-        onClick={(event) => event.stopPropagation()}
-      >
-        {children}
-      </a>
-    </Button>
-  ) : (
+  // Always a real <button>. An <a target="_blank"> is dead inside the Tauri
+  // webview (no window-open handler), so external links route through
+  // api.shell.openUrl via onClick — never an anchor.
+  const trigger = (
     <Button
       type="button"
       variant="ghost"
@@ -218,12 +218,25 @@ export function WorktreeCardDetailsHover({
   branchName,
   workspaceTitle,
   detailsAfter,
+  worktreeId,
+  trackerPhase,
+  workdir,
+  repoId,
   onEditIssue,
   onEditComment,
   onOpenGitHubIssueInAgentum,
   onOpenLinearIssueInAgentum
 }: WorktreeCardDetailsHoverProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false)
+  // #379 perf: `open: true` prefetches the Board status at card RENDER (not
+  // first hover), so the hover paints it instantly; the shared TTL cache +
+  // bus-event invalidation keep the cost to one fetch per issue per window.
+  const projectStatus = useIssueProjectStatus({
+    open: true,
+    issueUrl: issue?.url,
+    workdir,
+    repoId
+  })
   const dismissAndRun = React.useCallback(
     (handler: ((event: React.MouseEvent) => void) | undefined) => (event: React.MouseEvent) => {
       setOpen(false)
@@ -290,7 +303,10 @@ export function WorktreeCardDetailsHover({
                       </MetadataActionIcon>
                     )}
                     {issue.url && (
-                      <MetadataActionIcon label="View on GitHub" href={issue.url}>
+                      <MetadataActionIcon
+                        label="View on GitHub"
+                        onClick={() => void api.shell.openUrl(issue.url!)}
+                      >
                         <ExternalLink className="size-3" />
                       </MetadataActionIcon>
                     )}
@@ -304,9 +320,19 @@ export function WorktreeCardDetailsHover({
                 <div className="text-[13px] font-semibold leading-snug text-foreground break-words">
                   {issue.title}
                 </div>
-                {(issue.state || issueLabels.length > 0) && (
+                {(issueLabels.length > 0 || worktreeId || projectStatus) && (
                   <div className="flex flex-wrap gap-1">
-                    {issue.state && <IssueStateBadge state={issue.state} />}
+                    {/* #379 (Mateo): the hover shows the BOARD status + the
+                        labels only — the open/closed state badge was noise
+                        (state is implied by the board column + labels). */}
+                    {/* Spec 014 F2: the pipeline-phase chip; renders nothing
+                        when unbound. */}
+                    {worktreeId && (
+                      <TrackerPhaseChip worktreeId={worktreeId} persistedPhase={trackerPhase} />
+                    )}
+                    {/* Spec 018 (#365): the bound GitHub Project's Status column
+                        for this issue; renders nothing when unbound / off-project. */}
+                    <IssueProjectStatusChip status={projectStatus} />
                     {issueLabels.map((label) => (
                       <Badge key={label} variant="outline" className="h-4 px-1.5 text-[9px]">
                         {label}
@@ -334,7 +360,10 @@ export function WorktreeCardDetailsHover({
                       </MetadataActionIcon>
                     )}
                     {linearIssue.url && (
-                      <MetadataActionIcon label="View on Linear" href={linearIssue.url}>
+                      <MetadataActionIcon
+                        label="View on Linear"
+                        onClick={() => void api.shell.openUrl(linearIssue.url!)}
+                      >
                         <ExternalLink className="size-3" />
                       </MetadataActionIcon>
                     )}

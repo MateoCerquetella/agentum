@@ -26,7 +26,12 @@ export const worktrees = {
       // sends these; stripping them here was why the registry never saw them.
       linkedIssue: args[0]?.linkedIssue,
       linkedPR: args[0]?.linkedPR,
-      linkedLinearIssue: args[0]?.linkedLinearIssue
+      linkedLinearIssue: args[0]?.linkedLinearIssue,
+      // Spec 021: forward the tracker bind on the LOCAL path too (the remote RPC
+      // already did) — otherwise the sidebar status chip stays null for local
+      // repos even when the composer derived a bind.
+      trackerProvider: args[0]?.trackerProvider,
+      trackerUrl: args[0]?.trackerUrl
     }),
   remove: (...args: any[]) =>
     worktreesRemove({

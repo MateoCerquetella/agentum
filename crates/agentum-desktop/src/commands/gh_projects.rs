@@ -1,5 +1,5 @@
-//! GitHub ProjectV2 (read-only) surface, served by shelling out to
-//! `gh api graphql`.
+//! GitHub ProjectV2 surface (view reads + item field mutations), served by
+//! shelling out to `gh api graphql`.
 //!
 //! Why `gh api graphql` instead of a bespoke REST/GraphQL HTTP client: it reuses
 //! the user's existing `gh` login (keyring or env token), so there is no token to
@@ -8,13 +8,12 @@
 //! scope; when the token lacks it, GitHub answers with an `INSUFFICIENT_SCOPES`
 //! GraphQL error, which we classify as `scope_missing` so the renderer's
 //! GhAuthErrorHelp guides `gh auth refresh -s read:project` instead of a dead end.
+//! Field mutations (drag-between-columns, table cell edits) additionally need the
+//! `project` write scope — same classification, GitHub's message names the scope.
 //!
-//! Mutations (field edits, drag-between-columns) stay stubbed in `gh.rs`; this
-//! module is the read path only — the table/board the user opens.
-//!
-//! The pure `map_*` / `classify_*` / `parse_*` / `select_view` helpers are unit
-//! tested against representative GraphQL JSON; the `graphql()` subprocess wrapper
-//! is the only impure seam.
+//! The pure `map_*` / `classify_*` / `parse_*` / `select_view` /
+//! `field_mutation_value` helpers are unit tested against representative GraphQL
+//! JSON; the `graphql()` subprocess wrapper is the only impure seam.
 
 use serde_json::{json, Value};
 
@@ -27,6 +26,7 @@ const PAGE_SIZE: u32 = 50;
 // ─── Errors ──────────────────────────────────────────────────────────────
 
 // A classified failure shaped like the renderer's GitHubProjectViewError.
+#[derive(Debug)]
 struct ProjectError {
     kind: &'static str,
     message: String,
@@ -124,6 +124,7 @@ fn classify_stderr(stderr: &str) -> ProjectError {
 
 // ─── GraphQL runner ─────────────────────────────────────────────────────
 
+#[derive(Debug)]
 enum Scalar {
     Str(String),
     Int(i64),
@@ -492,9 +493,13 @@ fn map_row(item: &Value, position: usize) -> Value {
     })
 }
 
-// A ProjectV2View → the renderer's GitHubProjectView. groupBy/sortBy are not
-// queried in this read-only pass (board grouping is a later refinement); the
-// renderer requires the arrays to exist, so they're emitted empty.
+// A ProjectV2View → the renderer's GitHubProjectView. `verticalGroupByFields`
+// is GitHub's model of a Board view's columns (usually Status) and drives the
+// Kanban renderer; `groupByFields` drives Table group headers (on a Board it is
+// the optional swimlane grouping, typically empty). Both are queried and
+// mapped. `sortByFields` stays empty on purpose: leaving it unset makes rows
+// fall back to item `position` (GitHub's manual board order, which is exactly
+// right within a board column) and avoids changing Table view ordering.
 fn map_view(node: &Value) -> Value {
     json!({
         "id": str_at(node, "id"),
@@ -503,7 +508,8 @@ fn map_view(node: &Value) -> Value {
         "layout": node.get("layout").and_then(Value::as_str).unwrap_or("TABLE_LAYOUT"),
         "filter": node.get("filter").and_then(Value::as_str).unwrap_or(""),
         "fields": nodes_map(node.get("fields"), map_field),
-        "groupByFields": [],
+        "groupByFields": nodes_map(node.get("groupByFields"), map_field),
+        "verticalGroupByFields": nodes_map(node.get("verticalGroupByFields"), map_field),
         "sortByFields": [],
     })
 }
@@ -782,6 +788,8 @@ pub async fn gh_get_project_view_table(
                 nodes {{
                   id number name layout filter
                   fields(first: 50) {{ nodes {{ {FIELD_SELECTION} }} }}
+                  groupByFields(first: 20) {{ nodes {{ {FIELD_SELECTION} }} }}
+                  verticalGroupByFields(first: 20) {{ nodes {{ {FIELD_SELECTION} }} }}
                 }}
               }}
             }}
@@ -958,9 +966,353 @@ async fn fetch_rows(
     Ok((rows, total_count, false, false))
 }
 
+// ─── Field mutations ─────────────────────────────────────────────────────
+
+// One renderer mutation value (the `{ kind, ... }` union in
+// shared/github-project-types.ts) lowered to GraphQL: the variable
+// declarations to append to the mutation signature, the `value:` input
+// fragment, and the extra vars to bind.
+#[derive(Debug)]
+struct FieldMutation {
+    extra_decl: String,
+    fragment: String,
+    vars: Vec<(&'static str, Scalar)>,
+}
+
+// Every string travels as a GraphQL variable — the only thing ever spliced
+// into the query text is a Rust-formatted f64 (JSON numbers can't be NaN/Inf),
+// so nothing user-controlled reaches the query string.
+fn field_mutation_value(value: &Value) -> Result<FieldMutation, ProjectError> {
+    let take = |key: &'static str| -> Result<String, ProjectError> {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ProjectError::new(
+                    "unknown",
+                    format!("Malformed field value: missing `{key}`."),
+                )
+            })
+    };
+    let kind = value.get("kind").and_then(Value::as_str).unwrap_or("");
+    match kind {
+        "single-select" => Ok(FieldMutation {
+            extra_decl: ", $optionId: String!".to_string(),
+            fragment: "{ singleSelectOptionId: $optionId }".to_string(),
+            vars: vec![("optionId", Scalar::Str(take("optionId")?))],
+        }),
+        "iteration" => Ok(FieldMutation {
+            extra_decl: ", $iterationId: String!".to_string(),
+            fragment: "{ iterationId: $iterationId }".to_string(),
+            vars: vec![("iterationId", Scalar::Str(take("iterationId")?))],
+        }),
+        "text" => Ok(FieldMutation {
+            extra_decl: ", $text: String!".to_string(),
+            fragment: "{ text: $text }".to_string(),
+            vars: vec![("text", Scalar::Str(take("text")?))],
+        }),
+        "date" => Ok(FieldMutation {
+            extra_decl: ", $date: Date!".to_string(),
+            fragment: "{ date: $date }".to_string(),
+            vars: vec![("date", Scalar::Str(take("date")?))],
+        }),
+        "number" => {
+            let n = value.get("number").and_then(Value::as_f64).ok_or_else(|| {
+                ProjectError::new("unknown", "Malformed field value: missing `number`.")
+            })?;
+            Ok(FieldMutation {
+                extra_decl: String::new(),
+                fragment: format!("{{ number: {n} }}"),
+                vars: Vec::new(),
+            })
+        }
+        other => Err(ProjectError::new(
+            "unknown",
+            format!("Unsupported field value kind `{other}`."),
+        )),
+    }
+}
+
+// Push one field edit (a board drag writes the view's group-by field; table
+// cells edit any supported kind). Requires the `project` write scope; without
+// it the INSUFFICIENT_SCOPES error classifies as scope_missing and the
+// renderer toasts GitHub's message, which names the missing scope.
+#[tauri::command]
+pub async fn gh_update_project_item_field(
+    project_id: String,
+    item_id: String,
+    field_id: String,
+    value: Value,
+) -> Value {
+    let mutation = match field_mutation_value(&value) {
+        Ok(parts) => parts,
+        Err(err) => return err.envelope(),
+    };
+    let (extra_decl, fragment) = (mutation.extra_decl, mutation.fragment);
+    let query = format!(
+        "mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!{extra_decl}) {{ \
+           updateProjectV2ItemFieldValue(input: {{ projectId: $projectId, itemId: $itemId, fieldId: $fieldId, value: {fragment} }}) \
+           {{ projectV2Item {{ id }} }} }}"
+    );
+    let mut vars = vec![
+        ("projectId", Scalar::Str(project_id)),
+        ("itemId", Scalar::Str(item_id)),
+        ("fieldId", Scalar::Str(field_id)),
+    ];
+    vars.extend(mutation.vars);
+    match graphql(&query, &vars).await {
+        Ok(_) => json!({ "ok": true }),
+        Err(err) => err.envelope(),
+    }
+}
+
+#[tauri::command]
+pub async fn gh_clear_project_item_field(
+    project_id: String,
+    item_id: String,
+    field_id: String,
+) -> Value {
+    let query = "mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!) { \
+        clearProjectV2ItemFieldValue(input: { projectId: $projectId, itemId: $itemId, fieldId: $fieldId }) \
+        { projectV2Item { id } } }";
+    let vars = [
+        ("projectId", Scalar::Str(project_id)),
+        ("itemId", Scalar::Str(item_id)),
+        ("fieldId", Scalar::Str(field_id)),
+    ];
+    match graphql(query, &vars).await {
+        Ok(_) => json!({ "ok": true }),
+        Err(err) => err.envelope(),
+    }
+}
+
+// `gh_issue_project_status` — one issue's Status option name on the repo's
+// bound ProjectV2 (issue #365). A single graphql read: the issue's project
+// items, matched to the bound `project_id`, then the single-select field value
+// whose field id is the bound `status_field_id`. Returns
+// `{ ok:true, status:<name|null> }`; any gh/graphql failure returns the shared
+// error envelope. The renderer treats BOTH a null status and an error envelope
+// as "no chip" (silent absence, spec 018 AC 2), so this never needs to
+// distinguish "not on the project" from "fetch failed".
+#[tauri::command]
+pub async fn gh_issue_project_status(
+    owner: String,
+    repo: String,
+    number: i64,
+    project_id: String,
+    status_field_id: String,
+) -> Value {
+    // owner/repo are bound $vars (never interpolated) per the graphql()
+    // injection contract; number via Scalar::Int so `$number:Int!` binds numeric.
+    // #379: the same read also returns the ProjectV2 item id (the write
+    // handle `updateProjectV2ItemFieldValue` needs) and the Status field's
+    // option list (via a root node($fieldId) selection) so the issue-detail
+    // view can offer MOVING the card — still one round trip.
+    let query = r#"
+        query($owner: String!, $repo: String!, $number: Int!, $fieldId: ID!) {
+          repository(owner: $owner, name: $repo) {
+            issue(number: $number) {
+              projectItems(first: 20) {
+                nodes {
+                  id
+                  project { id }
+                  fieldValues(first: 50) {
+                    nodes {
+                      ... on ProjectV2ItemFieldSingleSelectValue {
+                        name
+                        field { ... on ProjectV2SingleSelectField { id } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          fieldNode: node(id: $fieldId) {
+            ... on ProjectV2SingleSelectField { options { id name } }
+          }
+        }
+    "#;
+    let data = match graphql(
+        query,
+        &[
+            ("owner", Scalar::Str(owner)),
+            ("repo", Scalar::Str(repo)),
+            ("number", Scalar::Int(number)),
+            ("fieldId", Scalar::Str(status_field_id.clone())),
+        ],
+    )
+    .await
+    {
+        Ok(data) => data,
+        Err(err) => return err.envelope(),
+    };
+    json!({
+        "ok": true,
+        "status": issue_project_status(&data, &project_id, &status_field_id),
+        "itemId": issue_project_item_id(&data, &project_id),
+        "options": status_field_options(&data),
+    })
+}
+
+// Pure: pick the issue's project item on `project_id`, then the single-select
+// field value whose field id is `status_field_id`, returning its option name.
+// Any missing hop → None (the issue isn't on that project, or has no Status set).
+fn issue_project_status(data: &Value, project_id: &str, status_field_id: &str) -> Option<String> {
+    let items = data
+        .get("repository")?
+        .get("issue")?
+        .get("projectItems")?
+        .get("nodes")?
+        .as_array()?;
+    for item in items {
+        let on_project = item
+            .get("project")
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_str)
+            == Some(project_id);
+        if !on_project {
+            continue;
+        }
+        let Some(values) = item
+            .get("fieldValues")
+            .and_then(|v| v.get("nodes"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for value in values {
+            let field_matches = value
+                .get("field")
+                .and_then(|f| f.get("id"))
+                .and_then(Value::as_str)
+                == Some(status_field_id);
+            if field_matches {
+                if let Some(name) = value.get("name").and_then(Value::as_str) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+// #379 (pure): the issue's ProjectV2 item id on the bound project — the
+// handle the field-value mutation needs. None when the issue isn't on the
+// bound project (renderer falls back to read-only display).
+fn issue_project_item_id(data: &Value, project_id: &str) -> Option<String> {
+    let items = data
+        .get("repository")?
+        .get("issue")?
+        .get("projectItems")?
+        .get("nodes")?
+        .as_array()?;
+    items.iter().find_map(|item| {
+        let on_project = item
+            .get("project")
+            .and_then(|p| p.get("id"))
+            .and_then(Value::as_str)
+            == Some(project_id);
+        if !on_project {
+            return None;
+        }
+        item.get("id").and_then(Value::as_str).map(str::to_string)
+    })
+}
+
+// #379 (pure): the bound Status field's `{id, name}` options from the root
+// fieldNode selection. Empty on any missing hop — never an error, the
+// renderer then simply can't offer a move.
+fn status_field_options(data: &Value) -> Vec<Value> {
+    data.get("fieldNode")
+        .and_then(|n| n.get("options"))
+        .and_then(Value::as_array)
+        .map(|opts| {
+            opts.iter()
+                .filter(|o| {
+                    o.get("id").and_then(Value::as_str).is_some()
+                        && o.get("name").and_then(Value::as_str).is_some()
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn issue_items(project_id: &str, field_id: &str, option: &str) -> Value {
+        json!({
+            "repository": { "issue": { "projectItems": { "nodes": [
+                { "id": "ITEM_1", "project": { "id": project_id }, "fieldValues": { "nodes": [
+                    {},
+                    { "name": option, "field": { "id": field_id } }
+                ] } }
+            ] } } },
+            "fieldNode": { "options": [
+                { "id": "OPT_A", "name": "Backlog" },
+                { "id": "OPT_B", "name": "In progress" },
+                { "junk": true }
+            ] }
+        })
+    }
+
+    #[test]
+    fn issue_project_item_id_matches_bound_project_only() {
+        let data = issue_items("PVT_1", "F_status", "In Progress");
+        assert_eq!(
+            issue_project_item_id(&data, "PVT_1").as_deref(),
+            Some("ITEM_1")
+        );
+        assert_eq!(issue_project_item_id(&data, "PVT_OTHER"), None);
+        assert_eq!(issue_project_item_id(&json!({}), "PVT_1"), None);
+    }
+
+    #[test]
+    fn status_field_options_reads_fieldnode_and_degrades_empty() {
+        let data = issue_items("PVT_1", "F_status", "In Progress");
+        let opts = status_field_options(&data);
+        // The malformed third entry is filtered; the two real options survive.
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0]["name"], "Backlog");
+        assert_eq!(opts[1]["id"], "OPT_B");
+        assert!(status_field_options(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn issue_project_status_reads_matching_option() {
+        let data = issue_items("PVT_1", "F_status", "In Progress");
+        assert_eq!(
+            issue_project_status(&data, "PVT_1", "F_status").as_deref(),
+            Some("In Progress")
+        );
+    }
+
+    #[test]
+    fn issue_project_status_none_when_not_on_bound_project() {
+        // Item exists but on a different project than the binding.
+        let data = issue_items("PVT_OTHER", "F_status", "In Progress");
+        assert_eq!(issue_project_status(&data, "PVT_1", "F_status"), None);
+    }
+
+    #[test]
+    fn issue_project_status_none_when_status_field_absent() {
+        // On the project, but the Status field id doesn't match (no value set).
+        let data = issue_items("PVT_1", "F_priority", "High");
+        assert_eq!(issue_project_status(&data, "PVT_1", "F_status"), None);
+    }
+
+    #[test]
+    fn issue_project_status_none_when_no_items() {
+        let data = json!({ "repository": { "issue": { "projectItems": { "nodes": [] } } } });
+        assert_eq!(issue_project_status(&data, "PVT_1", "F_status"), None);
+        // Missing hops (unlinked issue) also degrade to None, never panic.
+        assert_eq!(issue_project_status(&json!({}), "PVT_1", "F_status"), None);
+    }
 
     #[test]
     fn classifies_insufficient_scopes_as_scope_missing() {
@@ -1068,6 +1420,27 @@ mod tests {
     }
 
     #[test]
+    fn map_view_carries_board_column_field() {
+        // A Board view's columns arrive in `verticalGroupByFields` (usually
+        // Status); `groupByFields` holds only the optional swimlane grouping.
+        let node = json!({
+            "id": "V1", "number": 1, "name": "Backlog", "layout": "BOARD_LAYOUT",
+            "filter": null,
+            "fields": { "nodes": [] },
+            "groupByFields": { "nodes": [] },
+            "verticalGroupByFields": { "nodes": [{
+                "__typename": "ProjectV2SingleSelectField",
+                "id": "F1", "name": "Status", "dataType": "SINGLE_SELECT",
+                "options": [{ "id": "o1", "name": "Todo", "color": "GRAY" }]
+            }] }
+        });
+        let mapped = map_view(&node);
+        assert_eq!(mapped["groupByFields"], json!([]));
+        assert_eq!(mapped["verticalGroupByFields"][0]["id"], "F1");
+        assert_eq!(mapped["verticalGroupByFields"][0]["kind"], "single-select");
+    }
+
+    #[test]
     fn maps_known_field_values_and_drops_unknown() {
         let single = json!({
             "__typename": "ProjectV2ItemFieldSingleSelectValue",
@@ -1169,5 +1542,51 @@ mod tests {
         ));
         assert!(mentions_optional_field("Field 'issueType' doesn't exist"));
         assert!(!mentions_optional_field("Some unrelated error"));
+    }
+
+    #[test]
+    fn field_mutation_value_binds_strings_as_variables() {
+        // The board drop path: single-select (Status columns) and iteration.
+        let m =
+            field_mutation_value(&json!({ "kind": "single-select", "optionId": "o1" })).unwrap();
+        assert_eq!(m.extra_decl, ", $optionId: String!");
+        assert_eq!(m.fragment, "{ singleSelectOptionId: $optionId }");
+        assert!(matches!(&m.vars[..], [("optionId", Scalar::Str(s))] if s == "o1"));
+
+        let m =
+            field_mutation_value(&json!({ "kind": "iteration", "iterationId": "it9" })).unwrap();
+        assert_eq!(m.extra_decl, ", $iterationId: String!");
+        assert_eq!(m.fragment, "{ iterationId: $iterationId }");
+        assert!(matches!(&m.vars[..], [("iterationId", Scalar::Str(s))] if s == "it9"));
+
+        let m = field_mutation_value(&json!({ "kind": "text", "text": "hello" })).unwrap();
+        assert_eq!(m.fragment, "{ text: $text }");
+        assert!(matches!(&m.vars[..], [("text", Scalar::Str(s))] if s == "hello"));
+
+        let m = field_mutation_value(&json!({ "kind": "date", "date": "2026-07-12" })).unwrap();
+        assert_eq!(m.extra_decl, ", $date: Date!");
+        assert_eq!(m.fragment, "{ date: $date }");
+    }
+
+    #[test]
+    fn field_mutation_value_embeds_only_the_number_literal() {
+        let m = field_mutation_value(&json!({ "kind": "number", "number": 3.5 })).unwrap();
+        assert_eq!(m.extra_decl, "");
+        assert_eq!(m.fragment, "{ number: 3.5 }");
+        assert!(m.vars.is_empty());
+    }
+
+    #[test]
+    fn field_mutation_value_rejects_malformed_and_unknown_kinds() {
+        // Missing payload key for the declared kind.
+        let err = field_mutation_value(&json!({ "kind": "single-select" })).unwrap_err();
+        assert_eq!(err.kind, "unknown");
+        assert!(err.message.contains("optionId"));
+        // Empty string payloads are as unusable as missing ones.
+        assert!(field_mutation_value(&json!({ "kind": "text", "text": "" })).is_err());
+        // A kind outside the renderer union must not build a mutation.
+        let err = field_mutation_value(&json!({ "kind": "milestone" })).unwrap_err();
+        assert!(err.message.contains("milestone"));
+        assert!(field_mutation_value(&json!({})).is_err());
     }
 }

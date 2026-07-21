@@ -472,23 +472,81 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'wiki' | 'project'
-  previousViewBeforeWiki: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
-  previousViewBeforeProject: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki'
+  activeView:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeTasks:
+    | 'terminal'
+    | 'settings'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeSettings:
+    | 'terminal'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeActivity:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeSkills:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeHarness:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'project'
+    | 'projects'
+  /** Where the hub returns on close — 'projects' when it was opened from the
+   *  Projects page, so back-navigation lands on the picker, not a terminal. */
+  previousViewBeforeProject:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'projects'
+  previousViewBeforeProjects: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
   /** Which tab the Project Hub shows (ADE redesign: a project opens as a hub
-   *  with per-project Chat / Wiki / Tasks / Sessions). Survives tab switches
-   *  within a session; the repo itself is `activeRepoId`. */
-  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'sessions'
+   *  with per-project Chat / Wiki / Tasks / Tracker / Sessions). Survives tab
+   *  switches within a session; the repo itself is `activeRepoId`. */
+  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
   setProjectHubTab: (tab: UISlice['projectHubTab']) => void
   /** Open the per-project hub for a repo (sidebar project click). Sets the
    *  active repo, seeds the embedded Tasks tab's repo preselection, and
-   *  switches the main view. */
-  openProjectHub: (repoId: string, tab?: UISlice['projectHubTab']) => void
+   *  switches the main view. `seed.taskSource` picks the Tasks tab's tracker
+   *  (spec 016: re-routed bare board openers land a Linear filed-card on the
+   *  Linear tab) — NOT a detail payload; detail opens stay on openTaskPage. */
+  openProjectHub: (
+    repoId: string,
+    tab?: UISlice['projectHubTab'],
+    seed?: { taskSource?: TaskProvider }
+  ) => void
   closeProjectHub: () => void
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
@@ -541,8 +599,9 @@ export type UISlice = {
   closeSkillsPage: () => void
   openHarnessPage: () => void
   closeHarnessPage: () => void
-  openWikiPage: () => void
-  closeWikiPage: () => void
+  /** Open the Projects page (the card-grid picker; per Mateo the sidebar
+   *  never lists repos — projects are chosen inside this page, then the hub). */
+  openProjectsPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -905,11 +964,11 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeActivity: 'terminal',
   previousViewBeforeSkills: 'terminal',
   previousViewBeforeHarness: 'terminal',
-  previousViewBeforeWiki: 'terminal',
   previousViewBeforeProject: 'terminal',
+  previousViewBeforeProjects: 'terminal',
   projectHubTab: 'chat',
   setProjectHubTab: (tab) => set({ projectHubTab: tab }),
-  openProjectHub: (repoId, tab) => {
+  openProjectHub: (repoId, tab, seed) => {
     // Why: the hub's embedded Tasks tab is the full TaskPage seeded from
     // taskPageData at mount — preselect the hub's repo here so it scopes
     // correctly without going through openTaskPage (which would also flip
@@ -918,7 +977,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: 'project',
       projectHubTab: tab ?? state.projectHubTab,
-      taskPageData: { preselectedRepoId: repoId },
+      taskPageData: {
+        preselectedRepoId: repoId,
+        ...(seed?.taskSource ? { taskSource: seed.taskSource } : {})
+      },
       previousViewBeforeProject:
         state.activeView === 'project' ? state.previousViewBeforeProject : state.activeView
     }))
@@ -1143,15 +1205,13 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: state.previousViewBeforeHarness
     })),
-  openWikiPage: () =>
+  openProjectsPage: () =>
     set((state) => ({
-      activeView: 'wiki',
-      previousViewBeforeWiki:
-        state.activeView === 'wiki' ? state.previousViewBeforeWiki : state.activeView
-    })),
-  closeWikiPage: () =>
-    set((state) => ({
-      activeView: state.previousViewBeforeWiki
+      activeView: 'projects',
+      previousViewBeforeProjects:
+        state.activeView === 'projects' || state.activeView === 'project'
+          ? state.previousViewBeforeProjects
+          : state.activeView
     })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),

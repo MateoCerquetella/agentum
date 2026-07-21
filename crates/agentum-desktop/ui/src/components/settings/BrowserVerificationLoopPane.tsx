@@ -4,10 +4,6 @@ import { toast } from 'sonner'
 import { Label } from '../ui/label'
 import { Button } from '../ui/button'
 import { BROWSER_VERIFICATION_LOOP_SKILL_NAME } from '@/lib/agent-feature-install-commands'
-import {
-  AGENT_SKILL_CLI_PREREQUISITE_NOTICE,
-  ensureAgentumCliAvailableForAgentSkillTerminal
-} from '@/lib/agent-skill-cli-prerequisite'
 import { BROWSER_VERIFICATION_LOOP_SKILL_INSTALL_COMMAND } from '@/lib/browser-verification-loop-install-command'
 import {
   GLOBAL_AGENT_SKILL_SOURCE_KINDS,
@@ -143,10 +139,6 @@ export function BrowserVerificationLoopPane(): React.JSX.Element {
         loading={loading}
         error={error}
         icon={<Globe className="size-5" />}
-        preInstallNotice={AGENT_SKILL_CLI_PREREQUISITE_NOTICE}
-        onBeforeOpenTerminal={async () => {
-          await ensureAgentumCliAvailableForAgentSkillTerminal()
-        }}
         onRecheck={refresh}
       />
 

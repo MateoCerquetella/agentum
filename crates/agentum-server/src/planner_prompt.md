@@ -25,7 +25,7 @@ Run the commands one at a time. `gh` prints the new issue URL on success.
 
 - Create **3 to 7 issues**. Fewer than 3 means the goal wasn't decomposed; more
   than 7 means they're too granular for one downstream agent.
-- Each `--title` is a short imperative (e.g. "Add CSV export to the board").
+- Each `--title` is a short imperative (e.g. "Persist the session filter across restarts").
 - Each `--body` is 1 to 3 actionable sentences — the agent who claims the issue
   reads it as its first instruction, so make it concrete.
 - Do **not** pass `--label` unless you are sure the label already exists in the

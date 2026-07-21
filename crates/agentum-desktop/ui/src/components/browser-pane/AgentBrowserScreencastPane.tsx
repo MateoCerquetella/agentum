@@ -16,21 +16,38 @@
 // made the stream feel like a laggy VPS. Mouse-move is likewise coalesced to one
 // send per frame so a drag doesn't flood the input channel.
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import type { BrowserPage } from '../../../../shared/types'
 import {
   decodeBrowserScreencastFrame,
   type BrowserScreencastFrameMetadata
 } from '../../../../shared/browser-screencast-protocol'
 import {
+  clearProjectCdpData,
   openCdpScreencast,
   type CdpScreencastSubscription
 } from '../../runtime/cdp-screencast-client'
 import {
   getRemoteBrowserKeypressKey,
-  getRemoteBrowserKeyboardShortcut
+  getRemoteBrowserKeyboardShortcut,
+  getRemoteBrowserInsertText,
+  isRemoteBrowserPasteShortcut
 } from './remote-browser-keyboard'
 import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
+import { clientToDevicePoint } from './screencast-geometry'
+import { deriveProjectRepoId } from '../../lib/browser-project'
+import { api } from '@/tauri'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 
 /** Device scale the page lays out at, sent via `sendViewport`. Kept at 1× to match
  *  the server's 1× capture (`cdp_device_scale` → `--force-device-scale-factor`):
@@ -58,8 +75,10 @@ type AgentBrowserScreencastPaneProps = {
 }
 
 /** Map a client point onto the CDP device coordinate space the page expects.
- *  Mirrors the legacy pane's formula against the rendered <canvas> rect
- *  (`x = round(((clientX-rectLeft)/rectWidth)*deviceWidth)`). */
+ *  The canvas is `object-contain`, so the mapping must account for any letterbox
+ *  (see {@link clientToDevicePoint}) — mapping against the raw box rect
+ *  mis-routes clicks whenever the frame aspect ≠ the box aspect (the transient
+ *  first-open letterbox). Returns null on a bar click, so it's never mis-routed. */
 function toDevicePoint(
   event: { clientX: number; clientY: number },
   canvas: HTMLCanvasElement | null,
@@ -73,13 +92,14 @@ function toDevicePoint(
   // decoded bitmap), so it's the natural fallback when metadata is absent.
   const deviceWidth = metadata?.deviceWidth ?? canvas.width
   const deviceHeight = metadata?.deviceHeight ?? canvas.height
-  if (rect.width <= 0 || rect.height <= 0 || deviceWidth <= 0 || deviceHeight <= 0) {
-    return null
-  }
-  return {
-    x: Math.round(((event.clientX - rect.left) / rect.width) * deviceWidth),
-    y: Math.round(((event.clientY - rect.top) / rect.height) * deviceHeight)
-  }
+  return clientToDevicePoint(
+    event.clientX - rect.left,
+    event.clientY - rect.top,
+    rect.width,
+    rect.height,
+    deviceWidth,
+    deviceHeight
+  )
 }
 
 export default function AgentBrowserScreencastPane({
@@ -328,6 +348,19 @@ export default function AgentBrowserScreencastPane({
     }
   }, [isActive, sendViewport])
 
+  // First-frame viewport re-sync. The initial frame can arrive at the launcher's
+  // fixed window size (letterboxed in a differently-shaped pane) before the
+  // setDeviceMetricsOverride relayout lands, and a fully-loaded static page won't
+  // repaint on its own — so the stale frame keeps painting until a resize forces a
+  // new one (the "works only after I pop out and re-enter" bug). Re-send the
+  // viewport ONCE the first frame lands to force a re-capture at the pane's aspect.
+  // Idempotent when the viewport is already correct; NOT a timer poll (principle 3).
+  useEffect(() => {
+    if (isActive && hasFrame) {
+      sendViewport()
+    }
+  }, [isActive, hasFrame, sendViewport])
+
   // --- input handlers (forward to the same CDP instance the agent drives) -----
 
   // Emit the queued move immediately (cancelling the coalesce tick) — used before
@@ -410,6 +443,12 @@ export default function AgentBrowserScreencastPane({
         sendInput('browser.reload', {})
         return
       }
+      if (isRemoteBrowserPasteShortcut(shortcut)) {
+        // Let the native paste event fire (→ onPaste) so the clipboard TEXT is
+        // forwarded as browser.insertText. preventDefault here would kill the
+        // paste; a keypress here would just type a literal "v" and never paste.
+        return
+      }
       const key = getRemoteBrowserKeypressKey(e)
       if (key == null) {
         return
@@ -422,6 +461,23 @@ export default function AgentBrowserScreencastPane({
     [sendInput, markDriving]
   )
 
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      markDriving()
+      // Text-only paste from the ClipboardEvent (no navigator.clipboard.readText()
+      // — that can prompt or be blocked in the Tauri webview). Forwards
+      // browser.insertText → CDP Input.insertText (a trusted paste), which a
+      // synthetic Cmd/Ctrl+V keystroke cannot achieve in headless Chromium.
+      const message = getRemoteBrowserInsertText(e.clipboardData.getData('text'))
+      if (!message) {
+        return
+      }
+      e.preventDefault()
+      sendInput(message.method, message.params)
+    },
+    [sendInput, markDriving]
+  )
+
   const navigate = useCallback(() => {
     const url = normalizeBrowserNavigationUrl(addressBar)
     if (url) {
@@ -429,6 +485,44 @@ export default function AgentBrowserScreencastPane({
       sendInput('browser.goto', { url })
     }
   }, [addressBar, sendInput, bumpNav])
+
+  // Project-scoped "Clear browsing data" (spec 014 AC 5). Offered only when the
+  // pane's context derives to a project — synthetic/pseudo contexts have no
+  // project profile to clear.
+  const projectRepoId = deriveProjectRepoId(worktreeId)
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const clearProjectBrowsingData = useCallback(async () => {
+    if (!projectRepoId || clearing) {
+      return
+    }
+    setClearing(true)
+    try {
+      const server = await clearProjectCdpData(projectRepoId)
+      // Native (WKWebView) half — its warning is surfaced verbatim: a degraded
+      // clear must be OBSERVABLE, never a silent success (the old stub's bug).
+      let nativeWarning: string | null = null
+      try {
+        const native = (await api.browser.clearProjectData({ repoId: projectRepoId })) as {
+          cleared?: boolean
+          warning?: string | null
+        } | null
+        nativeWarning = native?.warning ?? null
+      } catch {
+        nativeWarning = 'native store not cleared — command unavailable'
+      }
+      if (!server.ok) {
+        toast.error(`Clear browsing data failed: ${server.error}`)
+      } else if (nativeWarning) {
+        toast.warning(`Browsing data cleared for this project. ${nativeWarning}`)
+      } else {
+        toast.success('Browsing data cleared for this project')
+      }
+    } finally {
+      setClearing(false)
+      setClearDialogOpen(false)
+    }
+  }, [projectRepoId, clearing])
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
@@ -476,7 +570,48 @@ export default function AgentBrowserScreencastPane({
           spellCheck={false}
           aria-label="Agent browser address"
         />
+        {projectRepoId ? (
+          <button
+            type="button"
+            className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+            onClick={() => setClearDialogOpen(true)}
+            aria-label="Clear browsing data for this project"
+            title="Clear browsing data for this project…"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        ) : null}
       </div>
+
+      <Dialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+        <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle className="text-base">Clear browsing data</DialogTitle>
+            <DialogDescription className="text-xs">
+              Deletes this project&apos;s browser cookies, logins, and storage — every
+              workspace of this project is signed out. Other projects are not affected.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setClearDialogOpen(false)}
+              disabled={clearing}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={clearProjectBrowsingData}
+              disabled={clearing}
+            >
+              {clearing ? 'Clearing…' : 'Clear data'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div
         ref={containerRef}
@@ -502,6 +637,7 @@ export default function AgentBrowserScreencastPane({
               onMouseUp={onMouseUp}
               onWheel={onWheel}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               onContextMenu={(e) => e.preventDefault()}
             />
             {!hasFrame ? (

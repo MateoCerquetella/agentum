@@ -28,6 +28,8 @@ import { createDictationSlice } from './slices/dictation'
 import { createWorkspaceCleanupSlice } from './slices/workspace-cleanup'
 import { createHostsSlice } from './slices/hosts'
 import { createServerWorktreeActivitySlice } from './slices/server-worktree-activity'
+import { createTrackerPhaseSlice } from './slices/tracker-phase'
+import { createWorkspaceHarnessOfferSlice } from './slices/workspace-harness-offer'
 import { e2eConfig } from '@/lib/e2e-config'
 import { registerHttpLinkStoreAccessor } from '@/lib/http-link-routing'
 
@@ -59,7 +61,9 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createDictationSlice(...a),
   ...createWorkspaceCleanupSlice(...a),
   ...createHostsSlice(...a),
-  ...createServerWorktreeActivitySlice(...a)
+  ...createServerWorktreeActivitySlice(...a),
+  ...createTrackerPhaseSlice(...a),
+  ...createWorkspaceHarnessOfferSlice(...a)
 }))
 
 registerHttpLinkStoreAccessor(() => useAppStore.getState())

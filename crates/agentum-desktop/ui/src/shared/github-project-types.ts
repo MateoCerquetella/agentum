@@ -94,6 +94,11 @@ export type GitHubProjectView = {
   filter: string
   fields: GitHubProjectField[]
   groupByFields: GitHubProjectField[]
+  /** Board (Kanban) column field. Why: GitHub models a board's columns as
+   *  `verticalGroupByFields`; `groupByFields` on a Board view is the optional
+   *  swimlane grouping. Optional because cached payloads from before this
+   *  field shipped lack the key. */
+  verticalGroupByFields?: GitHubProjectField[]
   sortByFields: GitHubProjectSort[]
 }
 
@@ -225,12 +230,13 @@ export type GitHubProjectSettings = {
     lastOpenedAt: string
   }[]
   lastViewByProject: Record<string, { viewId: string }>
+  /** LEGACY global slot. Read-only for new code (spec 016 migration fallback);
+   *  still written ONLY by the standalone (repoId=null) picker path. */
   activeProject: { owner: string; ownerType: GitHubProjectOwnerType; number: number } | null
-  /** Spec 009: per-repo project bindings, keyed by repo id (or the reserved
-   *  GLOBAL_TASK_PROJECT_SCOPE bucket when no repo is active). The legacy
-   *  global `activeProject` above is kept for backward-compat hydration but is
-   *  never read for resolution (hard-cut migration, spec 009 architecture D2).
-   *  Optional so profiles written before this field existed hydrate as-is. */
+  /** Spec 016: the per-repo board pick, keyed by Repo.id. OPTIONAL on the
+   *  wire — upgraded profiles carry a stored `githubProjects` object without
+   *  this key (the settings hydrate merge is top-level shallow, so the stored
+   *  object replaces the default wholesale), so every read must be `?? {}`. */
   activeProjectByRepo?: Record<
     string,
     { owner: string; ownerType: GitHubProjectOwnerType; number: number }

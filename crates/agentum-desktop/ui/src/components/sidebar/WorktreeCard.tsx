@@ -604,6 +604,10 @@ const WorktreeCard = React.memo(function WorktreeCard({
         linearIssue={metaLinearIssue}
         comment={metaComment}
         detailsAfter={hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
+        worktreeId={worktree.id}
+        trackerPhase={worktree.trackerPhase}
+        workdir={repo?.path}
+        repoId={repo?.id}
         onEditIssue={handleEditIssue}
         onEditComment={handleEditComment}
         onOpenGitHubIssueInAgentum={

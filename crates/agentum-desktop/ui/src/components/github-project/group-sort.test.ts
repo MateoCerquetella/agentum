@@ -9,7 +9,7 @@ import type {
   GitHubProjectTable,
   GitHubProjectView
 } from '../../../../shared/github-project-types'
-import { sortRows, groupRows } from '../../../../shared/github-project-group-sort'
+import { sortRows, groupRows, boardColumns } from '../../../../shared/github-project-group-sort'
 
 const singleSelectField: GitHubProjectField = {
   kind: 'single-select',
@@ -239,5 +239,125 @@ describe('groupRows', () => {
     ]
     const groups = groupRows(makeTable(view, rows), rows)
     expect(groups.map((g) => g.key)).toEqual(['opt_a', '__empty__'])
+  })
+})
+
+const statusValue = (optionId: string, name: string) =>
+  ({
+    F_status: {
+      kind: 'single-select' as const,
+      fieldId: 'F_status',
+      optionId,
+      name,
+      color: 'GRAY'
+    }
+  })
+
+// Mirrors GitHub's real Board payload: the column field arrives in
+// `verticalGroupByFields`; `groupByFields` (swimlanes) is empty.
+function boardView(field: GitHubProjectField): GitHubProjectView {
+  return { ...makeView(field), layout: 'BOARD_LAYOUT', verticalGroupByFields: [field] }
+}
+
+describe('boardColumns', () => {
+  it('emits a column per single-select option in order, plus a trailing "No <field>" column', () => {
+    const rows = [
+      makeRow('rB', 1, statusValue('opt_b', 'In Progress')),
+      makeRow('rNone', 2, {}),
+      makeRow('rA', 0, statusValue('opt_a', 'Todo'))
+    ]
+    const { field, columns } = boardColumns(makeTable(boardView(singleSelectField), rows))
+
+    expect(field?.id).toBe('F_status')
+    // Option order preserved; empty column last.
+    expect(columns.map((c) => c.key)).toEqual(['opt_a', 'opt_b', '__empty__'])
+    expect(columns.map((c) => c.label)).toEqual(['Todo', 'In Progress', 'No Status'])
+    // Empty option columns still appear (as drop targets) even with no rows —
+    // here every option has exactly one row.
+    expect(columns.map((c) => c.rows.map((r) => r.id))).toEqual([['rA'], ['rB'], ['rNone']])
+  })
+
+  it('makes option columns droppable with a single-select moveValue and the empty column a clear (null)', () => {
+    const { columns } = boardColumns(makeTable(boardView(singleSelectField), []))
+    const todo = columns.find((c) => c.key === 'opt_a')!
+    const none = columns.find((c) => c.key === '__empty__')!
+
+    expect(todo.droppable).toBe(true)
+    expect(todo.moveValue).toEqual({ kind: 'single-select', optionId: 'opt_a' })
+    expect(none.droppable).toBe(true)
+    expect(none.moveValue).toBeNull()
+    // Every option renders a column even when the board is empty.
+    expect(columns.map((c) => c.key)).toEqual(['opt_a', 'opt_b', '__empty__'])
+  })
+
+  it('never drops a row whose option no longer exists — it becomes a read-only column', () => {
+    const rows = [
+      makeRow('rGhost', 0, statusValue('opt_deleted', 'Archived')),
+      makeRow('rA', 1, statusValue('opt_a', 'Todo'))
+    ]
+    const { columns } = boardColumns(makeTable(boardView(singleSelectField), rows))
+
+    const ghost = columns.find((c) => c.key === 'opt_deleted')
+    expect(ghost).toBeDefined()
+    expect(ghost!.droppable).toBe(false)
+    expect(ghost!.rows.map((r) => r.id)).toEqual(['rGhost'])
+    // Orphan columns come after the known options and the empty column.
+    expect(columns.map((c) => c.key)).toEqual(['opt_a', 'opt_b', '__empty__', 'opt_deleted'])
+  })
+
+  it('builds iteration columns with an iteration moveValue', () => {
+    const rows = [
+      makeRow('rI', 0, {
+        F_iter: {
+          kind: 'iteration',
+          fieldId: 'F_iter',
+          iterationId: 'iter_1',
+          title: 'Sprint 1',
+          startDate: '2026-01-01',
+          duration: 14
+        }
+      })
+    ]
+    const { columns } = boardColumns(makeTable(boardView(iterationField), rows))
+    expect(columns.map((c) => c.key)).toEqual(['iter_1', 'iter_2', '__empty__'])
+    expect(columns.find((c) => c.key === 'iter_1')!.moveValue).toEqual({
+      kind: 'iteration',
+      iterationId: 'iter_1'
+    })
+  })
+
+  it('falls back to a single read-only "All" column when the view has no group-by', () => {
+    const rows = [makeRow('r1', 0, {}), makeRow('r2', 1, {})]
+    const { field, columns } = boardColumns(makeTable(makeView(singleSelectField), rows))
+    expect(field).toBeNull()
+    expect(columns).toHaveLength(1)
+    expect(columns[0].key).toBe('all')
+    expect(columns[0].droppable).toBe(false)
+    expect(columns[0].rows.map((r) => r.id)).toEqual(['r1', 'r2'])
+  })
+
+  it('prefers verticalGroupByFields (column field) over groupByFields (swimlanes)', () => {
+    const rows = [makeRow('rA', 0, statusValue('opt_a', 'Todo'))]
+    const view: GitHubProjectView = {
+      ...makeView(singleSelectField),
+      layout: 'BOARD_LAYOUT',
+      verticalGroupByFields: [singleSelectField],
+      groupByFields: [iterationField]
+    }
+    const { field, columns } = boardColumns(makeTable(view, rows))
+    expect(field?.id).toBe('F_status')
+    expect(columns.map((c) => c.key)).toEqual(['opt_a', 'opt_b', '__empty__'])
+  })
+
+  it('falls back to groupByFields for cached payloads without verticalGroupByFields', () => {
+    const rows = [makeRow('rA', 0, statusValue('opt_a', 'Todo'))]
+    const view: GitHubProjectView = {
+      ...makeView(singleSelectField),
+      layout: 'BOARD_LAYOUT',
+      groupByFields: [singleSelectField]
+    }
+    const { field, columns } = boardColumns(makeTable(view, rows))
+    expect(field?.id).toBe('F_status')
+    expect(columns.map((c) => c.key)).toEqual(['opt_a', 'opt_b', '__empty__'])
   })
 })

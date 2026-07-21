@@ -11,11 +11,11 @@ import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { applyBoardPick, clearBoardPick } from '@/lib/board-project-resolution'
 import { cn } from '@/lib/utils'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import { taskProjectScopeKey } from '../../../../shared/task-project-scope'
 import type {
   GitHubProjectOwnerType,
   GitHubProjectSettings,
@@ -41,6 +41,10 @@ type Props = {
     number: number
     title?: string
   } | null
+  /** Spec 016: repoId set = commits write the per-repo pick
+   *  (activeProjectByRepo[repoId]); null/absent = the standalone surface,
+   *  which keeps writing the legacy global activeProject verbatim. */
+  repoId?: string | null
   onSelect: (selection: ResolvedProjectSelection) => void
 }
 
@@ -92,10 +96,13 @@ async function resolveProjectRefForRuntime(
     : api.gh.resolveProjectRef({ input })
 }
 
-export default function ProjectPicker({ activeProject, onSelect }: Props): React.JSX.Element {
+export default function ProjectPicker({
+  activeProject,
+  repoId = null,
+  onSelect
+}: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const updateSettings = useAppStore((s) => s.updateSettings)
-  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const mountedRef = useMountedRef()
   const projectSettings: GitHubProjectSettings = useMemo(
     () =>
@@ -180,53 +187,29 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
 
   const updateProjectSettings = useCallback(
     async (mutate: (prev: GitHubProjectSettings) => GitHubProjectSettings) => {
-      const prev = useAppStore.getState().settings?.githubProjects ?? {
-        pinned: [],
-        recent: [],
-        lastViewByProject: {},
-        activeProject: null
-      }
+      const prev = projectSettings
       const next = mutate(prev)
       // Why: settings deep-merges only notifications; write the full
       // githubProjects object so sibling fields (pinned/recent/lastView/active)
       // are not clobbered by a partial write.
       await updateSettings({ githubProjects: next })
     },
-    [updateSettings]
+    [projectSettings, updateSettings]
   )
 
   const commitSelection = useCallback(
     async (selection: ResolvedProjectSelection, title: string | null) => {
-      const key = `${selection.ownerType}:${selection.owner}:${selection.projectNumber}`
-      await updateProjectSettings((prev) => {
-        const recent = [
-          {
-            owner: selection.owner,
-            ownerType: selection.ownerType,
-            number: selection.projectNumber,
-            lastOpenedAt: new Date().toISOString()
-          },
-          ...prev.recent.filter((r) => `${r.ownerType}:${r.owner}:${r.number}` !== key)
-        ].slice(0, 10)
-        const lastViewByProject = { ...prev.lastViewByProject }
-        if (selection.viewId) {
-          lastViewByProject[key] = { viewId: selection.viewId }
-        }
-        return {
-          ...prev,
-          recent,
-          lastViewByProject,
-          activeProject: null,
-          activeProjectByRepo: {
-            ...prev.activeProjectByRepo,
-            [taskProjectScopeKey(activeRepoId)]: {
-              owner: selection.owner,
-              ownerType: selection.ownerType,
-              number: selection.projectNumber
-            }
-          }
-        }
-      })
+      // Spec 016: `applyBoardPick` owns the split — per-repo active slot when
+      // repoId is set, the pre-016 legacy write when standalone; recent +
+      // lastViewByProject stay global in both branches.
+      await updateProjectSettings((prev) =>
+        applyBoardPick(prev, repoId, {
+          owner: selection.owner,
+          ownerType: selection.ownerType,
+          number: selection.projectNumber,
+          ...(selection.viewId ? { viewId: selection.viewId } : {})
+        })
+      )
       if (!mountedRef.current) {
         return
       }
@@ -236,19 +219,8 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
       setViewPickFor(null)
       void title
     },
-    [activeRepoId, mountedRef, onSelect, updateProjectSettings]
+    [mountedRef, onSelect, repoId, updateProjectSettings]
   )
-
-  const clearSelection = useCallback(async () => {
-    await updateProjectSettings((prev) => {
-      const activeProjectByRepo = { ...prev.activeProjectByRepo }
-      delete activeProjectByRepo[taskProjectScopeKey(activeRepoId)]
-      return { ...prev, activeProject: null, activeProjectByRepo }
-    })
-    if (mountedRef.current) {
-      setOpen(false)
-    }
-  }, [activeRepoId, mountedRef, updateProjectSettings])
 
   const handleChooseProject = useCallback(
     async (selection: {
@@ -433,21 +405,28 @@ export default function ProjectPicker({ activeProject, onSelect }: Props): React
                   className="h-8 pl-7 text-xs"
                 />
               </div>
-              {activeProject ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mt-1 h-7 w-full justify-start gap-2 text-xs text-muted-foreground"
-                  onClick={() => void clearSelection()}
-                >
-                  <X className="size-3.5" />
-                  Clear project for this repo
-                </Button>
-              ) : null}
             </div>
             {browseError ? <AuthErrorBanner error={browseError} /> : null}
             {!browseError && partialFailures.length > 0 ? (
               <PartialFailuresBanner failures={partialFailures} />
+            ) : null}
+            {/* #379: a wrong per-repo pick (e.g. another repo's board chosen
+                here once) was UNREMOVABLE — the only exit was picking a
+                different board. Clearing re-resolves binding → empty state. */}
+            {repoId != null && activeProject ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void updateProjectSettings((prev) => clearBoardPick(prev, repoId)).then(() => {
+                    setOpen(false)
+                    setQuery('')
+                  })
+                }}
+                className="mx-1 mt-1 flex w-[calc(100%-0.5rem)] items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent"
+              >
+                <X className="size-3.5" />
+                No board for this project (clear pick)
+              </button>
             ) : null}
             <div className="max-h-[340px] overflow-y-auto p-1 scrollbar-sleek">
               {projectSettings.pinned.length > 0 ? (
@@ -689,7 +668,8 @@ function ViewPickStep({
           <div className="px-2 py-2 text-xs text-muted-foreground">No views found.</div>
         ) : (
           views.map((v) => {
-            const supported = v.layout === 'TABLE_LAYOUT'
+            // Table and Board (Kanban) both render in-app; Roadmap does not.
+            const supported = v.layout === 'TABLE_LAYOUT' || v.layout === 'BOARD_LAYOUT'
             return (
               <button
                 key={v.id}
@@ -706,7 +686,7 @@ function ViewPickStep({
                   {v.layout === 'TABLE_LAYOUT'
                     ? 'Table'
                     : v.layout === 'BOARD_LAYOUT'
-                      ? 'Board (unsupported)'
+                      ? 'Board'
                       : 'Roadmap (unsupported)'}
                 </span>
               </button>

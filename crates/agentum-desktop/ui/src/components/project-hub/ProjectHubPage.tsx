@@ -6,18 +6,25 @@
 // into the hub's single project scope), so the hub adds navigation, not a
 // parallel implementation. The rail's Chat / Wiki / Board entries stay the
 // global, cross-project views.
-import React, { lazy, Suspense, useEffect, useMemo } from 'react'
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { ChevronLeft } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import type { AppState } from '@/store/types'
+import type { Repo } from '@/shared/types'
 import { useActiveRepo, useWorktreesForRepo } from '@/store/selectors'
 import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 import { cn } from '@/lib/utils'
 import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
 import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
+import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
+// Import-only (must-not-touch): the v0.75.1 host-aware target derivation the
+// wizard's tracker section already uses — one seam for `connectionId → hostId`.
+import { deriveTrackerBindingTarget } from '@/components/new-workspace/create-workspace-wizard-model'
+import { getProjectBinding } from '@/runtime/github-projects-client'
 import { ProjectSessionsList } from './ProjectSessionsList'
+import { TrackerIntakePanel } from './TrackerIntakePanel'
 
 // Lazy like App.tsx's page mounts: the hub chunk stays small and each surface
 // loads on first tab visit (Chat/Wiki/TaskPage are already split chunks).
@@ -25,7 +32,7 @@ const ChatPage = lazy(() => import('@/components/harness/ChatPage'))
 const WikiPage = lazy(() => import('@/components/wiki/WikiPage'))
 const TaskPage = lazy(() => import('@/components/TaskPage'))
 
-type HubTab = 'chat' | 'wiki' | 'tasks' | 'sessions'
+type HubTab = 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
 
 // The GitHub work-items cache key the Board reads on mount — the exact recipe
 // openTaskPage uses for its warm-up prefetch (resume-state custom query wins,
@@ -41,6 +48,10 @@ function boardWorkItemsQuery(s: AppState): string {
 const TABS: Array<{ id: HubTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'wiki', label: 'Wiki' },
+  // #379 (Mateo): Tracker and Tasks are ONE surface — the board binding +
+  // intake now live in a collapsible strip atop the Tasks tab. The 'tracker'
+  // tab id survives in the store union for deep-link compat; it lands on
+  // Tasks with the strip expanded.
   { id: 'tasks', label: 'Tasks' },
   { id: 'sessions', label: 'Sessions' }
 ]
@@ -61,11 +72,64 @@ export default function ProjectHubPage(): React.JSX.Element {
     repo != null && s.taskPageData.preselectedRepoId === repo.id
   )
   useEffect(() => {
-    if (!repo || tab !== 'tasks' || taskDataSeeded) return
+    // #379: 'tracker' now lands on the Tasks surface too, so it must seed the
+    // same preselection — else a legacy tracker deep link renders blank.
+    if (!repo || (tab !== 'tasks' && tab !== 'tracker') || taskDataSeeded) return
     useAppStore.setState((s) => ({
       taskPageData: { ...s.taskPageData, preselectedRepoId: repo.id }
     }))
   }, [repo, tab, taskDataSeeded])
+
+  // Spec 016: load this project's tracker binding into the PER-REPO session
+  // cache (`projectBindingByRepo`) that the embedded board resolves through —
+  // never the global `activeProject` slot (the old copy-hack silently re-keyed
+  // every other board surface). Host-aware: an SSH repo threads its
+  // `connectionId` as `hostId` so the server resolves the slug on the remote
+  // host. The incomplete-identity guard lives in the resolver's normalization
+  // now — this effect stores the raw identity.
+  const setProjectBindingState = useAppStore((s) => s.setProjectBindingState)
+  useEffect(() => {
+    if (!repo || tab !== 'tasks' || !isGitRepoKind(repo)) return
+    const target = deriveTrackerBindingTarget({ repo, isGit: true })
+    if (!target) {
+      setProjectBindingState(repo.id, { status: 'loaded', binding: null })
+      return
+    }
+    // Keep an existing 'loaded' entry while refetching (no board flicker);
+    // only a first visit shows the loading skeleton.
+    if (!useAppStore.getState().projectBindingByRepo[repo.id]) {
+      setProjectBindingState(repo.id, { status: 'loading' })
+    }
+    let cancelled = false
+    // SF1 (spec 020): thread repoId so an SSH repo's slug resolves on ITS
+    // host — the old `hostId` here was a dead param getProjectBinding never
+    // accepted (leftover of the #359 hostId→repoId migration).
+    void getProjectBinding({ workdir: target.workdir, repoId: target.repoId })
+      .then((res) => {
+        if (cancelled) return
+        const b = res.binding
+        setProjectBindingState(repo.id, {
+          status: 'loaded',
+          binding: b
+            ? {
+                projectOwner: b.projectOwner,
+                projectOwnerType: b.projectOwnerType,
+                projectNumber: b.projectNumber,
+                projectTitle: b.projectTitle
+              }
+            : null
+        })
+      })
+      .catch(() => {
+        if (cancelled) return
+        // Fail closed to 'loaded/null' so the resolver falls to the legacy
+        // tier instead of wedging on 'pending'.
+        setProjectBindingState(repo.id, { status: 'loaded', binding: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [repo, tab, setProjectBindingState])
 
   // Tasks-tab badge (ADE prototype "Tasks <count>"): open-item count from the
   // work-items cache. Null (no badge) until the key is warm — the prefetch
@@ -136,7 +200,7 @@ export default function ProjectHubPage(): React.JSX.Element {
         </div>
         <nav className="ml-3 flex items-center gap-0.5" aria-label="Project sections">
           {TABS.map(({ id, label }) => {
-            const isActive = tab === id
+            const isActive = (tab === 'tracker' ? 'tasks' : tab) === id
             return (
               <button
                 key={id}
@@ -179,10 +243,95 @@ export default function ProjectHubPage(): React.JSX.Element {
               transcript state) re-seeds instead of leaking across projects. */}
           {tab === 'chat' ? <ChatPage key={repo.id} pinnedRepo={repo} /> : null}
           {tab === 'wiki' ? <WikiPage key={repo.id} pinnedRepoId={repo.id} /> : null}
-          {tab === 'tasks' && taskDataSeeded ? <TaskPage key={repo.id} embedded /> : null}
+          {(tab === 'tasks' || tab === 'tracker') && taskDataSeeded ? (
+            <div className="flex h-full min-h-0 flex-col">
+              <HubTrackerStrip key={`strip-${repo.id}`} repo={repo} defaultOpen={tab === 'tracker'} />
+              <div className="min-h-0 flex-1">
+                <TaskPage key={repo.id} embedded />
+              </div>
+            </div>
+          ) : null}
           {tab === 'sessions' ? <ProjectSessionsList repoId={repo.id} /> : null}
         </Suspense>
       </div>
+    </div>
+  )
+}
+
+/** #379: Tracker folded INTO the Tasks tab — a slim collapsible strip above
+ *  the board. Collapsed by default; a legacy 'tracker' deep link opens it. */
+function HubTrackerStrip({
+  repo,
+  defaultOpen
+}: {
+  repo: Repo
+  defaultOpen: boolean
+}): React.JSX.Element {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="border-b border-border/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-4 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronLeft className={cn('size-3 transition-transform', open ? 'rotate-90' : '-rotate-90')} />
+        Tracker — board binding &amp; new issue
+      </button>
+      {open ? (
+        <div className="max-h-[55vh] overflow-y-auto scrollbar-sleek">
+          <ProjectTrackerConfig key={repo.id} repo={repo} />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * The hub's Tracker tab (spec 011 F1): mounts the SAME `ProjectBindingEditor`
+ * that Settings → Integrations and the provision step use, pinned to this
+ * project's workdir — so no repo `<select>` is needed. This is where a project
+ * configures which GitHub Project (+ status mapping) tracks its issues; the
+ * wizard's issue picker then reads that per-repo binding.
+ *
+ * Spec 015 F3: the config half gains a doing half — `TrackerIntakePanel`, a
+ * SIBLING that turns written intent into a filed GitHub/Linear issue (and,
+ * for a local GitHub issue, a pre-armed gated run). `onBound` bumps
+ * `bindingVersion` so a freshly saved binding re-resolves the panel's provider
+ * without a tab remount.
+ */
+function ProjectTrackerConfig({ repo }: { repo: Repo }): React.JSX.Element {
+  const [bindingVersion, setBindingVersion] = useState(0)
+  return (
+    <div className="mx-auto h-full max-w-2xl overflow-y-auto px-6 py-6">
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-[14px] font-semibold tracking-tight text-foreground">Tracker</h2>
+        <p className="mt-0.5 text-[12px] text-muted-foreground">
+          Bind this project to a GitHub Projects v2 board. Gated runs move its cards by column as
+          features code, verify, and finish — and the New Workspace picker lists this Project&apos;s
+          open issues.
+        </p>
+        <div className="mt-3">
+          {repo.path ? (
+            <ProjectBindingEditor
+              workdir={repo.path}
+              repoId={repo.id}
+              onBound={() => setBindingVersion((v) => v + 1)}
+            />
+          ) : (
+            // A project with no resolvable workdir (a remote/unmapped repo)
+            // can't bind a board here — bindings resolve through the local `gh`.
+            <p className="text-xs text-muted-foreground">
+              This project has no local workdir, so a board can&apos;t be bound here.
+            </p>
+          )}
+        </div>
+      </div>
+      {repo.path ? (
+        <div className="mt-4">
+          <TrackerIntakePanel repo={repo} bindingVersion={bindingVersion} />
+        </div>
+      ) : null}
     </div>
   )
 }

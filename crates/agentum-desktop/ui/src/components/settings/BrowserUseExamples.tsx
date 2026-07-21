@@ -5,9 +5,9 @@ import { Button } from '../ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 
 const EXAMPLE_PROMPTS: string[] = [
-  'Using Agentum CLI, open https://github.com/notifications and click the first unread pull request.',
-  "Take a screenshot of my open Linear board with the Agentum CLI and tell me what's blocked.",
-  'With Agentum CLI, go to our staging app, log in (my cookies are imported), and verify the checkout flow works.'
+  'Open https://github.com/notifications in the browser and click the first unread pull request.',
+  "Take a screenshot of my open Linear board and tell me what's blocked.",
+  'Go to our staging app in the browser, log in (my cookies are imported), and verify the checkout flow works.'
 ]
 
 async function handleCopyText(text: string, label: string): Promise<void> {
@@ -27,8 +27,8 @@ export function BrowserUseExamples(): React.JSX.Element {
         <p className="text-sm font-medium">Try it — example prompts</p>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        Paste any of these into Claude Code, Codex, or another agent in a project where the skill is
-        installed.
+        Paste any of these into Claude Code, Codex, or another agent launched from Agentum — the
+        agentum_browser tool is wired in automatically.
       </p>
       <ul className="mt-3 space-y-2">
         {EXAMPLE_PROMPTS.map((prompt) => (
