@@ -11,6 +11,7 @@ import type {
   PersistedTrustedAgentumHooks,
   PersistedUIState,
   StatusBarItem,
+  TaskLinearContext,
   TaskProvider,
   TaskResumeState,
   TaskViewPresetId,
@@ -21,6 +22,8 @@ import type {
   AgentActivityDisplayMode,
   WorktreeCardProperty
 } from '../../../../shared/types'
+import { GLOBAL_TASK_PROJECT_SCOPE } from '../../../../shared/types'
+import { taskProjectScopeKey } from '../../../../shared/task-project-scope'
 import type { LaunchSource } from '../../../../shared/telemetry-events'
 import { tuiAgentToAgentKind } from '../../../../shared/agent-kind'
 import { PET_SIZE_DEFAULT, PET_SIZE_MAX, PET_SIZE_MIN } from '../../../../shared/types'
@@ -360,7 +363,33 @@ function createAgentSendTargetModeInstanceId(): string {
   return `${Date.now()}:${agentSendTargetModeInstanceCounter}`
 }
 
-function sanitizeTaskResumeState(value: unknown): TaskResumeState | undefined {
+function sanitizeLinearContext(value: unknown): TaskLinearContext | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+  const context = value as Record<string, unknown>
+  if (
+    (context.kind !== 'project' && context.kind !== 'view') ||
+    typeof context.id !== 'string' ||
+    !context.id.trim() ||
+    typeof context.workspaceId !== 'string' ||
+    !context.workspaceId.trim() ||
+    context.workspaceId === 'all'
+  ) {
+    return undefined
+  }
+  return {
+    kind: context.kind,
+    id: context.id,
+    workspaceId: context.workspaceId,
+    model: context.model === 'issue' || context.model === 'project' ? context.model : undefined
+  }
+}
+
+function sanitizeTaskResumeState(
+  value: unknown,
+  validRepoIds?: ReadonlySet<string>
+): TaskResumeState | undefined {
   if (!value || typeof value !== 'object') {
     return undefined
   }
@@ -395,22 +424,28 @@ function sanitizeTaskResumeState(value: unknown): TaskResumeState | undefined {
   if (typeof input.linearQuery === 'string') {
     next.linearQuery = input.linearQuery
   }
-  if (input.linearContext && typeof input.linearContext === 'object') {
-    const context = input.linearContext as Record<string, unknown>
-    if (
-      (context.kind === 'project' || context.kind === 'view') &&
-      typeof context.id === 'string' &&
-      context.id.trim() &&
-      typeof context.workspaceId === 'string' &&
-      context.workspaceId.trim() &&
-      context.workspaceId !== 'all'
-    ) {
-      next.linearContext = {
-        kind: context.kind,
-        id: context.id,
-        workspaceId: context.workspaceId,
-        model: context.model === 'issue' || context.model === 'project' ? context.model : undefined
+  const legacyLinearContext = sanitizeLinearContext(input.linearContext)
+  if (legacyLinearContext) {
+    next.linearContext = legacyLinearContext
+  }
+  if (input.linearContextByRepo && typeof input.linearContextByRepo === 'object') {
+    const contexts: Record<string, TaskLinearContext> = {}
+    for (const [repoId, rawContext] of Object.entries(input.linearContextByRepo)) {
+      if (
+        repoId === '__proto__' ||
+        repoId === 'prototype' ||
+        repoId === 'constructor' ||
+        (validRepoIds && repoId !== GLOBAL_TASK_PROJECT_SCOPE && !validRepoIds.has(repoId))
+      ) {
+        continue
       }
+      const context = sanitizeLinearContext(rawContext)
+      if (context) {
+        contexts[repoId] = context
+      }
+    }
+    if (Object.keys(contexts).length > 0) {
+      next.linearContextByRepo = contexts
     }
   }
 
@@ -524,6 +559,7 @@ export type UISlice = {
   }
   taskResumeState: TaskResumeState | undefined
   setTaskResumeState: (updates: Partial<TaskResumeState>) => void
+  setLinearContextForRepo: (context: TaskLinearContext | undefined) => void
   githubTaskDrawerWorkItem: GitHubWorkItem | null
   setGithubTaskDrawerWorkItem: (item: GitHubWorkItem | null) => void
   newWorkspaceDraft: {
@@ -937,10 +973,18 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     // taskPageData at mount — preselect the hub's repo here so it scopes
     // correctly without going through openTaskPage (which would also flip
     // activeView to 'tasks' and record Board history).
-    get().setActiveRepo(repoId)
     set((state) => ({
+      activeRepoId: repoId,
       activeView: 'project',
       projectHubTab: tab ?? state.projectHubTab,
+      // Invalidate the target repo's session binding in the SAME store write
+      // that seeds its TaskPage. A previously cached/corrupt identity must not
+      // get one render under the newly opened repo while ProjectHubPage's
+      // async binding fetch is still starting. Other repos stay cached.
+      projectBindingByRepo: {
+        ...state.projectBindingByRepo,
+        [repoId]: { status: 'loading' }
+      },
       taskPageData: {
         preselectedRepoId: repoId,
         ...(seed?.taskSource ? { taskSource: seed.taskSource } : {})
@@ -1067,7 +1111,38 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   },
   setTaskResumeState: (updates) =>
     set((s) => {
-      const next = { ...s.taskResumeState, ...updates }
+      const { linearContext, ...plainUpdates } = updates
+      const next: TaskResumeState = { ...s.taskResumeState, ...plainUpdates }
+      // Keep every existing TaskPage call site safe while the persisted shape
+      // moves from the legacy global slot to a repo-scoped map.
+      if (Object.prototype.hasOwnProperty.call(updates, 'linearContext')) {
+        const scopeKey = taskProjectScopeKey(s.activeRepoId)
+        const linearContextByRepo = { ...s.taskResumeState?.linearContextByRepo }
+        if (linearContext) {
+          linearContextByRepo[scopeKey] = linearContext
+        } else {
+          delete linearContextByRepo[scopeKey]
+        }
+        next.linearContext = undefined
+        next.linearContextByRepo = linearContextByRepo
+      }
+      api.ui.set({ taskResumeState: next }).catch(console.error)
+      return { taskResumeState: next }
+    }),
+  setLinearContextForRepo: (context) =>
+    set((s) => {
+      const scopeKey = taskProjectScopeKey(s.activeRepoId)
+      const linearContextByRepo = { ...s.taskResumeState?.linearContextByRepo }
+      if (context) {
+        linearContextByRepo[scopeKey] = context
+      } else {
+        delete linearContextByRepo[scopeKey]
+      }
+      const next: TaskResumeState = {
+        ...s.taskResumeState,
+        linearContext: undefined,
+        linearContextByRepo
+      }
       api.ui.set({ taskResumeState: next }).catch(console.error)
       return { taskResumeState: next }
     }),
@@ -1626,7 +1701,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         browserDefaultUrl: ui.browserDefaultUrl ?? null,
         browserDefaultSearchEngine: ui.browserDefaultSearchEngine ?? null,
         browserKagiSessionLink: normalizeKagiSessionLink(ui.browserKagiSessionLink ?? ''),
-        taskResumeState: sanitizeTaskResumeState(ui.taskResumeState),
+        taskResumeState: sanitizeTaskResumeState(ui.taskResumeState, validRepoIds),
         featureTipsSeenIds: normalizeFeatureTipIds(ui.featureTipsSeenIds),
         featureInteractions: normalizeFeatureInteractions(ui.featureInteractions),
         trustedAgentumHooks: filterTrustedAgentumHooksToValidRepos(

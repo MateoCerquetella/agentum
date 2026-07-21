@@ -53,6 +53,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/harness/{id}/verify", post(verify))
         .route("/api/harness/{id}/confirm", post(confirm))
         .route("/api/harness/{id}/files", get(files))
+        .route("/api/harness/{id}/unlink-issue", post(unlink_issue))
 }
 
 /// Wire shape of `GET /api/harness/settings` (and the PUT *response*) — the
@@ -262,6 +263,29 @@ async fn files(
         .await
         .map_err(|e| ApiError::NotFound(e.to_string()))?;
     Ok(axum::Json(HarnessConfig::read_files(&workdir).await))
+}
+
+/// `POST /api/harness/{id}/unlink-issue` — detach the run's tracker issue
+/// (spec 023 Part B, AC 5) WITHOUT deleting the run: clears every feature's
+/// `tracker_provider`/`tracker_url` and persists `feature_list.json`, so
+/// `shared_tracker_provenance` subsequently returns `None` and later state
+/// transitions post nothing to the old issue (AC 6, via the existing
+/// `transition_tracker` guard). 200 on success (idempotent — re-unlinking an
+/// unlinked run rewrites the same cleared backlog), 404 on an unknown id.
+/// Deliberately a dedicated verb, not `PATCH /{id}` (architecture Q2):
+/// narrower intent, matches the existing `/{id}/run|init|verify|confirm`
+/// convention. Not public — the bearer-token middleware covers it like every
+/// other `/{id}` verb.
+async fn unlink_issue(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .harness
+        .unlink_issue(id)
+        .await
+        .map_err(|e| ApiError::NotFound(e.to_string()))?;
+    Ok(StatusCode::OK)
 }
 
 fn default_true() -> bool {
@@ -1070,5 +1094,161 @@ mod tests {
             "no tool given → default kept"
         );
         assert!(list.agent_model.is_none());
+    }
+}
+
+#[cfg(test)]
+mod unlink_route_tests {
+    //! Spec 023 Part B — handler-level tests for
+    //! `POST /api/harness/{id}/unlink-issue` through `tower::ServiceExt::oneshot`
+    //! (the clipboard.rs pattern: auth middleware is exercised at the lib.rs
+    //! merge site, not here).
+
+    use super::*;
+    use crate::TranscriptStore;
+    use crate::harness::{Feature, FeatureList, FeatureState, shared_tracker_provenance};
+    use agentum_store::Store;
+    use axum::body::Body;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::sync::broadcast;
+    use tower::ServiceExt;
+
+    async fn fresh_state() -> AppState {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("test.sqlite");
+        // Leak the tempdir for the lifetime of the test — Store holds an
+        // SqlitePool that needs the file to exist past the helper's return.
+        std::mem::forget(dir);
+        let store = Store::open(&p).await.unwrap();
+        let (bus, _rx) = broadcast::channel(16);
+        let (clip_bus, _crx) =
+            broadcast::channel::<crate::routes::clipboard::ClipboardRequestFrame>(64);
+        AppState {
+            store: Arc::new(store),
+            bus,
+            started_at: Instant::now(),
+            version: "test",
+            auth_limiter: Arc::new(crate::ratelimit::RateLimiter::new(
+                8,
+                Duration::from_secs(60),
+            )),
+            cert_fingerprint: Arc::new(String::new()),
+            transcripts: TranscriptStore::new(broadcast::channel(16).0),
+            stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            hostname: "test".to_string(),
+            no_auth: true,
+            clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            clipboard_request_bus: clip_bus,
+            hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            mcp_token: Arc::new(String::from("test-mcp-token")),
+            api_base_url: None,
+            desktop_bridge: None,
+            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
+            events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    fn unlink_request(id: Uuid) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/harness/{id}/unlink-issue"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// A `.harness/` whose two features are tracker-stamped (the
+    /// `plan_from_spec_with_tracker` shape unlink must invert).
+    fn write_stamped_harness(dir: &tempfile::TempDir, url: &str) {
+        let harness_dir = dir.path().join(".harness");
+        std::fs::create_dir_all(&harness_dir).unwrap();
+        let stamped = |id: &str| Feature {
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            tracker_provider: Some("github".into()),
+            tracker_url: Some(url.into()),
+        };
+        let list = FeatureList {
+            features: vec![stamped("F1"), stamped("F2")],
+            ..FeatureList::default()
+        };
+        std::fs::write(
+            harness_dir.join("feature_list.json"),
+            serde_json::to_string_pretty(&list).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// AC 5's route half: an unknown id 404s (the engine's `get_run` error
+    /// surfaces through `ApiError::NotFound`).
+    #[tokio::test]
+    async fn unlink_route_404s_an_unknown_id() {
+        let state = fresh_state().await;
+        let resp = super::router()
+            .with_state(state)
+            .oneshot(unlink_request(Uuid::new_v4()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// AC 5's route half: a registered run 200s and every feature's stamps are
+    /// cleared — `shared_tracker_provenance` returns `None`, so later
+    /// transitions post nothing (AC 6). AC 8: a SECOND run keeps its stamps.
+    #[tokio::test]
+    async fn unlink_route_200s_and_clears_only_that_run() {
+        let state = fresh_state().await;
+        let url = "https://github.com/acme/widgets/issues/42";
+
+        let dir_a = tempfile::tempdir().unwrap();
+        write_stamped_harness(&dir_a, url);
+        let id_a = state
+            .harness
+            .start(dir_a.path().to_path_buf())
+            .await
+            .unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        write_stamped_harness(&dir_b, url);
+        let id_b = state
+            .harness
+            .start(dir_b.path().to_path_buf())
+            .await
+            .unwrap();
+
+        let resp = super::router()
+            .with_state(state.clone())
+            .oneshot(unlink_request(id_a))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let status_a = state.harness.status(id_a).await.unwrap();
+        assert_eq!(shared_tracker_provenance(&status_a.features), None);
+        // The persisted backlog matches — the unlink survives a reload (Q3).
+        let on_disk = crate::harness::HarnessConfig::load(dir_a.path())
+            .await
+            .unwrap();
+        assert!(
+            on_disk
+                .features
+                .features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none())
+        );
+
+        // AC 8: the other run's tracker association is untouched.
+        let status_b = state.harness.status(id_b).await.unwrap();
+        assert_eq!(
+            shared_tracker_provenance(&status_b.features),
+            Some(("github".to_string(), url.to_string()))
+        );
     }
 }

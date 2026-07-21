@@ -21,7 +21,7 @@ import {
   SOCRATIC_FIRST_STAGE,
   stripSocraticControl
 } from '../lib/socratic-intake'
-import { type ChatStreamDelta, streamChat } from './chat-client'
+import { type ChatAgentId, type ChatStreamDelta, resolveChatAgent, streamChat } from './chat-client'
 import {
   type Conversation,
   type FiledResult,
@@ -170,6 +170,10 @@ export function sendChatMessage(opts: {
   thinking: boolean
   workdir?: string
   repoId?: string
+  /** Spec 394: the global Settings chat-agent pick. The turn runs on this
+   *  agent; it's stamped on the conversation as display metadata (never a
+   *  per-conversation override — reopening keeps following the global pick). */
+  agent?: ChatAgentId
   /** Spec 008 F2: intake mode for a NEW conversation (`'fast'` default). A
    *  CONTINUING thread inherits its stored mode/stage, so this is ignored for it
    *  — the mode is chosen once, at the entry button (D4: per-feature, no sticky
@@ -181,6 +185,7 @@ export function sendChatMessage(opts: {
   if (!text || snapshot.streaming[convoId]) return convoId
 
   const now = Date.now()
+  const agent = resolveChatAgent(opts.agent)
   const userTurn: StoredTurn = { role: 'user', content: text }
   // A conversationId that no longer exists (deleted under the caller's feet)
   // falls through to the create branch WITH the same id, so the reply lands
@@ -202,13 +207,14 @@ export function sendChatMessage(opts: {
 
   const messages: StoredTurn[] = [...history, { role: 'assistant', content: '', thinking: '' }]
   const convo: Conversation = existing
-    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, updatedAt: now, intake: intakeNow }
+    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, agent, updatedAt: now, intake: intakeNow }
     : {
         id: convoId,
         title: titleFromMessages([userTurn]),
         messages,
         model: opts.model,
         thinking: opts.thinking,
+        agent,
         createdAt: now,
         updatedAt: now,
         repoId: opts.repoId,
@@ -237,8 +243,10 @@ export function sendChatMessage(opts: {
     // never sent) — the server needs it to resolve the repo's host for SSH
     // context gathering.
     repoId: opts.repoId,
-    model: opts.model,
+    // A Claude model id must not leak to the Codex backend.
+    model: agent === 'claude' ? opts.model : undefined,
     thinking: opts.thinking,
+    agent,
     // Spec 008 F2: drive the server's per-stage prompt with THIS turn's intake
     // (Fast ignores stage). The stored stage was already advanced for next turn.
     mode: intakeNow.mode,

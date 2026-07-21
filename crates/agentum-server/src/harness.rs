@@ -621,6 +621,35 @@ impl HarnessEngine {
         Ok(())
     }
 
+    /// Spec 023 Part B (AC 5–6): detach the run's tracker issue WITHOUT
+    /// deleting the run — clear the per-feature stamps in memory AND persist
+    /// the cleared backlog. The stamps live on disk (the setter rewrites
+    /// `feature_list.json`), so a session-only mute would silently re-link on
+    /// a reload/restart; persisting is the desired "unlinked the wrong issue"
+    /// semantics (architecture Q3). Once cleared, `transition_tracker`'s
+    /// `tracker_provider` guard makes every later transition a silent no-op
+    /// (AC 6); features, gates, and `handoff.md` are untouched. A tracker
+    /// hiccup is logged, never fatal — the unlink itself is local and always
+    /// succeeds once the run exists.
+    pub async fn unlink_issue(&self, harness_id: Uuid) -> anyhow::Result<()> {
+        let (workdir, features_snapshot) = {
+            let run = self.get_run(harness_id).await?;
+            let mut r = run.write().await;
+            r.features.clear_tracker();
+            (r.workdir.clone(), r.features.clone())
+        };
+        // Same persist path as `set_feature_state`: the on-disk
+        // feature_list.json stays the single source of truth even mid-run.
+        let config = HarnessConfig::load(&workdir).await?;
+        config.save_features(&features_snapshot).await?;
+        self.log(
+            harness_id,
+            None,
+            "tracker issue unlinked — status transitions are now a no-op",
+        );
+        Ok(())
+    }
+
     /// Advance the run to a new SDD phase (spec 013): update in-memory state,
     /// reset the gate attempt counter, append a durable marker to `decisions.md`
     /// (the canonical record [`rebuild_phase_from_decisions`] reads on rescan),
@@ -2278,5 +2307,102 @@ mod surface_tests {
             tracker_url: None,
         });
         assert_eq!(shared_tracker_provenance(&list), None);
+    }
+
+    /// Spec 023 Part B: the primitive is the exact inverse of the
+    /// `plan_from_spec_inner` stamp loop — EVERY feature is cleared, so
+    /// `shared_tracker_provenance` finds nothing afterwards (the AC 6
+    /// precondition: the transition arm no-ops on `tracker_provider: None`).
+    #[test]
+    fn clear_tracker_removes_provenance() {
+        let mut list = FeatureList::default();
+        for i in 1..=3 {
+            list.features.push(Feature {
+                id: format!("F{i}"),
+                name: format!("Feature {i}"),
+                description: String::new(),
+                state: FeatureState::Pending,
+                attempts: 0,
+                last_error: None,
+                prompt: None,
+                tracker_provider: Some("github".into()),
+                tracker_url: Some("https://github.com/o/r/issues/42".into()),
+            });
+        }
+        assert!(shared_tracker_provenance(&list).is_some());
+        list.clear_tracker();
+        assert_eq!(shared_tracker_provenance(&list), None);
+        assert!(
+            list.features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none())
+        );
+    }
+
+    /// Spec 023 Part B (AC 5): unlink clears the tracker stamps on EVERY
+    /// feature — in memory, on disk, and for `shared_tracker_provenance` —
+    /// while the run itself (state, backlog shape) survives untouched (AC 6:
+    /// "the run otherwise continues normally").
+    #[tokio::test]
+    async fn unlink_issue_clears_stamps_in_memory_and_on_disk() {
+        let dir = TempDir::new().unwrap();
+        let harness_dir = dir.path().join(".harness");
+        std::fs::create_dir_all(&harness_dir).unwrap();
+        let url = "https://github.com/acme/widgets/issues/42";
+        let stamped = |id: &str, name: &str| Feature {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            tracker_provider: Some("github".into()),
+            tracker_url: Some(url.into()),
+        };
+        let list = FeatureList {
+            features: vec![stamped("F1", "One"), stamped("F2", "Two")],
+            ..FeatureList::default()
+        };
+        std::fs::write(
+            harness_dir.join("feature_list.json"),
+            serde_json::to_string_pretty(&list).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(harness_dir.join("AGENTS.md"), "# Agent Instructions\n").unwrap();
+
+        let engine = HarnessEngine::new();
+        let id = engine.start(dir.path().to_path_buf()).await.unwrap();
+        engine.unlink_issue(id).await.unwrap();
+
+        // In memory: every feature cleared, provenance gone, run intact.
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.state, HarnessState::Idle);
+        assert_eq!(status.features.features.len(), 2);
+        assert!(
+            status
+                .features
+                .features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none())
+        );
+        assert_eq!(shared_tracker_provenance(&status.features), None);
+
+        // On disk: the cleared backlog is what a reload/restart sees (Q3) —
+        // the unlink survives, never silently re-linking.
+        let cfg = HarnessConfig::load(dir.path()).await.unwrap();
+        assert!(
+            cfg.features
+                .features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none())
+        );
+    }
+
+    /// Spec 023 Part B: an unknown id errors — the route's 404 source.
+    #[tokio::test]
+    async fn unlink_issue_unknown_id_errors() {
+        let engine = HarnessEngine::new();
+        assert!(engine.unlink_issue(Uuid::new_v4()).await.is_err());
     }
 }

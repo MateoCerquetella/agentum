@@ -308,6 +308,15 @@ struct DraftBodyRequest {
     /// Optional `owner/repo` hint, threaded into the prompt for grounding.
     #[serde(default)]
     slug: Option<String>,
+    /// Spec 394: which agent drafts the body (`"claude"` default, `"codex"`) —
+    /// the desktop sends the Settings chat-agent pick; absent ⇒ `chat.toml`
+    /// → Claude (back-compat).
+    #[serde(default)]
+    agent: Option<String>,
+    /// Optional request-scoped model. The chat resolver applies this after the
+    /// agent is resolved, ahead of chat.toml and the backend default.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 /// Spec 020 F3 (D4): which context sources actually grounded the draft. Both
@@ -353,6 +362,8 @@ async fn draft_issue_body(
             .map(str::trim)
             .filter(|s| !s.is_empty()),
         &body.title,
+        body.agent.as_deref(),
+        body.model.as_deref(),
     )
     .await?;
     Ok(Json(DraftBodyResponse {
@@ -630,16 +641,20 @@ mod tests {
     // ── Spec 007: draft-body wire shape ─────────────────────────────────
 
     #[test]
-    fn draft_body_request_deserializes_with_and_without_slug() {
+    fn draft_body_request_deserializes_with_and_without_llm_choice() {
         let full: DraftBodyRequest = serde_json::from_value(serde_json::json!({
             "title": "Add a widget",
             "workdir": "/tmp/repo",
-            "slug": "acme/widgets"
+            "slug": "acme/widgets",
+            "agent": "claude",
+            "model": "claude-opus-4-8"
         }))
         .unwrap();
         assert_eq!(full.title, "Add a widget");
         assert_eq!(full.workdir, "/tmp/repo");
         assert_eq!(full.slug.as_deref(), Some("acme/widgets"));
+        assert_eq!(full.agent.as_deref(), Some("claude"));
+        assert_eq!(full.model.as_deref(), Some("claude-opus-4-8"));
 
         let minimal: DraftBodyRequest = serde_json::from_value(serde_json::json!({
             "title": "Add a widget",
@@ -647,6 +662,8 @@ mod tests {
         }))
         .unwrap();
         assert!(minimal.slug.is_none());
+        assert!(minimal.agent.is_none());
+        assert!(minimal.model.is_none());
 
         // A missing workdir is a deserialization error (the field is required),
         // matching the sibling create-issue contract.

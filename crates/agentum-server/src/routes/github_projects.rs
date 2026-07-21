@@ -293,7 +293,11 @@ async fn get_binding(
         q.slug.as_deref(),
     )
     .await?;
-    let binding = github_projects::binding_for_slug(&slug);
+    let binding = if let Some(repo_id) = q.repo_id.as_deref() {
+        super::project_trackers::compatibility_get(&state, repo_id, &slug).await?
+    } else {
+        github_projects::binding_for_slug(&slug)
+    };
     Ok(Json(GetBindingResponse {
         slug,
         binding: binding.as_ref().map(binding_dto),
@@ -377,7 +381,12 @@ async fn put_binding(
             blocked: n.blocked.clone(),
         }),
     };
-    github_projects::upsert_binding(&slug, binding.clone()).map_err(ApiError::Internal)?;
+    if let Some(repo_id) = body.repo_id.as_deref() {
+        super::project_trackers::compatibility_put(&state, repo_id, slug.clone(), binding.clone())
+            .await?;
+    } else {
+        github_projects::upsert_binding(&slug, binding.clone()).map_err(ApiError::Internal)?;
+    }
     Ok(Json(PutBindingResponse {
         slug,
         binding: binding_dto(&binding),
@@ -397,7 +406,11 @@ async fn delete_binding(
         q.slug.as_deref(),
     )
     .await?;
-    github_projects::remove_binding(&slug).map_err(ApiError::Internal)?;
+    if let Some(repo_id) = q.repo_id.as_deref() {
+        super::project_trackers::compatibility_delete(&state, repo_id).await?;
+    } else {
+        github_projects::remove_binding(&slug).map_err(ApiError::Internal)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

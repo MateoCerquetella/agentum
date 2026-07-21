@@ -99,6 +99,10 @@ import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import {
+  resolveLinearContextForRepo,
+  taskProjectScopeKey
+} from '../../../shared/task-project-scope'
+import {
   buildTaskPageRepoSourceState,
   deriveTaskPageGitHubWorkItemsFetchOptions,
   findTaskPageDialogWorkItem,
@@ -176,13 +180,23 @@ import {
 import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
 import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
 import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
+import { embeddedGithubModeForResolution } from './task-page/embedded-github-mode'
+import {
+  linearModeOptionsForScope,
+  resolveInitialLinearMode,
+  shouldFetchLinearIssueLanding
+} from './task-page/linear-project-scope'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
 // Spec 016: stable "no binding entry yet" identity so the embedded resolver
 // memo doesn't churn while the hub effect is still writing the store entry.
-const EMBEDDED_BINDING_ABSENT: BoardBindingState = { status: 'loaded', binding: null }
+// An absent embedded entry means the hub has not verified this repo yet. It
+// must never mean "verified unbound": treating it as loaded/null briefly
+// rendered an honest picker before the binding request, and—more importantly—
+// made an uninitialized cache indistinguishable from a completed lookup.
+const EMBEDDED_BINDING_PENDING: BoardBindingState = { status: 'loading' }
 
 export default function TaskPage({
   embedded = false
@@ -198,6 +212,7 @@ export default function TaskPage({
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
   const taskResumeState = useAppStore((s) => s.taskResumeState)
   const setTaskResumeState = useAppStore((s) => s.setTaskResumeState)
+  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const pageData = useAppStore((s) => s.taskPageData)
   const routedOpenTaskPage = useAppStore((s) => s.openTaskPage)
   const openTaskPage = useMemo(() => {
@@ -389,6 +404,10 @@ export default function TaskPage({
   const githubSearchPersistReadyRef = useRef(false)
   const linearSearchPersistReadyRef = useRef(false)
   const [taskResumeApplied, setTaskResumeApplied] = useState(false)
+  const visibleLinearModeOptions = useMemo(
+    () => linearModeOptionsForScope(LINEAR_MODE_OPTIONS, embedded),
+    [embedded]
+  )
 
   // Why: pageData.taskSource changes when the user clicks a specific source
   // icon in the sidebar while the task page is already open. useState only
@@ -454,7 +473,7 @@ export default function TaskPage({
     return resolveBoardProject({
       repoId: embeddedRepoId,
       settings: settings?.githubProjects,
-      bindingState: embeddedBindingEntry ?? EMBEDDED_BINDING_ABSENT
+      bindingState: embeddedBindingEntry ?? EMBEDDED_BINDING_PENDING
     })
   }, [embeddedRepoId, settings?.githubProjects, embeddedBindingEntry])
   // Re-fire only when the resolution identity CHANGES — a user's manual
@@ -474,9 +493,10 @@ export default function TaskPage({
       return
     }
     lastAppliedEmbeddedResolutionRef.current = identity
-    // pick|binding|legacy → the bound/picked board; none → the plain issue
-    // Kanban (the 'project' forcing must never leak into an unbound repo).
-    setGithubMode(embeddedResolution.source === 'none' ? 'items' : 'project')
+    // Bound repos render their board; unbound repos stay on this same surface
+    // and render the repo-scoped picker. Never hide an honest `none` result by
+    // falling through to the unrelated Items/Kanban view.
+    setGithubMode(embeddedGithubModeForResolution(embeddedResolution))
   }, [embeddedResolution])
 
   // ── GitLab task-source state ──────────────────────────────────────
@@ -1013,7 +1033,7 @@ export default function TaskPage({
   >(() => new Set())
   const lastLinearRequestRef = useRef<{ nonce: number; signature: string } | null>(null)
   const landingLinearRefreshKeysRef = useRef<ReadonlySet<string>>(new Set())
-  const linearContextResumeAttemptedRef = useRef(false)
+  const linearContextResumeAttemptedRef = useRef<string | null>(null)
 
   const patchScopedLinearIssue = useCallback((issueId: string, patch: Partial<LinearIssue>) => {
     const patchResult = (result: LinearCollectionResult<LinearIssue>) => ({
@@ -1132,7 +1152,7 @@ export default function TaskPage({
 
     const linearPreset = taskResumeState?.linearPreset ?? 'all'
     const linearQuery = taskResumeState?.linearQuery ?? ''
-    setLinearMode(taskResumeState?.linearMode ?? 'issues')
+    setLinearMode(resolveInitialLinearMode(embedded, taskResumeState?.linearMode))
     setActiveLinearPreset(linearPreset)
     setLinearSearchInput(linearQuery)
     setAppliedLinearSearch(linearQuery)
@@ -1151,17 +1171,32 @@ export default function TaskPage({
   ])
 
   useEffect(() => {
-    const context = taskResumeState?.linearContext
+    const context = resolveLinearContextForRepo(taskResumeState, activeRepoId)
+    const scopeKey = taskProjectScopeKey(activeRepoId)
+    const attemptKey = context ? `${scopeKey}:${context.kind}:${context.id}` : scopeKey
     if (
-      linearContextResumeAttemptedRef.current ||
+      linearContextResumeAttemptedRef.current === attemptKey ||
       !taskResumeApplied ||
       taskSource !== 'linear' ||
-      !linearStatus.connected ||
-      !context
+      !linearStatus.connected
     ) {
       return
     }
-    linearContextResumeAttemptedRef.current = true
+    linearContextResumeAttemptedRef.current = attemptKey
+    if (!context) {
+      clearSelectedLinearIssue()
+      setSelectedLinearProject(null)
+      setSelectedLinearProjectDetail(null)
+      setSelectedLinearCustomView(null)
+      setLinearProjectParentView(null)
+      // The standalone Tasks page may honestly fall back to its broad Issues
+      // landing. The embedded hub may not: without a repo-bound context that
+      // landing is account-wide and was the source of cross-project rows.
+      if (embedded) {
+        setLinearMode('projects')
+      }
+      return
+    }
     let cancelled = false
 
     if (context.kind === 'project') {
@@ -1234,10 +1269,13 @@ export default function TaskPage({
     fetchLinearCustomView,
     fetchLinearProject,
     listLinearCustomViews,
+    activeRepoId,
+    clearSelectedLinearIssue,
+    embedded,
     linearStatus.connected,
     setTaskResumeState,
     taskResumeApplied,
-    taskResumeState?.linearContext,
+    taskResumeState,
     taskSource
   ])
 
@@ -2804,7 +2842,7 @@ export default function TaskPage({
     if (taskSource !== 'linear') {
       return
     }
-    if (linearMode !== 'issues') {
+    if (!shouldFetchLinearIssueLanding(embedded, linearMode)) {
       return
     }
     if (!linearStatus.connected) {
@@ -2888,6 +2926,7 @@ export default function TaskPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     taskSource,
+    embedded,
     linearMode,
     linearStatus.connected,
     selectedLinearWorkspaceId,
@@ -3211,7 +3250,7 @@ export default function TaskPage({
         linearMode,
         linearContext: undefined
       })
-      linearContextResumeAttemptedRef.current = false
+      linearContextResumeAttemptedRef.current = null
       setLinearIssues([])
       setLinearError(null)
       setLinearLoading(true)
@@ -3736,7 +3775,7 @@ export default function TaskPage({
                         role="group"
                         aria-label="Linear task mode"
                       >
-                        {LINEAR_MODE_OPTIONS.map((mode) => {
+                        {visibleLinearModeOptions.map((mode) => {
                           const active = linearMode === mode.id
                           return (
                             <button

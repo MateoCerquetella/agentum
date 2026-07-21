@@ -9,12 +9,51 @@ cd "$ROOT"
 FEAT="${HARNESS_FEATURE_ID:-all}"
 echo "[verify] feature=$FEAT  root=$ROOT"
 
-# Backend gate — slices 1 & 2 live in agentum-server (also a safety net for 3).
-cargo test -p agentum-server --lib
+case "$FEAT" in
+  binding-identity-fidelity)
+    cargo test -p agentum-server project_trackers --lib -- --nocapture
+    cargo test -p agentum-server routes::util::tests::resolve_tracker --lib -- --nocapture
+    ;;
+  wizard-closed-tracker-scope)
+    (
+      cd crates/agentum-desktop/ui
+      bunx vitest run \
+        src/components/new-workspace/work-item-picker-model.test.ts \
+        src/components/new-workspace/create-workspace-wizard-model.test.ts \
+        src/components/new-workspace/tracker-section-scope.test.ts \
+        src/runtime/github-projects-client.test.ts
+      bunx vitest run src/store/slices/worktrees.test.ts \
+        -t "persists exact selected tracker coordinates and omits them for an unlinked create"
+    )
+    npm run build --prefix crates/agentum-desktop/ui
+    ;;
+  wiki-contract|wiki-routes)
+    cargo test -p agentum-server --lib
+    ;;
+  wiki-view)
+    cargo test -p agentum-server --lib
+    npm run build --prefix crates/agentum-desktop/ui
+    ;;
+  all)
+    cargo test -p agentum-server --lib
+    (
+      cd crates/agentum-desktop/ui
+      bunx vitest run \
+        src/components/new-workspace/work-item-picker-model.test.ts \
+        src/components/new-workspace/create-workspace-wizard-model.test.ts \
+        src/components/new-workspace/tracker-section-scope.test.ts \
+        src/runtime/github-projects-client.test.ts
+      bunx vitest run src/store/slices/worktrees.test.ts \
+        -t "persists exact selected tracker coordinates and omits them for an unlinked create"
+    )
+    npm run build --prefix crates/agentum-desktop/ui
+    ;;
+  *)
+    echo "[verify] unknown feature: $FEAT" >&2
+    exit 2
+    ;;
+esac
 
-# UI gate — the view slice must typecheck + build.
-if [ "$FEAT" = "wiki-view" ] || [ "$FEAT" = "all" ]; then
-  npm run build --prefix crates/agentum-desktop/ui
-fi
+git diff --check
 
 echo "[verify] GREEN"
