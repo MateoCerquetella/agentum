@@ -237,6 +237,20 @@ impl FeatureList {
         self.roles = roles;
         self.hitl_on_block = hitl_on_block;
     }
+
+    /// Inverse of the tracker-stamp loop in `plan_from_spec_inner` (spec 023
+    /// Part B, AC 5): clear `tracker_provider`/`tracker_url` on EVERY feature.
+    /// The setter stamps all, so the clear must hit all — a partial clear
+    /// leaves [`shared_tracker_provenance`] finding a stamped feature and the
+    /// transition arm keeps posting to the old issue (AC 6 fails). Persistence
+    /// is the caller's job (`HarnessConfig::save_features`, the same
+    /// pretty-JSON write the setter path uses).
+    pub(crate) fn clear_tracker(&mut self) {
+        for f in &mut self.features {
+            f.tracker_provider = None;
+            f.tracker_url = None;
+        }
+    }
 }
 
 /// The tracker provenance a backlog's features share, if any (spec 006 C1).
