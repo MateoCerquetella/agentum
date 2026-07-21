@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.91.0] — 2026-07-21
+
+### Fixed
+
+- **Linear work no longer leaks between Project Hubs.** Embedded Tasks surfaces
+  fail closed to the active repository's bound Linear project (or its project
+  picker) and never restore or fetch the account-wide Issues/Views landing.
+- **Standalone Tasks remains intentionally cross-project.** The global Tasks
+  page keeps its Linear Issues, Projects, and Views modes while project-scoped
+  hubs expose only data that belongs to their active project.
+
 ## [0.90.0] — 2026-07-21
 
 ### Added

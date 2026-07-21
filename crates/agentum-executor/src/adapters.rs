@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use agentum_core::{transcript, Session};
+use agentum_core::{Session, transcript};
 
-use crate::{translate_yolo_marker, LaunchCommand, McpProvision, ToolAdapter};
+use crate::{LaunchCommand, McpProvision, ToolAdapter, translate_yolo_marker};
 
 /// Append `--model=<v>` to argv if the session has a model set.
 fn push_model(argv: &mut Vec<String>, session: &Session) {
@@ -401,7 +401,7 @@ impl ToolAdapter for PassthroughAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{adapter_for, McpServer};
+    use crate::{McpServer, adapter_for};
     use agentum_core::{Session, Status};
     use time::OffsetDateTime;
     use uuid::Uuid;
