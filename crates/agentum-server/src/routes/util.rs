@@ -22,7 +22,7 @@ use crate::error::ApiError;
 /// `/api/fs/list` already resolves the same way, so every workdir
 /// gate now matches the picker's behaviour.
 pub(crate) fn expand_workdir(raw: &str) -> Result<PathBuf, ApiError> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = agentum_core::home_dir();
     expand_with_home(raw, home.as_deref())
 }
 
@@ -279,12 +279,12 @@ mod tests {
             effective_workdir(&ssh, "  /srv/proj/  ").unwrap(),
             "/srv/proj/"
         );
-        // Local: the expand still runs (HOME is set in the test env).
+        // Local: the expand still runs using the platform home variable.
         let local = host(HostKind::Local);
-        let home = std::env::var("HOME").expect("HOME set in test env");
+        let home = agentum_core::home_dir().expect("home directory set in test env");
         assert_eq!(
             effective_workdir(&local, "~/proj").unwrap(),
-            format!("{home}/proj")
+            home.join("proj").to_string_lossy()
         );
         assert_eq!(effective_workdir(&local, "/var/log/").unwrap(), "/var/log");
     }
