@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 025-operational-sidebar-triage
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer gate FAIL; see `review.md` and `handoffs/09-reviewer-to-developer.md`.)
+- **phase:** tester  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer-fix Developer gate PASS; see `handoffs/10-developer-to-tester.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,11 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Developer | **025 REWORK PASS → phase tester**
-  (`handoffs/05-developer-to-tester.md`). Settled now sorts strictly by activity;
-  rich status age is selected only from an explicit pane matching the aggregate
-  winning status and is otherwise omitted. Expanded focused suites pass 20/20,
-  the corrected production build passes, and diff hygiene is clean.
 - 2026-07-22 | Tester | **025 RETEST FAIL → send back to developer (iteration 2)**
   (`verification.md`; `handoffs/06-tester-to-developer.md`). Settled ordering is
   fixed, but timestamp selection does not yet apply authoritative explicit-status
@@ -112,3 +107,8 @@
   its required zero-count section headers under a no-match active filter, and
   rich cards can be collapsed/duplicated by legacy compact and inline-agent
   preferences. Fixes are localized presentation integration work.
+- 2026-07-22 | Developer | **025 REVIEW-FIX PASS → phase tester**
+  (`handoffs/10-developer-to-tester.md`). Operational no-match filters now keep
+  all three zero-count headers; operational presentation overrides legacy card
+  density and suppresses duplicate inline-agent rendering. Eight focused files
+  pass 47/47 and diff hygiene is clean.

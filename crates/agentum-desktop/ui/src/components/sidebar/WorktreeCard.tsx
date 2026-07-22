@@ -136,9 +136,9 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const fetchIssue = useAppStore((s) => s.fetchIssue)
   const fetchLinearIssue = useAppStore((s) => s.fetchLinearIssue)
   const cardProps = useAppStore((s) => s.worktreeCardProperties)
-  const compactCards =
-    operationalMeta?.presentation === 'operational-settled' ||
-    settings?.experimentalCompactWorktreeCards === true
+  const compactCards = operationalMeta
+    ? operationalMeta.presentation === 'operational-settled'
+    : settings?.experimentalCompactWorktreeCards === true
   const handleEditIssue = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
@@ -951,12 +951,14 @@ const WorktreeCard = React.memo(function WorktreeCard({
              naturally when agents appear/disappear. When agents directly
              follow the title, counterbalance the card stack gap so both rows
              read as one compact header group. */}
-        {showDetailedCardProperties && cardProps.includes('inline-agents') && (
-          <WorktreeCardAgents
-            worktreeId={worktree.id}
-            className={hasMetaRow || remoteBranchConflict ? 'mt-0' : '-mt-1'}
-          />
-        )}
+        {operationalMeta == null &&
+          showDetailedCardProperties &&
+          cardProps.includes('inline-agents') && (
+            <WorktreeCardAgents
+              worktreeId={worktree.id}
+              className={hasMetaRow || remoteBranchConflict ? 'mt-0' : '-mt-1'}
+            />
+          )}
 
         {operationalMeta?.presentation === 'operational-rich' && operationalMeta.agentLabel ? (
           <div className="truncate px-0.5 text-[10.5px] leading-none text-muted-foreground">

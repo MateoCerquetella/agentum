@@ -5191,7 +5191,7 @@ const WorktreeList = React.memo(function WorktreeList({
     importedWorktreesByRepo.size === 0
   // Why: Project Group headers can render before workspace rows load, but when
   // active filters hide everything the Clear Filters empty state must win.
-  if (rows.length === 0 || filtersHideAllRows) {
+  if (rows.length === 0 || (groupBy !== 'operational' && filtersHideAllRows)) {
     return (
       <div data-worktree-sidebar-container className="relative min-h-0 flex-1">
         <div className="worktree-sidebar-scrollbar flex h-full flex-col overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek pt-px">

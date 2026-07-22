@@ -252,6 +252,7 @@ function setLineageFixtureState(groupBy: 'none' | 'repo' = 'none'): void {
     sshTargetLabels: new Map(),
     tabsByWorktree: {},
     terminalLayoutsByTabId: {},
+    tmuxByPaneKey: {},
     toggleCollapsedGroup: vi.fn(),
     updateWorktreeMeta: vi.fn(),
     updateWorktreesMeta: vi.fn(),
@@ -323,6 +324,7 @@ function setProjectGroupWithoutWorktreeRowsState(filterRepoIds: string[] = []): 
     sshTargetLabels: new Map(),
     tabsByWorktree: {},
     terminalLayoutsByTabId: {},
+    tmuxByPaneKey: {},
     toggleCollapsedGroup: vi.fn(),
     updateWorktreeMeta: vi.fn(),
     updateWorktreesMeta: vi.fn(),
@@ -362,6 +364,22 @@ describe('WorktreeList lineage child card renderer', () => {
     expect(markup).toContain('No workspaces found')
     expect(markup).toContain('Clear Filters')
     expect(markup).not.toContain('Imported Services')
+  })
+
+  it('keeps zero-count operational sections when filters exclude every workspace', async () => {
+    setProjectGroupWithoutWorktreeRowsState(['another-repo'])
+    mockStore.state.groupBy = 'operational'
+
+    const markup = await renderWorktreeListMarkup()
+
+    const needsYouIndex = markup.indexOf('Needs You')
+    const activeIndex = markup.indexOf('Active')
+    const settledIndex = markup.indexOf('Settled')
+    expect(needsYouIndex).toBeGreaterThan(-1)
+    expect(activeIndex).toBeGreaterThan(needsYouIndex)
+    expect(settledIndex).toBeGreaterThan(activeIndex)
+    expect(markup.match(/aria-label="0 workspaces/g)).toHaveLength(3)
+    expect(markup).not.toContain('No workspaces found')
   })
 
   it('renders nested inline agent rows before the nested child-count toggle', async () => {

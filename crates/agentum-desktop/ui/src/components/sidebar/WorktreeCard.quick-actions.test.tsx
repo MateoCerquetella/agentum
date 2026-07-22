@@ -67,7 +67,7 @@ vi.mock('./CacheTimer', () => ({
 }))
 
 vi.mock('./WorktreeCardAgents', () => ({
-  default: () => null
+  default: () => <div>legacy inline agent summary</div>
 }))
 
 vi.mock('./SshDisconnectedDialog', () => ({
@@ -204,6 +204,30 @@ describe('WorktreeCard quick actions', () => {
 
     expect(markup).not.toContain('data-worktree-card-meta-row=""')
     expect(markup).toContain('tabindex="0"')
+  })
+
+  it('keeps rich operational metadata authoritative over legacy compact and inline-agent preferences', () => {
+    worktreeCardProperties = ['status', 'inline-agents']
+    settings = { experimentalCompactWorktreeCards: true }
+
+    const markup = renderToStaticMarkup(
+      <WorktreeCard
+        worktree={makeWorktree({ displayName: 'Harness UI', branch: 'feat/harness-ui' })}
+        repo={makeRepo()}
+        isActive={false}
+        operationalMeta={{
+          presentation: 'operational-rich',
+          projectName: 'agentum',
+          statusLabel: 'Working',
+          agentLabel: 'Codex'
+        }}
+      />
+    )
+
+    expect(markup).toContain('data-worktree-card-meta-row=""')
+    expect(markup).toContain('>feat/harness-ui</span>')
+    expect(markup.match(/>Codex</g)).toHaveLength(1)
+    expect(markup).not.toContain('legacy inline agent summary')
   })
 
   it('omits the branch metadata row when the workspace has a custom title', () => {
