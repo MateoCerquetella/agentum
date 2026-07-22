@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 025-operational-sidebar-triage
-- **phase:** tester  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Developer gate PASS; see `tasks.md` and `handoffs/03-developer-to-tester.md`.)
+- **phase:** tester  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Developer rework gate PASS; see `handoffs/05-developer-to-tester.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,12 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Analyst | **025 DRAFTED → phase PM** from the live Agentum MCP
-  `sdd-spec` playbook. One-slice ruling: search, project scoping, operational
-  sections, rich active cards, and settled disclosure jointly serve the single
-  act of triaging the next workspace. Existing status detectors, virtualized
-  rows, workspace interactions, and persisted grouping choices remain
-  authoritative; no backend or persistence-schema work is in scope.
 - 2026-07-22 | PM | **025 PM PASS → phase architect** (autonomous iteration 1;
   `handoffs/01-pm-to-architect.md`). All nine handoff checks pass. The single
   product action is operational workspace triage; live status truth, shared
@@ -110,3 +104,13 @@
   persisted-default normalization, and search shortcut routing. Focused Vitest
   suites pass 17/17, the production Vite build passes, and `git diff --check`
   is clean; real-browser layout/theme/interaction QA remains for Tester.
+- 2026-07-22 | Tester | **025 TESTER FAIL → send back to developer**
+  (`verification.md`; `handoffs/04-tester-to-developer.md`). Settled ordering
+  incorrectly prioritizes pinned state over recency, and displayed status age
+  can come from a different pane than the pane that won status precedence.
+  Focused suites pass 17/17; Playwright MCP is unavailable for screenshot QA.
+- 2026-07-22 | Developer | **025 REWORK PASS → phase tester**
+  (`handoffs/05-developer-to-tester.md`). Settled now sorts strictly by activity;
+  rich status age is selected only from an explicit pane matching the aggregate
+  winning status and is otherwise omitted. Expanded focused suites pass 20/20,
+  the corrected production build passes, and diff hygiene is clean.

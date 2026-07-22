@@ -210,6 +210,7 @@ import {
 } from './worktree-section-activity'
 import {
   buildOperationalSidebarRows,
+  selectOperationalStatusTimestamp,
   type OperationalWorkspaceFact
 } from './operational-sidebar-model'
 import { selectLiveAgentStatusEntriesForWorktree } from './worktree-agent-row-selectors'
@@ -4478,14 +4479,15 @@ const WorktreeList = React.memo(function WorktreeList({
     const facts = new Map<string, OperationalWorkspaceFact>()
     for (const worktree of worktrees) {
       const entries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
+      const status = resolveWorktreeStatusFromState(sectionActivityState, worktree.id)
       let latest = entries[0]
       for (const entry of entries) {
         if (!latest || entry.updatedAt > latest.updatedAt) latest = entry
       }
       facts.set(worktree.id, {
-        status: resolveWorktreeStatusFromState(sectionActivityState, worktree.id),
+        status,
         agentLabel: latest?.agentType ?? worktree.createdWithAgent,
-        stateTimestamp: latest?.stateStartedAt
+        stateTimestamp: selectOperationalStatusTimestamp(status, entries)
       })
     }
     return facts

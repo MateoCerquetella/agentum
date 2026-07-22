@@ -3,7 +3,8 @@ import type { Repo, Worktree } from '../../../../shared/types'
 import type { OperationalWorkspaceFact } from './operational-sidebar-model'
 import {
   buildOperationalSidebarRows,
-  formatOperationalShortAge
+  formatOperationalShortAge,
+  selectOperationalStatusTimestamp
 } from './operational-sidebar-model'
 
 function repo(id: string, displayName: string): Repo {
@@ -86,7 +87,7 @@ describe('buildOperationalSidebarRows', () => {
     }
   })
 
-  it('orders pinned first, then activity, and progressively discloses settled rows', () => {
+  it('orders settled strictly by activity and progressively discloses settled rows', () => {
     const trees = [
       worktree('old', { lastActivityAt: 10 }),
       worktree('new', { lastActivityAt: 30 }),
@@ -96,9 +97,9 @@ describe('buildOperationalSidebarRows', () => {
     const facts = Object.fromEntries(trees.map((tree) => [tree.id, { status: 'inactive' }]))
     const collapsed = build(trees, facts, { settledLimit: 3 })
     expect(collapsed.filter((row) => row.type === 'item').map((row) => row.worktree.id)).toEqual([
-      'pinned',
       'new',
-      'middle'
+      'middle',
+      'old'
     ])
     expect(collapsed[collapsed.length - 1]).toMatchObject({
       type: 'operational-settled-disclosure',
@@ -108,6 +109,16 @@ describe('buildOperationalSidebarRows', () => {
     const expanded = build(trees, facts, { settledLimit: 3, settledExpanded: true })
     expect(expanded.filter((row) => row.type === 'item')).toHaveLength(4)
     expect(expanded[expanded.length - 1]).toMatchObject({ expanded: true, remainingCount: 1 })
+  })
+
+  it('omits a rich state age when no matching winning signal timestamp is provided', () => {
+    const rows = build(
+      [worktree('watchdog', { lastActivityAt: 900_000 })],
+      { watchdog: { status: 'permission' } }
+    )
+    const item = rows.find((row) => row.type === 'item')
+    expect(item?.operationalMeta).toMatchObject({ statusLabel: 'Needs input' })
+    expect(item?.operationalMeta?.relativeAge).toBeUndefined()
   })
 
   it('omits unavailable optional metadata and treats a missing fact as settled', () => {
@@ -130,5 +141,25 @@ describe('formatOperationalShortAge', () => {
     expect(formatOperationalShortAge(700_000, 1_000_000)).toBe('5m')
     expect(formatOperationalShortAge(undefined, 1_000_000)).toBeUndefined()
     expect(formatOperationalShortAge(Number.NaN, 1_000_000)).toBeUndefined()
+  })
+})
+
+describe('selectOperationalStatusTimestamp', () => {
+  it('uses the same urgent pane signal that won aggregate precedence', () => {
+    const entries = [
+      { state: 'waiting' as const, stateStartedAt: 100, updatedAt: 200 },
+      { state: 'working' as const, stateStartedAt: 900, updatedAt: 1_000 }
+    ]
+
+    expect(selectOperationalStatusTimestamp('permission', entries)).toBe(100)
+    expect(selectOperationalStatusTimestamp('working', entries)).toBe(900)
+  })
+
+  it('omits timestamps when the winning aggregate status has no explicit matching pane', () => {
+    expect(
+      selectOperationalStatusTimestamp('permission', [
+        { state: 'working', stateStartedAt: 900, updatedAt: 1_000 }
+      ])
+    ).toBeUndefined()
   })
 })

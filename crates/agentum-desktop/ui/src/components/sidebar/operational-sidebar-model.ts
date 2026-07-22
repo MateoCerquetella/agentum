@@ -1,4 +1,5 @@
 import type { WorktreeStatus } from '@/lib/worktree-status'
+import type { AgentStatusEntry } from '../../shared/agent-status-types'
 import type { Repo, Worktree } from '../../../../shared/types'
 import type {
   OperationalSection,
@@ -54,6 +55,31 @@ function finiteTimestamp(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
+/**
+ * Select the state start belonging to the same explicit pane signal as the
+ * aggregate status. Watchdog/title/server fallbacks have no provable pane
+ * timestamp, so callers intentionally omit the age for those signals.
+ */
+export function selectOperationalStatusTimestamp(
+  status: WorktreeStatus,
+  entries: readonly Pick<AgentStatusEntry, 'state' | 'stateStartedAt' | 'updatedAt'>[]
+): number | undefined {
+  const matchesStatus = (state: AgentStatusEntry['state']): boolean => {
+    if (status === 'permission') return state === 'blocked' || state === 'waiting'
+    if (status === 'working') return state === 'working'
+    if (status === 'done') return state === 'done'
+    return false
+  }
+
+  let winner: (typeof entries)[number] | undefined
+  for (const entry of entries) {
+    if (matchesStatus(entry.state) && (!winner || entry.updatedAt > winner.updatedAt)) {
+      winner = entry
+    }
+  }
+  return finiteTimestamp(winner?.stateStartedAt)
+}
+
 export function formatOperationalShortAge(timestamp: number | undefined, now: number): string | undefined {
   const validTimestamp = finiteTimestamp(timestamp)
   if (validTimestamp === undefined || !Number.isFinite(now)) {
@@ -88,6 +114,14 @@ function compareOperationalEntries(a: OperationalEntry, b: OperationalEntry): nu
   if (a.worktree.isPinned !== b.worktree.isPinned) {
     return a.worktree.isPinned ? -1 : 1
   }
+  const byActivity = entryTimestamp(b) - entryTimestamp(a)
+  if (byActivity !== 0) return byActivity
+  return a.worktree.displayName.localeCompare(b.worktree.displayName, undefined, {
+    sensitivity: 'base'
+  })
+}
+
+function compareSettledEntries(a: OperationalEntry, b: OperationalEntry): number {
   const byActivity = entryTimestamp(b) - entryTimestamp(a)
   if (byActivity !== 0) return byActivity
   return a.worktree.displayName.localeCompare(b.worktree.displayName, undefined, {
@@ -142,7 +176,10 @@ export function buildOperationalSidebarRows({
     }
 
     const statusMeta = STATUS_META[fact.status]
-    const timestamp = finiteTimestamp(fact.stateTimestamp) ?? finiteTimestamp(worktree.lastActivityAt)
+    const timestamp =
+      fact.status === 'inactive'
+        ? finiteTimestamp(worktree.lastActivityAt)
+        : finiteTimestamp(fact.stateTimestamp)
     const relativeAge = formatOperationalShortAge(timestamp, now)
     const meta: OperationalWorkspaceMeta = {
       presentation:
@@ -159,7 +196,9 @@ export function buildOperationalSidebarRows({
     buckets[meta.section].push({ worktree, repo, meta })
   }
 
-  for (const bucket of Object.values(buckets)) bucket.sort(compareOperationalEntries)
+  buckets['needs-you'].sort(compareOperationalEntries)
+  buckets.active.sort(compareOperationalEntries)
+  buckets.settled.sort(compareSettledEntries)
 
   const rows: Row[] = []
   for (const { section, label, tone } of SECTION_META) {
