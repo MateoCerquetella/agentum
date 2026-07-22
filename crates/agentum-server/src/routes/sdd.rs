@@ -95,16 +95,19 @@ struct InjectBody {
     args: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct InjectResponse {
     /// What was typed into the pane: `bootstrap` (MCP fetch line) or `full`
     /// (the whole playbook, for tools without MCP wiring).
     mode: &'static str,
+    /// Whether the target agent's prompt was observed ready before delivery.
+    /// `false` is still a successful two-step tmux delivery.
+    ready: bool,
 }
 
 /// `POST /api/sessions/{id}/sdd/inject` — deliver a playbook to a running
-/// session. Validation mirrors `/submit`; delivery happens in the background
-/// through the same robust two-step `inject_prompt` path.
+/// session. Validation mirrors `/submit`; the response is returned only after
+/// the same robust two-step `inject_prompt` path confirms delivery.
 async fn inject(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -137,20 +140,44 @@ async fn inject(
     })?;
 
     let (mode, prompt) = prompt_for(&state, &session, &playbook, body.args.as_deref()).await;
+    let delivery = crate::harness::inject_prompt(&state, &session, &prompt).await;
+    finish_injection(&state, &session, &playbook.name, mode, delivery)
+}
+
+/// Translate the delivery primitive into the HTTP/event contract. Kept as a
+/// small seam so success and failure ordering can be tested without real tmux.
+fn finish_injection(
+    state: &AppState,
+    session: &Session,
+    playbook: &str,
+    mode: &'static str,
+    delivery: anyhow::Result<bool>,
+) -> Result<(StatusCode, Json<InjectResponse>), ApiError> {
+    let ready = match delivery {
+        Ok(ready) => ready,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = state.bus.send(
+                Event::new("sdd.inject_failed")
+                    .with_session(session.id, session.name.clone())
+                    .with_payload(json!({
+                        "playbook": playbook,
+                        "mode": mode,
+                        "error": message,
+                    })),
+            );
+            return Err(ApiError::Internal(format!(
+                "could not inject `{}` into session {}: {error}",
+                playbook, session.id
+            )));
+        }
+    };
     let _ = state.bus.send(
         Event::new("sdd.injected")
             .with_session(session.id, session.name.clone())
-            .with_payload(json!({ "playbook": playbook.name, "mode": mode })),
+            .with_payload(json!({ "playbook": playbook, "mode": mode, "ready": ready })),
     );
-    // Background delivery, same rationale as `/submit`: a busy agent can take
-    // tens of seconds to go idle and the HTTP response must not wait on that.
-    let bg = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::harness::inject_prompt(&bg, &session, &prompt).await {
-            tracing::warn!(target: "agentum::sdd", error = %e, "sdd inject delivery failed");
-        }
-    });
-    Ok((StatusCode::ACCEPTED, Json(InjectResponse { mode })))
+    Ok((StatusCode::OK, Json(InjectResponse { mode, ready })))
 }
 
 /// Pick the delivery mode for a session: the short MCP bootstrap when the
@@ -578,13 +605,60 @@ mod tests {
     #[test]
     fn bootstrap_only_for_tools_with_mcp_wiring() {
         // Arg-based + file-based launches resolve the bootstrap line…
-        for tool in ["claude", "codex", "cursor", "gemini", "opencode"] {
+        for tool in ["claude", "codex", "cursor", "agent", "gemini", "opencode"] {
             assert!(tool_is_mcp_wired(tool), "{tool} is wired");
         }
         // …bare shells and unwired CLIs must get the full playbook.
-        for tool in ["bash", "terminal", "aider", "hermes"] {
+        for tool in ["bash", "terminal", "aider", "hermes", "unknown-agent"] {
             assert!(!tool_is_mcp_wired(tool), "{tool} is not wired");
         }
+    }
+
+    #[tokio::test]
+    async fn injection_success_returns_delivery_and_emits_only_success() {
+        let state = fresh_state().await;
+        let session = seed_session(&state).await;
+        let mut rx = state.bus.subscribe();
+
+        let (status, Json(response)) =
+            finish_injection(&state, &session, "sdd-status", "bootstrap", Ok(false)).unwrap();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response.mode, "bootstrap");
+        assert!(!response.ready);
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.kind, "sdd.injected");
+        assert_eq!(event.session_id, Some(session.id));
+        assert_eq!(event.payload["playbook"], "sdd-status");
+        assert_eq!(event.payload["ready"], false);
+        assert!(
+            rx.try_recv().is_err(),
+            "success must emit exactly one event"
+        );
+    }
+
+    #[tokio::test]
+    async fn injection_failure_returns_error_and_emits_only_failure() {
+        let state = fresh_state().await;
+        let session = seed_session(&state).await;
+        let mut rx = state.bus.subscribe();
+
+        let error = finish_injection(
+            &state,
+            &session,
+            "sdd-spec",
+            "full",
+            Err(anyhow::anyhow!("submit Enter failed")),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("submit Enter failed"));
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.kind, "sdd.inject_failed");
+        assert_eq!(event.session_id, Some(session.id));
+        assert_eq!(event.payload["playbook"], "sdd-spec");
+        assert_eq!(event.payload["mode"], "full");
+        assert!(rx.try_recv().is_err(), "failure must not emit success");
     }
 
     use agentum_core::NewSession;
