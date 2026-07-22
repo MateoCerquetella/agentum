@@ -3,9 +3,9 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 024-sidebar-single-authoritative-issue-status
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (024 Reviewer SIGN-OFF on 2026-07-21; 0 blockers/should-fixes, AC 1-6 PASS, Developer + independent Tester Vitest 7/7 and production builds green. Live screenshot QA remains explicitly deferred to staging/runtime; no merge or release performed. `review.md` is the final evidence. 023 stays parked at **developer**; 021 stays parked at **pm**.)
-- **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
+- **current_spec:** 024-restore-project-colors-in-sidebar
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (024 Reviewer SIGN-OFF 2026-07-21; all six ACs satisfied, no blockers or architecture deviations, `review.md`.)
+- **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
@@ -87,25 +87,32 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-21 | PM | **024 PM PASS → phase architect.** All 9 handoff checks pass;
-  exact suppression/fallback behavior is observable and one-slice. Locked the
-  boundary against hiding `status/qa*` or arbitrary user labels and against any
-  tracker/cache/event mutation. Handoff: `handoffs/01-pm-to-architect.md`.
-- 2026-07-21 | Architect | **024 ARCHITECT PASS → phase developer.** Pinned a
-  two-file UI change: exact six-name render filter in `WorktreeCardMeta.tsx` and
-  focused bound/fallback static-render tests. All ACs map to seams and gates; no
-  open choice or architecture-invariant change. Handoff:
-  `handoffs/02-architect-to-developer.md`.
-- 2026-07-21 | Developer | **024 DEVELOPER PASS → phase tester.** Implemented
-  the two-file presentation-only filter and bound/unbound regressions. Focused
-  Vitest 7/7 PASS, production Vite build PASS (7,222 modules, 6m02s), diff check
-  PASS. Handoff: `handoffs/03-developer-to-tester.md`.
-- 2026-07-21 | Tester | **024 TESTER PASS-WITH-QA-DEFERRAL → phase reviewer.**
-  Independent Vitest 7/7, production build, and diff check PASS; AC 1-6 mapped,
-  0 defects. Live screenshot QA was not run because no Playwright/live fixture
-  was available and remains explicitly deferred. Handoff:
-  `handoffs/04-tester-to-reviewer.md`.
-- 2026-07-21 | Reviewer | **024 SIGN-OFF → phase done.** AC 1-6 PASS; 0
-  blockers/should-fixes; exact-label boundary, fallback, synchronous render,
-  scope, invariants, and security reviewed. Developer + independent Tester gates
-  green. Live screenshot QA stays explicit for staging/runtime. No merge/release.
+- 2026-07-21 | PM | **024 PM PASS → phase architect**
+  (`handoffs/01-pm-to-architect.md`): converted all six ACs to harness
+  checkboxes, made user value explicit, and locked icon-only color ownership,
+  validation/fallback, non-project exclusion, and theme-owned interaction
+  states. Canonical harness PM role used because legacy `ai/roles/pm.md` is
+  absent; no product-scope change. Tracker remains Todo.
+- 2026-07-21 | Architect | **024 ARCHITECT PASS → phase developer**
+  (`architecture.md`, `handoffs/02-architect-to-developer.md`): collision sweep
+  found the issue-407 Harness patch already implementation/review-gated. Adopted
+  its repo-only `RepoBadgeMark` plus existing Lucide tint because emoji/image
+  glyphs cannot be recolored; all six ACs map to named tests and exact commands.
+  Developer must audit the candidate diff and preserve unrelated dirty files.
+- 2026-07-21 | Developer | **024 DEVELOPER PASS → phase tester**
+  (`tasks.md`, `handoffs/03-developer-to-tester.md`): existing three-file Harness
+  patch matches architecture without correction. Fresh package-context Vitest
+  passed 108/108, Vite production build passed (7,236 modules), and
+  `git diff --check` passed. Corrected the architecture's malformed `npx
+  --prefix` invocation to the equivalent package-context command.
+- 2026-07-21 | Tester | **024 TESTER PASS → phase reviewer**
+  (`verification.md`, `handoffs/04-tester-to-reviewer.md`): independent focused
+  Vitest passed 108/108, Vite production build passed (7,236 modules), and diff
+  check passed. No invalid CSS path, non-project leakage, interaction/theme
+  regression, or architecture deviation found. Live state/theme and emoji/image
+  screenshots are explicit manual QA deferrals.
+- 2026-07-21 | Reviewer | **024 SIGN-OFF → phase done** (`review.md`): all six
+  ACs genuinely satisfied; implementation matches architecture and reuses the
+  existing resolver, mark, and glyph seams without API or persistence changes.
+  No blockers, dead code, unjustified complexity, or undocumented debt. Live
+  screenshots remain release/manual QA complements only.
