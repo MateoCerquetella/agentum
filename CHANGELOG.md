@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.92.1] — 2026-07-22
+
+### Fixed
+
+- **Windows release validation is cross-platform.** Home-directory expansion
+  falls back to `%USERPROFILE%`, SDD playbook frontmatter accepts CRLF files,
+  and browser-scope coverage uses native absolute paths on every runner.
+
 ## [0.92.0] — 2026-07-22
 
 ### Added
