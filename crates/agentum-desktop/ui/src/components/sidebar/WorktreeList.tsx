@@ -3037,7 +3037,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     data-workspace-status={headerWorkspaceStatus ?? undefined}
                     data-workspace-pin-drop-target={isPinnedHeader ? '' : undefined}
                     className={cn(
-                      'group flex h-7 w-full items-center gap-1.5 pr-1 text-left transition-all',
+                      'group flex h-7 w-full items-center gap-1.5 pr-1 text-left text-sidebar-foreground transition-all',
                       'cursor-pointer',
                       // Hub-open indicator: the project currently shown as the
                       // hub view reads as active, mirroring worktree cards.
@@ -3178,6 +3178,13 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                           <row.icon className="size-3" />
                         )}
                       </div>
+                    ) : null}
+
+                    {row.repo ? (
+                      <RepoBadgeMark
+                        color={repoHeaderColor}
+                        className="size-2 shrink-0 rounded-[2px]"
+                      />
                     ) : null}
 
                     <div className="min-w-0 flex-1">
