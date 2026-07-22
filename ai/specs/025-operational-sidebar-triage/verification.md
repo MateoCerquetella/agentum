@@ -53,3 +53,31 @@ real-browser evidence are claimed.
 - Isolated command: `bun test src/components/sidebar/operational-sidebar-model.test.ts` — 9
   passed, 0 failed, 25 assertions.
 - Diff hygiene: `git diff --check` passes.
+
+## Reviewer-fix narrow retest
+
+**PASS — return to Reviewer.** Both contained presentation findings are fixed without changing
+legacy grouping behavior.
+
+- **Zero-match filters:** `WorktreeList` now applies the legacy filtered-empty return only when
+  `groupBy !== 'operational'`. The operational model therefore remains mounted and renders
+  Needs You, Active, and Settled in that order with three zero-count headers. The focused
+  regression selects a non-matching project and asserts ordered headings, three `0 workspaces`
+  labels, and absence of the legacy empty state.
+- **Authoritative rich presentation:** `WorktreeCard` derives compact density from
+  `operationalMeta.presentation` whenever operational metadata exists, so
+  `operational-rich` retains its branch metadata even when the legacy compact preference is
+  enabled. The legacy `WorktreeCardAgents` block is gated on `operationalMeta == null`, while
+  the operational agent label remains rendered once. The focused regression asserts the
+  branch, one `Codex` label, and no mocked legacy inline-agent summary.
+- **Regression evidence:** Developer handoff 10 records eight focused files passing **47/47**.
+  Tester source inspection confirms the assertions exercise the two Reviewer findings and that
+  the changed conditionals preserve alternate-grouping behavior.
+- **Independent rerun limitation:** a direct rerun of the two files could not initialize after
+  this worktree's temporary dependency/shared-module links had been removed (`react` and then
+  `shared/repo-kind` resolution; direct Bun also lacks Vitest's `vi.hoisted` transform). This is
+  an environment/setup failure, not an assertion failure, and no additional passing run is
+  claimed.
+- **Browser QA remains deferred exactly as before:** Playwright MCP is absent, so no 220/500 px
+  light/dark screenshots, keyboard traversal, focus/contrast audit, or runtime drag/context
+  evidence is claimed.

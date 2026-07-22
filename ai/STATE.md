@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 025-operational-sidebar-triage
-- **phase:** tester  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer-fix Developer gate PASS; see `handoffs/10-developer-to-tester.md`.)
+- **phase:** reviewer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer-fix Tester gate PASS; see `handoffs/11-tester-to-reviewer.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,11 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Tester | **025 RETEST FAIL → send back to developer (iteration 2)**
-  (`verification.md`; `handoffs/06-tester-to-developer.md`). Settled ordering is
-  fixed, but timestamp selection does not yet apply authoritative explicit-status
-  freshness and can match a stale pane to a fallback winner. One final automatic
-  fix is allowed; another Tester failure forces human review.
 - 2026-07-22 | Developer | **025 REWORK ITERATION 2 PASS → phase tester**
   (`handoffs/07-developer-to-tester.md`). Timestamp selection now applies the
   authoritative explicit-status freshness predicate/TTL using the same clock as
@@ -112,3 +107,8 @@
   all three zero-count headers; operational presentation overrides legacy card
   density and suppresses duplicate inline-agent rendering. Eight focused files
   pass 47/47 and diff hygiene is clean.
+- 2026-07-22 | Tester | **025 REVIEW-FIX RETEST PASS → phase reviewer**
+  (`verification.md`; `handoffs/11-tester-to-reviewer.md`). Narrow source/test
+  evidence confirms zero-match operational headers and authoritative rich-card
+  rendering while preserving alternate modes. Recorded focused evidence is
+  47/47; browser-only QA remains explicitly deferred.
