@@ -6,6 +6,7 @@ import {
   formatOperationalShortAge,
   selectOperationalStatusTimestamp
 } from './operational-sidebar-model'
+import { AGENT_STATUS_STALE_AFTER_MS } from '../../shared/agent-status-types'
 
 function repo(id: string, displayName: string): Repo {
   return { id, displayName, path: `/tmp/${id}`, badgeColor: '#000', addedAt: 0 }
@@ -146,20 +147,41 @@ describe('formatOperationalShortAge', () => {
 
 describe('selectOperationalStatusTimestamp', () => {
   it('uses the same urgent pane signal that won aggregate precedence', () => {
+    const now = 2_000
     const entries = [
       { state: 'waiting' as const, stateStartedAt: 100, updatedAt: 200 },
       { state: 'working' as const, stateStartedAt: 900, updatedAt: 1_000 }
     ]
 
-    expect(selectOperationalStatusTimestamp('permission', entries)).toBe(100)
-    expect(selectOperationalStatusTimestamp('working', entries)).toBe(900)
+    expect(selectOperationalStatusTimestamp('permission', entries, now)).toBe(100)
+    expect(selectOperationalStatusTimestamp('working', entries, now)).toBe(900)
   })
 
   it('omits timestamps when the winning aggregate status has no explicit matching pane', () => {
     expect(
       selectOperationalStatusTimestamp('permission', [
         { state: 'working', stateStartedAt: 900, updatedAt: 1_000 }
-      ])
+      ], 2_000)
+    ).toBeUndefined()
+  })
+
+  it('omits fallback permission and done ages when same-state pane entries are stale', () => {
+    const now = 4_000_000
+    const staleUpdatedAt = now - AGENT_STATUS_STALE_AFTER_MS - 1
+
+    expect(
+      selectOperationalStatusTimestamp(
+        'permission',
+        [{ state: 'blocked', stateStartedAt: 100, updatedAt: staleUpdatedAt }],
+        now
+      )
+    ).toBeUndefined()
+    expect(
+      selectOperationalStatusTimestamp(
+        'done',
+        [{ state: 'done', stateStartedAt: 200, updatedAt: staleUpdatedAt }],
+        now
+      )
     ).toBeUndefined()
   })
 })

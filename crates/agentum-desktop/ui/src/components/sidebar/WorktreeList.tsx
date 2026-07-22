@@ -4476,10 +4476,11 @@ const WorktreeList = React.memo(function WorktreeList({
 
   const operationalFactsByWorktreeId = useMemo(() => {
     const current = useAppStore.getState()
+    const now = Date.now()
     const facts = new Map<string, OperationalWorkspaceFact>()
     for (const worktree of worktrees) {
       const entries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
-      const status = resolveWorktreeStatusFromState(sectionActivityState, worktree.id)
+      const status = resolveWorktreeStatusFromState(sectionActivityState, worktree.id, now)
       let latest = entries[0]
       for (const entry of entries) {
         if (!latest || entry.updatedAt > latest.updatedAt) latest = entry
@@ -4487,7 +4488,7 @@ const WorktreeList = React.memo(function WorktreeList({
       facts.set(worktree.id, {
         status,
         agentLabel: latest?.agentType ?? worktree.createdWithAgent,
-        stateTimestamp: selectOperationalStatusTimestamp(status, entries)
+        stateTimestamp: selectOperationalStatusTimestamp(status, entries, now)
       })
     }
     return facts

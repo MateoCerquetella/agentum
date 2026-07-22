@@ -128,9 +128,10 @@ export function buildWorktreeSectionActivitySummaries({
 
 export function resolveWorktreeStatusFromState(
   state: WorktreeSectionActivityState,
-  worktreeId: string
+  worktreeId: string,
+  now?: number
 ): ReturnType<typeof resolveWorktreeStatus> {
-  const agentSummary = selectWorktreeAgentActivitySummary(state, worktreeId)
+  const agentSummary = selectWorktreeAgentActivitySummary(state, worktreeId, now)
   const serverActivity = selectServerWorktreeActivity(state, worktreeId)
 
   // Why: collapsed headers must mirror the card dot semantics exactly; otherwise

@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 025-operational-sidebar-triage
-- **phase:** tester  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Developer rework gate PASS; see `handoffs/05-developer-to-tester.md`.)
+- **phase:** tester  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Developer rework iteration 2 PASS; see `handoffs/07-developer-to-tester.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,17 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | PM | **025 PM PASS → phase architect** (autonomous iteration 1;
-  `handoffs/01-pm-to-architect.md`). All nine handoff checks pass. The single
-  product action is operational workspace triage; live status truth, shared
-  interactions, virtualization, and explicit grouping preferences are locked
-  invariants. No tracker URL is present, so status reporting is skipped.
-- 2026-07-22 | Architect | **025 ARCHITECT PASS → phase developer**
-  (`architecture.md`, `tasks.md`, `handoffs/02-architect-to-developer.md`). A
-  real operational grouping, shared `resolveWorktreeStatus` truth, standard
-  virtual rows, one `WorktreeCard` interaction owner, transient text query, and
-  existing persisted project filters define the implementation. All nine ACs
-  map to named tests; no tracker URL is present.
 - 2026-07-22 | Developer | **025 DEVELOPER PASS → phase tester**
   (`handoffs/03-developer-to-tester.md`). Implemented the operational grouping,
   triage model, controls, rich/compact card bodies, disclosure, virtualization,
@@ -114,3 +103,13 @@
   rich status age is selected only from an explicit pane matching the aggregate
   winning status and is otherwise omitted. Expanded focused suites pass 20/20,
   the corrected production build passes, and diff hygiene is clean.
+- 2026-07-22 | Tester | **025 RETEST FAIL → send back to developer (iteration 2)**
+  (`verification.md`; `handoffs/06-tester-to-developer.md`). Settled ordering is
+  fixed, but timestamp selection does not yet apply authoritative explicit-status
+  freshness and can match a stale pane to a fallback winner. One final automatic
+  fix is allowed; another Tester failure forces human review.
+- 2026-07-22 | Developer | **025 REWORK ITERATION 2 PASS → phase tester**
+  (`handoffs/07-developer-to-tester.md`). Timestamp selection now applies the
+  authoritative explicit-status freshness predicate/TTL using the same clock as
+  aggregate status resolution; fallback-only winners omit age. Focused suites
+  pass 21/21 and diff hygiene is clean.

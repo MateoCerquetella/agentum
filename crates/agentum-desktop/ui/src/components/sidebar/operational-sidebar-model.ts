@@ -1,5 +1,9 @@
 import type { WorktreeStatus } from '@/lib/worktree-status'
-import type { AgentStatusEntry } from '../../shared/agent-status-types'
+import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
+import {
+  AGENT_STATUS_STALE_AFTER_MS,
+  type AgentStatusEntry
+} from '../../shared/agent-status-types'
 import type { Repo, Worktree } from '../../../../shared/types'
 import type {
   OperationalSection,
@@ -62,7 +66,8 @@ function finiteTimestamp(value: number | undefined): number | undefined {
  */
 export function selectOperationalStatusTimestamp(
   status: WorktreeStatus,
-  entries: readonly Pick<AgentStatusEntry, 'state' | 'stateStartedAt' | 'updatedAt'>[]
+  entries: readonly Pick<AgentStatusEntry, 'state' | 'stateStartedAt' | 'updatedAt'>[],
+  now: number = Date.now()
 ): number | undefined {
   const matchesStatus = (state: AgentStatusEntry['state']): boolean => {
     if (status === 'permission') return state === 'blocked' || state === 'waiting'
@@ -73,7 +78,11 @@ export function selectOperationalStatusTimestamp(
 
   let winner: (typeof entries)[number] | undefined
   for (const entry of entries) {
-    if (matchesStatus(entry.state) && (!winner || entry.updatedAt > winner.updatedAt)) {
+    if (
+      isExplicitAgentStatusFresh(entry, now, AGENT_STATUS_STALE_AFTER_MS) &&
+      matchesStatus(entry.state) &&
+      (!winner || entry.updatedAt > winner.updatedAt)
+    ) {
       winner = entry
     }
   }
