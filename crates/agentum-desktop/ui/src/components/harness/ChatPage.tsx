@@ -54,6 +54,10 @@ import {
   pickChatAgent,
   resolveChatModel
 } from '@/runtime/chat-client'
+import {
+  readChatModelPreference,
+  writeChatModelPreference
+} from '@/runtime/chat-preferences'
 import { contextWarningText } from '@/lib/chat-context-status'
 import { clampStage, type IntakeMode, normalizeIntake } from '@/lib/socratic-intake'
 import { type Conversation, type FiledResult, type StoredTurn } from '@/runtime/chat-history'
@@ -69,17 +73,8 @@ import {
 
 // Picker defaults persist across restarts so the user doesn't re-pick every time
 // (same client-persistence pattern as the planner tool / profiles).
-const MODEL_KEY = 'agentum.chat.model'
 const THINKING_KEY = 'agentum.chat.thinking'
 const WORKSPACE_KEY = 'agentum.chat.workspace'
-
-function readStoredModel(): string {
-  try {
-    return localStorage.getItem(MODEL_KEY) || DEFAULT_CHAT_MODEL
-  } catch {
-    return DEFAULT_CHAT_MODEL
-  }
-}
 function readStoredThinking(): boolean {
   try {
     return localStorage.getItem(THINKING_KEY) === '1'
@@ -142,7 +137,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
 
   // Model + extended-thinking picker (persisted defaults; also remembered per
   // conversation so reopening one restores what it last ran with).
-  const [model, setModel] = useState<string>(readStoredModel)
+  const [model, setModel] = useState<string>(readChatModelPreference)
   const [thinking, setThinking] = useState<boolean>(readStoredThinking)
 
   // Spec 394: the global Chat agent pick (Settings → Tasks). Claude keeps the
@@ -152,11 +147,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
   const { detectedIds: detectedAgentIds } = useDetectedAgents()
   const agent = pickChatAgent(chatAgentSetting, detectedAgentIds)
   useEffect(() => {
-    try {
-      localStorage.setItem(MODEL_KEY, model)
-    } catch {
-      /* storage may be unavailable — picker still works this session */
-    }
+    writeChatModelPreference(model)
   }, [model])
   useEffect(() => {
     try {
@@ -282,7 +273,7 @@ export default function ChatPage({ pinnedRepo }: { pinnedRepo?: Repo | null } = 
     setPendingMode(null)
     setError(null)
     // Default the picker back to the stored preference for a fresh chat.
-    setModel(readStoredModel())
+    setModel(readChatModelPreference())
     setThinking(readStoredThinking())
     textareaRef.current?.focus()
   }, [])

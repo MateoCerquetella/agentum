@@ -8,6 +8,12 @@
 set -euo pipefail
 FEAT="${HARNESS_FEATURE_ID:-}"
 
+if [ "$FEAT" = "binding-identity-fidelity" ] || [ "$FEAT" = "wizard-closed-tracker-scope" ]; then
+  echo "[qa] $FEAT: PENDING — requires a current-build desktop and named safe local/SSH fixtures" >&2
+  echo "[qa] live Agentum/xcode-theme, same-Project race, SSH, and linked/unlinked evidence was not run" >&2
+  exit 2
+fi
+
 if [ "$FEAT" != "wiki-view" ]; then
   echo "[qa] feature=$FEAT has no browser surface — pass"
   exit 0

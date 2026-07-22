@@ -59,13 +59,15 @@ import {
   createGithubIssue,
   draftGithubIssueBody,
   fetchGithubRepoLabels,
-  scaffoldSpecFromIssue
+  scaffoldSpecFromIssue,
+  type DraftLlmChoice
 } from '@/runtime/github-issue-client'
 import {
   deriveIssueSideEffectGate,
   describeIssueSideEffectSkip
 } from '@/lib/issue-side-effect-gate'
 import { firstStartGatedRunBlocker } from '@/lib/start-gated-run-precondition'
+import { linkedWorkItemAfterRepoChange } from '@/components/new-workspace/create-workspace-wizard-model'
 import {
   getHarnessSettings,
   startGatedWork,
@@ -227,7 +229,7 @@ type ComposerCardProps = {
   /** Spec 007: "Generate description" — drafts an SDD-shaped body from the
    *  typed title + repo context into the textarea (review before filing). */
   createIssueGenerating: boolean
-  onGenerateIssueBody: () => void
+  onGenerateIssueBody: (choice?: DraftLlmChoice) => void
   /** Spec 006 F1: label picker selection for the create-issue form. */
   createIssueLabels: string[]
   /** Pickable label names — `null` while the fetch is in flight; the static
@@ -1652,7 +1654,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // posted from here. Failures render inline (`createIssueError`) and leave
   // the form usable; a missing chat credential surfaces the server's
   // "set ANTHROPIC_API_KEY / sign in to Claude" message verbatim.
-  const handleGenerateIssueBody = useCallback(async (): Promise<void> => {
+  const handleGenerateIssueBody = useCallback(async (choice?: DraftLlmChoice): Promise<void> => {
     const title = createIssueTitle.trim()
     const repoPath = selectedRepo?.path
     if (createIssueGenerating || createIssueSubmitting) {
@@ -1674,7 +1676,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         title,
         slug: selectedRepoSlug
           ? `${selectedRepoSlug.owner}/${selectedRepoSlug.repo}`
-          : undefined
+          : undefined,
+        agent: choice?.agent,
+        model: choice?.model
       })
       setCreateIssueBody(body)
     } catch (error) {
@@ -1990,7 +1994,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setLinkedPR(null)
       setLinkedGitLabIssue(null)
       setLinkedGitLabMR(null)
-      setLinkedWorkItem(null)
+      setLinkedWorkItem(
+        linkedWorkItemAfterRepoChange({
+          currentRepoId: repoId,
+          nextRepoId: value,
+          linkedWorkItem
+        })
+      )
       // Spec 007 (bug 2): the repo switch just wiped the linked issue, so the
       // issue side-effect toggles lose their subject — disarm them instead of
       // leaving armed state behind a hidden checkbox (silent no-op at submit).
@@ -3047,7 +3057,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     createIssueError,
     onCreateIssueSubmit: handleCreateIssueSubmit,
     createIssueGenerating,
-    onGenerateIssueBody: () => void handleGenerateIssueBody(),
+    onGenerateIssueBody: (choice) => void handleGenerateIssueBody(choice),
     createIssueLabels,
     createIssueLabelOptions,
     onToggleCreateIssueLabel: handleToggleCreateIssueLabel,

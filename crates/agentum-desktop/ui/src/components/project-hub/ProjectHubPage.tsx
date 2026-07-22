@@ -14,6 +14,7 @@ import { useActiveRepo, useWorktreesForRepo } from '@/store/selectors'
 import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 import { cn } from '@/lib/utils'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
+import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { ProjectSessionsList } from './ProjectSessionsList'
 import { ProjectTasksPage } from './ProjectTasksPage'
 
@@ -87,6 +88,7 @@ export default function ProjectHubPage(): React.JSX.Element {
             className="size-4 shrink-0 text-muted-foreground"
             iconClassName="size-3.5"
           />
+          <RepoBadgeMark color={repo.badgeColor} className="size-1.5 rounded-full" />
           <h1 className="truncate text-[14px] font-semibold tracking-tight">{repo.displayName}</h1>
         </div>
         <nav className="ml-3 flex items-center gap-0.5" aria-label="Project sections">

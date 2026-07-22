@@ -61,14 +61,17 @@ export function ProjectBindingEditor({
   workdir,
   slug,
   repoId,
-  onBound
+  onBound,
+  onUnbound
 }: {
   workdir: string
   slug?: string
   /** Spec 020 F3: the registered repo's id — the server resolves the slug on
    *  that repo's own host, so SSH repos bind too. Absent = local (pre-020). */
   repoId?: string
-  onBound?: (binding: ProjectBindingDto) => void
+  onBound?: (binding: ProjectBindingDto, repositorySlug: string) => void
+  /** Fired only after the binding DELETE succeeds. */
+  onUnbound?: () => void
 }): React.JSX.Element {
   const mounted = useMountedRef()
   const [loaded, setLoaded] = useState(false)
@@ -250,7 +253,7 @@ export function ProjectBindingEditor({
       setDiscovery(null)
       setPicked(null)
       setSaved(true)
-      onBound?.(res.binding)
+      onBound?.(res.binding, res.slug)
     } catch (err) {
       if (!mounted.current) return
       setError(toBindError(err))
@@ -303,13 +306,14 @@ export function ProjectBindingEditor({
       setPicked(null)
       setSaved(false)
       dispatchSelection({ type: 'reset', selection: EMPTY_SELECTION })
+      onUnbound?.()
     } catch (err) {
       if (!mounted.current) return
       setError(toBindError(err))
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }, [workdir, slug, repoId, mounted])
+  }, [workdir, slug, repoId, onUnbound, mounted])
 
   if (!loaded) {
     return (

@@ -13,6 +13,129 @@ pub mod board_schema;
 pub mod profiles;
 pub mod transcript;
 
+/// Canonical, durable tracker ownership for one registered Agentum project.
+/// Credentials deliberately remain in their provider-specific global stores;
+/// this value contains only target identity, automation mapping and view state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerConfig {
+    pub schema_version: u32,
+    pub repo_id: String,
+    pub revision: i64,
+    pub provider: Option<ProjectTrackerProvider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<ProjectTrackerGithubTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear: Option<ProjectTrackerLinearTarget>,
+    #[serde(default)]
+    pub task_preferences: ProjectTrackerPreferences,
+    pub provenance: ProjectTrackerProvenance,
+}
+
+pub const PROJECT_TRACKER_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectTrackerProvider {
+    Github,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectTrackerProvenance {
+    Configured,
+    Migrated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerGithubTarget {
+    pub repository_slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_binding: Option<ProjectTrackerBoardBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerLinearTarget {
+    pub workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ProjectTrackerLinearScope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerLinearScope {
+    pub kind: ProjectTrackerLinearScopeKind,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectTrackerLinearScopeKind {
+    Project,
+    View,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<ProjectTrackerProviderPreferences>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear: Option<ProjectTrackerProviderPreferences>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerProviderPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hidden_field_ids_by_view: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// Serialized twin of the existing GitHub Projects binding. The server
+/// converts at the compatibility boundary, retaining one canonical row while
+/// preserving the established JSON/wire shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerBoardBinding {
+    pub project_id: String,
+    pub status_field_id: String,
+    pub status_mapping: ProjectTrackerStatusMapping,
+    pub done_closes_issue: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_owner_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_number: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_names: Option<ProjectTrackerStatusMapping>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerStatusMapping {
+    pub todo: String,
+    pub in_progress: String,
+    #[serde(default)]
+    pub in_review: String,
+    pub ready_to_test: String,
+    pub done: String,
+    pub blocked: String,
+}
+
 /// Crate-wide lock serializing every test that mutates process-global
 /// environment (`HOME`/`USERPROFILE`/`XDG_CONFIG_HOME`). cargo runs tests in
 /// parallel, so the `transcript` and `profiles` env tests would otherwise race
@@ -28,17 +151,35 @@ pub use board_schema::{
 /// Cross-platform user home directory, std-only (no `dirs`/`directories`
 /// dependency — `agentum-core` stays filesystem-light on purpose).
 ///
-/// Resolves `$HOME` on Unix and falls back to `%USERPROFILE%` on Windows,
-/// where `HOME` is conventionally unset. Returns `None` when neither is
-/// present (a misconfigured environment, not a normal one).
+/// Resolves `$HOME` on Unix and falls back to `%USERPROFILE%`, then the native
+/// `%HOMEDRIVE%%HOMEPATH%` pair on Windows, where `HOME` is conventionally
+/// unset. Returns `None` when none of those sources are present.
 ///
 /// Note: this does *not* read `$XDG_CONFIG_HOME` or any app-specific
 /// override (`$AGENTUM_HOME`) — those are layered on by callers
 /// (`profiles::default_path`, the store's path resolver) *on top of* this
 /// base. This helper only answers "where is the user's home directory".
 pub fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    home_dir_from_parts(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOMEDRIVE"),
+        std::env::var_os("HOMEPATH"),
+    )
+}
+
+fn home_dir_from_parts(
+    home: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
+    home_drive: Option<std::ffi::OsString>,
+    home_path: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    home.or(user_profile)
+        .or_else(|| {
+            let mut combined = home_drive?;
+            combined.push(home_path?);
+            Some(combined)
+        })
         .map(std::path::PathBuf::from)
 }
 
@@ -888,6 +1029,20 @@ pub fn validate_name(name: &str) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_dir_falls_back_to_windows_drive_and_path() {
+        let resolved = home_dir_from_parts(
+            None,
+            None,
+            Some(std::ffi::OsString::from("C:")),
+            Some(std::ffi::OsString::from(r"\Users\runneradmin")),
+        );
+        assert_eq!(
+            resolved,
+            Some(std::path::PathBuf::from(r"C:\Users\runneradmin"))
+        );
+    }
 
     #[test]
     fn status_roundtrip() {

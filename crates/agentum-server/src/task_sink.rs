@@ -1425,6 +1425,7 @@ mod tests {
     /// var keeps full authority over `Auto`. Env-mutating, so serialised via
     /// the crate-wide lock (the same discipline as routes/board_goals tests).
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn explicit_pin_outranks_env_sink_auto_still_honors_it() {
         let _guard = crate::TEST_ENV_LOCK
             .lock()
@@ -2415,6 +2416,7 @@ mod tests {
     /// the crate-wide lock.
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn pinned_provider_dispatches_to_matching_tracker_arm() {
         let _guard = crate::TEST_ENV_LOCK
             .lock()

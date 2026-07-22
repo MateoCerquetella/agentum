@@ -3,9 +3,9 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 025-operational-sidebar-triage
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer SIGN-OFF; ready to ship. Release remains human-gated.)
-- **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
+- **current_spec:** 026-new-workspace-tracker-fidelity
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (026 REVIEWER SIGN-OFF: all eight acceptance criteria are supported, required gates are green, and no blocker remains; live desktop/SSH QA and release stay human-gated.)
+- **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
@@ -87,29 +87,31 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Tester | **025 TESTER PASS-WITH-QA-DEFERRALS → phase reviewer**
-  (`025-issue-first-new-work/verification.md`; `handoffs/04-tester-to-reviewer.md`). Independently passed
-  focused UI **106/106**, Vite production build, focused Harness **10/10**,
-  Rust formatting, and diff hygiene. All eight ACs have evidence with zero
-  blocker/should-fix defects; installed-app GitHub/fault-injection/layout legs
-  remain the explicitly unrun staging gate.
-- 2026-07-22 | Reviewer | **025 SIGN-OFF → DONE** (`review.md`;
-  `025-issue-first-new-work/handoffs/05-reviewer-to-done.md`). All eight ACs and architecture invariants
-  pass with 0 blockers/should-fixes after closing the keyboard eligibility
-  send-back. Merge/release remain human-authorized, and installed-app scratch
-  GitHub, fault-injection, single-owner, and minimum-height QA stay mandatory.
-- 2026-07-22 | Developer | **025 REVIEW-FIX PASS → phase tester**
-  (`025-operational-sidebar-triage/handoffs/10-developer-to-tester.md`). Operational no-match filters now keep
-  all three zero-count headers; operational presentation overrides legacy card
-  density and suppresses duplicate inline-agent rendering. Eight focused files
-  pass 47/47 and diff hygiene is clean.
-- 2026-07-22 | Tester | **025 REVIEW-FIX RETEST PASS → phase reviewer**
-  (`025-operational-sidebar-triage/verification.md`; `handoffs/11-tester-to-reviewer.md`). Narrow source/test
-  evidence confirms zero-match operational headers and authoritative rich-card
-  rendering while preserving alternate modes. Recorded focused evidence is
-  47/47; browser-only QA remains explicitly deferred.
-- 2026-07-22 | Reviewer | **025 SIGN-OFF → DONE / READY TO SHIP**
-  (`025-operational-sidebar-triage/review.md`, `passed: true`; `handoffs/13-reviewer-signoff.md`). All code-level
-  ACs, architecture boundaries, tasks, risks, and handoffs are accepted. The
-  only residual is honestly documented Playwright staging QA; release promotion
-  remains human-gated.
+- 2026-07-21 | Tester | **026 TESTER PASS → phase reviewer** (autonomous loop
+  step 6, iteration 2; handoff `handoffs/04-tester-to-reviewer.md`). Independently
+  reran both harness verify IDs green, confirmed AC 4/8 production-seam tests and
+  honest pending QA exits, and mapped all eight criteria to executable evidence
+  or the explicit current-build desktop/SSH release gate.
+- 2026-07-21 | Reviewer | **026 SEND-BACK → phase developer** (autonomous loop
+  step 7, Reviewer iteration 1/2; handoff
+  `handoffs/05-reviewer-to-developer.md`). Inline unbind deletes the canonical
+  row but never invalidates the mounted wizard parent, so stale connected status
+  and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
+  unbind callback and regression.
+- 2026-07-21 | Developer | **026 REVIEWER RETRY PASS → phase tester**
+  (autonomous loop step 8, Reviewer iteration 2/2; updated handoff
+  `handoffs/03-developer-to-tester.md`). Successful inline unbind now projects
+  canonical absence into the mounted wizard synchronously, clears tracker rows,
+  and rejects late old-scope completions. Focused regression, 71-test harness,
+  Vite build, and diff check are green.
+- 2026-07-21 | Tester | **026 TESTER RETRY PASS → phase reviewer** (autonomous
+  loop step 9; updated `verification.md` and
+  `handoffs/04-tester-to-reviewer.md`). Independently confirmed the inline
+  unbind fix, both harness routes, 71 focused UI tests, the exact worktree test,
+  fresh Vite build, syntax checks, and diff check. Live desktop/SSH QA remains
+  an explicit pending release gate.
+- 2026-07-21 | Reviewer | **026 SIGN-OFF → phase done** (autonomous loop step
+  10, Reviewer iteration 2/2; `review.md`). Confirmed B1 fixed, all eight ACs
+  supported, both harness routes and final focused regression green, and no
+  architecture/isolation blocker remaining. Corrected stale review-only
+  comments; live desktop/SSH QA, merge, and release remain human-gated.

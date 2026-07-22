@@ -425,6 +425,9 @@ struct EnsuredSpec {
 /// (best-effort, logged — mirrors `board_goals.rs`'s plan-time Todo) so BOTH
 /// callers inherit the label-trail start (AC 4). The transition lives here (not
 /// `types.rs`) because it needs `&Store` and the fs-only plan helpers don't.
+// The arguments mirror the two route contracts and keep the fetched issue,
+// tracker provider, and convergence policy explicit at every call site.
+#[allow(clippy::too_many_arguments)]
 async fn ensure_spec_and_plan(
     store: &agentum_store::Store,
     // Spec 014 F1: the seam's TrackerEmit needs a bus; threaded from the

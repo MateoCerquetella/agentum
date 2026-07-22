@@ -181,6 +181,11 @@ import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LI
 import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
 import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
 import { embeddedGithubModeForResolution } from './task-page/embedded-github-mode'
+import {
+  linearModeOptionsForScope,
+  resolveInitialLinearMode,
+  shouldFetchLinearIssueLanding
+} from './task-page/linear-project-scope'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
@@ -399,6 +404,10 @@ export default function TaskPage({
   const githubSearchPersistReadyRef = useRef(false)
   const linearSearchPersistReadyRef = useRef(false)
   const [taskResumeApplied, setTaskResumeApplied] = useState(false)
+  const visibleLinearModeOptions = useMemo(
+    () => linearModeOptionsForScope(LINEAR_MODE_OPTIONS, embedded),
+    [embedded]
+  )
 
   // Why: pageData.taskSource changes when the user clicks a specific source
   // icon in the sidebar while the task page is already open. useState only
@@ -1143,7 +1152,7 @@ export default function TaskPage({
 
     const linearPreset = taskResumeState?.linearPreset ?? 'all'
     const linearQuery = taskResumeState?.linearQuery ?? ''
-    setLinearMode(taskResumeState?.linearMode ?? 'issues')
+    setLinearMode(resolveInitialLinearMode(embedded, taskResumeState?.linearMode))
     setActiveLinearPreset(linearPreset)
     setLinearSearchInput(linearQuery)
     setAppliedLinearSearch(linearQuery)
@@ -1180,6 +1189,12 @@ export default function TaskPage({
       setSelectedLinearProjectDetail(null)
       setSelectedLinearCustomView(null)
       setLinearProjectParentView(null)
+      // The standalone Tasks page may honestly fall back to its broad Issues
+      // landing. The embedded hub may not: without a repo-bound context that
+      // landing is account-wide and was the source of cross-project rows.
+      if (embedded) {
+        setLinearMode('projects')
+      }
       return
     }
     let cancelled = false
@@ -1256,6 +1271,7 @@ export default function TaskPage({
     listLinearCustomViews,
     activeRepoId,
     clearSelectedLinearIssue,
+    embedded,
     linearStatus.connected,
     setTaskResumeState,
     taskResumeApplied,
@@ -2826,7 +2842,7 @@ export default function TaskPage({
     if (taskSource !== 'linear') {
       return
     }
-    if (linearMode !== 'issues') {
+    if (!shouldFetchLinearIssueLanding(embedded, linearMode)) {
       return
     }
     if (!linearStatus.connected) {
@@ -2910,6 +2926,7 @@ export default function TaskPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     taskSource,
+    embedded,
     linearMode,
     linearStatus.connected,
     selectedLinearWorkspaceId,
@@ -3758,7 +3775,7 @@ export default function TaskPage({
                         role="group"
                         aria-label="Linear task mode"
                       >
-                        {LINEAR_MODE_OPTIONS.map((mode) => {
+                        {visibleLinearModeOptions.map((mode) => {
                           const active = linearMode === mode.id
                           return (
                             <button

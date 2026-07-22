@@ -113,6 +113,11 @@ fn playbooks_from(dir: Option<&Path>) -> Vec<Playbook> {
 /// without frontmatter is all body with an empty description — overrides
 /// shouldn't have to know the convention to work.
 fn split_frontmatter(raw: &str) -> (String, String) {
+    // Git checks text files out with CRLF by default on Windows. Normalize the
+    // embedded/override input so the same frontmatter grammar works on every
+    // release target.
+    let normalized = raw.replace("\r\n", "\n");
+    let raw = normalized.as_str();
     let Some(rest) = raw.strip_prefix("---\n") else {
         return (String::new(), raw.trim().to_string());
     };
@@ -194,6 +199,14 @@ mod tests {
         }
         let names: std::collections::HashSet<_> = all.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names.len(), all.len(), "names are unique");
+    }
+
+    #[test]
+    fn frontmatter_accepts_windows_line_endings() {
+        let (description, body) =
+            split_frontmatter("---\r\ndescription: Windows-safe\r\n---\r\n\r\nDo it.\r\n");
+        assert_eq!(description, "Windows-safe");
+        assert_eq!(body, "Do it.");
     }
 
     #[test]

@@ -5,6 +5,7 @@ import {
   capRepoList,
   deriveTrackerBindingTarget,
   deriveUnifiedTrackerStatus,
+  linkedWorkItemAfterRepoChange,
   deriveWizardComposerSeed,
   filterRepoList,
   REPO_LIST_COLLAPSED_CAP,
@@ -18,6 +19,31 @@ import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import type { TuiAgent } from '../../../../shared/types'
 
 const PROJECT: PickerProjectRef = { owner: 'acme', ownerType: 'organization', number: 7 }
+const LINKED_ITEM: LinkedWorkItemSummary = {
+  type: 'issue',
+  number: 42,
+  title: 'Selected issue',
+  url: 'https://github.com/acme/a/issues/42'
+}
+
+describe('linkedWorkItemAfterRepoChange', () => {
+  it('clears a selected issue on a real repo switch and preserves it for a no-op selection', () => {
+    expect(
+      linkedWorkItemAfterRepoChange({
+        currentRepoId: 'repo-a',
+        nextRepoId: 'repo-b',
+        linkedWorkItem: LINKED_ITEM
+      })
+    ).toBeNull()
+    expect(
+      linkedWorkItemAfterRepoChange({
+        currentRepoId: 'repo-a',
+        nextRepoId: 'repo-a',
+        linkedWorkItem: LINKED_ITEM
+      })
+    ).toBe(LINKED_ITEM)
+  })
+})
 
 describe('canLeaveRepoStep', () => {
   it('allows advancing when a repo is chosen and no connection is pending', () => {
@@ -162,13 +188,50 @@ describe('deriveUnifiedTrackerStatus', () => {
   it('reports "connected-empty" when a resolved Project loaded zero open issues', () => {
     expect(
       deriveUnifiedTrackerStatus({ resolved: PROJECT, status: 'idle', optionCount: 0 })
-    ).toEqual({ kind: 'connected-empty' })
+    ).toEqual({ kind: 'connected-empty', refreshing: false, stale: false })
   })
 
   it('reports "connected" with the issue count when a resolved Project loaded issues', () => {
     expect(
       deriveUnifiedTrackerStatus({ resolved: PROJECT, status: 'idle', optionCount: 3 })
-    ).toEqual({ kind: 'connected', issueCount: 3 })
+    ).toEqual({ kind: 'connected', issueCount: 3, refreshing: false, stale: false })
+  })
+
+  it('reports repository binding resolution and retained stale rows explicitly', () => {
+    expect(
+      deriveUnifiedTrackerStatus({
+        resolved: null,
+        binding: { kind: 'loading', targetKey: 'repo:/work' },
+        selectedGitRepo: true,
+        status: 'idle',
+        optionCount: 0,
+        hasTable: false
+      })
+    ).toEqual({ kind: 'resolving' })
+    expect(
+      deriveUnifiedTrackerStatus({
+        resolved: PROJECT,
+        binding: null,
+        selectedGitRepo: false,
+        status: 'failed',
+        optionCount: 2,
+        hasTable: true
+      })
+    ).toEqual({ kind: 'connected', issueCount: 2, refreshing: false, stale: true })
+    expect(
+      deriveUnifiedTrackerStatus({
+        resolved: null,
+        binding: {
+          kind: 'failed',
+          targetKey: 'repo:/work',
+          errorCode: 'tracker_target_mismatch'
+        },
+        selectedGitRepo: true,
+        status: 'idle',
+        optionCount: 0,
+        hasTable: false
+      })
+    ).toEqual({ kind: 'binding-mismatch' })
   })
 
   it('reports "none" regardless of status/count when no Project resolves', () => {

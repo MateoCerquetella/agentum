@@ -11,7 +11,7 @@ import type {
 } from '../../../../shared/types'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { initialStartGatedRunProp } from '@/lib/composer-modal-props'
-import type { PickerProjectRef } from './work-item-picker-model'
+import type { PickerBindingResolution, PickerProjectRef } from './work-item-picker-model'
 
 export type WizardStep = 1 | 2 | 3
 
@@ -170,10 +170,13 @@ export function capRepoList<T extends { id: string }>(input: {
  * - `none`: no Project resolved → the honest "no tracker (optional)" state.
  */
 export type UnifiedTrackerStatus =
-  | { kind: 'connected'; issueCount: number }
+  | { kind: 'connected'; issueCount: number; refreshing: boolean; stale: boolean }
   | { kind: 'connecting' }
-  | { kind: 'connected-empty' }
+  | { kind: 'resolving' }
+  | { kind: 'connected-empty'; refreshing: boolean; stale: boolean }
   | { kind: 'unavailable' }
+  | { kind: 'binding-mismatch' }
+  | { kind: 'binding-unavailable' }
   | { kind: 'none' }
 
 /**
@@ -184,29 +187,41 @@ export type UnifiedTrackerStatus =
  */
 export function deriveUnifiedTrackerStatus(input: {
   resolved: PickerProjectRef | null
-  status: 'idle' | 'loading' | 'failed'
+  binding?: PickerBindingResolution | null
+  selectedGitRepo?: boolean
+  status: 'idle' | 'loading' | 'refreshing' | 'failed'
   optionCount: number
+  hasTable?: boolean
 }): UnifiedTrackerStatus {
+  if (input.selectedGitRepo && input.binding?.kind === 'loading') return { kind: 'resolving' }
+  if (input.selectedGitRepo && input.binding?.kind === 'failed') {
+    if (input.binding.errorCode === 'tracker_target_mismatch') {
+      return { kind: 'binding-mismatch' }
+    }
+    return { kind: 'binding-unavailable' }
+  }
   if (!input.resolved) return { kind: 'none' }
   if (input.status === 'loading') return { kind: 'connecting' }
-  if (input.status === 'failed') return { kind: 'unavailable' }
-  if (input.optionCount <= 0) return { kind: 'connected-empty' }
-  return { kind: 'connected', issueCount: input.optionCount }
+  if (input.status === 'failed' && !input.hasTable) return { kind: 'unavailable' }
+  const refreshing = input.status === 'refreshing'
+  const stale = input.status === 'failed' && input.hasTable
+  if (input.optionCount <= 0) return { kind: 'connected-empty', refreshing, stale }
+  return { kind: 'connected', issueCount: input.optionCount, refreshing, stale }
 }
 
 /** Where the tracker section reads the per-repo binding from. `repoId` is the
  *  spec 020 wire identity (the server resolves the repo's own host from its
  *  registry — never a client-asserted host id); `local: false` = the repo
- *  lives on an SSH host (read-only resolution there; configuring the binding
- *  stays a local-repo affordance). */
+ *  lives on an SSH host, with reads and configuration routed through the same
+ *  repo identity. */
 export type TrackerBindingTarget = { workdir: string; repoId: string; local: boolean }
 
 /**
  * Derive the binding lookup target for the selected repo. Any GIT repo gets
  * one (#356) — local repos as before, SSH repos too, carrying the repo's
  * registry id as `repoId` (the server resolves the slug on the repo's own
- * host; bindings are slug-keyed, so a binding configured on the local clone
- * serves the SSH copy too). #359 shipped this with `connectionId` as a
+ * host; reads and configuration both use that registered identity). #359
+ * shipped this with `connectionId` as a
  * `hostId` param; migrated to spec 020's `repoId` contract at the develop
  * merge. Non-git selections resolve nothing and the picker falls back to the
  * global `activeProject`.
@@ -219,6 +234,15 @@ export function deriveTrackerBindingTarget(input: {
   const path = input.repo.path.trim()
   if (!path) return null
   return { workdir: path, repoId: input.repo.id, local: !input.repo.connectionId }
+}
+
+/** Repo-scoped issue selections never survive a real repository switch. */
+export function linkedWorkItemAfterRepoChange(input: {
+  currentRepoId: string
+  nextRepoId: string
+  linkedWorkItem: LinkedWorkItemSummary | null
+}): LinkedWorkItemSummary | null {
+  return input.currentRepoId === input.nextRepoId ? input.linkedWorkItem : null
 }
 
 // ---------- Single front door (spec 013 F4) ----------
