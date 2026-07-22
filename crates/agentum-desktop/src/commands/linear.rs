@@ -584,8 +584,27 @@ pub async fn linear_list_teams(workspace_id: Option<String>) -> Result<Vec<Value
 }
 
 #[tauri::command]
-pub fn linear_team_states() -> Vec<Value> {
-    Vec::new()
+pub async fn linear_team_states(
+    team_id: String,
+    workspace_id: Option<String>,
+) -> Result<Vec<Value>, String> {
+    let creds = read_creds();
+    let Some((token, ws_id, _)) = active_workspace(&creds, workspace_id.as_deref()) else {
+        return Ok(Vec::new());
+    };
+    let data = graphql(
+        &token,
+        "query($teamId: String!) { team(id: $teamId) { id states { nodes { id name type color position } } } }",
+        json!({ "teamId": team_id }),
+    ).await?;
+    if data.pointer("/team/id").and_then(Value::as_str) != Some(team_id.as_str()) {
+        return Err(format!("Linear team does not belong to workspace {ws_id}."));
+    }
+    Ok(data
+        .pointer("/team/states/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -670,8 +689,35 @@ pub async fn linear_list_projects(
 }
 
 #[tauri::command]
-pub fn linear_list_project_issues() -> Value {
-    empty_collection()
+pub async fn linear_list_project_issues(
+    project_id: String,
+    limit: Option<u32>,
+    workspace_id: String,
+) -> Result<Value, String> {
+    let creds = read_creds();
+    let Some((token, ws_id, ws_name)) = active_workspace(&creds, Some(&workspace_id)) else {
+        return Ok(empty_collection());
+    };
+    if ws_id != workspace_id {
+        return Err("Linear workspace identity mismatch.".into());
+    }
+    let data = graphql(
+        &token,
+        ISSUES_QUERY,
+        json!({ "filter": { "project": { "id": { "eq": project_id } } }, "first": limit.unwrap_or(100).clamp(1, 100) }),
+    ).await?;
+    let items: Vec<Value> = data
+        .pointer("/issues/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|node| map_issue_node(node, &ws_id, &ws_name))
+        .filter(|issue| {
+            issue.pointer("/project/id").and_then(Value::as_str) == Some(project_id.as_str())
+        })
+        .collect();
+    Ok(json!({ "items": items }))
 }
 
 #[tauri::command]
@@ -690,13 +736,45 @@ pub fn linear_list_custom_view_projects() -> Value {
 }
 
 #[tauri::command]
-pub fn linear_get_issue() -> Option<Value> {
-    None
+pub async fn linear_get_issue(
+    id: String,
+    workspace_id: Option<String>,
+) -> Result<Option<Value>, String> {
+    let creds = read_creds();
+    let Some((token, ws_id, ws_name)) = active_workspace(&creds, workspace_id.as_deref()) else {
+        return Ok(None);
+    };
+    let query = "query($id: String!) { issue(id: $id) { id identifier title description url priority estimate updatedAt state { name type color } team { id name key } assignee { id displayName avatarUrl } labels { nodes { id name } } project { id name url color } } }";
+    let data = graphql(&token, query, json!({ "id": id })).await?;
+    Ok(data
+        .get("issue")
+        .filter(|node| node.is_object())
+        .map(|node| map_issue_node(node, &ws_id, &ws_name)))
 }
 
 #[tauri::command]
-pub fn linear_get_project() -> Option<Value> {
-    None
+pub async fn linear_get_project(id: String, workspace_id: String) -> Result<Option<Value>, String> {
+    let creds = read_creds();
+    let Some((token, ws_id, ws_name)) = active_workspace(&creds, Some(&workspace_id)) else {
+        return Ok(None);
+    };
+    if ws_id != workspace_id {
+        return Err("Linear workspace identity mismatch.".into());
+    }
+    let data = graphql(&token, "query($id: String!) { project(id: $id) { id name url description color icon progress startDate targetDate createdAt updatedAt teams { nodes { id name key } } } }", json!({ "id": id })).await?;
+    let Some(project) = data.get("project").filter(|value| value.is_object()) else {
+        return Ok(None);
+    };
+    if project.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+        return Err("Linear project identity mismatch.".into());
+    }
+    let mut result = project.clone();
+    result["workspaceId"] = json!(ws_id);
+    result["workspaceName"] = json!(ws_name);
+    if let Some(nodes) = project.pointer("/teams/nodes") {
+        result["teams"] = nodes.clone();
+    }
+    Ok(Some(result))
 }
 
 #[tauri::command]
@@ -705,13 +783,75 @@ pub fn linear_get_custom_view() -> Option<Value> {
 }
 
 #[tauri::command]
-pub fn linear_create_issue() -> Option<Value> {
-    None
+pub async fn linear_create_issue(
+    team_id: String,
+    title: String,
+    description: Option<String>,
+    workspace_id: Option<String>,
+    parent_issue_id: Option<String>,
+    project_id: Option<String>,
+    state_id: Option<String>,
+    priority: Option<i32>,
+    assignee_id: Option<String>,
+    label_ids: Option<Vec<String>>,
+) -> Value {
+    let creds = read_creds();
+    let Some((token, _, _)) = active_workspace(&creds, workspace_id.as_deref()) else {
+        return json!({ "ok": false, "error": "Linear is not connected." });
+    };
+    let mut input = json!({ "teamId": team_id, "title": title });
+    for (key, value) in [
+        ("description", description.map(Value::String)),
+        ("parentId", parent_issue_id.map(Value::String)),
+        ("projectId", project_id.map(Value::String)),
+        ("stateId", state_id.map(Value::String)),
+        ("assigneeId", assignee_id.map(Value::String)),
+    ] {
+        if let Some(value) = value {
+            input[key] = value;
+        }
+    }
+    if let Some(value) = priority {
+        input["priority"] = json!(value);
+    }
+    if let Some(value) = label_ids {
+        input["labelIds"] = json!(value);
+    }
+    match graphql(&token, "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title url project { id } team { id } } } }", json!({ "input": input })).await {
+        Ok(data) => match data.pointer("/issueCreate/issue") { Some(issue) => json!({ "ok": true, "id": issue["id"], "identifier": issue["identifier"], "title": issue["title"], "url": issue["url"], "projectId": issue.pointer("/project/id"), "teamId": issue.pointer("/team/id") }), None => json!({ "ok": false, "error": "Linear did not create the issue." }) },
+        Err(error) => json!({ "ok": false, "error": error }),
+    }
 }
 
 #[tauri::command]
-pub fn linear_update_issue() -> Option<Value> {
-    None
+pub async fn linear_update_issue(
+    id: String,
+    updates: Value,
+    workspace_id: Option<String>,
+) -> Value {
+    let creds = read_creds();
+    let Some((token, _, _)) = active_workspace(&creds, workspace_id.as_deref()) else {
+        return json!({ "ok": false, "error": "Linear is not connected." });
+    };
+    match graphql(&token, "mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id project { id } team { id } } } }", json!({ "id": id, "input": updates })).await {
+        Ok(data) if data.pointer("/issueUpdate/success").and_then(Value::as_bool) == Some(true) => json!({ "ok": true }),
+        Ok(_) => json!({ "ok": false, "error": "Linear did not update the issue." }),
+        Err(error) => json!({ "ok": false, "error": error }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_issue_mapper_stamps_exact_workspace_and_project() {
+        let issue = json!({ "id":"i", "identifier":"ENG-1", "title":"T", "url":"https://linear.app/i", "priority":0, "updatedAt":"now", "state":{}, "team":{}, "labels":{"nodes":[]}, "project":{"id":"p", "name":"P"} });
+        let mapped = map_issue_node(&issue, "w", "W");
+        assert_eq!(mapped["workspaceId"], "w");
+        assert_eq!(mapped["project"]["id"], "p");
+        assert_eq!(mapped["project"]["workspaceId"], "w");
+    }
 }
 
 // Post a comment to a Linear issue via the GraphQL `commentCreate` mutation using

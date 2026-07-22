@@ -31,8 +31,12 @@ import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import {
   clearBoardPick,
   resolveBoardProject,
-  type BoardBindingState
+  type BoardBindingState,
+  type BoardProjectResolution
 } from '@/lib/board-project-resolution'
+import type { ProjectTaskScope } from '@/lib/project-task-scope'
+import { captureProjectTaskScopeGuard } from '@/lib/project-task-scope-guard'
+import { isLiveProjectTaskScopeAuthority, runGuardedProjectTaskAction } from '@/lib/project-task-scope-authority'
 import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
 import { getLinkedWorkItemSuggestedName, type LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { useRepoSlugIndex } from '@/lib/repo-slug-index'
@@ -68,6 +72,8 @@ type Props = {
   /** Spec 016: the hub that mounted this board. null = the standalone/global
    *  surface — resolution then reads only the legacy `activeProject` slot. */
   repoId?: string | null
+  /** Structural Project Hub mode: exact binding supplied by ProjectTasksPage. */
+  lockedScope?: Extract<ProjectTaskScope, { status: 'bound'; provider: 'github' }>
 }
 
 const AGENTUM_FEATURE_REQUEST_URL = 'https://github.com/mateocerquetella/agentum/issues/new'
@@ -91,7 +97,7 @@ function listProjectViewsForRuntime(
     : api.gh.listProjectViews(args)
 }
 
-export default function ProjectViewWrapper({ repoId = null }: Props = {}): React.JSX.Element {
+export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props = {}): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const projectViewCache = useAppStore((s) => s.projectViewCache)
   const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
@@ -103,6 +109,14 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
   const repos = useAppStore((s) => s.repos)
   const { lookupSlug, ready: slugIndexReady } = useRepoSlugIndex()
   const mountedRef = useMountedRef()
+  const lockedGuard = useMemo(
+    () => (lockedScope ? captureProjectTaskScopeGuard(lockedScope) : null),
+    [lockedScope]
+  )
+  const guardCurrent = useCallback(
+    () => !lockedGuard || (mountedRef.current && isLiveProjectTaskScopeAuthority(lockedGuard)),
+    [lockedGuard, mountedRef]
+  )
 
   // Spec 016: pick → binding → legacy, resolved per repo. Everything
   // downstream of `activeProject` (view-list cache, cache keys, live refresh)
@@ -110,9 +124,11 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
   const bindingEntry = useAppStore((s) => (repoId ? s.projectBindingByRepo[repoId] : undefined))
   const bindingState =
     bindingEntry ?? (repoId ? EMBEDDED_BINDING_PENDING : STANDALONE_BINDING_ABSENT)
-  const resolution = useMemo(
-    () => resolveBoardProject({ repoId, settings: settings?.githubProjects, bindingState }),
-    [repoId, settings?.githubProjects, bindingState]
+  const resolution = useMemo<BoardProjectResolution>(
+    () => lockedScope
+      ? { source: 'binding', project: { owner: lockedScope.owner, ownerType: lockedScope.ownerType, number: lockedScope.projectNumber } }
+      : resolveBoardProject({ repoId, settings: settings?.githubProjects, bindingState }),
+    [lockedScope, repoId, settings?.githubProjects, bindingState]
   )
   const activeProject = resolution.project
   const boundProjectTitle =
@@ -170,6 +186,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
 
   const doFetch = useCallback(
     async (selection: ResolvedProjectSelection, force = false, queryOverride?: string) => {
+      if (!guardCurrent()) return
       const runId = fetchRunIdRef.current + 1
       fetchRunIdRef.current = runId
       setLoading(true)
@@ -185,7 +202,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
           },
           { force }
         )
-        if (!mountedRef.current || fetchRunIdRef.current !== runId) {
+        if (!mountedRef.current || fetchRunIdRef.current !== runId || !guardCurrent()) {
           return
         }
         if (!res.ok) {
@@ -194,12 +211,12 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       } finally {
         // Why: a manual refresh can overlap with a tab/search fetch; an older
         // request finishing first must not clear the newer refresh indicator.
-        if (mountedRef.current && fetchRunIdRef.current === runId) {
+        if (mountedRef.current && fetchRunIdRef.current === runId && guardCurrent()) {
           setLoading(false)
         }
       }
     },
-    [fetchProjectViewTable, mountedRef]
+    [fetchProjectViewTable, guardCurrent, mountedRef]
   )
 
   const handleSelect = useCallback(
@@ -248,7 +265,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
   // the auto-fetch effect above, but force=true (the cache holds the stale
   // pre-move table). Event-driven only; no interval.
   const liveRefetch = useCallback(() => {
-    if (!activeProject) {
+    if (!activeProject || !guardCurrent()) {
       return
     }
     const key = `${activeProject.ownerType}:${activeProject.owner}:${activeProject.number}`
@@ -267,14 +284,14 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       /* force */ true,
       queryOverride
     )
-  }, [activeProject, lastViewByProject, appliedQueryByView, doFetch])
+  }, [activeProject, lastViewByProject, appliedQueryByView, doFetch, guardCurrent])
   useProjectViewLiveRefresh(liveRefetch)
 
   // Load the project's view list whenever the active project changes so the
   // tab strip can render. The list is small and rarely changes — fetched once
   // per project per session is fine.
   useEffect(() => {
-    if (!activeProject) {
+    if (!activeProject || !guardCurrent()) {
       return
     }
     const projectKey = `${activeProject.ownerType}:${activeProject.owner}:${activeProject.number}`
@@ -288,7 +305,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       projectNumber: activeProject.number
     })
       .then((res) => {
-        if (cancelled) {
+        if (cancelled || !guardCurrent()) {
           return
         }
         if (res.ok) {
@@ -298,7 +315,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
         }
       })
       .catch((err) => {
-        if (cancelled) {
+        if (cancelled || !guardCurrent()) {
           return
         }
         // Why: an IPC rejection here would surface as an unhandled rejection
@@ -308,11 +325,11 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
     return () => {
       cancelled = true
     }
-  }, [activeProject, viewListByProject, settings])
+  }, [activeProject, guardCurrent, viewListByProject, settings])
 
   const handleSwitchView = useCallback(
     async (viewId: string) => {
-      if (!activeProject) {
+      if (!activeProject || !guardCurrent()) {
         return
       }
       const projectKey = `${activeProject.ownerType}:${activeProject.owner}:${activeProject.number}`
@@ -341,6 +358,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
           }
         }
       })
+      if (!guardCurrent()) return
       await doFetch({
         owner: activeProject.owner,
         ownerType: activeProject.ownerType,
@@ -348,7 +366,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
         viewId
       })
     },
-    [activeProject, doFetch, lastViewByProject]
+    [activeProject, doFetch, guardCurrent, lastViewByProject]
   )
 
   const currentProjectViewKey = useMemo(() => {
@@ -394,7 +412,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
   // look empty — "No items match this view's filter" — for any project whose
   // repos aren't in Agentum (#11). `slugIndexReady`/`lookupSlug` stay in use to
   // route those per-row actions.
-  const visibleTable = table
+  const visibleTable = table && (!lockedScope || table.project.id === lockedScope.projectId) ? table : null
 
   // Parent-dropped toast, once per table.
   useEffect(() => {
@@ -523,6 +541,13 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
     []
   )
 
+  const isLockedRowActionable = useCallback((row: GitHubProjectRow): boolean => {
+    if (!lockedScope) return true
+    if (!guardCurrent() || !repoId || !row.content.repository || table?.project.id !== lockedScope.projectId) return false
+    const match = classifyStartWorkRepoMatches(lookupSlug(row.content.repository))
+    return match.kind === 'direct' ? match.repo.id === repoId : match.kind === 'multiple' ? match.repos.some((candidate) => candidate.id === repoId) : false
+  }, [guardCurrent, lockedScope, lookupSlug, repoId, table?.project.id])
+
   // Spec 015 F2: hop a multi-host work item into the new-workspace composer
   // seeded on a host that actually holds the repo. Mirrors TaskPage's
   // `openComposerForItem`: snapshot the issue body into `linkedContext` so the
@@ -536,6 +561,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       match: { repos: Repo[]; seedRepoId: string },
       origin: { owner: string; repo: string }
     ): Promise<void> => {
+      if (!guardCurrent()) return
       let linkedWorkItem: LinkedWorkItemSummary = {
         type: item.type,
         number: item.number,
@@ -560,14 +586,16 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
           console.warn('[project-view] could not load GitHub issue body for Start work:', err)
         }
       }
+      if (!guardCurrent()) return
       useAppStore.getState().openModal('new-workspace-composer', {
         linkedWorkItem,
         prefilledName: getLinkedWorkItemSuggestedName(item),
         initialRepoId: match.seedRepoId,
-        telemetrySource: 'sidebar'
+        telemetrySource: 'sidebar',
+        ...(lockedGuard ? { requiredProjectTaskScope: lockedGuard } : {})
       })
     },
-    []
+    [guardCurrent, lockedGuard]
   )
 
   // Spec 015 F2: the single classification point for both board start
@@ -582,6 +610,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       origin: { owner: string; repo: string }
       url: string | null
     }): void => {
+      if (!guardCurrent()) return
       const { buildItem, origin, url } = args
       const match = classifyStartWorkRepoMatches(lookupSlug(`${origin.owner}/${origin.repo}`))
       if (match.kind === 'none') {
@@ -591,6 +620,10 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       if (match.kind === 'direct') {
         const workItem = buildItem(match.repo.id)
         if (!workItem) {
+          return
+        }
+        if (lockedGuard) {
+          void openComposerForChoice(workItem, { repos: [match.repo], seedRepoId: match.repo.id }, origin)
           return
         }
         void launchWorkItemDirect({
@@ -618,12 +651,12 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       }
       void openComposerForChoice(workItem, match, origin)
     },
-    [lookupSlug, openComposerForChoice]
+    [guardCurrent, lockedGuard, lookupSlug, openComposerForChoice]
   )
 
   const handleOpenDialog = useCallback(
     (row: GitHubProjectRow) => {
-      if (!currentCacheKey || !table) {
+      if (!guardCurrent() || !currentCacheKey || !table) {
         return
       }
       const origin = buildOrigin(row, currentCacheKey, table)
@@ -632,6 +665,10 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
         if (row.content.url) {
           void api.shell.openUrl(row.content.url)
         }
+        return
+      }
+      if (!isLockedRowActionable(row)) {
+        if (row.content.url) void api.shell.openUrl(row.content.url)
         return
       }
       const match = classifyStartWorkRepoMatches(lookupSlug(`${origin.owner}/${origin.repo}`))
@@ -654,12 +691,12 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       // Unknown repo — use the simplified slug-mode dialog.
       setSlugDialog({ origin })
     },
-    [currentCacheKey, table, buildOrigin, lookupSlug, buildWorkItem]
+    [currentCacheKey, table, buildOrigin, guardCurrent, lookupSlug, buildWorkItem, isLockedRowActionable]
   )
 
   const handleStartWork = useCallback(
     (row: GitHubProjectRow) => {
-      if (!currentCacheKey || !table) {
+      if (!guardCurrent() || !currentCacheKey || !table || !isLockedRowActionable(row)) {
         return
       }
       const origin = buildOrigin(row, currentCacheKey, table)
@@ -672,53 +709,57 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
         url: row.content.url ?? null
       })
     },
-    [currentCacheKey, table, buildOrigin, buildWorkItem, startWorkForItem]
+    [currentCacheKey, table, buildOrigin, buildWorkItem, guardCurrent, startWorkForItem, isLockedRowActionable]
   )
 
   const handleEditAssignees = useCallback(
     async (row: GitHubProjectRow, add: string[], remove: string[]) => {
-      if (!currentCacheKey) {
+      if (!guardCurrent() || !currentCacheKey || !isLockedRowActionable(row)) {
         return
       }
-      const res = await patchProjectIssueOrPr(currentCacheKey, row.id, {
-        ...(add.length ? { addAssignees: add } : {}),
-        ...(remove.length ? { removeAssignees: remove } : {})
-      })
-      if (!res.ok) {
-        toast.error(res.error.message)
-      }
+      await runGuardedProjectTaskAction(
+        guardCurrent,
+        () => patchProjectIssueOrPr(currentCacheKey, row.id, {
+          ...(add.length ? { addAssignees: add } : {}),
+          ...(remove.length ? { removeAssignees: remove } : {})
+        }),
+        (res) => { if (!res.ok) toast.error(res.error.message) }
+      )
     },
-    [currentCacheKey, patchProjectIssueOrPr]
+    [currentCacheKey, guardCurrent, patchProjectIssueOrPr, isLockedRowActionable]
   )
 
   const handleEditLabels = useCallback(
     async (row: GitHubProjectRow, add: string[], remove: string[]) => {
-      if (!currentCacheKey) {
+      if (!guardCurrent() || !currentCacheKey || !isLockedRowActionable(row)) {
         return
       }
-      const res = await patchProjectIssueOrPr(currentCacheKey, row.id, {
-        ...(add.length ? { addLabels: add } : {}),
-        ...(remove.length ? { removeLabels: remove } : {})
-      })
-      if (!res.ok) {
-        // `|| fallback`: a malformed error envelope must never blank the toast.
-        toast.error(res.error?.message || 'Failed to update labels.')
-      }
+      await runGuardedProjectTaskAction(
+        guardCurrent,
+        () => patchProjectIssueOrPr(currentCacheKey, row.id, {
+          ...(add.length ? { addLabels: add } : {}),
+          ...(remove.length ? { removeLabels: remove } : {})
+        }),
+        (res) => {
+          if (!res.ok) toast.error(res.error?.message || 'Failed to update labels.')
+        }
+      )
     },
-    [currentCacheKey, patchProjectIssueOrPr]
+    [currentCacheKey, guardCurrent, patchProjectIssueOrPr, isLockedRowActionable]
   )
 
   const handleEditIssueType = useCallback(
     async (row: GitHubProjectRow, issueType: GitHubIssueType | null) => {
-      if (!currentCacheKey) {
+      if (!guardCurrent() || !currentCacheKey || !isLockedRowActionable(row)) {
         return
       }
-      const res = await patchProjectRowIssueType(currentCacheKey, row.id, issueType)
-      if (!res.ok) {
-        toast.error(res.error?.message || 'Failed to update the issue type.')
-      }
+      await runGuardedProjectTaskAction(
+        guardCurrent,
+        () => patchProjectRowIssueType(currentCacheKey, row.id, issueType),
+        (res) => { if (!res.ok) toast.error(res.error?.message || 'Failed to update the issue type.') }
+      )
     },
-    [currentCacheKey, patchProjectRowIssueType]
+    [currentCacheKey, guardCurrent, patchProjectRowIssueType, isLockedRowActionable]
   )
 
   const handleEditField = useCallback(
@@ -727,24 +768,24 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       fieldId: string,
       value: GitHubProjectFieldMutationValue | null
     ) => {
-      if (!currentCacheKey) {
+      if (!guardCurrent() || !currentCacheKey || !isLockedRowActionable(row)) {
         return
       }
-      const result =
-        value === null
-          ? await clearProjectFieldValue(currentCacheKey, row.id, fieldId)
-          : await updateProjectFieldValue(currentCacheKey, row.id, fieldId, value)
-      if (!result.ok) {
-        toast.error(result.error?.message || 'Failed to update the field.')
-      }
+      await runGuardedProjectTaskAction(
+        guardCurrent,
+        () => value === null
+          ? clearProjectFieldValue(currentCacheKey, row.id, fieldId)
+          : updateProjectFieldValue(currentCacheKey, row.id, fieldId, value),
+        (result) => { if (!result.ok) toast.error(result.error?.message || 'Failed to update the field.') }
+      )
     },
-    [clearProjectFieldValue, currentCacheKey, updateProjectFieldValue]
+    [clearProjectFieldValue, currentCacheKey, guardCurrent, updateProjectFieldValue, isLockedRowActionable]
   )
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex min-w-0 flex-none flex-wrap items-center gap-2 border-b border-border/50 bg-muted/30 px-3 py-2">
-        <ProjectPicker
+        {!lockedScope ? <ProjectPicker
           repoId={repoId}
           activeProject={
             activeProject && table
@@ -763,7 +804,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
                 : null
           }
           onSelect={handleSelect}
-        />
+        /> : <div data-testid="sdd-project-scope-f3-locked-reads" className="min-w-0 truncate text-xs font-medium">{lockedScope.projectTitle}</div>}
         {currentProjectViewKey ? (
           // Why: render the search input whenever a view is selected — even
           // while a refetch is in flight and `table` has briefly cleared for
@@ -862,7 +903,7 @@ export default function ProjectViewWrapper({ repoId = null }: Props = {}): React
       {/* Divergence hint (spec 016 D1): the explicit pick wins the DISPLAY,
           but status automation keeps writing to the server binding — say so,
           non-blocking, with a one-click way back to the bound project. */}
-      {resolution.source === 'pick' && resolution.divergesFromBinding ? (
+      {!lockedScope && resolution.source === 'pick' && resolution.divergesFromBinding ? (
         <div className="flex min-w-0 flex-none flex-wrap items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
           <span className="min-w-0 truncate">
             This project&apos;s tracker binding is{' '}

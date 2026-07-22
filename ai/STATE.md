@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 024-sdd-toolbar-session-fidelity
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (024 Reviewer SIGN-OFF, `passed: true`; all six ACs and named risks accepted with no blockers. See `review.md` and `handoffs/05-reviewer-to-done.md`.)
+- **current_spec:** 025-project-scoped-integrations-and-board-isolation
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Architect PASS; see `architecture.md` and `handoffs/02-architect-to-developer.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,29 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-21 | PM | **024 PM PASS → phase architect** (autonomous iteration 1;
-  `handoffs/01-pm-to-architect.md`). Refined nine architecture-heavy criteria
-  into six observable product outcomes. One-slice ruling: layout, stable
-  visibility, agent fidelity, and delivery truth all govern the single action
-  of operating the visible terminal's SDD toolbar against its bound server
-  session. Issue #395's status strip, spec 016's loop check-in, and spec 399's
-  gated-run surfacing remain separate. Tracker already In progress; no
-  regressive Todo write was sent.
-- 2026-07-21 | Architect | **024 ARCHITECT PASS → phase developer**
-  (`architecture.md`; `handoffs/02-architect-to-developer.md`). Decisions:
-  `Session.tool` remains launch/provisioning truth; manual shell agents use live
-  eligibility + full playbook; per-tab reuse requires host+workdir+tool+name;
-  generated names preserve tool/hash under 64 chars; pinned sessions hydrate
-  actual identity; newly requested mismatches fail closed; one-shot injection
-  awaits unchanged `inject_prompt` and reports success only after both tmux
-  sends. All six ACs map to named tests. Tracker phase remains In progress.
-- 2026-07-21 | Developer | **024 DEVELOPER PASS → phase tester** after one
-  send-back for a Rust borrow compile error (`handoffs/03-developer-to-tester.md`).
-  Stable toolbar identity, fail-closed session compatibility, suffix-preserving
-  names, pinned-session hydration, right-cluster Continue, and synchronous
-  delivery outcomes are implemented. Gates: focused UI **18/18**, Vite build,
-  focused Rust SDD **13/13**, and `git diff --check` PASS; repo-wide fmt reports
-  only pre-existing `agentum-executor/src/adapters.rs` drift.
 - 2026-07-21 | Tester | **024 TESTER PASS-WITH-QA-DEFERRALS → phase reviewer**
   (`verification.md`; `handoffs/04-tester-to-reviewer.md`). Independently passed
   focused UI **18/18**, Vite production build, focused Rust SDD **13/13**,
@@ -122,3 +99,20 @@
   complexity. One documented verification deviation—the standalone pinned-
   hydration helper test—was accepted by boundary inspection plus declared live
   staging QA. Tracker → Done.
+- 2026-07-22 | Spec | **025 DRAFT + PM GATE PASS → phase pm** (autonomous mode).
+  Project-owned provider/board/mapping controls move to Project Settings while
+  global Integrations retains account authentication. Embedded Project Hub Tasks
+  becomes a fail-closed projection of one repo binding; Linear's workspace-wide
+  projects/views/issues paths and all global fallbacks are forbidden there.
+- 2026-07-22 | PM | **025 PM PASS → phase architect** after one refinement
+  (`handoffs/01-pm-to-architect.md`). The single authority-boundary slice is
+  locked: Project Settings owns repo bindings, embedded Tasks consumes only that
+  binding, missing/stale/mismatched scope fails closed, and standalone Tasks
+  remains the explicit cross-project explorer. No human question blocks design.
+- 2026-07-22 | Architect | **025 ARCHITECT PASS → phase developer**
+  (`architecture.md`; `handoffs/02-architect-to-developer.md`). Pinned the atomic
+  `linearProjectBinding`, immutable `{repoId, scopeKey, generation}` authority,
+  structural replacement of embedded global `TaskPage`, exact provider views,
+  stale read/write/modal guards, local+SSH boundaries, F1–F4 file ownership, and
+  command-level verification. Existing slug-keyed GitHub storage is preserved;
+  account-wide pipeline controls remain global while repo bindings move local.

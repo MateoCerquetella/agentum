@@ -81,6 +81,13 @@ export type IssueSourcePreference = 'upstream' | 'origin' | 'auto'
  * that predate the field keep today's detection behavior.
  */
 export type TrackerProviderPreference = 'auto' | 'github' | 'linear'
+export type LinearProjectBinding = Readonly<{
+  workspaceId: string
+  workspaceName: string
+  projectId: string
+  projectName: string
+  projectUrl?: string
+}>
 export type ExternalWorktreeVisibility = 'hide' | 'show'
 
 export type Repo = {
@@ -109,6 +116,8 @@ export type Repo = {
    *  `undefined` is treated identically to `'auto'`; writers leave it
    *  undefined until the user picks in settings. */
   trackerProvider?: TrackerProviderPreference
+  /** Exact Linear board owned by this Agentum project. IDs are authoritative. */
+  linearProjectBinding?: LinearProjectBinding | null
   /** Controls whether worktrees Agentum did not create appear in the sidebar. */
   externalWorktreeVisibility?: ExternalWorktreeVisibility
   /** True when the repo predates hidden-by-default external worktrees. */
