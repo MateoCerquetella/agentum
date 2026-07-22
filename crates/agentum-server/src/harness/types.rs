@@ -480,6 +480,14 @@ pub enum HarnessEvent {
         feature_id: String,
         session_id: Uuid,
     },
+    /// A role/QA agent became the run's interactive session. Feature coding
+    /// keeps the older `AgentSpawned` event for compatibility.
+    CurrentSessionChanged {
+        harness_id: Uuid,
+        session_id: Uuid,
+        feature_id: Option<String>,
+        agent_tool: String,
+    },
     Log {
         harness_id: Uuid,
         feature_id: Option<String>,
@@ -532,6 +540,9 @@ pub struct HarnessRun {
     pub features: FeatureList,
     pub current_feature: Option<String>,
     pub current_session: Option<Uuid>,
+    /// Tool behind `current_session`; the desktop validates this before using
+    /// it as the attached tab's agent identity/SDD-bar hint.
+    pub current_agent_tool: Option<String>,
     pub started_at: Instant,
     pub agent_instructions: String,
     /// Set once [`drive`] has been kicked off so the run can't be driven twice.
@@ -542,6 +553,13 @@ pub struct HarnessRun {
     pub phase: SpecPhase,
     /// How many times the current phase's gate has run (role-gate retry counter).
     pub phase_attempts: u32,
+    /// The concrete SDD stage that transitioned into terminal `Blocked`.
+    /// Keeping this separate avoids the useless `blocked · blocked` status and
+    /// lets the UI say whether PM, architecture, or review needs attention.
+    pub blocked_phase: Option<SpecPhase>,
+    /// Latest role-gate verdict summary. Retained when the run blocks/parks so
+    /// intervention starts with the reason instead of only a red state.
+    pub gate_summary: Option<String>,
 }
 
 /// Config loaded from a project's `.harness/` directory.

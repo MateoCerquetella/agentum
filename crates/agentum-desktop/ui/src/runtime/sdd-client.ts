@@ -40,8 +40,8 @@ export async function injectSddPlaybook(
   sessionId: string,
   playbook: string,
   args?: string
-): Promise<{ mode: SddInjectMode }> {
-  return postJson<{ mode: SddInjectMode }>(`/api/sessions/${sessionId}/sdd/inject`, {
+): Promise<{ mode: SddInjectMode; ready: boolean }> {
+  return postJson<{ mode: SddInjectMode; ready: boolean }>(`/api/sessions/${sessionId}/sdd/inject`, {
     playbook,
     ...(args ? { args } : {})
   })

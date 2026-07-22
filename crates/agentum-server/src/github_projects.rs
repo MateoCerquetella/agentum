@@ -97,6 +97,29 @@ impl StatusMapping {
             BoardPhase::Blocked => &self.blocked,
         }
     }
+
+    /// Convert a status value GitHub just returned into Agentum's canonical
+    /// cache phase. Ambiguous duplicate option ids deliberately return `None`:
+    /// the external option remains display-authoritative, and a local cache
+    /// must never guess which lifecycle phase a shared/fallback column means.
+    pub fn tracker_phase_for_option_id(
+        &self,
+        option_id: &str,
+    ) -> Option<crate::task_sink::TrackerPhase> {
+        use crate::task_sink::TrackerPhase;
+        let candidates = [
+            (&self.todo, TrackerPhase::Todo),
+            (&self.in_progress, TrackerPhase::InProgress),
+            (&self.in_review, TrackerPhase::InReview),
+            (&self.ready_to_test, TrackerPhase::ReadyToTest),
+            (&self.done, TrackerPhase::Done),
+        ];
+        let mut matches = candidates
+            .into_iter()
+            .filter(|(id, _)| !id.trim().is_empty() && id.as_str() == option_id);
+        let (_, phase) = matches.next()?;
+        matches.next().is_none().then_some(phase)
+    }
 }
 
 /// The same five-field shape carrying option *names* — display/round-trip
@@ -196,6 +219,75 @@ pub(crate) fn binding_for_slug_at(path: &Path, slug: &str) -> Option<BoardBindin
 /// the next transition, no restart.
 pub fn binding_for_slug(slug: &str) -> Option<BoardBinding> {
     binding_for_slug_at(&github_projects_config_path()?, slug)
+}
+
+/// Upgrade a pre-InReview binding on demand. Older bindings deserialize with
+/// an empty `in_review`, which historically folded PRs onto In Progress. Once
+/// the project exposes a Review-like option, delivery must discover and persist
+/// that option before an InReview write can be acknowledged.
+fn binding_with_discovered_in_review(
+    binding: &BoardBinding,
+    discovered: &DiscoveredStatusField,
+) -> Result<BoardBinding, String> {
+    if discovered.project_id != binding.project_id
+        || discovered.status_field_id != binding.status_field_id
+    {
+        return Err(
+            "the saved project binding no longer matches the discovered Status field; rebind the tracker"
+                .into(),
+        );
+    }
+    let resolved = resolve_status_mapping(&discovered.options)?;
+    if resolved.in_review.via != MatchVia::Matched {
+        // A board with no review column intentionally keeps the documented
+        // InReview → InProgress fallback. Discovery is still required to tell
+        // that valid choice apart from a stale pre-InReview binding.
+        return Ok(binding.clone());
+    }
+
+    let mut upgraded = binding.clone();
+    upgraded.status_mapping.in_review = resolved.in_review.option_id;
+    let mut names = upgraded.option_names.take().unwrap_or_default();
+    names.in_review = resolved.in_review.option_name;
+    upgraded.option_names = Some(names);
+    Ok(upgraded)
+}
+
+/// Return the effective binding for an InReview write. Current bindings are a
+/// zero-call fast path; legacy bindings perform discovery and persist a newly
+/// matched review option. Boards without one retain the documented InProgress
+/// fallback.
+pub async fn ensure_in_review_mapping(
+    program: &str,
+    slug: &str,
+    binding: &BoardBinding,
+) -> Result<BoardBinding, String> {
+    if !binding.status_mapping.in_review.trim().is_empty() {
+        return Ok(binding.clone());
+    }
+    let owner = binding
+        .project_owner
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            "legacy project binding has no owner metadata; rebind the tracker".to_string()
+        })?;
+    let owner_type = binding
+        .project_owner_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            "legacy project binding has no owner type metadata; rebind the tracker".to_string()
+        })?;
+    let number = binding.project_number.ok_or_else(|| {
+        "legacy project binding has no project number; rebind the tracker".to_string()
+    })?;
+    let discovered = discover_status_field(program, owner, owner_type, number)
+        .await
+        .map_err(|error| error.message)?;
+    let upgraded = binding_with_discovered_in_review(binding, &discovered)?;
+    upsert_binding(slug, upgraded.clone())?;
+    Ok(upgraded)
 }
 
 fn write_bindings_at(path: &Path, file: &GithubProjectsFile) -> Result<(), String> {
@@ -1061,7 +1153,6 @@ mod tests {
     /// resolves ReadyToTest→"QA" and Done→"Shipped"; Blocked falls back to the
     /// Building option.
     #[test]
-    #[test]
     fn option_id_in_review_falls_back_to_in_progress_when_unmapped() {
         // #379: an empty in_review (every pre-#379 binding) folds onto the In
         // Progress option — byte-identical to spec 012 F3.
@@ -1080,6 +1171,40 @@ mod tests {
             ..m
         };
         assert_eq!(m2.option_id(BoardPhase::InReview), "pr");
+    }
+
+    #[test]
+    fn confirmed_status_option_maps_to_cache_phase_without_guessing() {
+        let mapping = StatusMapping {
+            todo: "todo-id".into(),
+            in_progress: "progress-id".into(),
+            in_review: "review-id".into(),
+            ready_to_test: "test-id".into(),
+            done: "done-id".into(),
+            blocked: "blocked-id".into(),
+        };
+        assert_eq!(
+            mapping.tracker_phase_for_option_id("todo-id"),
+            Some(crate::task_sink::TrackerPhase::Todo)
+        );
+        assert_eq!(
+            mapping.tracker_phase_for_option_id("review-id"),
+            Some(crate::task_sink::TrackerPhase::InReview)
+        );
+        assert_eq!(
+            mapping.tracker_phase_for_option_id("renamed-or-unknown"),
+            None
+        );
+
+        let ambiguous = StatusMapping {
+            in_review: "progress-id".into(),
+            ..mapping
+        };
+        assert_eq!(
+            ambiguous.tracker_phase_for_option_id("progress-id"),
+            None,
+            "a shared fallback column must not invent a local phase"
+        );
     }
 
     #[test]
@@ -1392,6 +1517,65 @@ mod tests {
             project_number: Some(7),
             option_names: None,
         }
+    }
+
+    #[test]
+    fn legacy_binding_learns_a_discovered_in_review_option() {
+        let binding = sample_binding();
+        let discovered = DiscoveredStatusField {
+            project_id: binding.project_id.clone(),
+            project_title: "Widgets".into(),
+            status_field_id: binding.status_field_id.clone(),
+            options: opts(&[
+                ("t", "Backlog"),
+                ("i", "In progress"),
+                ("review", "In Review"),
+                ("r", "QA"),
+                ("d", "Done"),
+            ]),
+        };
+
+        let upgraded = binding_with_discovered_in_review(&binding, &discovered).unwrap();
+        assert_eq!(upgraded.status_mapping.in_review, "review");
+        assert_eq!(
+            upgraded
+                .option_names
+                .as_ref()
+                .map(|names| names.in_review.as_str()),
+            Some("In Review")
+        );
+    }
+
+    #[test]
+    fn legacy_binding_preserves_fallback_when_project_has_no_review_option() {
+        let binding = sample_binding();
+        let discovered = DiscoveredStatusField {
+            project_id: binding.project_id.clone(),
+            project_title: "Widgets".into(),
+            status_field_id: binding.status_field_id.clone(),
+            options: opts(&[("t", "Todo"), ("i", "In progress"), ("d", "Done")]),
+        };
+
+        let effective = binding_with_discovered_in_review(&binding, &discovered).unwrap();
+        assert!(effective.status_mapping.in_review.is_empty());
+        assert_eq!(
+            effective.status_mapping.option_id(BoardPhase::InReview),
+            "i"
+        );
+    }
+
+    #[test]
+    fn legacy_binding_refuses_discovery_from_a_different_project() {
+        let binding = sample_binding();
+        let discovered = DiscoveredStatusField {
+            project_id: "PVT_other".into(),
+            project_title: "Other".into(),
+            status_field_id: binding.status_field_id.clone(),
+            options: Vec::new(),
+        };
+
+        let error = binding_with_discovered_in_review(&binding, &discovered).unwrap_err();
+        assert!(error.contains("no longer matches"));
     }
 
     /// AC 2d on the storage side: a stored mapping missing a phase fails

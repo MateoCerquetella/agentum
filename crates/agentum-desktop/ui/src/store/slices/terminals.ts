@@ -340,6 +340,7 @@ export type TerminalSlice = {
   updateTabTitle: (tabId: string, title: string) => void
   setGeneratedTabTitleFromAgentPrompt: (paneKey: string, prompt: string) => void
   clearTabLaunchAgent: (tabId: string) => void
+  setTabLaunchAgent: (tabId: string, agent: TuiAgent) => void
   setRuntimePaneTitle: (tabId: string, paneId: number, title: string) => void
   clearRuntimePaneTitle: (tabId: string, paneId: number) => void
   /** Mark a tab as having unread activity (agent working→idle transition).
@@ -1154,6 +1155,23 @@ export const createTerminalSlice: StateCreator<AppState, [], [], TerminalSlice> 
       void _launchAgent
       const nextTabs = [...tabs]
       nextTabs[tabIndex] = tabWithoutLaunchAgent
+      scheduleRuntimeGraphSync()
+      return { tabsByWorktree: { ...s.tabsByWorktree, [ownerWorktreeId]: nextTabs } }
+    })
+  },
+
+  setTabLaunchAgent: (tabId, agent) => {
+    set((s) => {
+      const ownerWorktreeId = getTerminalTabOwnerWorktreeId(s.tabsByWorktree, tabId)
+      if (!ownerWorktreeId) {
+        return s
+      }
+      const tabs = s.tabsByWorktree[ownerWorktreeId] ?? []
+      const currentTab = tabs.find((tab) => tab.id === tabId)
+      if (!currentTab || currentTab.launchAgent === agent) {
+        return s
+      }
+      const nextTabs = tabs.map((tab) => (tab.id === tabId ? { ...tab, launchAgent: agent } : tab))
       scheduleRuntimeGraphSync()
       return { tabsByWorktree: { ...s.tabsByWorktree, [ownerWorktreeId]: nextTabs } }
     })

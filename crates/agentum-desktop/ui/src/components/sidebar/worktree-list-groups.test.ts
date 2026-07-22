@@ -1541,7 +1541,7 @@ describe('WorktreeList header styles', () => {
     expect(source).toContain('[&_path]:cursor-pointer')
   })
 
-  it('resolves repo header color from project group headers only', () => {
+  it('renders the resolved project color mark in repo headers', () => {
     const source = readFileSync(
       fileURLToPath(new URL('./WorktreeList.tsx', import.meta.url)),
       'utf8'
@@ -1549,7 +1549,51 @@ describe('WorktreeList header styles', () => {
 
     expect(source).toContain('resolveProjectGroupHeaderColor({')
     expect(source).toContain('headerKey: row.key')
-    expect(source).toContain('color={repoHeaderColor}')
+    expect(source).toMatch(
+      /row\.repo\s*\?\s*\(\s*<RepoBadgeMark\s+color=\{repoHeaderColor\}\s+className="size-2 shrink-0 rounded-\[2px\]"/
+    )
+  })
+
+  it('keeps project color independent from active and selected header styling', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('./WorktreeList.tsx', import.meta.url)),
+      'utf8'
+    )
+
+    // The project color remains confined to an unconditional decorative mark,
+    // leaving theme-owned row backgrounds and foreground contrast intact.
+    expect(source).toMatch(
+      /row\.repo\s*\?\s*\(\s*<RepoBadgeMark\s+color=\{repoHeaderColor\}\s+className="size-2 shrink-0 rounded-\[2px\]"/
+    )
+    expect(source).toMatch(
+      /projectHubRepoId === row\.repo\.id\s*&&\s*'rounded-md bg-sidebar-accent'/
+    )
+    expect(source).toMatch(
+      /isProjectSelected\s*&&\s*'rounded-md bg-sidebar-accent ring-1 ring-sidebar-ring\/35'/
+    )
+    expect(source).toContain(
+      'min-w-0 truncate text-[13px] font-semibold leading-none'
+    )
+  })
+
+  it('uses the sidebar foreground token for readable light and dark theme content', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('./WorktreeList.tsx', import.meta.url)),
+      'utf8'
+    )
+
+    // Project color is an identity cue, not a text color. The header's label and
+    // inherited icons therefore follow the foreground paired with each theme's
+    // sidebar surface, while the configured color remains on the mark/glyph.
+    expect(source).toContain(
+      'pr-1 text-left text-sidebar-foreground transition-all'
+    )
+    expect(source).toMatch(
+      /<RepoIconGlyph\s+repoIcon=\{row\.repo\.repoIcon\}\s+color=\{repoHeaderColor\}/
+    )
+    expect(source).toMatch(
+      /<RepoBadgeMark\s+color=\{repoHeaderColor\}/
+    )
   })
 })
 

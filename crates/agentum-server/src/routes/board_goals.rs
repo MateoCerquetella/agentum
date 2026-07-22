@@ -645,7 +645,13 @@ async fn plan_goal_harness(
             )
             .await
             {
-                Ok(_) => {}
+                Ok(crate::task_sink::TransitionResult::Applied) => {}
+                Ok(crate::task_sink::TransitionResult::Skipped(reason)) => tracing::warn!(
+                    provider = p,
+                    id = %id,
+                    %reason,
+                    "initial Todo transition not acknowledged"
+                ),
                 Err(e) => {
                     tracing::warn!(provider = p, id = %id, error = %e, "initial Todo transition failed (non-fatal)")
                 }

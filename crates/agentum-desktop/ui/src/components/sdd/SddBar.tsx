@@ -19,6 +19,9 @@ import type { LucideIcon } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useTabAgent } from '@/lib/use-tab-agent'
 import type { TerminalTab } from '../../../../shared/types'
+import { getSession } from '@/runtime/agentum-server-client'
+import { resolveSddToolbarAgent } from '@/lib/sdd-toolbar-agent'
+import { deliverSddPlaybook } from '@/lib/sdd-injection-state'
 import {
   getSddLoop,
   injectSddPlaybook,
@@ -31,12 +34,17 @@ import { subscribeServerEvents } from '@/runtime/server-events-bus'
 
 /** The row's quick actions — plain labels, not slash commands (the command
  *  names stay an implementation detail of the server registry). */
-const SDD_BUTTONS: { playbook: string; label: string; icon: LucideIcon }[] = [
+const LEFT_ACTIONS: { playbook: string; label: string; icon: LucideIcon }[] = [
   { playbook: 'sdd-spec', label: 'Spec', icon: FileText },
   { playbook: 'sdd-spec-socratic', label: 'Spec Socratic', icon: MessagesSquare },
-  { playbook: 'sdd-orchestrate', label: 'Continue', icon: StepForward },
   { playbook: 'sdd-status', label: 'Status', icon: ListChecks }
 ]
+
+const CONTINUE_ACTION = {
+  playbook: 'sdd-orchestrate',
+  label: 'Continue',
+  icon: StepForward
+} satisfies { playbook: string; label: string; icon: LucideIcon }
 
 const PILL_CLASS =
   'inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40'
@@ -154,7 +162,34 @@ function PlaybookPreviewModal({
  * agents (the v0.72.0 "where are the buttons?" bug).
  */
 export function SddBarGate({ tab }: { tab: TerminalTab }): React.JSX.Element | null {
-  const agent = useTabAgent(tab)
+  const liveAgent = useTabAgent(tab)
+  const sessionId = useServerSessionId(tab.id)
+  const [sessionTool, setSessionTool] = useState<string | null | undefined>(undefined)
+
+  useEffect(() => {
+    if (!sessionId) {
+      setSessionTool(undefined)
+      return
+    }
+    let cancelled = false
+    setSessionTool(undefined)
+    void getSession(sessionId)
+      .then((session) => {
+        if (!cancelled) setSessionTool(session.tool)
+      })
+      .catch(() => {
+        if (!cancelled) setSessionTool(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId])
+
+  const agent = resolveSddToolbarAgent({
+    sessionTool,
+    requestedAgent: tab.launchAgent,
+    liveAgent
+  })
   if (!agent) {
     return null
   }
@@ -168,6 +203,7 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
   const [preview, setPreview] = useState<SddPlaybook | null>(null)
   const [loop, setLoop] = useState<SddLoopState>(INACTIVE_LOOP)
   const [loopPending, setLoopPending] = useState(false)
+  const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
   // Authoritative loop state: snapshot on bind, then live `sdd.loop.*` deltas.
@@ -246,12 +282,14 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
       return
     }
     const { name, title } = preview
+    const targetSessionId = sessionId
     setPreview(null)
-    void injectSddPlaybook(sessionId, name)
-      .then(({ mode }) =>
-        setNotice(mode === 'bootstrap' ? `${title} sent via MCP` : `${title} sent (full text)`)
-      )
-      .catch(() => setNotice(`Could not inject ${title}`))
+    void deliverSddPlaybook({
+      title,
+      inject: () => injectSddPlaybook(targetSessionId, name),
+      setSending,
+      setNotice
+    })
   }, [sessionId, preview])
 
   const toggleLoop = useCallback((): void => {
@@ -265,7 +303,7 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
       .finally(() => setLoopPending(false))
   }, [sessionId, loop.active, loopPending])
 
-  const disabled = sessionId === null
+  const disabled = sessionId === null || sending
 
   // Dismissed: keep a slim strip, but the restore control must read as an
   // obvious, clickable chip — the original 9px/60%-opacity ghost was
@@ -291,10 +329,7 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
 
   return (
     <div className="flex shrink-0 items-center gap-2 border-t border-border/60 bg-background px-3 py-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-        SDD
-      </span>
-      {SDD_BUTTONS.map(({ playbook, label, icon: Icon }) => (
+      {LEFT_ACTIONS.map(({ playbook, label, icon: Icon }) => (
         <button
           key={playbook}
           className={PILL_CLASS}
@@ -306,7 +341,18 @@ export function SddBar({ tabId }: { tabId: string }): React.JSX.Element {
           {label}
         </button>
       ))}
-      <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">{notice}</span>
+      <span className="ml-auto min-w-0 truncate text-xs text-muted-foreground">
+        {sending ? 'Sending…' : notice}
+      </span>
+      <button
+        className={PILL_CLASS}
+        disabled={disabled}
+        title={disabled ? 'Waiting for the agent session to connect' : undefined}
+        onClick={() => openPreview(CONTINUE_ACTION.playbook)}
+      >
+        <CONTINUE_ACTION.icon className="size-3.5" />
+        {CONTINUE_ACTION.label}
+      </button>
       <button
         className={`${PILL_CLASS} ${loop.active ? 'sdd-rainbow-border' : ''}`}
         disabled={disabled || loopPending}
