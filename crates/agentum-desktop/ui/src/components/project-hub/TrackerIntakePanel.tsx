@@ -7,19 +7,18 @@ import React from 'react'
 import { CheckCircle2, ExternalLink, Loader2, Play, Sparkles } from 'lucide-react'
 
 import { api } from '@/tauri'
-import { cn } from '@/lib/utils'
 import type { Repo } from '@/shared/types'
+import type { ProjectTaskScope } from '@/lib/project-task-scope'
 import { useTrackerIntake } from './use-tracker-intake'
 
 export function TrackerIntakePanel({
   repo,
-  bindingVersion
+  scope
 }: {
   repo: Repo
-  /** Bumped when ProjectBindingEditor saves — re-resolves the provider. */
-  bindingVersion: number
+  scope: Extract<ProjectTaskScope, { status: 'bound' }>
 }): React.JSX.Element {
-  const intake = useTrackerIntake({ repo, bindingVersion })
+  const intake = useTrackerIntake({ repo, scope })
   const hasDraft = intake.body.trim().length > 0 || intake.title.trim().length > 0
   const filedUrl = intake.filed?.url ?? null
 
@@ -32,37 +31,13 @@ export function TrackerIntakePanel({
       </p>
 
       <div className="mt-3 flex flex-col gap-2.5">
-        {/* Provider toggle — only when BOTH a GitHub Project and Linear resolve (AC 10). */}
-        {intake.provider === 'ambiguous' ? (
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-muted-foreground">File into</span>
-            {(['github', 'linear'] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => intake.setProviderChoice(p)}
-                className={cn(
-                  'rounded-md border px-2 py-0.5 text-[11px] capitalize transition-colors',
-                  intake.effectiveProvider === p
-                    ? 'border-muted-foreground/40 bg-secondary text-foreground'
-                    : 'border-border text-muted-foreground hover:border-muted-foreground/25'
-                )}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        ) : null}
-
         {/* #379: always SAY where a filed issue lands + the Linear state —
             "no Linear sync showing" was the complaint. When only one provider
             resolves there is no toggle, so this line is the only signal. */}
         <div className="text-[11px] text-muted-foreground">
           Files into{' '}
           <span className="font-medium capitalize text-foreground">{intake.effectiveProvider}</span>
-          {repo.trackerProvider === 'github' || repo.trackerProvider === 'linear' ? (
-            <> · pinned to {repo.trackerProvider === 'linear' ? 'Linear' : 'GitHub'} in settings</>
-          ) : null}
+          <> · locked by Project Settings</>
           {' · '}
           {intake.linearConnected ? (
             <span className="text-emerald-600 dark:text-emerald-400">Linear connected</span>

@@ -142,6 +142,26 @@ describe('repo update serialization', () => {
     expect(store.getState().repos[0]?.trackerProvider).toBe('linear')
   })
 
+  it('normalizes an atomic Linear binding without mutating a sibling repo', async () => {
+    reposUpdate.mockResolvedValueOnce(undefined)
+    const store = createTestStore()
+    store.setState({ repos: [localRepo, secondRepo] })
+    await store.getState().updateRepo(localRepo.id, { linearProjectBinding: { workspaceId: ' w ', workspaceName: ' Workspace ', projectId: ' p ', projectName: ' Project ', projectUrl: 'https://linear.app/p' } })
+    expect(reposUpdate).toHaveBeenCalledWith({ repoId: localRepo.id, updates: { linearProjectBinding: { workspaceId: 'w', workspaceName: 'Workspace', projectId: 'p', projectName: 'Project', projectUrl: 'https://linear.app/p' } } })
+    expect(store.getState().repos[1]).toEqual(secondRepo)
+    expect(Object.isFrozen(store.getState().repos[0]?.linearProjectBinding)).toBe(true)
+  })
+
+  it('persists an explicit null clear and rejects malformed partial objects', async () => {
+    reposUpdate.mockResolvedValue(undefined)
+    const store = createTestStore()
+    store.setState({ repos: [{ ...localRepo, linearProjectBinding: { workspaceId: 'w', workspaceName: 'W', projectId: 'p', projectName: 'P' } }] })
+    await store.getState().updateRepo(localRepo.id, { linearProjectBinding: null })
+    expect(reposUpdate).toHaveBeenLastCalledWith({ repoId: localRepo.id, updates: { linearProjectBinding: null } })
+    await store.getState().updateRepo(localRepo.id, { linearProjectBinding: { workspaceId: 'w' } as never })
+    expect(reposUpdate).toHaveBeenLastCalledWith({ repoId: localRepo.id, updates: {} })
+  })
+
   it('does not apply repo icons that fail shared sanitization', async () => {
     reposUpdate.mockResolvedValueOnce(undefined)
     const store = createTestStore()

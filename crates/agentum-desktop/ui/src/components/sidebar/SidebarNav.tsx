@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import type { GlobalSettings } from '../../../../shared/types'
 import { useActivityUnreadCount } from '@/components/activity/useActivityUnreadCount'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
+import { requestOperationalSidebarSearchFocus } from '@/lib/operational-sidebar-search-focus'
 
 export function shouldShowAgentsButton(
   settings: Pick<GlobalSettings, 'experimentalActivity'> | null | undefined
@@ -88,6 +89,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   const openProjectsPage = useAppStore((s) => s.openProjectsPage)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
+  const groupBy = useAppStore((s) => s.groupBy)
 
   const activityActive = activeView === 'activity'
   const harnessActive = activeView === 'harness'
@@ -131,7 +133,13 @@ const SidebarNav = React.memo(function SidebarNav() {
       {/* Secondary utility: fuzzy search. */}
       <button
         type="button"
-        onClick={() => openModal('worktree-palette')}
+        onClick={() => {
+          if (groupBy === 'operational') {
+            requestOperationalSidebarSearchFocus()
+          } else {
+            openModal('worktree-palette')
+          }
+        }}
         aria-label="Search worktrees and browser tabs"
         className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight text-sidebar-foreground/60 transition-colors hover:bg-sidebar-foreground/8"
       >

@@ -9,6 +9,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useAppStore } from '@/store'
 import type { LinearTeam, Repo } from '@/shared/types'
+import type { ProjectTaskScope } from '@/lib/project-task-scope'
+import { captureProjectTaskScopeGuard } from '@/lib/project-task-scope-guard'
+import { isLiveProjectTaskScopeAuthority } from '@/lib/project-task-scope-authority'
 import {
   canDraftIssue,
   canFileIssue,
@@ -16,7 +19,6 @@ import {
   deriveFiledGatedRunGate,
   deriveIntentTitle,
   deriveTrackerIntakePhase,
-  resolveCreateIssueProvider
 } from '@/components/new-workspace/create-issue-intent-model'
 import type {
   CreateIssueProvider,
@@ -24,26 +26,23 @@ import type {
   FiledIssue,
   TrackerIntakePhase
 } from '@/components/new-workspace/create-issue-intent-model'
-import { resolvePickerProject } from '@/components/new-workspace/work-item-picker-model'
 import type { PickerProjectRef } from '@/components/new-workspace/work-item-picker-model'
-import { getProjectBinding } from '@/runtime/github-projects-client'
-import type { ProjectBindingDto } from '@/runtime/github-projects-client'
 import { createGithubIssue, draftGithubIssueBody } from '@/runtime/github-issue-client'
 import {
   linearCreateIssue,
-  linearListTeams,
-  linearStatus
+  linearListTeams
 } from '@/runtime/runtime-linear-client'
 import type { IssueSideEffectGate } from '@/lib/issue-side-effect-gate'
 import { getLinkedWorkItemSuggestedName } from '@/lib/new-workspace'
 
 export type TrackerIntake = {
-  /** Which provider the file arm resolves to; `ambiguous` renders the toggle. */
+  /** The provider locked by Project Settings. */
   provider: CreateIssueProvider | 'ambiguous'
   /** The provider a file would actually target (toggle choice applied). */
   effectiveProvider: CreateIssueProvider
   setProviderChoice: (p: CreateIssueProvider) => void
-  /** The GitHub Project the tab resolved to (binding > global active), if any. */
+  linearConnected: boolean
+  /** The exact bound GitHub Project, if any. */
   resolved: PickerProjectRef | null
 
   intent: string
@@ -76,13 +75,12 @@ export type TrackerIntake = {
 
 export function useTrackerIntake({
   repo,
-  bindingVersion
+  scope
 }: {
   repo: Repo
-  bindingVersion: number
+  scope: Extract<ProjectTaskScope, { status: 'bound' }>
 }): TrackerIntake {
   const openModal = useAppStore((s) => s.openModal)
-  const activeProject = useAppStore((s) => s.settings?.githubProjects?.activeProject ?? null)
   // Only the runtime-target field routes the Linear RPC — selecting it (not the
   // whole settings object) keeps the probe from re-running on unrelated writes.
   const activeRuntimeEnvironmentId = useAppStore(
@@ -93,76 +91,31 @@ export function useTrackerIntake({
     [activeRuntimeEnvironmentId]
   )
 
-  // --- Binding read (WorkItemsField precedent): fail-closed null, re-read when
-  // ProjectBindingEditor saves (bindingVersion bump). The response's slug also
-  // spares the server an `origin` read on draft/create.
-  const [binding, setBinding] = useState<ProjectBindingDto | null>(null)
-  const [slug, setSlug] = useState<string | null>(null)
-  useEffect(() => {
-    const workdir = repo.path
-    if (!workdir) {
-      setBinding(null)
-      setSlug(null)
-      return
-    }
-    let cancelled = false
-    // Spec 020 F3: `repoId` makes the slug resolve on the repo's OWN host —
-    // the leg that un-dead-ends SSH repos (it's how `slug` gets learned at all).
-    void getProjectBinding({ workdir, repoId: repo.id })
-      .then((res) => {
-        if (cancelled) return
-        setBinding(res.binding)
-        setSlug(res.slug || null)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setBinding(null)
-        setSlug(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [repo.path, repo.id, bindingVersion])
+  const guard = useMemo(() => captureProjectTaskScopeGuard(scope), [scope])!
+  const guardCurrent = useCallback(() => isLiveProjectTaskScopeAuthority(guard), [guard])
+  const slug = scope.provider === 'github' ? scope.repoSlug : null
+  const resolved: PickerProjectRef | null = scope.provider === 'github'
+    ? { owner: scope.owner, ownerType: scope.ownerType, number: scope.projectNumber }
+    : null
 
-  const resolved = useMemo(
-    () => resolvePickerProject({ binding, activeProject }),
-    [binding, activeProject]
-  )
-
-  // --- Linear probe (CreateIssuePanel precedent): best-effort; any failure
-  // keeps the GitHub-only default rather than surfacing an error.
-  const [linearConnected, setLinearConnected] = useState(false)
+  // Fetch only teams admitted by the immutable Linear project scope.
   const [teams, setTeams] = useState<LinearTeam[]>([])
   const [teamId, setTeamId] = useState<string | null>(null)
   useEffect(() => {
+    setTeams([]); setTeamId(null)
+    if (scope.provider !== 'linear') return
     let cancelled = false
-    void linearStatus(linearSettings)
-      .then((status) => {
-        if (cancelled || !status.connected) return
-        setLinearConnected(true)
-        return linearListTeams(linearSettings).then((list) => {
-          if (cancelled) return
-          setTeams(list)
-          // Sole team auto-selects (the wizard's open-question-2 default).
-          if (list.length === 1) setTeamId(list[0].id)
-        })
-      })
-      .catch(() => {
-        /* best-effort: stay GitHub-only */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [linearSettings])
+    void linearListTeams(linearSettings, scope.workspaceId).then((list) => {
+      if (cancelled || !guardCurrent()) return
+      const exact = list.filter((team) => team.workspaceId === scope.workspaceId && scope.teamIds.includes(team.id))
+      setTeams(exact)
+      if (exact.length === 1) setTeamId(exact[0].id)
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [guardCurrent, linearSettings, scope])
 
-  const [providerChoice, setProviderChoice] = useState<CreateIssueProvider | null>(null)
-  const provider = resolveCreateIssueProvider({ resolved, linearConnected })
-  // #379: when both providers resolve, the project's trackerProvider pin —
-  // not a hardcoded GitHub — is the default; an explicit toggle still wins.
-  const pin = repo.trackerProvider
-  const pinDefault: CreateIssueProvider = pin === 'linear' || pin === 'github' ? pin : 'github'
-  const effectiveProvider: CreateIssueProvider =
-    provider === 'ambiguous' ? (providerChoice ?? pinDefault) : provider
+  const provider: CreateIssueProvider = scope.provider
+  const effectiveProvider = provider
 
   // --- Intake state (the useComposerState:1519/:1615 handler shapes).
   const [intent, setIntent] = useState('')
@@ -175,6 +128,7 @@ export function useTrackerIntake({
   // Spec 020 F3 (D4): the server's word on whether repo/wiki context fed the
   // draft — never inferred client-side from connectionId.
   const [grounding, setGrounding] = useState<DraftGrounding | null>(null)
+  useEffect(() => { setIntent(''); setTitle(''); setBody(''); setError(null); setFiled(null); setGrounding(null); setGenerating(false); setSubmitting(false) }, [scope.scopeKey, scope.generation])
 
   const busy = generating || submitting
   const phase = deriveTrackerIntakePhase({
@@ -186,7 +140,7 @@ export function useTrackerIntake({
   })
 
   const draft = useCallback(async (): Promise<void> => {
-    if (!canDraftIssue(intent, busy)) return
+    if (!canDraftIssue(intent, busy) || !guardCurrent()) return
     const workdir = repo.path
     if (!workdir) {
       setError('This project has no local workdir to draft against.')
@@ -210,18 +164,20 @@ export function useTrackerIntake({
         title: seededTitle,
         ...(slug ? { slug } : {})
       })
+      if (!guardCurrent()) return
       setBody(res.body)
       setGrounding(res.grounding ?? null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not generate a description.')
+      if (guardCurrent()) setError(err instanceof Error ? err.message : 'Could not generate a description.')
     } finally {
-      setGenerating(false)
+      if (guardCurrent()) setGenerating(false)
     }
-  }, [busy, intent, repo.path, slug])
+  }, [busy, guardCurrent, intent, repo.path, slug])
 
   const fileGithub = useCallback(async (): Promise<void> => {
     const trimmedTitle = title.trim()
     const workdir = repo.path
+    if (!guardCurrent() || scope.provider !== 'github') return
     if (!workdir) {
       setError('This project has no local workdir to file from.')
       return
@@ -239,6 +195,11 @@ export function useTrackerIntake({
         ...(slug ? { slug } : {}),
         repoId: repo.id
       })
+      if (!guardCurrent()) return
+      if (created.slug.toLowerCase() !== scope.repoSlug.toLowerCase()) {
+        setError('GitHub returned an issue outside this project scope.')
+        return
+      }
       // `filed` only from the provider-confirmed response — never before (AC 12).
       setFiled({
         provider: 'github',
@@ -248,15 +209,15 @@ export function useTrackerIntake({
         title: trimmedTitle
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create the GitHub issue.')
+      if (guardCurrent()) setError(err instanceof Error ? err.message : 'Could not create the GitHub issue.')
     } finally {
-      setSubmitting(false)
+      if (guardCurrent()) setSubmitting(false)
     }
-  }, [body, repo.path, repo.id, slug, title])
+  }, [body, guardCurrent, repo.path, repo.id, scope, slug, title])
 
   const fileLinear = useCallback(async (): Promise<void> => {
     const trimmedTitle = title.trim()
-    if (!teamId) {
+    if (!teamId || !guardCurrent() || scope.provider !== 'linear' || !scope.teamIds.includes(teamId)) {
       setError('Pick a Linear team to file into.')
       return
     }
@@ -266,11 +227,18 @@ export function useTrackerIntake({
       const result = await linearCreateIssue(linearSettings, {
         teamId,
         title: trimmedTitle,
-        description: body.trim() || undefined
+        description: body.trim() || undefined,
+        workspaceId: scope.workspaceId,
+        projectId: scope.projectId
       })
+      if (!guardCurrent()) return
       if (!result.ok) {
         // Inconclusive/failed never shows "filed" (AC 12) — `filed` unchanged.
         setError(result.error || 'Could not create the Linear issue.')
+        return
+      }
+      if (result.projectId !== scope.projectId || result.teamId !== teamId) {
+        setError('Linear returned an issue outside this project scope.')
         return
       }
       setFiled({
@@ -280,20 +248,20 @@ export function useTrackerIntake({
         title: result.title
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create the Linear issue.')
+      if (guardCurrent()) setError(err instanceof Error ? err.message : 'Could not create the Linear issue.')
     } finally {
-      setSubmitting(false)
+      if (guardCurrent()) setSubmitting(false)
     }
-  }, [body, linearSettings, teamId, title])
+  }, [body, guardCurrent, linearSettings, scope, teamId, title])
 
   const file = useCallback((): void => {
-    if (!canFileIssue(title, busy)) return
+    if (!canFileIssue(title, busy) || !guardCurrent()) return
     if (effectiveProvider === 'linear') {
       void fileLinear()
     } else {
       void fileGithub()
     }
-  }, [busy, effectiveProvider, fileGithub, fileLinear, title])
+  }, [busy, effectiveProvider, fileGithub, fileLinear, guardCurrent, title])
 
   const gate = deriveFiledGatedRunGate(filed, repo.connectionId)
 
@@ -309,22 +277,23 @@ export function useTrackerIntake({
     // The gate composes D3 (GitHub-only) and the local-repo precondition; a
     // gated run needs the FRESH worktree the composer creates, so this is the
     // spec-008 pre-armed hop — never a direct `startGatedWork` from here.
-    if (!gate.eligible || !filed || filed.provider !== 'github') return
+    if (!gate.eligible || !filed || filed.provider !== 'github' || !guardCurrent()) return
     openModal('new-workspace-composer', {
       linkedWorkItem: { type: 'issue', number: filed.number, title: filed.title, url: filed.url },
       prefilledName: getLinkedWorkItemSuggestedName({ title: filed.title }),
       initialRepoId: repo.id,
       startGatedRun: true,
-      telemetrySource: 'sidebar'
+      telemetrySource: 'sidebar',
+      requiredProjectTaskScope: guard
     })
-  }, [filed, gate.eligible, openModal, repo.id])
+  }, [filed, gate.eligible, guard, guardCurrent, openModal, repo.id])
 
   return {
     provider,
     effectiveProvider,
-    setProviderChoice,
+    setProviderChoice: () => undefined,
     /** #379: surfaced so the panel can SHOW the Linear connection state. */
-    linearConnected,
+    linearConnected: scope.provider === 'linear',
     resolved,
     intent,
     setIntent,

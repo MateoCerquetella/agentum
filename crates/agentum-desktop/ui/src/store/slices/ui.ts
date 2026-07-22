@@ -213,25 +213,23 @@ const LINEAR_TASK_PREFETCH_LIMIT = 36
 // hook-status entries these acks pair with.
 const HYDRATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
-// One-time migration so existing users land on the new hosts-first sidebar.
-// They carry an explicit persisted `groupBy: 'repo'` (the OLD default), which
-// would otherwise hide host grouping. On the first rehydrate after this ships
-// we force 'host' once and set a localStorage flag; afterwards the user's
-// explicit choice (including switching back to 'repo') is respected.
-const GROUPBY_HOST_MIGRATION_KEY = 'agentum-groupby-host-migrated'
-function migrateGroupByToHostOnce(
-  persisted: UISlice['groupBy'] | 'parent' | undefined
-): UISlice['groupBy'] {
-  const resolved: UISlice['groupBy'] = persisted === 'parent' ? 'host' : (persisted ?? 'host')
-  try {
-    if (typeof localStorage !== 'undefined' && !localStorage.getItem(GROUPBY_HOST_MIGRATION_KEY)) {
-      localStorage.setItem(GROUPBY_HOST_MIGRATION_KEY, '1')
-      return 'host'
-    }
-  } catch {
-    // localStorage unavailable (SSR/headless) — fall through to the resolved value.
+const VALID_WORKTREE_GROUPS = new Set<UISlice['groupBy']>([
+  'operational',
+  'none',
+  'workspace-status',
+  'repo',
+  'pr-status',
+  'host'
+])
+
+/** Preserve every explicit supported preference; default only absent/corrupt data. */
+export function normalizePersistedGroupBy(persisted: unknown): UISlice['groupBy'] {
+  if (persisted === 'parent') {
+    return 'host'
   }
-  return resolved
+  return VALID_WORKTREE_GROUPS.has(persisted as UISlice['groupBy'])
+    ? (persisted as UISlice['groupBy'])
+    : 'operational'
 }
 
 const VALID_TASK_PRESETS = new Set<TaskViewPresetId>([
@@ -676,7 +674,7 @@ export type UISlice = {
   clearAgentumHookTrustForRepo: (repoId: string) => void
   setupScriptPromptDismissedRepoIds: string[]
   dismissSetupScriptPrompt: (repoId: string) => void
-  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
+  groupBy: 'operational' | 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
   setGroupBy: (g: UISlice['groupBy']) => void
   sortBy: 'name' | 'smart' | 'recent' | 'repo' | 'manual'
   setSortBy: (s: UISlice['sortBy']) => void
@@ -1362,7 +1360,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       return { setupScriptPromptDismissedRepoIds: next }
     }),
 
-  groupBy: 'host',
+  groupBy: 'operational',
   // Why: group keys are mode-specific (e.g. repo id vs PR status), so
   // collapsed state from one mode is meaningless in another. Clearing
   // also prevents unbounded accumulation of stale keys across mode switches.
@@ -1642,13 +1640,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         ),
         rightSidebarOpen: typeof ui.rightSidebarOpen === 'boolean' ? ui.rightSidebarOpen : true,
         rightSidebarTab: normalizePersistedRightSidebarTab(ui.rightSidebarTab),
-        // Why: hosts-first is the new default layout. New/legacy-undefined and
-        // the legacy 'parent' value resolve to 'host'. Existing users carried an
-        // explicit persisted 'repo' (the OLD default), which would hide the new
-        // layout — so a ONE-TIME migration lands everyone on 'host' the first
-        // time this ships, after which their explicit choice (incl. switching
-        // back to 'repo') is respected. The localStorage flag makes it one-shot.
-        groupBy: migrateGroupByToHostOnce(ui.groupBy as UISlice['groupBy'] | 'parent' | undefined),
+        // Operational is the default only for absent/corrupt state. Explicit
+        // choices remain stable across upgrades; legacy parent means host.
+        groupBy: normalizePersistedGroupBy(ui.groupBy),
         sortBy,
         // Why: Active-only was retired. Force the old persisted flag off so an
         // old profile cannot invisibly keep narrowing the workspace list.

@@ -193,6 +193,38 @@ describe('filterWorkItemOptions', () => {
   })
 })
 
+describe('filterWorkItemOptions', () => {
+  const options = [
+    {
+      itemId: 'one',
+      number: 394,
+      title: 'Choose which agent creates the workspace',
+      url: 'https://github.com/acme/agentum/issues/394',
+      repository: 'acme/agentum'
+    },
+    {
+      itemId: 'two',
+      number: 17,
+      title: 'Improve the release dashboard',
+      url: 'https://github.com/acme/console/issues/17',
+      repository: 'acme/console'
+    }
+  ]
+
+  it('matches issue number with or without #, title, and repository', () => {
+    expect(filterWorkItemOptions(options, '#394').map((item) => item.itemId)).toEqual(['one'])
+    expect(filterWorkItemOptions(options, 'RELEASE').map((item) => item.itemId)).toEqual(['two'])
+    expect(filterWorkItemOptions(options, 'acme/console').map((item) => item.itemId)).toEqual([
+      'two'
+    ])
+  })
+
+  it('keeps Project order for an empty query and returns no false matches', () => {
+    expect(filterWorkItemOptions(options, '   ')).toEqual(options)
+    expect(filterWorkItemOptions(options, 'does-not-exist')).toEqual([])
+  })
+})
+
 describe('isPickableIssueRow', () => {
   it('accepts an open issue and rejects PR / draft / closed', () => {
     expect(isPickableIssueRow(row({ itemType: 'ISSUE', state: 'OPEN' }))).toBe(true)
