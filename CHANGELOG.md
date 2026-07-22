@@ -4,6 +4,27 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.95.0] — 2026-07-22
+
+### Added
+
+- **Workspaces can start without an issue.** The new-work wizard offers a
+  manual-work option that skips issue creation and linking while preserving the
+  selected repository, agent, and model.
+- **SSH repositories support issue-first work.** Existing GitHub issues can be
+  searched and selected for SSH-backed projects, and new issues are created
+  against the repository's configured identity instead of requiring a local
+  checkout.
+
+### Fixed
+
+- **Failed gated runs recover cleanly.** Agentum tears down stale harness
+  sessions before recording failure and exposes a retry action instead of
+  leaving the run indefinitely stuck.
+- **SDD progress remains visible and aligned.** The gated-run header stays
+  mounted while Autopilot starts, and the connector correctly follows PM Spec,
+  Architecture, Plan tasks, Build, and Review.
+
 ## [0.94.0] — 2026-07-22
 
 ### Changed
