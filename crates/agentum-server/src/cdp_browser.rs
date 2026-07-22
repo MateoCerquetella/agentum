@@ -1294,11 +1294,14 @@ mod tests {
         // The per-project contract: the user's pane (full UI id) and the
         // worktree's agent (bare path) MUST collapse to the SAME project scope,
         // or the agent drives a different browser than the user is watching.
-        let path = "/Users/x/.agentum/worktrees/feat";
+        let path = std::env::temp_dir()
+            .join("agentum-scope-pane")
+            .to_string_lossy()
+            .into_owned();
         let full = format!("repo-abc::{path}");
         let wts = tbl(&[("repo-abc", full.as_str())]);
         let a = resolve_scope_from_tables(&full, &wts, &[]).unwrap();
-        let b = resolve_scope_from_tables(path, &wts, &[]).unwrap();
+        let b = resolve_scope_from_tables(&path, &wts, &[]).unwrap();
         assert_eq!(a, b);
         assert_eq!(
             a,
@@ -1312,7 +1315,11 @@ mod tests {
     #[test]
     fn scope_bare_repo_id_workspace_suffix_and_repo_main_path() {
         let uuid = "0123abcd-0000-0000-0000-000000000000";
-        let repos = tbl(&[(uuid, "/repo/main")]);
+        let repo_path = std::env::temp_dir()
+            .join("agentum-scope-repo-main")
+            .to_string_lossy()
+            .into_owned();
+        let repos = tbl(&[(uuid, repo_path.as_str())]);
         // Bare registered repo id (plain-workspace / project-hub surfaces).
         assert_eq!(
             resolve_scope_from_tables(uuid, &[], &repos).unwrap(),
@@ -1330,7 +1337,7 @@ mod tests {
         );
         // A session running in the repo's main checkout (bare path, repos hit).
         assert_eq!(
-            resolve_scope_from_tables("/repo/main", &[], &repos).unwrap(),
+            resolve_scope_from_tables(&repo_path, &[], &repos).unwrap(),
             BrowserScope::Project {
                 repo_id: uuid.into()
             }
@@ -1357,7 +1364,11 @@ mod tests {
             }
         );
         // An unknown absolute path defers to the git probe (None) — NOT Shared.
-        assert_eq!(resolve_scope_from_tables("/no/such/path", &[], &[]), None);
+        let unknown_path = std::env::temp_dir()
+            .join("agentum-scope-no-such-path")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_scope_from_tables(&unknown_path, &[], &[]), None);
     }
 
     #[test]
