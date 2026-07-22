@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 024-sdd-toolbar-session-fidelity
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (024 Reviewer SIGN-OFF, `passed: true`; all six ACs and named risks accepted with no blockers. See `review.md` and `handoffs/05-reviewer-to-done.md`.)
+- **current_spec:** 025-issue-first-new-work
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer SIGN-OFF; installed-app GitHub/fault-injection/layout QA remains mandatory before human-authorized release.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,38 +87,34 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-21 | PM | **024 PM PASS → phase architect** (autonomous iteration 1;
-  `handoffs/01-pm-to-architect.md`). Refined nine architecture-heavy criteria
-  into six observable product outcomes. One-slice ruling: layout, stable
-  visibility, agent fidelity, and delivery truth all govern the single action
-  of operating the visible terminal's SDD toolbar against its bound server
-  session. Issue #395's status strip, spec 016's loop check-in, and spec 399's
-  gated-run surfacing remain separate. Tracker already In progress; no
-  regressive Todo write was sent.
-- 2026-07-21 | Architect | **024 ARCHITECT PASS → phase developer**
-  (`architecture.md`; `handoffs/02-architect-to-developer.md`). Decisions:
-  `Session.tool` remains launch/provisioning truth; manual shell agents use live
-  eligibility + full playbook; per-tab reuse requires host+workdir+tool+name;
-  generated names preserve tool/hash under 64 chars; pinned sessions hydrate
-  actual identity; newly requested mismatches fail closed; one-shot injection
-  awaits unchanged `inject_prompt` and reports success only after both tmux
-  sends. All six ACs map to named tests. Tracker phase remains In progress.
-- 2026-07-21 | Developer | **024 DEVELOPER PASS → phase tester** after one
-  send-back for a Rust borrow compile error (`handoffs/03-developer-to-tester.md`).
-  Stable toolbar identity, fail-closed session compatibility, suffix-preserving
-  names, pinned-session hydration, right-cluster Continue, and synchronous
-  delivery outcomes are implemented. Gates: focused UI **18/18**, Vite build,
-  focused Rust SDD **13/13**, and `git diff --check` PASS; repo-wide fmt reports
-  only pre-existing `agentum-executor/src/adapters.rs` drift.
-- 2026-07-21 | Tester | **024 TESTER PASS-WITH-QA-DEFERRALS → phase reviewer**
+- 2026-07-22 | PM | **025 PM PASS → phase architect** (`handoffs/01-pm-to-architect.md`).
+  Gate 9/9: one final New Work action is the slice; eight ACs cover staged issue
+  intent, mandatory generated spec, explicit Autopilot/manual ownership, ordered
+  recovery, and honest eligibility. Locked the issue as canonical user input,
+  Autopilot as eligible default, no silent fallback, and Chat/Loop as follow-ups.
+  No tracker URL is present, so no external status call was made.
+- 2026-07-22 | Architect | **025 ARCHITECT PASS → phase developer**
+  (`architecture.md`; `handoffs/02-architect-to-developer.md`). Chose a resumable
+  modal-lifetime UI saga over a false cross-system transaction; confirmed issue
+  and full worktree results checkpoint immediately; explicit submit overrides
+  avoid stale React state; manual spec preparation adds opt-in converge while
+  preserving the route's default 400; Autopilot requires confirmed ownership and
+  never falls back silently. Eight ACs map to named seams and gates.
+- 2026-07-22 | Developer | **025 DEVELOPER PASS → phase tester**
+  (`handoffs/03-developer-to-tester.md`). Delivered deferred New/Existing issue
+  intake, explicit Autopilot/manual execution, modal-lifetime issue/worktree
+  checkpoints, strict ownership, and opt-in spec convergence. Focused UI tests
+  passed **106/106**, Vite production build passed, the focused Rust converge
+  contract passed, and diff hygiene is clean; installed-app QA remains the
+  spec-declared Tester/staging boundary.
+- 2026-07-22 | Tester | **025 TESTER PASS-WITH-QA-DEFERRALS → phase reviewer**
   (`verification.md`; `handoffs/04-tester-to-reviewer.md`). Independently passed
-  focused UI **18/18**, Vite production build, focused Rust SDD **13/13**,
-  server-package fmt, and diff hygiene; all six ACs PASS with zero blocker or
-  should-fix findings. Live split/reconnect/non-MCP screenshot legs remain the
-  spec-declared `qa.sh` / staging boundary.
-- 2026-07-21 | Reviewer | **024 SIGN-OFF → DONE** (`review.md`, `passed: true`;
-  `handoffs/05-reviewer-to-done.md`). All six acceptance criteria and named
-  risks accepted; no blocker, undocumented debt, dead code, or unjustified
-  complexity. One documented verification deviation—the standalone pinned-
-  hydration helper test—was accepted by boundary inspection plus declared live
-  staging QA. Tracker → Done.
+  focused UI **106/106**, Vite production build, focused Harness **10/10**,
+  Rust formatting, and diff hygiene. All eight ACs have evidence with zero
+  blocker/should-fix defects; installed-app GitHub/fault-injection/layout legs
+  remain the explicitly unrun staging gate.
+- 2026-07-22 | Reviewer | **025 SIGN-OFF → DONE** (`review.md`;
+  `handoffs/05-reviewer-to-done.md`). All eight ACs and architecture invariants
+  pass with 0 blockers/should-fixes after closing the keyboard eligibility
+  send-back. Merge/release remain human-authorized, and installed-app scratch
+  GitHub, fault-injection, single-owner, and minimum-height QA stay mandatory.

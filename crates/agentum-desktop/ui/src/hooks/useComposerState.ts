@@ -26,6 +26,7 @@ import type {
   GitLabWorkItem,
   LinearIssue,
   AgentumHooks,
+  CreateWorktreeResult,
   SetupDecision,
   SetupRunPolicy,
   SparsePreset,
@@ -92,6 +93,12 @@ import { deriveTrackerBindCoords } from '@/components/new-workspace/work-item-pi
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { normalizeSparseDirectoryLines, sparseDirectoriesMatch } from '@/lib/sparse-paths'
 import { joinPath } from '@/lib/path'
+import type {
+  ExecutionMode,
+  NewWorkCheckpoint,
+  NewWorkStage,
+  NewWorkStageStatus
+} from '@/components/new-workspace/new-work-launch-model'
 import { importExternalPathsToRuntime } from '@/runtime/runtime-file-client'
 import {
   checkRuntimeHooks,
@@ -214,7 +221,7 @@ type ComposerCardProps = {
   onCreateIssueBodyChange: (value: string) => void
   createIssueSubmitting: boolean
   createIssueError: string | null
-  onCreateIssueSubmit: () => void
+  onCreateIssueSubmit: () => Promise<LinkedWorkItemSummary | null>
   /** Spec 007: "Generate description" — drafts an SDD-shaped body from the
    *  typed title + repo context into the textarea (review before filing). */
   createIssueGenerating: boolean
@@ -316,9 +323,17 @@ export type UseComposerStateResult = {
   promptTextareaRef: React.RefObject<HTMLTextAreaElement | null>
   nameInputRef: React.RefObject<HTMLInputElement | null>
   submit: () => Promise<void>
-  submitQuick: (agent: TuiAgent | null) => Promise<void>
+  submitQuick: (agent: TuiAgent | null, options?: QuickSubmitOptions) => Promise<void>
   /** Invoked by the Enter handler to re-check whether submission should fire. */
   createDisabled: boolean
+}
+
+export type QuickSubmitOptions = {
+  linkedWorkItem?: LinkedWorkItemSummary
+  executionMode?: ExecutionMode
+  checkpoint?: NewWorkCheckpoint
+  onCheckpoint?: (next: NewWorkCheckpoint) => void
+  onProgress?: (stage: NewWorkStage, status: NewWorkStageStatus) => void
 }
 
 // Why: both the full-page TaskPage composer and the Cmd+J modal can be
@@ -1517,19 +1532,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     )
   }, [])
 
-  const handleCreateIssueSubmit = useCallback(async (): Promise<void> => {
+  const handleCreateIssueSubmit = useCallback(async (): Promise<LinkedWorkItemSummary | null> => {
     const title = createIssueTitle.trim()
     const repoPath = selectedRepo?.path
     if (createIssueSubmitting) {
-      return
+      return null
     }
     if (!title) {
       setCreateIssueError('Give the issue a title.')
-      return
+      return null
     }
     if (!repoPath) {
       setCreateIssueError('Pick a project first.')
-      return
+      return null
     }
     setCreateIssueSubmitting(true)
     setCreateIssueError(null)
@@ -1568,9 +1583,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         labels,
         author: created.author ?? null
       }
-      setLinkedWorkItem(
-        body
-          ? {
+      const confirmedSummary: LinkedWorkItemSummary = body
+        ? {
               ...summary,
               linkedContext: {
                 provider: 'github',
@@ -1583,17 +1597,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
                 })
               }
             }
-          : summary
-      )
+        : summary
+      setLinkedWorkItem(confirmedSummary)
       setCreateIssueOpen(false)
       setCreateIssueTitle('')
       setCreateIssueBody('')
       setCreateIssueLabels([])
+      return confirmedSummary
     } catch (error) {
       // Zero state change on failure — the form stays filled for a retry.
       setCreateIssueError(
         error instanceof Error ? error.message : 'Could not create the GitHub issue.'
       )
+      return null
     } finally {
       setCreateIssueSubmitting(false)
     }
@@ -2631,7 +2647,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   const submitQuick = useCallback(
-    async (requestedAgent: TuiAgent | null): Promise<void> => {
+    async (requestedAgent: TuiAgent | null, options?: QuickSubmitOptions): Promise<void> => {
       const agent =
         requestedAgent && isTuiAgentEnabled(requestedAgent, disabledTuiAgents)
           ? requestedAgent
@@ -2639,9 +2655,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       const workspaceNameSeed = getWorkspaceSeedName({
         explicitName: name,
         prompt: '',
-        linkedIssueNumber: parsedLinkedIssueNumber,
+        linkedIssueNumber: options?.linkedWorkItem?.number ?? parsedLinkedIssueNumber,
         linkedPR,
-        linkedTitle: linkedWorkItem?.title ?? null,
+        linkedTitle: options?.linkedWorkItem?.title ?? linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       })
       if (
@@ -2657,11 +2673,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
       setCreateError(null)
       setCreating(true)
+      let activeStage: NewWorkStage = 'worktree'
       try {
         const smartGitHubResolution = await resolvePendingSmartGitHubSubmit()
-        const submitLinkedWorkItem = smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem
+        const submitLinkedWorkItem =
+          options?.linkedWorkItem ?? smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem
         const submitLinkedIssueNumber =
-          smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber
+          options?.linkedWorkItem?.number ?? smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber
         const submitLinkedPR = smartGitHubResolution?.linkedPR ?? effectiveLinkedPR
         const workspaceName = smartGitHubResolution?.workspaceName ?? workspaceNameSeed
         if (!workspaceName) {
@@ -2713,7 +2731,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         // like the full submit path — otherwise a wizard-created issue's worktree
         // shows no status chip in the sidebar (bind dropped on create).
         const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
-        const result = await createWorktree(
+        options?.onProgress?.('worktree', 'active')
+        const result: CreateWorktreeResult = options?.checkpoint?.worktreeResult ?? (await createWorktree(
           repoId,
           workspaceName,
           selectedRepoIsGit ? baseBranch : undefined,
@@ -2738,7 +2757,15 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           undefined,
           trackerBind?.trackerProvider,
           trackerBind?.trackerUrl
-        )
+        ))
+        if (!options?.checkpoint?.worktreeResult) {
+          options?.onCheckpoint?.({
+            ...options?.checkpoint,
+            ...(submitLinkedWorkItem ? { linkedWorkItem: submitLinkedWorkItem } : {}),
+            worktreeResult: result
+          })
+        }
+        options?.onProgress?.('worktree', 'done')
         const worktree = result.worktree
 
         const trimmedNote = note.trim()
@@ -2749,7 +2776,41 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         // nothing driving it (spec 007: the pure gate is re-derived inside
         // maybeStartGatedRun, which returns whether the engine took ownership).
         let gatedRunStarted = false
-        if (startGatedRun) {
+        if (options?.executionMode === 'autopilot') {
+          activeStage = 'spec'
+          options.onProgress?.('spec', 'active')
+          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
+          if (!gate.eligible) throw new Error(describeIssueSideEffectSkip('start-gated-run', gate.reason))
+          activeStage = 'run'
+          const started = await startGatedWork({
+            workdir: worktree.path,
+            number: gate.number,
+            slug: `${gate.slug.owner}/${gate.slug.repo}`,
+            ...(agent ? { agentTool: agent } : {}),
+            ...(selectedRepo.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+          })
+          gatedRunStarted = gatedRunResultOwnsWorktree(started)
+          if (!gatedRunStarted) {
+            throw new Error('SDD Autopilot planned no work and did not take ownership of this workspace.')
+          }
+          options.onProgress?.('spec', 'done')
+          options.onProgress?.('run', 'done')
+        } else if (options?.executionMode === 'manual') {
+          activeStage = 'spec'
+          options.onProgress?.('spec', 'active')
+          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
+          if (gate.eligible) {
+            await scaffoldSpecFromIssue({
+              workdir: worktree.path,
+              number: gate.number,
+              slug: `${gate.slug.owner}/${gate.slug.repo}`,
+              plan: false,
+              converge: true,
+              ...(selectedRepo.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+            })
+          }
+          options.onProgress?.('spec', 'done')
+        } else if (startGatedRun) {
           // The server converge-scaffolds + plans + runs the engine; the D5
           // scaffold call is skipped when the toggle is armed (AC 1). Runs
           // before the skip-session branch so the gated run starts either way.
@@ -2795,12 +2856,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           // worktree. A failed start falls through to a normal session.
           gatedRun: gatedRunStarted
         })
+        if (options?.executionMode === 'manual') options.onProgress?.('run', 'done')
         setSidebarOpen(true)
         if (persistDraft) {
           clearNewWorkspaceDraft()
         }
         onCreated?.()
       } catch (error) {
+        if (options?.executionMode === 'autopilot' && activeStage === 'run') {
+          options.onProgress?.('spec', 'error')
+        }
+        options?.onProgress?.(activeStage, 'error')
         const formattedError = formatWorkspaceCreateError(error)
         setCreateError(formattedError)
         toast.error(getWorkspaceCreateErrorToastMessage(formattedError))
@@ -2934,7 +3000,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onCreateIssueBodyChange: setCreateIssueBody,
     createIssueSubmitting,
     createIssueError,
-    onCreateIssueSubmit: () => void handleCreateIssueSubmit(),
+    onCreateIssueSubmit: handleCreateIssueSubmit,
     createIssueGenerating,
     onGenerateIssueBody: () => void handleGenerateIssueBody(),
     createIssueLabels,

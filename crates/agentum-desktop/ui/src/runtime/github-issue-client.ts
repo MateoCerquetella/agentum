@@ -250,6 +250,7 @@ export async function draftGithubIssueBody(input: {
 // (crates/agentum-server/src/routes/harness.rs::SpecFromIssueResponse).
 export type ScaffoldedSpecFromIssue = {
   specId: string
+  specExisted: boolean
   specPath: string
   written: string[]
 }
@@ -268,6 +269,8 @@ export async function scaffoldSpecFromIssue(input: {
   slug?: string
   /** Also derive feature_list.json (server default: true). */
   plan?: boolean
+  /** Retain an existing human-edited spec and return success (retry/adoption). */
+  converge?: boolean
   /** Spec 021 (#379): the repo's tracker pin (`auto`/`github`/`linear`).
    *  Absent/`auto` keeps the issue-driven path's GitHub stamping. */
   tracker?: string
@@ -285,6 +288,7 @@ export async function scaffoldSpecFromIssue(input: {
         number: String(input.number),
         ...(input.slug ? { slug: input.slug } : {}),
         ...(input.plan !== undefined ? { plan: input.plan } : {}),
+        ...(input.converge !== undefined ? { converge: input.converge } : {}),
         ...(input.tracker ? { tracker: input.tracker } : {})
       }),
       signal: controller.signal
