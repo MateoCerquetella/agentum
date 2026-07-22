@@ -28,7 +28,6 @@ import {
   type GithubStateMap
 } from '@/tauri/github-labels'
 import { LinearApiKeyDialog } from '@/components/linear-api-key-dialog'
-import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 import {
   getPreflightIntegrationStatuses,
   type PreflightRefreshProvider
@@ -220,54 +219,6 @@ function GithubStatusLabelsEditor(): React.JSX.Element {
           </span>
         ) : null}
       </div>
-    </div>
-  )
-}
-
-/**
- * Settings mount for the shared Projects v2 board-binding editor (spec 010
- * F1, D7). A binding is per-repo while settings is global, so a repo selector
- * bridges that: pick a local repo, then bind/edit its board through the SAME
- * `ProjectBindingEditor` the F3 wizard step will mount later. This is the
- * wizard-independent surface F2 dogfoods on an existing workspace.
- */
-function GithubProjectsBoardEditor(): React.JSX.Element {
-  // Spec 020 F3: SSH repos are listed too — the threaded `repoId` makes the
-  // server resolve the binding's slug on the repo's own host, so the old
-  // local-only filter no longer reflects a real limitation.
-  const repos = useAppStore((s) => s.repos)
-  const [repoId, setRepoId] = useState<string>('')
-  const selected = repos.find((r) => r.id === repoId) ?? repos[0] ?? null
-
-  return (
-    <div className="mt-3 rounded-md border border-border/50 bg-background/60 p-3">
-      <p className="text-sm font-medium text-foreground">Projects v2 board</p>
-      <p className="mt-0.5 text-[11px] text-muted-foreground/70">
-        Bind a repo to a GitHub Projects v2 board: gated runs move its cards by column as features
-        code, verify, and finish — custom column names included.
-      </p>
-      {repos.length === 0 ? (
-        <p className="mt-2.5 text-xs text-muted-foreground">
-          Add a repo first — bindings are per-repo.
-        </p>
-      ) : (
-        <div className="mt-2.5 space-y-2.5">
-          <select
-            value={selected?.id ?? ''}
-            onChange={(e) => setRepoId(e.target.value)}
-            className="h-8 w-full min-w-0 rounded-md border border-input bg-background px-2 text-xs text-foreground"
-          >
-            {repos.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.displayName}
-              </option>
-            ))}
-          </select>
-          {selected ? (
-            <ProjectBindingEditor key={selected.id} workdir={selected.path} repoId={selected.id} />
-          ) : null}
-        </div>
-      )}
     </div>
   )
 }
@@ -587,9 +538,6 @@ export function IntegrationsPane(): React.JSX.Element {
             and the labels are plain config (no gh call happens here). */}
         <GithubStatusLabelsEditor />
 
-        {/* Spec 010 F1: bind a repo's Projects v2 board (per-repo; the
-            selector bridges global settings ↔ per-repo bindings). */}
-        <GithubProjectsBoardEditor />
       </div>
 
       {/* GitLab */}

@@ -84,14 +84,18 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
             ]
           },
           {
-            title: 'Tracker',
-            description:
-              'Which tracker harness runs drive ticket transitions against for this project.',
+            title: 'Project Integrations',
+            description: 'Choose the external board owned by this project.',
             keywords: [
               repo.displayName,
               'tracker',
+              'integrations',
               'github',
+              'github projects',
               'linear',
+              'linear project',
+              'board binding',
+              'status mapping',
               'issues',
               'tickets',
               'harness',

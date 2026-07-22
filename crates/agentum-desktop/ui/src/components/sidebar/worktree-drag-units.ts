@@ -12,6 +12,8 @@ type WorktreeDragUnitRow =
   // Host-first grouping adds a super-level above repo headers; it carries no
   // drag units, so the unit builder accepts and skips it.
   | { type: 'host-header' }
+  | { type: 'remote-tmux-card' }
+  | { type: 'operational-settled-disclosure' }
 
 export function getWorktreeDragUnitGroups(
   rows: readonly WorktreeDragUnitRow[]
@@ -29,7 +31,11 @@ export function getWorktreeDragUnitGroups(
       })
       continue
     }
-    if (row.type === 'imported-worktrees-card') {
+    if (
+      row.type === 'imported-worktrees-card' ||
+      row.type === 'remote-tmux-card' ||
+      row.type === 'operational-settled-disclosure'
+    ) {
       continue
     }
     if (row.type === 'host-header') {

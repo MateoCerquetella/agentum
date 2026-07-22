@@ -12,15 +12,15 @@ export default defineConfig({
     // crash at the app root. Deduping resolves every import to the top-level copy.
     dedupe: ['react', 'react-dom', 'react/jsx-runtime'],
     alias: {
-      '@renderer': resolve('src'),
-      '@': resolve('src'),
+      '@renderer': resolve(__dirname, 'src'),
+      '@': resolve(__dirname, 'src'),
       // Map Electron-era relative imports to their new locations
-      '../../shared': resolve('src/shared'),
-      '../../../shared': resolve('src/shared'),
-      '../../../../shared': resolve('src/shared'),
+      '../../shared': resolve(__dirname, 'src/shared'),
+      '../../../shared': resolve(__dirname, 'src/shared'),
+      '../../../../shared': resolve(__dirname, 'src/shared'),
       // Resources
-      '../../resources': resolve('resources'),
-      '../../../resources': resolve('resources'),
+      '../../resources': resolve(__dirname, 'resources'),
+      '../../../resources': resolve(__dirname, 'resources'),
     },
   },
   worker: {

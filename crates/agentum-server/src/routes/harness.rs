@@ -320,6 +320,10 @@ struct SpecFromIssueRequest {
     /// Also derive + write `feature_list.json` (default true).
     #[serde(default = "default_true")]
     plan: bool,
+    /// Opt in to retry/adoption semantics: retain an existing, potentially
+    /// human-edited spec and report success instead of returning 400.
+    #[serde(default)]
+    converge: bool,
     /// Spec 021 (#379): optional explicit tracker pin (`auto`/`github`/
     /// `linear`). Absent/`auto` keeps this issue-driven path's GitHub
     /// stamping (D4); `linear` overrides.
@@ -331,6 +335,8 @@ struct SpecFromIssueRequest {
 #[serde(rename_all = "camelCase")]
 struct SpecFromIssueResponse {
     spec_id: String,
+    /// True when the route retained an existing spec byte-for-byte.
+    spec_existed: bool,
     /// Relative to `workdir`, e.g. `.agentum-harness/specs/42-add-widget/spec.md`.
     spec_path: String,
     /// Scaffold + spec files written (relative paths).
@@ -383,13 +389,14 @@ async fn spec_from_issue(
         req.number.trim(),
         &issue,
         req.plan,
-        /* converge_existing */ false,
+        req.converge,
         provider,
     )
     .await?;
 
     Ok(axum::Json(SpecFromIssueResponse {
         spec_id: ensured.spec_id,
+        spec_existed: ensured.spec_existed,
         spec_path: ensured.spec_path,
         written: ensured.written,
         features: ensured.features,
@@ -854,6 +861,29 @@ mod tests {
             resolve_tracker_pin(Some("jira")),
             Err(ApiError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn spec_from_issue_converge_is_opt_in() {
+        let legacy: SpecFromIssueRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/example",
+            "number": "42"
+        }))
+        .unwrap();
+        assert!(
+            !legacy.converge,
+            "legacy callers keep the 400-on-existing contract"
+        );
+
+        let retry: SpecFromIssueRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/example",
+            "number": "42",
+            "plan": false,
+            "converge": true
+        }))
+        .unwrap();
+        assert!(retry.converge);
+        assert!(!retry.plan);
     }
 
     /// Spec 005 AC 1 convergence: an existing spec is not a failure for

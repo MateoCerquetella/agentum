@@ -26,6 +26,7 @@ import type {
   GitLabWorkItem,
   LinearIssue,
   AgentumHooks,
+  CreateWorktreeResult,
   SetupDecision,
   SetupRunPolicy,
   SparsePreset,
@@ -94,6 +95,13 @@ import { deriveTrackerBindCoords } from '@/components/new-workspace/work-item-pi
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { normalizeSparseDirectoryLines, sparseDirectoriesMatch } from '@/lib/sparse-paths'
 import { joinPath } from '@/lib/path'
+import type {
+  ExecutionMode,
+  NewWorkCheckpoint,
+  NewWorkStage,
+  NewWorkStageStatus
+} from '@/components/new-workspace/new-work-launch-model'
+import { isLiveProjectTaskScopeAuthority } from '@/lib/project-task-scope-authority'
 import { importExternalPathsToRuntime } from '@/runtime/runtime-file-client'
 import {
   checkRuntimeHooks,
@@ -154,6 +162,7 @@ export type UseComposerStateOptions = {
    *  full composer needs for linked-item prompt previews. */
   enableIssueAutomation?: boolean
   createGateMode?: 'full' | 'quick'
+  requiredProjectTaskScope?: Readonly<{ scopeKey: string; generation: number; repoId: string }>
 }
 
 type ComposerCardProps = {
@@ -216,7 +225,7 @@ type ComposerCardProps = {
   onCreateIssueBodyChange: (value: string) => void
   createIssueSubmitting: boolean
   createIssueError: string | null
-  onCreateIssueSubmit: () => void
+  onCreateIssueSubmit: () => Promise<LinkedWorkItemSummary | null>
   /** Spec 007: "Generate description" — drafts an SDD-shaped body from the
    *  typed title + repo context into the textarea (review before filing). */
   createIssueGenerating: boolean
@@ -318,9 +327,17 @@ export type UseComposerStateResult = {
   promptTextareaRef: React.RefObject<HTMLTextAreaElement | null>
   nameInputRef: React.RefObject<HTMLInputElement | null>
   submit: () => Promise<void>
-  submitQuick: (agent: TuiAgent | null) => Promise<void>
+  submitQuick: (agent: TuiAgent | null, options?: QuickSubmitOptions) => Promise<void>
   /** Invoked by the Enter handler to re-check whether submission should fire. */
   createDisabled: boolean
+}
+
+export type QuickSubmitOptions = {
+  linkedWorkItem?: LinkedWorkItemSummary
+  executionMode?: ExecutionMode
+  checkpoint?: NewWorkCheckpoint
+  onCheckpoint?: (next: NewWorkCheckpoint) => void
+  onProgress?: (stage: NewWorkStage, status: NewWorkStageStatus) => void
 }
 
 // Why: both the full-page TaskPage composer and the Cmd+J modal can be
@@ -348,7 +365,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onRepoIdOverrideChange,
     telemetrySource,
     enableIssueAutomation = true,
-    createGateMode = 'full'
+    createGateMode = 'full',
+    requiredProjectTaskScope
   } = options
 
   // Why: each `useAppStore(s => s.someAction)` registers its own equality
@@ -416,6 +434,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [internalRepoId, setInternalRepoId] = useState<string>(resolvedInitialRepoId)
   const repoId = repoIdOverride ?? internalRepoId
   const selectedRepo = eligibleRepos.find((repo) => repo.id === repoId)
+  const requiredScopeIsCurrent = useCallback((): boolean => {
+    if (!requiredProjectTaskScope) return true
+    if (!isLiveProjectTaskScopeAuthority(requiredProjectTaskScope)) return false
+    const current = useAppStore.getState().repos.find((repo) => repo.id === requiredProjectTaskScope.repoId)
+    if (!current || repoId !== requiredProjectTaskScope.repoId) return false
+    try {
+      const key = JSON.parse(requiredProjectTaskScope.scopeKey) as unknown[]
+      if (key[1] === 'linear') {
+        return current.trackerProvider === 'linear' && current.linearProjectBinding?.workspaceId === key[2] && current.linearProjectBinding?.projectId === key[3]
+      }
+      return key[1] === 'github' && current.trackerProvider === 'github'
+    } catch { return false }
+  }, [repoId, requiredProjectTaskScope])
   const selectedRepoIsGit = selectedRepo ? isGitRepoKind(selectedRepo) : false
   const selectedRepoConnectionId = selectedRepo?.connectionId ?? null
   const selectedRepoSshState = selectedRepoConnectionId
@@ -1003,6 +1034,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     note,
     name,
     repoId,
+    requiredScopeIsCurrent,
     setNewWorkspaceDraft,
     tuiAgent
   ])
@@ -1139,6 +1171,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   const onConnectSelectedRepo = useCallback(async (): Promise<void> => {
+    if (!requiredScopeIsCurrent()) {
+      toast.error('This project task scope changed. Reopen the workspace action from the current board.')
+      return
+    }
     const targetId = selectedRepoConnectionIdRef.current
     if (!targetId) {
       return
@@ -1160,13 +1196,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // step): it registers the SSH target as a server host, probes it over SSH,
       // and updates sshConnectionStates — which flips this card to "connected".
       const result = await connectSshTargetViaServer(targetId)
+      if (!requiredScopeIsCurrent()) {
+        toast.error('This project task scope changed while connecting.')
+        return
+      }
       if (!result.ok) {
         toast.error(result.message || 'Failed to connect to project.')
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to connect to project.')
     }
-  }, [])
+  }, [requiredScopeIsCurrent])
 
   // Why: warm the Start-from picker's PR cache on composer mount and whenever
   // the selected repo changes so opening the picker paints instantly from
@@ -1519,19 +1559,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     )
   }, [])
 
-  const handleCreateIssueSubmit = useCallback(async (): Promise<void> => {
+  const handleCreateIssueSubmit = useCallback(async (): Promise<LinkedWorkItemSummary | null> => {
     const title = createIssueTitle.trim()
     const repoPath = selectedRepo?.path
     if (createIssueSubmitting) {
-      return
+      return null
     }
     if (!title) {
       setCreateIssueError('Give the issue a title.')
-      return
+      return null
     }
     if (!repoPath) {
       setCreateIssueError('Pick a project first.')
-      return
+      return null
     }
     setCreateIssueSubmitting(true)
     setCreateIssueError(null)
@@ -1570,9 +1610,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         labels,
         author: created.author ?? null
       }
-      setLinkedWorkItem(
-        body
-          ? {
+      const confirmedSummary: LinkedWorkItemSummary = body
+        ? {
               ...summary,
               linkedContext: {
                 provider: 'github',
@@ -1585,17 +1624,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
                 })
               }
             }
-          : summary
-      )
+        : summary
+      setLinkedWorkItem(confirmedSummary)
       setCreateIssueOpen(false)
       setCreateIssueTitle('')
       setCreateIssueBody('')
       setCreateIssueLabels([])
+      return confirmedSummary
     } catch (error) {
       // Zero state change on failure — the form stays filled for a retry.
       setCreateIssueError(
         error instanceof Error ? error.message : 'Could not create the GitHub issue.'
       )
+      return null
     } finally {
       setCreateIssueSubmitting(false)
     }
@@ -2384,6 +2425,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   )
 
   const submit = useCallback(async (): Promise<void> => {
+    if (!requiredScopeIsCurrent()) { toast.error('This project task scope changed. Reopen the workspace action from the current board.'); return }
     if (
       !repoId ||
       !workspaceSeedName ||
@@ -2481,6 +2523,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       const setupTrustDecision = selectedRepoIsGit
         ? await ensureHooksConfirmed(useAppStore.getState(), repoId, 'setup')
         : 'skip'
+      if (!requiredScopeIsCurrent()) { toast.error('This project task scope changed while the workspace gate was open.'); return }
       const effectiveSetupDecision: SetupDecision =
         setupTrustDecision === 'skip'
           ? 'skip'
@@ -2505,6 +2548,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // poller can drive the linked item's status. GitHub issue → URL; Linear →
       // identifier; PR/MR-linked or unlinked create binds nothing.
       const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
+      if (!requiredScopeIsCurrent()) {
+        toast.error('This project task scope changed before the workspace could be created.')
+        return
+      }
       const result = await createWorktree(
         repoId,
         workspaceName,
@@ -2618,6 +2665,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     persistDraft,
     pushTarget,
     repoId,
+    requiredScopeIsCurrent,
     requiresExplicitSetupChoice,
     resolvePendingSmartGitHubSubmit,
     resolvedSetupDecision,
@@ -2641,7 +2689,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   const submitQuick = useCallback(
-    async (requestedAgent: TuiAgent | null): Promise<void> => {
+    async (requestedAgent: TuiAgent | null, options?: QuickSubmitOptions): Promise<void> => {
+      if (!requiredScopeIsCurrent()) {
+        toast.error('This project task scope changed. Reopen the workspace action from the current board.')
+        return
+      }
       const agent =
         requestedAgent && isTuiAgentEnabled(requestedAgent, disabledTuiAgents)
           ? requestedAgent
@@ -2649,9 +2701,9 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       const workspaceNameSeed = getWorkspaceSeedName({
         explicitName: name,
         prompt: '',
-        linkedIssueNumber: parsedLinkedIssueNumber,
+        linkedIssueNumber: options?.linkedWorkItem?.number ?? parsedLinkedIssueNumber,
         linkedPR,
-        linkedTitle: linkedWorkItem?.title ?? null,
+        linkedTitle: options?.linkedWorkItem?.title ?? linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       })
       if (
@@ -2667,11 +2719,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
       setCreateError(null)
       setCreating(true)
+      let activeStage: NewWorkStage = 'worktree'
       try {
         const smartGitHubResolution = await resolvePendingSmartGitHubSubmit()
-        const submitLinkedWorkItem = smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem
+        const submitLinkedWorkItem =
+          options?.linkedWorkItem ?? smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem
         const submitLinkedIssueNumber =
-          smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber
+          options?.linkedWorkItem?.number ?? smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber
         const submitLinkedPR = smartGitHubResolution?.linkedPR ?? effectiveLinkedPR
         const workspaceName = smartGitHubResolution?.workspaceName ?? workspaceNameSeed
         if (!workspaceName) {
@@ -2707,6 +2761,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         const trustDecision = selectedRepoIsGit
           ? await ensureHooksConfirmed(useAppStore.getState(), repoId, 'setup')
           : 'skip'
+        if (!requiredScopeIsCurrent()) {
+          toast.error('This project task scope changed while the workspace gate was open.')
+          return
+        }
         const effectiveSetupDecision: SetupDecision =
           trustDecision === 'skip'
             ? 'skip'
@@ -2723,7 +2781,12 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         // like the full submit path — otherwise a wizard-created issue's worktree
         // shows no status chip in the sidebar (bind dropped on create).
         const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
-        const result = await createWorktree(
+        if (!requiredScopeIsCurrent()) {
+          toast.error('This project task scope changed before the workspace could be created.')
+          return
+        }
+        options?.onProgress?.('worktree', 'active')
+        const result: CreateWorktreeResult = options?.checkpoint?.worktreeResult ?? (await createWorktree(
           repoId,
           workspaceName,
           selectedRepoIsGit ? baseBranch : undefined,
@@ -2748,7 +2811,15 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           undefined,
           trackerBind?.trackerProvider,
           trackerBind?.trackerUrl
-        )
+        ))
+        if (!options?.checkpoint?.worktreeResult) {
+          options?.onCheckpoint?.({
+            ...options?.checkpoint,
+            ...(submitLinkedWorkItem ? { linkedWorkItem: submitLinkedWorkItem } : {}),
+            worktreeResult: result
+          })
+        }
+        options?.onProgress?.('worktree', 'done')
         const worktree = result.worktree
 
         const trimmedNote = note.trim()
@@ -2759,7 +2830,41 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         // nothing driving it (spec 007: the pure gate is re-derived inside
         // maybeStartGatedRun, which returns whether the engine took ownership).
         let gatedRunStarted = false
-        if (startGatedRun) {
+        if (options?.executionMode === 'autopilot') {
+          activeStage = 'spec'
+          options.onProgress?.('spec', 'active')
+          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
+          if (!gate.eligible) throw new Error(describeIssueSideEffectSkip('start-gated-run', gate.reason))
+          activeStage = 'run'
+          const started = await startGatedWork({
+            workdir: worktree.path,
+            number: gate.number,
+            slug: `${gate.slug.owner}/${gate.slug.repo}`,
+            ...(agent ? { agentTool: agent } : {}),
+            ...(selectedRepo.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+          })
+          gatedRunStarted = gatedRunResultOwnsWorktree(started)
+          if (!gatedRunStarted) {
+            throw new Error('SDD Autopilot planned no work and did not take ownership of this workspace.')
+          }
+          options.onProgress?.('spec', 'done')
+          options.onProgress?.('run', 'done')
+        } else if (options?.executionMode === 'manual') {
+          activeStage = 'spec'
+          options.onProgress?.('spec', 'active')
+          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
+          if (gate.eligible) {
+            await scaffoldSpecFromIssue({
+              workdir: worktree.path,
+              number: gate.number,
+              slug: `${gate.slug.owner}/${gate.slug.repo}`,
+              plan: false,
+              converge: true,
+              ...(selectedRepo.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+            })
+          }
+          options.onProgress?.('spec', 'done')
+        } else if (startGatedRun) {
           // The server converge-scaffolds + plans + runs the engine; the D5
           // scaffold call is skipped when the toggle is armed (AC 1). Runs
           // before the skip-session branch so the gated run starts either way.
@@ -2805,12 +2910,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           // worktree. A failed start falls through to a normal session.
           gatedRun: gatedRunStarted
         })
+        if (options?.executionMode === 'manual') options.onProgress?.('run', 'done')
         setSidebarOpen(true)
         if (persistDraft) {
           clearNewWorkspaceDraft()
         }
         onCreated?.()
       } catch (error) {
+        if (options?.executionMode === 'autopilot' && activeStage === 'run') {
+          options.onProgress?.('spec', 'error')
+        }
+        options?.onProgress?.(activeStage, 'error')
         const formattedError = formatWorkspaceCreateError(error)
         setCreateError(formattedError)
         toast.error(getWorkspaceCreateErrorToastMessage(formattedError))
@@ -2842,6 +2952,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       persistDraft,
       pushTarget,
       repoId,
+      requiredScopeIsCurrent,
       requiresExplicitSetupChoice,
       resolvePendingSmartGitHubSubmit,
       resolvedSetupDecision,
@@ -2944,7 +3055,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onCreateIssueBodyChange: setCreateIssueBody,
     createIssueSubmitting,
     createIssueError,
-    onCreateIssueSubmit: () => void handleCreateIssueSubmit(),
+    onCreateIssueSubmit: handleCreateIssueSubmit,
     createIssueGenerating,
     onGenerateIssueBody: (choice) => void handleGenerateIssueBody(choice),
     createIssueLabels,

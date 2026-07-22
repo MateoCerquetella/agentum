@@ -8,6 +8,7 @@ import {
 } from './worktree-list-groups'
 import {
   buildWorktreeSectionActivitySummaries,
+  resolveWorktreeStatusFromState,
   type WorktreeSectionActivityState
 } from './worktree-section-activity'
 
@@ -118,6 +119,37 @@ function buildSummaries({
 }
 
 describe('buildWorktreeSectionActivitySummaries', () => {
+  it('exports the same urgent precedence resolver used by card status', () => {
+    const worktreeId = 'wt-urgent'
+    const tabId = 'tab-urgent'
+    const now = Date.now()
+    const blocked: AgentStatusEntry = {
+      state: 'blocked',
+      prompt: '',
+      updatedAt: now,
+      stateStartedAt: now,
+      paneKey: `${tabId}:blocked`,
+      stateHistory: []
+    }
+    const working: AgentStatusEntry = {
+      ...blocked,
+      state: 'working',
+      paneKey: `${tabId}:working`
+    }
+    const state = makeState({
+      tabsByWorktree: {
+        [worktreeId]: [makeTerminalTab({ id: tabId, worktreeId })]
+      },
+      agentStatusByPaneKey: {
+        [blocked.paneKey]: blocked,
+        [working.paneKey]: working
+      },
+      agentStatusEpoch: 1
+    })
+
+    expect(resolveWorktreeStatusFromState(state, worktreeId)).toBe('permission')
+  })
+
   it('counts running worktrees across repo project-group ancestors', () => {
     const parent = makeProjectGroup({ id: 'parent', name: 'Parent' })
     const child = makeProjectGroup({

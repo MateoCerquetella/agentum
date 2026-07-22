@@ -126,6 +126,20 @@ import type {
   Repo,
   TuiAgent
 } from '../../../../shared/types'
+import {
+  NEW_WORK_STAGES,
+  canLaunchNewWork,
+  deriveNewWorkEligibility,
+  initialNewWorkProgress,
+  newWorkPrimaryLabel,
+  resolveLaunchIssue,
+  updateNewWorkProgress,
+  type ExecutionMode,
+  type NewWorkCheckpoint,
+  type NewWorkEligibility,
+  type NewWorkProgress,
+  type WorkSource
+} from './new-work-launch-model'
 
 /**
  * The "Create Workspace" wizard — a three-step front-end (Host → Repo &
@@ -167,6 +181,7 @@ export default function CreateWorkspaceWizard({
   // is inherited byte-identically (inv. 4).
   const { cardProps, submitQuick, nameInputRef } = useComposerState({
     ...deriveWizardComposerSeed(modalData),
+    requiredProjectTaskScope: modalData.requiredProjectTaskScope,
     initialPrompt: '',
     persistDraft: false,
     onCreated: onClose,
@@ -189,7 +204,6 @@ export default function CreateWorkspaceWizard({
     onBaseBranchChange,
     detectedAgentIds,
     creating,
-    createDisabled,
     selectedRepoRequiresConnection,
     selectedRepoConnectInProgress,
     onConnectSelectedRepo,
@@ -202,6 +216,9 @@ export default function CreateWorkspaceWizard({
     onCreateIssueTitleChange,
     createIssueBody,
     onCreateIssueBodyChange,
+    createIssueLabels,
+    createIssueLabelOptions,
+    onToggleCreateIssueLabel,
     createIssueGenerating,
     onGenerateIssueBody,
     createIssueSubmitting,
@@ -210,13 +227,17 @@ export default function CreateWorkspaceWizard({
     // Spec 013 F3: bind a filed Linear issue through the SAME composer seam the
     // Linear @-picker uses (`setLinkedWorkItem(buildLinearIssueLinkedWorkItem)`).
     onSmartLinearIssueSelect,
+    requiresExplicitSetupChoice,
+    setupDecision,
     // Spec 013 F4: the gated-run toggle — the SAME seams the composer card used,
     // so `submitQuick` inherits the `start_work` precondition set unchanged.
-    canStartGatedRun,
-    startGatedRun,
-    onStartGatedRunChange,
-    sddRolesEnabled
   } = cardProps
+  const scopeLockedDisabledRepoIds = useMemo(() => {
+    if (!modalData.requiredProjectTaskScope) return disabledRepoIds
+    const next = new Map(disabledRepoIds)
+    for (const candidate of repos) if (candidate.id !== modalData.requiredProjectTaskScope.repoId) next.set(candidate.id, 'Repository locked to the active Project Tasks scope.')
+    return next
+  }, [disabledRepoIds, modalData.requiredProjectTaskScope, repos])
 
   // Quick-agent selection mirrors the composer modal's `QuickTabBody`: the
   // user's pick wins, else the preferred/detected default. Derived during
@@ -245,6 +266,12 @@ export default function CreateWorkspaceWizard({
   const quickAgent = resolvedAgent.quickAgent
 
   const [step, setStep] = useState<WizardStep>(1)
+  const [workSource, setWorkSource] = useState<WorkSource>(linkedWorkItem ? 'existing' : 'new')
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('autopilot')
+  const [launchCheckpoint, setLaunchCheckpoint] = useState<NewWorkCheckpoint>({})
+  const [launchProgress, setLaunchProgress] = useState(initialNewWorkProgress())
+  const [launchAttempted, setLaunchAttempted] = useState(false)
+  const launchInFlightRef = useRef(false)
   const [addingRepo, setAddingRepo] = useState(false)
   // Spec: SSH/remote "Add project" is inline in the wizard (not a separate
   // dialog) — this toggles the inline remote-add panel in step 2. Reset on host
@@ -255,6 +282,7 @@ export default function CreateWorkspaceWizard({
   const lastUsedHostKeyRef = useRef(selectedHostKey)
 
   const selectedRepo = repos.find((repo) => repo.id === repoId)
+  const canStageNewGithubIssue = selectedRepoIsGit && !selectedRepo?.connectionId
   const selectedHostLabel =
     eligibleHosts.find((host) => host.key === selectedHostKey)?.label ??
     (selectedHostKey === LOCAL_HOST_KEY ? 'This machine' : 'SSH host')
@@ -360,10 +388,81 @@ export default function CreateWorkspaceWizard({
     [onRepoChange]
   )
 
-  const handlePrimary = useCallback(() => {
+  const eligibility = deriveNewWorkEligibility({
+    isLocal: !selectedRepo?.connectionId,
+    isGit: selectedRepoIsGit,
+    source: workSource,
+    linkedWorkItem,
+    selectedAgentInstalled: Boolean(quickAgent && (!detectedAgentIds || detectedAgentIds.has(quickAgent))),
+    setupBlocked:
+      selectedRepoRequiresConnection || (requiresExplicitSetupChoice && !setupDecision)
+  })
+
+  useEffect(() => {
+    if (
+      step === 3 &&
+      selectedRepo &&
+      !launchCheckpoint.linkedWorkItem &&
+      workSource === 'new' &&
+      !canStageNewGithubIssue
+    ) {
+      setWorkSource('existing')
+    }
+  }, [canStageNewGithubIssue, launchCheckpoint.linkedWorkItem, selectedRepo, step, workSource])
+
+  const launchAllowed = canLaunchNewWork({
+    source: workSource,
+    executionMode,
+    eligibility,
+    hasSelectedAgent: Boolean(quickAgent),
+    canStageNewIssue: canStageNewGithubIssue,
+    hasNewIssueTitle: Boolean(createIssueTitle.trim()),
+    hasSelectedIssue: Boolean(linkedWorkItem),
+    hasIssueCheckpoint: Boolean(launchCheckpoint.linkedWorkItem)
+  })
+
+  const handlePrimary = useCallback(async () => {
     if (step === 3) {
-      if (!createDisabled && !creating) {
-        void submitQuick(quickAgent)
+      if (
+        launchInFlightRef.current ||
+        creating ||
+        createIssueSubmitting ||
+        !launchAllowed
+      ) {
+        return
+      }
+      launchInFlightRef.current = true
+      try {
+        setLaunchAttempted(true)
+        let checkpoint = launchCheckpoint
+        let issue = checkpoint.linkedWorkItem ?? null
+        if (!issue) {
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'active'))
+          const resolved = await resolveLaunchIssue({
+            source: workSource,
+            selectedIssue: linkedWorkItem,
+            checkpoint,
+            createIssue: onCreateIssueSubmit
+          })
+          if (!resolved.issue) {
+            setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'error'))
+            return
+          }
+          checkpoint = resolved.checkpoint
+          issue = resolved.issue
+          setLaunchCheckpoint(checkpoint)
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'done'))
+        }
+        await submitQuick(quickAgent, {
+          linkedWorkItem: issue,
+          executionMode,
+          checkpoint,
+          onCheckpoint: setLaunchCheckpoint,
+          onProgress: (stage, status) =>
+            setLaunchProgress((current) => updateNewWorkProgress(current, stage, status))
+        })
+      } finally {
+        launchInFlightRef.current = false
       }
       return
     }
@@ -371,7 +470,7 @@ export default function CreateWorkspaceWizard({
       return
     }
     goNext()
-  }, [canLeaveRepoStep, createDisabled, creating, goNext, quickAgent, step, submitQuick])
+  }, [canLeaveRepoStep, createIssueSubmitting, creating, executionMode, goNext, launchAllowed, launchCheckpoint, linkedWorkItem, onCreateIssueSubmit, quickAgent, step, submitQuick, workSource])
 
   // Enter advances / creates (there are no multi-line inputs here, so a bare
   // Enter is unambiguous); Radix handles Esc → close on its own.
@@ -385,8 +484,8 @@ export default function CreateWorkspaceWizard({
       // textareas (newline), buttons (their onClick, e.g. "Draft with AI" or an
       // agent tile), and selects — must NOT also advance/create the workspace,
       // or Enter double-fires (the "creates it double" report). The create-issue
-      // panel additionally stops Enter propagation so its title field files the
-      // issue rather than reaching here at all.
+      // panel additionally stops Enter propagation so its title field cannot
+      // reach the final launch action while the draft is being edited.
       const target = event.target as HTMLElement | null
       if (
         target instanceof HTMLTextAreaElement ||
@@ -396,7 +495,7 @@ export default function CreateWorkspaceWizard({
         return
       }
       event.preventDefault()
-      handlePrimary()
+      void handlePrimary()
     },
     [handlePrimary]
   )
@@ -413,9 +512,13 @@ export default function CreateWorkspaceWizard({
     [name, quickAgent, selectedHostLabel, selectedRepo, step]
   )
 
-  const primaryLabel = wizardPrimaryLabel(step, creating)
+  const primaryLabel = step === 3
+    ? creating ? 'Preparing work…' : newWorkPrimaryLabel(workSource, launchAttempted)
+    : wizardPrimaryLabel(step, creating)
   const primaryDisabled =
-    step === 3 ? createDisabled || creating : step === 2 ? !canLeaveRepoStep : false
+    step === 3
+      ? creating || createIssueSubmitting || !launchAllowed
+      : step === 2 ? !canLeaveRepoStep : false
 
   // Spec 013 F1: the tracker section reads SOLELY from the Project the picker
   // resolves (per-repo binding ∨ global activeProject) — no git-remote heuristic
@@ -487,7 +590,7 @@ export default function CreateWorkspaceWizard({
             <RepoStep
               hostLabel={selectedHostLabel}
               repos={hostScopedRepos}
-              disabledRepoIds={disabledRepoIds}
+              disabledRepoIds={scopeLockedDisabledRepoIds}
               repoId={repoId}
               onRepoChange={onRepoChange}
               selectedRepo={selectedRepo}
@@ -531,6 +634,9 @@ export default function CreateWorkspaceWizard({
                 onTitleChange: onCreateIssueTitleChange,
                 body: createIssueBody,
                 onBodyChange: onCreateIssueBodyChange,
+                labels: createIssueLabels,
+                labelOptions: createIssueLabelOptions,
+                onToggleLabel: onToggleCreateIssueLabel,
                 generating: createIssueGenerating,
                 onGenerate: onGenerateIssueBody,
                 submitting: createIssueSubmitting,
@@ -538,19 +644,22 @@ export default function CreateWorkspaceWizard({
                 onSubmit: onCreateIssueSubmit
               }}
               linear={{ settings, onBind: onSmartLinearIssueSelect }}
-              gatedRun={{
-                canStart: canStartGatedRun,
-                enabled: startGatedRun,
-                onChange: onStartGatedRunChange,
-                sddRolesEnabled
-              }}
+              workSource={workSource}
+              onWorkSourceChange={setWorkSource}
+              executionMode={executionMode}
+              onExecutionModeChange={setExecutionMode}
+              eligibility={eligibility}
+              progress={launchProgress}
+              locked={Boolean(launchCheckpoint.linkedWorkItem)}
+              canStageNewIssue={canStageNewGithubIssue}
+              worktreeLocked={Boolean(launchCheckpoint.worktreeResult)}
             />
           ) : null}
         </div>
 
         {/* Footer */}
         <div className="flex flex-none items-center gap-2.5 border-t border-border bg-muted/40 px-[18px] py-3">
-          {step > 1 ? (
+          {step > 1 && !launchCheckpoint.linkedWorkItem ? (
             <button
               type="button"
               onClick={goBack}
@@ -563,7 +672,7 @@ export default function CreateWorkspaceWizard({
           <span className="flex-1" />
           <button
             type="button"
-            onClick={handlePrimary}
+            onClick={() => void handlePrimary()}
             disabled={primaryDisabled}
             className="inline-flex items-center gap-2 rounded-full bg-primary px-[18px] py-2 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -1345,6 +1454,9 @@ type CreateIssueSeams = {
   onTitleChange: (value: string) => void
   body: string
   onBodyChange: (value: string) => void
+  labels: string[]
+  labelOptions: string[] | null
+  onToggleLabel: (label: string) => void
   generating: boolean
   onGenerate: (choice?: DraftLlmChoice) => void
   submitting: boolean
@@ -1362,15 +1474,6 @@ type LinearCreateSeams = {
 
 /** Spec 013 F4: the composer's gated-run seams, migrated into the wizard. Maps
  *  1:1 onto `cardProps` — no new state or submit path. */
-type GatedRunSeams = {
-  /** Eligible when a github.com issue is linked and the repo is local git. */
-  canStart: boolean
-  enabled: boolean
-  onChange: (value: boolean) => void
-  /** Whether gated runs use the SDD role loop (drives the armed copy only). */
-  sddRolesEnabled: boolean
-}
-
 function AgentStep({
   agents,
   detectedAgentIds,
@@ -1391,7 +1494,15 @@ function AgentStep({
   onPickWorkItem,
   createIssue,
   linear,
-  gatedRun
+  workSource,
+  onWorkSourceChange,
+  executionMode,
+  onExecutionModeChange,
+  eligibility,
+  progress,
+  locked,
+  canStageNewIssue,
+  worktreeLocked
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
@@ -1419,7 +1530,15 @@ function AgentStep({
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
-  gatedRun: GatedRunSeams
+  workSource: WorkSource
+  onWorkSourceChange: (source: WorkSource) => void
+  executionMode: ExecutionMode
+  onExecutionModeChange: (mode: ExecutionMode) => void
+  eligibility: NewWorkEligibility
+  progress: NewWorkProgress
+  locked: boolean
+  canStageNewIssue: boolean
+  worktreeLocked: boolean
 }): React.JSX.Element {
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
@@ -1431,6 +1550,16 @@ function AgentStep({
           Link or create the issue first — the {selectedRepoIsGit ? 'worktree' : 'workspace'} is
           named after it. Then pick the agent.
         </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {(['new', 'existing'] as const).map((source) => (
+          <button key={source} type="button" disabled={locked || (source === 'new' && !canStageNewIssue)} onClick={() => onWorkSourceChange(source)}
+            className={cn('rounded-lg border px-3 py-2 text-left text-[12px]', workSource === source ? 'border-primary/55 bg-primary/8 text-foreground' : 'border-border text-muted-foreground', locked && 'opacity-60')}>
+            <span className="block font-medium">{source === 'new' ? 'New issue' : 'Existing issue'}</span>
+            <span className="block text-[10.5px] text-muted-foreground">{source === 'new' ? 'Filed only when work starts' : 'Choose from this project'}</span>
+          </button>
+        ))}
       </div>
 
       {/* Tracker FIRST: linking/creating the issue auto-fills the name field
@@ -1446,6 +1575,9 @@ function AgentStep({
         onPickWorkItem={onPickWorkItem}
         createIssue={createIssue}
         linear={linear}
+        source={workSource}
+        canStageNewIssue={canStageNewIssue}
+        showLinkedSelection={workSource === 'existing' || locked}
       />
 
       <div className="flex flex-col gap-2.5">
@@ -1455,6 +1587,7 @@ function AgentStep({
         <input
           ref={nameInputRef}
           value={name}
+          disabled={worktreeLocked}
           onChange={(event) => onNameValueChange(event.target.value)}
           placeholder="auto"
           className="h-[34px] rounded-md border border-input bg-secondary px-2.5 font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
@@ -1479,6 +1612,7 @@ function AgentStep({
               <button
                 key={agent}
                 type="button"
+                disabled={worktreeLocked}
                 onClick={() => onPick(agent)}
                 title={installed ? undefined : 'Not detected on PATH'}
                 className={cn(
@@ -1486,7 +1620,8 @@ function AgentStep({
                   selected
                     ? 'border-muted-foreground/40 bg-secondary text-foreground'
                     : 'border-border text-muted-foreground hover:border-muted-foreground/25',
-                  !installed && !selected ? 'opacity-55' : ''
+                  !installed && !selected ? 'opacity-55' : '',
+                  worktreeLocked ? 'cursor-not-allowed opacity-60' : ''
                 )}
               >
                 <AgentIcon agent={agent} size={13} />
@@ -1500,33 +1635,32 @@ function AgentStep({
         </div>
         {agents.length === 0 ? (
           <span className="text-[11.5px] text-muted-foreground">
-            No agents detected on PATH — install one, or pick after the workspace opens.
+            No agents detected on PATH — install or detect one before starting work.
           </span>
         ) : null}
       </div>
 
-      {/* Spec 013 F4: the migrated "Start gated run" toggle — eligible only when
-          a github.com issue is linked to a local git repo. Bound to the SAME
-          cardProps seams, so submitting arms `start_work` unchanged (inv. 4). */}
-      {gatedRun.canStart ? (
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-secondary px-3 py-2.5">
-          <input
-            type="checkbox"
-            checked={gatedRun.enabled}
-            onChange={(event) => gatedRun.onChange(event.target.checked)}
-            className="mt-0.5 size-3.5 flex-none accent-primary"
-          />
-          <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="text-[12.5px] font-medium text-foreground">Start gated run</span>
-            <span className="text-[11px] text-muted-foreground">
-              {gatedRun.enabled
-                ? gatedRun.sddRolesEnabled
-                  ? 'The linked issue becomes the spec; the SDD role loop drives the worktree behind a verify gate.'
-                  : 'The linked issue becomes the spec; the Harness Engine drives the worktree behind a verify gate.'
-                : 'Turn the linked issue into a spec and let the Harness Engine drive the worktree behind a verify gate.'}
-            </span>
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" disabled={!eligibility.eligible || progress.worktree === 'done'} onClick={() => onExecutionModeChange('autopilot')}
+          className={cn('rounded-lg border px-3 py-2 text-left', executionMode === 'autopilot' ? 'border-primary/55 bg-primary/8' : 'border-border', !eligibility.eligible && 'opacity-50')}>
+          <span className="block text-[12px] font-medium">SDD Autopilot</span>
+          <span className="block text-[10.5px] text-muted-foreground">PM → Architect → Build → Verify → Review</span>
+        </button>
+        <button type="button" disabled={progress.worktree === 'done'} onClick={() => onExecutionModeChange('manual')}
+          className={cn('rounded-lg border px-3 py-2 text-left', executionMode === 'manual' ? 'border-primary/55 bg-primary/8' : 'border-border')}>
+          <span className="block text-[12px] font-medium">Open manually</span>
+          <span className="block text-[10.5px] text-muted-foreground">
+            {eligibility.eligible
+              ? 'Prepare the spec, then open one agent'
+              : 'Open one agent · no generated SDD spec'}
           </span>
-        </label>
+        </button>
+      </div>
+      {!eligibility.eligible ? <span className="text-[11px] text-amber-500">{eligibility.message}</span> : null}
+      {Object.values(progress).some((status) => status !== 'pending') ? (
+        <div className="grid grid-cols-4 gap-1.5 rounded-lg border border-border p-2">
+          {NEW_WORK_STAGES.map((stage) => <span key={stage} className={cn('text-center text-[10px] capitalize text-muted-foreground', progress[stage] === 'done' && 'text-emerald-500', progress[stage] === 'error' && 'text-destructive')}>{progress[stage] === 'done' ? '✓ ' : progress[stage] === 'active' ? '● ' : progress[stage] === 'error' ? '! ' : ''}{stage}</span>)}
+        </div>
       ) : null}
     </div>
   )
@@ -1563,7 +1697,10 @@ function TrackerSection({
   linkedWorkItem,
   onPickWorkItem,
   createIssue,
-  linear
+  linear,
+  source,
+  canStageNewIssue,
+  showLinkedSelection
 }: {
   /** The selected GIT repo's workdir (local path, or the path on the repo's
    *  own host for an SSH repo). The slug is resolved server-side from this
@@ -1587,6 +1724,9 @@ function TrackerSection({
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
+  source: WorkSource
+  canStageNewIssue: boolean
+  showLinkedSelection: boolean
 }): React.JSX.Element {
   const [binding, setBinding] = useState<PickerBindingResolution | null>(null)
   const [tableState, setTableState] = useState<{
@@ -1819,21 +1959,23 @@ function TrackerSection({
   return (
     <div className="flex flex-col gap-2.5">
       {/* Spec 013 F1 (AC 1): one section header, the control at the TOP. */}
-      <div className="flex items-center justify-between gap-2">
+      {source === 'existing' ? <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
           Tracker
         </span>
         {configureControl}
-      </div>
+      </div> : null}
 
       {/* Status line — driven SOLELY by the resolved Project (AC 2). */}
-      <TrackerStatusLine
-        status={trackerStatus}
-        hasWorkdir={Boolean(workdir)}
-        onRetry={resolved ? refresh : undefined}
-      />
+      {source === 'existing' ? (
+        <TrackerStatusLine
+          status={trackerStatus}
+          hasWorkdir={Boolean(workdir)}
+          onRetry={resolved ? refresh : undefined}
+        />
+      ) : null}
 
-      {table ? (
+      {source === 'existing' && table ? (
         <div className="overflow-hidden rounded-lg border border-border bg-card/30">
           <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
             <Search className="size-3.5 flex-none text-muted-foreground" />
@@ -1934,14 +2076,21 @@ function TrackerSection({
       {/* Spec 013 F2/F3: create an issue from a short intent, then bind it. Only
           when nothing is linked yet and the repo is a local git repo. The file
           arm targets GitHub or Linear per the resolved tracker (F3). */}
-      {createIssue.canCreate ? (
-        <CreateIssuePanel createIssue={createIssue} linear={linear} resolved={resolved} />
+      {source === 'new' && canStageNewIssue ? (
+        <CreateIssuePanel createIssue={createIssue} linear={linear} resolved={resolved} deferred />
       ) : null}
 
-      {linkedWorkItem ? (
-        <span className="text-[11px] text-emerald-500">
-          Linked · #{linkedWorkItem.number} {linkedWorkItem.title}
-        </span>
+      {linkedWorkItem && showLinkedSelection ? (
+        <div className="flex items-start gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/8 px-3 py-2">
+          <Check className="mt-0.5 size-3.5 flex-none text-emerald-500" aria-hidden />
+          <span className="min-w-0 text-[11.5px] text-foreground">
+            <span className="font-semibold text-emerald-500">Selected for this workspace</span>
+            <span className="ml-1.5 font-mono text-muted-foreground">
+              #{linkedWorkItem.number}
+            </span>{' '}
+            {linkedWorkItem.title}
+          </span>
+        </div>
       ) : null}
     </div>
   )
@@ -1965,13 +2114,15 @@ function TrackerSection({
 function CreateIssuePanel({
   createIssue,
   linear,
-  resolved
+  resolved,
+  deferred = false
 }: {
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
   resolved: PickerProjectRef | null
+  deferred?: boolean
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(deferred)
   const savedChatAgent = useAppStore((state) => state.settings?.chatAgent)
   const updateSettings = useAppStore((state) => state.updateSettings)
   const { detectedIds: detectedChatAgentIds } = useDetectedAgents()
@@ -2009,7 +2160,7 @@ function CreateIssuePanel({
   // Probe Linear once the panel is open: is it connected, and what teams exist?
   // Non-fatal — any failure keeps the GitHub-only default.
   useEffect(() => {
-    if (!open) {
+    if (!open || deferred) {
       return
     }
     let cancelled = false
@@ -2036,11 +2187,14 @@ function CreateIssuePanel({
     return () => {
       cancelled = true
     }
-  }, [open, linear.settings])
+  }, [deferred, open, linear.settings])
 
   const provider = resolveCreateIssueProvider({ resolved, linearConnected })
-  const effectiveProvider: CreateIssueProvider =
-    provider === 'ambiguous' ? (providerChoice ?? 'github') : provider
+  const effectiveProvider: CreateIssueProvider = deferred
+    ? 'github'
+    : provider === 'ambiguous'
+      ? (providerChoice ?? 'github')
+      : provider
 
   const busy = createIssue.generating || createIssue.submitting || linearFiling
   const phase = deriveCreateIssueIntentPhase({
@@ -2136,7 +2290,7 @@ function CreateIssuePanel({
     }
   }, [createIssue, effectiveProvider, handleLinearFile])
 
-  if (!open) {
+  if (!open && !deferred) {
     return (
       <button
         type="button"
@@ -2167,19 +2321,19 @@ function CreateIssuePanel({
       }}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] font-medium text-foreground">Create an issue</span>
-        <button
+        <span className="text-[12px] font-medium text-foreground">New GitHub issue</span>
+        {!deferred ? <button
           type="button"
           onClick={() => setOpen(false)}
           aria-label="Cancel"
           className="inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <X className="size-3.5" />
-        </button>
+        </button> : null}
       </div>
 
       {/* F3: only when a repo has BOTH a GitHub Project and Linear connected. */}
-      {provider === 'ambiguous' ? (
+      {!deferred && provider === 'ambiguous' ? (
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] text-muted-foreground">File into</span>
           {(['github', 'linear'] as const).map((p) => (
@@ -2209,10 +2363,7 @@ function CreateIssuePanel({
           value={createIssue.title}
           onChange={(event) => createIssue.onTitleChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && canFile) {
-              event.preventDefault()
-              handleFile()
-            }
+            if (event.key === 'Enter' && !event.shiftKey) event.stopPropagation()
           }}
           placeholder="What needs doing?"
           className="h-[34px] rounded-md border border-input bg-secondary px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
@@ -2294,8 +2445,35 @@ function CreateIssuePanel({
         />
       </div>
 
+      {deferred && createIssue.labelOptions?.length ? (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[11px] text-muted-foreground">Labels (optional)</span>
+          <div className="flex flex-wrap gap-1.5">
+            {createIssue.labelOptions.map((label) => {
+              const selected = createIssue.labels.includes(label)
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => createIssue.onToggleLabel(label)}
+                  className={cn(
+                    'rounded-full border px-2 py-0.5 text-[10.5px] transition-colors',
+                    selected
+                      ? 'border-primary/50 bg-primary/10 text-foreground'
+                      : 'border-border text-muted-foreground hover:border-muted-foreground/40'
+                  )}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {/* F3: pick the Linear team when filing into Linear and >1 exists. */}
-      {effectiveProvider === 'linear' && teams.length > 1 ? (
+      {!deferred && effectiveProvider === 'linear' && teams.length > 1 ? (
         <label className="flex flex-col gap-1.5">
           <span className="text-[11px] text-muted-foreground">Linear team</span>
           <select
@@ -2313,7 +2491,7 @@ function CreateIssuePanel({
         </label>
       ) : null}
 
-      <button
+      {!deferred ? <button
         type="button"
         onClick={handleFile}
         disabled={!canFile}
@@ -2325,7 +2503,7 @@ function CreateIssuePanel({
           : effectiveProvider === 'linear'
             ? 'Create Linear issue'
             : 'Create issue'}
-      </button>
+      </button> : null}
 
       {inlineError ? <span className="text-[11px] text-destructive">{inlineError}</span> : null}
     </div>

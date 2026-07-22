@@ -127,6 +127,7 @@ import {
 import { isGitRepoKind } from '../../shared/repo-kind'
 import { showTerminalShortcutCaptureNotification } from '@/lib/terminal-shortcut-capture-notification'
 import { resolveMountedLazyModalIds, type LazyModalId } from './lazy-modal-mount-state'
+import { requestOperationalSidebarSearchFocus } from './lib/operational-sidebar-search-focus'
 
 // Why: a WebView user-agent can omit "Mac" in some embeddings, which would
 // drop the macOS traffic-light pad and let the sidebar toggle collide with the
@@ -1200,6 +1201,10 @@ function App(): React.JSX.Element {
         e.preventDefault()
         notifyTerminalCapture('worktree.palette')
         const store = useAppStore.getState()
+        if (store.sidebarOpen && store.groupBy === 'operational') {
+          requestOperationalSidebarSearchFocus()
+          return
+        }
         if (store.activeModal === 'worktree-palette') {
           store.closeModal()
         } else {

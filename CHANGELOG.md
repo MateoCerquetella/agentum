@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.93.0] — 2026-07-22
+
+### Added
+
+- **Project-owned integration settings.** Each Agentum project now configures
+  its own GitHub Project or Linear board from that project's settings instead
+  of relying on a global integration selection.
+- **Issue-first workspace creation.** New work can begin by drafting and filing
+  the issue before the workspace is created, with the chosen agent and model
+  carried through the flow.
+- **Operational sidebar triage.** Workspace activity, status, age, and agent
+  state are easier to scan while keeping project colors and authoritative
+  tracker status visible.
+
+### Fixed
+
+- **External boards are strictly isolated by project.** Project pages reject
+  account-wide Linear navigation, stale GitHub Project identities, cached rows,
+  and late responses from any other project.
+- **Project switches fail closed.** An unbound or unresolved project shows only
+  its own picker or configuration path and never borrows another project's
+  board, issue list, or task mode.
+
 ## [0.92.3] — 2026-07-22
 
 ### Fixed

@@ -659,6 +659,7 @@ async fn repo_slug(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// Minimal registry entry for the pure-registration tests (no fs, no env).
     fn repo_with(path: &str, connection_id: Option<&str>) -> Repo {
@@ -1026,5 +1027,46 @@ mod tests {
             repicked.extra.get("trackerProvider"),
             Some(&Value::String("github".into()))
         );
+    }
+
+    #[test]
+    fn linear_project_binding_object_null_and_sibling_fields_round_trip() {
+        let repo = Repo {
+            id: "r1".into(),
+            path: "/p".into(),
+            display_name: "p".into(),
+            badge_color: "#5b8def".into(),
+            added_at: 42,
+            kind: Some("git".into()),
+            connection_id: None,
+            host_id: None,
+            extra: Map::from_iter([("unrelated".into(), json!({ "kept": true }))]),
+        };
+        let binding = json!({
+            "workspaceId": "workspace-a", "workspaceName": "Workspace A",
+            "projectId": "project-a", "projectName": "Project A",
+            "projectUrl": "https://linear.app/workspace/project/project-a"
+        });
+        let updated = apply_repo_updates(
+            &repo,
+            Map::from_iter([("linearProjectBinding".into(), binding.clone())]),
+        )
+        .unwrap();
+        assert_eq!(updated.extra["linearProjectBinding"], binding);
+        assert_eq!(updated.extra["unrelated"], json!({ "kept": true }));
+        let raw = serde_json::to_string(&updated).unwrap();
+        let reloaded: Repo = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            reloaded.extra["linearProjectBinding"]["projectId"],
+            "project-a"
+        );
+        assert_eq!(reloaded.extra["unrelated"], json!({ "kept": true }));
+        let cleared = apply_repo_updates(
+            &reloaded,
+            Map::from_iter([("linearProjectBinding".into(), Value::Null)]),
+        )
+        .unwrap();
+        assert_eq!(cleared.extra["linearProjectBinding"], Value::Null);
+        assert_eq!(cleared.extra["unrelated"], json!({ "kept": true }));
     }
 }

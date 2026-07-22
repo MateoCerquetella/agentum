@@ -15,6 +15,7 @@ import type {
 import { isGitRepoKind } from '../../../../shared/repo-kind'
 import { sanitizeRepoIcon } from '../../../../shared/repo-icon'
 import { normalizeRepoBadgeColor } from '../../../../shared/repo-badge-color'
+import { normalizeLinearProjectBinding } from '../../shared/linear-project-binding'
 import { getProjectGroupSubtreeIds } from '../../../../shared/project-groups'
 import { getRepoIdFromWorktreeId } from './worktree-helpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
@@ -76,6 +77,7 @@ type RepoUpdate = Partial<
     | 'symlinkPaths'
     | 'issueSourcePreference'
     | 'trackerProvider'
+    | 'linearProjectBinding'
     | 'externalWorktreeVisibility'
     | 'externalWorktreeVisibilityPromptDismissedAt'
     | 'projectGroupId'
@@ -104,6 +106,11 @@ function sanitizeRepoUpdate(updates: RepoUpdate): RepoUpdate {
   }
   if ('worktreeBasePath' in sanitized && sanitized.worktreeBasePath !== undefined) {
     sanitized.worktreeBasePath = sanitized.worktreeBasePath.trim() || undefined
+  }
+  if ('linearProjectBinding' in sanitized) {
+    const binding = normalizeLinearProjectBinding(sanitized.linearProjectBinding)
+    if (binding === undefined) delete sanitized.linearProjectBinding
+    else sanitized.linearProjectBinding = binding
   }
   return sanitized
 }

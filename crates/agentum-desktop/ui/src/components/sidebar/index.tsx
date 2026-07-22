@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAppStore } from '@/store'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useSidebarResize } from '@/hooks/useSidebarResize'
@@ -43,6 +43,18 @@ function Sidebar({
   const { nativeDropTarget, dropHandlers, affordance } = useSidebarProjectDrop()
   const hydrateHosts = useAppStore((s) => s.hydrateHosts)
   const sshConnectedGeneration = useAppStore((s) => s.sshConnectedGeneration)
+  const groupBy = useAppStore((s) => s.groupBy)
+  const filterRepoIds = useAppStore((s) => s.filterRepoIds)
+  const [operationalQuery, setOperationalQuery] = useState('')
+  const [settledExpanded, setSettledExpanded] = useState(false)
+
+  useEffect(() => {
+    setSettledExpanded(false)
+  }, [operationalQuery, filterRepoIds])
+
+  useEffect(() => {
+    if (groupBy !== 'operational') setSettledExpanded(false)
+  }, [groupBy])
 
   // Hydrate host metadata (label, OS) on mount and whenever an SSH target connects.
   useEffect(() => {
@@ -86,11 +98,17 @@ function Sidebar({
           <>
             {/* Fixed controls */}
             <SidebarNav />
-            <SidebarHeader />
+            <SidebarHeader
+              operationalQuery={operationalQuery}
+              onOperationalQueryChange={setOperationalQuery}
+            />
 
             <WorktreeList
               scrollOffsetRef={worktreeScrollOffsetRef}
               scrollAnchorRef={worktreeScrollAnchorRef}
+              operationalQuery={operationalQuery}
+              settledExpanded={settledExpanded}
+              onSettledExpandedChange={setSettledExpanded}
             />
 
             <SetupScriptPromptCard />

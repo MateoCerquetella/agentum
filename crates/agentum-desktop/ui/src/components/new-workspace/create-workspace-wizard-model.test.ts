@@ -284,6 +284,10 @@ describe('deriveWizardComposerSeed (spec 013 F4 single front door)', () => {
     expect(seed).toHaveProperty('initialStartGatedRun', true)
   })
 
+  it('locks the initial repository to a required project task scope', () => {
+    expect(deriveWizardComposerSeed({ initialRepoId: 'wrong', requiredProjectTaskScope: { repoId: 'repo-locked', generation: 4, scopeKey: '["repo-locked","linear","w","p"]' } }).initialRepoId).toBe('repo-locked')
+  })
+
   it('does not arm the gated-run toggle when startGatedRun is false/absent', () => {
     expect('initialStartGatedRun' in deriveWizardComposerSeed({ startGatedRun: false })).toBe(false)
     expect('initialStartGatedRun' in deriveWizardComposerSeed({ prefilledName: 'x' })).toBe(false)
