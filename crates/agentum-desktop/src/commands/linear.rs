@@ -783,6 +783,7 @@ pub fn linear_get_custom_view() -> Option<Value> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command parameters are the public IPC payload.
 pub async fn linear_create_issue(
     team_id: String,
     title: String,
