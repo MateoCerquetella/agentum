@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 026-new-workspace-tracker-fidelity
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (026 REVIEWER SIGN-OFF: all eight acceptance criteria are supported, required gates are green, and no blocker remains; live desktop/SSH QA and release stay human-gated.)
+- **current_spec:** 027-remove-internal-workspace-board
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (027 reviewer sign-off: tracker-only work selection, inert legacy compatibility, required tests, and desktop build are green.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,11 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-21 | Tester | **026 TESTER PASS → phase reviewer** (autonomous loop
-  step 6, iteration 2; handoff `handoffs/04-tester-to-reviewer.md`). Independently
-  reran both harness verify IDs green, confirmed AC 4/8 production-seam tests and
-  honest pending QA exits, and mapped all eight criteria to executable evidence
-  or the explicit current-build desktop/SSH release gate.
 - 2026-07-21 | Reviewer | **026 SEND-BACK → phase developer** (autonomous loop
   step 7, Reviewer iteration 1/2; handoff
   `handoffs/05-reviewer-to-developer.md`). Inline unbind deletes the canonical
@@ -115,3 +110,10 @@
   supported, both harness routes and final focused regression green, and no
   architecture/isolation blocker remaining. Corrected stale review-only
   comments; live desktop/SSH QA, merge, and release remain human-gated.
+- 2026-07-22 | Author | **027 drafted → phase pm**. Narrowed issue #431 to one
+  user action: select workspace work from the configured external tracker;
+  internal board routes and fallback retire while legacy rows remain inert.
+- 2026-07-22 | Reviewer | **027 SIGN-OFF → phase done**. Confirmed external-
+  tracker-only UI/runtime behavior, retired board APIs, inert legacy rows,
+  current docs/playbooks, focused regressions, workspace tests, and desktop
+  production build are green.

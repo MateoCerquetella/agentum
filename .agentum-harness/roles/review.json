@@ -1,1 +1,1 @@
-{"passed": true, "summary": "Project headers now retain a normalized configured-color swatch across neutral theme-owned states, with fallback coverage and a successful desktop UI build recorded."}
+{"passed": true, "summary": "Spec 431 is complete: tracker-only UI/runtime removal, inert legacy compatibility, current docs/playbooks, focused regression coverage, workspace library tests, and desktop build all satisfy the spec and architecture."}

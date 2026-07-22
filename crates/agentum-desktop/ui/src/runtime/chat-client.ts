@@ -1,6 +1,6 @@
 // Typed client for the conversational chat route on the embedded agentum-server
-// (`POST /api/chat`). Mirrors `board-client.ts`: same loopback endpoint + bearer
-// auth (`getServerEndpoint` → `apiUrl`), wire shapes faithful to the server's
+// (`POST /api/chat`). Uses the shared loopback endpoint + bearer auth
+// (`getServerEndpoint` → `apiUrl`), with wire shapes faithful to the server's
 // `/api/chat` contract. The endpoint is a Socratic interviewer — it asks
 // clarifying questions, then proposes a task breakdown the user can file into
 // GitHub or Linear. This client is conversation-only; it never creates tasks.
@@ -90,8 +90,8 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 /**
  * `POST /api/chat` — send the running transcript and get the assistant's next
- * reply. Mirrors board-client's `createGoal`: own fetch path so the typed error
- * envelope survives. On a non-ok response, surfaces the server's message text:
+ * reply. It owns its fetch path so the typed error envelope survives. On a
+ * non-ok response, surfaces the server's message text:
  * handles BOTH `{ error: string }` (400) and `{ error: { message } }` (502
  * `llm_failed`) shapes, throwing `Error(<server message>)` either way.
  */

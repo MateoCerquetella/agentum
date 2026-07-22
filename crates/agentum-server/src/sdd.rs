@@ -202,6 +202,28 @@ mod tests {
     }
 
     #[test]
+    fn current_docs_and_sdd_playbooks_keep_internal_board_compatibility_only() {
+        let api = include_str!("../../../docs/API.md");
+        let data_model = include_str!("../../../docs/DATA-MODEL.md");
+        assert!(
+            !api.contains("/api/board"),
+            "current API docs must not advertise retired board routes"
+        );
+        assert!(
+            data_model.contains("Legacy migration compatibility only"),
+            "retained board schema must be labeled compatibility-only"
+        );
+
+        for name in ["sdd-spec", "sdd-orchestrate"] {
+            let playbook = get(name).unwrap();
+            assert!(
+                !playbook.body.contains("board card"),
+                "{name} must not advertise internal board cards as trackers"
+            );
+        }
+    }
+
+    #[test]
     fn frontmatter_accepts_windows_line_endings() {
         let (description, body) =
             split_frontmatter("---\r\ndescription: Windows-safe\r\n---\r\n\r\nDo it.\r\n");

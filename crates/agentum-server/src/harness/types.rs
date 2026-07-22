@@ -83,7 +83,7 @@ pub struct Feature {
     /// lifecycle → ticket-state transitions; `None` = no external tracker.
     #[serde(default)]
     pub tracker_provider: Option<String>,
-    /// The tracker item's URL, surfaced in the UI (None for the internal board).
+    /// The external tracker item's URL, surfaced in the UI.
     #[serde(default)]
     pub tracker_url: Option<String>,
 }
@@ -1160,7 +1160,7 @@ pub fn issue_spec_id(number: &str, title: &str) -> String {
 
 /// One feature to seed into a harness backlog, carrying the tracker provenance
 /// so the engine can later drive ticket-state transitions (spec 012). `id` is the
-/// tracker's stable handle (board key, issue number, Linear identifier).
+/// tracker's stable handle (GitHub issue number or Linear identifier).
 #[derive(Debug, Clone)]
 pub struct BacklogFeature {
     pub id: String,
@@ -1174,7 +1174,7 @@ pub struct BacklogFeature {
 /// `.agentum-harness/feature_list.json` (spec 011 — chat-to-features).
 ///
 /// Unlike [`plan_from_spec`], the features come from the *task tracker* (the
-/// internal board / GitHub / Linear), which is the source of truth; this only
+/// GitHub or Linear, which remains the source of truth; this only
 /// derives the harness backlog from them. Every feature starts `Pending` and the
 /// harness is left **Idle** — this function never registers or runs anything, so
 /// the user reviews the board and explicitly clicks Run (human-gated, per spec).

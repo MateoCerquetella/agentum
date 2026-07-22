@@ -49,7 +49,6 @@ mod port_wait;
 pub mod provision;
 pub mod ratelimit;
 mod routes;
-mod rules;
 pub mod sdd;
 pub mod task_sink;
 pub mod tls;
@@ -309,14 +308,6 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::uploads::router())
         .merge(routes::agents::router())
         .merge(routes::agent_tasks::router())
-        .merge(routes::board::router())
-        .merge(routes::board_goals::router())
-        .merge(routes::board_links::router())
-        .merge(routes::board_rules::router())
-        // 016a: server-side board←GitHub pull + durable tracker bindings. Adds
-        // `/api/board/bindings*` only; #58's `POST /api/board/sync` stays in
-        // `board::router()` above, untouched.
-        .merge(routes::board_sync::router())
         .merge(routes::notes::router())
         .merge(routes::wiki::router())
         .merge(routes::preferences::router())
@@ -447,8 +438,8 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
 }
 
 /// Spawn the always-on background workers shared by every server boot path:
-/// the auth-session sweeper, the watchdog, the goal-status reconciler, the
-/// session→comment bridge, and the host-metrics ticker. Factored out so the
+/// the auth-session sweeper, watchdog, tracker workers, and host-metrics ticker.
+/// Factored out so the
 /// in-process embedded boot (desktop) and the standalone `serve()` (TUI/daemon)
 /// stay in lockstep.
 fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
@@ -483,26 +474,6 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         });
     }
 
-    // Goal-status auto-progression reconciler: enforces `goal.status = max(child
-    // statuses)` and fires the planner auto-stop on first child arrival.
-    {
-        let store = state.store.clone();
-        let bus = bus.clone();
-        tokio::spawn(async move {
-            agentum_watchdog::run_goal_reconciler(store, bus).await;
-        });
-    }
-
-    // Watchdog → comment bridge: converts agent.*/session.crashed events into
-    // [system] comments on the bound card's thread.
-    {
-        let store = state.store.clone();
-        let bus = bus.clone();
-        tokio::spawn(async move {
-            agentum_watchdog::run_session_comment_bridge(store, bus).await;
-        });
-    }
-
     // Spec 012 F2: session-start → tracker InProgress. A bus subscriber (never
     // inline in the launch path — invariant #2) that, on `session.started` in a
     // bound worktree, drives the linked item to In Progress via the one existing
@@ -522,10 +493,9 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     // The bus rides in so an applied transition emits `tracker.phase_changed`
     // (spec 014 F1).
     {
-        let store = state.store.clone();
         let bus = bus.clone();
         tokio::spawn(async move {
-            tracker_sync::run_pr_merge_poller(store, bus).await;
+            tracker_sync::run_pr_merge_poller(bus).await;
         });
     }
 
@@ -744,6 +714,41 @@ async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn internal_board_route_families_are_unregistered() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let addr: SocketAddr = "127.0.0.1:5544".parse().unwrap();
+        let (state, _bus) = embedded_app_state(store, addr);
+        let app = router(state);
+
+        for path in [
+            "/api/board",
+            "/api/board/1",
+            "/api/board/goals",
+            "/api/board/goals/1/harness-plan",
+            "/api/board/links",
+            "/api/board/links/1/2/blocks",
+            "/api/board/rules",
+            "/api/board/rules/todo",
+            "/api/board/bindings",
+            "/api/board/bindings/1/sync",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::NOT_FOUND,
+                "retired internal-board route {path} must not be exposed"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn embedded_app_state_carries_its_url_and_is_no_auth() {

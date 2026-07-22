@@ -579,13 +579,13 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         },
         {
             "name": "agentum_report_status",
-            "description": "Report a work item's pipeline phase to its tracker: GitHub = flip the status/* label, Linear = move the workflow state, board = move the card column. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, in_review, ready_to_test, done).",
+            "description": "Report a work item's pipeline phase to its external tracker: GitHub = flip the status/* label, Linear = move the workflow state. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, in_review, ready_to_test, done).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "provider": { "type": "string", "enum": ["github", "linear", "board"] },
-                    "id": { "type": "string", "description": "The tracker's stable handle: board card key (AG-12), Linear identifier (ENG-42), or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
-                    "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear/board." },
+                    "provider": { "type": "string", "enum": ["github", "linear"] },
+                    "id": { "type": "string", "description": "The tracker's stable handle: Linear identifier (ENG-42) or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
+                    "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear." },
                     "phase": { "type": "string", "enum": ["todo", "in_progress", "in_review", "ready_to_test", "done"] }
                 },
                 "required": ["provider", "phase"],
@@ -1555,12 +1555,10 @@ async fn bounded_transition_text(
 /// or a panic can never take the MCP response down with it.
 async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<String> {
     let (provider, id, url, phase) = parse_report_status_args(args)?;
-    let store = state.store.clone();
     let bus = state.bus.clone();
     let prov = provider.clone();
     let handle = tokio::spawn(async move {
         crate::task_sink::apply_tracker_transition(
-            &store,
             &prov,
             &id,
             url.as_deref(),
@@ -2152,6 +2150,16 @@ mod tests {
             phase_enum.as_array().unwrap().contains(&json!("in_review")),
             "tool-spec phase enum must advertise in_review, got {phase_enum}"
         );
+        let provider_enum = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agentum_report_status")
+            .unwrap()["inputSchema"]["properties"]["provider"]["enum"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(provider_enum, vec![json!("github"), json!("linear")]);
     }
 
     /// The AC 9 pin: every outcome shape — including a seam `Err` — maps to a
@@ -2167,11 +2175,11 @@ mod tests {
         );
         assert_eq!(
             report_status_text(
-                Ok(TransitionResult::Skipped("no board card with key X".into())),
+                Ok(TransitionResult::Skipped("unknown tracker provider".into())),
                 "board",
                 TrackerPhase::Todo,
             ),
-            "skipped: no board card with key X"
+            "skipped: unknown tracker provider"
         );
         let text = report_status_text(
             Err(anyhow::anyhow!("network down")),
@@ -2274,46 +2282,18 @@ mod tests {
         assert!(err.contains("session is not running"), "got: {err}");
     }
 
-    /// Wire-level delegation (board arm, no subprocess): the tool moves a real
-    /// board card's column through `apply_tracker_transition` — proof the arm
-    /// delegates to the seam rather than reimplementing tracker mechanics.
+    /// Legacy board metadata remains readable as input but is a bounded,
+    /// non-writing best-effort skip through the shared transition seam.
     #[tokio::test]
-    async fn report_status_moves_a_board_card() {
+    async fn report_status_legacy_board_provider_is_non_writing() {
         let state = fresh_state().await;
-        let card = state
-            .store
-            .create_board_item(agentum_core::NewBoardItem {
-                title: "Add OAuth login".into(),
-                body: None,
-                lbl: Some("feat".into()),
-                status: Some("todo".into()),
-                workdir: None,
-                parent_goal_id: None,
-                tool: None,
-                model: None,
-                session_id: None,
-                priority: None,
-            })
-            .await
-            .unwrap();
-
         let text = tool_report_status(
             &state,
-            &json!({ "provider": "board", "id": card.key, "phase": "in_progress" }),
+            &json!({ "provider": "board", "id": "AG-12", "phase": "in_progress" }),
         )
         .await
         .unwrap();
-        assert_eq!(text, "applied: board → InProgress");
-
-        let moved = state
-            .store
-            .list_board_items()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|c| c.key == card.key)
-            .unwrap();
-        assert_eq!(moved.status, "doing");
+        assert_eq!(text, "skipped: unknown tracker provider \"board\"");
 
         // Unknown provider flows to the seam's Skipped — visible, non-fatal.
         let text = tool_report_status(

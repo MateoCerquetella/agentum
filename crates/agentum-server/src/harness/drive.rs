@@ -343,7 +343,6 @@ async fn handle_gate_failure(
         // re-halts the already-halted run.
         if let Some(provider) = feature.tracker_provider.as_deref() {
             match crate::task_sink::apply_blocked_transition(
-                &state.store,
                 provider,
                 &feature.id,
                 feature.tracker_url.as_deref(),
@@ -417,7 +416,6 @@ async fn transition_tracker(
     };
     let engine = &state.harness;
     let result = crate::task_sink::apply_tracker_transition(
-        &state.store,
         provider,
         &feature.id,
         feature.tracker_url.as_deref(),
@@ -463,7 +461,6 @@ fn spawn_tracker_transition_retry(
     };
     let tracker_id = feature.id.clone();
     let tracker_url = feature.tracker_url.clone();
-    let store = state.store.clone();
     let bus = state.bus.clone();
     let engine = state.harness.clone();
     tokio::spawn(async move {
@@ -471,7 +468,6 @@ fn spawn_tracker_transition_retry(
             let delay = std::time::Duration::from_secs(2u64.saturating_pow(attempt).min(60));
             tokio::time::sleep(delay).await;
             let result = crate::task_sink::apply_tracker_transition(
-                &store,
                 &provider,
                 &tracker_id,
                 tracker_url.as_deref(),
