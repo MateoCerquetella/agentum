@@ -6,7 +6,7 @@
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
 import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 
-type FeatureState =
+export type FeatureState =
   | 'pending'
   | 'coding'
   | 'verifying'
@@ -39,7 +39,7 @@ export type SpecPhase =
 /** The SDD role behind an agent-played gate (spec 013). */
 type RoleKind = 'pm' | 'architect' | 'reviewer'
 
-type Feature = {
+export type HarnessFeature = {
   id: string
   name: string
   description: string
@@ -53,8 +53,8 @@ type Feature = {
   tracker_url?: string | null
 }
 
-type FeatureList = {
-  features: Feature[]
+export type HarnessFeatureList = {
+  features: HarnessFeature[]
   max_retries: number
   agent_tool: string
   agent_model?: string | null
@@ -81,15 +81,21 @@ export type HarnessStatus = {
   id: string
   workdir: string
   state: HarnessState
-  features: FeatureList
+  features: HarnessFeatureList
   current_feature?: string | null
   current_session?: string | null
+  /** Validated by the UI before becoming a tab launch-agent hint. */
+  current_agent_tool?: string | null
   elapsed_secs: number
   agent_instructions: string
   /** Current SDD phase (spec 013); `executing` for a plain feature run. */
   phase?: SpecPhase
   /** Role-gate retry counter for the current phase (spec 013). */
   phase_attempts?: number
+  /** Concrete SDD stage that entered terminal `blocked`. */
+  blocked_phase?: SpecPhase | null
+  /** Latest role-gate verdict, retained across reconnect/reload. */
+  gate_summary?: string | null
 }
 
 type HarnessFiles = {
@@ -107,6 +113,13 @@ export type HarnessEvent =
   | { type: 'init_started'; harness_id: string }
   | { type: 'init_completed'; harness_id: string; success: boolean; output: string }
   | { type: 'agent_spawned'; harness_id: string; feature_id: string; session_id: string }
+  | {
+      type: 'current_session_changed'
+      harness_id: string
+      session_id: string
+      feature_id?: string | null
+      agent_tool: string
+    }
   | { type: 'log'; harness_id: string; feature_id?: string | null; message: string }
   | { type: 'verify_started'; harness_id: string; feature_id: string }
   | { type: 'verify_completed'; harness_id: string; feature_id: string; success: boolean; output: string }
@@ -199,7 +212,7 @@ type PlanGoalHarnessResult = {
   provider: string
   workdir: string
   feature_count: number
-  features: FeatureList
+  features: HarnessFeatureList
 }
 
 /**

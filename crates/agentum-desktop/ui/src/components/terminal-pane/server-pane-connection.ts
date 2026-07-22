@@ -23,6 +23,7 @@ import { makePaneKey } from '../../../../shared/stable-pane-id'
 import { createPaneActivityTracker, type PaneActivityTracker } from './pane-activity-tracker'
 import type { AgentType } from '../../../../shared/agent-status-types'
 import { registerServerSessionActivity } from '@/runtime/server-session-activity'
+import { isTuiAgent } from '../../../../shared/tui-agent-config'
 
 /** The tab's launch agent (claude/codex/…) drives the server session's tool;
  *  a plain terminal tab has none, so it runs a shell. */
@@ -351,6 +352,22 @@ export function connectPaneServerSession(
           : await ensureWorkspaceSession({ workdir, tool, hostId, name: sessionNameForTab })
         if (disposed) {
           return
+        }
+        if (pinnedSessionId) {
+          // A pinned id names an existing process, so its persisted tool is the
+          // display truth even when the restored tab carries stale launch intent.
+          if (isTuiAgent(session.tool)) {
+            useAppStore.getState().setTabLaunchAgent(deps.tabId, session.tool)
+          } else {
+            useAppStore.getState().clearTabLaunchAgent(deps.tabId)
+          }
+        } else if (session.tool !== tool) {
+          // Never bind a newly requested Codex/Claude/etc tab to a differently
+          // provisioned process. ensureWorkspaceSession also checks this; keep
+          // the boundary guard here so future callers cannot weaken it silently.
+          throw new Error(
+            `server session tool mismatch: requested ${tool}, received ${session.tool}`
+          )
         }
         // Only type an `onlyIfFresh` launch command into a FRESHLY spawned
         // pane (bare shell). Reattached panes still run whatever was in them —

@@ -1121,6 +1121,7 @@ pub async fn gh_issue_project_status(
                   fieldValues(first: 50) {
                     nodes {
                       ... on ProjectV2ItemFieldSingleSelectValue {
+                        optionId
                         name
                         field { ... on ProjectV2SingleSelectField { id } }
                       }
@@ -1152,6 +1153,7 @@ pub async fn gh_issue_project_status(
     json!({
         "ok": true,
         "status": issue_project_status(&data, &project_id, &status_field_id),
+        "statusOptionId": issue_project_status_option_id(&data, &project_id, &status_field_id),
         "itemId": issue_project_item_id(&data, &project_id),
         "options": status_field_options(&data),
     })
@@ -1161,6 +1163,28 @@ pub async fn gh_issue_project_status(
 // field value whose field id is `status_field_id`, returning its option name.
 // Any missing hop → None (the issue isn't on that project, or has no Status set).
 fn issue_project_status(data: &Value, project_id: &str, status_field_id: &str) -> Option<String> {
+    issue_project_status_value(data, project_id, status_field_id)
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn issue_project_status_option_id(
+    data: &Value,
+    project_id: &str,
+    status_field_id: &str,
+) -> Option<String> {
+    issue_project_status_value(data, project_id, status_field_id)
+        .and_then(|value| value.get("optionId"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn issue_project_status_value<'a>(
+    data: &'a Value,
+    project_id: &str,
+    status_field_id: &str,
+) -> Option<&'a Value> {
     let items = data
         .get("repository")?
         .get("issue")?
@@ -1190,9 +1214,7 @@ fn issue_project_status(data: &Value, project_id: &str, status_field_id: &str) -
                 .and_then(Value::as_str)
                 == Some(status_field_id);
             if field_matches {
-                if let Some(name) = value.get("name").and_then(Value::as_str) {
-                    return Some(name.to_string());
-                }
+                return Some(value);
             }
         }
     }
@@ -1250,7 +1272,7 @@ mod tests {
             "repository": { "issue": { "projectItems": { "nodes": [
                 { "id": "ITEM_1", "project": { "id": project_id }, "fieldValues": { "nodes": [
                     {},
-                    { "name": option, "field": { "id": field_id } }
+                    { "optionId": "OPT_STATUS", "name": option, "field": { "id": field_id } }
                 ] } }
             ] } } },
             "fieldNode": { "options": [
@@ -1289,6 +1311,10 @@ mod tests {
         assert_eq!(
             issue_project_status(&data, "PVT_1", "F_status").as_deref(),
             Some("In Progress")
+        );
+        assert_eq!(
+            issue_project_status_option_id(&data, "PVT_1", "F_status").as_deref(),
+            Some("OPT_STATUS")
         );
     }
 

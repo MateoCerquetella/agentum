@@ -448,6 +448,7 @@ async fn delete_config(
 
 /// Transition compatibility lookup. Exact slug matching is allowed only when
 /// canonical ownership is unambiguous (or all matching mappings are equal).
+#[cfg(test)]
 pub(crate) async fn binding_for_transition(
     state: &AppState,
     project_repo_id: Option<&str>,
@@ -709,6 +710,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)]
     async fn get_migrates_exact_repo_binding_once_without_rewriting_registry() {
         let _lock = crate::TEST_ENV_LOCK
             .lock()

@@ -97,6 +97,27 @@ export function deriveIssueOptions(
   return out
 }
 
+/**
+ * Filter the open-issue picker without mutating/reordering its authoritative
+ * Project order. Number, title, and repository are all searchable so a large
+ * cross-repo Project remains usable; a leading `#` is accepted for the natural
+ * issue-number spelling. Selection lives outside this helper, so filtering a
+ * selected issue out of view can never silently unlink it.
+ */
+export function filterWorkItemOptions(
+  options: readonly WorkItemOption[],
+  query: string
+): WorkItemOption[] {
+  const normalized = query.trim().toLowerCase().replace(/^#/, '')
+  if (!normalized) return [...options]
+  return options.filter((option) => {
+    const haystack = [String(option.number), option.title, option.repository ?? '']
+      .join('\n')
+      .toLowerCase()
+    return haystack.includes(normalized)
+  })
+}
+
 /** The minimal Project identity the issue picker needs to list issues: owner +
  *  ownerType + number. Both the per-repo binding and the global `activeProject`
  *  collapse to this shape (`fetchProjectViewTable` reads exactly these). */

@@ -39,12 +39,17 @@ describe('resolveProjectGroupHeaderColor', () => {
     ).toBe(REPO_COLORS[5])
   })
 
-  it('falls back to gray for unknown project group headers', () => {
+  it.each([
+    ['missing', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['invalid', 'not-a-color']
+  ] as const)('falls back to gray for %s project colors', (_case, badgeColor) => {
     expect(
       resolveProjectGroupHeaderColor({
         groupBy: 'repo',
         headerKey: 'repo:missing-repo',
-        badgeColor: undefined
+        badgeColor
       })
     ).toBe(DEFAULT_REPO_BADGE_COLOR)
   })
