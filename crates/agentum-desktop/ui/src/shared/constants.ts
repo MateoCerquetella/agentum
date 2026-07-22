@@ -398,7 +398,7 @@ export function getDefaultUIState(): PersistedUIState {
     rightSidebarOpen: true,
     rightSidebarTab: 'explorer',
     rightSidebarWidth: 350,
-    groupBy: 'repo',
+    groupBy: 'operational',
     sortBy: 'recent',
     showActiveOnly: false,
     hideSleepingWorkspaces: DEFAULT_HIDE_SLEEPING_WORKSPACES,

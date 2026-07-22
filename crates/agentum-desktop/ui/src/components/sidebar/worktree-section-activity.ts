@@ -110,7 +110,7 @@ export function buildWorktreeSectionActivitySummaries({
       continue
     }
 
-    const status = getSectionWorktreeStatus(state, worktree.id)
+    const status = resolveWorktreeStatusFromState(state, worktree.id)
     for (const groupKey of groupKeys) {
       const summary = summaries.get(groupKey) ?? { ...EMPTY_WORKTREE_SECTION_ACTIVITY }
       if (status === 'working') {
@@ -126,7 +126,7 @@ export function buildWorktreeSectionActivitySummaries({
   return summaries
 }
 
-function getSectionWorktreeStatus(
+export function resolveWorktreeStatusFromState(
   state: WorktreeSectionActivityState,
   worktreeId: string
 ): ReturnType<typeof resolveWorktreeStatus> {

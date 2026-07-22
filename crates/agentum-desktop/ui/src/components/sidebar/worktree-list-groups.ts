@@ -29,9 +29,28 @@ import type { AppState } from '@/store/types'
 import { getGitHubPRCacheKey, getLegacyGitHubPRCacheKey } from '@/store/slices/github-cache-key'
 import { UNGROUPED_PROJECT_GROUP_KEY } from '../../../../shared/project-groups'
 
+export type WorktreeGroupBy =
+  | 'operational'
+  | 'none'
+  | 'workspace-status'
+  | 'repo'
+  | 'pr-status'
+  | 'host'
 
+export type OperationalSection = 'needs-you' | 'active' | 'settled'
 
-export type WorktreeGroupBy = 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
+export type OperationalWorkspaceMeta = {
+  presentation: 'operational-rich' | 'operational-settled'
+  section: OperationalSection
+  status: 'permission' | 'working' | 'done' | 'active' | 'inactive'
+  statusLabel: 'Needs input' | 'Working' | 'Ready' | 'Active' | 'Settled'
+  projectName?: string
+  agentLabel?: string
+  stateTimestamp?: number
+  /** Card-facing name; relativeAge is retained for model consumers. */
+  ageLabel?: string
+  relativeAge?: string
+}
 
 /** A host as rendered in the sidebar tree. `key` is `local` or `ssh:<id>`. */
 export type SidebarHost = {
@@ -196,6 +215,15 @@ type WorktreeRow = {
   lineageChildCount: number
   lineageGroupKey?: string
   lineageCollapsed?: boolean
+  presentation?: 'operational-rich' | 'operational-settled'
+  operationalMeta?: OperationalWorkspaceMeta
+}
+
+export type OperationalSettledDisclosureRow = {
+  type: 'operational-settled-disclosure'
+  key: 'operational:settled:disclosure'
+  remainingCount: number
+  expanded: boolean
 }
 
 export type ImportedWorktreesCardCandidate = {
@@ -233,6 +261,7 @@ export type Row =
   | ImportedWorktreesCardRow
   | HostHeaderRow
   | RemoteTmuxCardRow
+  | OperationalSettledDisclosureRow
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
 

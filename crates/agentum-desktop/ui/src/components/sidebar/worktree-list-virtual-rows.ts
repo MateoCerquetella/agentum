@@ -54,6 +54,15 @@ export function estimateRenderRowSize(
   if (row?.type === 'imported-worktrees-card') {
     return IMPORTED_WORKTREES_LINE_ROW_HEIGHT
   }
+  if (row?.type === 'operational-settled-disclosure') {
+    return 34
+  }
+  if (row?.type === 'item' && row.presentation === 'operational-settled') {
+    return 44
+  }
+  if (row?.type === 'item' && row.presentation === 'operational-rich') {
+    return 92
+  }
   return 116
 }
 

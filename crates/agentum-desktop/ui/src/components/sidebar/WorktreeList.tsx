@@ -202,11 +202,18 @@ import {
 import { buildImportedWorktreesCardCandidates } from './imported-worktrees-card-candidates'
 import {
   buildWorktreeSectionActivitySummaries,
+  resolveWorktreeStatusFromState,
   reuseSectionActivitySummariesIfEqual,
   EMPTY_WORKTREE_SECTION_ACTIVITY,
   type WorktreeSectionActivityState,
   type WorktreeSectionActivitySummary
 } from './worktree-section-activity'
+import {
+  buildOperationalSidebarRows,
+  type OperationalWorkspaceFact
+} from './operational-sidebar-model'
+import { selectLiveAgentStatusEntriesForWorktree } from './worktree-agent-row-selectors'
+import { useNow } from '@/components/dashboard/useNow'
 import { runWorktreeBatchDelete } from './delete-worktree-flow'
 
 export {
@@ -494,6 +501,7 @@ type VirtualizedWorktreeViewportProps = {
   showInlineAgentCards: boolean
   showSectionStatus: boolean
   sectionActivityByGroupKey: ReadonlyMap<string, WorktreeSectionActivitySummary>
+  onSettledExpandedChange: (expanded: boolean) => void
   // Why: broad grouping changes still remount the viewport, while add/delete
   // stays mounted for row-key anchoring and layout animation. These refs bridge
   // both paths so the virtualizer never falls back to scrollTop 0.
@@ -739,6 +747,12 @@ export function getRenderRowKey(row: RenderRow): string {
   if (row.type === 'host-header') {
     return `host:${row.key}`
   }
+  if (row.type === 'remote-tmux-card') {
+    return `remote-tmux:${row.key}`
+  }
+  if (row.type === 'operational-settled-disclosure') {
+    return `operational:${row.key}`
+  }
   return `wt:${row.worktree.id}`
 }
 
@@ -752,7 +766,11 @@ export function getWorktreeDragGroups(rows: Row[]): WorktreeDragGroup[] {
       groups.push({ key: current.key, worktreeIds: current.ids })
       continue
     }
-    if (row.type === 'imported-worktrees-card') {
+    if (
+      row.type === 'imported-worktrees-card' ||
+      row.type === 'remote-tmux-card' ||
+      row.type === 'operational-settled-disclosure'
+    ) {
       continue
     }
     // Host-header rows are a super-level above repo groups — not a drag group
@@ -854,6 +872,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   showInlineAgentCards,
   showSectionStatus,
   sectionActivityByGroupKey,
+  onSettledExpandedChange,
   scrollOffsetRef,
   scrollAnchorRef
 }: VirtualizedWorktreeViewportProps) {
@@ -3465,6 +3484,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                               }
                             : undefined
                         }
+                        operationalMeta={itemRow.operationalMeta}
                       />
                     </div>
                   </div>
@@ -3699,6 +3719,37 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               )
             }
 
+            if (row.type === 'operational-settled-disclosure') {
+              return (
+                <div
+                  key={vItem.key}
+                  role="presentation"
+                  data-worktree-virtual-row
+                  data-worktree-virtual-row-key={String(vItem.key)}
+                  data-index={vItem.index}
+                  ref={measureVirtualRowElement}
+                  className="absolute left-0 right-0 top-0 flex justify-center py-1"
+                  style={{ transform: getVirtualRowTransform(vItem.start) }}
+                >
+                  <button
+                    type="button"
+                    aria-expanded={row.expanded}
+                    onClick={() => onSettledExpandedChange(!row.expanded)}
+                    className="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                  >
+                    {row.expanded ? 'Show less' : `Show ${row.remainingCount} more`}
+                  </button>
+                </div>
+              )
+            }
+
+            // Reserved row type; buildRows does not currently emit it. Keep it
+            // out of the worktree branch so future emission cannot dereference
+            // a missing worktree while its dedicated presentation is added.
+            if (row.type === 'remote-tmux-card') {
+              return null
+            }
+
 
             const itemWorkspaceStatus =
               groupBy === 'workspace-status'
@@ -3781,6 +3832,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
 type WorktreeListProps = {
   scrollOffsetRef: React.MutableRefObject<number>
   scrollAnchorRef: React.MutableRefObject<VirtualizedScrollAnchor>
+  operationalQuery: string
+  settledExpanded: boolean
+  onSettledExpandedChange: (expanded: boolean) => void
 }
 
 export function installWorktreeVisibleRefreshVisibilityListener(onChange: () => void): () => void {
@@ -3790,8 +3844,12 @@ export function installWorktreeVisibleRefreshVisibilityListener(onChange: () => 
 
 const WorktreeList = React.memo(function WorktreeList({
   scrollOffsetRef,
-  scrollAnchorRef
+  scrollAnchorRef,
+  operationalQuery,
+  settledExpanded,
+  onSettledExpandedChange
 }: WorktreeListProps) {
+  const operationalNow = useNow(30_000)
   // ── Granular selectors (each is a primitive or shallow-stable ref) ──
   const allWorktrees = useAllWorktrees()
   const repoMap = useRepoMap()
@@ -3895,6 +3953,10 @@ const WorktreeList = React.memo(function WorktreeList({
     (s) => s.migrationUnsupportedByPtyId
   )
   const sectionActivityRetainedAgentsByPaneKey = useAppStore((s) => s.retainedAgentsByPaneKey)
+  const sectionActivityAwaitingInputByPaneKey = useAppStore((s) => s.awaitingInputByPaneKey)
+  const sectionActivityServerByWorktreeId = useAppStore(
+    (s) => s.serverWorktreeActivityByWorktreeId
+  )
 
   const sortEpoch = useAppStore((s) => s.sortEpoch)
 
@@ -4309,15 +4371,19 @@ const WorktreeList = React.memo(function WorktreeList({
       // agentStatusEpoch, so read the current map without subscribing to it.
       agentStatusByPaneKey: current.agentStatusByPaneKey,
       migrationUnsupportedByPtyId: sectionActivityMigrationUnsupportedByPtyId,
-      retainedAgentsByPaneKey: sectionActivityRetainedAgentsByPaneKey
+      retainedAgentsByPaneKey: sectionActivityRetainedAgentsByPaneKey,
+      awaitingInputByPaneKey: sectionActivityAwaitingInputByPaneKey,
+      serverWorktreeActivityByWorktreeId: sectionActivityServerByWorktreeId
     }
   }, [
     sectionActivityAgentStatusEpoch,
+    sectionActivityAwaitingInputByPaneKey,
     sectionActivityBrowserTabsByWorktree,
     sectionActivityMigrationUnsupportedByPtyId,
     sectionActivityPtyIdsByTabId,
     sectionActivityRetainedAgentsByPaneKey,
     sectionActivityRuntimePaneTitlesByTabId,
+    sectionActivityServerByWorktreeId,
     sectionActivityTabsByWorktree
   ])
   // Identity-stable across rebuilds: the epoch-driven useMemo re-runs on every
@@ -4407,8 +4473,36 @@ const WorktreeList = React.memo(function WorktreeList({
     [hostMetaByKey, hostsWithTmux, sshConnectionStates, sshTargetLabels]
   )
 
+  const operationalFactsByWorktreeId = useMemo(() => {
+    const current = useAppStore.getState()
+    const facts = new Map<string, OperationalWorkspaceFact>()
+    for (const worktree of worktrees) {
+      const entries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
+      let latest = entries[0]
+      for (const entry of entries) {
+        if (!latest || entry.updatedAt > latest.updatedAt) latest = entry
+      }
+      facts.set(worktree.id, {
+        status: resolveWorktreeStatusFromState(sectionActivityState, worktree.id),
+        agentLabel: latest?.agentType ?? worktree.createdWithAgent,
+        stateTimestamp: latest?.stateStartedAt
+      })
+    }
+    return facts
+  }, [sectionActivityState, worktrees])
+
   // Build flat row list for rendering
   const rows: Row[] = useMemo(() => {
+    if (groupBy === 'operational') {
+      return buildOperationalSidebarRows({
+        worktrees,
+        repoMap,
+        factsByWorktreeId: operationalFactsByWorktreeId,
+        query: operationalQuery,
+        settledExpanded,
+        now: operationalNow
+      })
+    }
     const built = buildRows(
       effectiveGroupBy,
       worktrees,
@@ -4434,6 +4528,10 @@ const WorktreeList = React.memo(function WorktreeList({
   }, [
     effectiveGroupBy,
     groupBy,
+    operationalFactsByWorktreeId,
+    operationalNow,
+    operationalQuery,
+    settledExpanded,
     worktrees,
     repoMap,
     prCache,
@@ -5222,6 +5320,7 @@ const WorktreeList = React.memo(function WorktreeList({
         showInlineAgentCards={cardProps.includes('inline-agents')}
         showSectionStatus={showSectionStatus}
         sectionActivityByGroupKey={sectionActivityByGroupKey}
+        onSettledExpandedChange={onSettledExpandedChange}
         scrollOffsetRef={scrollOffsetRef}
         scrollAnchorRef={scrollAnchorRef}
       />
