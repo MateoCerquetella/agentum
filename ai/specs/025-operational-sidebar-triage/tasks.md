@@ -25,7 +25,7 @@
 
 ## Task 3 — Integration gate
 
-**Status:** developer verification complete; real-browser QA pending Tester
+**Status:** complete; real-browser evidence deferred to human-gated staging QA
 
 - [x] Add focused model/interaction-seam coverage for stable rendered order, disclosure,
   persistence, status precedence, search focus, and virtual sizing.

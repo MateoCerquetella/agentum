@@ -1,73 +1,58 @@
 # Review — Spec 025: operational sidebar triage
 
-- **Status:** SEND-BACK TO DEVELOPER
+- **Status:** SIGN-OFF — READY TO SHIP
 - **Date:** 2026-07-22
 - **Reviewer:** autonomous SDD Reviewer
 
 ## Verdict
 
-`passed: false`
+`passed: true`
 
-The implementation is close and the Tester evidence is accepted, but source review found two
-contained presentation defects that prevent final sign-off. Neither requires an architecture or
-PM change.
+The implementation satisfies the code-level acceptance criteria and is consistent with the
+approved architecture. The two prior Reviewer findings are closed with localized production
+changes and focused regressions. No additional maintainability, scope, or handoff blocker was
+found.
 
 ## What worked well
 
-- The pure operational model is small, deterministic, and keeps status precedence, search,
-  ordering, counts, and disclosure outside React.
-- The implementation reuses the existing status resolver, virtual row path, and `WorktreeCard`
-  interaction owner. No backend, polling, persistence-schema, or duplicated interaction path was
-  introduced.
-- The two Tester send-backs were fixed at the shallowest layer with focused regressions. The final
-  Tester record is internally honest: 21/21 focused tests and the production build pass, while
-  browser screenshots and interaction QA are explicitly deferred rather than claimed.
-- `tasks.md` and the eight-role handoff trail accurately record completed work, rework, and the
-  remaining staging evidence.
+- Operational filtering now bypasses the legacy filtered-empty return, so a zero-match project
+  filter retains exactly three ordered Needs You, Active, and Settled headers with zero counts.
+  Alternate grouping modes keep the existing recovery empty state.
+- `WorktreeCard` now treats `operationalMeta.presentation` as the density authority. A rich
+  operational card retains its branch metadata even when the legacy compact preference is on,
+  and the legacy inline-agent block is suppressed so the operational agent label renders once.
+- Both fixes preserve the established boundaries: the pure operational model owns triage and
+  disclosure, the standard virtual row path owns rendering, and `WorktreeCard` remains the sole
+  workspace interaction owner.
+- The spec, architecture, completed task checklist, Tester verification, and eleven handoffs form
+  a coherent audit trail. Send-backs were routed to the shallowest fixing role and their
+  regressions are named explicitly.
 
 ## Areas for improvement
 
-### 1. Preserve the three operational sections when filters match no workspaces
+- None required before ship-ready status.
 
-`WorktreeList.tsx:5187-5195` takes the legacy `filtersHideAllRows` empty-state return whenever an
-active project/default-branch filter leaves `worktrees` empty. In operational mode the model has
-already emitted the three required zero-count headers, but this return replaces them with “No
-workspaces found.” That contradicts AC 1 and architecture D3, which require the operational queue
-to always render exactly Needs You, Active, and Settled with truthful full counts.
+## Risks and debt
 
-**Required fix:** keep the legacy recovery empty state for alternate groupings, but allow the
-operational rows to render when their filtered set is empty. Add a focused regression for a
-selected project (or other active filter) with zero matching workspaces that asserts the three
-ordered `0` headers remain visible.
+- Playwright-only QA remains staging/release evidence: 220 px and 500 px light/dark screenshots,
+  keyboard traversal, focus/contrast inspection, and runtime drag/context interaction have not
+  been observed in this environment. This limitation is consistently documented and no browser
+  evidence is fabricated.
+- `WorktreeCard.tsx` and `WorktreeList.tsx` remain large, established interaction surfaces. This
+  change adds contained branches rather than a parallel implementation; future decomposition is
+  optional debt, not a blocker for this slice.
 
-### 2. Make `operational-rich` the authoritative card presentation
+## Evidence accepted
 
-`WorktreeCard.tsx:139-141` lets `experimentalCompactWorktreeCards` make an
-`operational-rich` row compact. In the usual no-badge/no-cache case, `hasMetaRow` then becomes
-false (`:562-580`), so the required visible branch line is omitted. Separately,
-`WorktreeCard.tsx:947-965` still renders the configured inline-agent list and then the new
-operational agent summary, duplicating agent presentation and violating architecture D4’s
-explicit suppression rule.
-
-**Required fix:** when `operationalMeta` exists, derive density from its presentation (`rich` or
-`settled`) rather than the legacy experimental compact preference, and suppress
-`WorktreeCardAgents` for operational rows. Add focused render coverage proving a rich operational
-card still visibly contains branch and only one agent summary when legacy compact and
-inline-agent preferences are enabled.
-
-## Risks
-
-- Browser-only QA remains residual release/staging evidence: 220/500 px light/dark screenshots,
-  keyboard traversal, focus/contrast checks, and runtime drag/context behavior have not been
-  observed in a Playwright-enabled surface. This is documented debt, not fabricated pass evidence,
-  and is not the reason for this send-back.
-- No other maintainability, dead-code, scope, or architecture blocker was found in the four
-  feature commits.
+- Reviewer-fix Developer evidence: eight focused files, **47/47 passing**.
+- Earlier focused/model evidence and production UI build are recorded green in
+  `verification.md`.
+- Final source review confirms both required conditions and their focused assertions.
+- `git diff --check` passes.
 
 ## Recommendation
 
-Route to Developer for the two localized fixes above, rerun the existing focused suite plus the
-new regressions, and return directly to Tester for a narrow retest. Reviewer can sign off after
-that evidence is green; no PM or Architect loop is warranted.
+Mark Spec 025 `done` and treat it as ready to ship. Keep the documented real-browser checks in
+the human-gated staging/release checklist.
 
-Reviewer gate: **FAIL — targeted Developer send-back**.
+Reviewer gate: **PASS — SIGN-OFF**.

@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 025-operational-sidebar-triage
-- **phase:** reviewer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer-fix Tester gate PASS; see `handoffs/11-tester-to-reviewer.md`.)
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer SIGN-OFF; ready to ship. Release remains human-gated.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,11 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Developer | **025 REWORK ITERATION 2 PASS → phase tester**
-  (`handoffs/07-developer-to-tester.md`). Timestamp selection now applies the
-  authoritative explicit-status freshness predicate/TTL using the same clock as
-  aggregate status resolution; fallback-only winners omit age. Focused suites
-  pass 21/21 and diff hygiene is clean.
 - 2026-07-22 | Tester | **025 FINAL RETEST PASS → phase reviewer**
   (`verification.md`; `handoffs/08-tester-to-reviewer.md`). All nine ACs have
   code/test verdicts with no remaining code-level failure; isolated model retest
@@ -112,3 +107,8 @@
   evidence confirms zero-match operational headers and authoritative rich-card
   rendering while preserving alternate modes. Recorded focused evidence is
   47/47; browser-only QA remains explicitly deferred.
+- 2026-07-22 | Reviewer | **025 SIGN-OFF → DONE / READY TO SHIP**
+  (`review.md`, `passed: true`; `handoffs/13-reviewer-signoff.md`). All code-level
+  ACs, architecture boundaries, tasks, risks, and handoffs are accepted. The
+  only residual is honestly documented Playwright staging QA; release promotion
+  remains human-gated.

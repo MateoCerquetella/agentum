@@ -1,7 +1,7 @@
 # Spec 025 — Operational sidebar triage
 
 - **Number:** 025
-- **Status:** PM
+- **Status:** Done — Reviewer signed off; ready to ship
 - **Surface:** `crates/agentum-desktop/ui`
 - **Author:** Codex
 - **Date:** 2026-07-22
