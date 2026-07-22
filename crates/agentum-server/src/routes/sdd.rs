@@ -285,7 +285,7 @@ pub(crate) async fn set_loop_active(
     if !active {
         let removed = state.sdd_loops.lock().expect("sdd_loops lock").remove(&id);
         if let Some(h) = removed {
-            abort_and_announce(&state, id, h, "toggled_off").await;
+            abort_and_announce(state, id, h, "toggled_off").await;
         }
         return Ok(read_loop_state(state, id));
     }
