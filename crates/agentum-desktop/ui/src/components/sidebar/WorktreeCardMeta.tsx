@@ -66,6 +66,29 @@ type WorktreeCardDetailsHoverProps = WorktreeCardMetaBadgesProps & {
   onOpenLinearIssueInAgentum?: (event: React.MouseEvent) => void
 }
 
+// Keep synchronized with the Agentum-managed lifecycle labels in
+// crates/agentum-server/src/task_sink.rs. Human QA labels are intentionally
+// excluded so they remain visible beside an authoritative Project status.
+const AGENTUM_TRACKER_LABELS: ReadonlySet<string> = new Set([
+  'status/todo',
+  'status/in-progress',
+  'status/in-review',
+  'status/ready-to-test',
+  'status/done',
+  'status/blocked'
+])
+
+export function visibleIssueLabels(
+  labels: readonly string[],
+  projectStatus: string | null | undefined
+): readonly string[] {
+  if (!projectStatus?.trim()) {
+    return labels
+  }
+
+  return labels.filter((label) => !AGENTUM_TRACKER_LABELS.has(label))
+}
+
 function hasComment(comment: string | null): boolean {
   return (comment ?? '').trim().length > 0
 }
@@ -253,6 +276,7 @@ export function WorktreeCardDetailsHover({
   }
 
   const issueLabels = issue?.labels ?? []
+  const displayedIssueLabels = visibleIssueLabels(issueLabels, projectStatus.status)
 
   return (
     <HoverCard open={open} onOpenChange={setOpen} openDelay={250} closeDelay={120}>
@@ -317,7 +341,7 @@ export function WorktreeCardDetailsHover({
                 <div className="text-[13px] font-semibold leading-snug text-foreground break-words">
                   {issue.title}
                 </div>
-                {(issueLabels.length > 0 || projectStatus.status) && (
+                {(displayedIssueLabels.length > 0 || projectStatus.status) && (
                   <div className="flex flex-wrap gap-1">
                     {/* #379 (Mateo): the hover shows the BOARD status + the
                         labels only — the open/closed state badge was noise
@@ -325,7 +349,7 @@ export function WorktreeCardDetailsHover({
                     {/* #399: GitHub Project Status is the sole lifecycle chip.
                         Never render the local TrackerPhaseChip beside it. */}
                     <IssueProjectStatusChip status={projectStatus.status} />
-                    {issueLabels.map((label) => (
+                    {displayedIssueLabels.map((label) => (
                       <Badge key={label} variant="outline" className="h-4 px-1.5 text-[9px]">
                         {label}
                       </Badge>
