@@ -130,6 +130,65 @@ describe('WorktreeCardDetailsHover', () => {
     expect(markup).not.toContain('In Progress')
   })
 
+  it('suppresses canonical tracker labels beside a resolved Project status', () => {
+    projectStatusState.status = 'In progress'
+    const markup = renderToStaticMarkup(
+      <WorktreeCardDetailsHover
+        issue={{
+          number: 402,
+          title: 'Single authoritative issue status',
+          state: 'open',
+          url: 'https://github.com/acme/agentum/issues/402',
+          labels: ['status/blocked', 'status/in-progress', 'status/qa', 'area/desktop']
+        }}
+        linearIssue={null}
+        comment={null}
+        workdir="/worktree"
+        repoId="repo-1"
+        onEditIssue={vi.fn()}
+        onEditComment={vi.fn()}
+      >
+        <span>hover</span>
+      </WorktreeCardDetailsHover>
+    )
+
+    expect(markup.match(/data-project-status="true"/g)).toHaveLength(1)
+    expect(markup.match(/>In progress</g)).toHaveLength(1)
+    expect(markup).not.toContain('status/blocked')
+    expect(markup).not.toContain('status/in-progress')
+    expect(markup).toContain('status/qa')
+    expect(markup).toContain('area/desktop')
+  })
+
+  it('preserves canonical tracker labels when no Project status resolves', () => {
+    projectStatusState.status = null
+    const markup = renderToStaticMarkup(
+      <WorktreeCardDetailsHover
+        issue={{
+          number: 402,
+          title: 'Label-only issue status fallback',
+          state: 'open',
+          url: 'https://github.com/acme/agentum/issues/402',
+          labels: ['status/blocked', 'status/in-progress', 'status/qa', 'area/desktop']
+        }}
+        linearIssue={null}
+        comment={null}
+        workdir="/worktree"
+        repoId="repo-1"
+        onEditIssue={vi.fn()}
+        onEditComment={vi.fn()}
+      >
+        <span>hover</span>
+      </WorktreeCardDetailsHover>
+    )
+
+    expect(markup).not.toContain('data-project-status="true"')
+    expect(markup).toContain('status/blocked')
+    expect(markup).toContain('status/in-progress')
+    expect(markup).toContain('status/qa')
+    expect(markup).toContain('area/desktop')
+  })
+
   it('surfaces an actionable warning while a GitHub transition remains pending', () => {
     projectStatusState.warning =
       'GitHub status sync pending: project scope missing. Check gh authentication and the Project binding; Agentum will retry.'
