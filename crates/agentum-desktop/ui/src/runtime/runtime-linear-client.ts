@@ -30,7 +30,7 @@ export type RuntimeLinearSettings =
 export type LinearIssueFilter = 'assigned' | 'created' | 'all' | 'completed'
 export type LinearConnectResult = { ok: true; viewer: LinearViewer } | { ok: false; error: string }
 export type LinearCreateIssueResult =
-  | { ok: true; id: string; identifier: string; title: string; url: string }
+  | { ok: true; id: string; identifier: string; title: string; url: string; projectId?: string; teamId?: string }
   | { ok: false; error: string }
 export type LinearMutationResult = { ok: true } | { ok: false; error: string }
 export type LinearCommentResult = { ok: true; id: string } | { ok: false; error: string }

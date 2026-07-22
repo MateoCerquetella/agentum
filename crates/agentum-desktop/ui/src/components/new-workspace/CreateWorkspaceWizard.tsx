@@ -159,6 +159,7 @@ export default function CreateWorkspaceWizard({
   // is inherited byte-identically (inv. 4).
   const { cardProps, submitQuick, nameInputRef } = useComposerState({
     ...deriveWizardComposerSeed(modalData),
+    requiredProjectTaskScope: modalData.requiredProjectTaskScope,
     initialPrompt: '',
     persistDraft: false,
     onCreated: onClose,
@@ -209,6 +210,12 @@ export default function CreateWorkspaceWizard({
     // Spec 013 F4: the gated-run toggle — the SAME seams the composer card used,
     // so `submitQuick` inherits the `start_work` precondition set unchanged.
   } = cardProps
+  const scopeLockedDisabledRepoIds = useMemo(() => {
+    if (!modalData.requiredProjectTaskScope) return disabledRepoIds
+    const next = new Map(disabledRepoIds)
+    for (const candidate of repos) if (candidate.id !== modalData.requiredProjectTaskScope.repoId) next.set(candidate.id, 'Repository locked to the active Project Tasks scope.')
+    return next
+  }, [disabledRepoIds, modalData.requiredProjectTaskScope, repos])
 
   // Quick-agent selection mirrors the composer modal's `QuickTabBody`: the
   // user's pick wins, else the preferred/detected default. Derived during
@@ -562,7 +569,7 @@ export default function CreateWorkspaceWizard({
             <RepoStep
               hostLabel={selectedHostLabel}
               repos={hostScopedRepos}
-              disabledRepoIds={disabledRepoIds}
+              disabledRepoIds={scopeLockedDisabledRepoIds}
               repoId={repoId}
               onRepoChange={onRepoChange}
               selectedRepo={selectedRepo}

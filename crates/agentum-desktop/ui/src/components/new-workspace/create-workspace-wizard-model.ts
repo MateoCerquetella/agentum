@@ -240,6 +240,8 @@ export type CreateWorkspaceWizardData = {
   /** Spec 005 F1 (AC 3): open with the "Start gated run" toggle armed. */
   startGatedRun?: boolean
   telemetrySource?: WorkspaceCreateTelemetrySource
+  /** Locks workspace creation to the Project Hub scope that opened it. */
+  requiredProjectTaskScope?: Readonly<{ scopeKey: string; generation: number; repoId: string }>
 }
 
 /**
@@ -260,7 +262,7 @@ export function deriveWizardComposerSeed(modalData: CreateWorkspaceWizardData): 
 } & ({ initialStartGatedRun: true } | Record<string, never>) {
   return {
     initialName: modalData.prefilledName ?? '',
-    initialRepoId: modalData.initialRepoId,
+    initialRepoId: modalData.requiredProjectTaskScope?.repoId ?? modalData.initialRepoId,
     initialLinkedWorkItem: modalData.linkedWorkItem ?? null,
     initialWorkspaceStatus: modalData.initialWorkspaceStatus,
     initialBaseBranch: modalData.initialBaseBranch,
