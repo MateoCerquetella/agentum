@@ -2513,7 +2513,7 @@ export type PersistedUIState = {
   rightSidebarOpen: boolean
   rightSidebarTab: RightSidebarTab
   rightSidebarWidth: number
-  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
+  groupBy: 'operational' | 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
   sortBy: 'name' | 'smart' | 'recent' | 'repo' | 'manual'
   /** Deprecated; the Active only filter is retired and ignored on hydration. */
   showActiveOnly: boolean

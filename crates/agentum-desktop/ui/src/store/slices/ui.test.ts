@@ -8,7 +8,7 @@ import type {
   Worktree,
   WorktreeCardProperty
 } from '../../../../shared/types'
-import { createUISlice } from './ui'
+import { createUISlice, normalizePersistedGroupBy } from './ui'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createSettingsSearchState } from './settings-search-state'
 import type { AppState } from '../types'
@@ -461,6 +461,24 @@ describe('createUISlice agent send target mode', () => {
 })
 
 describe('createUISlice hydratePersistedUI', () => {
+  it('defaults fresh and absent grouping to operational without overwriting explicit choices', () => {
+    expect(getDefaultUIState().groupBy).toBe('operational')
+    expect(createUIStore().getState().groupBy).toBe('operational')
+    expect(normalizePersistedGroupBy(undefined)).toBe('operational')
+    expect(normalizePersistedGroupBy('corrupt')).toBe('operational')
+    expect(normalizePersistedGroupBy('parent')).toBe('host')
+    for (const explicit of [
+      'operational',
+      'host',
+      'repo',
+      'workspace-status',
+      'pr-status',
+      'none'
+    ] as const) {
+      expect(normalizePersistedGroupBy(explicit)).toBe(explicit)
+    }
+  })
+
   it('defaults persisted right sidebar visibility to open', () => {
     expect(getDefaultUIState().rightSidebarOpen).toBe(true)
   })

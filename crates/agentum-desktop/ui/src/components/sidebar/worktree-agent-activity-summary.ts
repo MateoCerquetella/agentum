@@ -37,6 +37,7 @@ type AgentActivityCache = {
   migrationUnsupportedByPtyId: AppState['migrationUnsupportedByPtyId']
   retainedAgentsByPaneKey: AppState['retainedAgentsByPaneKey']
   awaitingInputByPaneKey: AppState['awaitingInputByPaneKey']
+  evaluatedAt: number
   summaries: Map<string, WorktreeAgentActivitySummary>
 }
 
@@ -44,13 +45,15 @@ let agentActivityCache: AgentActivityCache | null = null
 
 export function selectWorktreeAgentActivitySummary(
   state: AgentActivityInput,
-  worktreeId: string
+  worktreeId: string,
+  now?: number
 ): WorktreeAgentActivitySummary {
-  return getWorktreeAgentActivitySummaries(state).get(worktreeId) ?? EMPTY_SUMMARY
+  return getWorktreeAgentActivitySummaries(state, now).get(worktreeId) ?? EMPTY_SUMMARY
 }
 
 function getWorktreeAgentActivitySummaries(
-  state: AgentActivityInput
+  state: AgentActivityInput,
+  now?: number
 ): Map<string, WorktreeAgentActivitySummary> {
   if (
     agentActivityCache &&
@@ -58,7 +61,8 @@ function getWorktreeAgentActivitySummaries(
     agentActivityCache.agentStatusEpoch === state.agentStatusEpoch &&
     agentActivityCache.migrationUnsupportedByPtyId === state.migrationUnsupportedByPtyId &&
     agentActivityCache.retainedAgentsByPaneKey === state.retainedAgentsByPaneKey &&
-    agentActivityCache.awaitingInputByPaneKey === state.awaitingInputByPaneKey
+    agentActivityCache.awaitingInputByPaneKey === state.awaitingInputByPaneKey &&
+    (now === undefined || agentActivityCache.evaluatedAt === now)
   ) {
     return agentActivityCache.summaries
   }
@@ -83,10 +87,13 @@ function getWorktreeAgentActivitySummaries(
     return summary
   }
 
-  const now = Date.now()
+  const evaluatedAt = now ?? Date.now()
   for (const [paneKey, entry] of Object.entries(state.agentStatusByPaneKey)) {
     const worktreeId = worktreeIdForPaneKey(paneKey, tabIdToWorktreeId)
-    if (!worktreeId || !isExplicitAgentStatusFresh(entry, now, AGENT_STATUS_STALE_AFTER_MS)) {
+    if (
+      !worktreeId ||
+      !isExplicitAgentStatusFresh(entry, evaluatedAt, AGENT_STATUS_STALE_AFTER_MS)
+    ) {
       continue
     }
     applyLiveAgentState(summaryForWorktree(worktreeId), entry)
@@ -122,6 +129,7 @@ function getWorktreeAgentActivitySummaries(
     migrationUnsupportedByPtyId: state.migrationUnsupportedByPtyId,
     retainedAgentsByPaneKey: state.retainedAgentsByPaneKey,
     awaitingInputByPaneKey: state.awaitingInputByPaneKey,
+    evaluatedAt,
     summaries
   }
   return summaries

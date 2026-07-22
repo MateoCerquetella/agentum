@@ -6,8 +6,15 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import SidebarWorkspaceOptionsMenu from './SidebarWorkspaceOptionsMenu'
 import WorkspaceKanbanDrawer from './WorkspaceKanbanDrawer'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
+import { OperationalSidebarControls } from './OperationalSidebarControls'
 
-const SidebarHeader = React.memo(function SidebarHeader() {
+const SidebarHeader = React.memo(function SidebarHeader({
+  operationalQuery,
+  onOperationalQueryChange
+}: {
+  operationalQuery: string
+  onOperationalQueryChange: (query: string) => void
+}) {
   const newWorktreeShortcutLabel = useShortcutLabel('workspace.create')
   const [workspaceBoardOpen, setWorkspaceBoardOpen] = useState(false)
   const [workspaceBoardMenuOpen, setWorkspaceBoardMenuOpen] = useState(false)
@@ -92,6 +99,23 @@ const SidebarHeader = React.memo(function SidebarHeader() {
 
   return (
     <>
+      {groupBy === 'operational' ? (
+        <OperationalSidebarControls
+          query={operationalQuery}
+          onQueryChange={onOperationalQueryChange}
+          boardControl={
+            <Button
+              variant={workspaceBoardOpen ? 'secondary' : 'ghost'}
+              size="icon-xs"
+              aria-label="Workspace board"
+              aria-pressed={workspaceBoardOpen}
+              onClick={handleWorkspaceBoardToggle}
+            >
+              <Kanban className="size-3.5" strokeWidth={2.25} />
+            </Button>
+          }
+        />
+      ) : (
       <div className="mt-2 flex h-8 items-center justify-between px-2 gap-2">
         <div className="flex min-w-0 items-center gap-1">
           <span className="pl-2 pr-0.5 text-xs font-semibold text-muted-foreground/80 select-none">
@@ -148,6 +172,7 @@ const SidebarHeader = React.memo(function SidebarHeader() {
           </Tooltip>
         </div>
       </div>
+      )}
       <WorkspaceKanbanDrawer
         open={workspaceBoardOpen}
         preserveOpenForMenu={workspaceBoardMenuOpen}
