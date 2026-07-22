@@ -4,6 +4,15 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.92.3] — 2026-07-22
+
+### Fixed
+
+- **Windows CI keeps a stable home directory during parallel tests.** The
+  workflow initializes `HOME` from the native Windows user-profile API before
+  registry tests run, so environment-isolation restores cannot leave readers
+  without a home path.
+
 ## [0.92.2] — 2026-07-22
 
 ### Fixed
