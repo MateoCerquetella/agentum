@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { HarnessStatus } from '@/runtime/harness-client'
 
 const STORE_STATE = {
+  gatedRunStartingByWorktreeId: {},
   worktreesByRepo: {
     'repo-1': [{ id: 'wt-1', repoId: 'repo-1', path: '/workspace/feature' }]
   }
@@ -47,7 +48,8 @@ function makeRun(overrides: Partial<HarnessStatus> = {}): HarnessStatus {
       agent_tool: 'claude',
       settle_grace_secs: 8,
       settle_timeout_secs: 1200,
-      agent_yolo: true
+      agent_yolo: true,
+      roles: true
     },
     elapsed_secs: 3,
     agent_instructions: '',
@@ -82,7 +84,11 @@ describe('GatedRunBar (host)', () => {
     const { default: GatedRunBar } = await importBar()
     const html = renderToStaticMarkup(<GatedRunBar worktreeId="wt-1" />)
     expect(html).toContain('Gated run')
-    expect(html).toContain('running · executing · Build the thing · 1/2')
+    expect(html).toContain('Working on Build the thing')
+    expect(html).toContain('PM spec')
+    expect(html).toContain('Architecture')
+    expect(html).toContain('Build the thing')
+    expect(html).toContain('0/2 complete')
     expect(html).toContain('#42')
     expect(html).toContain('Unlink issue')
     // Load-bearing vs the launcher overlay's z-20: the strip must paint above.
@@ -95,10 +101,12 @@ describe('GatedRunBar (host)', () => {
     expect(renderToStaticMarkup(<GatedRunBar worktreeId="wt-1" />)).toBe('')
   })
 
-  it('renders nothing for a finished run (nothing left to unlink)', async () => {
+  it('keeps completed progress visible but removes the unlink mutation', async () => {
     const { default: GatedRunBar } = await importBar()
     hookState = { run: makeRun({ state: 'done' }), refresh: () => {} }
-    expect(renderToStaticMarkup(<GatedRunBar worktreeId="wt-1" />)).toBe('')
+    const html = renderToStaticMarkup(<GatedRunBar worktreeId="wt-1" />)
+    expect(html).toContain('Gated run complete')
+    expect(html).not.toContain('Unlink issue')
   })
 
   it('renders no chip once the run is unlinked', async () => {
@@ -118,13 +126,12 @@ describe('GatedRunBarView', () => {
     const { GatedRunBarView } = await importBar()
     const html = renderToStaticMarkup(
       <GatedRunBarView
-        state="running"
-        phase={null}
-        currentFeature={null}
-        featureProgress={null}
+        run={makeRun()}
         issueLabel="#42"
         busy={false}
         arming={true}
+        expanded={true}
+        onToggleExpanded={() => {}}
         onUnlink={() => {}}
       />
     )
@@ -135,13 +142,12 @@ describe('GatedRunBarView', () => {
     const { GatedRunBarView } = await importBar()
     const html = renderToStaticMarkup(
       <GatedRunBarView
-        state="running"
-        phase={null}
-        currentFeature={null}
-        featureProgress={null}
+        run={makeRun()}
         issueLabel="#42"
         busy={true}
         arming={false}
+        expanded={true}
+        onToggleExpanded={() => {}}
         onUnlink={() => {}}
       />
     )

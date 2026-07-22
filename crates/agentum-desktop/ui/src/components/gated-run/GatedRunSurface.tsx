@@ -13,9 +13,10 @@
 import React, { useEffect } from 'react'
 import { useAppStore } from '@/store'
 import WorkspaceAgentLauncher from '../WorkspaceAgentLauncher'
-import { deriveGatedRunSurface } from '@/lib/harness-run'
+import { deriveGatedRunSurface, gatedRunSessionTitle } from '@/lib/harness-run'
 import { useWorktreeHarnessRun } from '@/hooks/useWorktreeHarnessRun'
 import { GatedRunStartingPanel } from './GatedRunStartingPanel'
+import { isTuiAgent } from '@/shared/tui-agent-config'
 
 /** If no engine run matches within this window the pending slice is cleared —
  *  the workspace falls back to the picker rather than claiming "starting"
@@ -68,9 +69,13 @@ export default function GatedRunSurface({
         activate: true,
         recordInteraction: false,
         persistTmux: true,
-        serverSessionId: sessionId
+        serverSessionId: sessionId,
+        ...(() => {
+          const rawAgent = run.current_agent_tool ?? run.features.agent_tool
+          return isTuiAgent(rawAgent) ? { launchAgent: rawAgent } : {}
+        })()
       })
-      state.setTabCustomTitle(tab.id, 'Gated run')
+      state.setTabCustomTitle(tab.id, gatedRunSessionTitle(run))
     }
     state.clearGatedRunStarting(worktreeId)
   }, [pending, run?.current_session, worktreeId])

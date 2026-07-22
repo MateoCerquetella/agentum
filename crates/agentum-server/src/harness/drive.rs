@@ -222,10 +222,23 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             let qa_mode = resolve_qa_mode(&config, agent_qa_capable);
             let (qa_ok, qa_out) = match qa_mode {
                 QaMode::Agent => {
-                    run_qa_agent_gate(
+                    let result = run_qa_agent_gate(
                         state, harness_id, &workdir, &config, &feature, grace, timeout,
                     )
-                    .await?
+                    .await?;
+                    // The QA pane is intentionally torn down once its verdict
+                    // lands. Restore the still-live coding session as current
+                    // so retries/SDD controls return to the agent that receives
+                    // gate feedback.
+                    engine
+                        .set_current_session(
+                            harness_id,
+                            session.id,
+                            &config.features.agent_tool,
+                            Some(&feature.id),
+                        )
+                        .await?;
+                    result
                 }
                 _ => engine.run_qa_once(harness_id, &feature.id).await?,
             };
@@ -393,7 +406,7 @@ async fn transition_tracker(
         return;
     };
     let engine = &state.harness;
-    match crate::task_sink::apply_tracker_transition(
+    let result = crate::task_sink::apply_tracker_transition(
         &state.store,
         provider,
         &feature.id,
@@ -404,8 +417,8 @@ async fn transition_tracker(
             worktree_id: None,
         },
     )
-    .await
-    {
+    .await;
+    match &result {
         Ok(crate::task_sink::TransitionResult::Applied) => {
             engine.log(harness_id, Some(&feature.id), format!("ticket → {phase:?}"))
         }
@@ -420,6 +433,62 @@ async fn transition_tracker(
             format!("ticket transition to {phase:?} failed (non-fatal): {e}"),
         ),
     }
+    if !matches!(result, Ok(crate::task_sink::TransitionResult::Applied)) {
+        spawn_tracker_transition_retry(state, harness_id, feature, phase);
+    }
+}
+
+/// Keep an unacknowledged lifecycle write pending without stalling the harness.
+/// Five capped-backoff attempts cover transient auth/network/Projects failures;
+/// every failure emits `tracker.sync_pending`, and later lifecycle observers
+/// (session/PR/merge) remain able to retry beyond this bounded worker.
+fn spawn_tracker_transition_retry(
+    state: &AppState,
+    harness_id: Uuid,
+    feature: &Feature,
+    phase: crate::task_sink::TrackerPhase,
+) {
+    let Some(provider) = feature.tracker_provider.clone() else {
+        return;
+    };
+    let tracker_id = feature.id.clone();
+    let tracker_url = feature.tracker_url.clone();
+    let store = state.store.clone();
+    let bus = state.bus.clone();
+    let engine = state.harness.clone();
+    tokio::spawn(async move {
+        for attempt in 1..=5u32 {
+            let delay = std::time::Duration::from_secs(2u64.saturating_pow(attempt).min(60));
+            tokio::time::sleep(delay).await;
+            let result = crate::task_sink::apply_tracker_transition(
+                &store,
+                &provider,
+                &tracker_id,
+                tracker_url.as_deref(),
+                phase,
+                crate::task_sink::TrackerEmit {
+                    bus: &bus,
+                    worktree_id: None,
+                },
+            )
+            .await;
+            if matches!(result, Ok(crate::task_sink::TransitionResult::Applied)) {
+                engine.log(
+                    harness_id,
+                    Some(&tracker_id),
+                    format!("ticket → {phase:?} (sync retry {attempt})"),
+                );
+                return;
+            }
+            tracing::warn!(
+                feature = %tracker_id,
+                ?phase,
+                attempt,
+                ?result,
+                "tracker transition remains pending"
+            );
+        }
+    });
 }
 
 /// A per-SPAWN unique, tmux-safe session name: `harness-<kind>-<run8>-<nonce4>`.
@@ -482,7 +551,12 @@ async fn spawn_feature_agent(
 
     state
         .harness
-        .set_session(harness_id, session.id, &feature.id)
+        .set_session(
+            harness_id,
+            session.id,
+            &feature.id,
+            &config.features.agent_tool,
+        )
         .await?;
 
     let target = agentum_tmux::target_for(&session.name);
@@ -574,6 +648,10 @@ async fn spawn_qa_agent(
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn QA agent: {e}"))?;
+    state
+        .harness
+        .set_current_session(harness_id, session.id, &session.tool, Some(&feature.id))
+        .await?;
     info!(%harness_id, feature = %feature.id, session = %session.id, "harness spawned QA agent");
     Ok(session)
 }
@@ -714,6 +792,10 @@ async fn spawn_role_agent(
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn role agent: {e}"))?;
+    state
+        .harness
+        .set_current_session(harness_id, session.id, &session.tool, None)
+        .await?;
     info!(%harness_id, role = %role.as_str(), session = %session.id, "harness spawned role agent");
     Ok(session)
 }
@@ -783,8 +865,6 @@ async fn run_role_gate(
         {
             engine.log(harness_id, None, settle_timeout_message(timeout));
         }
-        teardown_session(state, &session).await;
-
         let (passed, summary) = match tokio::fs::read_to_string(&verdict_abs).await {
             Ok(raw) => match parse_role_verdict(&raw) {
                 Ok(v) => v,
@@ -803,6 +883,7 @@ async fn run_role_gate(
         };
 
         let attempt = engine.bump_phase_attempt(harness_id).await?;
+        engine.set_gate_summary(harness_id, summary.clone()).await?;
         engine.emit(HarnessEvent::GateResult {
             harness_id,
             role,
@@ -818,6 +899,8 @@ async fn run_role_gate(
             config.features.hitl_on_block,
         ) {
             GateDecision::Advance => {
+                teardown_session(state, &session).await;
+                engine.clear_current(harness_id).await;
                 let _ = append_decision(
                     workdir,
                     &format!("{} gate PASS (attempt {attempt}): {summary}", phase.slug()),
@@ -831,6 +914,8 @@ async fn run_role_gate(
                 return Ok(true);
             }
             GateDecision::Retry => {
+                teardown_session(state, &session).await;
+                engine.clear_current(harness_id).await;
                 engine.log(
                     harness_id,
                     None,

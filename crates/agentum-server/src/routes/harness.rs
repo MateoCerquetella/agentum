@@ -418,6 +418,9 @@ struct EnsuredSpec {
 /// (best-effort, logged — mirrors `board_goals.rs`'s plan-time Todo) so BOTH
 /// callers inherit the label-trail start (AC 4). The transition lives here (not
 /// `types.rs`) because it needs `&Store` and the fs-only plan helpers don't.
+// The arguments mirror the two route contracts and keep the fetched issue,
+// tracker provider, and convergence policy explicit at every call site.
+#[allow(clippy::too_many_arguments)]
 async fn ensure_spec_and_plan(
     store: &agentum_store::Store,
     // Spec 014 F1: the seam's TrackerEmit needs a bus; threaded from the
@@ -496,7 +499,12 @@ async fn ensure_spec_and_plan(
         )
         .await
         {
-            Ok(_) => {}
+            Ok(crate::task_sink::TransitionResult::Applied) => {}
+            Ok(crate::task_sink::TransitionResult::Skipped(reason)) => tracing::warn!(
+                number,
+                %reason,
+                "initial Todo transition not acknowledged; session lifecycle will retry"
+            ),
             Err(e) => {
                 tracing::warn!(number, error = %e, "initial Todo transition failed (non-fatal)")
             }
