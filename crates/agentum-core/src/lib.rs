@@ -151,17 +151,35 @@ pub use board_schema::{
 /// Cross-platform user home directory, std-only (no `dirs`/`directories`
 /// dependency — `agentum-core` stays filesystem-light on purpose).
 ///
-/// Resolves `$HOME` on Unix and falls back to `%USERPROFILE%` on Windows,
-/// where `HOME` is conventionally unset. Returns `None` when neither is
-/// present (a misconfigured environment, not a normal one).
+/// Resolves `$HOME` on Unix and falls back to `%USERPROFILE%`, then the native
+/// `%HOMEDRIVE%%HOMEPATH%` pair on Windows, where `HOME` is conventionally
+/// unset. Returns `None` when none of those sources are present.
 ///
 /// Note: this does *not* read `$XDG_CONFIG_HOME` or any app-specific
 /// override (`$AGENTUM_HOME`) — those are layered on by callers
 /// (`profiles::default_path`, the store's path resolver) *on top of* this
 /// base. This helper only answers "where is the user's home directory".
 pub fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    home_dir_from_parts(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOMEDRIVE"),
+        std::env::var_os("HOMEPATH"),
+    )
+}
+
+fn home_dir_from_parts(
+    home: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
+    home_drive: Option<std::ffi::OsString>,
+    home_path: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    home.or(user_profile)
+        .or_else(|| {
+            let mut combined = home_drive?;
+            combined.push(home_path?);
+            Some(combined)
+        })
         .map(std::path::PathBuf::from)
 }
 
@@ -1011,6 +1029,20 @@ pub fn validate_name(name: &str) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_dir_falls_back_to_windows_drive_and_path() {
+        let resolved = home_dir_from_parts(
+            None,
+            None,
+            Some(std::ffi::OsString::from("C:")),
+            Some(std::ffi::OsString::from(r"\Users\runneradmin")),
+        );
+        assert_eq!(
+            resolved,
+            Some(std::path::PathBuf::from(r"C:\Users\runneradmin"))
+        );
+    }
 
     #[test]
     fn status_roundtrip() {

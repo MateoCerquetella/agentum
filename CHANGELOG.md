@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.92.2] — 2026-07-22
+
+### Fixed
+
+- **Windows home resolution covers native runner environments.** When `HOME`
+  and `USERPROFILE` are absent, Agentum now resolves the standard
+  `%HOMEDRIVE%%HOMEPATH%` pair used by Windows services and CI runners.
+
 ## [0.92.1] — 2026-07-22
 
 ### Fixed
