@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 025-operational-sidebar-triage
-- **phase:** tester  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Developer rework iteration 2 PASS; see `handoffs/07-developer-to-tester.md`.)
+- **phase:** reviewer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Tester gate PASS; see `verification.md` and `handoffs/08-tester-to-reviewer.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,12 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Developer | **025 DEVELOPER PASS → phase tester**
-  (`handoffs/03-developer-to-tester.md`). Implemented the operational grouping,
-  triage model, controls, rich/compact card bodies, disclosure, virtualization,
-  persisted-default normalization, and search shortcut routing. Focused Vitest
-  suites pass 17/17, the production Vite build passes, and `git diff --check`
-  is clean; real-browser layout/theme/interaction QA remains for Tester.
 - 2026-07-22 | Tester | **025 TESTER FAIL → send back to developer**
   (`verification.md`; `handoffs/04-tester-to-developer.md`). Settled ordering
   incorrectly prioritizes pinned state over recency, and displayed status age
@@ -113,3 +107,8 @@
   authoritative explicit-status freshness predicate/TTL using the same clock as
   aggregate status resolution; fallback-only winners omit age. Focused suites
   pass 21/21 and diff hygiene is clean.
+- 2026-07-22 | Tester | **025 FINAL RETEST PASS → phase reviewer**
+  (`verification.md`; `handoffs/08-tester-to-reviewer.md`). All nine ACs have
+  code/test verdicts with no remaining code-level failure; isolated model retest
+  passes 9/9 and recorded focused/build gates pass. Playwright-only 220/500 px
+  light/dark screenshots remain explicitly deferred and are not claimed.
