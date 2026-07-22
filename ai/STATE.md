@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 025-operational-sidebar-triage
-- **phase:** reviewer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Tester gate PASS; see `verification.md` and `handoffs/08-tester-to-reviewer.md`.)
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (025 Reviewer gate FAIL; see `review.md` and `handoffs/09-reviewer-to-developer.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,11 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Tester | **025 TESTER FAIL → send back to developer**
-  (`verification.md`; `handoffs/04-tester-to-developer.md`). Settled ordering
-  incorrectly prioritizes pinned state over recency, and displayed status age
-  can come from a different pane than the pane that won status precedence.
-  Focused suites pass 17/17; Playwright MCP is unavailable for screenshot QA.
 - 2026-07-22 | Developer | **025 REWORK PASS → phase tester**
   (`handoffs/05-developer-to-tester.md`). Settled now sorts strictly by activity;
   rich status age is selected only from an explicit pane matching the aggregate
@@ -112,3 +107,8 @@
   code/test verdicts with no remaining code-level failure; isolated model retest
   passes 9/9 and recorded focused/build gates pass. Playwright-only 220/500 px
   light/dark screenshots remain explicitly deferred and are not claimed.
+- 2026-07-22 | Reviewer | **025 REVIEW FAIL → send back to developer**
+  (`review.md`; `handoffs/09-reviewer-to-developer.md`). Operational mode loses
+  its required zero-count section headers under a no-match active filter, and
+  rich cards can be collapsed/duplicated by legacy compact and inline-agent
+  preferences. Fixes are localized presentation integration work.
