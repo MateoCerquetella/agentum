@@ -131,8 +131,10 @@ describe('GatedRunBarView', () => {
         busy={false}
         arming={true}
         expanded={true}
+        restarting={false}
         onToggleExpanded={() => {}}
         onUnlink={() => {}}
+        onRetry={() => {}}
       />
     )
     expect(html).toContain('Confirm unlink')
@@ -147,10 +149,32 @@ describe('GatedRunBarView', () => {
         busy={true}
         arming={false}
         expanded={true}
+        restarting={false}
         onToggleExpanded={() => {}}
         onUnlink={() => {}}
+        onRetry={() => {}}
       />
     )
     expect(html).toContain('disabled=""')
+  })
+
+  it('offers recovery for a failed run and keeps the stage connector behind labels', async () => {
+    const { GatedRunBarView } = await importBar()
+    const html = renderToStaticMarkup(
+      <GatedRunBarView
+        run={makeRun({ state: 'failed' })}
+        issueLabel="#42"
+        busy={false}
+        arming={false}
+        expanded={true}
+        restarting={false}
+        onToggleExpanded={() => {}}
+        onUnlink={() => {}}
+        onRetry={() => {}}
+      />
+    )
+    expect(html).toContain('Retry run')
+    expect(html).toContain('w-[calc(100%+0.25rem)]')
+    expect(html).toContain('relative z-10 truncate bg-background')
   })
 })

@@ -77,12 +77,17 @@ export async function fetchGithubIssueBody(input: {
 export async function fetchGithubRepoLabels(input: {
   workdir: string
   slug?: string
+  /** Resolve the slug on the registered repo's host (required for SSH paths). */
+  repoId?: string
   /** Abort budget — a slow/hung `gh` must not delay the composer. */
   timeoutMs?: number
 }): Promise<string[]> {
   const params = new URLSearchParams({ workdir: input.workdir })
   if (input.slug) {
     params.set('slug', input.slug)
+  }
+  if (input.repoId) {
+    params.set('repoId', input.repoId)
   }
   const url = await apiUrl(`/api/github/labels?${params.toString()}`)
 

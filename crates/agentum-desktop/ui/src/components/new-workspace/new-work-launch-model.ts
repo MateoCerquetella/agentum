@@ -1,7 +1,7 @@
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace';
 import type { CreateWorktreeResult } from '../../../../shared/types';
 
-export type WorkSource = 'new' | 'existing';
+export type WorkSource = 'new' | 'existing' | 'none';
 export type ExecutionMode = 'autopilot' | 'manual';
 export type NewWorkStage = 'issue' | 'worktree' | 'spec' | 'run';
 export type NewWorkStageStatus = 'pending' | 'active' | 'done' | 'error';
@@ -34,10 +34,11 @@ export const NEW_WORK_STAGES: readonly NewWorkStage[] = [
 ];
 
 export function initialNewWorkProgress(
-  checkpoint: NewWorkCheckpoint = {}
+  checkpoint: NewWorkCheckpoint = {},
+  source: WorkSource = 'new'
 ): NewWorkProgress {
   return {
-    issue: checkpoint.linkedWorkItem ? 'done' : 'pending',
+    issue: source === 'none' || checkpoint.linkedWorkItem ? 'done' : 'pending',
     worktree: checkpoint.worktreeResult ? 'done' : 'pending',
     spec: 'pending',
     run: 'pending'
@@ -57,9 +58,8 @@ export function newWorkPrimaryLabel(
   retrying = false
 ): string {
   if (retrying) return 'Retry from incomplete step';
-  return source === 'new'
-    ? 'Create issue & start work'
-    : 'Create worktree & start work';
+  if (source === 'new') return 'Create issue & start work';
+  return source === 'none' ? 'Create workspace & start work' : 'Create worktree & start work';
 }
 
 export function deriveDefaultExecutionMode(
@@ -139,6 +139,13 @@ export function deriveNewWorkEligibility(input: {
       message: 'Resolve the project setup requirement before starting work.'
     };
   }
+  if (input.source === 'none') {
+    return {
+      eligible: false,
+      reason: 'non-github-issue',
+      message: 'SDD Autopilot needs a GitHub issue. Choose Open manually to work without one.'
+    };
+  }
   if (
     input.source === 'existing' &&
     (!input.linkedWorkItem ||
@@ -177,10 +184,11 @@ export async function resolveLaunchIssue(input: {
       created: false
     };
   }
-  const issue =
-    input.source === 'new'
-      ? await input.createIssue()
-      : (input.selectedIssue ?? null);
+  const issue = input.source === 'new'
+    ? await input.createIssue()
+    : input.source === 'existing'
+      ? (input.selectedIssue ?? null)
+      : null;
   if (!issue)
     return { checkpoint: input.checkpoint, issue: null, created: false };
   return {

@@ -209,6 +209,14 @@ export default function CreateWorkspaceWizard({
     onConnectSelectedRepo,
     applyLinkedWorkItem,
     linkedWorkItem,
+    onRemoveLinkedWorkItem,
+    onLinkPopoverOpenChange,
+    linkQuery,
+    onLinkQueryChange,
+    filteredLinkItems,
+    linkItemsLoading,
+    linkDirectLoading,
+    onSelectLinkedItem,
     // Spec 013 F2: the composer's EXISTING create-issue seams — the wizard
     // shares the hook, so it renders them rather than rebuilding the flow.
     canCreateGithubIssue,
@@ -266,10 +274,13 @@ export default function CreateWorkspaceWizard({
   const quickAgent = resolvedAgent.quickAgent
 
   const [step, setStep] = useState<WizardStep>(1)
-  const [workSource, setWorkSource] = useState<WorkSource>(linkedWorkItem ? 'existing' : 'new')
+  const initialWorkSource: WorkSource = linkedWorkItem ? 'existing' : 'new'
+  const [workSource, setWorkSource] = useState<WorkSource>(initialWorkSource)
   const [executionMode, setExecutionMode] = useState<ExecutionMode>('autopilot')
   const [launchCheckpoint, setLaunchCheckpoint] = useState<NewWorkCheckpoint>({})
-  const [launchProgress, setLaunchProgress] = useState(initialNewWorkProgress())
+  const [launchProgress, setLaunchProgress] = useState(() =>
+    initialNewWorkProgress(linkedWorkItem ? { linkedWorkItem } : {}, initialWorkSource)
+  )
   const [launchAttempted, setLaunchAttempted] = useState(false)
   const launchInFlightRef = useRef(false)
   const [addingRepo, setAddingRepo] = useState(false)
@@ -282,7 +293,9 @@ export default function CreateWorkspaceWizard({
   const lastUsedHostKeyRef = useRef(selectedHostKey)
 
   const selectedRepo = repos.find((repo) => repo.id === repoId)
-  const canStageNewGithubIssue = selectedRepoIsGit && !selectedRepo?.connectionId
+  // Creation is slug-addressed and the server resolves an SSH repo's origin
+  // through its registry id, so remote git repos support the same source card.
+  const canStageNewGithubIssue = selectedRepoIsGit
   const selectedHostLabel =
     eligibleHosts.find((host) => host.key === selectedHostKey)?.label ??
     (selectedHostKey === LOCAL_HOST_KEY ? 'This machine' : 'SSH host')
@@ -398,6 +411,22 @@ export default function CreateWorkspaceWizard({
       selectedRepoRequiresConnection || (requiresExplicitSetupChoice && !setupDecision)
   })
 
+  const handleWorkSourceChange = useCallback(
+    (source: WorkSource): void => {
+      if (launchCheckpoint.linkedWorkItem) return
+      setWorkSource(source)
+      setLaunchProgress(initialNewWorkProgress({}, source))
+      setLaunchAttempted(false)
+      if (source !== 'existing') {
+        onRemoveLinkedWorkItem()
+      }
+      if (source === 'none') {
+        setExecutionMode('manual')
+      }
+    },
+    [launchCheckpoint.linkedWorkItem, onRemoveLinkedWorkItem]
+  )
+
   useEffect(() => {
     if (
       step === 3 &&
@@ -406,9 +435,9 @@ export default function CreateWorkspaceWizard({
       workSource === 'new' &&
       !canStageNewGithubIssue
     ) {
-      setWorkSource('existing')
+      handleWorkSourceChange(selectedRepoIsGit ? 'existing' : 'none')
     }
-  }, [canStageNewGithubIssue, launchCheckpoint.linkedWorkItem, selectedRepo, step, workSource])
+  }, [canStageNewGithubIssue, handleWorkSourceChange, launchCheckpoint.linkedWorkItem, selectedRepo, selectedRepoIsGit, step, workSource])
 
   const launchAllowed = canLaunchNewWork({
     source: workSource,
@@ -436,7 +465,7 @@ export default function CreateWorkspaceWizard({
         setLaunchAttempted(true)
         let checkpoint = launchCheckpoint
         let issue = checkpoint.linkedWorkItem ?? null
-        if (!issue) {
+        if (!issue && workSource !== 'none') {
           setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'active'))
           const resolved = await resolveLaunchIssue({
             source: workSource,
@@ -452,9 +481,11 @@ export default function CreateWorkspaceWizard({
           issue = resolved.issue
           setLaunchCheckpoint(checkpoint)
           setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'done'))
+        } else if (workSource === 'none') {
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'done'))
         }
         await submitQuick(quickAgent, {
-          linkedWorkItem: issue,
+          linkedWorkItem: workSource === 'none' ? null : issue,
           executionMode,
           checkpoint,
           onCheckpoint: setLaunchCheckpoint,
@@ -645,7 +676,7 @@ export default function CreateWorkspaceWizard({
               }}
               linear={{ settings, onBind: onSmartLinearIssueSelect }}
               workSource={workSource}
-              onWorkSourceChange={setWorkSource}
+              onWorkSourceChange={handleWorkSourceChange}
               executionMode={executionMode}
               onExecutionModeChange={setExecutionMode}
               eligibility={eligibility}
@@ -653,6 +684,14 @@ export default function CreateWorkspaceWizard({
               locked={Boolean(launchCheckpoint.linkedWorkItem)}
               canStageNewIssue={canStageNewGithubIssue}
               worktreeLocked={Boolean(launchCheckpoint.worktreeResult)}
+              repoIssuePicker={{
+                onOpenChange: onLinkPopoverOpenChange,
+                query: linkQuery,
+                onQueryChange: onLinkQueryChange,
+                items: filteredLinkItems,
+                loading: linkItemsLoading || linkDirectLoading,
+                onSelect: onSelectLinkedItem
+              }}
             />
           ) : null}
         </div>
@@ -1472,6 +1511,15 @@ type LinearCreateSeams = {
   onBind: (issue: LinearIssue) => void
 }
 
+type RepoIssuePickerSeams = {
+  onOpenChange: (open: boolean) => void
+  query: string
+  onQueryChange: (value: string) => void
+  items: GitHubWorkItem[]
+  loading: boolean
+  onSelect: (item: GitHubWorkItem) => void
+}
+
 /** Spec 013 F4: the composer's gated-run seams, migrated into the wizard. Maps
  *  1:1 onto `cardProps` — no new state or submit path. */
 function AgentStep({
@@ -1502,7 +1550,8 @@ function AgentStep({
   progress,
   locked,
   canStageNewIssue,
-  worktreeLocked
+  worktreeLocked,
+  repoIssuePicker
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
@@ -1539,7 +1588,14 @@ function AgentStep({
   locked: boolean
   canStageNewIssue: boolean
   worktreeLocked: boolean
+  repoIssuePicker: RepoIssuePickerSeams
 }): React.JSX.Element {
+  useEffect(() => {
+    repoIssuePicker.onOpenChange(workSource === 'existing')
+  }, [repoIssuePicker.onOpenChange, workSource])
+
+  const repoIssues = repoIssuePicker.items.filter((item) => item.type === 'issue')
+
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
       <div className="flex flex-col gap-0.5">
@@ -1552,19 +1608,80 @@ function AgentStep({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        {(['new', 'existing'] as const).map((source) => (
+      <div className="grid grid-cols-3 gap-2">
+        {(['new', 'existing', 'none'] as const).map((source) => (
           <button key={source} type="button" disabled={locked || (source === 'new' && !canStageNewIssue)} onClick={() => onWorkSourceChange(source)}
             className={cn('rounded-lg border px-3 py-2 text-left text-[12px]', workSource === source ? 'border-primary/55 bg-primary/8 text-foreground' : 'border-border text-muted-foreground', locked && 'opacity-60')}>
-            <span className="block font-medium">{source === 'new' ? 'New issue' : 'Existing issue'}</span>
-            <span className="block text-[10.5px] text-muted-foreground">{source === 'new' ? 'Filed only when work starts' : 'Choose from this project'}</span>
+            <span className="block font-medium">
+              {source === 'new' ? 'New issue' : source === 'existing' ? 'Existing issue' : 'No issue'}
+            </span>
+            <span className="block text-[10.5px] text-muted-foreground">
+              {source === 'new'
+                ? 'Filed when work starts'
+                : source === 'existing'
+                  ? 'Choose from this project'
+                  : 'Start untracked work'}
+            </span>
           </button>
         ))}
       </div>
 
+      {workSource === 'existing' ? (
+        <div className="overflow-hidden rounded-lg border border-border bg-card/30">
+          <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+            <Search className="size-3.5 flex-none text-muted-foreground" />
+            <input
+              value={repoIssuePicker.query}
+              onChange={(event) => repoIssuePicker.onQueryChange(event.target.value)}
+              aria-label="Search repository issues"
+              placeholder="Search issues or paste #number / URL"
+              className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground/70"
+            />
+            {repoIssuePicker.loading ? (
+              <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label="Loading issues" />
+            ) : null}
+          </div>
+          <div className="max-h-36 overflow-y-auto p-1">
+            {repoIssues.length ? (
+              repoIssues.map((item) => {
+                const selected = linkedWorkItem?.url === item.url
+                return (
+                  <button
+                    key={item.id ?? item.url}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => {
+                      repoIssuePicker.onSelect(item)
+                      // The shared selector normally closes its popover after
+                      // a pick. This inline picker stays mounted, so keep its
+                      // host-aware search effects live for a changed selection.
+                      repoIssuePicker.onOpenChange(true)
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                      selected
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                    )}
+                  >
+                    <Check className={cn('size-3 flex-none', selected ? 'opacity-70' : 'opacity-0')} />
+                    <span className="flex-none font-mono text-[11px]">#{item.number}</span>
+                    <span className="truncate">{item.title}</span>
+                  </button>
+                )
+              })
+            ) : (
+              <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                {repoIssuePicker.loading ? 'Loading repository issues…' : 'No matching open issues.'}
+              </p>
+            )}
+          </div>
+        </div>
+      ) : null}
+
       {/* Tracker FIRST: linking/creating the issue auto-fills the name field
           below (via applyLinkedWorkItem's title slug) while it's still blank. */}
-      <TrackerSection
+      {workSource !== 'none' ? <TrackerSection
         workdir={trackerWorkdir}
         repoId={trackerRepoId}
         local={trackerLocal}
@@ -1578,7 +1695,7 @@ function AgentStep({
         source={workSource}
         canStageNewIssue={canStageNewIssue}
         showLinkedSelection={workSource === 'existing' || locked}
-      />
+      /> : null}
 
       <div className="flex flex-col gap-2.5">
         <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">

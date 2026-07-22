@@ -14,13 +14,19 @@ import {
   Github,
   Loader2,
   PauseCircle,
+  RotateCcw,
   Unlink
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { isTuiAgent } from '@/shared/tui-agent-config'
 import { cn } from '@/lib/utils'
-import { unlinkHarnessIssue, type HarnessFeature, type HarnessStatus } from '@/runtime/harness-client'
+import {
+  runHarness,
+  unlinkHarnessIssue,
+  type HarnessFeature,
+  type HarnessStatus
+} from '@/runtime/harness-client'
 import {
   currentHarnessFeature,
   deriveGatedRunStages,
@@ -39,8 +45,10 @@ export type GatedRunBarViewProps = {
   busy: boolean
   arming: boolean
   expanded: boolean
+  restarting: boolean
   onToggleExpanded: () => void
   onUnlink: () => void
+  onRetry: () => void
 }
 
 const FEATURE_LABELS: Record<HarnessFeature['state'], string> = {
@@ -89,8 +97,10 @@ export function GatedRunBarView({
   busy,
   arming,
   expanded,
+  restarting,
   onToggleExpanded,
-  onUnlink
+  onUnlink,
+  onRetry
 }: GatedRunBarViewProps): React.JSX.Element {
   const stages = deriveGatedRunStages(run)
   const currentFeature = currentHarnessFeature(run)
@@ -148,6 +158,21 @@ export function GatedRunBarView({
             ) : null}
           </span>
         ) : null}
+        {run.state === 'failed' || run.state === 'blocked' ? (
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={restarting}
+            className="inline-flex flex-none items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {restarting ? (
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+            ) : (
+              <RotateCcw className="size-3" aria-hidden />
+            )}
+            {restarting ? 'Retrying…' : 'Retry run'}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={onToggleExpanded}
@@ -165,6 +190,15 @@ export function GatedRunBarView({
             <div className="mb-2.5 grid grid-cols-5 gap-1" aria-label="SDD stages">
               {stages.map((stage, index) => (
                 <div key={stage.id} className="relative flex min-w-0 items-center gap-1.5">
+                  {index < stages.length - 1 ? (
+                    <span
+                      className={cn(
+                        'absolute left-2 top-1/2 z-0 h-px w-[calc(100%+0.25rem)] -translate-y-1/2',
+                        stage.status === 'complete' ? 'bg-emerald-500/45' : 'bg-border'
+                      )}
+                      aria-hidden
+                    />
+                  ) : null}
                   <span
                     className={cn(
                       'relative z-10 flex size-4 flex-none items-center justify-center rounded-full border bg-background',
@@ -187,7 +221,7 @@ export function GatedRunBarView({
                   </span>
                   <span
                     className={cn(
-                      'truncate text-[10px]',
+                      'relative z-10 truncate bg-background px-0.5 text-[10px]',
                       stage.status === 'active' || stage.status === 'blocked'
                         ? 'font-semibold text-foreground'
                         : 'text-muted-foreground'
@@ -195,9 +229,6 @@ export function GatedRunBarView({
                   >
                     {stage.label}
                   </span>
-                  {index < stages.length - 1 ? (
-                    <span className="absolute left-4 right-0 top-2 h-px bg-border" aria-hidden />
-                  ) : null}
                 </div>
               ))}
             </div>
@@ -288,6 +319,7 @@ export default function GatedRunBar({
   })
   const { run, refresh } = useWorktreeHarnessRun(workdir)
   const [busy, setBusy] = useState(false)
+  const [restarting, setRestarting] = useState(false)
   const [arming, setArming] = useState(false)
   const [expanded, setExpanded] = useState(true)
   const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -360,7 +392,37 @@ export default function GatedRunBar({
       .finally(() => setBusy(false))
   }, [run, busy, arming, refresh])
 
-  if (!run) return null
+  const handleRetry = useCallback((): void => {
+    if (!run || restarting) return
+    setRestarting(true)
+    runHarness(run.id)
+      .then(() => {
+        toast.success('Gated run restarted.')
+        refresh()
+      })
+      .catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => setRestarting(false))
+  }, [refresh, restarting, run])
+
+  if (!run) {
+    return pending ? (
+      <section
+        className="relative z-30 shrink-0 border-b border-border bg-card"
+        aria-label="Gated run progress"
+      >
+        <div className="flex min-h-9 items-center gap-2.5 px-3 py-1.5">
+          <Loader2 className="size-4 animate-spin text-sky-500" aria-hidden />
+          <p className="truncate text-xs text-foreground">
+            <span className="font-semibold">Gated run</span>
+            <span className="mx-1.5 text-muted-foreground/50">/</span>
+            <span className="text-muted-foreground">Starting SDD Autopilot…</span>
+          </p>
+        </div>
+      </section>
+    ) : null
+  }
   const issue = runLinkedIssue(run)
   return (
     <GatedRunBarView
@@ -369,8 +431,10 @@ export default function GatedRunBar({
       busy={busy}
       arming={arming}
       expanded={expanded}
+      restarting={restarting}
       onToggleExpanded={() => setExpanded((value) => !value)}
       onUnlink={handleUnlink}
+      onRetry={handleRetry}
     />
   )
 }

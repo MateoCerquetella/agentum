@@ -34,9 +34,19 @@ pub async fn drive(state: AppState, harness_id: Uuid) {
         // A run removed mid-drive (user pressed Stop/unload) surfaces here as a
         // "harness not found" error — that's an intentional teardown, not a
         // failure. Only surface a real error if the run still exists.
-        if state.harness.status(harness_id).await.is_ok() {
+        if let Ok(status) = state.harness.status(harness_id).await {
             warn!(%harness_id, error = %e, "harness run failed");
             state.harness.emit_error(harness_id, e.to_string());
+            // A failed spawn/delivery must not leave a dead session pinned as
+            // the run's current surface. The persistent progress bar remains
+            // visible and can retry the run, while the stale pane stops looking
+            // like work is still in progress.
+            if let Some(session_id) = status.current_session
+                && let Ok(Some(session)) = state.store.get_session_by_id(session_id).await
+            {
+                teardown_session(&state, &session).await;
+            }
+            state.harness.clear_current(harness_id).await;
             let _ = state
                 .harness
                 .set_state(harness_id, HarnessState::Failed)
@@ -1175,7 +1185,7 @@ pub(crate) async fn inject_prompt(
     Ok(ready)
 }
 
-/// Gracefully stop an agent's pane + mark the session stopped. Best-effort.
+/// Gracefully mark an agent stopped + retire its pane. Best-effort.
 pub(crate) async fn teardown_session(state: &AppState, session: &agentum_core::Session) {
     let host = match state
         .store
@@ -1190,11 +1200,15 @@ pub(crate) async fn teardown_session(state: &AppState, session: &agentum_core::S
             .tmux_target
             .clone()
             .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
-        let _ = crate::host_runtime::kill_session(&host, &target).await;
+        // Persist first: the watchdog can observe the pane disappear between
+        // kill and the following DB write. The old order misclassified normal
+        // harness teardown as `session.crashed`, which could strand recovery
+        // surfaces on a dead "current" agent.
         let _ = state
             .store
             .update_status_and_target(session.id, Status::Stopped, None)
             .await;
+        let _ = crate::host_runtime::kill_session(&host, &target).await;
     }
 }
 

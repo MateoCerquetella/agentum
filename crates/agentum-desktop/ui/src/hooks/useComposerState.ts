@@ -215,7 +215,8 @@ type ComposerCardProps = {
     options?: { preserveBranchNameOverride?: boolean }
   ) => void
   /** True when the composer should offer "Create GitHub issue": nothing is
-   *  linked yet and the selected repo is a local git repo (spec 004 F3). */
+   *  linked yet and the selected repo is a git repo. SSH repos resolve their
+   *  slug through `repoId`; filing still uses the authenticated local `gh`. */
   canCreateGithubIssue: boolean
   createIssueOpen: boolean
   onCreateIssueOpenChange: (open: boolean) => void
@@ -333,7 +334,8 @@ export type UseComposerStateResult = {
 }
 
 export type QuickSubmitOptions = {
-  linkedWorkItem?: LinkedWorkItemSummary
+  /** `null` explicitly suppresses an item already held by the composer. */
+  linkedWorkItem?: LinkedWorkItemSummary | null
   executionMode?: ExecutionMode
   checkpoint?: NewWorkCheckpoint
   onCheckpoint?: (next: NewWorkCheckpoint) => void
@@ -1503,11 +1505,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
   }, [name])
 
-  // Spec 004 F3: the affordance only renders when nothing is linked yet and
-  // the selected repo is a *local git* repo — issue creation resolves the slug
-  // from the local origin and runs the local `gh`.
+  // Issue filing always uses the authenticated local `gh`; `repoId` lets the
+  // server resolve an SSH repo's origin on its own host. A remote path is not
+  // a reason to disable the affordance.
   const canCreateGithubIssue = Boolean(
-    !linkedWorkItem && selectedRepo && selectedRepoIsGit && !selectedRepo.connectionId
+    !linkedWorkItem && selectedRepo && selectedRepoIsGit
   )
 
   const handleCreateIssueOpenChange = useCallback(
@@ -1541,7 +1543,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
     let cancelled = false
     setCreateIssueLabelOptions(null)
-    fetchGithubRepoLabels({ workdir: selectedRepoPath })
+    fetchGithubRepoLabels({ workdir: selectedRepoPath, repoId })
       .catch(() => [...STATIC_FALLBACK_LABELS])
       .then((labels) => {
         if (!cancelled) {
@@ -1551,7 +1553,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     return () => {
       cancelled = true
     }
-  }, [createIssueOpen, selectedRepoPath])
+  }, [createIssueOpen, repoId, selectedRepoPath])
 
   const handleToggleCreateIssueLabel = useCallback((label: string): void => {
     setCreateIssueLabels((current) =>
@@ -1588,6 +1590,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         title,
         ...(body ? { body } : {}),
         workdir: repoPath,
+        repoId: selectedRepo.id,
         ...(labels.length ? { labels } : {})
       })
       // Reuse the standard linked-item application (linkedIssue slot, suggested
@@ -2698,12 +2701,20 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         requestedAgent && isTuiAgentEnabled(requestedAgent, disabledTuiAgents)
           ? requestedAgent
           : null
+      const hasLinkedWorkItemOverride = Boolean(
+        options && Object.prototype.hasOwnProperty.call(options, 'linkedWorkItem')
+      )
+      const requestedLinkedWorkItem = hasLinkedWorkItemOverride
+        ? (options?.linkedWorkItem ?? null)
+        : linkedWorkItem
       const workspaceNameSeed = getWorkspaceSeedName({
         explicitName: name,
         prompt: '',
-        linkedIssueNumber: options?.linkedWorkItem?.number ?? parsedLinkedIssueNumber,
+        linkedIssueNumber: hasLinkedWorkItemOverride
+          ? (requestedLinkedWorkItem?.number ?? null)
+          : parsedLinkedIssueNumber,
         linkedPR,
-        linkedTitle: options?.linkedWorkItem?.title ?? linkedWorkItem?.title ?? null,
+        linkedTitle: requestedLinkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       })
       if (
@@ -2721,11 +2732,18 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setCreating(true)
       let activeStage: NewWorkStage = 'worktree'
       try {
-        const smartGitHubResolution = await resolvePendingSmartGitHubSubmit()
-        const submitLinkedWorkItem =
-          options?.linkedWorkItem ?? smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem
-        const submitLinkedIssueNumber =
-          options?.linkedWorkItem?.number ?? smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber
+        // An explicit override (including `null` for the wizard's "No issue"
+        // source) owns the decision. Do not let a URL-like workspace name
+        // silently re-link an item behind that choice.
+        const smartGitHubResolution = hasLinkedWorkItemOverride
+          ? null
+          : await resolvePendingSmartGitHubSubmit()
+        const submitLinkedWorkItem = hasLinkedWorkItemOverride
+          ? requestedLinkedWorkItem
+          : (smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem)
+        const submitLinkedIssueNumber = hasLinkedWorkItemOverride
+          ? (requestedLinkedWorkItem?.number ?? null)
+          : (smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber)
         const submitLinkedPR = smartGitHubResolution?.linkedPR ?? effectiveLinkedPR
         const workspaceName = smartGitHubResolution?.workspaceName ?? workspaceNameSeed
         if (!workspaceName) {

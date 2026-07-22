@@ -23,6 +23,7 @@ describe('new work launch model', () => {
     expect(newWorkPrimaryLabel('existing')).toBe(
       'Create worktree & start work'
     );
+    expect(newWorkPrimaryLabel('none')).toBe('Create workspace & start work');
     const eligible = deriveNewWorkEligibility({
       isLocal: true,
       isGit: true,
@@ -105,6 +106,36 @@ describe('new work launch model', () => {
     });
     expect(result.issue).toEqual(issue);
     expect(createIssue).not.toHaveBeenCalled();
+  });
+
+  it('supports untracked manual work without filing or selecting an issue', async () => {
+    const createIssue = vi.fn();
+    const result = await resolveLaunchIssue({
+      source: 'none',
+      checkpoint: {},
+      createIssue
+    });
+    expect(result.issue).toBeNull();
+    expect(result.created).toBe(false);
+    expect(createIssue).not.toHaveBeenCalled();
+    expect(initialNewWorkProgress({}, 'none').issue).toBe('done');
+    expect(
+      canLaunchNewWork({
+        source: 'none',
+        executionMode: 'manual',
+        eligibility: deriveNewWorkEligibility({
+          isLocal: true,
+          isGit: true,
+          source: 'none',
+          selectedAgentInstalled: true
+        }),
+        hasSelectedAgent: true,
+        canStageNewIssue: false,
+        hasNewIssueTitle: false,
+        hasSelectedIssue: false,
+        hasIssueCheckpoint: false
+      })
+    ).toBe(true);
   });
 
   it('tracks ordered completion and retry position', () => {
