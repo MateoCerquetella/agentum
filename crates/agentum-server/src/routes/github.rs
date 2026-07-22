@@ -21,6 +21,7 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 
@@ -116,7 +117,7 @@ pub(crate) async fn fetch_github_issue(
     let workdir = super::util::effective_workdir(&host, workdir)?;
     // Prefer the `owner/repo` hint (zero I/O); fall back to the project's
     // `origin` read. Reuses the exact resolver the board issue path uses.
-    let slug = super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
+    let slug = super::util::resolve_github_slug(&host, &workdir, slug_hint)
         .await
         .map_err(|reason| {
             ApiError::BadRequest(format!("could not resolve a GitHub repo: {reason:?}"))
@@ -273,17 +274,15 @@ async fn create_issue(
     let fref = TaskSink::Github
         .create_feature(
             &SinkCtx {
-                store: &state.store,
                 // The explicit-slug GitHub arm runs `gh` from `$HOME`; workdir
                 // is passed for shape only (same note as the Chat path).
                 workdir: std::path::Path::new(workdir),
-                parent_goal_id: None,
                 slug: Some(&slug),
             },
             &feature,
         )
         .await
-        .map_err(|e| super::board_goals::map_sink_error(TaskSink::Github, &e))?;
+        .map_err(map_github_sink_error)?;
 
     let number = issue_number_from_ref_id(&fref.id)?;
     // Spec 006 F4: fetched AFTER the successful create — a login failure must
@@ -296,6 +295,34 @@ async fn create_issue(
         slug,
         author,
     }))
+}
+
+fn map_github_sink_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    let (code, message) = if message.contains("failed to run `gh`") {
+        (
+            "no_gh",
+            "GitHub CLI (`gh`) is not installed or not on PATH.".to_string(),
+        )
+    } else {
+        let lower = message.to_ascii_lowercase();
+        let code = if lower.contains("no default remote repository")
+            || lower.contains("not a git repository")
+            || lower.contains("none of the git remotes")
+            || lower.contains("could not determine")
+        {
+            "not_github_repo"
+        } else {
+            "gh_failed"
+        };
+        (code, message)
+    };
+    ApiError::Custom(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        serde_json::json!({
+            "error": { "code": code, "message": message, "provider": "github" }
+        }),
+    )
 }
 
 #[derive(Debug, Deserialize)]

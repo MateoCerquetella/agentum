@@ -383,7 +383,6 @@ async fn spec_from_issue(
 
     let provider = resolve_tracker_pin(req.tracker.as_deref())?;
     let ensured = ensure_spec_and_plan(
-        &state.store,
         &state.bus,
         &workdir,
         req.number.trim(),
@@ -429,7 +428,6 @@ struct EnsuredSpec {
 // tracker provider, and convergence policy explicit at every call site.
 #[allow(clippy::too_many_arguments)]
 async fn ensure_spec_and_plan(
-    store: &agentum_store::Store,
     // Spec 014 F1: the seam's TrackerEmit needs a bus; threaded from the
     // route handlers' `state.bus` (tests pass a throwaway channel).
     bus: &tokio::sync::broadcast::Sender<agentum_core::Event>,
@@ -494,7 +492,6 @@ async fn ensure_spec_and_plan(
     if let Some(list) = &features {
         let _ = list; // planned OK → start the label trail at Todo (idempotent flip)
         match crate::task_sink::apply_tracker_transition(
-            store,
             provider,
             number,
             Some(&issue.url),
@@ -659,7 +656,6 @@ async fn start_work(
     // Converge-scaffold + plan (forced ON, AC 1) + Todo-at-plan (AC 4).
     let provider = resolve_tracker_pin(req.tracker.as_deref())?;
     let ensured = ensure_spec_and_plan(
-        &state.store,
         &state.bus,
         &workdir,
         req.number.trim(),
@@ -809,22 +805,13 @@ mod tests {
     #[tokio::test]
     async fn ensure_spec_and_plan_writes_and_plans_fresh() {
         let dir = tempfile::tempdir().unwrap();
-        let store = fresh_store(&dir).await;
         let url = "https://example.com/acme/widgets/issues/42";
         let issue = synthetic_issue(url);
 
-        let ensured = ensure_spec_and_plan(
-            &store,
-            &test_bus(),
-            dir.path(),
-            "42",
-            &issue,
-            true,
-            false,
-            "github",
-        )
-        .await
-        .unwrap();
+        let ensured =
+            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, false, "github")
+                .await
+                .unwrap();
         assert!(!ensured.spec_existed);
         assert_eq!(ensured.spec_id, "42-add-widget");
         assert_eq!(
@@ -893,7 +880,6 @@ mod tests {
     #[tokio::test]
     async fn ensure_spec_and_plan_converges_on_existing_spec() {
         let dir = tempfile::tempdir().unwrap();
-        let store = fresh_store(&dir).await;
         let url = "https://example.com/acme/widgets/issues/42";
         let issue = synthetic_issue(url);
 
@@ -903,33 +889,17 @@ mod tests {
         std::fs::create_dir_all(&spec_dir).unwrap();
         std::fs::write(spec_dir.join("spec.md"), "# Edited\n\n- [ ] Only one\n").unwrap();
 
-        let err = ensure_spec_and_plan(
-            &store,
-            &test_bus(),
-            dir.path(),
-            "42",
-            &issue,
-            true,
-            false,
-            "github",
-        )
-        .await
-        .err()
-        .expect("never-overwrite 400 without converge");
+        let err =
+            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, false, "github")
+                .await
+                .err()
+                .expect("never-overwrite 400 without converge");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
 
-        let ensured = ensure_spec_and_plan(
-            &store,
-            &test_bus(),
-            dir.path(),
-            "42",
-            &issue,
-            true,
-            true,
-            "github",
-        )
-        .await
-        .unwrap();
+        let ensured =
+            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, true, "github")
+                .await
+                .unwrap();
         assert!(ensured.spec_existed);
         let list = ensured.features.unwrap();
         assert_eq!(list.features.len(), 1, "planned from the existing spec");
@@ -955,7 +925,6 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = fresh_store(&dir).await;
         let log = dir.path().join("calls.log");
         let script = dir.path().join("gh-fake");
         std::fs::write(
@@ -983,17 +952,9 @@ mod tests {
         // dev machine would rename the asserted default `status/todo` label.
         unsafe { std::env::set_var("AGENTUM_GH_BIN", &script) };
         unsafe { std::env::set_var("AGENTUM_GITHUB_CONFIG", dir.path().join("github.json")) };
-        let result = ensure_spec_and_plan(
-            &store,
-            &test_bus(),
-            dir.path(),
-            "42",
-            &issue,
-            true,
-            false,
-            "github",
-        )
-        .await;
+        let result =
+            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, false, "github")
+                .await;
         unsafe { std::env::remove_var("AGENTUM_GH_BIN") };
         unsafe { std::env::remove_var("AGENTUM_GITHUB_CONFIG") };
         drop(guard);

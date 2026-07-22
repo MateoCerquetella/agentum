@@ -207,16 +207,7 @@ async fn handle_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("(no crash signature)")
                 .to_string();
-            fire_blocked(
-                store,
-                bus,
-                &wt,
-                fire,
-                &session.name,
-                "session crash",
-                &gate_tail,
-            )
-            .await;
+            fire_blocked(bus, &wt, fire, &session.name, "session crash", &gate_tail).await;
         }
         // Recovery: clear the awaiting timer, and if an episode was active,
         // re-apply the persisted phase (which drops `status/blocked`).
@@ -230,7 +221,7 @@ async fn handle_event(
                 return;
             };
             if ledger.end_episode(&wt.id) {
-                clear_blocked(store, bus, &wt).await;
+                clear_blocked(bus, &wt).await;
             }
         }
         _ => {}
@@ -257,16 +248,7 @@ async fn sweep_due(
             "agent has been awaiting input for over {} minutes",
             threshold.as_secs() / 60
         );
-        fire_blocked(
-            store,
-            bus,
-            &wt,
-            fire,
-            &session.name,
-            "awaiting input",
-            &gate_tail,
-        )
-        .await;
+        fire_blocked(bus, &wt, fire, &session.name, "awaiting input", &gate_tail).await;
     }
 }
 
@@ -298,7 +280,6 @@ async fn resolve_bound_github(
 /// touches `gh`; the URL doubles as the (inert, GitHub-ignored) tracker id,
 /// exactly like `tracker_sync`.
 async fn fire_blocked(
-    store: &Store,
     bus: &broadcast::Sender<Event>,
     wt: &TrackerWorktree,
     fire: Fire,
@@ -314,7 +295,6 @@ async fn fire_blocked(
     };
     let with_comment = fire == Fire::LabelAndComment;
     match apply_blocked_transition(
-        store,
         "github",
         url,
         Some(url),
@@ -345,7 +325,7 @@ async fn fire_blocked(
 /// regress. The `gh issue edit` remove-set drops `status/blocked` for free,
 /// and the resulting `tracker.phase_changed` clears the chip (AC 11). No
 /// persisted phase ⇒ skip — never fabricate one.
-async fn clear_blocked(store: &Store, bus: &broadcast::Sender<Event>, wt: &TrackerWorktree) {
+async fn clear_blocked(bus: &broadcast::Sender<Event>, wt: &TrackerWorktree) {
     let Some(phase) = wt.tracker_phase.as_deref().and_then(parse_tracker_phase) else {
         return;
     };
@@ -353,7 +333,6 @@ async fn clear_blocked(store: &Store, bus: &broadcast::Sender<Event>, wt: &Track
         return;
     };
     match apply_tracker_transition(
-        store,
         "github",
         url,
         Some(url),

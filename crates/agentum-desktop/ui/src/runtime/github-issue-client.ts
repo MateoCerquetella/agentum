@@ -1,5 +1,5 @@
 // Typed client for `GET /api/github/issue` on the embedded agentum-server.
-// Mirrors `board-client.ts`: same loopback endpoint + bearer auth. The Tasks
+// Uses the shared loopback endpoint + bearer auth. The Tasks
 // "Use" path calls this to fetch a GitHub issue's body so the spawned agent
 // starts from the spec — the same way Linear already snapshots its description
 // into linked context (spec 002, Option B). Wire shape is faithful to

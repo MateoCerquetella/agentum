@@ -12,7 +12,7 @@
 //! window); everything else — list/add/update/create/clone/remove/reorder and
 //! the base-ref helpers — is here.
 
-use super::board_goals::SlugReason;
+use super::util::SlugReason;
 use super::util::now_millis;
 use std::path::{Path as StdPath, PathBuf};
 
@@ -627,7 +627,7 @@ fn slug_reason_wire(reason: SlugReason) -> (StatusCode, &'static str, &'static s
 /// with/without-origin contract is testable against a temp git repo without
 /// touching the real `~/.agentum` registry.
 async fn slug_on_host(host: &Host, path: &str) -> Result<RepoSlugResponse, ApiError> {
-    let slug = super::board_goals::resolve_github_slug(host, path, None)
+    let slug = super::util::resolve_github_slug(host, path, None)
         .await
         .map_err(|reason| {
             let (status, code, message) = slug_reason_wire(reason);
@@ -883,7 +883,7 @@ mod tests {
     /// 020 invariant this wire exists to carry.
     #[test]
     fn slug_reason_wire_distinguishes_transport_from_semantic() {
-        use super::super::board_goals::SlugReason;
+        use super::super::util::SlugReason;
         let (semantic_status, semantic_code, semantic_msg) =
             slug_reason_wire(SlugReason::NoGithubRemote);
         let (transport_status, transport_code, transport_msg) =

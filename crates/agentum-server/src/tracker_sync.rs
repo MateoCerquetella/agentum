@@ -221,9 +221,7 @@ async fn react_to_session_start(store: &Store, bus: &broadcast::Sender<Event>, s
             bus,
             worktree_id: Some(&worktree.id),
         };
-        match apply_tracker_transition(store, &provider, &tracker_id, Some(&url), target, emit)
-            .await
-        {
+        match apply_tracker_transition(&provider, &tracker_id, Some(&url), target, emit).await {
             Ok(result) => {
                 tracing::info!(
                     workdir = %workdir,
@@ -530,7 +528,6 @@ async fn pr_view_via_gh(program: &str, slug: &str, number: i64) -> Result<PrView
 /// only when the external write was acknowledged and the local phase persisted.
 /// A skipped/failed write stays pending so the next poll retries it.
 async fn drive_and_persist(
-    store: &Store,
     bus: &broadcast::Sender<Event>,
     worktree_id: &str,
     tracker_url: &str,
@@ -542,16 +539,7 @@ async fn drive_and_persist(
         bus,
         worktree_id: Some(worktree_id),
     };
-    match apply_tracker_transition(
-        store,
-        "github",
-        &tracker_id,
-        Some(tracker_url),
-        target,
-        emit,
-    )
-    .await
-    {
+    match apply_tracker_transition("github", &tracker_id, Some(tracker_url), target, emit).await {
         Ok(TransitionResult::Applied) => {
             tracing::info!(worktree = %worktree_id, ?target, "poller tracker transition applied");
             if let Err(e) = crate::routes::worktrees::persist_tracker_progress(
@@ -599,11 +587,7 @@ impl PollTick {
 /// One poll tick: for each bound, non-Done github worktree with a branch, detect
 /// its PR lifecycle. F3 handles PR-open → InReview + persist `linked_pr`. (F4
 /// extends this with merge → Done for a worktree that already has a `linked_pr`.)
-async fn poll_pr_lifecycle_once(
-    store: &Store,
-    bus: &broadcast::Sender<Event>,
-    program: &str,
-) -> PollTick {
+async fn poll_pr_lifecycle_once(bus: &broadcast::Sender<Event>, program: &str) -> PollTick {
     let mut tick = PollTick::default();
     let worktrees: Vec<crate::routes::worktrees::TrackerWorktree> =
         crate::routes::worktrees::list_tracker_worktrees()
@@ -645,7 +629,6 @@ async fn poll_pr_lifecycle_once(
                     match branch_integrated_into_local_develop(path, branch, initial_head).await {
                         Ok(true) => {
                             drive_and_persist(
-                                store,
                                 bus,
                                 &w.id,
                                 url,
@@ -675,7 +658,6 @@ async fn poll_pr_lifecycle_once(
                     );
                     if poll_pr_open_decision(w.tracker_phase.as_deref(), &pr).is_some() {
                         let applied = drive_and_persist(
-                            store,
                             bus,
                             &w.id,
                             url,
@@ -699,7 +681,6 @@ async fn poll_pr_lifecycle_once(
             // bypassed the only InReview write attempt.
             if next_phase_write(w.tracker_phase.as_deref(), TrackerPhase::InReview).is_some() {
                 let applied = drive_and_persist(
-                    store,
                     bus,
                     &w.id,
                     url,
@@ -720,7 +701,6 @@ async fn poll_pr_lifecycle_once(
                         // 010's `done_closes_issue`, closes the issue. Persisting
                         // "done" makes the terminal-stop restart-safe.
                         let applied = drive_and_persist(
-                            store,
                             bus,
                             &w.id,
                             url,
@@ -745,7 +725,7 @@ async fn poll_pr_lifecycle_once(
 /// 45s), drive InReview on the first non-draft PR and Done on merge, for every
 /// bound github worktree. Bounded + backed-off + never-halt. Spawned at server
 /// boot beside the other background workers.
-pub async fn run_pr_merge_poller(store: Arc<Store>, bus: broadcast::Sender<Event>) {
+pub async fn run_pr_merge_poller(bus: broadcast::Sender<Event>) {
     let secs = std::env::var("AGENTUM_TRACKER_POLL_SECS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -759,7 +739,7 @@ pub async fn run_pr_merge_poller(store: Arc<Store>, bus: broadcast::Sender<Event
         let wait = base * 2u32.pow(consecutive_failed_ticks.min(4));
         tokio::time::sleep(wait).await;
         let program = crate::github_projects::gh_bin();
-        let tick = poll_pr_lifecycle_once(&store, &bus, &program).await;
+        let tick = poll_pr_lifecycle_once(&bus, &program).await;
         if tick.all_failed() {
             consecutive_failed_ticks = consecutive_failed_ticks.saturating_add(1);
         } else {

@@ -943,7 +943,11 @@ mod tests {
         new_session(target, &workdir, &["sleep".into(), "3600".into()], &[])
             .await
             .unwrap();
-        sleep(Duration::from_millis(300)).await;
+        // Some interactive shell profiles render a startup banner (for example
+        // fastfetch) before handing the pane to `sleep`. Let that output settle
+        // so the combined and immediately-following individual captures compare
+        // the same static viewport rather than racing shell initialization.
+        sleep(Duration::from_secs(10)).await;
 
         let boundary = ":::agentum-test-boundary:::";
         let stdout = capture_pane_sample_combined(target, 50, boundary)

@@ -27,10 +27,10 @@ You are the Orchestrator. Drive the current spec through the role loop with expl
 
 7. **DONE**: when the Reviewer signs off, update `STATE.md` (`current_phase: done`), report tracker phase `done`, and ask the human whether to continue to the next spec or stop.
 
-## Tracker status (GitHub / Linear / board)
+## Tracker status (GitHub / Linear)
 
 If the current spec carries a `tracker:` URL in its `spec.md` frontmatter (a GitHub
-issue URL, Linear ticket, or board card — written by `/sdd-spec`), mirror every
+issue URL or Linear ticket — written by `/sdd-spec`), mirror every
 phase transition to the tracker with the `agentum_report_status` MCP tool:
 
 | Entering SDD phase | `agentum_report_status` phase |

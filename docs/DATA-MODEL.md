@@ -31,6 +31,8 @@ CREATE TABLE events (
 
 CREATE INDEX events_session_ts_idx ON events(session_id, ts);
 
+-- Legacy migration compatibility only. Agentum preserves existing rows when
+-- opening older databases but does not read or mutate them during normal work.
 CREATE TABLE board_items (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     key         TEXT NOT NULL UNIQUE,              -- AG-1, AG-2…

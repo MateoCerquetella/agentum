@@ -189,3 +189,131 @@
   produced after the earlier zero-duration Vitest cache entry.
 - review gate PASS (attempt 1): Project headers now retain a normalized configured-color swatch across neutral theme-owned states, with fallback coverage and a successful desktop UI build recorded.
 - phase: entered done (from review)
+- phase: entered authoring (from done)
+- authoring gate PASS (attempt 1): Spec 431 is one tracker-authoritative work-selection slice with five observable criteria, explicit non-goals, grounded reuse, preserved invariants, and no duplicate existing spec.
+- phase: entered architecture (from authoring)
+- architecture scope corrected by user decision: Spec 431 targets the existing GitHub and Linear project tracker and transition seams only; adding another provider is deferred.
+- architecture gate PASS: The internal-board removal plan is grounded in existing project-scoped providers, named transition seams, route isolation, and legacy-row compatibility tests.
+- phase: entered authoring (from blocked)
+- authoring gate PASS (attempt 1): Single tracker-authoritative work-selection slice with a named persona, observable criteria, explicit non-goals, grounded reuse, preserved invariants, and no competing spec.
+- phase: entered architecture (from authoring)
+- architecture gate PASS (attempt 1): Grounded plan removes internal-board UI, routes, sink/store access, and reconcilers while preserving external tracker flows and inert legacy data, with every criterion mapped to named tests.
+- phase: entered decompose (from architecture)
+- phase: entered executing (from decompose)
+- phase: entered review (from executing)
+- reviewer gate FAIL (attempt 1, 2026-07-22): reviewed the Spec 431 working-tree
+  diff against `ai/specs/027-remove-internal-workspace-board/architecture.md`.
+  ACCEPTED: `TaskPage.tsx` removes the board sync callback/actions and deletes
+  `runtime/board-client.ts`; `ProjectTasksPage.tsx` keeps GitHub/Linear views
+  with explicit tracker empty-state copy and structural coverage; server route
+  registration and board route/store/core/watchdog modules are removed; the
+  real-router 404 matrix, external-only sink enum, legacy-provider best-effort
+  test, and legacy-row reopen/inertness test are present; migrations are
+  unchanged. REJECTED: the deletion is incomplete and silently deviates from
+  Architecture Components 2 and 3. `runtime/harness-client.ts:211-228` retains
+  dead `PlanGoalHarnessResult`/`planGoalHarness` code that still POSTs to the
+  retired `/api/board/goals/{id}/harness-plan` route and advertises the internal
+  board, while `crates/agentum-server/tests/board_server_sync_016a.rs`,
+  `goal_cards_end_to_end.rs`, and `card_session_binding_e2e.rs` remain and assert
+  successful board APIs/reference removed store and watchdog symbols. This is
+  dead, broken board code, and the architecture explicitly requires all three
+  suites be deleted. The green handoff does not cover the gap:
+  `.agentum-harness/verify.sh` runs only `cargo test -p agentum-server --lib`
+  plus fmt (not either full command required by AC5), and `handoff.md` records
+  693 server-lib tests but no desktop build output. Required fix: remove the
+  stale harness client helper/comments and the three obsolete integration test
+  files, then make the verification gate execute and record both exact AC5
+  commands.
+- reviewer gate FAIL (attempt 2, 2026-07-22): re-reviewed the Spec 431 diff
+  against `ai/specs/027-remove-internal-workspace-board/architecture.md` without
+  re-running the already-completed verify gate. ACCEPTED: the attempt-1 dead
+  harness-plan client and three board integration suites are now deleted;
+  `verify.sh` runs both exact AC5 commands; the tracker-only Tasks UI, real-router
+  404 matrix, external-only sink signatures, inert legacy-row test, removed
+  board persistence/workers, and unchanged migrations match the architecture.
+  REJECTED: live docs still advertise working `/api/board` CRUD and an active
+  `board_items` model (`docs/API.md:24-33`, `docs/DATA-MODEL.md:34-43`), while
+  `runtime/harness-client.ts:50-52` still advertises `board` as a supported
+  tracker and an internal-board null URL. The latter directly violates
+  Architecture Component 3 (`architecture.md:113-118`), and the former leaves
+  undocumented product/maintenance debt after those routes were removed.
+  Required fix: update current docs to mark legacy board tables compatibility-
+  only/remove the retired API, and remove the stale supported-board wire comments.
+- reviewer gate FAIL (attempt 3, 2026-07-22): reviewed the current Spec 431 diff
+  against `ai/specs/027-remove-internal-workspace-board/architecture.md` without
+  rerunning the completed verify gate. ACCEPTED: the tracker-only Tasks UI and
+  settings empty state remain covered by `ProjectTasksPage.test.tsx`; the real
+  router's `/api/board*` 404 matrix, external-only `TaskSink`, store-free
+  transition signatures, legacy-provider non-writing behavior, inert legacy-row
+  reopen test, removed board routes/store/watchdog modules, unchanged migrations,
+  and exact AC5 commands in `verify.sh` match the spec and architecture. REJECTED:
+  attempt 2's documentation/maintenance gap is unchanged: `docs/API.md:24-33`
+  still advertises live `/api/board` CRUD, `docs/DATA-MODEL.md:34-43` still
+  presents `board_items` as an active model, and
+  `runtime/harness-client.ts:49-52` plus `task_sink.rs:31-34` still describe
+  internal-board providers/keys as supported runtime contracts. This conflicts
+  with Architecture Component 3's external-only contract and D3's requirement
+  that board storage be compatibility-only, leaving silent technical debt.
+  Required fix: remove the retired API documentation, label the retained schema
+  as inert migration compatibility, and update the stale wire/model comments to
+  describe GitHub/Linear only (while retaining legacy input tolerance where the
+  architecture explicitly requires it).
+- reviewer gate FAIL (attempt 4, 2026-07-22): reviewed the current Spec 431 diff
+  and existing verify handoff against
+  `ai/specs/027-remove-internal-workspace-board/architecture.md` without rerunning
+  tests. ACCEPTED: tracker-only Tasks UI/empty-state coverage, unregistered
+  `/api/board*` routes, external-only/store-free transition seams, inert legacy
+  row coverage, removed board persistence/reconcilers, unchanged migrations,
+  and both exact AC5 commands recorded green. REJECTED: the prior maintenance
+  gap is still present: `docs/API.md:24-33` advertises live board CRUD,
+  `docs/DATA-MODEL.md:34-43` presents `board_items` as active rather than inert
+  compatibility data, `runtime/harness-client.ts:50-52` and
+  `task_sink.rs:31-34` advertise board-backed tracker values, and the live SDD
+  playbooks still instruct agents to accept board cards
+  (`sdd-orchestrate.md:30-34`, `sdd-spec.md:15-19`). This contradicts the
+  architecture's external-only runtime contract and compatibility-only storage
+  boundary. Required fix: retire the board from current docs/comments/playbooks
+  while preserving only explicitly documented legacy input/schema tolerance.
+- review gate BLOCKED after 4 attempts: Retire the internal board from current API/data-model docs and live harness/SDD contracts, leaving it documented only as legacy schema/input compatibility.
+- phase: entered blocked (from review)
+- phase: entered authoring (from blocked)
+- authoring gate PASS (attempt 1): One tracker-authoritative work-selection slice now has a named persona, six observable criteria including current docs and SDD contracts, explicit non-goals, grounded reuse, preserved invariants, and no competing spec.
+- phase: entered architecture (from authoring)
+- architecture gate PASS (attempt 1): Grounded external-tracker-only plan names current UI, router, tracker, persistence, and documentation seams; preserves legacy data safely; and maps every acceptance criterion to focused tests plus required builds.
+- phase: entered decompose (from architecture)
+- phase: entered executing (from decompose)
+- phase: entered review (from executing)
+- reviewer gate FAIL (attempt 1, 2026-07-22): reviewed the Spec 431 working-tree
+  diff against `architecture.md` and the completed verification handoff without
+  rerunning tests. ACCEPTED: `TaskPage.tsx` removes the internal sync path and
+  `ProjectTasksPage.tsx` retains GitHub/Linear plus an explicit settings-linked
+  empty state; the real router has a `/api/board*` 404 matrix; `TaskSink` and
+  tracker transitions are external-only and store-free while legacy `board`
+  metadata skips without writing; board CRUD/routes/reconcilers are deleted,
+  migrations remain unchanged, and the legacy-row reopen snapshot test is
+  present. Current API/data-model docs and embedded SDD playbooks also contain
+  the intended external-only wording, and `handoff.md` records the required
+  workspace library test and desktop build gate as passed. REJECTED: the
+  architecture-required regression test
+  `sdd::tests::current_work_item_docs_are_external_only_and_legacy_schema_is_labeled`
+  is absent from `crates/agentum-server/src/sdd.rs` (its test module ends with
+  only the existing registry/prompt tests at lines 185-262), despite
+  `architecture.md:122-127,239,262-264` naming it as the mitigation for current
+  documentation drifting back to the retired board contract. Required fix: add
+  that focused structural test over the embedded live playbooks and both current
+  docs, as specified by the architecture.
+- reviewer gate PASS (attempt 2, 2026-07-22): re-reviewed the current Spec 431
+  diff against `spec.md` and `architecture.md` without rerunning tests. The sole
+  attempt-1 gap is closed by
+  `sdd::tests::current_docs_and_sdd_playbooks_keep_internal_board_compatibility_only`:
+  it reads the current API/data-model docs, resolves the architecture-named
+  `sdd-spec` and `sdd-orchestrate` playbooks, rejects retired `/api/board` and
+  board-card advertising, and requires the retained schema's explicit legacy
+  compatibility label; retry evidence records 1 passed / 0 failed. The already
+  accepted tracker-only Tasks UI, real-router 404 matrix, external-only/store-free
+  tracker seams, bounded legacy-provider handling, inert legacy-row coverage,
+  removed CRUD/reconcilers, unchanged migrations, workspace library suite, and
+  desktop build remain aligned with the architecture. No undocumented debt,
+  unjustified complexity, or silent architectural deviation remains.
+- review gate PASS (attempt 2): Spec 431 is complete: tracker-only UI/runtime removal, inert legacy compatibility, current docs/playbooks, focused regression coverage, workspace library tests, and desktop build all satisfy the spec and architecture.
+- phase: entered done (from review)

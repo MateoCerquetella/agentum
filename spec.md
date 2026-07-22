@@ -1,53 +1,64 @@
-# Spec 407 — Restore project colors in the desktop sidebar
+# Spec 431 — Remove the internal Workspace board
 
 - **Status:** PM ready
-- **Surface:** `crates/agentum-desktop/ui`
-- **Tracker:** https://github.com/MateoCerquetella/agentum/issues/407
+- **Surface:** `crates/agentum-desktop/ui`, `crates/agentum-server`
+- **Tracker:** https://github.com/MateoCerquetella/agentum/issues/431
 
 ## Problem
 
-A workspace operator scanning projects in the desktop sidebar sees only neutral grey/white
-project marks, so projects with similar names are slower to distinguish. The pain occurs
-during routine workspace navigation, before the operator opens a project or workspace.
+When a workspace operator chooses the next tracked item in a project's Tasks view, Agentum's
+internal board appears alongside the configured tracker, leaving the operator unsure which status
+is authoritative and exposing stale mirrored cards to autonomous runs.
 
 ## Goal
 
-A workspace operator identifies a desktop-sidebar project by its configured color.
+A workspace operator selects workspace work from the project's configured external tracker.
 
 ## User value
 
-Project colors restore the operator's quickest visual cue when navigating workspaces.
+One tracker remains authoritative, eliminating duplicate cards and status reconciliation.
 
 ## Acceptance criteria
 
-- [ ] A project header grouped under Projects renders its valid configured `Repo.badgeColor` on the project icon in the normal state.
-- [ ] The same project header retains that configured icon color when hovered, selected, or opened while the existing interaction-state background remains visible.
-- [ ] Switching between the existing light and dark themes renders the same configured project icon color without replacing it with a neutral theme color.
-- [ ] A project with a missing or invalid `badgeColor` renders `DEFAULT_REPO_BADGE_COLOR` and does not render the invalid value.
-- [ ] `npm run build --prefix crates/agentum-desktop/ui` completes successfully, and focused sidebar color tests pass.
+- [ ] A project's Tasks surface renders items from its configured GitHub or Linear source, or renders an explicit no-tracker empty state, and renders no internal-board cards or “Sync to Board” action.
+- [ ] Requests to `/api/board`, `/api/board/goals`, `/api/board/links`, `/api/board/rules`, and `/api/board/bindings`, including their nested routes, return `404 Not Found`.
+- [ ] Creating, selecting, or transitioning a GitHub- or Linear-backed harness item persists or emits the existing external-tracker result without inserting or updating an internal `board_items` row.
+- [ ] Agentum starts successfully with a database containing legacy internal-board rows, and normal workspace and harness flows neither return nor mutate those rows.
+- [ ] Current API/data-model documentation and live SDD playbooks omit the internal board as an available work-item system and label retained board schema or input values as legacy compatibility only.
+- [ ] `cargo test --workspace --lib` and `npm run build --prefix crates/agentum-desktop/ui` complete successfully with focused route, tracker-flow, and Tasks-surface checks passing.
 
 ## Scope and non-goals
 
-- **In scope:** the project/repository header icon color in the desktop sidebar, including
-  normal, hover, selected/opened, light-theme, dark-theme, and fallback states.
-- **Out of scope:** recoloring project names or workspace cards; changing the color picker,
-  stored metadata, project-group folder colors, theme palettes, layout, or interactions.
+- **In scope:** the desktop Tasks surface, internal-board server routes, internal-board fallbacks in
+  normal work-item flows, current product/SDD documentation, and inert compatibility for existing
+  board rows or legacy tracker input.
+- **Out of scope:** deleting historical migrations or user data; removing external GitHub
+  Projects/Linear views; redesigning tracker setup; changing provider APIs, session launch,
+  watchdog streaming, or harness gates.
 
 ## Existing code to reuse
 
-- `WorktreeList` owns project-header rendering and interaction states in
-  `crates/agentum-desktop/ui/src/components/sidebar/WorktreeList.tsx`; reuse this path.
-- `Repo.badgeColor` is the configured project color in
-  `crates/agentum-desktop/ui/src/shared/types.ts`.
-- `normalizeRepoBadgeColor` and `DEFAULT_REPO_BADGE_COLOR` validate and default colors in
-  `crates/agentum-desktop/ui/src/shared/repo-badge-color.ts` and `shared/constants.ts`.
-- `RepoIconGlyph` is the existing project icon; its focused color seam and tests live in
-  `components/sidebar/project-header-color.ts` and `project-header-color.test.ts`.
+- `crates/agentum-desktop/ui/src/components/project-hub/ProjectTasksPage.tsx` already resolves
+  project-scoped GitHub and Linear items; `TaskPage.tsx` and `runtime/board-client.ts` contain the
+  internal `syncTasksToBoard` path.
+- `crates/agentum-server/src/task_sink.rs` already owns external tracker selection and transitions
+  through `TrackerChoice::Github` and `TrackerChoice::Linear`; `TaskSink::Board` is the internal
+  fallback.
+- Internal routes live in `crates/agentum-server/src/routes/board.rs`, `board_goals.rs`,
+  `board_links.rs`, `board_rules.rs`, and `board_sync.rs`, registered by
+  `crates/agentum-server/src/lib.rs`; external GitHub Projects routes are separate.
+- Legacy persistence lives in `crates/agentum-store/src/board.rs` and existing board migrations.
+- Current board contracts are also described by `docs/API.md`, `docs/DATA-MODEL.md`,
+  `crates/agentum-server/src/sdd_playbooks/sdd-orchestrate.md`,
+  `crates/agentum-server/src/sdd_playbooks/sdd-spec.md`, and tracker wire comments in
+  `crates/agentum-desktop/ui/src/runtime/harness-client.ts` and
+  `crates/agentum-server/src/task_sink.rs`; retain only explicitly identified legacy tolerance.
 
-## Invariants
+## Invariants and overlap
 
-- Existing project-header navigation, selection, collapse, drag, and theme behavior persist.
-- Untrusted persisted color strings never reach inline CSS without color normalization.
-
-No existing spec in `ai/specs` targets project-header badge-color restoration; tracker-status
-chips and other sidebar color work are separate surfaces.
+- External GitHub Projects remain available; the existing launch path, push streaming, tracker
+  best-effort behavior, and harness gates remain unchanged.
+- Specs 002, 016, and 025 cover direct external-ticket start and project-scoped trackers but do
+  not retire the internal API and fallback. `ai/specs/027-remove-internal-workspace-board/spec.md`
+  is the canonical archive of this same issue; this root file is its harness execution copy, not a
+  separate or competing spec.

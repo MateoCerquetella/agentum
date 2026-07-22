@@ -2032,12 +2032,7 @@ async fn create_github_issues(
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "/".to_string())
                 });
-            match super::board_goals::resolve_github_slug(
-                &host,
-                &workdir,
-                body.repo_slug.as_deref(),
-            )
-            .await
+            match super::util::resolve_github_slug(&host, &workdir, body.repo_slug.as_deref()).await
             {
                 Ok(slug) => slug,
                 Err(_) => {
@@ -2065,9 +2060,7 @@ async fn create_github_issues(
         let res = TaskSink::Github
             .create_feature(
                 &SinkCtx {
-                    store: &state.store,
                     workdir: &workdir_path,
-                    parent_goal_id: None,
                     slug: Some(&slug),
                 },
                 feature,
@@ -2101,7 +2094,7 @@ async fn create_github_issues(
 /// arm ignores them for now (documented v1 no-op); per-issue failures land in
 /// `failed` (still a 200).
 async fn create_linear_issues(
-    state: &AppState,
+    _state: &AppState,
     plan: &FeaturePlan,
     split: SplitMode,
     labels: &[String],
@@ -2116,7 +2109,7 @@ async fn create_linear_issues(
         ));
     }
 
-    // Linear's create arm ignores `workdir`/`slug`/`parent_goal_id`; pass a
+    // Linear's create arm ignores `workdir`/`slug`; pass a
     // neutral ctx for shape only.
     let tmp = std::env::temp_dir();
     let features = plan_to_features(plan, split, labels);
@@ -2125,9 +2118,7 @@ async fn create_linear_issues(
         let res = TaskSink::Linear
             .create_feature(
                 &SinkCtx {
-                    store: &state.store,
                     workdir: &tmp,
-                    parent_goal_id: None,
                     slug: None,
                 },
                 feature,
@@ -2177,7 +2168,7 @@ fn extract_feature_plan(raw: &str) -> Option<FeaturePlan> {
 
 /// A client `repo_slug` must look like `owner/repo` — exactly one `/`, both
 /// halves non-empty, no whitespace (the `^[^/\s]+/[^/\s]+$` shape). Mirrors
-/// `board_goals::is_valid_slug` so a malformed hint falls through to the read.
+/// the shared slug validator so a malformed hint falls through to the read.
 fn slug_matches(s: &str) -> bool {
     let mut parts = s.split('/');
     match (parts.next(), parts.next(), parts.next()) {
@@ -2779,9 +2770,6 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = agentum_store::Store::open(&dir.path().join("t.db"))
-            .await
-            .unwrap();
         // NUL-separated argv log: the body embeds newlines, so a line-based
         // log could not be split back into arguments unambiguously.
         let log = dir.path().join("argv.log");
@@ -2827,9 +2815,7 @@ mod tests {
         let res = TaskSink::Github
             .create_feature(
                 &SinkCtx {
-                    store: &store,
                     workdir: dir.path(),
-                    parent_goal_id: None,
                     slug: Some("o/r"),
                 },
                 &features[0],

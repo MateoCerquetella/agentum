@@ -13,7 +13,6 @@ import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
-import { type SyncIssueInput, syncExternalIssues } from '@/runtime/board-client'
 import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
@@ -927,62 +926,6 @@ export default function TaskPage({
   const [linearGroupBy, setLinearGroupBy] = useState<LinearGroupBy>('none')
   const [linearOrderBy, setLinearOrderBy] = useState<LinearOrderBy>('priority')
 
-  // ── Fold to Board (#48) ──────────────────────────────────────────────────
-  // The Tasks view is a sync source for the Board: map the loaded issues of the
-  // active provider into board cards (idempotent upsert keyed on issue URL), so
-  // GitHub/Linear issues flow in as cards on the one board.
-  // Why routed (not raw setActiveView): from the embedded hub Tasks tab this
-  // is a real navigation to the full Board page — openTaskPage records
-  // previousViewBeforeTasks ('project') so Esc/X return to the hub instead of
-  // whatever stale view the last Board visit left behind.
-  const routedOpenBoardPage = useAppStore((s) => s.openTaskPage)
-  const [syncingToBoard, setSyncingToBoard] = useState(false)
-  const syncTasksToBoard = useCallback(async () => {
-    let inputs: SyncIssueInput[] = []
-    if (taskSource === 'github') {
-      // Issues only — PRs aren't board tickets.
-      inputs = pages
-        .flat()
-        .filter((it) => it.type === 'issue')
-        .map((it) => ({
-          external_url: it.url,
-          external_provider: 'github',
-          title: it.title,
-          status: it.state === 'closed' ? 'done' : 'todo',
-          lbl: 'github'
-        }))
-    } else if (taskSource === 'linear') {
-      inputs = linearIssues.map((it) => ({
-        external_url: it.url,
-        external_provider: 'linear',
-        title: it.title,
-        body: it.description,
-        status:
-          it.state.type === 'completed' || it.state.type === 'canceled'
-            ? 'done'
-            : it.state.type === 'started'
-              ? 'doing'
-              : 'todo',
-        lbl: 'linear'
-      }))
-    }
-    if (inputs.length === 0) {
-      toast.info('No issues loaded to sync to the Board.')
-      return
-    }
-    setSyncingToBoard(true)
-    try {
-      const { synced } = await syncExternalIssues(inputs)
-      toast.success(
-        `Synced ${synced.length} ${taskSource} issue${synced.length === 1 ? '' : 's'} to the Board.`,
-        { action: { label: 'Open Board', onClick: () => routedOpenBoardPage() } }
-      )
-    } catch (e) {
-      toast.error(`Sync to Board failed: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setSyncingToBoard(false)
-    }
-  }, [taskSource, pages, linearIssues, routedOpenBoardPage])
   const [linearDisplayProperties, setLinearDisplayProperties] = useState<
     ReadonlySet<LinearDisplayProperty>
   >(() => new Set(DEFAULT_LINEAR_DISPLAY_PROPERTIES))
@@ -3670,28 +3613,6 @@ export default function TaskPage({
                             {githubTasksBusy ? 'Refreshing GitHub work…' : 'Refresh GitHub work'}
                           </TooltipContent>
                         </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={syncTasksToBoard}
-                              disabled={syncingToBoard}
-                              aria-busy={syncingToBoard}
-                              aria-label="Send GitHub issues to the Board"
-                              className="size-8 cursor-pointer border-border/50 bg-transparent hover:bg-muted/50 backdrop-blur-md disabled:pointer-events-auto disabled:cursor-wait supports-[backdrop-filter]:bg-transparent"
-                            >
-                              {syncingToBoard ? (
-                                <LoaderCircle className="size-4 animate-spin" />
-                              ) : (
-                                <FolderKanban className="size-4" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" sideOffset={6}>
-                            Send these issues to the Board
-                          </TooltipContent>
-                        </Tooltip>
                       </div>
                     </div>
 
@@ -3860,30 +3781,6 @@ export default function TaskPage({
                             Refresh Linear
                           </TooltipContent>
                         </Tooltip>
-                        {linearMode === 'issues' ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                onClick={syncTasksToBoard}
-                                disabled={syncingToBoard}
-                                aria-busy={syncingToBoard}
-                                aria-label="Send Linear issues to the Board"
-                                className="size-8 border-border/50 bg-transparent hover:bg-muted/50 backdrop-blur-md supports-[backdrop-filter]:bg-transparent"
-                              >
-                                {syncingToBoard ? (
-                                  <LoaderCircle className="size-4 animate-spin" />
-                                ) : (
-                                  <FolderKanban className="size-4" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom" sideOffset={6}>
-                              Send these issues to the Board
-                            </TooltipContent>
-                          </Tooltip>
-                        ) : null}
                       </div>
                     </div>
 

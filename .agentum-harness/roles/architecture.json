@@ -1,1 +1,1 @@
-{"passed": true, "summary": "Grounded minimal plan reuses the existing normalized repo color and badge primitives, preserves theme-owned contrast, maps every criterion to named tests, and limits production changes to the actual repo-header renderer."}
+{"passed": true, "summary": "Grounded external-tracker-only plan names current UI, router, tracker, persistence, and documentation seams; preserves legacy data safely; and maps every acceptance criterion to focused tests plus required builds."}
