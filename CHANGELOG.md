@@ -4,6 +4,30 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.92.0] — 2026-07-22
+
+### Added
+
+- **Gated runs now show observable live progress.** The workspace and harness
+  surfaces expose the active feature, phase, gate, attempt, and latest useful
+  event instead of leaving a newly started run on an opaque picker screen.
+
+### Fixed
+
+- **GitHub Project status is authoritative in the sidebar.** Duplicate local
+  phase chips are removed, confirmed board status reconciles stale local state,
+  and failed writes remain retryable until the remote tracker acknowledges them.
+- **Local merges into `develop` advance linked tracker work.** The tracker poller
+  detects completed local integration without requiring a remote PR merge first.
+- **SDD toolbar actions preserve the selected session.** Injection and loop
+  controls remain bound to the visible agent session across refreshes and pane
+  identity changes.
+- **Project colors are visible in the sidebar again** while retaining neutral
+  fallbacks for projects without a configured color.
+- **Release-tag CI is green under strict Clippy.** Test-only compatibility code,
+  environment-serialized async tests, and the SDD stop seam no longer trip the
+  `-D warnings` gate.
+
 ## [0.91.0] — 2026-07-21
 
 ### Fixed
