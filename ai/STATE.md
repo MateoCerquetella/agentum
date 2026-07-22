@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 024-restore-project-colors-in-sidebar
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (024 Reviewer SIGN-OFF 2026-07-21; all six ACs satisfied, no blockers or architecture deviations, `review.md`.)
+- **current_spec:** 024-sdd-toolbar-session-fidelity
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (024 Reviewer SIGN-OFF, `passed: true`; all six ACs and named risks accepted with no blockers. See `review.md` and `handoffs/05-reviewer-to-done.md`.)
 - **mode:** autonomous  <!-- HITL (human in the loop) | auto | autonomous -->  (set by `/sdd-orchestrate autonomous` 2026-07-21; max two iterations per gate; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,32 +87,38 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-21 | PM | **024 PM PASS → phase architect**
-  (`handoffs/01-pm-to-architect.md`): converted all six ACs to harness
-  checkboxes, made user value explicit, and locked icon-only color ownership,
-  validation/fallback, non-project exclusion, and theme-owned interaction
-  states. Canonical harness PM role used because legacy `ai/roles/pm.md` is
-  absent; no product-scope change. Tracker remains Todo.
+- 2026-07-21 | PM | **024 PM PASS → phase architect** (autonomous iteration 1;
+  `handoffs/01-pm-to-architect.md`). Refined nine architecture-heavy criteria
+  into six observable product outcomes. One-slice ruling: layout, stable
+  visibility, agent fidelity, and delivery truth all govern the single action
+  of operating the visible terminal's SDD toolbar against its bound server
+  session. Issue #395's status strip, spec 016's loop check-in, and spec 399's
+  gated-run surfacing remain separate. Tracker already In progress; no
+  regressive Todo write was sent.
 - 2026-07-21 | Architect | **024 ARCHITECT PASS → phase developer**
-  (`architecture.md`, `handoffs/02-architect-to-developer.md`): collision sweep
-  found the issue-407 Harness patch already implementation/review-gated. Adopted
-  its repo-only `RepoBadgeMark` plus existing Lucide tint because emoji/image
-  glyphs cannot be recolored; all six ACs map to named tests and exact commands.
-  Developer must audit the candidate diff and preserve unrelated dirty files.
-- 2026-07-21 | Developer | **024 DEVELOPER PASS → phase tester**
-  (`tasks.md`, `handoffs/03-developer-to-tester.md`): existing three-file Harness
-  patch matches architecture without correction. Fresh package-context Vitest
-  passed 108/108, Vite production build passed (7,236 modules), and
-  `git diff --check` passed. Corrected the architecture's malformed `npx
-  --prefix` invocation to the equivalent package-context command.
-- 2026-07-21 | Tester | **024 TESTER PASS → phase reviewer**
-  (`verification.md`, `handoffs/04-tester-to-reviewer.md`): independent focused
-  Vitest passed 108/108, Vite production build passed (7,236 modules), and diff
-  check passed. No invalid CSS path, non-project leakage, interaction/theme
-  regression, or architecture deviation found. Live state/theme and emoji/image
-  screenshots are explicit manual QA deferrals.
-- 2026-07-21 | Reviewer | **024 SIGN-OFF → phase done** (`review.md`): all six
-  ACs genuinely satisfied; implementation matches architecture and reuses the
-  existing resolver, mark, and glyph seams without API or persistence changes.
-  No blockers, dead code, unjustified complexity, or undocumented debt. Live
-  screenshots remain release/manual QA complements only.
+  (`architecture.md`; `handoffs/02-architect-to-developer.md`). Decisions:
+  `Session.tool` remains launch/provisioning truth; manual shell agents use live
+  eligibility + full playbook; per-tab reuse requires host+workdir+tool+name;
+  generated names preserve tool/hash under 64 chars; pinned sessions hydrate
+  actual identity; newly requested mismatches fail closed; one-shot injection
+  awaits unchanged `inject_prompt` and reports success only after both tmux
+  sends. All six ACs map to named tests. Tracker phase remains In progress.
+- 2026-07-21 | Developer | **024 DEVELOPER PASS → phase tester** after one
+  send-back for a Rust borrow compile error (`handoffs/03-developer-to-tester.md`).
+  Stable toolbar identity, fail-closed session compatibility, suffix-preserving
+  names, pinned-session hydration, right-cluster Continue, and synchronous
+  delivery outcomes are implemented. Gates: focused UI **18/18**, Vite build,
+  focused Rust SDD **13/13**, and `git diff --check` PASS; repo-wide fmt reports
+  only pre-existing `agentum-executor/src/adapters.rs` drift.
+- 2026-07-21 | Tester | **024 TESTER PASS-WITH-QA-DEFERRALS → phase reviewer**
+  (`verification.md`; `handoffs/04-tester-to-reviewer.md`). Independently passed
+  focused UI **18/18**, Vite production build, focused Rust SDD **13/13**,
+  server-package fmt, and diff hygiene; all six ACs PASS with zero blocker or
+  should-fix findings. Live split/reconnect/non-MCP screenshot legs remain the
+  spec-declared `qa.sh` / staging boundary.
+- 2026-07-21 | Reviewer | **024 SIGN-OFF → DONE** (`review.md`, `passed: true`;
+  `handoffs/05-reviewer-to-done.md`). All six acceptance criteria and named
+  risks accepted; no blocker, undocumented debt, dead code, or unjustified
+  complexity. One documented verification deviation—the standalone pinned-
+  hydration helper test—was accepted by boundary inspection plus declared live
+  staging QA. Tracker → Done.

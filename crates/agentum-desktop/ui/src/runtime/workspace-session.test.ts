@@ -18,7 +18,7 @@ vi.mock('./agentum-server-client', () => ({
 }))
 
 import { listSessions, createSession, startSession, type Session } from './agentum-server-client'
-import { ensureWorkspaceSession } from './workspace-session'
+import { ensureWorkspaceSession, sessionName } from './workspace-session'
 
 const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 
@@ -82,5 +82,62 @@ describe('ensureWorkspaceSession — create-time conflict (race)', () => {
     expect(result.id).toBe('sess-1')
     // The 409 must not propagate to the caller (git panels).
     expect(startSession).not.toHaveBeenCalled() // racer already running
+  })
+
+  it('does not recover a name conflict by attaching an incompatible tool', async () => {
+    vi.mocked(listSessions)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        session({ name: 'repo-codex-tab', tool: 'claude', host_id: NIL_UUID })
+      ])
+    vi.mocked(createSession).mockRejectedValue(
+      new Error('agentum-server 409 on /api/sessions — name collision')
+    )
+
+    await expect(
+      ensureWorkspaceSession({
+        workdir: '/repo',
+        tool: 'codex',
+        name: 'repo-codex-tab'
+      })
+    ).rejects.toThrow('409')
+  })
+})
+
+describe('workspace agent identity', () => {
+  it('preserves the tool and stable hash suffix for long worktree names', () => {
+    const workdir = `/repo/${'very-long-worktree-name-'.repeat(4)}`
+    const claude = sessionName(workdir, 'claude', 'tab-1')
+    const codex = sessionName(workdir, 'codex', 'tab-1')
+
+    expect(claude.length).toBeLessThanOrEqual(64)
+    expect(codex.length).toBeLessThanOrEqual(64)
+    expect(claude).toMatch(/-claude-[a-z0-9]+$/)
+    expect(codex).toMatch(/-codex-[a-z0-9]+$/)
+    expect(claude).not.toBe(codex)
+  })
+
+  it('rejects an incompatible create response', async () => {
+    vi.mocked(listSessions).mockResolvedValue([])
+    vi.mocked(createSession).mockResolvedValue(
+      session({ name: 'repo-codex-tab', tool: 'claude', host_id: NIL_UUID })
+    )
+
+    await expect(
+      ensureWorkspaceSession({ workdir: '/repo', tool: 'codex', name: 'repo-codex-tab' })
+    ).rejects.toThrow('incompatible with requested tool codex')
+  })
+
+  it('rejects an incompatible start response', async () => {
+    vi.mocked(listSessions).mockResolvedValue([
+      session({ name: 'repo-codex-tab', tool: 'codex', status: 'stopped', host_id: NIL_UUID })
+    ])
+    vi.mocked(startSession).mockResolvedValue(
+      session({ name: 'repo-codex-tab', tool: 'claude', status: 'running', host_id: NIL_UUID })
+    )
+
+    await expect(
+      ensureWorkspaceSession({ workdir: '/repo', tool: 'codex', name: 'repo-codex-tab' })
+    ).rejects.toThrow('incompatible with requested tool codex')
   })
 })

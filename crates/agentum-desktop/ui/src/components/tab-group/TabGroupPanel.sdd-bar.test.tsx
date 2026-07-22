@@ -108,6 +108,9 @@ describe('TabGroupPanel SDD bar (issue #313)', () => {
     for (const label of ['Spec', 'Spec Socratic', 'Continue', 'Status', 'Loop']) {
       expect(html).toContain(label)
     }
+    expect(html).not.toContain('>SDD</span>')
+    expect(html.indexOf('Status')).toBeLessThan(html.indexOf('Continue'))
+    expect(html.indexOf('Continue')).toBeLessThan(html.indexOf('Loop'))
   })
 
   it('renders no SDD bar when the tab is a plain shell', async () => {
