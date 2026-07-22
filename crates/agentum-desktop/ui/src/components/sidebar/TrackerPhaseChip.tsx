@@ -2,7 +2,11 @@ import React from 'react'
 import { Badge } from '@/components/ui/badge'
 import { CircleAlert, CircleCheck, CircleDot, Clock, Eye, FlaskConical } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { deriveTrackerChip, type TrackerPhaseWire } from '@/lib/tracker-phase'
+import {
+  deriveTrackerChip,
+  isTrackerChipRedundantWithProjectStatus,
+  type TrackerPhaseWire
+} from '@/lib/tracker-phase'
 import { useAppStore } from '@/store'
 
 // Spec 014 F2 (AC 5): the tracker-phase chip — the issue's PIPELINE phase
@@ -32,14 +36,16 @@ const ATTENTION_TONE = 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:tex
 
 export function TrackerPhaseChip({
   worktreeId,
-  persistedPhase
+  persistedPhase,
+  projectStatus
 }: {
   worktreeId: string
   persistedPhase?: string | null
+  projectStatus?: string | null
 }): React.JSX.Element | null {
   const live = useAppStore((s) => s.trackerLiveByWorktreeId[worktreeId])
   const chip = deriveTrackerChip(persistedPhase, live)
-  if (!chip) {
+  if (!chip || isTrackerChipRedundantWithProjectStatus(chip, projectStatus)) {
     return null
   }
   const Icon = chip.attention ? CircleAlert : chip.phase ? PHASE_ICONS[chip.phase] : CircleAlert

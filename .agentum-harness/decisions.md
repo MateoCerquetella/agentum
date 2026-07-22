@@ -136,6 +136,12 @@
   scenario (loop on a done spec stops after step 1 with `agent_completed`)
   goes to staging QA / the release human, per this repo's qa.sh convention.
 - phase: entered done (from review)
+- 2026-07-21 [ai/spec-024 reviewer]: SIGN-OFF after reconciling the completed
+  issue-407 Harness patch with the `ai/` role loop. Confirmed repo-only
+  normalized swatch wiring, theme-owned interaction contrast, non-project
+  exclusion, fallback tests, 108/108 focused Vitest in both Developer and
+  Tester phases, two green production builds, and clean diff checks. Live
+  screenshots remain release/manual QA; no code send-back.
 - phase: entered authoring (from executing) [run 379, 2026-07-17]
 - authoring gate PASS (attempt 1) [run 379]: One-slice per-project tracker picker; persona, user value, and non-goals added; ACs made testable and re-grounded (hardcoded "github" in routes/harness.rs + TaskSink::select env/auto-probe are the seams; per-project issue-URL fields dropped as they contradict the per-feature tracker_url flow).
 - phase: entered architecture (from authoring) [run 379]
@@ -161,3 +167,25 @@
 - 2026-07-20 [run 394 integration]: reconciled the feature with current develop's
   remote repo-context SSE events, control-marker intake advancement, and
   repo/wiki-grounded draft response without dropping either behavior.
+- phase: entered authoring (from executing)
+- authoring gate PASS (attempt 1): Spec 407 is a single grounded sidebar-color slice with a named operator, explicit scope, and five observable acceptance criteria.
+- phase: entered architecture (from authoring)
+- architecture gate PASS (attempt 1): Grounded minimal plan reuses the existing normalized repo color and badge primitives, preserves theme-owned contrast, maps every criterion to named tests, and limits production changes to the actual repo-header renderer.
+- phase: entered decompose (from architecture)
+- phase: entered executing (from decompose)
+- phase: entered review (from executing)
+- reviewer gate PASS (attempt 1, 2026-07-21): reviewed the Spec 407 diff against
+  `.agentum-harness/specs/407-fix-colors-in-sidebar-on-projects-now-th/architecture.md`.
+  ACCEPTED: `WorktreeList.tsx` keeps normalized `repoHeaderColor` on the existing
+  `RepoIconGlyph`, adds the architecture-specified unconditional repo-only
+  `RepoBadgeMark` (`size-2 shrink-0`), and leaves selected/open backgrounds and
+  rings theme-neutral while explicitly inheriting `text-sidebar-foreground`.
+  `project-header-color.test.ts` covers configured, missing, null, empty, and
+  invalid values through the existing neutral fallback; the source-contract
+  tests pin the mark, state separation, theme foreground, and truncating layout.
+  No data/store/theme/navigation boundary changed, matching architecture.md with
+  no deviation. Final evidence: `.agentum-harness/handoff.md` records the exact
+  UI build criterion as successful, and `crates/agentum-desktop/ui/dist` was
+  produced after the earlier zero-duration Vitest cache entry.
+- review gate PASS (attempt 1): Project headers now retain a normalized configured-color swatch across neutral theme-owned states, with fallback coverage and a successful desktop UI build recorded.
+- phase: entered done (from review)

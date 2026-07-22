@@ -795,6 +795,28 @@ async fn github_transition_with_board(
         // Unbound: the label IS the status — today's behavior byte-for-byte.
         return github_transition_with(program, slug, number, phase, map).await;
     };
+    let refreshed_binding;
+    let b = if phase == TrackerPhase::InReview && b.status_mapping.in_review.trim().is_empty() {
+        match crate::github_projects::ensure_in_review_mapping(program, slug, b).await {
+            Ok(upgraded) => {
+                refreshed_binding = upgraded;
+                &refreshed_binding
+            }
+            Err(reason) => {
+                tracing::warn!(slug, number, %reason, "InReview project mapping refresh failed");
+                return match github_transition_with(program, slug, number, phase, map).await {
+                    TransitionResult::Applied => TransitionResult::Skipped(format!(
+                        "Projects board write deferred ({reason}); status label applied as fallback"
+                    )),
+                    TransitionResult::Skipped(why) => TransitionResult::Skipped(format!(
+                        "Projects board write deferred ({reason}); label fallback skipped: {why}"
+                    )),
+                };
+            }
+        }
+    } else {
+        b
+    };
     match crate::github_projects::board_write_with(program, b, slug, number, phase.into()).await {
         Ok(()) => {
             // The board holds the status now — strip the duplicate `status/*`
@@ -950,9 +972,9 @@ pub struct TrackerEmit<'a> {
 /// Spec 014 F1: on — and ONLY on — `Ok(Applied)` a `tracker.phase_changed`
 /// event is emitted on the bus. `broadcast::Sender::send` is synchronous and
 /// non-blocking; the ignored zero-receiver `Err` makes fire-and-forget
-/// structural. `Skipped`/`Err` emit nothing (the bus never lies) — including a
-/// partial write that folds into `Skipped` (the persisted-phase re-fetch
-/// reconciles clients).
+/// structural. `Skipped`/`Err` emit `tracker.sync_pending`, never
+/// `tracker.phase_changed`: clients refetch GitHub and surface the retryable
+/// warning without inventing the requested phase (#399).
 pub async fn apply_tracker_transition(
     store: &Store,
     provider: &str,
@@ -962,15 +984,39 @@ pub async fn apply_tracker_transition(
     emit: TrackerEmit<'_>,
 ) -> anyhow::Result<TransitionResult> {
     let result = transition_inner(store, provider, tracker_id, tracker_url, phase).await;
-    if matches!(result, Ok(TransitionResult::Applied)) {
-        let _ = emit.bus.send(
-            agentum_core::Event::new("tracker.phase_changed").with_payload(serde_json::json!({
-                "worktree_id": emit.worktree_id,
-                "provider": provider,
-                "phase": phase.wire_str(),
-                "tracker_url": tracker_url,
-            })),
-        );
+    match &result {
+        Ok(TransitionResult::Applied) => {
+            let _ = emit.bus.send(
+                agentum_core::Event::new("tracker.phase_changed").with_payload(serde_json::json!({
+                    "worktree_id": emit.worktree_id,
+                    "provider": provider,
+                    "phase": phase.wire_str(),
+                    "tracker_url": tracker_url,
+                })),
+            );
+        }
+        Ok(TransitionResult::Skipped(reason)) => {
+            let _ = emit.bus.send(
+                agentum_core::Event::new("tracker.sync_pending").with_payload(serde_json::json!({
+                    "worktree_id": emit.worktree_id,
+                    "provider": provider,
+                    "target_phase": phase.wire_str(),
+                    "tracker_url": tracker_url,
+                    "reason": reason,
+                })),
+            );
+        }
+        Err(error) => {
+            let _ = emit.bus.send(
+                agentum_core::Event::new("tracker.sync_pending").with_payload(serde_json::json!({
+                    "worktree_id": emit.worktree_id,
+                    "provider": provider,
+                    "target_phase": phase.wire_str(),
+                    "tracker_url": tracker_url,
+                    "reason": error.to_string(),
+                })),
+            );
+        }
     }
     result
 }
@@ -1379,6 +1425,7 @@ mod tests {
     /// var keeps full authority over `Auto`. Env-mutating, so serialised via
     /// the crate-wide lock (the same discipline as routes/board_goals tests).
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn explicit_pin_outranks_env_sink_auto_still_honors_it() {
         let _guard = crate::TEST_ENV_LOCK
             .lock()
@@ -2191,11 +2238,10 @@ mod tests {
         );
     }
 
-    /// AC 2: a skipped transition emits NOTHING — the bus never lies. Covers
-    /// the board unknown-key skip and the github hermetic no-url/unparseable
-    /// skips (the blocked seam shares the same wrapper shape).
+    /// #399: skipped lifecycle writes emit a pending warning, never a false
+    /// phase_changed success. The blocked seam keeps its separate contract.
     #[tokio::test]
-    async fn skipped_transition_emits_nothing() {
+    async fn skipped_transition_emits_pending_not_success() {
         let store = fresh_store().await;
         let (bus, mut rx) = tokio::sync::broadcast::channel(8);
         let emit = || TrackerEmit {
@@ -2231,7 +2277,17 @@ mod tests {
         .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
 
-        assert!(rx.try_recv().is_err(), "Skipped must emit nothing");
+        for expected_provider in ["board", "github"] {
+            let ev = rx.try_recv().expect("Skipped emits a pending warning");
+            assert_eq!(ev.kind, "tracker.sync_pending");
+            assert_eq!(ev.payload["provider"], expected_provider);
+            assert_eq!(ev.payload["target_phase"], "done");
+            assert!(ev.payload["reason"].as_str().is_some());
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "Skipped must never emit phase_changed"
+        );
     }
 
     /// Write an executable fake `gh` into `dir` and return its path. Passed to
@@ -2360,6 +2416,7 @@ mod tests {
     /// the crate-wide lock.
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn pinned_provider_dispatches_to_matching_tracker_arm() {
         let _guard = crate::TEST_ENV_LOCK
             .lock()

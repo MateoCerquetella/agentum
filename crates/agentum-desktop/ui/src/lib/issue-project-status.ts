@@ -5,9 +5,10 @@
 // and the clock are injected) so it's trivially testable — mirrors
 // lib/tracker-phase.ts.
 //
-// Contract: resolve() NEVER throws and NEVER rejects. Every miss, unbound repo,
-// off-project issue, or fetch error resolves to `null` (spec 018 AC 2, silent
-// absence). The caller renders a chip iff the result is a non-empty string.
+// Contract: resolve() NEVER throws and NEVER rejects. GitHub's returned option
+// name is the only display value. Failures retain the last externally confirmed
+// value and return an actionable warning; they never synthesize a desired local
+// phase (issue #399).
 //
 // Freshness: the Status option is VOLATILE — the board column moves while a run
 // is coding (Backlog → Todo → In Progress → …), so a session-long cache shows
@@ -59,7 +60,13 @@ export const STATUS_STALE_AFTER_MS = 30_000
 
 /** A cached status read: the option name (`null` = none/unbound) + when it was
  *  fetched, so hovers after STATUS_STALE_AFTER_MS revalidate. */
-export type StatusCacheEntry = { status: string | null; fetchedAt: number }
+export type IssueProjectStatusResult = {
+  status: string | null
+  statusOptionId: string | null
+  warning: string | null
+}
+
+export type StatusCacheEntry = IssueProjectStatusResult & { fetchedAt: number }
 
 /** The binding fields the status read needs. `null` = repo has no binding. */
 export type ProjectBindingRef = {
@@ -75,29 +82,33 @@ export type IssueProjectStatusDeps = {
   statusCache: Map<string, StatusCacheEntry>
   /** Read the repo's Projects v2 binding (the existing getProjectBinding). */
   getBinding: (ref: IssueRef) => Promise<ProjectBindingRef>
-  /** Read the issue's Status option on the bound project (the new command). */
-  getStatus: (ref: IssueRef, binding: NonNullable<ProjectBindingRef>) => Promise<string | null>
+  /** Read the issue's live Status option on the bound project. */
+  getStatus: (
+    ref: IssueRef,
+    binding: NonNullable<ProjectBindingRef>
+  ) => Promise<{ status: string | null; statusOptionId: string | null }>
   /** Clock seam for staleness (default Date.now). */
   now?: () => number
   /** Override for tests (default STATUS_STALE_AFTER_MS). */
   staleAfterMs?: number
 }
 
-/** Resolve the issue's Project Status option name, or null. Fills both caches;
- *  a call inside the freshness window hits the caches and issues no fetch, a
- *  later one revalidates. Never throws — every failure path returns null (or
- *  the last-known status on a revalidation error). */
+/** Resolve GitHub's Project Status result. Fills both caches; a call inside the
+ *  freshness window hits the caches unless the linked issue has just loaded
+ *  with `forceRefresh`. Never throws: failures retain the last externally
+ *  confirmed value and carry an actionable warning. */
 export async function resolveIssueProjectStatus(
   ref: IssueRef,
-  deps: IssueProjectStatusDeps
-): Promise<string | null> {
+  deps: IssueProjectStatusDeps,
+  options: { forceRefresh?: boolean } = {}
+): Promise<IssueProjectStatusResult> {
   const now = deps.now ?? Date.now
   const staleAfterMs = deps.staleAfterMs ?? STATUS_STALE_AFTER_MS
   const key = statusCacheKey(ref.slug, ref.number)
 
   const cached = deps.statusCache.get(key)
-  if (cached && now() - cached.fetchedAt < staleAfterMs) {
-    return cached.status
+  if (!options.forceRefresh && cached && now() - cached.fetchedAt < staleAfterMs) {
+    return cached
   }
 
   // A stored binding is reused for the session (project/field ids are stable);
@@ -106,27 +117,45 @@ export async function resolveIssueProjectStatus(
   if (!binding) {
     try {
       binding = await deps.getBinding(ref)
-    } catch {
-      binding = null
+    } catch (error) {
+      return resultWithWarning(cached, error)
     }
     deps.bindingCache.set(ref.slug, binding)
   }
 
   if (!binding) {
-    deps.statusCache.set(key, { status: null, fetchedAt: now() })
-    return null
+    const result = { status: null, statusOptionId: null, warning: null }
+    deps.statusCache.set(key, { ...result, fetchedAt: now() })
+    return result
   }
 
-  let status: string | null
   try {
-    status = normalizeStatus(await deps.getStatus(ref, binding))
-  } catch {
-    // Transient revalidation failure: keep showing the last-known column
-    // instead of blanking an already-rendered chip; a first fetch stays null.
-    status = cached ? cached.status : null
+    const external = await deps.getStatus(ref, binding)
+    const result = {
+      status: normalizeStatus(external.status),
+      statusOptionId: normalizeStatus(external.statusOptionId),
+      warning: null
+    }
+    deps.statusCache.set(key, { ...result, fetchedAt: now() })
+    return result
+  } catch (error) {
+    const result = resultWithWarning(cached, error)
+    deps.statusCache.set(key, { ...result, fetchedAt: now() })
+    return result
   }
-  deps.statusCache.set(key, { status, fetchedAt: now() })
-  return status
+}
+
+function resultWithWarning(
+  cached: StatusCacheEntry | undefined,
+  error: unknown
+): IssueProjectStatusResult {
+  const detail =
+    error instanceof Error && error.message.trim() ? error.message.trim() : 'unknown error'
+  return {
+    status: cached?.status ?? null,
+    statusOptionId: cached?.statusOptionId ?? null,
+    warning: `GitHub status sync pending: ${detail}. Check gh authentication and the Project binding; Agentum will retry.`
+  }
 }
 
 /** A blank/whitespace-only option name is "no status", not an empty chip. */
