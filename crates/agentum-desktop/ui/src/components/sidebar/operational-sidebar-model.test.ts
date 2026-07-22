@@ -51,8 +51,8 @@ describe('buildOperationalSidebarRows', () => {
     )
     expect(rows.filter((row) => row.type === 'header').map((row) => [row.label, row.count])).toEqual([
       ['Needs You', 1],
-      ['Active', 3],
-      ['Settled', 1]
+      ['Active', 2],
+      ['Settled', 2]
     ])
     const items = rows.filter((row) => row.type === 'item')
     expect(items.map((row) => row.worktree.id).sort()).toEqual([
@@ -64,11 +64,22 @@ describe('buildOperationalSidebarRows', () => {
     ])
     expect(items.map((row) => row.operationalMeta?.statusLabel)).toEqual([
       'Needs input',
-      'Active',
       'Ready',
       'Working',
+      'Settled',
       'Settled'
     ])
+  })
+
+  it('treats generic open-surface liveness as settled, not active work', () => {
+    const rows = build([worktree('open')], { open: { status: 'active' } })
+    const item = rows.find((row) => row.type === 'item')
+
+    expect(item?.operationalMeta).toMatchObject({
+      section: 'settled',
+      statusLabel: 'Settled',
+      presentation: 'operational-settled'
+    })
   })
 
   it('searches display name, branch, project, and visible agent label', () => {

@@ -45,7 +45,9 @@ const STATUS_META: Record<
   permission: { section: 'needs-you', statusLabel: 'Needs input' },
   working: { section: 'active', statusLabel: 'Working' },
   done: { section: 'active', statusLabel: 'Ready' },
-  active: { section: 'active', statusLabel: 'Active' },
+  // A mounted tab, browser surface, or live tmux session is only liveness. It
+  // does not mean an agent is doing work, so keep it out of the action queue.
+  active: { section: 'settled', statusLabel: 'Settled' },
   inactive: { section: 'settled', statusLabel: 'Settled' }
 }
 
