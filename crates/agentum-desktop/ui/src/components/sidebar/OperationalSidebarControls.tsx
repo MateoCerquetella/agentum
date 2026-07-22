@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Plus, Search } from 'lucide-react'
+import { Plus, Search } from 'lucide-react'
 import { useAppStore } from '@/store'
+import { useActiveWorktree, useAllWorktrees } from '@/store/selectors'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -15,7 +16,10 @@ import {
 } from '@/lib/operational-sidebar-search-focus'
 import { cn } from '@/lib/utils'
 import SidebarWorkspaceOptionsMenu from './SidebarWorkspaceOptionsMenu'
-import { visibleOperationalProjectCount } from './operational-project-overflow'
+import {
+  orderOperationalProjects,
+  visibleOperationalProjectCount
+} from './operational-project-overflow'
 
 export function OperationalSidebarControls({
   query,
@@ -27,6 +31,8 @@ export function OperationalSidebarControls({
   boardControl?: React.ReactNode
 }): React.JSX.Element {
   const repos = useAppStore((s) => s.repos)
+  const worktrees = useAllWorktrees()
+  const activeWorktree = useActiveWorktree()
   const filterRepoIds = useAppStore((s) => s.filterRepoIds)
   const setFilterRepoIds = useAppStore((s) => s.setFilterRepoIds)
   const openModal = useAppStore((s) => s.openModal)
@@ -55,13 +61,27 @@ export function OperationalSidebarControls({
     return () => observer.disconnect()
   }, [])
 
-  const orderedRepos = useMemo(() => {
-    const selected = new Set(filterRepoIds)
-    return [...repos].sort((a, b) => Number(selected.has(b.id)) - Number(selected.has(a.id)))
-  }, [filterRepoIds, repos])
+  const workspaceCountByRepoId = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const worktree of worktrees) {
+      counts.set(worktree.repoId, (counts.get(worktree.repoId) ?? 0) + 1)
+    }
+    return counts
+  }, [worktrees])
+  const orderedRepos = useMemo(
+    () =>
+      orderOperationalProjects({
+        repos,
+        selectedRepoIds: filterRepoIds,
+        activeRepoId: activeWorktree?.repoId,
+        workspaceCountByRepoId
+      }),
+    [activeWorktree?.repoId, filterRepoIds, repos, workspaceCountByRepoId]
+  )
   const visibleCount = visibleOperationalProjectCount({
     availableWidth: railWidth,
-    projectWidths: orderedRepos.map((repo) => Math.min(112, 28 + repo.displayName.length * 7))
+    reservedWidth: 76,
+    projectWidths: orderedRepos.map((repo) => Math.min(88, 28 + repo.displayName.length * 7))
   })
   const visibleRepos = orderedRepos.slice(0, visibleCount)
   const overflowRepos = orderedRepos.slice(visibleCount)
@@ -118,7 +138,7 @@ export function OperationalSidebarControls({
             aria-pressed={selected.has(repo.id)}
             onClick={() => toggleRepo(repo.id)}
             className={cn(
-              'h-6 min-w-0 shrink rounded border px-2 text-[10px] font-medium focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+              'h-6 max-w-[88px] shrink-0 rounded border px-2 text-[10px] font-medium focus-visible:ring-2 focus-visible:ring-sidebar-ring',
               selected.has(repo.id) ? 'border-sidebar-ring bg-sidebar-accent text-foreground' : 'border-sidebar-border text-muted-foreground'
             )}
           >
@@ -128,8 +148,13 @@ export function OperationalSidebarControls({
         {overflowRepos.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="xs" className="ml-auto h-6 shrink-0 px-1.5" aria-label="More projects">
-                <ChevronDown className="size-3" />
+              <Button
+                variant="ghost"
+                size="xs"
+                className="ml-auto h-6 shrink-0 px-1.5 text-[10px] tabular-nums"
+                aria-label={`${overflowRepos.length} more projects`}
+              >
+                +{overflowRepos.length}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="max-h-72 min-w-44 overflow-y-auto">
