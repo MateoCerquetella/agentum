@@ -178,10 +178,6 @@ export function TrackerIntakePanel({
               <span className="text-[11px] text-muted-foreground">
                 Gated runs: GitHub issues only.
               </span>
-            ) : !intake.gate.eligible && intake.gate.reason === 'remote-repo' ? (
-              <span className="text-[11px] text-muted-foreground">
-                Gated runs start locally — this repo is remote (SSH).
-              </span>
             ) : null}
           </div>
         ) : null}

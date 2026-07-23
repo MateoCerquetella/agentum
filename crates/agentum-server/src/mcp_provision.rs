@@ -133,19 +133,36 @@ pub async fn write_agent_project_config(
     tool: &str,
     agentum_mcp_url: &str,
 ) {
+    if let Err(e) =
+        write_agent_project_config_checked(state, host, workdir, tool, agentum_mcp_url).await
+    {
+        tracing::warn!(tool, "could not write agentum MCP project config: {e:#}");
+    }
+}
+
+/// Strict variant used by SSH harness sessions. Returns `true` when this tool
+/// uses a project config and the merge was written, `false` for arg-based
+/// tools. Unlike the compatibility wrapper, I/O failures are surfaced.
+pub async fn write_agent_project_config_checked(
+    state: &AppState,
+    host: &Host,
+    workdir: &str,
+    tool: &str,
+    agentum_mcp_url: &str,
+) -> Result<bool> {
     let Some(file) = agent_mcp_file(tool) else {
-        return;
+        return Ok(false);
     };
     let abs = format!("{}/{}", workdir.trim_end_matches('/'), file.rel_path);
     let server = agentum_server(state, agentum_mcp_url);
     let existing = crate::host_runtime::read_remote_file(host, &abs)
         .await
-        .ok()
-        .flatten();
+        .context("read existing agent MCP project config")?;
     let merged = merge_agent_config(existing.as_deref(), &file, &server);
-    if let Err(e) = crate::host_runtime::write_remote_file(host, &abs, &merged).await {
-        tracing::warn!(tool, "could not write agentum MCP config to {abs}: {e:#}");
-    }
+    crate::host_runtime::write_remote_file(host, &abs, &merged)
+        .await
+        .with_context(|| format!("write agentum MCP config to {abs}"))?;
+    Ok(true)
 }
 
 /// Fixed loopback port the reverse SSH tunnel binds on each host. A remote

@@ -62,7 +62,7 @@ function makeWorktree(): Worktree {
   }
 }
 
-function seedStore(opts?: { connectionId?: string | null }): void {
+function seedStore(opts?: { connectionId?: string | null; hostId?: string | null }): void {
   useAppStore.setState({
     repos: [
       {
@@ -71,7 +71,8 @@ function seedStore(opts?: { connectionId?: string | null }): void {
         displayName: 'repo',
         badgeColor: '#000000',
         addedAt: 0,
-        ...(opts?.connectionId !== undefined ? { connectionId: opts.connectionId } : {})
+        ...(opts?.connectionId !== undefined ? { connectionId: opts.connectionId } : {}),
+        ...(opts?.hostId !== undefined ? { hostId: opts.hostId } : {})
       }
     ],
     worktreesByRepo: { 'repo-1': [makeWorktree()] }
@@ -95,11 +96,48 @@ function starting(): Record<string, unknown> {
 }
 
 describe('maybeOfferWorkspaceHarnessRun', () => {
-  it('remote repo (connectionId set): zero fs calls, no offer (D5)', async () => {
+  it('remote repo without a resolved server host fails closed', async () => {
     seedStore({ connectionId: 'c1' })
     await maybeOfferWorkspaceHarnessRun({ worktreeId: WT_ID, gatedRun: false })
     expect(fsListEntries).not.toHaveBeenCalled()
     expect(offers()).toEqual({})
+  })
+
+  it('detects a remote Harness through the resolved SSH host', async () => {
+    seedStore({ connectionId: 'c1', hostId: 'host-1' })
+    vi.mocked(fsListEntries).mockResolvedValueOnce(listing([specFileEntry()]))
+
+    await maybeOfferWorkspaceHarnessRun({ worktreeId: WT_ID, gatedRun: false })
+
+    expect(fsListEntries).toHaveBeenCalledWith('/workspace/feature/.agentum-harness', {
+      hidden: true,
+      hostId: 'host-1'
+    })
+    expect(offers()).toEqual({
+      [WT_ID]: {
+        worktreeId: WT_ID,
+        workdir: '/workspace/feature',
+        harnessDir: '.agentum-harness'
+      }
+    })
+  })
+
+  it('does not let a legacy local run at the same path suppress an SSH offer', async () => {
+    seedStore({ connectionId: 'c1', hostId: 'host-1' })
+    vi.mocked(fsListEntries).mockResolvedValueOnce(listing([specFileEntry()]))
+    vi.mocked(listHarnesses).mockResolvedValueOnce([
+      { workdir: '/workspace/feature' }
+    ] as unknown as Awaited<ReturnType<typeof listHarnesses>>)
+
+    await maybeOfferWorkspaceHarnessRun({ worktreeId: WT_ID, gatedRun: false })
+
+    expect(offers()).toEqual({
+      [WT_ID]: {
+        worktreeId: WT_ID,
+        workdir: '/workspace/feature',
+        harnessDir: '.agentum-harness'
+      }
+    })
   })
 
   it('gated run: zero fs calls, no offer (D6) — but the starting slice is set (spec 023 AC 1)', async () => {
@@ -247,7 +285,10 @@ describe('acceptHarnessOffer', () => {
 
     await acceptHarnessOffer(OFFER)
 
-    expect(startHarness).toHaveBeenCalledWith('/workspace/feature')
+    expect(startHarness).toHaveBeenCalledWith({
+      workdir: '/workspace/feature',
+      worktreeId: WT_ID
+    })
     expect(runHarness).toHaveBeenCalledWith('h-1')
     expect(vi.mocked(startHarness).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(runHarness).mock.invocationCallOrder[0]!

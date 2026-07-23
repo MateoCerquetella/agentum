@@ -2,7 +2,12 @@
 // `server-endpoint` is mocked so no loopback server is needed; `fetch` is
 // stubbed per test.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { subscribeHarnessEvents, unlinkHarnessIssue } from './harness-client'
+import {
+  startGatedWork,
+  startHarness,
+  subscribeHarnessEvents,
+  unlinkHarnessIssue
+} from './harness-client'
 
 vi.mock('./server-endpoint', () => ({
   apiUrl: vi.fn((p: string) => Promise.resolve(p)),
@@ -33,6 +38,67 @@ describe('unlinkHarnessIssue', () => {
       vi.fn(() => Promise.resolve(new Response('harness gone not found', { status: 404 })))
     )
     await expect(unlinkHarnessIssue('gone')).rejects.toThrow('harness 404')
+  })
+})
+
+describe('worktree-scoped Harness requests', () => {
+  it('registers a Harness with authoritative worktree identity', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ harness_id: 'run-1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await startHarness({
+      workdir: '/srv/project feature',
+      worktreeId: 'repo-1::/srv/project feature'
+    })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({
+      workdir: '/srv/project feature',
+      worktreeId: 'repo-1::/srv/project feature'
+    })
+  })
+
+  it('starts gated work with the same authoritative identity', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            harnessId: 'run-1',
+            specId: '42-feature',
+            specExisted: false,
+            planned: 1,
+            runStarted: true,
+            alreadyRunning: false
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await startGatedWork({
+      workdir: '/srv/project feature',
+      worktreeId: 'repo-1::/srv/project feature',
+      number: 42,
+      slug: 'acme/widgets',
+      agentTool: 'codex'
+    })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      workdir: '/srv/project feature',
+      worktreeId: 'repo-1::/srv/project feature',
+      number: '42',
+      slug: 'acme/widgets',
+      agentTool: 'codex'
+    })
   })
 })
 

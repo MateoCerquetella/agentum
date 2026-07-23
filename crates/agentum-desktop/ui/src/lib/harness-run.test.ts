@@ -49,18 +49,86 @@ function stampedFeatures(stamps: Array<{ provider?: string; url?: string }>) {
 describe('findHarnessRunForWorkdir', () => {
   it('matches the run whose workdir is the worktree path', () => {
     const run = makeRun()
-    expect(findHarnessRunForWorkdir([makeRun({ id: 'other', workdir: '/elsewhere' }), run], '/workspace/feature')).toBe(run)
+    expect(
+      findHarnessRunForWorkdir(
+        [makeRun({ id: 'other', workdir: '/elsewhere' }), run],
+        '/workspace/feature',
+        undefined,
+        true
+      )
+    ).toBe(run)
   })
 
   it('normalizes trailing slashes on BOTH sides before comparing', () => {
     const run = makeRun({ workdir: '/workspace/feature/' })
-    expect(findHarnessRunForWorkdir([run], '/workspace/feature')).toBe(run)
-    expect(findHarnessRunForWorkdir([makeRun()], '/workspace/feature/')).toBeDefined()
+    expect(findHarnessRunForWorkdir([run], '/workspace/feature', undefined, true)).toBe(run)
+    expect(
+      findHarnessRunForWorkdir([makeRun()], '/workspace/feature/', undefined, true)
+    ).toBeDefined()
   })
 
   it('returns undefined when no run owns the workdir', () => {
-    expect(findHarnessRunForWorkdir([makeRun()], '/nope')).toBeUndefined()
-    expect(findHarnessRunForWorkdir([], '/workspace/feature')).toBeUndefined()
+    expect(findHarnessRunForWorkdir([makeRun()], '/nope', undefined, true)).toBeUndefined()
+    expect(findHarnessRunForWorkdir([], '/workspace/feature', undefined, true)).toBeUndefined()
+  })
+
+  it('matches worktree identity before path and never crosses scoped hosts', () => {
+    const first = makeRun({
+      id: 'run-first',
+      worktree_id: 'repo-a::/srv/shared',
+      repo_id: 'repo-a',
+      host_id: 'host-a',
+      workdir: '/srv/shared'
+    })
+    const second = makeRun({
+      id: 'run-second',
+      worktree_id: 'repo-b::/srv/shared',
+      repo_id: 'repo-b',
+      host_id: 'host-b',
+      workdir: '/srv/shared'
+    })
+
+    expect(
+      findHarnessRunForWorkdir(
+        [first, second],
+        '/srv/shared',
+        'repo-b::/srv/shared',
+        false
+      )
+    ).toBe(second)
+    expect(
+      findHarnessRunForWorkdir([first], '/srv/shared', 'repo-b::/srv/shared', false)
+    ).toBeUndefined()
+  })
+
+  it('uses path fallback only for an unscoped legacy local run', () => {
+    const legacy = makeRun({ id: 'legacy', workdir: '/workspace/feature' })
+    const foreignScoped = makeRun({
+      id: 'foreign',
+      worktree_id: 'other::/workspace/feature',
+      workdir: '/workspace/feature'
+    })
+    expect(
+      findHarnessRunForWorkdir(
+        [foreignScoped, legacy],
+        '/workspace/feature',
+        'repo::/workspace/feature',
+        true
+      )
+    ).toBe(legacy)
+  })
+
+  it('never path-matches an unscoped local run for an SSH target', () => {
+    const legacyLocal = makeRun({ id: 'legacy-local', workdir: '/srv/shared' })
+
+    expect(
+      findHarnessRunForWorkdir(
+        [legacyLocal],
+        '/srv/shared',
+        'remote-repo::/srv/shared',
+        false
+      )
+    ).toBeUndefined()
   })
 })
 

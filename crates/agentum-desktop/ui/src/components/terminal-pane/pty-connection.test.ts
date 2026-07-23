@@ -2104,6 +2104,44 @@ describe('connectPanePty', () => {
     }
   })
 
+  it('keeps an undiscovered composite SSH worktree on its remote PTY provider', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport()
+    transportFactoryQueue.push(transport)
+
+    const remoteWorktreeId = 'repo1::/home/dyaus/Developer/projects/agentum'
+    mockStoreState = {
+      ...mockStoreState,
+      activeWorktreeId: remoteWorktreeId,
+      tabsByWorktree: {
+        [remoteWorktreeId]: [{ id: 'tab-1', ptyId: null }]
+      },
+      ptyIdsByTabId: { 'tab-1': [] },
+      // Regression: SSH tabs can mount before relay discovery has populated
+      // the Worktree object. The composite id still identifies repo1.
+      worktreesByRepo: {},
+      repos: [{ id: 'repo1', connectionId: 'ssh-dyaus' }]
+    }
+
+    connectPanePty(
+      createPane(1) as never,
+      createManager(1) as never,
+      createDeps({
+        worktreeId: remoteWorktreeId,
+        cwd: '/home/dyaus/Developer/projects/agentum'
+      }) as never
+    )
+    await flushAsyncTicks()
+
+    expect(createdTransportOptions[0]).toEqual(
+      expect.objectContaining({
+        connectionId: 'ssh-dyaus',
+        cwd: '/home/dyaus/Developer/projects/agentum',
+        worktreeId: remoteWorktreeId
+      })
+    )
+  })
+
   it('drops agent status without retaining when OSC 133 reports the command finished', async () => {
     const { connectPanePty } = await import('./pty-connection')
 

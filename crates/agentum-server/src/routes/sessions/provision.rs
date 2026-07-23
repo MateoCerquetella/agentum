@@ -201,6 +201,7 @@ pub(crate) async fn spawn_agent_into_pane(
         )
         .await;
     } else if matches!(host.kind, HostKind::Ssh { .. }) {
+        let strict_harness = session.name.starts_with("harness-");
         // Remote MCP parity: the agentum MCP lives on the Mac. Reverse-tunnel it
         // to the host (token-guarded, loopback-bound), then wire each agent at
         // the tunnel URL. Best-effort: a tunnel failure logs and launches the
@@ -235,6 +236,11 @@ pub(crate) async fn spawn_agent_into_pane(
                                     config_file: PathBuf::from(host_cfg),
                                 }),
                                 Err(e) => {
+                                    if strict_harness {
+                                        return Err(ApiError::Internal(format!(
+                                            "remote harness MCP config provisioning failed: {e}"
+                                        )));
+                                    }
                                     tracing::warn!(session = %session.id, "could not write remote MCP config to host: {e}");
                                     None
                                 }
@@ -251,24 +257,54 @@ pub(crate) async fn spawn_agent_into_pane(
                             launch.env.extend(adapter.mcp_env(&p));
                         }
                         // File-based agents: write the config on the HOST in the workdir.
-                        crate::mcp_provision::write_agent_project_config(
-                            state,
-                            host,
-                            &workdir.to_string_lossy(),
-                            &session.tool,
-                            &agentum_mcp_url,
-                        )
-                        .await;
+                        if strict_harness {
+                            crate::mcp_provision::write_agent_project_config_checked(
+                                state,
+                                host,
+                                &workdir.to_string_lossy(),
+                                &session.tool,
+                                &agentum_mcp_url,
+                            )
+                            .await
+                            .map_err(|e| {
+                                ApiError::Internal(format!(
+                                    "remote harness MCP project provisioning failed: {e}"
+                                ))
+                            })?;
+                        } else {
+                            crate::mcp_provision::write_agent_project_config(
+                                state,
+                                host,
+                                &workdir.to_string_lossy(),
+                                &session.tool,
+                                &agentum_mcp_url,
+                            )
+                            .await;
+                        }
                     }
-                    Err(e) => tracing::warn!(
-                        session = %session.id,
-                        "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
-                    ),
+                    Err(e) => {
+                        if strict_harness {
+                            return Err(ApiError::Internal(format!(
+                                "remote harness MCP tunnel failed: {e}"
+                            )));
+                        }
+                        tracing::warn!(
+                            session = %session.id,
+                            "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
+                        );
+                    }
                 }
             }
-            None => tracing::warn!(
-                "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
-            ),
+            None => {
+                if strict_harness {
+                    return Err(ApiError::Internal(
+                        "remote harness requires an embedded Agentum API endpoint".into(),
+                    ));
+                }
+                tracing::warn!(
+                    "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
+                );
+            }
         }
     }
 

@@ -7,6 +7,7 @@ describe('CreateWorkspaceWizard issue drafting choices', () => {
     expect(source).toContain('Draft simple issue')
     expect(source).toContain('More drafting options')
     expect(source).toContain('Shape into spec…')
+    expect(source).toContain('configured provider')
     expect(source).toContain('IssueSpecInterviewDialog')
   })
 

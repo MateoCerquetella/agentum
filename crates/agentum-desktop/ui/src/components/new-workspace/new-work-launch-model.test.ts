@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  activeNewWorkStage,
   canLaunchNewWork,
+  canSelectWorkSource,
   deriveDefaultExecutionMode,
   deriveNewWorkEligibility,
   firstIncompleteNewWorkStage,
   initialNewWorkProgress,
+  isNewWorkRetryAvailable,
+  newWorkBusyLabel,
   newWorkPrimaryLabel,
   resolveLaunchIssue,
+  shouldDefaultNewWorkToManual,
   updateNewWorkProgress
 } from './new-work-launch-model';
 
@@ -25,9 +30,9 @@ describe('new work launch model', () => {
     );
     expect(newWorkPrimaryLabel('none')).toBe('Create workspace & start work');
     const eligible = deriveNewWorkEligibility({
-      isLocal: true,
       isGit: true,
       source: 'new',
+      newIssueProvider: 'github',
       selectedAgentInstalled: true
     });
     expect(eligible).toEqual({ eligible: true });
@@ -37,16 +42,6 @@ describe('new work launch model', () => {
   it.each([
     [
       {
-        isLocal: false,
-        isGit: true,
-        source: 'new' as const,
-        selectedAgentInstalled: true
-      },
-      'remote-repo'
-    ],
-    [
-      {
-        isLocal: true,
         isGit: false,
         source: 'new' as const,
         selectedAgentInstalled: true
@@ -55,7 +50,6 @@ describe('new work launch model', () => {
     ],
     [
       {
-        isLocal: true,
         isGit: true,
         source: 'new' as const,
         selectedAgentInstalled: false
@@ -64,7 +58,6 @@ describe('new work launch model', () => {
     ],
     [
       {
-        isLocal: true,
         isGit: true,
         source: 'existing' as const,
         selectedAgentInstalled: true,
@@ -77,6 +70,68 @@ describe('new work launch model', () => {
       eligible: false,
       reason
     });
+  });
+
+  it('keeps host-aware SSH GitHub work eligible', () => {
+    expect(
+      deriveNewWorkEligibility({
+        isGit: true,
+        source: 'new',
+        newIssueProvider: 'github',
+        selectedAgentInstalled: true
+      })
+    ).toEqual({ eligible: true });
+  });
+
+  it('routes a canonical Linear new issue to manual execution', () => {
+    const eligibility = deriveNewWorkEligibility({
+      isGit: true,
+      source: 'new',
+      newIssueProvider: 'linear',
+      selectedAgentInstalled: true
+    });
+    expect(eligibility).toMatchObject({
+      eligible: false,
+      reason: 'non-github-issue'
+    });
+    expect(deriveDefaultExecutionMode(eligibility)).toBe('manual');
+    expect(
+      shouldDefaultNewWorkToManual({
+        isGit: true,
+        source: 'new',
+        trackerConfigLoaded: true,
+        newIssueProvider: 'linear'
+      })
+    ).toBe(true);
+  });
+
+  it('does not demote Existing while issue selection is still transient', () => {
+    expect(
+      shouldDefaultNewWorkToManual({
+        isGit: true,
+        source: 'existing',
+        trackerConfigLoaded: true,
+        newIssueProvider: 'github',
+        linkedWorkItem: null
+      })
+    ).toBe(false);
+    expect(
+      shouldDefaultNewWorkToManual({
+        isGit: true,
+        source: 'existing',
+        trackerConfigLoaded: true,
+        newIssueProvider: 'github',
+        linkedWorkItem: issue
+      })
+    ).toBe(false);
+    expect(
+      shouldDefaultNewWorkToManual({
+        isGit: true,
+        source: 'existing',
+        trackerConfigLoaded: true,
+        linkedWorkItem: { ...issue, url: 'https://linear.app/acme/issue/ENG-42' }
+      })
+    ).toBe(true);
   });
 
   it('checkpoints a created issue and never files it twice on retry', async () => {
@@ -124,7 +179,52 @@ describe('new work launch model', () => {
         source: 'none',
         executionMode: 'manual',
         eligibility: deriveNewWorkEligibility({
-          isLocal: true,
+          isGit: true,
+          source: 'none',
+          selectedAgentInstalled: true
+        }),
+        hasSelectedAgent: true,
+        canStageNewIssue: false,
+        hasNewIssueTitle: false,
+        hasSelectedIssue: false,
+        hasIssueCheckpoint: false
+      })
+    ).toBe(true);
+  });
+
+  it('keeps No issue available while tracker loading/error leaves tracked sources disabled', () => {
+    for (const trackerConfigured of [false]) {
+      expect(
+        canSelectWorkSource({
+          source: 'new',
+          trackerConfigured,
+          canStageNewIssue: false,
+          locked: false
+        })
+      ).toBe(false);
+      expect(
+        canSelectWorkSource({
+          source: 'existing',
+          trackerConfigured,
+          canStageNewIssue: false,
+          locked: false
+        })
+      ).toBe(false);
+      expect(
+        canSelectWorkSource({
+          source: 'none',
+          trackerConfigured,
+          canStageNewIssue: false,
+          locked: false
+        })
+      ).toBe(true);
+    }
+
+    expect(
+      canLaunchNewWork({
+        source: 'none',
+        executionMode: 'manual',
+        eligibility: deriveNewWorkEligibility({
           isGit: true,
           source: 'none',
           selectedAgentInstalled: true
@@ -145,6 +245,28 @@ describe('new work launch model', () => {
     progress = updateNewWorkProgress(progress, 'spec', 'error');
     expect(firstIncompleteNewWorkStage(progress)).toBe('spec');
     expect(newWorkPrimaryLabel('new', true)).toBe('Retry from incomplete step');
+  });
+
+  it('keeps stage-specific busy copy stable and exposes retry only while idle', () => {
+    let progress = initialNewWorkProgress({}, 'new');
+    progress = updateNewWorkProgress(progress, 'issue', 'active');
+    expect(activeNewWorkStage(progress)).toBe('issue');
+    expect(newWorkBusyLabel(progress)).toBe('Preparing issue…');
+    expect(isNewWorkRetryAvailable(progress, true)).toBe(false);
+
+    progress = updateNewWorkProgress(progress, 'issue', 'done');
+    progress = updateNewWorkProgress(progress, 'worktree', 'active');
+    expect(newWorkBusyLabel(progress)).toBe('Creating worktree…');
+
+    progress = updateNewWorkProgress(progress, 'worktree', 'done');
+    progress = updateNewWorkProgress(progress, 'spec', 'active');
+    expect(newWorkBusyLabel(progress)).toBe('Preparing spec…');
+
+    progress = updateNewWorkProgress(progress, 'spec', 'done');
+    progress = updateNewWorkProgress(progress, 'run', 'error');
+    expect(newWorkBusyLabel(progress)).toBeNull();
+    expect(isNewWorkRetryAvailable(progress, true)).toBe(false);
+    expect(isNewWorkRetryAvailable(progress, false)).toBe(true);
   });
 
   it('uses one launch gate for mouse and keyboard submission', () => {
@@ -184,7 +306,7 @@ describe('new work launch model', () => {
         hasSelectedIssue: true,
         eligibility: {
           eligible: false,
-          reason: 'remote-repo',
+          reason: 'non-github-issue',
           message: 'Manual only.'
         }
       })

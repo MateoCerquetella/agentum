@@ -8,8 +8,6 @@
 //! Mounted into the main `AppState` router so it inherits the bearer-token
 //! middleware (free on the embedded loopback server, which is `no_auth`).
 
-use std::path::PathBuf;
-
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -22,7 +20,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::harness::{HarnessConfig, HarnessFiles, HarnessStatus};
+use crate::harness::{ExecutionMode, HarnessConfig, HarnessFiles, HarnessStatus, HarnessWorkspace};
 
 /// Opt-in capability switch for the Auto QA arm (spec 005 F3, D3): when true,
 /// `resolve_qa_mode`'s Auto arm treats agent-QA as capable WITHOUT
@@ -128,11 +126,62 @@ async fn put_settings(
 struct StartRequest {
     /// Project directory containing `.harness/`.
     workdir: String,
+    /// Registered worktree identity. When supplied the server resolves repo,
+    /// host, and path and will not fall back to the daemon's local filesystem.
+    #[serde(default, rename = "worktreeId")]
+    worktree_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct StartResponse {
     harness_id: Uuid,
+    scope: agentum_core::HarnessScope,
+    #[serde(rename = "executionMode")]
+    execution_mode: ExecutionMode,
+    #[serde(rename = "worktreeId")]
+    worktree_id: Option<String>,
+    #[serde(rename = "repoId")]
+    repo_id: Option<String>,
+    #[serde(rename = "hostId")]
+    host_id: Option<Uuid>,
+}
+
+async fn resolve_request_workspace(
+    state: &AppState,
+    workdir: &str,
+    worktree_id: Option<&str>,
+) -> Result<HarnessWorkspace, ApiError> {
+    if let Some(worktree_id) = worktree_id {
+        let worktree_id = worktree_id.trim();
+        if worktree_id.is_empty() {
+            return Err(ApiError::BadRequest("worktreeId must not be blank".into()));
+        }
+        let (scope, host) =
+            super::worktrees::resolve_harness_scope(state, worktree_id, workdir).await?;
+        let workspace = HarnessWorkspace::scoped(scope, host);
+        if !workspace
+            .is_dir(&workspace.root())
+            .await
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?
+        {
+            return Err(ApiError::BadRequest(format!(
+                "worktree does not exist on its registered host: {}",
+                workspace.scope().path
+            )));
+        }
+        return Ok(workspace);
+    }
+
+    // Compatibility is deliberately local-only. Supplying a worktree id is
+    // the sole way to opt into SSH resolution; a bad id never reaches here.
+    let workdir = super::util::expand_workdir(workdir)?;
+    if !workdir.is_dir() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            workdir.display()
+        )));
+    }
+    Ok(HarnessWorkspace::local(workdir))
 }
 
 /// `POST /api/harness` — register a run from a project dir (validates `.harness/`).
@@ -140,14 +189,53 @@ async fn start(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<StartRequest>,
 ) -> Result<axum::Json<StartResponse>, ApiError> {
-    // Reuse the same `~`/relative expansion every workdir-taking route uses.
-    let workdir = super::util::expand_workdir(&req.workdir)?;
-    let harness_id = state
-        .harness
-        .start(workdir)
+    let workspace =
+        resolve_request_workspace(&state, &req.workdir, req.worktree_id.as_deref()).await?;
+    let mut config = HarnessConfig::load_from(&workspace)
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    Ok(axum::Json(StartResponse { harness_id }))
+    workspace
+        .strict_remote_preflight(
+            &state,
+            Some(&config.features.agent_tool),
+            /* require_gh */ false,
+        )
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("remote harness preflight failed: {e}")))?;
+    if workspace.is_remote()
+        && (config.features.execution_mode != ExecutionMode::Sequential
+            || config.features.max_concurrency != 1)
+    {
+        config.features.execution_mode = ExecutionMode::Sequential;
+        config.features.max_concurrency = 1;
+        config
+            .save_features(&config.features)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+    }
+    let scope = workspace.scope().clone();
+    let execution_mode = config.features.execution_mode;
+    let harness_id = if let Some(host) = workspace.host().cloned() {
+        state
+            .harness
+            .start_scoped(scope.clone(), host)
+            .await
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?
+    } else {
+        state
+            .harness
+            .start(workspace.root())
+            .await
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?
+    };
+    Ok(axum::Json(StartResponse {
+        harness_id,
+        execution_mode,
+        worktree_id: scope.worktree_id.clone(),
+        repo_id: scope.repo_id.clone(),
+        host_id: scope.host_id,
+        scope,
+    }))
 }
 
 /// `GET /api/harness` — full status for every registered run (handy for a list
@@ -261,12 +349,12 @@ async fn files(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<axum::Json<HarnessFiles>, ApiError> {
-    let workdir: PathBuf = state
+    let workspace = state
         .harness
-        .workdir(id)
+        .workspace(id)
         .await
         .map_err(|e| ApiError::NotFound(e.to_string()))?;
-    Ok(axum::Json(HarnessConfig::read_files(&workdir).await))
+    Ok(axum::Json(HarnessConfig::read_files_from(&workspace).await))
 }
 
 /// `POST /api/harness/{id}/unlink-issue` — detach the run's tracker issue
@@ -316,6 +404,9 @@ fn resolve_tracker_pin(raw: Option<&str>) -> Result<&'static str, ApiError> {
 struct SpecFromIssueRequest {
     /// The NEW worktree's path — the spec is written INTO it.
     workdir: String,
+    /// Exact registered worktree identity for host-aware execution.
+    #[serde(default)]
+    worktree_id: Option<String>,
     /// Issue number, digits-only (validated by the shared fetch).
     number: String,
     /// `owner/repo` fast path for the slug resolution.
@@ -363,14 +454,13 @@ async fn spec_from_issue(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<SpecFromIssueRequest>,
 ) -> Result<axum::Json<SpecFromIssueResponse>, ApiError> {
-    let workdir = super::util::expand_workdir(&req.workdir)?;
-    if !workdir.is_dir() {
-        return Err(ApiError::BadRequest(format!(
-            "workdir does not exist: {}",
-            workdir.display()
-        )));
-    }
-    let workdir_str = workdir.to_string_lossy().to_string();
+    let workspace =
+        resolve_request_workspace(&state, &req.workdir, req.worktree_id.as_deref()).await?;
+    workspace
+        .strict_remote_preflight(&state, None, /* require_gh */ true)
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("remote harness preflight failed: {e}")))?;
+    let workdir_str = workspace.scope().path.clone();
 
     // Server-authoritative fetch (validates the digits-only number). The
     // worktree shares the parent repo's `origin`, so it resolves the slug.
@@ -378,7 +468,7 @@ async fn spec_from_issue(
     // byte-identical pin).
     let issue = super::github::fetch_github_issue(
         &state,
-        None,
+        workspace.scope().repo_id.as_deref(),
         &workdir_str,
         &req.number,
         req.slug.as_deref(),
@@ -388,7 +478,7 @@ async fn spec_from_issue(
     let provider = resolve_tracker_pin(req.tracker.as_deref())?;
     let ensured = ensure_spec_and_plan(
         &state.bus,
-        &workdir,
+        &workspace,
         req.number.trim(),
         &issue,
         req.plan,
@@ -436,7 +526,7 @@ async fn ensure_spec_and_plan(
     // route handlers' `state.bus` (tests pass a throwaway channel).
     bus: &tokio::sync::broadcast::Sender<agentum_core::Event>,
     // Fully qualified: `Path` in this module is the axum extractor.
-    workdir: &std::path::Path,
+    workspace: &HarnessWorkspace,
     number: &str,
     issue: &super::github::FetchedIssue,
     plan: bool,
@@ -447,14 +537,19 @@ async fn ensure_spec_and_plan(
     provider: &str,
 ) -> Result<EnsuredSpec, ApiError> {
     // Idempotent: existing contract files are kept; only missing ones written.
-    let scaffold = crate::harness::scaffold_harness(workdir)
+    let scaffold = crate::harness::scaffold_harness_in(workspace)
         .await
         .map_err(|e| ApiError::Internal(format!("could not scaffold the harness: {e}")))?;
 
     let spec_id = crate::harness::issue_spec_id(number, &issue.title);
     let rel_spec_path = format!("{}/specs/{spec_id}/spec.md", crate::harness::HARNESS_DIR);
-    let spec_md_path = workdir.join(&rel_spec_path);
-    let spec_existed = spec_md_path.exists();
+    let spec_md_path = workspace
+        .join(&rel_spec_path)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let spec_existed = workspace
+        .is_file(&spec_md_path)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
     if spec_existed && !converge_existing {
         return Err(ApiError::BadRequest(format!(
             "spec {spec_id} already exists — not overwriting {rel_spec_path}"
@@ -464,13 +559,15 @@ async fn ensure_spec_and_plan(
     let mut written = scaffold.written;
     if !spec_existed {
         if let Some(parent) = spec_md_path.parent() {
-            tokio::fs::create_dir_all(parent)
+            workspace
+                .mkdir_all(parent)
                 .await
                 .map_err(|e| ApiError::Internal(format!("could not create the spec dir: {e}")))?;
         }
         let spec_md =
             crate::harness::spec_md_from_issue(number, &issue.title, &issue.body, &issue.url);
-        tokio::fs::write(&spec_md_path, spec_md)
+        workspace
+            .write(&spec_md_path, &spec_md)
             .await
             .map_err(|e| ApiError::Internal(format!("could not write spec.md: {e}")))?;
         written.push(rel_spec_path.clone());
@@ -479,10 +576,11 @@ async fn ensure_spec_and_plan(
     // The transform guarantees ≥1 checkbox, so a plan failure here is IO-class
     // (a converged human-edited spec with no checkboxes also surfaces here).
     let features = if plan {
-        let list =
-            crate::harness::plan_from_spec_with_tracker(workdir, &spec_id, provider, &issue.url)
-                .await
-                .map_err(|e| ApiError::Internal(format!("could not plan from the spec: {e}")))?;
+        let list = crate::harness::plan_from_spec_with_tracker_in(
+            workspace, &spec_id, provider, &issue.url,
+        )
+        .await
+        .map_err(|e| ApiError::Internal(format!("could not plan from the spec: {e}")))?;
         let backlog = format!("{}/feature_list.json", crate::harness::HARNESS_DIR);
         // The scaffold may have just seeded the same file — list it once.
         if !written.contains(&backlog) {
@@ -502,7 +600,7 @@ async fn ensure_spec_and_plan(
             crate::task_sink::TrackerPhase::Todo,
             crate::task_sink::TrackerEmit {
                 bus,
-                worktree_id: None,
+                worktree_id: workspace.scope().worktree_id.as_deref(),
             },
         )
         .await
@@ -533,6 +631,9 @@ async fn ensure_spec_and_plan(
 struct StartWorkRequest {
     /// The freshly created worktree (local).
     workdir: String,
+    /// Exact registered worktree identity. Required for SSH execution.
+    #[serde(default)]
+    worktree_id: Option<String>,
     /// Issue number, digits-only.
     number: String,
     /// `owner/repo` fast path.
@@ -558,6 +659,7 @@ fn apply_start_work_knobs(
     agent_tool: Option<&str>,
     agent_model: Option<&str>,
     sdd_roles: bool,
+    remote: bool,
 ) {
     if let Some(t) = agent_tool {
         list.agent_tool = t.to_string();
@@ -571,8 +673,15 @@ fn apply_start_work_knobs(
     // Newly-created issue-to-run flows use the shared-worktree coordinator.
     // Hand-authored and already-running feature lists without this field keep
     // the sequential compatibility engine.
-    list.execution_mode = crate::harness::ExecutionMode::Orchestrated;
-    list.max_concurrency = crate::harness::orchestrated::MAX_CONCURRENCY;
+    if remote {
+        // Shared-worktree orchestration still uses local-only transactional fs
+        // machinery. SSH runs use the fully host-aware sequential role loop.
+        list.execution_mode = crate::harness::ExecutionMode::Sequential;
+        list.max_concurrency = 1;
+    } else {
+        list.execution_mode = crate::harness::ExecutionMode::Orchestrated;
+        list.max_concurrency = crate::harness::orchestrated::MAX_CONCURRENCY;
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -587,6 +696,11 @@ struct StartWorkResponse {
     run_started: bool,
     /// Friendly state, NOT an error (200).
     already_running: bool,
+    execution_mode: ExecutionMode,
+    worktree_id: Option<String>,
+    repo_id: Option<String>,
+    host_id: Option<Uuid>,
+    scope: agentum_core::HarnessScope,
 }
 
 /// `POST /api/harness/start-work` — the one-click issue → gated run
@@ -605,18 +719,15 @@ async fn start_work(
     // precede ALL filesystem mutation (re-planning rewrites feature_list.json).
     let _g = state.harness.start_work_lock.lock().await;
 
-    let workdir = super::util::expand_workdir(&req.workdir)?;
-    if !workdir.is_dir() {
-        return Err(ApiError::BadRequest(format!(
-            "workdir does not exist: {}",
-            workdir.display()
-        )));
-    }
-    let workdir_str = workdir.to_string_lossy().to_string();
+    let workspace =
+        resolve_request_workspace(&state, &req.workdir, req.worktree_id.as_deref()).await?;
+    let scope = workspace.scope().clone();
+    let workdir = workspace.root();
+    let workdir_str = scope.path.clone();
 
     // Friendly already-running check FIRST (before any fs write). A live drive
     // loop owns the worktree: report it, never clobber its mid-run state.
-    if let Some(existing) = state.harness.find_by_workdir(&workdir).await {
+    if let Some(existing) = state.harness.find_by_scope(&scope).await {
         match state.harness.claim_driver(existing).await {
             Ok(false) => {
                 let status = state
@@ -631,6 +742,11 @@ async fn start_work(
                     planned: status.features.features.len(),
                     run_started: false,
                     already_running: true,
+                    execution_mode: status.execution_mode,
+                    worktree_id: status.worktree_id,
+                    repo_id: status.repo_id,
+                    host_id: status.host_id,
+                    scope: status.scope,
                 }));
             }
             // We now own an *idle* stale run: remove it and fall through to a
@@ -649,13 +765,22 @@ async fn start_work(
         }
     }
 
+    // The selected tool is known before planning (planning resets to the
+    // default `claude` when the request has no override), so validate the real
+    // remote agent and Agentum MCP path before any scaffold/backlog mutation.
+    let selected_tool = req.agent_tool.as_deref().unwrap_or("claude");
+    workspace
+        .strict_remote_preflight(&state, Some(selected_tool), /* require_gh */ true)
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("remote harness preflight failed: {e}")))?;
+
     // Fetch — needed even when the spec exists, because
     // `spec_id = issue_spec_id(number, title)` needs the title.
     // No repoId: the workdir is an is_dir-gated LOCAL worktree (spec 020
     // byte-identical pin).
     let issue = super::github::fetch_github_issue(
         &state,
-        None,
+        scope.repo_id.as_deref(),
         &workdir_str,
         &req.number,
         req.slug.as_deref(),
@@ -666,7 +791,7 @@ async fn start_work(
     let provider = resolve_tracker_pin(req.tracker.as_deref())?;
     let ensured = ensure_spec_and_plan(
         &state.bus,
-        &workdir,
+        &workspace,
         req.number.trim(),
         &issue,
         /* plan */ true,
@@ -686,12 +811,14 @@ async fn start_work(
         .setting_get_bool(SDD_ROLES_ENABLED_SETTING, true)
         .await
         .unwrap_or(true);
-    let list = crate::harness::update_backlog_knobs(&workdir, |list| {
+    let remote = workspace.is_remote();
+    let list = crate::harness::update_backlog_knobs_in(&workspace, |list| {
         apply_start_work_knobs(
             list,
             req.agent_tool.as_deref(),
             req.agent_model.as_deref(),
             sdd_roles,
+            remote,
         );
     })
     .await
@@ -699,11 +826,19 @@ async fn start_work(
 
     // Register AFTER the plan so the run's in-memory snapshot is the real
     // backlog, not the scaffold stub.
-    let harness_id = state
-        .harness
-        .start(workdir.clone())
-        .await
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let harness_id = if let Some(host) = workspace.host().cloned() {
+        state
+            .harness
+            .start_scoped(scope.clone(), host)
+            .await
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?
+    } else {
+        state
+            .harness
+            .start(workdir.clone())
+            .await
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?
+    };
 
     // Claim + spawn — byte-identical to the `run` route's spawn. A fresh
     // registration can't be driving, so a failed claim is an internal bug;
@@ -730,6 +865,11 @@ async fn start_work(
         planned: list.features.len(),
         run_started: true,
         already_running: false,
+        execution_mode: list.execution_mode,
+        worktree_id: scope.worktree_id.clone(),
+        repo_id: scope.repo_id.clone(),
+        host_id: scope.host_id,
+        scope,
     }))
 }
 
@@ -840,10 +980,17 @@ mod tests {
         let url = "https://example.com/acme/widgets/issues/42";
         let issue = synthetic_issue(url);
 
-        let ensured =
-            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, false, "github")
-                .await
-                .unwrap();
+        let ensured = ensure_spec_and_plan(
+            &test_bus(),
+            &HarnessWorkspace::local(dir.path()),
+            "42",
+            &issue,
+            true,
+            false,
+            "github",
+        )
+        .await
+        .unwrap();
         assert!(!ensured.spec_existed);
         assert_eq!(ensured.spec_id, "42-add-widget");
         assert_eq!(
@@ -905,6 +1052,66 @@ mod tests {
         assert!(!retry.plan);
     }
 
+    #[test]
+    fn harness_requests_accept_optional_camel_case_worktree_id() {
+        let legacy: StartRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/example"
+        }))
+        .unwrap();
+        assert!(legacy.worktree_id.is_none());
+        let scoped: StartRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/srv/repo/wt",
+            "worktreeId": "repo::/srv/repo/wt"
+        }))
+        .unwrap();
+        assert_eq!(scoped.worktree_id.as_deref(), Some("repo::/srv/repo/wt"));
+
+        let spec: SpecFromIssueRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/srv/repo/wt",
+            "worktreeId": "repo::/srv/repo/wt",
+            "number": "42"
+        }))
+        .unwrap();
+        assert_eq!(spec.worktree_id.as_deref(), Some("repo::/srv/repo/wt"));
+        let start: StartWorkRequest = serde_json::from_value(serde_json::json!({
+            "workdir": "/srv/repo/wt",
+            "worktreeId": "repo::/srv/repo/wt",
+            "number": "42"
+        }))
+        .unwrap();
+        assert_eq!(start.worktree_id.as_deref(), Some("repo::/srv/repo/wt"));
+    }
+
+    #[test]
+    fn start_work_response_exposes_camel_case_scope_and_mode() {
+        let host_id = Uuid::new_v4();
+        let scope = agentum_core::HarnessScope {
+            worktree_id: Some("repo::/srv/repo/wt".into()),
+            repo_id: Some("repo".into()),
+            host_id: Some(host_id),
+            path: "/srv/repo/wt".into(),
+        };
+        let value = serde_json::to_value(StartWorkResponse {
+            harness_id: Uuid::new_v4(),
+            spec_id: "42-test".into(),
+            spec_existed: false,
+            planned: 2,
+            run_started: true,
+            already_running: false,
+            execution_mode: ExecutionMode::Sequential,
+            worktree_id: scope.worktree_id.clone(),
+            repo_id: scope.repo_id.clone(),
+            host_id: scope.host_id,
+            scope,
+        })
+        .unwrap();
+        assert_eq!(value["executionMode"], "sequential");
+        assert_eq!(value["worktreeId"], "repo::/srv/repo/wt");
+        assert_eq!(value["repoId"], "repo");
+        assert_eq!(value["hostId"], host_id.to_string());
+        assert_eq!(value["scope"]["path"], "/srv/repo/wt");
+    }
+
     /// Spec 005 AC 1 convergence: an existing spec is not a failure for
     /// start-work (`converge_existing: true` re-plans from the existing file,
     /// never overwriting it) while the 004 route contract stays pinned
@@ -921,17 +1128,31 @@ mod tests {
         std::fs::create_dir_all(&spec_dir).unwrap();
         std::fs::write(spec_dir.join("spec.md"), "# Edited\n\n- [ ] Only one\n").unwrap();
 
-        let err =
-            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, false, "github")
-                .await
-                .err()
-                .expect("never-overwrite 400 without converge");
+        let err = ensure_spec_and_plan(
+            &test_bus(),
+            &HarnessWorkspace::local(dir.path()),
+            "42",
+            &issue,
+            true,
+            false,
+            "github",
+        )
+        .await
+        .err()
+        .expect("never-overwrite 400 without converge");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
 
-        let ensured =
-            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, true, "github")
-                .await
-                .unwrap();
+        let ensured = ensure_spec_and_plan(
+            &test_bus(),
+            &HarnessWorkspace::local(dir.path()),
+            "42",
+            &issue,
+            true,
+            true,
+            "github",
+        )
+        .await
+        .unwrap();
         assert!(ensured.spec_existed);
         let list = ensured.features.unwrap();
         assert_eq!(list.features.len(), 1, "planned from the existing spec");
@@ -984,9 +1205,16 @@ mod tests {
         // dev machine would rename the asserted default `status/todo` label.
         unsafe { std::env::set_var("AGENTUM_GH_BIN", &script) };
         unsafe { std::env::set_var("AGENTUM_GITHUB_CONFIG", dir.path().join("github.json")) };
-        let result =
-            ensure_spec_and_plan(&test_bus(), dir.path(), "42", &issue, true, false, "github")
-                .await;
+        let result = ensure_spec_and_plan(
+            &test_bus(),
+            &HarnessWorkspace::local(dir.path()),
+            "42",
+            &issue,
+            true,
+            false,
+            "github",
+        )
+        .await;
         unsafe { std::env::remove_var("AGENTUM_GH_BIN") };
         unsafe { std::env::remove_var("AGENTUM_GITHUB_CONFIG") };
         drop(guard);
@@ -1109,7 +1337,7 @@ mod tests {
     #[test]
     fn start_work_knobs_stamp_roles_only_when_enabled() {
         let mut list = crate::harness::FeatureList::default();
-        apply_start_work_knobs(&mut list, Some("codex"), Some("gpt-9"), true);
+        apply_start_work_knobs(&mut list, Some("codex"), Some("gpt-9"), true, false);
         assert!(list.roles, "enabled stamps roles=true");
         assert_eq!(list.agent_tool, "codex");
         assert_eq!(list.agent_model.as_deref(), Some("gpt-9"));
@@ -1117,7 +1345,7 @@ mod tests {
         assert!(list.features.is_empty(), "features untouched");
 
         let mut list = crate::harness::FeatureList::default();
-        apply_start_work_knobs(&mut list, None, None, false);
+        apply_start_work_knobs(&mut list, None, None, false, false);
         assert!(!list.roles, "disabled leaves the plan's resting false");
         assert_eq!(
             list.agent_tool,
@@ -1125,6 +1353,23 @@ mod tests {
             "no tool given → default kept"
         );
         assert!(list.agent_model.is_none());
+    }
+
+    #[test]
+    fn ssh_start_work_uses_sequential_roles_with_one_slot() {
+        let mut list = crate::harness::FeatureList::default();
+        apply_start_work_knobs(&mut list, Some("codex"), None, true, true);
+        assert!(list.roles);
+        assert_eq!(list.execution_mode, ExecutionMode::Sequential);
+        assert_eq!(list.max_concurrency, 1);
+
+        let mut local = crate::harness::FeatureList::default();
+        apply_start_work_knobs(&mut local, Some("codex"), None, true, false);
+        assert_eq!(local.execution_mode, ExecutionMode::Orchestrated);
+        assert_eq!(
+            local.max_concurrency,
+            crate::harness::orchestrated::MAX_CONCURRENCY
+        );
     }
 }
 

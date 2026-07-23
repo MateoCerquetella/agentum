@@ -532,6 +532,10 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       get().clearAgentumHookTrustForRepo(projectId)
       const repoPath = get().repos.find((repo) => repo.id === projectId)?.path
       get().evictGitHubRepoCaches(projectId, repoPath)
+      // Repo ids can be reused after remove/re-add. Drop every canonical
+      // tracker bucket now so a prior provider, conflict, or load error cannot
+      // flash on the newly registered project before its authoritative GET.
+      get().forgetProjectTrackerConfig(projectId)
       const { clearRepoSlugCacheEntry } = await import('../../lib/repo-slug-index')
       clearRepoSlugCacheEntry(projectId)
 

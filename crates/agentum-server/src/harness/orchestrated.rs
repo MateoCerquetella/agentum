@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::AppState;
-use agentum_core::{LOCAL_HOST_ID, NewSession};
+use agentum_core::{HostKind, LOCAL_HOST_ID, NewSession};
 
 pub const EXECUTION_PLAN_VERSION: u32 = 1;
 pub const MAX_PACKET_BYTES: usize = 32 * 1024;
@@ -533,14 +533,22 @@ pub async fn initialize_run(
 ) -> anyhow::Result<String> {
     validate_plan(plan, workdir)?;
     let coordinator_token = capability();
+    // Production orchestration is initialized from a registered engine run,
+    // which carries the authoritative scope. Keep the historical helper seam
+    // usable for local broker tests and callers that initialize directly.
+    let scope = match state.harness.workspace(run_id).await {
+        Ok(workspace) => workspace.scope().clone(),
+        Err(_) => agentum_core::HarnessScope::local_path(workdir.to_string_lossy()),
+    };
     state
         .store
-        .harness_create_orchestrated_run(
+        .harness_create_orchestrated_run_scoped(
             &run_id.to_string(),
             &workdir.to_string_lossy(),
             &serde_json::to_string(plan)?,
             &coordinator_token,
             max_concurrency.clamp(1, MAX_CONCURRENCY) as i64,
+            &scope,
         )
         .await?;
     for task in &plan.tasks {
@@ -971,8 +979,31 @@ pub async fn recover_incomplete_patches(state: &AppState) -> anyhow::Result<usiz
             .harness_get_orchestrated_run(&patch.run_id)
             .await?
         {
+            let scope = run.harness_scope()?;
+            if let Some(host_id) = scope.host_id.filter(|id| *id != LOCAL_HOST_ID) {
+                let remote = state
+                    .store
+                    .get_host(host_id)
+                    .await?
+                    .is_none_or(|host| matches!(host.kind, HostKind::Ssh { .. }));
+                if remote {
+                    // Orchestrated patch application is local-only. Never
+                    // interpret an SSH path on the daemon while recovering a
+                    // stale/external row, including when its host was deleted.
+                    state
+                        .store
+                        .harness_update_patch(
+                            &patch.patch_id,
+                            "blocked_remote_mode",
+                            Some("remote orchestrated patch recovery is unsupported; filesystem was not touched"),
+                        )
+                        .await?;
+                    continue;
+                }
+            }
+            let workdir = Path::new(&scope.path);
             let preimages: Vec<Preimage> = serde_json::from_str(&patch.preimages_json)?;
-            restore(Path::new(&run.workdir), &preimages, &patch.patch_id);
+            restore(workdir, &preimages, &patch.patch_id);
             for preimage in &preimages {
                 if state
                     .store
@@ -980,9 +1011,7 @@ pub async fn recover_incomplete_patches(state: &AppState) -> anyhow::Result<usiz
                     .await?
                     .is_some()
                 {
-                    let hash = content_hash(
-                        &Path::new(&run.workdir).join(safe_relative(&preimage.path)?),
-                    )?;
+                    let hash = content_hash(&workdir.join(safe_relative(&preimage.path)?))?;
                     state
                         .store
                         .harness_update_lease_hash(&patch.run_id, &preimage.path, &hash)
@@ -1900,9 +1929,43 @@ pub async fn recover_orchestrated_runs(state: &AppState) -> anyhow::Result<()> {
         if matches!(run.status.as_str(), "completed" | "stopped") {
             continue;
         }
+        let scope = run.harness_scope()?;
+        let host =
+            match scope.host_id {
+                Some(host_id) => Some(state.store.get_host(host_id).await?.ok_or_else(|| {
+                    anyhow::anyhow!("orchestrated run host is missing: {host_id}")
+                })?),
+                None => None,
+            };
+        // The transactional coordinator is intentionally local-only. A stale
+        // or externally-created SSH orchestrated row must never make recovery
+        // inspect the same-looking path on the daemon.
+        if host
+            .as_ref()
+            .is_some_and(|host| matches!(host.kind, HostKind::Ssh { .. }))
+        {
+            state
+                .store
+                .harness_update_run(&run.run_id, "blocked_remote_mode", None, None)
+                .await?;
+            state
+                .harness
+                .restore_orchestrated(
+                    Uuid::parse_str(&run.run_id)?,
+                    scope,
+                    host,
+                    super::HarnessState::Blocked,
+                    run.coordinator_session
+                        .as_deref()
+                        .and_then(|id| Uuid::parse_str(id).ok()),
+                )
+                .await?;
+            continue;
+        }
+        let scoped_workdir = Path::new(&scope.path);
         let mut conflict = false;
         for lease in state.store.harness_leases(&run.run_id).await? {
-            let live = content_hash(&Path::new(&run.workdir).join(safe_relative(&lease.path)?))?;
+            let live = content_hash(&scoped_workdir.join(safe_relative(&lease.path)?))?;
             if live != lease.content_hash {
                 conflict = true;
                 state
@@ -1914,7 +1977,7 @@ pub async fn recover_orchestrated_runs(state: &AppState) -> anyhow::Result<()> {
         for task in state.store.harness_tasks(&run.run_id).await? {
             let create_dirs: Vec<String> = serde_json::from_str(&task.create_dirs_json)?;
             for dir in create_dirs {
-                for path in files_under(Path::new(&run.workdir), &dir)? {
+                for path in files_under(scoped_workdir, &dir)? {
                     if state
                         .store
                         .harness_lease(&run.run_id, &path)
@@ -1928,9 +1991,7 @@ pub async fn recover_orchestrated_runs(state: &AppState) -> anyhow::Result<()> {
                                 &run.run_id,
                                 &path,
                                 &task.task_id,
-                                &content_hash(
-                                    &Path::new(&run.workdir).join(safe_relative(&path)?),
-                                )?,
+                                &content_hash(&scoped_workdir.join(safe_relative(&path)?))?,
                             )
                             .await?;
                         state.store.harness_freeze_lease(&run.run_id, &path).await?;
@@ -1964,7 +2025,8 @@ pub async fn recover_orchestrated_runs(state: &AppState) -> anyhow::Result<()> {
             .harness
             .restore_orchestrated(
                 harness_id,
-                PathBuf::from(&run.workdir),
+                scope,
+                host,
                 if conflict {
                     super::HarnessState::Blocked
                 } else {

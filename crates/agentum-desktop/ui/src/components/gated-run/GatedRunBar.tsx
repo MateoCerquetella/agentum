@@ -364,7 +364,19 @@ export default function GatedRunBar({
       .find((entry) => entry.id === worktreeId)
     return worktree?.path
   })
-  const { run, refresh } = useWorktreeHarnessRun(workdir)
+  const allowLegacyLocalPathFallback = useAppStore((state) => {
+    const worktree = Object.values(state.worktreesByRepo ?? {})
+      .flat()
+      .find((entry) => entry.id === worktreeId)
+    if (!worktree) return false
+    const repo = state.repos?.find((entry) => entry.id === worktree.repoId)
+    return repo ? !repo.connectionId : false
+  })
+  const { run, refresh } = useWorktreeHarnessRun(
+    workdir,
+    worktreeId,
+    allowLegacyLocalPathFallback
+  )
   const [busy, setBusy] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const [arming, setArming] = useState(false)

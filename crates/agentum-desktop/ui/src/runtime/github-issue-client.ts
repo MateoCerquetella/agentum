@@ -295,6 +295,8 @@ export type ScaffoldedSpecFromIssue = {
 export async function scaffoldSpecFromIssue(input: {
   /** The new worktree's absolute path — the spec is written INTO it. */
   workdir: string
+  /** Authoritative worktree identity used to resolve its host and path. */
+  worktreeId: string
   number: number
   slug?: string
   /** Also derive feature_list.json (server default: true). */
@@ -315,6 +317,7 @@ export async function scaffoldSpecFromIssue(input: {
       headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
       body: JSON.stringify({
         workdir: input.workdir,
+        worktreeId: input.worktreeId,
         number: String(input.number),
         ...(input.slug ? { slug: input.slug } : {}),
         ...(input.plan !== undefined ? { plan: input.plan } : {}),

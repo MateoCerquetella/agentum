@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use agentum_core::{Event, HostKind, LOCAL_HOST_ID, NewSession, Status};
+use agentum_core::{Event, Host, HostKind, LOCAL_HOST_ID, NewSession, Status};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -67,6 +67,15 @@ pub async fn drive(state: AppState, harness_id: Uuid) {
 
 async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
+    let initial_config = HarnessConfig::load_from(&workspace).await?;
+    workspace
+        .strict_remote_preflight(
+            state,
+            Some(&initial_config.features.agent_tool),
+            /* require_gh */ false,
+        )
+        .await?;
 
     // 1. Environment smoke-test.
     engine.log(harness_id, None, "running init.sh");
@@ -89,8 +98,11 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         );
     }
 
-    let workdir = engine.workdir(harness_id).await?;
-    let execution_mode = HarnessConfig::load(&workdir).await?.features.execution_mode;
+    let workdir = workspace.root();
+    let execution_mode = HarnessConfig::load_from(&workspace)
+        .await?
+        .features
+        .execution_mode;
     let orchestrated = execution_mode == ExecutionMode::Orchestrated;
 
     // 1b. SDD role phases wrap the feature loop (spec 013). OFF by default → a
@@ -98,7 +110,7 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
     // before. When on, PM/architect gates + decompose run first; the feature
     // loop is the `Executing` phase; the reviewer gate runs after all are green.
     let phases_on = {
-        let cfg = HarnessConfig::load(&workdir).await?;
+        let cfg = HarnessConfig::load_from(&workspace).await?;
         cfg.features.roles && cfg.features.spec_id.is_some()
     };
     if phases_on {
@@ -121,25 +133,24 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
     }
 
     if orchestrated {
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let spec_id =
             config.features.spec_id.clone().ok_or_else(|| {
                 anyhow::anyhow!("orchestrated execution requires features.spec_id")
             })?;
         let plan = super::orchestrated::load_execution_plan(&workdir, &spec_id)?;
-        let architecture = tokio::fs::read_to_string(
-            config
-                .harness_dir
-                .join("specs")
-                .join(&spec_id)
-                .join("architecture.md"),
-        )
-        .await
-        .unwrap_or_default();
-        let dirty = tokio::process::Command::new("git")
-            .args(["status", "--porcelain"])
-            .current_dir(&workdir)
-            .output()
+        let architecture = workspace
+            .try_read(
+                &config
+                    .harness_dir
+                    .join("specs")
+                    .join(&spec_id)
+                    .join("architecture.md"),
+            )
+            .await?
+            .unwrap_or_default();
+        let dirty = workspace
+            .run("git", &["status".into(), "--porcelain".into()], &[])
             .await
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
@@ -211,7 +222,7 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         engine.set_state(harness_id, HarnessState::Running).await?;
 
         // 3. Reload config (agent tool/model/timeouts may have been edited).
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let session = spawn_feature_agent(state, harness_id, &workdir, &config, &feature).await?;
         // The agent is now coding this feature → move its ticket to "In Progress"
         // (best-effort; never halts the run).
@@ -237,15 +248,17 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         // must not send the agent hunting for a missing file. Handles the legacy
         // `.harness` dir by deriving the dir name from config.harness_dir, not
         // the HARNESS_DIR const (spec 005 F2).
-        let spec_rel = config.features.spec_id.as_deref().and_then(|sid| {
-            let dir = config
-                .harness_dir
-                .file_name()?
-                .to_string_lossy()
-                .into_owned();
-            let rel = format!("{dir}/specs/{sid}/spec.md");
-            workdir.join(&rel).exists().then_some(rel)
-        });
+        let spec_rel = if let Some(sid) = config.features.spec_id.as_deref() {
+            match config.harness_dir.file_name() {
+                Some(dir) => {
+                    let rel = format!("{}/specs/{sid}/spec.md", dir.to_string_lossy());
+                    workspace.is_file(&workdir.join(&rel)).await?.then_some(rel)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         let prompt =
             build_feature_prompt(&config.agent_instructions, &feature, spec_rel.as_deref());
         if !inject_prompt(state, &session, &prompt).await? {
@@ -592,6 +605,17 @@ pub(super) fn spawn_session_name(kind: &str, harness_id: Uuid) -> String {
     format!("harness-{kind}-{}-{}", &run[..8], &nonce[..4])
 }
 
+async fn pinned_harness_host(state: &AppState, harness_id: Uuid) -> anyhow::Result<(Host, Uuid)> {
+    let workspace = state.harness.workspace(harness_id).await?;
+    let host_id = workspace.scope().effective_host_id();
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("harness host is missing: {host_id}"))?;
+    Ok((host, host_id))
+}
+
 /// Create + start a real agent session scoped to one feature.
 async fn spawn_feature_agent(
     state: &AppState,
@@ -600,11 +624,7 @@ async fn spawn_feature_agent(
     config: &HarnessConfig,
     feature: &Feature,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
+    let (host, host_id) = pinned_harness_host(state, harness_id).await?;
 
     let name = spawn_session_name(&sanitize(&feature.id), harness_id);
 
@@ -631,7 +651,7 @@ async fn spawn_feature_agent(
     };
     let session = state
         .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .create_session_on_host(new, Some(host_id))
         .await?;
 
     state
@@ -698,11 +718,7 @@ async fn spawn_qa_agent(
     config: &HarnessConfig,
     feature: &Feature,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
+    let (host, host_id) = pinned_harness_host(state, harness_id).await?;
     let name = spawn_session_name(&format!("qa-{}", sanitize(&feature.id)), harness_id);
     let flags = if config.features.agent_yolo {
         vec![agentum_executor::YOLO_MARKER.to_string()]
@@ -727,7 +743,7 @@ async fn spawn_qa_agent(
     };
     let session = state
         .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .create_session_on_host(new, Some(host_id))
         .await?;
     let target = agentum_tmux::target_for(&session.name);
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
@@ -757,6 +773,7 @@ async fn run_qa_agent_gate(
     timeout: Duration,
 ) -> anyhow::Result<(bool, String)> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
     engine
         .set_feature_state(harness_id, &feature.id, FeatureState::ReadyToTest)
         .await?;
@@ -765,9 +782,9 @@ async fn run_qa_agent_gate(
     // we never read a previous attempt's result.
     let verdict_abs = qa_verdict_path(&config.harness_dir, &feature.id);
     if let Some(parent) = verdict_abs.parent() {
-        tokio::fs::create_dir_all(parent).await.ok();
+        workspace.mkdir_all(parent).await.ok();
     }
-    tokio::fs::remove_file(&verdict_abs).await.ok();
+    workspace.remove_file(&verdict_abs).await.ok();
     let verdict_rel = verdict_abs
         .strip_prefix(workdir)
         .map(|p| p.to_string_lossy().into_owned())
@@ -813,7 +830,7 @@ async fn run_qa_agent_gate(
     }
     teardown_session(state, &session).await;
 
-    match tokio::fs::read_to_string(&verdict_abs).await {
+    match workspace.read(&verdict_abs).await {
         Ok(raw) => match parse_qa_verdict(&raw) {
             Ok((passed, summary)) => Ok((passed, summary)),
             Err(e) => Ok((
@@ -832,9 +849,13 @@ async fn run_qa_agent_gate(
 
 /// Read the spec under review for a role gate (spec 013). Best-effort: an empty
 /// string if the spec is absent (the gate will then most likely emit CONCERNS).
-async fn read_spec_md(harness_dir: &Path, spec_id: &str) -> String {
+async fn read_spec_md(
+    workspace: &super::HarnessWorkspace,
+    harness_dir: &Path,
+    spec_id: &str,
+) -> String {
     let path = harness_dir.join("specs").join(spec_id).join("spec.md");
-    tokio::fs::read_to_string(path).await.unwrap_or_default()
+    workspace.read(&path).await.unwrap_or_default()
 }
 
 /// Spawn a real agent session for a **role gate** (spec 013). Mirrors
@@ -847,11 +868,7 @@ async fn spawn_role_agent(
     config: &HarnessConfig,
     role: RoleKind,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
+    let (host, host_id) = pinned_harness_host(state, harness_id).await?;
     let name = spawn_session_name(role.as_str(), harness_id);
     let flags = if config.features.agent_yolo {
         vec![agentum_executor::YOLO_MARKER.to_string()]
@@ -871,7 +888,7 @@ async fn spawn_role_agent(
     };
     let session = state
         .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .create_session_on_host(new, Some(host_id))
         .await?;
     let target = agentum_tmux::target_for(&session.name);
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
@@ -898,12 +915,13 @@ async fn run_role_gate(
     phase: SpecPhase,
 ) -> anyhow::Result<bool> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
     let Some(role) = phase.role() else {
         return Ok(true); // a non-agent phase (e.g. Decompose) — nothing to gate
     };
 
     loop {
-        let config = HarnessConfig::load(workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let spec_id = config
             .features
             .spec_id
@@ -911,15 +929,15 @@ async fn run_role_gate(
             .ok_or_else(|| anyhow::anyhow!("role gate requires features.spec_id"))?;
         let grace = Duration::from_secs(config.features.settle_grace_secs);
         let timeout = Duration::from_secs(config.features.settle_timeout_secs);
-        let spec_md = read_spec_md(&config.harness_dir, &spec_id).await;
+        let spec_md = read_spec_md(&workspace, &config.harness_dir, &spec_id).await;
 
         // Verdict file under <harness_dir>/roles/<phase>.json; clear any stale one
         // first so we never read a previous attempt's result.
         let verdict_abs = role_verdict_path(&config.harness_dir, phase);
         if let Some(parent) = verdict_abs.parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+            workspace.mkdir_all(parent).await.ok();
         }
-        tokio::fs::remove_file(&verdict_abs).await.ok();
+        workspace.remove_file(&verdict_abs).await.ok();
         let verdict_rel = verdict_abs
             .strip_prefix(workdir)
             .map(|p| p.to_string_lossy().into_owned())
@@ -950,7 +968,7 @@ async fn run_role_gate(
         {
             engine.log(harness_id, None, settle_timeout_message(timeout));
         }
-        let (passed, summary) = match tokio::fs::read_to_string(&verdict_abs).await {
+        let (passed, summary) = match workspace.read(&verdict_abs).await {
             Ok(raw) => match parse_role_verdict(&raw) {
                 Ok(v) => v,
                 Err(e) => (
@@ -986,8 +1004,8 @@ async fn run_role_gate(
             GateDecision::Advance => {
                 teardown_session(state, &session).await;
                 engine.clear_current(harness_id).await;
-                let _ = append_decision(
-                    workdir,
+                let _ = append_decision_in(
+                    &workspace,
                     &format!("{} gate PASS (attempt {attempt}): {summary}", phase.slug()),
                 )
                 .await;
@@ -1013,8 +1031,8 @@ async fn run_role_gate(
                 continue;
             }
             GateDecision::Block => {
-                let _ = append_decision(
-                    workdir,
+                let _ = append_decision_in(
+                    &workspace,
                     &format!(
                         "{} gate BLOCKED after {attempt} attempts: {summary}",
                         phase.slug()
@@ -1034,8 +1052,8 @@ async fn run_role_gate(
                 return Ok(false);
             }
             GateDecision::AwaitConfirm => {
-                let _ = append_decision(
-                    workdir,
+                let _ = append_decision_in(
+                    &workspace,
                     &format!(
                         "{} gate AWAITING HUMAN after {attempt} attempts: {summary}",
                         phase.slug()
@@ -1071,6 +1089,7 @@ async fn run_pre_feature_phases(
     workdir: &Path,
 ) -> anyhow::Result<()> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
 
     engine.set_phase(harness_id, SpecPhase::Authoring).await?;
     if !run_role_gate(state, harness_id, workdir, SpecPhase::Authoring).await? {
@@ -1083,7 +1102,7 @@ async fn run_pre_feature_phases(
         return Ok(());
     }
 
-    let current = HarnessConfig::load(workdir).await?;
+    let current = HarnessConfig::load_from(&workspace).await?;
     if current.features.execution_mode == ExecutionMode::Orchestrated {
         // The architect owns task compilation in orchestrated mode. Its
         // execution-plan.json is validated immediately after this phase.
@@ -1095,7 +1114,7 @@ async fn run_pre_feature_phases(
     // PM-refined) spec, re-apply the run knobs the fresh list would reset, then
     // make it visible to the feature loop.
     engine.set_phase(harness_id, SpecPhase::Decompose).await?;
-    let config = HarnessConfig::load(workdir).await?;
+    let config = HarnessConfig::load_from(&workspace).await?;
     let spec_id = config
         .features
         .spec_id
@@ -1113,9 +1132,9 @@ async fn run_pre_feature_phases(
     // list-level knobs, never per-feature stamps.
     let mut derived = match shared_tracker_provenance(&config.features) {
         Some((provider, url)) => {
-            plan_from_spec_with_tracker(workdir, &spec_id, &provider, &url).await?
+            plan_from_spec_with_tracker_in(&workspace, &spec_id, &provider, &url).await?
         }
-        None => plan_from_spec(workdir, &spec_id).await?,
+        None => plan_from_spec_in(&workspace, &spec_id).await?,
     };
     derived.copy_knobs_from(&config.features);
     config.save_features(&derived).await?;

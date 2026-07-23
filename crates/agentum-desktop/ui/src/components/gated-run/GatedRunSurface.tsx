@@ -36,7 +36,19 @@ export default function GatedRunSurface({
       .find((w) => w.id === worktreeId)
     return worktree?.path
   })
-  const { run } = useWorktreeHarnessRun(workdir)
+  const allowLegacyLocalPathFallback = useAppStore((state) => {
+    const worktree = Object.values(state.worktreesByRepo ?? {})
+      .flat()
+      .find((entry) => entry.id === worktreeId)
+    if (!worktree) return false
+    const repo = state.repos?.find((entry) => entry.id === worktree.repoId)
+    return repo ? !repo.connectionId : false
+  })
+  const { run } = useWorktreeHarnessRun(
+    workdir,
+    worktreeId,
+    allowLegacyLocalPathFallback
+  )
 
   // The overlay only mounts when the worktree has NO surface, so an
   // attachable session reads as `hasNoSurface === false` upstream — here the

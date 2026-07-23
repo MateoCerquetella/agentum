@@ -194,10 +194,11 @@ describe('deriveFiledGatedRunGate', () => {
     expect(deriveFiledGatedRunGate(FILED_GITHUB, undefined).eligible).toBe(true)
   })
 
-  it('refuses a remote (SSH) repo with the gate reason', () => {
+  it('allows a remote (SSH) repo when the filed item is a GitHub issue', () => {
     expect(deriveFiledGatedRunGate(FILED_GITHUB, 'ssh-1')).toEqual({
-      eligible: false,
-      reason: 'remote-repo'
+      eligible: true,
+      slug: { owner: 'acme', repo: 'widgets' },
+      number: 42
     })
   })
 

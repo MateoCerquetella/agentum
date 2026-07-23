@@ -93,6 +93,11 @@ export type HarnessWorkerStatus = {
 export type HarnessStatus = {
   id: string
   workdir: string
+  /** Authoritative workspace identity. Missing only on legacy local runs. */
+  worktree_id?: string | null
+  repo_id?: string | null
+  /** Server host id pinned when the run was registered. */
+  host_id?: string | null
   state: HarnessState
   features: HarnessFeatureList
   current_feature?: string | null
@@ -182,15 +187,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) : undefined) as T
 }
 
-/** `POST /api/harness` — register a run from a project dir containing `.harness/`. */
-export function startHarness(workdir: string): Promise<{ harness_id: string }> {
-  return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
+export type HarnessWorktreeTarget = {
+  workdir: string
+  /** Authoritative identity; the server resolves host/path from it. */
+  worktreeId: string
+}
+
+/** `POST /api/harness` — register a run from a worktree containing a Harness. */
+export function startHarness(input: HarnessWorktreeTarget): Promise<{ harness_id: string }> {
+  return request('/api/harness', {
+    method: 'POST',
+    body: JSON.stringify({
+      workdir: input.workdir,
+      worktreeId: input.worktreeId
+    })
+  })
 }
 
 /** Wire shape of `POST /api/harness/start-work` (spec 005 F1 — camelCase,
  *  matching the newer `SpecFromIssueResponse` precedent). */
 export type StartGatedWorkResult = {
   harnessId: string
+  worktreeId?: string
+  repoId?: string
+  hostId?: string
+  executionMode?: 'sequential' | 'orchestrated'
   specId: string
   specExisted: boolean
   planned: number
@@ -208,6 +229,8 @@ export type StartGatedWorkResult = {
  */
 export function startGatedWork(input: {
   workdir: string
+  /** Authoritative identity for local and SSH worktrees. */
+  worktreeId: string
   number: number
   slug?: string
   agentTool?: string
@@ -220,6 +243,7 @@ export function startGatedWork(input: {
     method: 'POST',
     body: JSON.stringify({
       workdir: input.workdir,
+      worktreeId: input.worktreeId,
       number: String(input.number),
       ...(input.slug ? { slug: input.slug } : {}),
       ...(input.agentTool ? { agentTool: input.agentTool } : {}),

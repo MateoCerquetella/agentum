@@ -11,7 +11,7 @@
 use super::util::now_millis;
 use std::path::PathBuf;
 
-use agentum_core::{Host, HostKind};
+use agentum_core::{HarnessScope, Host, HostKind};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
@@ -97,14 +97,94 @@ pub(crate) fn scope_worktree_pairs() -> Vec<(String, String)> {
 }
 
 pub(crate) fn read_worktrees() -> Result<Vec<Worktree>, ApiError> {
+    Ok(read_worktrees_raw()?
+        .into_iter()
+        .map(enrich_worktree)
+        .collect())
+}
+
+/// Registry rows without local git enrichment. Identity resolution must use
+/// this path: probing a remote worktree with local `git -C` is both wrong and
+/// unnecessary when the id already encodes the authoritative path.
+fn read_worktrees_raw() -> Result<Vec<Worktree>, ApiError> {
     let path = registry_path()?;
     if !path.exists() {
         return Ok(Vec::new());
     }
     let raw = std::fs::read_to_string(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
     // Tolerate a corrupt registry rather than wedging the app on every call.
-    let worktrees: Vec<Worktree> = serde_json::from_str(&raw).unwrap_or_default();
-    Ok(worktrees.into_iter().map(enrich_worktree).collect())
+    Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+fn normalized_claimed_path(path: &str) -> &str {
+    let trimmed = path.trim();
+    if trimmed == "/" {
+        trimmed
+    } else {
+        trimmed.trim_end_matches('/')
+    }
+}
+
+fn scope_from_registry(
+    worktrees: &[Worktree],
+    worktree_id: &str,
+    claimed_workdir: &str,
+    host_id: uuid::Uuid,
+) -> Result<HarnessScope, ApiError> {
+    let row = worktrees
+        .iter()
+        .find(|row| row.id == worktree_id)
+        .ok_or_else(|| ApiError::NotFound(format!("worktree not found: {worktree_id}")))?;
+    let (encoded_repo, encoded_path) = row.id.split_once("::").ok_or_else(|| {
+        ApiError::BadRequest(format!("invalid registered worktree id: {}", row.id))
+    })?;
+    if encoded_repo != row.repo_id {
+        return Err(ApiError::BadRequest(format!(
+            "worktree/repo identity mismatch for {}",
+            row.id
+        )));
+    }
+    if !std::path::Path::new(encoded_path).is_absolute()
+        || std::path::Path::new(encoded_path)
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(ApiError::BadRequest(format!(
+            "worktree path is not an absolute, traversal-free path: {encoded_path}"
+        )));
+    }
+    if normalized_claimed_path(claimed_workdir) != normalized_claimed_path(encoded_path) {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not match worktreeId: claimed {:?}, registered {:?}",
+            claimed_workdir, encoded_path
+        )));
+    }
+    Ok(HarnessScope {
+        worktree_id: Some(row.id.clone()),
+        repo_id: Some(row.repo_id.clone()),
+        host_id: Some(host_id),
+        path: normalized_claimed_path(encoded_path).to_string(),
+    })
+}
+
+/// Resolve an exact registered worktree to its repo, server host, and path.
+/// Supplying `worktreeId` opts into strict ownership: an unknown id, malformed
+/// registry row, deleted host, or claimed-path mismatch is an error and never
+/// falls back to local execution.
+pub(crate) async fn resolve_harness_scope(
+    state: &AppState,
+    worktree_id: &str,
+    claimed_workdir: &str,
+) -> Result<(HarnessScope, Host), ApiError> {
+    let rows = read_worktrees_raw()?;
+    let repo_id = rows
+        .iter()
+        .find(|row| row.id == worktree_id)
+        .map(|row| row.repo_id.clone())
+        .ok_or_else(|| ApiError::NotFound(format!("worktree not found: {worktree_id}")))?;
+    let host = load_host_for_repo(state, &repo_id).await?;
+    let scope = scope_from_registry(&rows, worktree_id, claimed_workdir, host.id)?;
+    Ok((scope, host))
 }
 
 fn write_worktrees(worktrees: &[Worktree]) -> Result<(), ApiError> {
@@ -1232,6 +1312,68 @@ prunable gitdir file points to non-existent location
         let (repo, path) = "r1::/a/b/c".split_once("::").unwrap();
         assert_eq!(repo, "r1");
         assert_eq!(path, "/a/b/c");
+    }
+
+    fn registered_worktree(id: &str, repo_id: &str) -> Worktree {
+        Worktree {
+            id: id.into(),
+            repo_id: repo_id.into(),
+            display_name: "test".into(),
+            comment: String::new(),
+            linked_issue: None,
+            linked_pr: None,
+            linked_linear_issue: None,
+            tracker_provider: None,
+            tracker_url: None,
+            tracker_phase: None,
+            is_archived: false,
+            is_unread: false,
+            is_pinned: false,
+            sort_order: 0,
+            last_activity_at: 0,
+            extra: Map::new(),
+        }
+    }
+
+    #[test]
+    fn harness_scope_requires_exact_registry_identity_and_path() {
+        let host_id = uuid::Uuid::new_v4();
+        let rows = vec![registered_worktree("repo::/srv/repo/wt", "repo")];
+        let scope =
+            scope_from_registry(&rows, "repo::/srv/repo/wt", "/srv/repo/wt/", host_id).unwrap();
+        assert_eq!(scope.worktree_id.as_deref(), Some("repo::/srv/repo/wt"));
+        assert_eq!(scope.repo_id.as_deref(), Some("repo"));
+        assert_eq!(scope.host_id, Some(host_id));
+        assert_eq!(scope.path, "/srv/repo/wt");
+
+        assert!(matches!(
+            scope_from_registry(&rows, "repo::/srv/repo/missing", "/srv/repo/wt", host_id),
+            Err(ApiError::NotFound(_))
+        ));
+        assert!(matches!(
+            scope_from_registry(&rows, "repo::/srv/repo/wt", "/tmp/local-lookalike", host_id),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn harness_scope_rejects_tampered_repo_prefix_and_traversal() {
+        let host_id = uuid::Uuid::new_v4();
+        let tampered = vec![registered_worktree("other::/srv/repo/wt", "repo")];
+        assert!(matches!(
+            scope_from_registry(&tampered, "other::/srv/repo/wt", "/srv/repo/wt", host_id),
+            Err(ApiError::BadRequest(_))
+        ));
+        let traversal = vec![registered_worktree("repo::/srv/repo/../secret", "repo")];
+        assert!(matches!(
+            scope_from_registry(
+                &traversal,
+                "repo::/srv/repo/../secret",
+                "/srv/repo/../secret",
+                host_id
+            ),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]

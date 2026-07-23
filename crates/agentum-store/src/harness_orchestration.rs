@@ -24,8 +24,32 @@ pub struct HarnessOrchestratedRunRow {
     pub max_concurrency: i64,
     pub final_gate_runs: i64,
     pub checkpoint_json: Option<String>,
+    pub scope_worktree_id: Option<String>,
+    pub scope_repo_id: Option<String>,
+    pub scope_host_id: Option<String>,
+    pub scope_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl HarnessOrchestratedRunRow {
+    /// Rehydrate the authoritative scope. Rows written before migration 0029
+    /// remain valid local runs and fall back to their historical `workdir`.
+    pub fn harness_scope(&self) -> Result<agentum_core::HarnessScope> {
+        Ok(agentum_core::HarnessScope {
+            worktree_id: self.scope_worktree_id.clone(),
+            repo_id: self.scope_repo_id.clone(),
+            host_id: self
+                .scope_host_id
+                .as_deref()
+                .map(uuid::Uuid::parse_str)
+                .transpose()?,
+            path: self
+                .scope_path
+                .clone()
+                .unwrap_or_else(|| self.workdir.clone()),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -105,18 +129,44 @@ impl Store {
         coordinator_token: &str,
         max_concurrency: i64,
     ) -> Result<()> {
+        let scope = agentum_core::HarnessScope::local_path(workdir);
+        self.harness_create_orchestrated_run_scoped(
+            run_id,
+            workdir,
+            plan_json,
+            coordinator_token,
+            max_concurrency,
+            &scope,
+        )
+        .await
+    }
+
+    pub async fn harness_create_orchestrated_run_scoped(
+        &self,
+        run_id: &str,
+        workdir: &str,
+        plan_json: &str,
+        coordinator_token: &str,
+        max_concurrency: i64,
+        scope: &agentum_core::HarnessScope,
+    ) -> Result<()> {
         let ts = now()?;
         sqlx::query(
             "INSERT OR REPLACE INTO harness_orchestrated_runs
              (run_id,workdir,plan_json,status,coordinator_session,coordinator_token,
-              max_concurrency,final_gate_runs,checkpoint_json,created_at,updated_at)
-             VALUES (?,?,?,'planning',NULL,?,?,0,NULL,?,?)",
+              max_concurrency,final_gate_runs,checkpoint_json,scope_worktree_id,
+              scope_repo_id,scope_host_id,scope_path,created_at,updated_at)
+             VALUES (?,?,?,'planning',NULL,?,?,0,NULL,?,?,?,?,?,?)",
         )
         .bind(run_id)
         .bind(workdir)
         .bind(plan_json)
         .bind(coordinator_token)
         .bind(max_concurrency)
+        .bind(scope.worktree_id.as_deref())
+        .bind(scope.repo_id.as_deref())
+        .bind(scope.host_id.map(|id| id.to_string()))
+        .bind(&scope.path)
         .bind(&ts)
         .bind(&ts)
         .execute(&self.pool)
@@ -606,5 +656,48 @@ mod tests {
         );
         assert!(s.harness_increment_final_gate_runs("r").await.unwrap());
         assert!(!s.harness_increment_final_gate_runs("r").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn orchestrated_scope_round_trips_and_legacy_wrapper_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(&dir.path().join("db.sqlite")).await.unwrap();
+        let host_id = uuid::Uuid::new_v4();
+        let scope = agentum_core::HarnessScope {
+            worktree_id: Some("repo::/srv/repo/wt".into()),
+            repo_id: Some("repo".into()),
+            host_id: Some(host_id),
+            path: "/srv/repo/wt".into(),
+        };
+        s.harness_create_orchestrated_run_scoped(
+            "scoped",
+            "/srv/repo/wt",
+            "{}",
+            "token",
+            4,
+            &scope,
+        )
+        .await
+        .unwrap();
+        let row = s
+            .harness_get_orchestrated_run("scoped")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.harness_scope().unwrap(), scope);
+
+        s.harness_create_orchestrated_run("legacy", "/tmp/legacy", "{}", "token", 4)
+            .await
+            .unwrap();
+        let legacy = s
+            .harness_get_orchestrated_run("legacy")
+            .await
+            .unwrap()
+            .unwrap()
+            .harness_scope()
+            .unwrap();
+        assert_eq!(legacy.path, "/tmp/legacy");
+        assert!(legacy.worktree_id.is_none());
+        assert!(legacy.host_id.is_none());
     }
 }

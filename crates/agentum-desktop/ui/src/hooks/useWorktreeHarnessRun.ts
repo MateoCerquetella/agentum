@@ -16,8 +16,8 @@ import { findHarnessRunForWorkdir } from '@/lib/harness-run'
 import { normalizeWorkdir } from '@/lib/workspace-harness-detect'
 
 /** Instance-local confirmed snapshots plus the newest request for each
- * normalized workdir. Exported only so the IO-free ordering contract can be
- * regression tested without adding a DOM hook-test dependency. */
+ * authoritative worktree id (or normalized legacy path). Exported only so the
+ * IO-free ordering contract can be regression tested. */
 export type WorktreeHarnessSnapshotState = {
   snapshotsByWorkdir: ReadonlyMap<string, HarnessStatus>
   latestRequestByWorkdir: ReadonlyMap<string, number>
@@ -30,17 +30,22 @@ export function createWorktreeHarnessSnapshotState(): WorktreeHarnessSnapshotSta
   }
 }
 
+function worktreeSnapshotKey(workdir: string, worktreeId?: string): string {
+  return worktreeId ? `id:${worktreeId}` : `path:${normalizeWorkdir(workdir)}`
+}
+
 export function beginWorktreeHarnessSnapshotRequest(
   state: WorktreeHarnessSnapshotState,
   workdir: string,
-  requestId: number
+  requestId: number,
+  worktreeId?: string
 ): WorktreeHarnessSnapshotState {
-  const normalized = normalizeWorkdir(workdir)
-  const currentRequest = state.latestRequestByWorkdir.get(normalized) ?? 0
+  const key = worktreeSnapshotKey(workdir, worktreeId)
+  const currentRequest = state.latestRequestByWorkdir.get(key) ?? 0
   if (requestId <= currentRequest) return state
 
   const latestRequestByWorkdir = new Map(state.latestRequestByWorkdir)
-  latestRequestByWorkdir.set(normalized, requestId)
+  latestRequestByWorkdir.set(key, requestId)
   return { ...state, latestRequestByWorkdir }
 }
 
@@ -51,32 +56,53 @@ export function resolveWorktreeHarnessSnapshotRequest(
   state: WorktreeHarnessSnapshotState,
   workdir: string,
   requestId: number,
-  run: HarnessStatus | undefined
+  run: HarnessStatus | undefined,
+  worktreeId: string | undefined,
+  allowLegacyLocalPathFallback: boolean
 ): WorktreeHarnessSnapshotState {
-  const normalized = normalizeWorkdir(workdir)
-  if (state.latestRequestByWorkdir.get(normalized) !== requestId) return state
+  const key = worktreeSnapshotKey(workdir, worktreeId)
+  if (state.latestRequestByWorkdir.get(key) !== requestId) return state
 
-  if (run && !findHarnessRunForWorkdir([run], workdir)) return state
+  if (
+    run &&
+    !findHarnessRunForWorkdir(
+      [run],
+      workdir,
+      worktreeId,
+      allowLegacyLocalPathFallback
+    )
+  ) {
+    return state
+  }
 
-  const previous = state.snapshotsByWorkdir.get(normalized)
+  const previous = state.snapshotsByWorkdir.get(key)
   if (run === previous || (!run && !previous)) return state
 
   const snapshotsByWorkdir = new Map(state.snapshotsByWorkdir)
   if (run) {
-    snapshotsByWorkdir.set(normalized, run)
+    snapshotsByWorkdir.set(key, run)
   } else {
-    snapshotsByWorkdir.delete(normalized)
+    snapshotsByWorkdir.delete(key)
   }
   return { ...state, snapshotsByWorkdir }
 }
 
 export function selectWorktreeHarnessSnapshot(
   state: WorktreeHarnessSnapshotState,
-  workdir: string | undefined
+  workdir: string | undefined,
+  worktreeId: string | undefined,
+  allowLegacyLocalPathFallback: boolean
 ): HarnessStatus | undefined {
   if (!workdir) return undefined
-  const snapshot = state.snapshotsByWorkdir.get(normalizeWorkdir(workdir))
-  return snapshot ? findHarnessRunForWorkdir([snapshot], workdir) : undefined
+  const snapshot = state.snapshotsByWorkdir.get(worktreeSnapshotKey(workdir, worktreeId))
+  return snapshot
+    ? findHarnessRunForWorkdir(
+        [snapshot],
+        workdir,
+        worktreeId,
+        allowLegacyLocalPathFallback
+      )
+    : undefined
 }
 
 export type WorktreeHarnessRun = {
@@ -85,12 +111,21 @@ export type WorktreeHarnessRun = {
   refresh: () => void
 }
 
-export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarnessRun {
+export function useWorktreeHarnessRun(
+  workdir: string | undefined,
+  worktreeId: string | undefined,
+  allowLegacyLocalPathFallback: boolean
+): WorktreeHarnessRun {
   const [snapshots, setSnapshots] = useState(createWorktreeHarnessSnapshotState)
   const nextRequestId = useRef(0)
   const [nonce, setNonce] = useState(0)
   const refresh = useCallback((): void => setNonce((n) => n + 1), [])
-  const run = selectWorktreeHarnessSnapshot(snapshots, workdir)
+  const run = selectWorktreeHarnessSnapshot(
+    snapshots,
+    workdir,
+    worktreeId,
+    allowLegacyLocalPathFallback
+  )
 
   useEffect(() => {
     if (!workdir) return
@@ -103,7 +138,7 @@ export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarn
       const requestId = ++nextRequestId.current
       latestRequestId = requestId
       setSnapshots((current) =>
-        beginWorktreeHarnessSnapshotRequest(current, workdir, requestId)
+        beginWorktreeHarnessSnapshotRequest(current, workdir, requestId, worktreeId)
       )
       return requestId
     }
@@ -117,7 +152,14 @@ export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarn
     ): void => {
       if (!isCurrent(requestId)) return
       setSnapshots((current) =>
-        resolveWorktreeHarnessSnapshotRequest(current, workdir, requestId, status)
+        resolveWorktreeHarnessSnapshotRequest(
+          current,
+          workdir,
+          requestId,
+          status,
+          worktreeId,
+          allowLegacyLocalPathFallback
+        )
       )
     }
 
@@ -126,7 +168,12 @@ export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarn
       try {
         const runs = await listHarnesses()
         if (!isCurrent(requestId)) return
-        const found = findHarnessRunForWorkdir(runs, workdir)
+        const found = findHarnessRunForWorkdir(
+          runs,
+          workdir,
+          worktreeId,
+          allowLegacyLocalPathFallback
+        )
         matchedId = found?.id ?? null
         resolveRequest(requestId, found)
       } catch {
@@ -140,7 +187,12 @@ export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarn
       try {
         const status = await getHarnessStatus(id)
         if (!isCurrent(requestId)) return
-        const owned = findHarnessRunForWorkdir([status], workdir)
+        const owned = findHarnessRunForWorkdir(
+          [status],
+          workdir,
+          worktreeId,
+          allowLegacyLocalPathFallback
+        )
         if (!owned) {
           // Ownership may have moved while the response was in flight. Re-list
           // before evicting so only an authoritative list miss clears the bar.
@@ -191,7 +243,7 @@ export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarn
       disposed = true
       stream?.close()
     }
-  }, [workdir, nonce])
+  }, [workdir, worktreeId, allowLegacyLocalPathFallback, nonce])
 
   return { run, refresh }
 }

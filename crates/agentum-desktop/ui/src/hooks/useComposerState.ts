@@ -103,6 +103,7 @@ import type {
   NewWorkStageStatus
 } from '@/components/new-workspace/new-work-launch-model'
 import { isLiveProjectTaskScopeAuthority } from '@/lib/project-task-scope-authority'
+import { projectTaskScopeGuardMatchesTracker } from '@/lib/project-task-scope-guard'
 import { importExternalPathsToRuntime } from '@/runtime/runtime-file-client'
 import {
   checkRuntimeHooks,
@@ -389,7 +390,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       openSettingsTarget: s.openSettingsTarget,
       prefetchWorkItems: s.prefetchWorkItems,
       fetchSparsePresets: s.fetchSparsePresets,
-      fetchDetectedWorktrees: s.fetchDetectedWorktrees
+      fetchDetectedWorktrees: s.fetchDetectedWorktrees,
+      loadProjectTrackerConfig: s.loadProjectTrackerConfig
     }))
   )
   const {
@@ -403,7 +405,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     openSettingsTarget,
     prefetchWorkItems,
     fetchSparsePresets,
-    fetchDetectedWorktrees
+    fetchDetectedWorktrees,
+    loadProjectTrackerConfig
   } = actions
 
   const repos = useAppStore((s) => s.repos)
@@ -438,18 +441,35 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [internalRepoId, setInternalRepoId] = useState<string>(resolvedInitialRepoId)
   const repoId = repoIdOverride ?? internalRepoId
   const selectedRepo = eligibleRepos.find((repo) => repo.id === repoId)
+  const selectedProjectTrackerConfig = useAppStore(
+    (state) => state.projectTrackerConfigByRepo[repoId]
+  )
+  const selectedProjectTrackerLoadStatus = useAppStore(
+    (state) => state.projectTrackerLoadStatusByRepo[repoId] ?? 'idle'
+  )
+  useEffect(() => {
+    if (!repoId) return
+    void loadProjectTrackerConfig(repoId).catch(() => {
+      // Project tracker surfaces render the actionable load error. Composer
+      // launch behavior simply remains fail-closed until a config is loaded.
+    })
+  }, [loadProjectTrackerConfig, repoId])
+  const selectedTrackerProvider =
+    selectedProjectTrackerLoadStatus === 'loaded'
+      ? (selectedProjectTrackerConfig?.provider ?? null)
+      : null
   const requiredScopeIsCurrent = useCallback((): boolean => {
     if (!requiredProjectTaskScope) return true
     if (!isLiveProjectTaskScopeAuthority(requiredProjectTaskScope)) return false
-    const current = useAppStore.getState().repos.find((repo) => repo.id === requiredProjectTaskScope.repoId)
-    if (!current || repoId !== requiredProjectTaskScope.repoId) return false
-    try {
-      const key = JSON.parse(requiredProjectTaskScope.scopeKey) as unknown[]
-      if (key[1] === 'linear') {
-        return current.trackerProvider === 'linear' && current.linearProjectBinding?.workspaceId === key[2] && current.linearProjectBinding?.projectId === key[3]
-      }
-      return key[1] === 'github' && current.trackerProvider === 'github'
-    } catch { return false }
+    const state = useAppStore.getState()
+    const current = state.repos.find((repo) => repo.id === requiredProjectTaskScope.repoId)
+    const tracker = state.projectTrackerConfigByRepo[requiredProjectTaskScope.repoId]
+    return Boolean(
+      current &&
+      repoId === requiredProjectTaskScope.repoId &&
+      state.projectTrackerLoadStatusByRepo[requiredProjectTaskScope.repoId] === 'loaded' &&
+      projectTaskScopeGuardMatchesTracker(requiredProjectTaskScope, tracker)
+    )
   }, [repoId, requiredProjectTaskScope])
   const selectedRepoIsGit = selectedRepo ? isGitRepoKind(selectedRepo) : false
   const selectedRepoConnectionId = selectedRepo?.connectionId ?? null
@@ -1706,14 +1726,14 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   // Spec 004 F4 (D5): the toggle only applies to a linked *github.com issue*
-  // targeting a local git repo — the scaffold endpoint writes into the new
-  // worktree's local path.
+  // targeting a git repo. The server resolves the local or SSH workspace from
+  // the submitted worktree identity before it writes the generated spec.
   const linkedGithubIssueLink = useMemo(
     () => (linkedWorkItem?.type === 'issue' ? parseGitHubIssueOrPRLink(linkedWorkItem.url) : null),
     [linkedWorkItem]
   )
   const canScaffoldSpec = Boolean(
-    linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit && !selectedRepo?.connectionId
+    linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit
   )
 
   // Spec 006 F3 (AC 8): fetch whether gated runs use the SDD role loop when
@@ -2317,14 +2337,14 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // the freshly created workspace.
   const maybeScaffoldSpecFromIssue = useCallback(
     async (
-      worktree: { path: string },
+      worktree: { id: string; path: string },
       item: LinkedWorkItemSummary | null | undefined
     ): Promise<void> => {
       if (!scaffoldSpec) {
         return
       }
-      // Re-derive the gate from the submitted item: github.com issues only,
-      // local targets only (the endpoint writes to a local path). Spec 007:
+      // Re-derive the gate from the submitted item: github.com issues only.
+      // The endpoint resolves local/SSH execution from worktreeId. Spec 007:
       // an ARMED toggle that skips must say so — the silent return was bug 2.
       const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
       if (gate.eligible === false) {
@@ -2334,18 +2354,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       try {
         await scaffoldSpecFromIssue({
           workdir: worktree.path,
+          worktreeId: worktree.id,
           number: gate.number,
           slug: `${gate.slug.owner}/${gate.slug.repo}`,
           // Spec 021 (#379): thread the repo's tracker pin so the planned
           // backlog stamps the right provider ('auto'/absent = GitHub).
-          ...(selectedRepo?.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+          ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
         })
       } catch (error) {
         console.error('Failed to scaffold a spec from the linked issue', error)
         toast.error('Workspace created, but the spec scaffold failed.')
       }
     },
-    [scaffoldSpec, selectedRepo]
+    [scaffoldSpec, selectedRepo, selectedTrackerProvider]
   )
 
   // Spec 005 F1: with "Start gated run" armed, after createWorktree succeeds
@@ -2356,7 +2377,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // selection, written into the run's agent_tool knob post-plan (D2).
   const maybeStartGatedRun = useCallback(
     async (
-      worktree: { path: string },
+      worktree: { id: string; path: string },
       item: LinkedWorkItemSummary | null | undefined,
       agent: TuiAgent | null
     ): Promise<boolean> => {
@@ -2367,8 +2388,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       if (!startGatedRun) {
         return false
       }
-      // Re-derive the gate from the submitted item: github.com issues only,
-      // local targets only (the start-work route writes to a local path).
+      // Re-derive the gate from the submitted item: github.com issues only;
+      // start-work resolves the authoritative target from worktreeId.
       // Spec 007: an ARMED toggle that skips must say so (bug 2).
       const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
       if (gate.eligible === false) {
@@ -2378,12 +2399,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       try {
         const result = await startGatedWork({
           workdir: worktree.path,
+          worktreeId: worktree.id,
           number: gate.number,
           slug: `${gate.slug.owner}/${gate.slug.repo}`,
           ...(agent ? { agentTool: agent } : {}),
           // Spec 021 (#379): thread the repo's tracker pin so the run's
           // features + transitions aim at the right provider.
-          ...(selectedRepo?.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+          ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
         })
         // Only suppress the plain session when the engine actually took
         // ownership (a live run, or a fresh one with ≥1 planned feature). A
@@ -2430,7 +2452,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         return false
       }
     },
-    [startGatedRun, selectedRepo]
+    [startGatedRun, selectedRepo, selectedTrackerProvider]
   )
 
   const submit = useCallback(async (): Promise<void> => {
@@ -2862,10 +2884,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           activeStage = 'run'
           const started = await startGatedWork({
             workdir: worktree.path,
+            worktreeId: worktree.id,
             number: gate.number,
             slug: `${gate.slug.owner}/${gate.slug.repo}`,
             ...(agent ? { agentTool: agent } : {}),
-            ...(selectedRepo.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+            ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
           })
           gatedRunStarted = gatedRunResultOwnsWorktree(started)
           if (!gatedRunStarted) {
@@ -2880,11 +2903,12 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           if (gate.eligible) {
             await scaffoldSpecFromIssue({
               workdir: worktree.path,
+              worktreeId: worktree.id,
               number: gate.number,
               slug: `${gate.slug.owner}/${gate.slug.repo}`,
               plan: false,
               converge: true,
-              ...(selectedRepo.trackerProvider ? { tracker: selectedRepo.trackerProvider } : {})
+              ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
             })
           }
           options.onProgress?.('spec', 'done')
@@ -2984,6 +3008,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       selectedRepo,
       selectedRepoIsGit,
       selectedRepoRequiresConnection,
+      selectedTrackerProvider,
       settings?.agentCmdOverrides,
       disabledTuiAgents,
       setSidebarOpen,

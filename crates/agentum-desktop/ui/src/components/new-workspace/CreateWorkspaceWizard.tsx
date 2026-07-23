@@ -12,7 +12,6 @@ import {
   Laptop,
   Loader2,
   PlugZap,
-  Plus,
   RefreshCw,
   Search,
   Server,
@@ -65,47 +64,36 @@ import {
   buildWizardRecap,
   canLeaveRepoStep as canLeaveRepoStepModel,
   capRepoList,
-  deriveTrackerBindingTarget,
-  deriveUnifiedTrackerStatus,
   deriveWizardComposerSeed,
   filterRepoList,
   resolveWizardAgentOptions,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
   type CreateWorkspaceWizardData,
-  type UnifiedTrackerStatus,
   type WizardStep
 } from '@/components/new-workspace/create-workspace-wizard-model'
 import {
   buildBindPayload,
   deriveTrackerIssueViewModel,
-  pickerBindingTargetKey,
-  pickerProjectKey,
-  pickerScopeKey,
-  resolvePickerProject,
-  type PickerBindingResolution,
   type PickerProjectRef,
   type WorkItemOption
 } from '@/components/new-workspace/work-item-picker-model'
 import {
   isCurrentTrackerSectionScope,
-  trackerConfigureActionLabel,
-  trackerSectionAfterSuccessfulUnbind,
   trackerSectionTableForScope
 } from '@/components/new-workspace/tracker-section-scope'
 import {
   canFileIssue,
-  deriveCreateIssueIntentPhase,
-  resolveCreateIssueProvider,
-  type CreateIssueProvider
+  deriveCreateIssueIntentPhase
 } from '@/components/new-workspace/create-issue-intent-model'
 import {
   linearCreateIssue,
+  linearListCustomViewIssues,
+  linearListIssues,
+  linearListProjectIssues,
   linearListTeams,
-  linearStatus,
   type RuntimeLinearSettings
 } from '@/runtime/runtime-linear-client'
-import { ProjectBindingEditor } from '@/components/github-projects/ProjectBindingEditor'
 import {
   CHAT_AGENTS,
   CHAT_MODELS,
@@ -118,14 +106,9 @@ import {
   writeChatModelPreference
 } from '@/runtime/chat-preferences'
 import type { DraftIssueStyle, DraftLlmChoice } from '@/runtime/github-issue-client'
-import {
-  getProjectBinding,
-  GithubProjectsBindingError
-} from '@/runtime/github-projects-client'
 import type {
   GetProjectViewTableArgs,
   GetProjectViewTableResult,
-  GitHubProjectSettings,
   GitHubProjectTable
 } from '@/shared/github-project-types'
 import type {
@@ -135,13 +118,23 @@ import type {
   Repo,
   TuiAgent
 } from '../../../../shared/types'
+import type {
+  ProjectTrackerConfig,
+  ProjectTrackerLinearTarget,
+  ProjectTrackerProvider
+} from '@/shared/project-tracker-config'
+import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
   NEW_WORK_STAGES,
   canLaunchNewWork,
+  canSelectWorkSource,
   deriveNewWorkEligibility,
   initialNewWorkProgress,
+  isNewWorkRetryAvailable,
+  newWorkBusyLabel,
   newWorkPrimaryLabel,
   resolveLaunchIssue,
+  shouldDefaultNewWorkToManual,
   updateNewWorkProgress,
   type ExecutionMode,
   type NewWorkCheckpoint,
@@ -179,11 +172,6 @@ export default function CreateWorkspaceWizard({
   const getCachedProjectViewTable = useAppStore((s) => s.getCachedProjectViewTable)
   const addRepoFromStore = useAppStore((s) => s.addRepo)
   const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
-  // Spec 011 F2: the issue picker can use the globally-active Project only
-  // when there is no selected git repo. A selected repo is a closed scope and
-  // must resolve through its own binding.
-  const activeProject = settings?.githubProjects?.activeProject ?? null
-
   // Spec 013 F4: seed the SAME `useComposerState` from the full modal-open data
   // (pure `deriveWizardComposerSeed` — every opinionated field honored). The
   // gate mode / issue-automation / submit path are unchanged, so the gated run
@@ -247,9 +235,20 @@ export default function CreateWorkspaceWizard({
     onSmartLinearIssueSelect,
     requiresExplicitSetupChoice,
     setupDecision,
+    onSetupDecisionChange,
     // Spec 013 F4: the gated-run toggle — the SAME seams the composer card used,
     // so `submitQuick` inherits the `start_work` precondition set unchanged.
   } = cardProps
+  const trackerConfig = useAppStore((state) =>
+    repoId ? state.projectTrackerConfigByRepo[repoId] : undefined
+  )
+  const trackerConfigLoadStatus = useAppStore((state) =>
+    repoId ? (state.projectTrackerLoadStatusByRepo[repoId] ?? 'idle') : 'idle'
+  )
+  const trackerConfigError = useAppStore((state) =>
+    repoId ? state.projectTrackerErrorByRepo[repoId] : undefined
+  )
+  const loadProjectTrackerConfig = useAppStore((state) => state.loadProjectTrackerConfig)
   const scopeLockedDisabledRepoIds = useMemo(() => {
     if (!modalData.requiredProjectTaskScope) return disabledRepoIds
     const next = new Map(disabledRepoIds)
@@ -291,8 +290,11 @@ export default function CreateWorkspaceWizard({
   const [launchProgress, setLaunchProgress] = useState(() =>
     initialNewWorkProgress(linkedWorkItem ? { linkedWorkItem } : {}, initialWorkSource)
   )
-  const [launchAttempted, setLaunchAttempted] = useState(false)
+  const [launchInFlight, setLaunchInFlight] = useState(false)
   const launchInFlightRef = useRef(false)
+  const configuredIssueCreatorRef = useRef<() => Promise<LinkedWorkItemSummary | null>>(
+    onCreateIssueSubmit
+  )
   const [addingRepo, setAddingRepo] = useState(false)
   // Spec: SSH/remote "Add project" is inline in the wizard (not a separate
   // dialog) — this toggles the inline remote-add panel in step 2. Reset on host
@@ -305,7 +307,9 @@ export default function CreateWorkspaceWizard({
   const selectedRepo = repos.find((repo) => repo.id === repoId)
   // Creation is slug-addressed and the server resolves an SSH repo's origin
   // through its registry id, so remote git repos support the same source card.
-  const canStageNewGithubIssue = selectedRepoIsGit
+  const configuredTrackerReady =
+    trackerConfigLoadStatus === 'loaded' && Boolean(trackerConfig?.provider)
+  const canStageConfiguredIssue = selectedRepoIsGit && configuredTrackerReady
   const selectedHostLabel =
     eligibleHosts.find((host) => host.key === selectedHostKey)?.label ??
     (selectedHostKey === LOCAL_HOST_KEY ? 'This machine' : 'SSH host')
@@ -412,21 +416,38 @@ export default function CreateWorkspaceWizard({
   )
 
   const eligibility = deriveNewWorkEligibility({
-    isLocal: !selectedRepo?.connectionId,
     isGit: selectedRepoIsGit,
     source: workSource,
+    newIssueProvider:
+      trackerConfigLoadStatus === 'loaded' ? (trackerConfig?.provider ?? null) : undefined,
     linkedWorkItem,
     selectedAgentInstalled: Boolean(quickAgent && (!detectedAgentIds || detectedAgentIds.has(quickAgent))),
     setupBlocked:
       selectedRepoRequiresConnection || (requiresExplicitSetupChoice && !setupDecision)
   })
 
+  const structurallyManual = shouldDefaultNewWorkToManual({
+    isGit: selectedRepoIsGit,
+    source: workSource,
+    trackerConfigLoaded: trackerConfigLoadStatus === 'loaded',
+    newIssueProvider: trackerConfig?.provider ?? null,
+    linkedWorkItem
+  })
+
+  // Demote only structural incompatibilities. A loading tracker, missing
+  // Existing selection, unavailable agent, or pending setup choice is
+  // transient and must not strand a later valid GitHub selection in Manual.
+  useEffect(() => {
+    if (step === 3 && structurallyManual && executionMode === 'autopilot') {
+      setExecutionMode('manual')
+    }
+  }, [executionMode, step, structurallyManual])
+
   const handleWorkSourceChange = useCallback(
     (source: WorkSource): void => {
       if (launchCheckpoint.linkedWorkItem) return
       setWorkSource(source)
       setLaunchProgress(initialNewWorkProgress({}, source))
-      setLaunchAttempted(false)
       if (source !== 'existing') {
         onRemoveLinkedWorkItem()
       }
@@ -438,23 +459,29 @@ export default function CreateWorkspaceWizard({
   )
 
   useEffect(() => {
+    if (step !== 3 || !selectedRepo?.id) return
+    void loadProjectTrackerConfig(selectedRepo.id).catch(() => undefined)
+  }, [loadProjectTrackerConfig, selectedRepo?.id, step])
+
+  useEffect(() => {
     if (
       step === 3 &&
       selectedRepo &&
       !launchCheckpoint.linkedWorkItem &&
-      workSource === 'new' &&
-      !canStageNewGithubIssue
+      trackerConfigLoadStatus === 'loaded' &&
+      !trackerConfig?.provider &&
+      workSource !== 'none'
     ) {
-      handleWorkSourceChange(selectedRepoIsGit ? 'existing' : 'none')
+      handleWorkSourceChange('none')
     }
-  }, [canStageNewGithubIssue, handleWorkSourceChange, launchCheckpoint.linkedWorkItem, selectedRepo, selectedRepoIsGit, step, workSource])
+  }, [handleWorkSourceChange, launchCheckpoint.linkedWorkItem, selectedRepo, step, trackerConfig?.provider, trackerConfigLoadStatus, workSource])
 
   const launchAllowed = canLaunchNewWork({
     source: workSource,
     executionMode,
     eligibility,
     hasSelectedAgent: Boolean(quickAgent),
-    canStageNewIssue: canStageNewGithubIssue,
+    canStageNewIssue: canStageConfiguredIssue,
     hasNewIssueTitle: Boolean(createIssueTitle.trim()),
     hasSelectedIssue: Boolean(linkedWorkItem),
     hasIssueCheckpoint: Boolean(launchCheckpoint.linkedWorkItem)
@@ -471,8 +498,8 @@ export default function CreateWorkspaceWizard({
         return
       }
       launchInFlightRef.current = true
+      setLaunchInFlight(true)
       try {
-        setLaunchAttempted(true)
         let checkpoint = launchCheckpoint
         let issue = checkpoint.linkedWorkItem ?? null
         if (!issue && workSource !== 'none') {
@@ -481,7 +508,7 @@ export default function CreateWorkspaceWizard({
             source: workSource,
             selectedIssue: linkedWorkItem,
             checkpoint,
-            createIssue: onCreateIssueSubmit
+            createIssue: () => configuredIssueCreatorRef.current()
           })
           if (!resolved.issue) {
             setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'error'))
@@ -504,6 +531,7 @@ export default function CreateWorkspaceWizard({
         })
       } finally {
         launchInFlightRef.current = false
+        setLaunchInFlight(false)
       }
       return
     }
@@ -511,7 +539,7 @@ export default function CreateWorkspaceWizard({
       return
     }
     goNext()
-  }, [canLeaveRepoStep, createIssueSubmitting, creating, executionMode, goNext, launchAllowed, launchCheckpoint, linkedWorkItem, onCreateIssueSubmit, quickAgent, step, submitQuick, workSource])
+  }, [canLeaveRepoStep, createIssueSubmitting, creating, executionMode, goNext, launchAllowed, launchCheckpoint, linkedWorkItem, quickAgent, step, submitQuick, workSource])
 
   // Enter advances / creates (there are no multi-line inputs here, so a bare
   // Enter is unambiguous); Radix handles Esc → close on its own.
@@ -553,29 +581,31 @@ export default function CreateWorkspaceWizard({
     [name, quickAgent, selectedHostLabel, selectedRepo, step]
   )
 
+  const launchBusy = launchInFlight || creating || createIssueSubmitting
+  const retryAvailable = isNewWorkRetryAvailable(launchProgress, launchBusy)
   const primaryLabel = step === 3
-    ? creating ? 'Preparing work…' : newWorkPrimaryLabel(workSource, launchAttempted)
+    ? newWorkBusyLabel(launchProgress) ?? (launchBusy ? 'Preparing work…' : newWorkPrimaryLabel(workSource, retryAvailable))
     : wizardPrimaryLabel(step, creating)
   const primaryDisabled =
     step === 3
-      ? creating || createIssueSubmitting || !launchAllowed
+      ? launchBusy || !launchAllowed
       : step === 2 ? !canLeaveRepoStep : false
+  const handleDialogOpenChange = useCallback(
+    (open: boolean): void => {
+      // Keep the staged launch owner mounted until its current checkpoint
+      // settles. Closing mid-request would hide an operation that can still
+      // create an issue or worktree in the selected project.
+      if (!open && launchBusy) return
+      onOpenChange(open)
+    },
+    [launchBusy, onOpenChange]
+  )
 
-  // Spec 013 F1: the tracker section reads SOLELY from the Project the picker
-  // resolves (per-repo binding ∨ global activeProject) — no git-remote heuristic
-  // that could disagree with the picker's issue list. Any GIT repo carries a
-  // binding target now (#356, shipped v0.75.1): SSH repos resolve their slug
-  // on their own host via spec 020's `repoId` (#359's hostId param, migrated
-  // to the repoId wire at the develop merge). Reading and configuration are
-  // both host-aware. A non-git selection resolves nothing and may use the
-  // legacy global activeProject.
-  const trackerTarget = deriveTrackerBindingTarget({
-    repo: selectedRepo,
-    isGit: selectedRepoIsGit
-  })
-
+  // Step 3 reads only the selected repo's canonical tracker record. Both the
+  // issue source and the final launch path therefore share one authority for
+  // local and SSH repositories.
   return (
-    <Dialog open onOpenChange={onOpenChange}>
+    <Dialog open onOpenChange={handleDialogOpenChange}>
       <DialogContent
         showCloseButton={false}
         onKeyDown={handleKeyDown}
@@ -602,14 +632,15 @@ export default function CreateWorkspaceWizard({
             ) : null}
             <button
               type="button"
+              disabled={launchBusy}
               onClick={onClose}
               aria-label="Close"
-              className="inline-flex size-6 flex-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="inline-flex size-6 flex-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               <X className="size-3.5" />
             </button>
           </div>
-          <StepDots step={step} onJump={(target) => setStep(target)} />
+          <StepDots step={step} locked={launchBusy} onJump={(target) => setStep(target)} />
           <div className="h-px bg-border" />
         </div>
 
@@ -651,7 +682,11 @@ export default function CreateWorkspaceWizard({
           ) : null}
 
           {step === 3 ? (
-            <AgentStep
+            <fieldset
+              disabled={launchBusy}
+              className="m-0 min-w-0 border-0 p-0 disabled:cursor-wait disabled:opacity-80"
+            >
+              <AgentStep
               agents={agentOptions}
               detectedAgentIds={detectedAgentIds}
               quickAgent={quickAgent}
@@ -662,10 +697,10 @@ export default function CreateWorkspaceWizard({
               name={name}
               onNameValueChange={onNameValueChange}
               nameInputRef={nameInputRef}
-              trackerWorkdir={trackerTarget?.workdir}
-              trackerRepoId={trackerTarget?.repoId}
-              trackerLocal={trackerTarget?.local}
-              activeProject={activeProject}
+              trackerConfig={trackerConfig}
+              trackerConfigLoadStatus={trackerConfigLoadStatus}
+              trackerConfigError={trackerConfigError}
+              onRetryTrackerConfig={() => selectedRepo ? void loadProjectTrackerConfig(selectedRepo.id, { force: true }).catch(() => undefined) : undefined}
               fetchProjectViewTable={fetchProjectViewTable}
               getCachedProjectViewTable={getCachedProjectViewTable}
               linkedWorkItem={linkedWorkItem}
@@ -693,8 +728,14 @@ export default function CreateWorkspaceWizard({
               onExecutionModeChange={setExecutionMode}
               eligibility={eligibility}
               progress={launchProgress}
+              requiresExplicitSetupChoice={requiresExplicitSetupChoice}
+              setupDecision={setupDecision}
+              onSetupDecisionChange={onSetupDecisionChange}
               locked={Boolean(launchCheckpoint.linkedWorkItem)}
-              canStageNewIssue={canStageNewGithubIssue}
+              canStageNewIssue={canStageConfiguredIssue}
+              onRegisterIssueCreator={(creator) => {
+                configuredIssueCreatorRef.current = creator
+              }}
               worktreeLocked={Boolean(launchCheckpoint.worktreeResult)}
               repoIssuePicker={{
                 onOpenChange: onLinkPopoverOpenChange,
@@ -704,17 +745,22 @@ export default function CreateWorkspaceWizard({
                 loading: linkItemsLoading || linkDirectLoading,
                 onSelect: onSelectLinkedItem
               }}
-            />
+              />
+            </fieldset>
           ) : null}
         </div>
 
         {/* Footer */}
-        <div className="flex flex-none items-center gap-2.5 border-t border-border bg-muted/40 px-[18px] py-3">
+        <div
+          className="flex flex-none flex-col-reverse gap-2.5 border-t border-border bg-muted/40 px-3 py-3 sm:flex-row sm:items-center sm:px-[18px]"
+          aria-busy={step === 3 && launchBusy}
+        >
           {step > 1 && !launchCheckpoint.linkedWorkItem ? (
             <button
               type="button"
+              disabled={launchBusy}
               onClick={goBack}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[12.5px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-[12.5px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
             >
               <ArrowLeft className="size-3.5" />
               Back
@@ -725,11 +771,11 @@ export default function CreateWorkspaceWizard({
             type="button"
             onClick={() => void handlePrimary()}
             disabled={primaryDisabled}
-            className="inline-flex items-center gap-2 rounded-full bg-primary px-[18px] py-2 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-primary px-[18px] py-2 text-[13px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
           >
-            {creating && step === 3 ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {launchBusy && step === 3 ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {primaryLabel}
-            {!creating || step !== 3 ? <ArrowRight className="size-3.5" aria-hidden /> : null}
+            {!launchBusy || step !== 3 ? <ArrowRight className="size-3.5" aria-hidden /> : null}
           </button>
         </div>
       </DialogContent>
@@ -740,9 +786,11 @@ export default function CreateWorkspaceWizard({
 /** Segmented step indicator — completed steps are clickable to jump back. */
 function StepDots({
   step,
+  locked,
   onJump
 }: {
   step: WizardStep
+  locked: boolean
   onJump: (target: WizardStep) => void
 }): React.JSX.Element {
   return (
@@ -755,11 +803,12 @@ function StepDots({
           <button
             key={label}
             type="button"
-            disabled={!done}
+            disabled={!done || locked}
             onClick={() => done && onJump(n)}
             className={cn(
               'inline-flex items-center gap-2',
-              done ? 'cursor-pointer' : 'cursor-default'
+              done && !locked ? 'cursor-pointer' : 'cursor-default',
+              locked && 'opacity-60'
             )}
           >
             <span
@@ -1078,6 +1127,578 @@ function RepoStep({
         </div>
       ) : null}
     </div>
+  )
+}
+
+/** Canonical repo-keyed tracker control. The provider choice, source cards,
+ * provider-specific issue list, and new-issue form are one visual/runtime
+ * unit, all driven by `/api/repos/{repoId}/tracker-config`. */
+function CanonicalTrackerSection({
+  config,
+  configLoadStatus,
+  configError,
+  onRetryConfig,
+  fetchProjectViewTable,
+  getCachedProjectViewTable,
+  linkedWorkItem,
+  repo,
+  onPickWorkItem,
+  createIssue,
+  linear,
+  source,
+  onSourceChange,
+  locked,
+  canStageNewIssue,
+  showLinkedSelection,
+  repoIssuePicker,
+  onRegisterIssueCreator
+}: {
+  config: ProjectTrackerConfig | null | undefined
+  configLoadStatus: 'idle' | 'loading' | 'loaded' | 'error'
+  configError?: string
+  onRetryConfig: () => void
+  fetchProjectViewTable: (
+    args: GetProjectViewTableArgs,
+    options?: { force?: boolean }
+  ) => Promise<GetProjectViewTableResult>
+  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
+  linkedWorkItem: LinkedWorkItemSummary | null
+  repo?: Repo
+  onPickWorkItem: (option: WorkItemOption) => void
+  createIssue: CreateIssueSeams
+  linear: LinearCreateSeams
+  source: WorkSource
+  onSourceChange: (source: WorkSource) => void
+  locked: boolean
+  canStageNewIssue: boolean
+  showLinkedSelection: boolean
+  repoIssuePicker: RepoIssuePickerSeams
+  onRegisterIssueCreator: (creator: () => Promise<LinkedWorkItemSummary | null>) => void
+}): React.JSX.Element {
+  const provider = config?.provider ?? null
+  const configured = configLoadStatus === 'loaded' && provider !== null
+  const githubTarget = provider === 'github' ? config?.github : undefined
+  const githubBinding = githubTarget?.projectBinding
+  const resolvedProject = useMemo<PickerProjectRef | null>(
+    () =>
+      githubBinding?.projectOwner &&
+      (githubBinding.projectOwnerType === 'user' ||
+        githubBinding.projectOwnerType === 'organization') &&
+      githubBinding.projectNumber != null
+        ? {
+            owner: githubBinding.projectOwner,
+            ownerType: githubBinding.projectOwnerType,
+            number: githubBinding.projectNumber
+          }
+        : null,
+    [
+      githubBinding?.projectNumber,
+      githubBinding?.projectOwner,
+      githubBinding?.projectOwnerType
+    ]
+  )
+  const usesGithubRepositoryFallback = provider === 'github' && !resolvedProject
+
+  const [projectTableState, setProjectTableState] = useState<{
+    scopeKey: string
+    table: GitHubProjectTable
+  } | null>(null)
+  const [projectStatus, setProjectStatus] = useState<
+    'idle' | 'loading' | 'refreshing' | 'failed'
+  >('idle')
+  const [query, setQuery] = useState('')
+  const projectScopeKey =
+    resolvedProject && githubBinding
+      ? JSON.stringify([
+          config?.repoId,
+          config?.revision,
+          githubTarget?.repositorySlug,
+          githubBinding.projectId
+        ])
+      : null
+  const latestProjectScopeKeyRef = useRef(projectScopeKey)
+  latestProjectScopeKeyRef.current = projectScopeKey
+  const cachedProjectTable = useMemo(
+    () =>
+      resolvedProject
+        ? getCachedProjectViewTable({
+            owner: resolvedProject.owner,
+            ownerType: resolvedProject.ownerType,
+            projectNumber: resolvedProject.number
+          })
+        : null,
+    [getCachedProjectViewTable, resolvedProject]
+  )
+  const projectTable = trackerSectionTableForScope(
+    projectTableState,
+    projectScopeKey,
+    cachedProjectTable
+  )
+
+  const readProject = useCallback(
+    (force = false): void => {
+      if (!resolvedProject || !projectScopeKey) return
+      const capturedKey = projectScopeKey
+      const args = {
+        owner: resolvedProject.owner,
+        ownerType: resolvedProject.ownerType,
+        projectNumber: resolvedProject.number
+      }
+      const cached = getCachedProjectViewTable(args)
+      setProjectStatus(cached ? 'refreshing' : 'loading')
+      if (cached) setProjectTableState({ scopeKey: capturedKey, table: cached })
+      void fetchProjectViewTable(args, force || cached ? { force: true } : undefined)
+        .then((result) => {
+          if (!isCurrentTrackerSectionScope(capturedKey, latestProjectScopeKeyRef.current)) return
+          if (result.ok) {
+            setProjectTableState({ scopeKey: capturedKey, table: result.data })
+            setProjectStatus('idle')
+          } else {
+            setProjectStatus('failed')
+          }
+        })
+        .catch(() => {
+          if (isCurrentTrackerSectionScope(capturedKey, latestProjectScopeKeyRef.current)) {
+            setProjectStatus('failed')
+          }
+        })
+    },
+    [fetchProjectViewTable, getCachedProjectViewTable, projectScopeKey, resolvedProject]
+  )
+
+  useEffect(() => {
+    setQuery('')
+    if (source === 'existing' && resolvedProject) readProject()
+    else if (!resolvedProject) {
+      setProjectStatus('idle')
+      setProjectTableState(null)
+    }
+  }, [projectScopeKey, readProject, resolvedProject, source])
+
+  useEffect(() => {
+    repoIssuePicker.onOpenChange(
+      source === 'existing' && configured && usesGithubRepositoryFallback
+    )
+  }, [configured, repoIssuePicker.onOpenChange, source, usesGithubRepositoryFallback])
+
+  const projectIssueView = useMemo(
+    () => deriveTrackerIssueViewModel(projectTable, query, githubTarget?.repositorySlug),
+    [githubTarget?.repositorySlug, projectTable, query]
+  )
+  const repoIssues = repoIssuePicker.items.filter((item) => item.type === 'issue')
+
+  const linearTarget = provider === 'linear' ? config?.linear : undefined
+  const [linearIssues, setLinearIssues] = useState<LinearIssue[]>([])
+  const [linearStatusValue, setLinearStatusValue] = useState<
+    'idle' | 'loading' | 'failed'
+  >('idle')
+  const [linearError, setLinearError] = useState<string | null>(null)
+  const [linearRefresh, setLinearRefresh] = useState(0)
+  useEffect(() => {
+    if (source !== 'existing' || provider !== 'linear' || !linearTarget) {
+      setLinearIssues([])
+      setLinearStatusValue('idle')
+      setLinearError(null)
+      return
+    }
+    let cancelled = false
+    setLinearStatusValue('loading')
+    setLinearError(null)
+    const request =
+      linearTarget.scope?.kind === 'project'
+        ? linearListProjectIssues(
+            linear.settings,
+            linearTarget.scope.id,
+            100,
+            linearTarget.workspaceId
+          ).then((result) => result.items)
+        : linearTarget.scope?.kind === 'view'
+          ? linearListCustomViewIssues(
+              linear.settings,
+              linearTarget.scope.id,
+              100,
+              linearTarget.workspaceId
+            ).then((result) => result.items)
+          : linearListIssues(linear.settings, 'all', 100, linearTarget.workspaceId)
+    void request
+      .then((issues) => {
+        if (cancelled) return
+        setLinearIssues(
+          issues.filter(
+            (issue) =>
+              issue.workspaceId === linearTarget.workspaceId &&
+              (!linearTarget.teamId || issue.team.id === linearTarget.teamId) &&
+              (linearTarget.scope?.kind !== 'project' ||
+                (issue.project?.id === linearTarget.scope.id &&
+                  issue.project.workspaceId === linearTarget.workspaceId))
+          )
+        )
+        setLinearStatusValue('idle')
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setLinearError(cause instanceof Error ? cause.message : 'Could not load Linear issues.')
+        setLinearStatusValue('failed')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [linear.settings, linearRefresh, linearTarget, provider, source])
+
+  const visibleLinearIssues = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return linearIssues
+    return linearIssues.filter(
+      (issue) =>
+        issue.title.toLowerCase().includes(needle) ||
+        issue.identifier.toLowerCase().includes(needle)
+    )
+  }, [linearIssues, query])
+
+  const openTrackerSettings = (): void => {
+    if (!repo) return
+    const store = useAppStore.getState()
+    store.openSettingsTarget({
+      pane: 'repo',
+      repoId: repo.id,
+      sectionId: 'project-integrations'
+    })
+    store.openSettingsPage()
+    // Settings replaces the wizard as the active surface. Leaving the modal
+    // active would keep this blocking dialog above the requested repo pane.
+    store.closeModal()
+  }
+
+  const targetLabel =
+    provider === 'github'
+      ? githubBinding?.projectTitle ?? githubTarget?.repositorySlug ?? 'GitHub'
+      : provider === 'linear'
+        ? linearTarget?.scope
+          ? `Linear ${linearTarget.scope.kind}`
+          : 'Linear workspace'
+        : 'Not configured'
+  const selectedUrl = linkedWorkItem?.url ?? null
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-border bg-card/30">
+      <div className="flex flex-col gap-2 border-b border-border px-3 py-2.5 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            Tracker
+          </p>
+          <p className="truncate text-[12px] font-medium text-foreground">{targetLabel}</p>
+        </div>
+        {repo ? (
+          <button
+            type="button"
+            onClick={openTrackerSettings}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
+          >
+            <KanbanSquare className="size-3" />
+            Configure
+          </button>
+        ) : null}
+      </div>
+
+      <div className="space-y-3 p-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {(['new', 'existing', 'none'] as const).map((option) => {
+            const disabled = !canSelectWorkSource({
+              source: option,
+              trackerConfigured: configured,
+              canStageNewIssue,
+              locked
+            })
+            return (
+              <button
+                key={option}
+                type="button"
+                disabled={disabled}
+                onClick={() => onSourceChange(option)}
+                className={cn(
+                  'rounded-lg border px-3 py-2 text-left text-[12px] transition-colors',
+                  source === option
+                    ? 'border-primary/55 bg-primary/8 text-foreground'
+                    : 'border-border text-muted-foreground hover:border-muted-foreground/30',
+                  disabled && 'cursor-not-allowed opacity-45'
+                )}
+              >
+                <span className="block font-medium">
+                  {option === 'new'
+                    ? 'New issue'
+                    : option === 'existing'
+                      ? 'Existing issue'
+                      : 'No issue'}
+                </span>
+                <span className="block text-[10.5px] text-muted-foreground">
+                  {option === 'new'
+                    ? 'File with configured provider'
+                    : option === 'existing'
+                      ? 'Choose from configured provider'
+                      : 'Start untracked work'}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+
+        {!configured && source !== 'none' ? (
+          <div className="flex flex-col gap-2 rounded-md border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground sm:flex-row sm:items-center">
+            <span className="min-w-0 flex-1">
+              {configLoadStatus === 'error'
+                ? configError ?? 'Could not load this project\'s tracker.'
+                : configLoadStatus === 'loading' || configLoadStatus === 'idle'
+                  ? 'Loading this project\'s tracker configuration…'
+                  : 'Configure one tracker to create or choose an issue. No issue remains available.'}
+            </span>
+            {configLoadStatus === 'error' ? (
+              <button
+                type="button"
+                onClick={onRetryConfig}
+                className="rounded-md border border-border px-2 py-1 text-[10.5px] text-foreground"
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {configured && source === 'new' && repo && provider ? (
+          <CanonicalCreateIssuePanel
+            createIssue={createIssue}
+            linear={linear}
+            provider={provider}
+            linearTarget={linearTarget}
+            repo={repo}
+            onRegisterIssueCreator={onRegisterIssueCreator}
+          />
+        ) : null}
+
+        {configured && source === 'existing' && provider === 'github' && resolvedProject ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-background/35">
+            <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+              <Search className="size-3.5 flex-none text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Filter GitHub Project issues"
+                placeholder="Filter by title or #number"
+                className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/70"
+              />
+              <span className="font-mono text-[10.5px] text-muted-foreground">
+                {projectIssueView.issueCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => readProject(true)}
+                disabled={projectStatus === 'loading' || projectStatus === 'refreshing'}
+                aria-label="Refresh GitHub Project issues"
+                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={cn(
+                    'size-3.5',
+                    (projectStatus === 'loading' || projectStatus === 'refreshing') &&
+                      'animate-spin'
+                  )}
+                />
+              </button>
+            </div>
+            <div className="max-h-52 overflow-y-auto p-1">
+              {projectIssueView.groups.length ? (
+                projectIssueView.groups.map((group) => (
+                  <div key={group.key} className="mb-1 last:mb-0">
+                    {group.label ? (
+                      <div className="sticky top-0 z-[1] flex items-center gap-2 bg-card/95 px-2.5 py-1.5 backdrop-blur-sm">
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: trackerStatusColor(group.color) }}
+                        />
+                        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          {group.label}
+                        </span>
+                      </div>
+                    ) : null}
+                    {group.options.map((option) => (
+                      <button
+                        key={option.itemId}
+                        type="button"
+                        aria-pressed={selectedUrl === option.url}
+                        onClick={() => onPickWorkItem(option)}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                          selectedUrl === option.url
+                            ? 'bg-secondary text-foreground'
+                            : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                        )}
+                      >
+                        <Check
+                          className={cn(
+                            'size-3 flex-none',
+                            selectedUrl === option.url ? 'opacity-70' : 'opacity-0'
+                          )}
+                        />
+                        <span className="font-mono text-[11px]">#{option.number}</span>
+                        <span className="truncate">{option.title}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))
+              ) : (
+                <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                  {projectStatus === 'failed'
+                    ? 'GitHub Project issues could not load. Use refresh to retry.'
+                    : projectStatus === 'loading'
+                      ? 'Loading GitHub Project issues…'
+                      : 'No matching open issues in this Project.'}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {configured && source === 'existing' && usesGithubRepositoryFallback ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-background/35">
+            <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+              <Search className="size-3.5 flex-none text-muted-foreground" />
+              <input
+                value={repoIssuePicker.query}
+                onChange={(event) => repoIssuePicker.onQueryChange(event.target.value)}
+                aria-label="Search repository issues"
+                placeholder="Search issues or paste #number / URL"
+                className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/70"
+              />
+              {repoIssuePicker.loading ? (
+                <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+              ) : null}
+            </div>
+            <div className="max-h-52 overflow-y-auto p-1">
+              {repoIssues.length ? (
+                repoIssues.map((item) => (
+                  <button
+                    key={item.id ?? item.url}
+                    type="button"
+                    aria-pressed={selectedUrl === item.url}
+                    onClick={() => {
+                      repoIssuePicker.onSelect(item)
+                      repoIssuePicker.onOpenChange(true)
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                      selectedUrl === item.url
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                    )}
+                  >
+                    <Check
+                      className={cn(
+                        'size-3 flex-none',
+                        selectedUrl === item.url ? 'opacity-70' : 'opacity-0'
+                      )}
+                    />
+                    <span className="font-mono text-[11px]">#{item.number}</span>
+                    <span className="truncate">{item.title}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                  {repoIssuePicker.loading
+                    ? 'Loading repository issues…'
+                    : 'No matching open repository issues.'}
+                </p>
+              )}
+            </div>
+            <div className="border-t border-border px-2.5 py-1.5 font-mono text-[10.5px] text-muted-foreground">
+              {githubTarget?.repositorySlug} · repository fallback
+            </div>
+          </div>
+        ) : null}
+
+        {configured && source === 'existing' && provider === 'linear' ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-background/35">
+            <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+              <Search className="size-3.5 flex-none text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Filter Linear issues"
+                placeholder="Filter by title or identifier"
+                className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/70"
+              />
+              <span className="font-mono text-[10.5px] text-muted-foreground">
+                {visibleLinearIssues.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLinearRefresh((value) => value + 1)}
+                disabled={linearStatusValue === 'loading'}
+                aria-label="Refresh Linear issues"
+                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={cn(
+                    'size-3.5',
+                    linearStatusValue === 'loading' && 'animate-spin'
+                  )}
+                />
+              </button>
+            </div>
+            <div className="max-h-52 overflow-y-auto p-1">
+              {visibleLinearIssues.length ? (
+                visibleLinearIssues.map((issue) => (
+                  <button
+                    key={issue.id}
+                    type="button"
+                    aria-pressed={selectedUrl === issue.url}
+                    onClick={() => linear.onBind(issue)}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                      selectedUrl === issue.url
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                    )}
+                  >
+                    <Check
+                      className={cn(
+                        'size-3 flex-none',
+                        selectedUrl === issue.url ? 'opacity-70' : 'opacity-0'
+                      )}
+                    />
+                    <span className="font-mono text-[11px]">{issue.identifier}</span>
+                    <span className="truncate">{issue.title}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                  {linearStatusValue === 'loading'
+                    ? 'Loading Linear issues…'
+                    : linearError ?? 'No matching Linear issues.'}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {source === 'none' ? (
+          <p className="rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-muted-foreground">
+            This workspace will start without creating or linking an external issue.
+          </p>
+        ) : null}
+
+        {linkedWorkItem && showLinkedSelection ? (
+          <div className="flex items-start gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/8 px-3 py-2">
+            <Check className="mt-0.5 size-3.5 flex-none text-emerald-500" />
+            <span className="min-w-0 text-[11.5px] text-foreground">
+              <span className="font-semibold text-emerald-500">Selected</span>
+              <span className="ml-1.5 font-mono text-muted-foreground">
+                {linkedWorkItem.linearIdentifier ?? `#${linkedWorkItem.number}`}
+              </span>{' '}
+              {linkedWorkItem.title}
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </section>
   )
 }
 
@@ -1499,7 +2120,7 @@ function BaseBranchCombobox({
  *  section (spec 013 F2). Every field maps 1:1 onto a `useComposerState`
  *  `cardProps` entry — no new state, no rebuilt flow. */
 type CreateIssueSeams = {
-  /** True when "Create issue" applies: nothing linked yet + a local git repo. */
+  /** True when "Create issue" applies: nothing linked yet + a git repo. */
   canCreate: boolean
   title: string
   onTitleChange: (value: string) => void
@@ -1513,7 +2134,7 @@ type CreateIssueSeams = {
   onGenerate: (choice?: DraftLlmChoice, style?: DraftIssueStyle) => void
   submitting: boolean
   error: string | null
-  onSubmit: () => void
+  onSubmit: () => Promise<LinkedWorkItemSummary | null>
 }
 
 /** Spec 013 F3: the seams the Linear create arm needs — the runtime settings
@@ -1546,10 +2167,10 @@ function AgentStep({
   name,
   onNameValueChange,
   nameInputRef,
-  trackerWorkdir,
-  trackerRepoId,
-  trackerLocal,
-  activeProject,
+  trackerConfig,
+  trackerConfigLoadStatus,
+  trackerConfigError,
+  onRetryTrackerConfig,
   fetchProjectViewTable,
   getCachedProjectViewTable,
   linkedWorkItem,
@@ -1562,8 +2183,12 @@ function AgentStep({
   onExecutionModeChange,
   eligibility,
   progress,
+  requiresExplicitSetupChoice,
+  setupDecision,
+  onSetupDecisionChange,
   locked,
   canStageNewIssue,
+  onRegisterIssueCreator,
   worktreeLocked,
   repoIssuePicker
 }: {
@@ -1577,14 +2202,10 @@ function AgentStep({
   name: string
   onNameValueChange: (value: string) => void
   nameInputRef: React.RefObject<HTMLInputElement | null>
-  trackerWorkdir?: string
-  /** Spec 020 F3: the repo's registry id — the binding resolves on the repo's
-   *  own host (#356: SSH repos included). */
-  trackerRepoId?: string
-  /** False when the repo lives on an SSH host; the same repoId-aware binding
-   *  read/write path supports both host kinds. */
-  trackerLocal?: boolean
-  activeProject: GitHubProjectSettings['activeProject']
+  trackerConfig: ProjectTrackerConfig | null | undefined
+  trackerConfigLoadStatus: 'idle' | 'loading' | 'loaded' | 'error'
+  trackerConfigError?: string
+  onRetryTrackerConfig: () => void
   fetchProjectViewTable: (
     args: GetProjectViewTableArgs,
     options?: { force?: boolean }
@@ -1600,17 +2221,15 @@ function AgentStep({
   onExecutionModeChange: (mode: ExecutionMode) => void
   eligibility: NewWorkEligibility
   progress: NewWorkProgress
+  requiresExplicitSetupChoice: boolean
+  setupDecision: 'run' | 'skip' | null
+  onSetupDecisionChange: (value: 'run' | 'skip') => void
   locked: boolean
   canStageNewIssue: boolean
+  onRegisterIssueCreator: (creator: () => Promise<LinkedWorkItemSummary | null>) => void
   worktreeLocked: boolean
   repoIssuePicker: RepoIssuePickerSeams
 }): React.JSX.Element {
-  useEffect(() => {
-    repoIssuePicker.onOpenChange(workSource === 'existing')
-  }, [repoIssuePicker.onOpenChange, workSource])
-
-  const repoIssues = repoIssuePicker.items.filter((item) => item.type === 'issue')
-
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
       <div className="flex flex-col gap-0.5">
@@ -1623,84 +2242,14 @@ function AgentStep({
         </span>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
-        {(['new', 'existing', 'none'] as const).map((source) => (
-          <button key={source} type="button" disabled={locked || (source === 'new' && !canStageNewIssue)} onClick={() => onWorkSourceChange(source)}
-            className={cn('rounded-lg border px-3 py-2 text-left text-[12px]', workSource === source ? 'border-primary/55 bg-primary/8 text-foreground' : 'border-border text-muted-foreground', locked && 'opacity-60')}>
-            <span className="block font-medium">
-              {source === 'new' ? 'New issue' : source === 'existing' ? 'Existing issue' : 'No issue'}
-            </span>
-            <span className="block text-[10.5px] text-muted-foreground">
-              {source === 'new'
-                ? 'Filed when work starts'
-                : source === 'existing'
-                  ? 'Choose from this project'
-                  : 'Start untracked work'}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {workSource === 'existing' ? (
-        <div className="overflow-hidden rounded-lg border border-border bg-card/30">
-          <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
-            <Search className="size-3.5 flex-none text-muted-foreground" />
-            <input
-              value={repoIssuePicker.query}
-              onChange={(event) => repoIssuePicker.onQueryChange(event.target.value)}
-              aria-label="Search repository issues"
-              placeholder="Search issues or paste #number / URL"
-              className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground/70"
-            />
-            {repoIssuePicker.loading ? (
-              <Loader2 className="size-3.5 animate-spin text-muted-foreground" aria-label="Loading issues" />
-            ) : null}
-          </div>
-          <div className="max-h-36 overflow-y-auto p-1">
-            {repoIssues.length ? (
-              repoIssues.map((item) => {
-                const selected = linkedWorkItem?.url === item.url
-                return (
-                  <button
-                    key={item.id ?? item.url}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => {
-                      repoIssuePicker.onSelect(item)
-                      // The shared selector normally closes its popover after
-                      // a pick. This inline picker stays mounted, so keep its
-                      // host-aware search effects live for a changed selection.
-                      repoIssuePicker.onOpenChange(true)
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
-                      selected
-                        ? 'bg-secondary text-foreground'
-                        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
-                    )}
-                  >
-                    <Check className={cn('size-3 flex-none', selected ? 'opacity-70' : 'opacity-0')} />
-                    <span className="flex-none font-mono text-[11px]">#{item.number}</span>
-                    <span className="truncate">{item.title}</span>
-                  </button>
-                )
-              })
-            ) : (
-              <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
-                {repoIssuePicker.loading ? 'Loading repository issues…' : 'No matching open issues.'}
-              </p>
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {/* Tracker FIRST: linking/creating the issue auto-fills the name field
-          below (via applyLinkedWorkItem's title slug) while it's still blank. */}
-      {workSource !== 'none' ? <TrackerSection
-        workdir={trackerWorkdir}
-        repoId={trackerRepoId}
-        local={trackerLocal}
-        activeProject={activeProject}
+      {/* The single tracker control sits immediately below the step heading.
+          Source selection and the provider-specific list/form live inside it,
+          so there is no second repository picker that can disagree. */}
+      <CanonicalTrackerSection
+        config={trackerConfig}
+        configLoadStatus={trackerConfigLoadStatus}
+        configError={trackerConfigError}
+        onRetryConfig={onRetryTrackerConfig}
         fetchProjectViewTable={fetchProjectViewTable}
         getCachedProjectViewTable={getCachedProjectViewTable}
         linkedWorkItem={linkedWorkItem}
@@ -1709,9 +2258,13 @@ function AgentStep({
         createIssue={createIssue}
         linear={linear}
         source={workSource}
+        onSourceChange={onWorkSourceChange}
+        locked={locked}
         canStageNewIssue={canStageNewIssue}
         showLinkedSelection={workSource === 'existing' || locked}
-      /> : null}
+        repoIssuePicker={repoIssuePicker}
+        onRegisterIssueCreator={onRegisterIssueCreator}
+      />
 
       <div className="flex flex-col gap-2.5">
         <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -1731,6 +2284,46 @@ function AgentStep({
           </span>
         ) : null}
       </div>
+
+      {requiresExplicitSetupChoice ? (
+        <div className="flex flex-col gap-2.5">
+          <div>
+            <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+              Project setup
+            </span>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              This project asks whether its setup script should run in the new workspace.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {(['run', 'skip'] as const).map((decision) => (
+              <button
+                key={decision}
+                type="button"
+                disabled={worktreeLocked}
+                aria-pressed={setupDecision === decision}
+                onClick={() => onSetupDecisionChange(decision)}
+                className={cn(
+                  'rounded-lg border px-3 py-2 text-left text-[12px] transition-colors',
+                  setupDecision === decision
+                    ? 'border-primary/55 bg-primary/8 text-foreground'
+                    : 'border-border text-muted-foreground hover:border-muted-foreground/30',
+                  worktreeLocked && 'cursor-not-allowed opacity-50'
+                )}
+              >
+                <span className="block font-medium">
+                  {decision === 'run' ? 'Run setup' : 'Skip setup'}
+                </span>
+                <span className="block text-[10.5px] text-muted-foreground">
+                  {decision === 'run'
+                    ? 'Prepare dependencies before the agent starts'
+                    : 'Open the workspace without running the script'}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-2.5">
         <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -1773,7 +2366,7 @@ function AgentStep({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <button type="button" disabled={!eligibility.eligible || progress.worktree === 'done'} onClick={() => onExecutionModeChange('autopilot')}
           className={cn('rounded-lg border px-3 py-2 text-left', executionMode === 'autopilot' ? 'border-primary/55 bg-primary/8' : 'border-border', !eligibility.eligible && 'opacity-50')}>
           <span className="block text-[12px] font-medium">SDD Autopilot</span>
@@ -1799,473 +2392,24 @@ function AgentStep({
   )
 }
 
-/**
- * Spec 011 F2 / 012 F1 / 013 F1: the New Workspace tracker section — ONE honest
- * section. A selected git repo resolves only its repo-owned binding; absent or
- * failed resolution exposes no Project rows. Legacy callers without a selected
- * git repo may still use the globally-active Project. It then lists that
- * Project's OPEN issues (PRs/closed excluded, via `deriveIssueOptions`) so the
- * operator binds the card they're about to work.
- *
- * Spec 013 F1: the "Change / Configure tracker" control lives in this section's
- * TOP header, and the status line is driven SOLELY by the resolved Project
- * (`deriveUnifiedTrackerStatus`) — the same value that seeds the issue list — so
- * the section can never claim "no tracker" while it lists issues (AC 3). The
- * old git-remote heuristic (`deriveWizardTracker`) is gone. The
- * `ProjectBindingEditor` popover is the SAME editor the hub / Settings use, so
- * the Project can be picked or switched right here.
- *
- * Picking is OPTIONAL and non-fatal (AC 3): no resolved Project / an unreachable
- * fetch shows an honest empty state and never blocks the step. Binding flows
- * through the composer's `applyLinkedWorkItem` seam (via `onPickWorkItem`), so
- * the workspace persists its tracker coords on create.
- */
-function TrackerSection({
-  workdir,
-  repoId,
-  local,
-  activeProject,
-  fetchProjectViewTable,
-  getCachedProjectViewTable,
-  linkedWorkItem,
-  repo,
-  onPickWorkItem,
+/** Deferred issue form for the canonical provider. The final wizard CTA owns
+ * filing, so this component registers exactly one provider-specific creator
+ * instead of rendering a second provider toggle or submit path. */
+function CanonicalCreateIssuePanel({
   createIssue,
   linear,
-  source,
-  canStageNewIssue,
-  showLinkedSelection
-}: {
-  /** The selected GIT repo's workdir (local path, or the path on the repo's
-   *  own host for an SSH repo). The slug is resolved server-side from this
-   *  workdir's git remote — on the right host (#356). */
-  workdir?: string
-  /** Spec 020 F3: the repo's registry id — the server resolves the slug on
-   *  the repo's own host (the read leg that makes SSH repos resolve at all;
-   *  #359's hostId, migrated to the repoId wire). Gated exactly like
-   *  `workdir`; also threaded to the binding editor. */
-  repoId?: string
-  /** False for SSH repos. Reading and configuration both remain host-aware via
-   *  the selected registry `repoId`. */
-  local?: boolean
-  activeProject: GitHubProjectSettings['activeProject']
-  fetchProjectViewTable: (
-    args: GetProjectViewTableArgs,
-    options?: { force?: boolean }
-  ) => Promise<GetProjectViewTableResult>
-  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
-  linkedWorkItem: LinkedWorkItemSummary | null
-  repo?: Repo
-  onPickWorkItem: (option: WorkItemOption) => void
-  createIssue: CreateIssueSeams
-  linear: LinearCreateSeams
-  source: WorkSource
-  canStageNewIssue: boolean
-  showLinkedSelection: boolean
-}): React.JSX.Element {
-  const [binding, setBinding] = useState<PickerBindingResolution | null>(null)
-  const [tableState, setTableState] = useState<{
-    scopeKey: string
-    table: GitHubProjectTable
-  } | null>(null)
-  const [status, setStatus] = useState<'idle' | 'loading' | 'refreshing' | 'failed'>('idle')
-  const [configureOpen, setConfigureOpen] = useState(false)
-  const [query, setQuery] = useState('')
-
-  const bindingTargetKey = workdir ? pickerBindingTargetKey({ workdir, repoId }) : null
-  const currentBinding: PickerBindingResolution | null = bindingTargetKey
-    ? binding?.targetKey === bindingTargetKey
-      ? binding
-      : { kind: 'loading', targetKey: bindingTargetKey }
-    : null
-  const latestBindingTargetRef = useRef(bindingTargetKey)
-  latestBindingTargetRef.current = bindingTargetKey
-
-  // Read the selected repo's per-repo Projects binding — host-aware via the
-  // repo's registry id (spec 020: the server resolves the repo's own host, so
-  // SSH repos resolve the same slug-keyed binding their local clone
-  // configured). Fail-closed — a missing binding, an unreachable host, or gh
-  // being unavailable leaves the selected repo fail-closed with no Project.
-  useEffect(() => {
-    if (!workdir) {
-      setBinding(null)
-      return
-    }
-    const targetKey = pickerBindingTargetKey({ workdir, repoId })
-    setBinding({ kind: 'loading', targetKey })
-    let cancelled = false
-    void getProjectBinding({ workdir, repoId })
-      .then((res) => {
-        if (cancelled || latestBindingTargetRef.current !== targetKey) return
-        setBinding(
-          res.binding
-            ? {
-                kind: 'resolved',
-                targetKey,
-                repositorySlug: res.slug,
-                binding: res.binding
-              }
-            : { kind: 'absent', targetKey }
-        )
-      })
-      .catch((error: unknown) => {
-        if (!cancelled && latestBindingTargetRef.current === targetKey) {
-          setBinding({
-            kind: 'failed',
-            targetKey,
-            ...(error instanceof GithubProjectsBindingError && error.code
-              ? { errorCode: error.code }
-              : {})
-          })
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [workdir, repoId])
-
-  // Selected repos resolve only their own binding. The global activeProject is
-  // retained solely for legacy callers without a selected git repo.
-  const resolved = useMemo(
-    () =>
-      resolvePickerProject({
-        binding: currentBinding,
-        activeProject,
-        selectedGitRepo: Boolean(workdir)
-      }),
-    [currentBinding, activeProject, workdir]
-  )
-  const repositorySlug = currentBinding?.kind === 'resolved' ? currentBinding.repositorySlug : null
-  const scopeKey = resolved
-    ? bindingTargetKey && repositorySlug
-      ? pickerScopeKey({ targetKey: bindingTargetKey, repositorySlug, project: resolved })
-      : `global:${pickerProjectKey(resolved)}`
-    : null
-  const latestScopeKeyRef = useRef(scopeKey)
-  latestScopeKeyRef.current = scopeKey
-  // Read the matching cache during render so the first frame after binding
-  // resolution already contains rows. The effect below owns revalidation, not
-  // first paint; a table from another Project remains ineligible by key.
-  const cachedTable = useMemo(
-    () =>
-      resolved
-        ? getCachedProjectViewTable({
-            owner: resolved.owner,
-            ownerType: resolved.ownerType,
-            projectNumber: resolved.number
-          })
-        : null,
-    [resolved, getCachedProjectViewTable]
-  )
-  const table = trackerSectionTableForScope(tableState, scopeKey, cachedTable)
-
-  useEffect(() => {
-    if (!resolved) {
-      setStatus('idle')
-      return
-    }
-    if (!scopeKey) return
-    const capturedKey = scopeKey
-    const args = {
-      owner: resolved.owner,
-      ownerType: resolved.ownerType,
-      projectNumber: resolved.number
-    }
-    // Paint a fresh cached table synchronously — re-entering step 3 within the
-    // cache TTL no longer re-fires the RPC or flashes the "loading the Project's
-    // issues…" spinner over data that's seconds old (#385). A miss falls
-    // through to the normal fetch below.
-    const cached = getCachedProjectViewTable(args)
-    let cancelled = false
-    if (cached) {
-      setTableState({ scopeKey: capturedKey, table: cached })
-      setStatus('refreshing')
-    } else {
-      setStatus('loading')
-    }
-    void fetchProjectViewTable(args, cached ? { force: true } : undefined)
-      .then((res) => {
-        if (cancelled || !isCurrentTrackerSectionScope(capturedKey, latestScopeKeyRef.current)) return
-        if (res.ok) {
-          setTableState({ scopeKey: capturedKey, table: res.data })
-          setStatus('idle')
-        } else {
-          setStatus('failed')
-        }
-      })
-      .catch(() => {
-        if (!cancelled && isCurrentTrackerSectionScope(capturedKey, latestScopeKeyRef.current)) {
-          setStatus('failed')
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [resolved, scopeKey, fetchProjectViewTable, getCachedProjectViewTable])
-
-  useEffect(() => setQuery(''), [scopeKey])
-
-  const issueView = useMemo(
-    () => deriveTrackerIssueViewModel(table, query, repositorySlug ?? undefined),
-    [table, query, repositorySlug]
-  )
-  const selectedUrl = linkedWorkItem?.type === 'issue' ? linkedWorkItem.url : null
-
-  const refresh = useCallback(() => {
-    if (!resolved || !scopeKey) return
-    const args = {
-      owner: resolved.owner,
-      ownerType: resolved.ownerType,
-      projectNumber: resolved.number
-    }
-    setStatus(table ? 'refreshing' : 'loading')
-    void fetchProjectViewTable(args, { force: true })
-      .then((res) => {
-        if (!isCurrentTrackerSectionScope(scopeKey, latestScopeKeyRef.current)) return
-        if (res.ok) {
-          setTableState({ scopeKey, table: res.data })
-          setStatus('idle')
-        } else {
-          setStatus('failed')
-        }
-      })
-      .catch(() => {
-        if (isCurrentTrackerSectionScope(scopeKey, latestScopeKeyRef.current)) setStatus('failed')
-      })
-  }, [fetchProjectViewTable, scopeKey, resolved, table])
-
-  // Spec 013 F1: the ONE status, from the ONE resolved Project the list reads.
-  const trackerStatus = useMemo<UnifiedTrackerStatus>(
-    () =>
-      deriveUnifiedTrackerStatus({
-        resolved,
-        binding: currentBinding,
-        selectedGitRepo: Boolean(workdir),
-        status,
-        optionCount: issueView.issueCount,
-        hasTable: Boolean(table)
-      }),
-    [resolved, currentBinding, workdir, status, issueView.issueCount, table]
-  )
-
-  // The compact repo-scoped configure/switch affordance. The shared editor and
-  // server resolve both local and SSH repositories through workdir + repoId.
-  const configureControl = workdir ? (
-    <Popover open={configureOpen} onOpenChange={setConfigureOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
-        >
-          <KanbanSquare className="size-3" />
-          {trackerConfigureActionLabel(Boolean(resolved))}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="max-h-[420px] w-[360px] overflow-y-auto p-3">
-        <ProjectBindingEditor
-          workdir={workdir}
-          repoId={repoId}
-          onBound={(next, nextRepositorySlug) => {
-            if (bindingTargetKey) {
-              setBinding({
-                kind: 'resolved',
-                targetKey: bindingTargetKey,
-                repositorySlug: nextRepositorySlug,
-                binding: next
-              })
-            }
-            setConfigureOpen(false)
-          }}
-          onUnbound={() => {
-            if (!bindingTargetKey) return
-            const unbound = trackerSectionAfterSuccessfulUnbind(bindingTargetKey)
-            latestScopeKeyRef.current = unbound.scopeKey
-            setBinding(unbound.binding)
-            setTableState(null)
-            setStatus('idle')
-            setQuery('')
-            setConfigureOpen(false)
-          }}
-        />
-      </PopoverContent>
-    </Popover>
-  ) : null
-
-  return (
-    <div className="flex flex-col gap-2.5">
-      {/* Spec 013 F1 (AC 1): one section header, the control at the TOP. */}
-      {source === 'existing' ? <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
-          Tracker
-        </span>
-        {configureControl}
-      </div> : null}
-
-      {/* Status line — driven SOLELY by the resolved Project (AC 2). */}
-      {source === 'existing' ? (
-        <TrackerStatusLine
-          status={trackerStatus}
-          hasWorkdir={Boolean(workdir)}
-          onRetry={resolved ? refresh : undefined}
-        />
-      ) : null}
-
-      {source === 'existing' && table ? (
-        <div className="overflow-hidden rounded-lg border border-border bg-card/30">
-          <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
-            <Search className="size-3.5 flex-none text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              aria-label="Filter Project issues"
-              placeholder="Filter by title or #number"
-              className="min-w-0 flex-1 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground/70"
-            />
-            <span className="flex-none font-mono text-[10.5px] text-muted-foreground">
-              {issueView.issueCount} {issueView.issueCount === 1 ? 'issue' : 'issues'}
-            </span>
-            <button
-              type="button"
-              onClick={refresh}
-              disabled={status === 'refreshing'}
-              aria-label="Refresh Project issues"
-              className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
-            >
-              <RefreshCw className={cn('size-3.5', status === 'refreshing' && 'animate-spin')} />
-            </button>
-          </div>
-          <div className="max-h-52 overflow-y-auto p-1">
-            {issueView.groups.length ? (
-              issueView.groups.map((group) => (
-                <div key={group.key} className="mb-1 last:mb-0">
-                  {group.label ? (
-                    <div className="sticky top-0 z-[1] flex items-center gap-2 bg-card/95 px-2.5 py-1.5 backdrop-blur-sm">
-                      <span
-                        className="size-2 rounded-full"
-                        style={{ backgroundColor: trackerStatusColor(group.color) }}
-                      />
-                      <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                        {group.label}
-                      </span>
-                      <span className="font-mono text-[10px] text-muted-foreground/70">
-                        {group.options.length}
-                      </span>
-                    </div>
-                  ) : null}
-                  {group.options.map((option) => {
-                    const selected = selectedUrl === option.url
-                    return (
-                      <button
-                        key={option.itemId}
-                        type="button"
-                        aria-pressed={selected}
-                        aria-label={`Link issue #${option.number}: ${option.title}`}
-                        onClick={() => onPickWorkItem(option)}
-                        className={cn(
-                          'flex w-full items-center gap-2 rounded-md border-l-2 px-2.5 py-1.5 text-left text-[12px] transition-colors',
-                          selected
-                            ? 'border-l-primary bg-secondary text-foreground'
-                            : 'border-l-transparent text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
-                        )}
-                      >
-                        <Check
-                          className={cn('size-3 flex-none', selected ? 'opacity-70' : 'opacity-0')}
-                        />
-                        <span className="flex-none font-mono text-[11px] text-muted-foreground">
-                          #{option.number}
-                        </span>
-                        <span className="truncate">{option.title}</span>
-                        {group.label ? (
-                          <span className="ml-auto inline-flex max-w-28 flex-none items-center gap-1 truncate rounded-full border border-border px-1.5 py-0.5 text-[9.5px] text-muted-foreground">
-                            <span
-                              className="size-1.5 flex-none rounded-full"
-                              style={{ backgroundColor: trackerStatusColor(group.color) }}
-                            />
-                            <span className="truncate">{group.label}</span>
-                          </span>
-                        ) : null}
-                      </button>
-                    )
-                  })}
-                </div>
-              ))
-            ) : (
-              <div className="px-3 py-5 text-center text-[11.5px] text-muted-foreground">
-                {query.trim()
-                  ? `No open issues match “${query.trim()}”.`
-                  : 'No open issues in this Project.'}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center justify-between border-t border-border px-2.5 py-1.5 text-[10.5px] text-muted-foreground">
-            <span className="truncate">
-              {table.project.title || `${table.project.owner} · Project ${table.project.number}`}
-            </span>
-            <span className="flex-none font-mono">
-              {table.project.owner} · #{table.project.number}
-            </span>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Spec 013 F2/F3: create an issue from a short intent, then bind it. Only
-          when nothing is linked yet and the repo is a local git repo. The file
-          arm targets GitHub or Linear per the resolved tracker (F3). */}
-      {source === 'new' && canStageNewIssue && repo ? (
-        <CreateIssuePanel
-          createIssue={createIssue}
-          linear={linear}
-          resolved={resolved}
-          repo={repo}
-          deferred
-        />
-      ) : null}
-
-      {linkedWorkItem && showLinkedSelection ? (
-        <div className="flex items-start gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/8 px-3 py-2">
-          <Check className="mt-0.5 size-3.5 flex-none text-emerald-500" aria-hidden />
-          <span className="min-w-0 text-[11.5px] text-foreground">
-            <span className="font-semibold text-emerald-500">Selected for this workspace</span>
-            <span className="ml-1.5 font-mono text-muted-foreground">
-              #{linkedWorkItem.number}
-            </span>{' '}
-            {linkedWorkItem.title}
-          </span>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-/**
- * Spec 013 F2/F3: "Create issue from intent" — a thin surface over the
- * composer's EXISTING create-issue seams. The operator types "what do you want
- * to do?", Draft calls `onGenerateIssueBody` (wiki+codebase-grounded
- * server-side), then Create files the drafted title+body.
- *
- * F3: the *file* step branches by provider (`resolveCreateIssueProvider`): a
- * GitHub Project resolves ⇒ GitHub (`onCreateIssueSubmit` → `createGithubIssue`
- * → `applyLinkedWorkItem`); no Project but Linear connected ⇒ Linear
- * (`linearCreateIssue`, then bind via the SAME `onSmartLinearIssueSelect` seam);
- * BOTH ⇒ a provider toggle. The drafted body is provider-agnostic.
- *
- * Errors render inline; the wizard's Create workspace primary is never gated on
- * this panel (inv. 7).
- */
-function CreateIssuePanel({
-  createIssue,
-  linear,
-  resolved,
+  provider,
+  linearTarget,
   repo,
-  deferred = false
+  onRegisterIssueCreator
 }: {
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
-  resolved: PickerProjectRef | null
+  provider: ProjectTrackerProvider
+  linearTarget?: ProjectTrackerLinearTarget
   repo: Repo
-  deferred?: boolean
+  onRegisterIssueCreator: (creator: () => Promise<LinkedWorkItemSummary | null>) => void
 }): React.JSX.Element {
-  const [open, setOpen] = useState(deferred)
   const savedChatAgent = useAppStore((state) => state.settings?.chatAgent)
   const updateSettings = useAppStore((state) => state.updateSettings)
   const { detectedIds: detectedChatAgentIds } = useDetectedAgents()
@@ -2274,6 +2418,10 @@ function CreateIssuePanel({
   const [draftModel, setDraftModel] = useState(
     () => resolveChatModel(readChatModelPreference()).id
   )
+  const [teams, setTeams] = useState<LinearTeam[]>([])
+  const [teamId, setTeamId] = useState<string | null>(linearTarget?.teamId ?? null)
+  const [linearFiling, setLinearFiling] = useState(false)
+  const [linearError, setLinearError] = useState<string | null>(null)
   const [specOpen, setSpecOpen] = useState(false)
   const [specResetVersion, setSpecResetVersion] = useState(0)
   const draftPreferenceTouched = useRef(false)
@@ -2293,125 +2441,81 @@ function CreateIssuePanel({
     availableDraftAgents.find((agent) => agent.id === draftAgent)?.id ??
     availableDraftAgents[0]?.id ??
     draftAgent
-  // F3 Linear arm — probed lazily when the panel opens (best-effort; a failure
-  // leaves `linearConnected` false so the panel stays GitHub-only).
-  const [linearConnected, setLinearConnected] = useState(false)
-  const [teams, setTeams] = useState<LinearTeam[]>([])
-  const [teamId, setTeamId] = useState<string | null>(null)
-  const [providerChoice, setProviderChoice] = useState<CreateIssueProvider | null>(null)
-  const [linearFiling, setLinearFiling] = useState(false)
-  const [linearError, setLinearError] = useState<string | null>(null)
 
-  // Probe Linear once the panel is open: is it connected, and what teams exist?
-  // Non-fatal — any failure keeps the GitHub-only default.
   useEffect(() => {
-    if (!open || deferred) {
-      return
-    }
+    setTeams([])
+    setTeamId(linearTarget?.teamId ?? null)
+    setLinearError(null)
+    if (provider !== 'linear' || !linearTarget) return
     let cancelled = false
-    void linearStatus(linear.settings)
-      .then((status) => {
-        if (cancelled || !status.connected) {
-          return
-        }
-        setLinearConnected(true)
-        return linearListTeams(linear.settings).then((list) => {
-          if (cancelled) {
-            return
-          }
-          setTeams(list)
-          // Default to the sole team when there's exactly one (open question 2).
-          if (list.length === 1) {
-            setTeamId(list[0].id)
-          }
-        })
+    void linearListTeams(linear.settings, linearTarget.workspaceId)
+      .then((items) => {
+        if (cancelled) return
+        const exact = items.filter(
+          (team) => !team.workspaceId || team.workspaceId === linearTarget.workspaceId
+        )
+        setTeams(exact)
+        if (!linearTarget.teamId && exact.length === 1) setTeamId(exact[0].id)
       })
-      .catch(() => {
-        /* best-effort: stay GitHub-only */
+      .catch((cause) => {
+        if (!cancelled) {
+          setLinearError(cause instanceof Error ? cause.message : 'Could not load Linear teams.')
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [deferred, open, linear.settings])
-
-  const provider = resolveCreateIssueProvider({ resolved, linearConnected })
-  const effectiveProvider: CreateIssueProvider = deferred
-    ? 'github'
-    : provider === 'ambiguous'
-      ? (providerChoice ?? 'github')
-      : provider
+  }, [linear.settings, linearTarget, provider])
 
   const busy = createIssue.generating || createIssue.submitting || linearFiling
   const phase = deriveCreateIssueIntentPhase({
     generating: createIssue.generating,
     submitting: createIssue.submitting || linearFiling,
-    error: createIssue.error ?? linearError,
+    error: provider === 'linear' ? linearError : createIssue.error,
     hasBody: createIssue.body.trim().length > 0
   })
-  const inlineError = effectiveProvider === 'linear' ? linearError : createIssue.error
 
-  // Draft an SDD-shaped body from the TITLE (optional helper — the title is the
-  // one required field now; a blank body files fine). Provider-agnostic markdown
-  // that files to either tracker.
-  const handleDraft = useCallback((style: DraftIssueStyle = 'concise') => {
-    if (!canFileIssue(createIssue.title, busy)) {
-      return
-    }
-    setLinearError(null)
-    const choice: DraftLlmChoice = {
-      agent: effectiveDraftAgent,
-      ...(effectiveDraftAgent === 'claude' ? { model: draftModel } : {})
-    }
-    createIssue.onGenerate(choice, style)
-  }, [busy, createIssue, draftModel, effectiveDraftAgent])
-
-  const handleOpenSpec = useCallback(() => {
-    if (!canFileIssue(createIssue.title, busy)) return
-    setSpecResetVersion((value) => value + 1)
-    setSpecOpen(true)
-  }, [busy, createIssue.title])
-
-  const handleDraftAgentChange = useCallback(
-    (agent: ChatAgentId) => {
-      draftPreferenceTouched.current = true
-      setDraftAgent(agent)
-      void updateSettings({ chatAgent: agent })
-    },
-    [updateSettings]
-  )
-
-  const handleDraftModelChange = useCallback((model: string) => {
-    setDraftModel(model)
-    writeChatModelPreference(model)
-  }, [])
-
-  // F3 Linear file arm: create the issue in Linear, then bind it through the
-  // SAME composer seam (`onSmartLinearIssueSelect`) the Linear @-picker uses, so
-  // the workspace persists `trackerProvider:'linear'` on create (spec 012).
-  const handleLinearFile = useCallback(async () => {
+  const createLinear = useCallback(async (): Promise<LinkedWorkItemSummary | null> => {
     const title = createIssue.title.trim()
-    if (!canFileIssue(title, busy)) {
-      return
+    if (!linearTarget) {
+      setLinearError('The configured Linear target is incomplete.')
+      return null
     }
     if (!teamId) {
       setLinearError('Pick a Linear team to file into.')
-      return
+      return null
     }
-    const team = teams.find((t) => t.id === teamId)
+    if (!canFileIssue(title, busy)) return null
+    const team = teams.find((candidate) => candidate.id === teamId)
     setLinearFiling(true)
     setLinearError(null)
     try {
       const result = await linearCreateIssue(linear.settings, {
         teamId,
         title,
-        description: createIssue.body.trim() || undefined
+        description: createIssue.body.trim() || undefined,
+        workspaceId: linearTarget.workspaceId,
+        projectId:
+          linearTarget.scope?.kind === 'project' ? linearTarget.scope.id : undefined
       })
       if (!result.ok) {
         setLinearError(result.error || 'Could not create the Linear issue.')
-        return
+        return null
+      }
+      if (result.teamId !== teamId) {
+        setLinearError('Linear returned an issue outside the configured team.')
+        return null
+      }
+      if (
+        linearTarget.scope?.kind === 'project' &&
+        result.projectId !== linearTarget.scope.id
+      ) {
+        setLinearError('Linear returned an issue outside the configured project.')
+        return null
       }
       const issue: LinearIssue = {
         id: result.id,
+        workspaceId: linearTarget.workspaceId,
         identifier: result.identifier,
         title: result.title,
         description: createIssue.body.trim() || undefined,
@@ -2420,150 +2524,112 @@ function CreateIssuePanel({
         team: team
           ? { id: team.id, name: team.name, key: team.key }
           : { id: teamId, name: teamId, key: teamId },
+        ...(linearTarget.scope?.kind === 'project'
+          ? {
+              project: {
+                id: linearTarget.scope.id,
+                workspaceId: linearTarget.workspaceId,
+                name: linearTarget.scope.id
+              }
+            }
+          : {}),
         labels: [],
         labelIds: [],
         priority: 0,
         updatedAt: new Date().toISOString()
       }
       linear.onBind(issue)
-    } catch (error) {
-      setLinearError(error instanceof Error ? error.message : 'Could not create the Linear issue.')
+      return buildLinearIssueLinkedWorkItem(issue)
+    } catch (cause) {
+      setLinearError(cause instanceof Error ? cause.message : 'Could not create the Linear issue.')
+      return null
     } finally {
       setLinearFiling(false)
     }
-  }, [busy, createIssue.body, createIssue.title, linear, teamId, teams])
+  }, [busy, createIssue.body, createIssue.title, linear, linearTarget, teamId, teams])
 
-  const handleFile = useCallback(() => {
-    if (effectiveProvider === 'linear') {
-      void handleLinearFile()
-    } else {
-      createIssue.onSubmit()
+  useEffect(() => {
+    onRegisterIssueCreator(provider === 'linear' ? createLinear : createIssue.onSubmit)
+  }, [createIssue.onSubmit, createLinear, onRegisterIssueCreator, provider])
+
+  const handleDraft = useCallback(() => {
+    if (!canFileIssue(createIssue.title, busy)) return
+    setLinearError(null)
+    const choice: DraftLlmChoice = {
+      agent: effectiveDraftAgent,
+      ...(effectiveDraftAgent === 'claude' ? { model: draftModel } : {})
     }
-  }, [createIssue, effectiveProvider, handleLinearFile])
+    createIssue.onGenerate(choice, 'concise')
+  }, [busy, createIssue, draftModel, effectiveDraftAgent])
 
-  if (!open && !deferred) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 self-start rounded-md border border-dashed border-border px-2.5 py-1.5 text-[11.5px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
-      >
-        <Plus className="size-3.5" />
-        Create an issue for this work
-      </button>
-    )
-  }
+  const handleOpenSpec = useCallback(() => {
+    if (!canFileIssue(createIssue.title, busy)) return
+    setSpecResetVersion((value) => value + 1)
+    setSpecOpen(true)
+  }, [busy, createIssue.title])
 
-  const hasBody = createIssue.body.trim().length > 0
-  const canFile = canFileIssue(createIssue.title, busy)
-
-  const specSeed = [createIssue.title.trim(), createIssue.body.trim()]
-    .filter(Boolean)
-    .join('\n\n')
+  const inlineError = provider === 'linear' ? linearError : createIssue.error
+  const specSeed = [createIssue.title.trim(), createIssue.body.trim()].filter(Boolean).join('\n\n')
 
   return (
     <>
-    {/* Enter inside the panel files the issue (or inserts a newline in the
-        description) — it must NOT bubble to the wizard's global key handler, which
-        would otherwise create the whole workspace out from under a half-typed
-        issue. Stopping propagation here is the fix for the "creates it double"
-        report: the title input's Enter used to trigger "Create workspace". */}
-    <div
-      className="flex flex-col gap-2.5 rounded-lg border border-border p-3"
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' && !event.shiftKey) {
-          event.stopPropagation()
-        }
-      }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] font-medium text-foreground">New GitHub issue</span>
-        {!deferred ? <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label="Cancel"
-          className="inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-3.5" />
-        </button> : null}
-      </div>
-
-      {/* F3: only when a repo has BOTH a GitHub Project and Linear connected. */}
-      {!deferred && provider === 'ambiguous' ? (
-        <div className="flex items-center gap-1.5">
-          <span className="text-[11px] text-muted-foreground">File into</span>
-          {(['github', 'linear'] as const).map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setProviderChoice(p)}
-              className={cn(
-                'rounded-md border px-2 py-0.5 text-[11px] capitalize transition-colors',
-                effectiveProvider === p
-                  ? 'border-muted-foreground/40 bg-secondary text-foreground'
-                  : 'border-border text-muted-foreground hover:border-muted-foreground/25'
-              )}
-            >
-              {p}
-            </button>
-          ))}
+      <div
+        className="flex flex-col gap-2.5 rounded-lg border border-border bg-background/35 p-3"
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) event.stopPropagation()
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[12px] font-medium text-foreground">
+            New {provider === 'linear' ? 'Linear' : 'GitHub'} issue
+          </span>
+          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[9.5px] uppercase text-muted-foreground">
+            configured provider
+          </span>
         </div>
-      ) : null}
 
-      {/* Single required field: the title. Enter files the issue right away — no
-          separate "draft" round-trip stands between typing and creating. */}
-      <label className="flex flex-col gap-1.5">
-        <span className="text-[11px] text-muted-foreground">Title</span>
-        <input
-          autoFocus
-          value={createIssue.title}
-          onChange={(event) => createIssue.onTitleChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) event.stopPropagation()
-          }}
-          placeholder="What needs doing?"
-          className="h-[34px] rounded-md border border-input bg-secondary px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
-        />
-      </label>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[11px] text-muted-foreground">Title</span>
+          <input
+            value={createIssue.title}
+            onChange={(event) => createIssue.onTitleChange(event.target.value)}
+            placeholder="What needs doing?"
+            className="h-[34px] rounded-md border border-input bg-secondary px-2.5 text-[12.5px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+          />
+        </label>
 
-      {/* Description is optional. The default AI path stays intentionally terse;
-          the menu opens the guided SDD interview for complex work. */}
-      <div className="flex flex-col gap-1.5">
-        <div className="flex flex-wrap items-end justify-between gap-2">
-          <span className="text-[11px] text-muted-foreground">Description (optional)</span>
-          <div className="flex flex-wrap items-end gap-1.5">
-            <label className="flex flex-col gap-0.5">
-              <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
-                Engine
-              </span>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <span className="text-[11px] text-muted-foreground">Description (optional)</span>
+            <div className="flex flex-wrap items-end gap-1.5">
               <select
                 aria-label="Drafting engine"
                 value={effectiveDraftAgent}
                 disabled={availableDraftAgents.length === 0 || busy}
-                onChange={(event) => handleDraftAgentChange(event.target.value as ChatAgentId)}
-                className="h-6 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                onChange={(event) => {
+                  const agent = event.target.value as ChatAgentId
+                  draftPreferenceTouched.current = true
+                  setDraftAgent(agent)
+                  void updateSettings({ chatAgent: agent })
+                }}
+                className="h-6 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] outline-none"
               >
-                {availableDraftAgents.length === 0 ? (
-                  <option value={effectiveDraftAgent}>No detected engine</option>
-                ) : null}
                 {availableDraftAgents.map((agent) => (
                   <option key={agent.id} value={agent.id}>
                     {agent.label}
                   </option>
                 ))}
               </select>
-            </label>
-            {effectiveDraftAgent === 'claude' ? (
-              <label className="flex flex-col gap-0.5">
-                <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
-                  Model
-                </span>
+              {effectiveDraftAgent === 'claude' ? (
                 <select
                   aria-label="Drafting model"
                   value={draftModel}
                   disabled={busy}
-                  onChange={(event) => handleDraftModelChange(event.target.value)}
-                  className="h-6 max-w-44 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                  onChange={(event) => {
+                    setDraftModel(event.target.value)
+                    writeChatModelPreference(event.target.value)
+                  }}
+                  className="h-6 max-w-44 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] outline-none"
                 >
                   {CHAT_MODELS.map((model) => (
                     <option key={model.id} value={model.id}>
@@ -2571,77 +2637,56 @@ function CreateIssuePanel({
                     </option>
                   ))}
                 </select>
-              </label>
-            ) : (
-              <span className="inline-flex h-6 items-center rounded-md border border-border bg-secondary px-2 text-[10.5px] text-muted-foreground">
-                default model
-              </span>
-            )}
-            <div className="flex">
-              <button
-                type="button"
-                onClick={() => handleDraft('concise')}
-                disabled={!canFile || availableDraftAgents.length === 0}
-                className="inline-flex h-6 items-center gap-1 rounded-l-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {phase === 'drafting' ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <Sparkles className="size-3" />
-                )}
-                {phase === 'drafting'
-                  ? 'Drafting…'
-                  : hasBody
-                    ? 'Redraft simple'
-                    : 'Draft simple issue'}
-              </button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    disabled={!canFile || availableDraftAgents.length === 0}
-                    aria-label="More drafting options"
-                    className="-ml-px inline-flex h-6 w-6 items-center justify-center rounded-r-md border border-border text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <ChevronDown className="size-3" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-60">
-                  <DropdownMenuItem onSelect={() => handleDraft('concise')}>
-                    <Sparkles className="size-3.5" />
-                    <span className="flex flex-col">
-                      <span>Simple issue</span>
-                      <span className="text-[10.5px] font-normal text-muted-foreground">
-                        A short, direct description
-                      </span>
-                    </span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={handleOpenSpec}>
-                    <WandSparkles className="size-3.5" />
-                    <span className="flex flex-col">
+              ) : null}
+              <div className="flex">
+                <button
+                  type="button"
+                  onClick={handleDraft}
+                  disabled={!canFileIssue(createIssue.title, busy) || availableDraftAgents.length === 0}
+                  className="inline-flex h-6 items-center gap-1 rounded-l-md border border-border px-2 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  {phase === 'drafting' ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3" />
+                  )}
+                  {phase === 'drafting' ? 'Drafting…' : 'Draft simple issue'}
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={!canFileIssue(createIssue.title, busy)}
+                      aria-label="More drafting options"
+                      className="-ml-px inline-flex h-6 w-6 items-center justify-center rounded-r-md border border-border text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      <ChevronDown className="size-3" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-60">
+                    <DropdownMenuItem onSelect={handleDraft}>
+                      <Sparkles className="size-3.5" />
+                      <span>Draft simple issue</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={handleOpenSpec}>
+                      <WandSparkles className="size-3.5" />
                       <span>Shape into spec…</span>
-                      <span className="text-[10.5px] font-normal text-muted-foreground">
-                        Complex issue · guided SDD
-                      </span>
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </div>
           </div>
+          <textarea
+            value={createIssue.body}
+            onChange={(event) => createIssue.onBodyChange(event.target.value)}
+            rows={createIssue.body.trim() ? 6 : 3}
+            placeholder="Add details or draft an SDD-shaped description."
+            className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+          />
         </div>
-        <textarea
-          value={createIssue.body}
-          onChange={(event) => createIssue.onBodyChange(event.target.value)}
-          rows={hasBody ? 6 : 3}
-          placeholder="Add details, draft a simple issue, or shape a complex SDD spec."
-          className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
-        />
-      </div>
 
-      {deferred && createIssue.labelOptions?.length ? (
-        <div className="flex flex-col gap-1.5">
-          <span className="text-[11px] text-muted-foreground">Labels (optional)</span>
+        {provider === 'github' && createIssue.labelOptions?.length ? (
           <div className="flex flex-wrap gap-1.5">
             {createIssue.labelOptions.map((label) => {
               const selected = createIssue.labels.includes(label)
@@ -2652,10 +2697,10 @@ function CreateIssuePanel({
                   aria-pressed={selected}
                   onClick={() => createIssue.onToggleLabel(label)}
                   className={cn(
-                    'rounded-full border px-2 py-0.5 text-[10.5px] transition-colors',
+                    'rounded-full border px-2 py-0.5 text-[10.5px]',
                     selected
                       ? 'border-primary/50 bg-primary/10 text-foreground'
-                      : 'border-border text-muted-foreground hover:border-muted-foreground/40'
+                      : 'border-border text-muted-foreground'
                   )}
                 >
                   {label}
@@ -2663,44 +2708,32 @@ function CreateIssuePanel({
               )
             })}
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {/* F3: pick the Linear team when filing into Linear and >1 exists. */}
-      {!deferred && effectiveProvider === 'linear' && teams.length > 1 ? (
-        <label className="flex flex-col gap-1.5">
-          <span className="text-[11px] text-muted-foreground">Linear team</span>
-          <select
-            value={teamId ?? ''}
-            onChange={(event) => setTeamId(event.target.value || null)}
-            className="h-[34px] rounded-md border border-input bg-secondary px-2 text-[12.5px] text-foreground outline-none focus-visible:border-ring"
-          >
-            <option value="">Select a team…</option>
-            {teams.map((team) => (
-              <option key={team.id} value={team.id}>
-                {team.name} ({team.key})
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
+        {provider === 'linear' && (teams.length > 1 || !teamId) ? (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-muted-foreground">Linear team</span>
+            <select
+              value={teamId ?? ''}
+              onChange={(event) => setTeamId(event.target.value || null)}
+              className="h-[34px] rounded-md border border-input bg-secondary px-2 text-[12.5px] outline-none"
+            >
+              <option value="">Select a configured workspace team…</option>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name} ({team.key})
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
 
-      {!deferred ? <button
-        type="button"
-        onClick={handleFile}
-        disabled={!canFile}
-        className="inline-flex items-center gap-1.5 self-start rounded-full bg-primary px-3.5 py-1.5 text-[12px] font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {phase === 'filing' ? <Loader2 className="size-3.5 animate-spin" /> : null}
-        {phase === 'filing'
-          ? 'Creating…'
-          : effectiveProvider === 'linear'
-            ? 'Create Linear issue'
-            : 'Create issue'}
-      </button> : null}
-
-      {inlineError ? <span className="text-[11px] text-destructive">{inlineError}</span> : null}
-    </div>
+        <p className="text-[10.5px] text-muted-foreground">
+          The issue is filed once when you start work; a failed later stage retries from its
+          checkpoint without filing a duplicate.
+        </p>
+        {inlineError ? <span className="text-[11px] text-destructive">{inlineError}</span> : null}
+      </div>
       <IssueSpecInterviewDialog
         open={specOpen}
         onOpenChange={setSpecOpen}
@@ -2733,111 +2766,4 @@ function trackerStatusColor(color: string | null): string {
   if (keyword) return keyword
   if (/^#?[0-9a-fA-F]{6}$/.test(color)) return color.startsWith('#') ? color : `#${color}`
   return 'var(--muted-foreground)'
-}
-
-/** The single status line for the unified tracker section — a pure view of
- *  `deriveUnifiedTrackerStatus`. "none" is the ONLY state that reads "no
- *  tracker", and it renders only when no Project resolved (AC 3). */
-function TrackerStatusLine({
-  status,
-  hasWorkdir,
-  onRetry
-}: {
-  status: UnifiedTrackerStatus
-  hasWorkdir: boolean
-  onRetry?: () => void
-}): React.JSX.Element {
-  switch (status.kind) {
-    case 'resolving':
-      return (
-        <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" />
-          Resolving this repository&apos;s Project…
-        </div>
-      )
-    case 'binding-unavailable':
-      return (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
-          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            Couldn&apos;t resolve this repository&apos;s tracker. Workspace creation is still available.
-          </span>
-        </div>
-      )
-    case 'binding-mismatch':
-      return (
-        <div className="flex items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5">
-          <KanbanSquare className="size-[15px] flex-none text-destructive" />
-          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            This tracker belongs to a different repository. Reconfigure it before selecting an issue.
-          </span>
-        </div>
-      )
-    case 'connecting':
-      return (
-        <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" />
-          Connecting — loading the Project's issues…
-        </div>
-      )
-    case 'unavailable':
-      return (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
-          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            Tracker connected, but its issues couldn't load — pick or link one later (optional).
-          </span>
-          {onRetry ? (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="rounded-md border border-border px-2 py-1 text-[10.5px] hover:text-foreground"
-            >
-              Retry
-            </button>
-          ) : null}
-        </div>
-      )
-    case 'connected-empty':
-      return (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
-          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            {status.refreshing
-              ? 'Refreshing Project issues…'
-              : status.stale
-                ? 'Refresh failed — showing the last saved Project data.'
-                : 'Tracker connected — no open issues in this Project. Link one later (optional).'}
-          </span>
-          <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
-            connected
-          </span>
-        </div>
-      )
-    case 'connected':
-      return (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3 py-2.5">
-          <KanbanSquare className="size-[15px] flex-none text-muted-foreground" />
-          <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
-            {status.refreshing
-              ? 'Refreshing Project issues — cached rows remain available.'
-              : status.stale
-                ? 'Refresh failed — showing the last saved Project data.'
-                : "Tracker connected — pick the issue you're about to work (optional)."}
-          </span>
-          <span className="flex-none rounded-full bg-emerald-500/15 px-2 py-0.5 font-mono text-[10.5px] text-emerald-500">
-            {status.issueCount} open
-          </span>
-        </div>
-      )
-    case 'none':
-    default:
-      return (
-        <div className="rounded-lg border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground">
-          {hasWorkdir
-            ? 'No tracker bound to this repo yet — configure one above to pick an issue (optional).'
-            : 'No tracker — configure one from the Board view to pick an issue here (optional).'}
-        </div>
-      )
-  }
 }

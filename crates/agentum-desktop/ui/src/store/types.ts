@@ -29,6 +29,7 @@ import type { ServerWorktreeActivitySlice } from './slices/server-worktree-activ
 import type { TrackerPhaseSlice } from './slices/tracker-phase'
 import type { WorkspaceHarnessOfferSlice } from './slices/workspace-harness-offer'
 import type { GatedRunStartingSlice } from './slices/gated-run-starting'
+import type { ProjectTrackersSlice } from './slices/project-trackers'
 
 export type AppState = RepoSlice &
   SparsePresetsSlice &
@@ -59,5 +60,6 @@ export type AppState = RepoSlice &
   HostsSlice &
   ServerWorktreeActivitySlice &
   TrackerPhaseSlice &
+  ProjectTrackersSlice &
   WorkspaceHarnessOfferSlice &
   GatedRunStartingSlice

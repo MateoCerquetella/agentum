@@ -26,15 +26,18 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
+
+use agentum_core::{HarnessScope, Host};
 
 // Harness data types + on-disk `.agentum-harness/` operations live in `types`;
 // the engine, drive loop, and gate helpers below still reference them directly
 // via this glob re-export (which also preserves the `harness::Foo` public API).
 mod types;
+mod workspace;
 pub use types::*;
+pub(crate) use workspace::HarnessWorkspace;
 
 // Prompt builders + verdict parsers + small utilities; `pub(crate)` items the
 // drive/gate code calls. Internal (not re-exported in the public surface).
@@ -92,21 +95,56 @@ impl HarnessEngine {
         None
     }
 
+    /// Resolve an existing run by authoritative scope. Registered worktrees
+    /// match by worktree id (so identical-looking paths on two hosts never
+    /// collide); legacy local callers retain path matching.
+    pub async fn find_by_scope(&self, scope: &HarnessScope) -> Option<Uuid> {
+        let runs = self.runs.read().await;
+        for (id, run) in runs.iter() {
+            let run = run.read().await;
+            let matched = match &scope.worktree_id {
+                Some(worktree_id) => run.scope.worktree_id.as_ref() == Some(worktree_id),
+                None => run.scope.worktree_id.is_none() && run.scope.path == scope.path,
+            };
+            if matched {
+                return Some(*id);
+            }
+        }
+        None
+    }
+
     /// Register a new run from a project directory. Loads `.harness/` so a bad
     /// config fails fast (before the UI shows a run that can never start).
     pub async fn start(&self, workdir: PathBuf) -> anyhow::Result<Uuid> {
-        let config = HarnessConfig::load(&workdir).await?;
+        self.start_workspace(HarnessWorkspace::local(workdir)).await
+    }
+
+    /// Register a run against the server-resolved worktree/host scope.
+    pub(crate) async fn start_scoped(
+        &self,
+        scope: HarnessScope,
+        host: Host,
+    ) -> anyhow::Result<Uuid> {
+        self.start_workspace(HarnessWorkspace::scoped(scope, host))
+            .await
+    }
+
+    async fn start_workspace(&self, workspace: HarnessWorkspace) -> anyhow::Result<Uuid> {
+        let config = HarnessConfig::load_from(&workspace).await?;
+        let workdir = workspace.root();
         let id = Uuid::new_v4();
 
         // Restore the SDD phase from the durable decision log so a re-registered
         // run (store wipe, daemon restart) resumes where it left off (spec 013).
         // Defaults to `Executing` for a fresh or pre-013 run.
-        let phase = rebuild_phase_from_decisions(&read_decisions(&workdir).await)
+        let phase = rebuild_phase_from_decisions(&read_decisions_in(&workspace).await)
             .unwrap_or(SpecPhase::Executing);
 
         let run = HarnessRun {
             id,
             workdir,
+            scope: workspace.scope().clone(),
+            workspace,
             state: HarnessState::Idle,
             features: config.features.clone(),
             current_feature: None,
@@ -139,19 +177,24 @@ impl HarnessEngine {
     pub(crate) async fn restore_orchestrated(
         &self,
         id: Uuid,
-        workdir: PathBuf,
+        scope: HarnessScope,
+        host: Option<Host>,
         state: HarnessState,
         current_session: Option<Uuid>,
     ) -> anyhow::Result<()> {
         if self.runs.read().await.contains_key(&id) {
             return Ok(());
         }
-        let config = HarnessConfig::load(&workdir).await?;
-        let phase = rebuild_phase_from_decisions(&read_decisions(&workdir).await)
+        let workspace = HarnessWorkspace::restored(scope.clone(), host);
+        let workdir = workspace.root();
+        let config = HarnessConfig::load_from(&workspace).await?;
+        let phase = rebuild_phase_from_decisions(&read_decisions_in(&workspace).await)
             .unwrap_or(SpecPhase::Executing);
         let run = HarnessRun {
             id,
             workdir,
+            scope,
+            workspace,
             state,
             features: config.features.clone(),
             current_feature: None,
@@ -180,22 +223,20 @@ impl HarnessEngine {
     /// Run `init.sh` (the environment smoke-test). Returns `false` (and sets the
     /// run `Failed`) on a non-zero exit. A missing `init.sh` is a pass.
     pub async fn run_init(&self, harness_id: Uuid) -> anyhow::Result<bool> {
-        let workdir = self.workdir(harness_id).await?;
+        let workspace = self.workspace(harness_id).await?;
         self.set_state(harness_id, HarnessState::InitVerifying)
             .await?;
         self.emit(HarnessEvent::InitStarted { harness_id });
 
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let (success, output) = match config.init_script {
             Some(script) => {
-                let out = Command::new("bash")
-                    .arg(&script)
-                    .current_dir(&workdir)
-                    .output()
+                let out = workspace
+                    .run("bash", &[script.to_string_lossy().into_owned()], &[])
                     .await?;
                 (
-                    out.status.success(),
-                    combine_output(&out.stdout, &out.stderr),
+                    out.success,
+                    combine_output(&out.stdout, out.stderr.as_bytes()),
                 )
             }
             None => (true, "no init.sh — skipping environment check".to_string()),
@@ -229,7 +270,7 @@ impl HarnessEngine {
         harness_id: Uuid,
         feature_id: &str,
     ) -> anyhow::Result<(bool, String)> {
-        let workdir = self.workdir(harness_id).await?;
+        let workspace = self.workspace(harness_id).await?;
         self.set_feature_state(harness_id, feature_id, FeatureState::Verifying)
             .await?;
         self.set_state(harness_id, HarnessState::Verifying).await?;
@@ -238,31 +279,30 @@ impl HarnessEngine {
             feature_id: feature_id.to_string(),
         });
 
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let (success, output) = if let Some(script) = config.verify_script {
-            let out = Command::new("bash")
-                .arg(&script)
-                .env("HARNESS_FEATURE_ID", feature_id)
-                .current_dir(&workdir)
-                .output()
+            let out = workspace
+                .run(
+                    "bash",
+                    &[script.to_string_lossy().into_owned()],
+                    &[("HARNESS_FEATURE_ID".into(), feature_id.into())],
+                )
                 .await?;
             (
-                out.status.success(),
-                combine_output(&out.stdout, &out.stderr),
+                out.success,
+                combine_output(&out.stdout, out.stderr.as_bytes()),
             )
         } else {
-            match Command::new("npm")
-                .args(["run", "verify"])
-                .current_dir(&workdir)
-                .output()
+            match workspace
+                .run("npm", &["run".into(), "verify".into()], &[])
                 .await
             {
-                Ok(out) => (
-                    out.status.success(),
-                    combine_output(&out.stdout, &out.stderr),
+                Ok(out) if out.code != Some(127) => (
+                    out.success,
+                    combine_output(&out.stdout, out.stderr.as_bytes()),
                 ),
                 // No verify.sh and no `npm run verify`: nothing to gate on.
-                Err(_) => (
+                Ok(_) | Err(_) => (
                     true,
                     "no verify.sh and no `npm run verify` — gate skipped".to_string(),
                 ),
@@ -290,7 +330,7 @@ impl HarnessEngine {
         harness_id: Uuid,
         feature_id: &str,
     ) -> anyhow::Result<(bool, String)> {
-        let workdir = self.workdir(harness_id).await?;
+        let workspace = self.workspace(harness_id).await?;
         self.set_feature_state(harness_id, feature_id, FeatureState::ReadyToTest)
             .await?;
         self.log(
@@ -299,17 +339,18 @@ impl HarnessEngine {
             "unit gate green — running browser QA gate (qa.sh)",
         );
 
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let (success, output) = if let Some(script) = config.qa_script {
-            let out = Command::new("bash")
-                .arg(&script)
-                .env("HARNESS_FEATURE_ID", feature_id)
-                .current_dir(&workdir)
-                .output()
+            let out = workspace
+                .run(
+                    "bash",
+                    &[script.to_string_lossy().into_owned()],
+                    &[("HARNESS_FEATURE_ID".into(), feature_id.into())],
+                )
                 .await?;
             (
-                out.status.success(),
-                combine_output(&out.stdout, &out.stderr),
+                out.success,
+                combine_output(&out.stdout, out.stderr.as_bytes()),
             )
         } else {
             (
@@ -330,11 +371,11 @@ impl HarnessEngine {
         self.set_feature_state(harness_id, feature_id, FeatureState::Done)
             .await?;
 
-        let (workdir, feature) = {
+        let (workspace, feature) = {
             let run = self.get_run(harness_id).await?;
             let r = run.read().await;
             (
-                r.workdir.clone(),
+                r.workspace.clone(),
                 r.features
                     .features
                     .iter()
@@ -343,7 +384,7 @@ impl HarnessEngine {
             )
         };
         if let Some(feature) = feature {
-            let config = HarnessConfig::load(&workdir).await?;
+            let config = HarnessConfig::load_from(&workspace).await?;
             config.write_handoff(&feature, output).await?;
             self.emit(HarnessEvent::HandoffWritten {
                 harness_id,
@@ -412,7 +453,7 @@ impl HarnessEngine {
         output: &str,
     ) -> anyhow::Result<(bool, u32)> {
         let run = self.get_run(harness_id).await?;
-        let (blocked, attempts, workdir, features_snapshot) = {
+        let (blocked, attempts, workspace, features_snapshot) = {
             let mut r = run.write().await;
             let max_retries = r.features.max_retries;
             let mut blocked = false;
@@ -428,11 +469,11 @@ impl HarnessEngine {
                     feature.state = FeatureState::Coding;
                 }
             }
-            (blocked, attempts, r.workdir.clone(), r.features.clone())
+            (blocked, attempts, r.workspace.clone(), r.features.clone())
         };
 
         // Persist outside the lock-held mutation above.
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         config.save_features(&features_snapshot).await?;
 
         let new_state = if blocked {
@@ -485,6 +526,10 @@ impl HarnessEngine {
         Ok(HarnessStatus {
             id: r.id,
             workdir: r.workdir.to_string_lossy().into_owned(),
+            scope: r.scope.clone(),
+            worktree_id: r.scope.worktree_id.clone(),
+            repo_id: r.scope.repo_id.clone(),
+            host_id: r.scope.host_id,
             state: r.state,
             features: r.features.clone(),
             current_feature: r.current_feature.clone(),
@@ -515,6 +560,11 @@ impl HarnessEngine {
         Ok(r.workdir.clone())
     }
 
+    pub(crate) async fn workspace(&self, harness_id: Uuid) -> anyhow::Result<HarnessWorkspace> {
+        let run = self.get_run(harness_id).await?;
+        Ok(run.read().await.workspace.clone())
+    }
+
     /// Atomically claim the driver slot. Returns `false` if a drive loop is
     /// already live so the route can reject a double-run instead of spawning two
     /// loops. The slot is freed by [`Self::release_driver`] when the loop exits
@@ -542,7 +592,7 @@ impl HarnessEngine {
     /// silently skip past it to the next pending feature (`next_pending_feature`
     /// ignores `Blocked`). Returns how many were reset.
     pub async fn reset_blocked_features(&self, harness_id: Uuid) -> anyhow::Result<usize> {
-        let (reset_ids, workdir, snapshot) = {
+        let (reset_ids, workspace, snapshot) = {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             let mut reset_ids = Vec::new();
@@ -554,10 +604,10 @@ impl HarnessEngine {
                     reset_ids.push(f.id.clone());
                 }
             }
-            (reset_ids, r.workdir.clone(), r.features.clone())
+            (reset_ids, r.workspace.clone(), r.features.clone())
         };
         if !reset_ids.is_empty() {
-            let config = HarnessConfig::load(&workdir).await?;
+            let config = HarnessConfig::load_from(&workspace).await?;
             config.save_features(&snapshot).await?;
             for id in &reset_ids {
                 self.emit(HarnessEvent::FeatureStateChanged {
@@ -686,17 +736,17 @@ impl HarnessEngine {
         feature_id: &str,
         state: FeatureState,
     ) -> anyhow::Result<()> {
-        let (workdir, features_snapshot) = {
+        let (workspace, features_snapshot) = {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             if let Some(feature) = r.features.features.iter_mut().find(|f| f.id == feature_id) {
                 feature.state = state;
             }
-            (r.workdir.clone(), r.features.clone())
+            (r.workspace.clone(), r.features.clone())
         };
         // Persist the board to disk so the on-disk feature_list.json stays the
         // single source of truth even mid-run.
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         config.save_features(&features_snapshot).await?;
 
         self.emit(HarnessEvent::FeatureStateChanged {
@@ -718,15 +768,15 @@ impl HarnessEngine {
     /// hiccup is logged, never fatal — the unlink itself is local and always
     /// succeeds once the run exists.
     pub async fn unlink_issue(&self, harness_id: Uuid) -> anyhow::Result<()> {
-        let (workdir, features_snapshot) = {
+        let (workspace, features_snapshot) = {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             r.features.clear_tracker();
-            (r.workdir.clone(), r.features.clone())
+            (r.workspace.clone(), r.features.clone())
         };
         // Same persist path as `set_feature_state`: the on-disk
         // feature_list.json stays the single source of truth even mid-run.
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         config.save_features(&features_snapshot).await?;
         self.log(
             harness_id,
@@ -741,7 +791,7 @@ impl HarnessEngine {
     /// (the canonical record [`rebuild_phase_from_decisions`] reads on rescan),
     /// and emit `PhaseChanged`.
     async fn set_phase(&self, harness_id: Uuid, to: SpecPhase) -> anyhow::Result<()> {
-        let (workdir, from) = {
+        let (workspace, from) = {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             let from = r.phase;
@@ -755,12 +805,12 @@ impl HarnessEngine {
             if !matches!(to, SpecPhase::Blocked | SpecPhase::AwaitingConfirm) {
                 r.phase_attempts = 0;
             }
-            (r.workdir.clone(), from)
+            (r.workspace.clone(), from)
         };
         if from != to {
             // One canonical "entered <phase>" marker per transition.
-            let _ = append_decision(
-                &workdir,
+            let _ = append_decision_in(
+                &workspace,
                 &format!("phase: entered {} (from {})", to.slug(), from.slug()),
             )
             .await;
@@ -805,8 +855,8 @@ impl HarnessEngine {
     /// the in-memory list, so without this the freshly-derived features are
     /// invisible to the loop.
     async fn reload_features(&self, harness_id: Uuid) -> anyhow::Result<()> {
-        let workdir = self.workdir(harness_id).await?;
-        let config = HarnessConfig::load(&workdir).await?;
+        let workspace = self.workspace(harness_id).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let run = self.get_run(harness_id).await?;
         run.write().await.features = config.features;
         Ok(())
@@ -829,6 +879,16 @@ impl Default for HarnessEngine {
 pub struct HarnessStatus {
     pub id: Uuid,
     pub workdir: String,
+    /// Full authoritative scope for new clients.
+    #[serde(default)]
+    pub scope: HarnessScope,
+    /// Flat compatibility fields consumed by the desktop status model.
+    #[serde(default)]
+    pub worktree_id: Option<String>,
+    #[serde(default)]
+    pub repo_id: Option<String>,
+    #[serde(default)]
+    pub host_id: Option<Uuid>,
     pub state: HarnessState,
     pub features: FeatureList,
     pub current_feature: Option<String>,
@@ -940,12 +1000,44 @@ mod tests {
     async fn start_then_next_pending() {
         let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
         let engine = HarnessEngine::new();
-        let id = engine.start(wd).await.unwrap();
-        assert_eq!(engine.status(id).await.unwrap().state, HarnessState::Idle);
+        let id = engine.start(wd.clone()).await.unwrap();
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.state, HarnessState::Idle);
+        assert_eq!(status.scope.path, wd.to_string_lossy());
+        assert!(status.worktree_id.is_none());
+        assert!(status.repo_id.is_none());
+        assert!(status.host_id.is_none());
         assert_eq!(
             engine.next_pending_feature(id).await.unwrap().unwrap().id,
             "feat-1"
         );
+    }
+
+    #[tokio::test]
+    async fn scoped_start_surfaces_authoritative_identity() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let now = time::OffsetDateTime::now_utc();
+        let host = agentum_core::Host {
+            id: agentum_core::LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: agentum_core::HostKind::Local,
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        };
+        let scope = HarnessScope {
+            worktree_id: Some(format!("repo::{}", wd.display())),
+            repo_id: Some("repo".into()),
+            host_id: Some(agentum_core::LOCAL_HOST_ID),
+            path: wd.to_string_lossy().into_owned(),
+        };
+        let engine = HarnessEngine::new();
+        let id = engine.start_scoped(scope.clone(), host).await.unwrap();
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.scope, scope);
+        assert_eq!(status.worktree_id, status.scope.worktree_id);
+        assert_eq!(status.repo_id, status.scope.repo_id);
+        assert_eq!(status.host_id, Some(agentum_core::LOCAL_HOST_ID));
     }
 
     // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.

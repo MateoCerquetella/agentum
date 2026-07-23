@@ -62,8 +62,28 @@ vi.mock('@/runtime/harness-client', () => ({
 }))
 
 vi.mock('@/lib/harness-run', () => ({
-  findHarnessRunForWorkdir: (runs: HarnessStatus[], workdir: string) =>
-    runs.find((run) => run.workdir.replace(/\/+$/, '') === workdir.replace(/\/+$/, ''))
+  findHarnessRunForWorkdir: (
+    runs: HarnessStatus[],
+    workdir: string,
+    worktreeId: string | undefined,
+    allowLegacyLocalPathFallback: boolean
+  ) => {
+    if (worktreeId) {
+      return (
+        runs.find((run) => run.worktree_id === worktreeId) ??
+        (allowLegacyLocalPathFallback
+          ? runs.find(
+              (run) =>
+                !run.worktree_id &&
+                run.workdir.replace(/\/+$/, '') === workdir.replace(/\/+$/, '')
+            )
+          : undefined)
+      )
+    }
+    return allowLegacyLocalPathFallback
+      ? runs.find((run) => run.workdir.replace(/\/+$/, '') === workdir.replace(/\/+$/, ''))
+      : undefined
+  }
 }))
 
 function makeRun(overrides: Partial<HarnessStatus> = {}): HarnessStatus {
@@ -117,20 +137,37 @@ function makeSnapshotRun(
   return run
 }
 
-function renderHook(workdir: string | undefined, runEffects: boolean) {
+function renderHook(
+  workdir: string | undefined,
+  runEffects: boolean,
+  worktreeId?: string,
+  allowLegacyLocalPathFallback = true
+) {
   reactState.index = 0
   reactState.effectsEnabled = runEffects
-  const result = useWorktreeHarnessRun(workdir)
+  const result = useWorktreeHarnessRun(
+    workdir,
+    worktreeId,
+    allowLegacyLocalPathFallback
+  )
   reactState.effectsEnabled = false
   return result
 }
 
-function mountHook(workdir: string | undefined) {
-  return renderHook(workdir, true)
+function mountHook(
+  workdir: string | undefined,
+  worktreeId?: string,
+  allowLegacyLocalPathFallback = true
+) {
+  return renderHook(workdir, true, worktreeId, allowLegacyLocalPathFallback)
 }
 
-function readHook(workdir: string | undefined) {
-  return renderHook(workdir, false)
+function readHook(
+  workdir: string | undefined,
+  worktreeId?: string,
+  allowLegacyLocalPathFallback = true
+) {
+  return renderHook(workdir, false, worktreeId, allowLegacyLocalPathFallback)
 }
 
 function cleanupEffects(): void {
@@ -182,6 +219,37 @@ describe('useWorktreeHarnessRun', () => {
     expect(io.listHarnesses).toHaveBeenCalledTimes(1)
     expect(io.getHarnessStatus).not.toHaveBeenCalled()
     expect(readHook('/workspace/feature').run).toBe(run)
+  })
+
+  it('hydrates by worktree id when two hosts expose the same path', async () => {
+    const first = makeRun({
+      id: 'run-a',
+      worktree_id: 'repo-a::/srv/shared',
+      host_id: 'host-a',
+      workdir: '/srv/shared'
+    })
+    const second = makeRun({
+      id: 'run-b',
+      worktree_id: 'repo-b::/srv/shared',
+      host_id: 'host-b',
+      workdir: '/srv/shared'
+    })
+    io.listHarnesses.mockResolvedValue([first, second])
+
+    mountHook('/srv/shared', 'repo-b::/srv/shared', false)
+    await flushAsyncWork()
+
+    expect(readHook('/srv/shared', 'repo-b::/srv/shared', false).run).toBe(second)
+  })
+
+  it('does not hydrate an SSH worktree from a legacy local run at the same path', async () => {
+    const legacyLocal = makeRun({ id: 'legacy-local', workdir: '/srv/shared' })
+    io.listHarnesses.mockResolvedValue([legacyLocal])
+
+    mountHook('/srv/shared', 'remote-repo::/srv/shared', false)
+    await flushAsyncWork()
+
+    expect(readHook('/srv/shared', 'remote-repo::/srv/shared', false).run).toBeUndefined()
   })
 
   it('refreshes the matched run for every status lifecycle event', async () => {
@@ -288,17 +356,31 @@ describe('worktree harness snapshot continuity', () => {
     let state = createWorktreeHarnessSnapshotState()
 
     state = beginWorktreeHarnessSnapshotRequest(state, workdir, 1)
-    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 1, coding)
+    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 1, coding, undefined, true)
 
     state = beginWorktreeHarnessSnapshotRequest(state, workdir, 2)
-    expect(selectWorktreeHarnessSnapshot(state, workdir)).toBe(coding)
-    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 2, verifying)
-    expect(selectWorktreeHarnessSnapshot(state, workdir)).toBe(verifying)
+    expect(selectWorktreeHarnessSnapshot(state, workdir, undefined, true)).toBe(coding)
+    state = resolveWorktreeHarnessSnapshotRequest(
+      state,
+      workdir,
+      2,
+      verifying,
+      undefined,
+      true
+    )
+    expect(selectWorktreeHarnessSnapshot(state, workdir, undefined, true)).toBe(verifying)
 
     state = beginWorktreeHarnessSnapshotRequest(state, workdir, 3)
-    expect(selectWorktreeHarnessSnapshot(state, workdir)).toBe(verifying)
-    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 3, readyToTest)
-    expect(selectWorktreeHarnessSnapshot(state, workdir)).toBe(readyToTest)
+    expect(selectWorktreeHarnessSnapshot(state, workdir, undefined, true)).toBe(verifying)
+    state = resolveWorktreeHarnessSnapshotRequest(
+      state,
+      workdir,
+      3,
+      readyToTest,
+      undefined,
+      true
+    )
+    expect(selectWorktreeHarnessSnapshot(state, workdir, undefined, true)).toBe(readyToTest)
   })
 
   it('selects the owning snapshot when switching away and back and clears an unmatched worktree', () => {
@@ -308,13 +390,33 @@ describe('worktree harness snapshot continuity', () => {
     let state = createWorktreeHarnessSnapshotState()
 
     state = beginWorktreeHarnessSnapshotRequest(state, owningWorkdir, 1)
-    state = resolveWorktreeHarnessSnapshotRequest(state, owningWorkdir, 1, latest)
+    state = resolveWorktreeHarnessSnapshotRequest(
+      state,
+      owningWorkdir,
+      1,
+      latest,
+      undefined,
+      true
+    )
 
-    expect(selectWorktreeHarnessSnapshot(state, unmatchedWorkdir)).toBeUndefined()
+    expect(
+      selectWorktreeHarnessSnapshot(state, unmatchedWorkdir, undefined, true)
+    ).toBeUndefined()
     state = beginWorktreeHarnessSnapshotRequest(state, unmatchedWorkdir, 2)
-    state = resolveWorktreeHarnessSnapshotRequest(state, unmatchedWorkdir, 2, undefined)
-    expect(selectWorktreeHarnessSnapshot(state, unmatchedWorkdir)).toBeUndefined()
-    expect(selectWorktreeHarnessSnapshot(state, `${owningWorkdir}/`)).toBe(latest)
+    state = resolveWorktreeHarnessSnapshotRequest(
+      state,
+      unmatchedWorkdir,
+      2,
+      undefined,
+      undefined,
+      true
+    )
+    expect(
+      selectWorktreeHarnessSnapshot(state, unmatchedWorkdir, undefined, true)
+    ).toBeUndefined()
+    expect(
+      selectWorktreeHarnessSnapshot(state, `${owningWorkdir}/`, undefined, true)
+    ).toBe(latest)
   })
 
   it('rejects a stale response and a snapshot owned by another normalized workdir', () => {
@@ -326,21 +428,23 @@ describe('worktree harness snapshot continuity', () => {
     let state = createWorktreeHarnessSnapshotState()
 
     state = beginWorktreeHarnessSnapshotRequest(state, workdir, 1)
-    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 1, initial)
+    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 1, initial, undefined, true)
     state = beginWorktreeHarnessSnapshotRequest(state, workdir, 2)
     state = beginWorktreeHarnessSnapshotRequest(state, workdir, 3)
-    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 3, latest)
+    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 3, latest, undefined, true)
 
     const afterLatest = state
-    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 2, stale)
+    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 2, stale, undefined, true)
     expect(state).toBe(afterLatest)
-    expect(selectWorktreeHarnessSnapshot(state, workdir)).toBe(latest)
+    expect(selectWorktreeHarnessSnapshot(state, workdir, undefined, true)).toBe(latest)
 
     state = beginWorktreeHarnessSnapshotRequest(state, workdir, 4)
     const beforeForeign = state
-    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 4, foreign)
+    state = resolveWorktreeHarnessSnapshotRequest(state, workdir, 4, foreign, undefined, true)
     expect(state).toBe(beforeForeign)
-    expect(selectWorktreeHarnessSnapshot(state, workdir)).toBe(latest)
-    expect(selectWorktreeHarnessSnapshot(state, foreign.workdir)).toBeUndefined()
+    expect(selectWorktreeHarnessSnapshot(state, workdir, undefined, true)).toBe(latest)
+    expect(
+      selectWorktreeHarnessSnapshot(state, foreign.workdir, undefined, true)
+    ).toBeUndefined()
   })
 })

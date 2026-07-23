@@ -29,6 +29,18 @@ use crate::AppState;
 use crate::error::ApiError;
 use crate::task_sink::{NewFeature, SinkCtx, TaskSink};
 
+fn issue_fetch_cwd(host_kind: &agentum_core::HostKind, resolved_workdir: &str) -> String {
+    match host_kind {
+        agentum_core::HostKind::Local => crate::task_sink::neutral_cwd()
+            .to_string_lossy()
+            .into_owned(),
+        // A daemon-local $HOME path is meaningless over SSH. `--repo` keeps
+        // gh repository selection explicit, so the authoritative remote
+        // worktree is a safe, existing cwd.
+        agentum_core::HostKind::Ssh { .. } => resolved_workdir.to_string(),
+    }
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/github/issue", get(get_issue))
@@ -125,8 +137,7 @@ pub(crate) async fn fetch_github_issue(
 
     // `gh` is addressed by `--repo <slug>` and run from a neutral cwd ($HOME) so
     // a stray `.git`/`GH_REPO` can't redirect it — identical to issue creation.
-    let cwd = crate::task_sink::neutral_cwd();
-    let cwd = cwd.to_string_lossy();
+    let cwd = issue_fetch_cwd(&host.kind, &workdir);
     let out = crate::host_runtime::gh_in_dir(
         &host,
         &cwd,
@@ -535,6 +546,24 @@ mod tests {
         assert!(!is_numeric_issue_id("--repo"));
         assert!(!is_numeric_issue_id("1a"));
         assert!(!is_numeric_issue_id("-5"));
+    }
+
+    #[test]
+    fn issue_fetch_cwd_is_remote_path_on_ssh() {
+        let ssh = agentum_core::HostKind::Ssh {
+            user: "dev".into(),
+            hostname: "forge.example".into(),
+            port: 22,
+            auth: agentum_core::SshAuth::Agent,
+        };
+        assert_eq!(
+            issue_fetch_cwd(&ssh, "/srv/repo/worktree"),
+            "/srv/repo/worktree"
+        );
+        assert_eq!(
+            issue_fetch_cwd(&agentum_core::HostKind::Local, "/srv/repo/worktree"),
+            crate::task_sink::neutral_cwd().to_string_lossy()
+        );
     }
 
     #[test]

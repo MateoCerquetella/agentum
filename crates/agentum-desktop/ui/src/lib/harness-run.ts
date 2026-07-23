@@ -7,19 +7,29 @@ import type { HarnessStatus } from '@/runtime/harness-client'
 import { normalizeWorkdir } from './workspace-harness-detect'
 
 /**
- * The engine run whose `workdir` is the worktree's path. Both sides are
- * normalized exactly like the spec-015 offer dedupe (`decideHarnessOffer`):
- * `HarnessStatus.workdir` is the server's `expand_workdir`'d absolute path,
- * `worktree.path` comes back pre-expanded — a trailing-slash spelling still
- * matches, symlink divergence stays an accepted residual (same exposure as
- * the engine's own `find_by_workdir`).
+ * The engine run that owns this worktree. New runs match their authoritative
+ * id first so identical paths on two hosts can never cross-attach. A path
+ * match is allowed only for a local target when the candidate is a legacy run
+ * without an id; SSH paths are never treated as globally unique.
  */
 export function findHarnessRunForWorkdir(
   runs: HarnessStatus[],
-  workdir: string
+  workdir: string,
+  worktreeId: string | undefined,
+  allowLegacyLocalPathFallback: boolean
 ): HarnessStatus | undefined {
   const normalized = normalizeWorkdir(workdir)
-  return runs.find((r) => normalizeWorkdir(r.workdir) === normalized)
+  if (worktreeId) {
+    const exact = runs.find((run) => run.worktree_id === worktreeId)
+    if (exact) return exact
+    if (!allowLegacyLocalPathFallback) return undefined
+    return runs.find(
+      (run) => !run.worktree_id && normalizeWorkdir(run.workdir) === normalized
+    )
+  }
+  return allowLegacyLocalPathFallback
+    ? runs.find((run) => normalizeWorkdir(run.workdir) === normalized)
+    : undefined
 }
 
 /**

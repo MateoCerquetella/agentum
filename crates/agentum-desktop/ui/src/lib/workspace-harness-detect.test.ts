@@ -50,8 +50,8 @@ describe('shouldDetectHarnessSpec', () => {
     expect(shouldDetectHarnessSpec({ gatedRun: true, connectionId: null })).toBe(false)
   })
 
-  it('SSH connectionId suppresses detection (D5)', () => {
-    expect(shouldDetectHarnessSpec({ gatedRun: false, connectionId: 'ssh-1' })).toBe(false)
+  it('known SSH worktrees detect through the host-aware filesystem route', () => {
+    expect(shouldDetectHarnessSpec({ gatedRun: false, connectionId: 'ssh-1' })).toBe(true)
   })
 
   it('unknown worktree (undefined connectionId) fails closed', () => {
@@ -112,6 +112,7 @@ describe('decideHarnessOffer', () => {
         detection: found,
         worktreeId: 'repo-1::/workspace/feature',
         workdir: '/workspace/feature',
+        allowLegacyLocalPathFallback: true,
         registeredWorkdirs: ['/workspace/feature']
       })
     ).toBeNull()
@@ -123,6 +124,7 @@ describe('decideHarnessOffer', () => {
         detection: found,
         worktreeId: 'repo-1::/workspace/feature',
         workdir: '/workspace/feature/',
+        allowLegacyLocalPathFallback: true,
         registeredWorkdirs: ['/workspace/feature']
       })
     ).toBeNull()
@@ -134,11 +136,56 @@ describe('decideHarnessOffer', () => {
         detection: found,
         worktreeId: 'repo-1::/workspace/feature',
         workdir: '/workspace/feature',
+        allowLegacyLocalPathFallback: true,
         registeredWorkdirs: ['/somewhere/else']
       })
     ).toEqual({
       worktreeId: 'repo-1::/workspace/feature',
       workdir: '/workspace/feature',
+      harnessDir: HARNESS_DIR
+    })
+  })
+
+  it('dedupes by worktree id without colliding with the same path on another host', () => {
+    const common = {
+      detection: found,
+      worktreeId: 'repo-1::/srv/shared',
+      workdir: '/srv/shared',
+      allowLegacyLocalPathFallback: false
+    }
+    expect(
+      decideHarnessOffer({
+        ...common,
+        registeredRuns: [
+          { workdir: '/srv/shared', worktree_id: 'repo-2::/srv/shared' }
+        ]
+      })
+    ).toEqual({
+      worktreeId: common.worktreeId,
+      workdir: common.workdir,
+      harnessDir: HARNESS_DIR
+    })
+    expect(
+      decideHarnessOffer({
+        ...common,
+        registeredRuns: [{ workdir: '/srv/shared', worktree_id: common.worktreeId }]
+      })
+    ).toBeNull()
+  })
+
+  it('does not suppress an SSH offer for an unscoped local run at the same path', () => {
+    expect(
+      decideHarnessOffer({
+        detection: found,
+        worktreeId: 'remote-repo::/srv/shared',
+        workdir: '/srv/shared',
+        allowLegacyLocalPathFallback: false,
+        registeredRuns: [{ workdir: '/srv/shared' }],
+        registeredWorkdirs: ['/srv/shared']
+      })
+    ).toEqual({
+      worktreeId: 'remote-repo::/srv/shared',
+      workdir: '/srv/shared',
       harnessDir: HARNESS_DIR
     })
   })
@@ -149,6 +196,7 @@ describe('decideHarnessOffer', () => {
         detection: { found: false },
         worktreeId: 'repo-1::/workspace/feature',
         workdir: '/workspace/feature',
+        allowLegacyLocalPathFallback: true,
         registeredWorkdirs: []
       })
     ).toBeNull()

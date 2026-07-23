@@ -25,12 +25,12 @@ import {
  * List a directory's entries, folding EVERY failure to `null`. A missing dir
  * is a `BadRequest("path error: …")` from `routes/fs.rs`, and a transient
  * server error changes nothing about the outcome (no banner, fail-closed) —
- * distinguishing them buys v1 nothing. `hostId` is never passed: D5 guarantees
- * the workdir is local before any fs call.
+ * distinguishing them buys this flow nothing. SSH worktrees pass their
+ * resolved server host id; local worktrees omit it.
  */
-async function listOrNull(path: string): Promise<FsFileEntry[] | null> {
+async function listOrNull(path: string, hostId?: string): Promise<FsFileEntry[] | null> {
   try {
-    const listing = await fsListEntries(path, { hidden: true })
+    const listing = await fsListEntries(path, { hidden: true, ...(hostId ? { hostId } : {}) })
     return listing.entries
   } catch {
     return null
@@ -78,18 +78,25 @@ export async function maybeOfferWorkspaceHarnessRun(opts: {
       return
     }
 
-    const connectionId =
-      state.repos?.find((r) => r.id === worktree.repoId)?.connectionId ?? null
+    const repo = state.repos?.find((candidate) => candidate.id === worktree.repoId)
+    if (!repo) return
+    const connectionId = repo.connectionId ?? null
     if (!shouldDetectHarnessSpec({ gatedRun: false, connectionId })) {
       return
     }
+    // A known SSH repo without its server host mapping is not safe to query.
+    // Repo hydration normally fills hostId; fail closed during that brief gap.
+    const hostId = connectionId ? (repo?.hostId ?? undefined) : undefined
+    if (connectionId && !hostId) return
 
     const base = normalizeWorkdir(worktree.path)
-    const canonical = await listOrNull(`${base}/${HARNESS_DIR}`)
+    const canonical = await listOrNull(`${base}/${HARNESS_DIR}`, hostId)
     // Legacy is consulted ONLY when the canonical dir is absent — the fold in
     // detectHarnessSpec mirrors the server's resolve_harness_dir, and skipping
     // the second fetch keeps the not-found path at ≤2 fs calls (AC 6).
-    const legacy = canonical === null ? await listOrNull(`${base}/${LEGACY_HARNESS_DIR}`) : null
+    const legacy = canonical === null
+      ? await listOrNull(`${base}/${LEGACY_HARNESS_DIR}`, hostId)
+      : null
     const detection = detectHarnessSpec(canonical, legacy)
     if (!detection.found) {
       return
@@ -97,12 +104,13 @@ export async function maybeOfferWorkspaceHarnessRun(opts: {
 
     // AC 5 dedupe — only reached on the found path, so the not-found flow
     // stays at the fs listing alone (AC 6: no other network).
-    const registeredWorkdirs = (await listHarnesses()).map((h) => h.workdir)
+    const registeredRuns = await listHarnesses()
     const offer = decideHarnessOffer({
       detection,
       worktreeId: opts.worktreeId,
       workdir: worktree.path,
-      registeredWorkdirs
+      allowLegacyLocalPathFallback: !connectionId,
+      registeredRuns
     })
     if (!offer) {
       return
@@ -139,7 +147,10 @@ export async function maybeOfferWorkspaceHarnessRun(opts: {
  */
 export async function acceptHarnessOffer(offer: WorkspaceHarnessOffer): Promise<void> {
   try {
-    const { harness_id } = await startHarness(offer.workdir)
+    const { harness_id } = await startHarness({
+      workdir: offer.workdir,
+      worktreeId: offer.worktreeId
+    })
     await runHarness(harness_id)
     toast.success('Harness run started')
     useAppStore.getState().clearWorkspaceHarnessOffer(offer.worktreeId)

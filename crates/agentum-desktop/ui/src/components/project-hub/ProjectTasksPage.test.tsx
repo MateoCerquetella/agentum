@@ -8,7 +8,7 @@ describe('Project Tasks structural isolation', () => {
   it('publishes bound scope authority before mounting guarded tracker reads', () => {
     const source = readFileSync(new URL('./ProjectTasksPage.tsx', import.meta.url), 'utf8')
     const publishStart = source.indexOf('const publish = (next: ProjectTaskScope)')
-    const publishEnd = source.indexOf("if (repo.trackerProvider !== 'github'", publishStart)
+    const publishEnd = source.indexOf("if (configLoadStatus !== 'loaded')", publishStart)
     const publishBody = source.slice(publishStart, publishEnd)
 
     expect(publishStart).toBeGreaterThan(-1)
@@ -22,13 +22,15 @@ describe('Project Tasks structural isolation', () => {
   it('renders only external tracker sources or the settings empty state', () => {
     const source = readFileSync(new URL('./ProjectTasksPage.tsx', import.meta.url), 'utf8')
 
-    expect(source).toContain("repo.trackerProvider !== 'github'")
-    expect(source).toContain("repo.trackerProvider !== 'linear'")
+    expect(source).toContain('projectTrackerConfigByRepo[repo.id]')
+    expect(source).toContain("config.provider === 'github'")
     expect(source).toContain('ProjectViewWrapper')
+    expect(source).toContain('LockedGithubRepoTasks')
     expect(source).toContain('LockedLinearProjectTasks')
     expect(source).toContain('No tracker is configured for')
     expect(source).toContain('configured tracker is unavailable')
     expect(source).toContain('Choose a GitHub or Linear tracker in Project Settings.')
+    expect(source).not.toContain('repo.trackerProvider')
     expect(source).not.toContain('internal board')
   })
 

@@ -94,7 +94,7 @@ export function useTrackerIntake({
   const guard = useMemo(() => captureProjectTaskScopeGuard(scope), [scope])!
   const guardCurrent = useCallback(() => isLiveProjectTaskScopeAuthority(guard), [guard])
   const slug = scope.provider === 'github' ? scope.repoSlug : null
-  const resolved: PickerProjectRef | null = scope.provider === 'github'
+  const resolved: PickerProjectRef | null = scope.provider === 'github' && scope.target === 'project'
     ? { owner: scope.owner, ownerType: scope.ownerType, number: scope.projectNumber }
     : null
 
@@ -265,17 +265,16 @@ export function useTrackerIntake({
 
   const gate = deriveFiledGatedRunGate(filed, repo.connectionId)
 
-  // The host label explains WHY the files weren't readable (presentation
-  // only — the WorktreeCard sshTargetLabels precedent); the note itself keys
-  // exclusively on the server's grounding flag.
+  // The host label explains why repo grounding was unavailable (presentation
+  // only); gated-run support itself is host-aware and no longer local-only.
   const hostLabel = useAppStore((s) =>
     repo.connectionId ? (s.sshTargetLabels.get(repo.connectionId) ?? 'a remote host') : null
   )
   const groundingNote = deriveDraftGroundingNote(grounding, hostLabel)
 
   const startGatedRun = useCallback((): void => {
-    // The gate composes D3 (GitHub-only) and the local-repo precondition; a
-    // gated run needs the FRESH worktree the composer creates, so this is the
+    // The gate composes D3 (GitHub-only); a gated run needs the FRESH worktree
+    // the composer creates, so this is the
     // spec-008 pre-armed hop — never a direct `startGatedWork` from here.
     if (!gate.eligible || !filed || filed.provider !== 'github' || !guardCurrent()) return
     openModal('new-workspace-composer', {

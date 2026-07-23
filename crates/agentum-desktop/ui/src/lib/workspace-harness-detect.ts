@@ -29,11 +29,9 @@ export function normalizeWorkdir(path: string): string {
 }
 
 /**
- * Pre-fs gate: D6 (a gated-run creation already registers + runs via
- * `/api/harness/start-work` ⇒ never offer) and D5 (the engine reads the
- * server-local FS only, so SSH worktrees can't run — `connectionId` string =
- * SSH ⇒ false; `undefined` = worktree/repo not found ⇒ fail closed; `null` =
- * local ⇒ true).
+ * Pre-fs gate: a gated-run creation already registers via start-work, while an
+ * unknown worktree still fails closed. Known local and SSH worktrees are both
+ * detectable because the listing and Harness registration routes are host-aware.
  */
 export function shouldDetectHarnessSpec(ctx: {
   gatedRun: boolean
@@ -42,7 +40,7 @@ export function shouldDetectHarnessSpec(ctx: {
   if (ctx.gatedRun) {
     return false
   }
-  return ctx.connectionId === null
+  return ctx.connectionId !== undefined
 }
 
 /**
@@ -87,24 +85,38 @@ export type WorkspaceHarnessOffer = {
 }
 
 /**
- * AC 5 dedupe + the final offer. `registeredWorkdirs` = `HarnessStatus.workdir`
- * values (`runtime/harness-client.ts`; the server serializes the
- * `expand_workdir`'d PathBuf — absolute, no trailing slash). Both sides are
- * normalized before comparing so a trailing-slash spelling still matches.
- * Symlink-diverging spellings are an accepted residual — the same exposure the
- * engine's own `find_by_workdir` has.
+ * Dedupe + the final offer. Scoped runs match worktree id; normalized paths are
+ * used only for legacy statuses that predate authoritative run identity.
  */
 export function decideHarnessOffer(input: {
   detection: HarnessSpecDetection
   worktreeId: string
   workdir: string
-  registeredWorkdirs: string[]
+  /** Legacy statuses have no worktree/host scope. Only a local target may
+   *  safely dedupe against one by path; SSH paths are not globally unique. */
+  allowLegacyLocalPathFallback: boolean
+  registeredRuns?: Array<{ workdir: string; worktree_id?: string | null }>
+  /** Backward-compatible pure-model input for pre-scope callers/tests. */
+  registeredWorkdirs?: string[]
 }): WorkspaceHarnessOffer | null {
   if (!input.detection.found) {
     return null
   }
   const normalized = normalizeWorkdir(input.workdir)
-  if (input.registeredWorkdirs.some((w) => normalizeWorkdir(w) === normalized)) {
+  const registered = input.registeredRuns ?? []
+  const alreadyRegistered = registered.some(
+    (run) =>
+      run.worktree_id === input.worktreeId ||
+      (input.allowLegacyLocalPathFallback &&
+        !run.worktree_id &&
+        normalizeWorkdir(run.workdir) === normalized)
+  )
+  const legacyRegistered =
+    input.allowLegacyLocalPathFallback &&
+    (input.registeredWorkdirs ?? []).some(
+      (workdir) => normalizeWorkdir(workdir) === normalized
+    )
+  if (alreadyRegistered || legacyRegistered) {
     return null
   }
   return {

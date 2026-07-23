@@ -286,13 +286,14 @@ export function ProjectBindingEditor({
         })
         if (!mounted.current) return
         setBinding(res.binding)
+        onBound?.(res.binding, res.slug)
       } catch (err) {
         if (!mounted.current) return
         setDoneClosesIssue(!value)
         setError(toBindError(err))
       }
     },
-    [binding, workdir, slug, repoId, mounted]
+    [binding, workdir, slug, repoId, onBound, mounted]
   )
 
   const handleUnbind = useCallback(async () => {

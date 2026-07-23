@@ -18,7 +18,6 @@ export type NewWorkEligibility =
   | {
       eligible: false;
       reason:
-        | 'remote-repo'
         | 'non-git'
         | 'non-github-issue'
         | 'agent-unavailable'
@@ -32,6 +31,46 @@ export const NEW_WORK_STAGES: readonly NewWorkStage[] = [
   'spec',
   'run'
 ];
+
+/** Stable footer copy for each durable launch checkpoint. Keeping these labels
+ * in the model prevents the CTA from bouncing between incidental hook flags
+ * while issue creation hands off to worktree/spec/run orchestration. */
+export const NEW_WORK_STAGE_ACTIVE_LABELS: Readonly<Record<NewWorkStage, string>> = {
+  issue: 'Preparing issue…',
+  worktree: 'Creating worktree…',
+  spec: 'Preparing spec…',
+  run: 'Starting run…'
+};
+
+export function activeNewWorkStage(progress: NewWorkProgress): NewWorkStage | null {
+  return NEW_WORK_STAGES.find(stage => progress[stage] === 'active') ?? null;
+}
+
+export function newWorkBusyLabel(progress: NewWorkProgress): string | null {
+  const stage = activeNewWorkStage(progress);
+  return stage ? NEW_WORK_STAGE_ACTIVE_LABELS[stage] : null;
+}
+
+/** A retry is offered only after the pipeline is idle with a failed durable
+ * stage. An attempted-but-still-running launch must retain its stage label. */
+export function isNewWorkRetryAvailable(
+  progress: NewWorkProgress,
+  launchBusy: boolean
+): boolean {
+  return !launchBusy && NEW_WORK_STAGES.some(stage => progress[stage] === 'error');
+}
+
+export function canSelectWorkSource(input: {
+  source: WorkSource
+  trackerConfigured: boolean
+  canStageNewIssue: boolean
+  locked: boolean
+}): boolean {
+  if (input.locked) return false
+  if (input.source === 'none') return true
+  if (!input.trackerConfigured) return false
+  return input.source !== 'new' || input.canStageNewIssue
+}
 
 export function initialNewWorkProgress(
   checkpoint: NewWorkCheckpoint = {},
@@ -66,6 +105,31 @@ export function deriveDefaultExecutionMode(
   eligibility: NewWorkEligibility
 ): ExecutionMode {
   return eligibility.eligible ? 'autopilot' : 'manual';
+}
+
+function isGitHubIssue(item: LinkedWorkItemSummary | null | undefined): boolean {
+  return Boolean(
+    item &&
+      item.type === 'issue' &&
+      item.url.toLowerCase().includes('github.com/')
+  );
+}
+
+/** Whether a source is structurally incompatible with Autopilot. Transient
+ * states (tracker loading, no existing issue selected yet, agent/setup probes)
+ * deliberately do not demote the operator's execution-mode choice. */
+export function shouldDefaultNewWorkToManual(input: {
+  isGit: boolean;
+  source: WorkSource;
+  trackerConfigLoaded: boolean;
+  newIssueProvider?: 'github' | 'linear' | null;
+  linkedWorkItem?: LinkedWorkItemSummary | null;
+}): boolean {
+  if (!input.isGit || input.source === 'none') return true;
+  if (input.source === 'new') {
+    return input.trackerConfigLoaded && input.newIssueProvider !== 'github';
+  }
+  return Boolean(input.linkedWorkItem && !isGitHubIssue(input.linkedWorkItem));
 }
 
 export function canLaunchNewWork(input: {
@@ -104,20 +168,16 @@ export function canLaunchNewWork(input: {
 }
 
 export function deriveNewWorkEligibility(input: {
-  isLocal: boolean;
   isGit: boolean;
   source: WorkSource;
+  /** Canonical provider used when `source` creates a new issue. `undefined`
+   * means the repo-scoped config is still loading; `null` means it loaded
+   * without a tracker. */
+  newIssueProvider?: 'github' | 'linear' | null;
   linkedWorkItem?: LinkedWorkItemSummary | null;
   selectedAgentInstalled: boolean;
   setupBlocked?: boolean;
 }): NewWorkEligibility {
-  if (!input.isLocal) {
-    return {
-      eligible: false,
-      reason: 'remote-repo',
-      message: 'SDD Autopilot is not available for SSH projects.'
-    };
-  }
   if (!input.isGit) {
     return {
       eligible: false,
@@ -147,10 +207,21 @@ export function deriveNewWorkEligibility(input: {
     };
   }
   if (
+    input.source === 'new' &&
+    input.newIssueProvider !== undefined &&
+    input.newIssueProvider !== 'github'
+  ) {
+    return {
+      eligible: false,
+      reason: 'non-github-issue',
+      message: input.newIssueProvider === 'linear'
+        ? 'SDD Autopilot requires a GitHub issue. Linear issues open manually.'
+        : 'SDD Autopilot needs a configured GitHub issue tracker.'
+    };
+  }
+  if (
     input.source === 'existing' &&
-    (!input.linkedWorkItem ||
-      input.linkedWorkItem.type !== 'issue' ||
-      !input.linkedWorkItem.url.toLowerCase().includes('github.com/'))
+    !isGitHubIssue(input.linkedWorkItem)
   ) {
     return {
       eligible: false,

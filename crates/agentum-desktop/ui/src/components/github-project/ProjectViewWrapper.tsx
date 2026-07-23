@@ -34,7 +34,7 @@ import {
   type BoardBindingState,
   type BoardProjectResolution
 } from '@/lib/board-project-resolution'
-import type { ProjectTaskScope } from '@/lib/project-task-scope'
+import type { GithubProjectTaskScope } from '@/lib/project-task-scope'
 import { captureProjectTaskScopeGuard } from '@/lib/project-task-scope-guard'
 import { isLiveProjectTaskScopeAuthority, runGuardedProjectTaskAction } from '@/lib/project-task-scope-authority'
 import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
@@ -73,7 +73,7 @@ type Props = {
    *  surface — resolution then reads only the legacy `activeProject` slot. */
   repoId?: string | null
   /** Structural Project Hub mode: exact binding supplied by ProjectTasksPage. */
-  lockedScope?: Extract<ProjectTaskScope, { status: 'bound'; provider: 'github' }>
+  lockedScope?: GithubProjectTaskScope
 }
 
 const AGENTUM_FEATURE_REQUEST_URL = 'https://github.com/mateocerquetella/agentum/issues/new'
