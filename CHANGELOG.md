@@ -4,6 +4,37 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.3] — 2026-07-23
+
+### Added
+
+- **Tracker identity now follows work from project setup through gated runs.**
+  Project-scoped GitHub and Linear bindings are shared consistently by Tasks,
+  New workspace, harness launch, and tracker updates, including remote-host
+  repository scopes.
+
+### Fixed
+
+- **Live transcripts no longer leak observers or race session teardown.** Reads,
+  resets, stop, kill, delete, and watchdog retirement now share one ordered
+  lifecycle, so stale requests cannot resurrect retired transcript workers.
+- **Gated-run progress stays visible and current.** The top bar survives startup
+  and temporary empty responses, preserves the active run, and refreshes status
+  without flickering back to an offer or picker.
+- **Workspace issue intake fails closed and retries cleanly.** Tracker load
+  failures are shown instead of becoming false empty states, and the repository,
+  host, issue, and tracker snapshot used at launch cannot drift between steps.
+- **Ephemeral SSH terminals now stay on the remote host.** With tmux persistence
+  off, the desktop PTY launches OpenSSH for the bound target and rejects missing
+  or invalid target identities instead of falling through to a local shell.
+- **Remote harness operations keep their execution boundary.** Repo discovery,
+  filesystem access, provisioning, and MCP actions preserve host identity rather
+  than falling back to a same-looking local path.
+- **Remote harness recovery is quarantined before touching the local host.**
+  Offline, deleted, stale, or malformed remote bindings no longer make startup
+  inspect a same-looking local path or fail globally, and quarantined runs
+  cannot restart managed workers until a coordinator resolves them.
+
 ## [0.96.2] — 2026-07-23
 
 ### Fixed
