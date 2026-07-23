@@ -1,1 +1,1 @@
-{"passed": true, "summary": "Grounded external-tracker-only plan names current UI, router, tracker, persistence, and documentation seams; preserves legacy data safely; and maps every acceptance criterion to focused tests plus required builds."}
+{"passed": true, "summary": "Grounded minimal plan preserves the existing single root topbar and fixes workdir-scoped snapshot continuity with ordered event refreshes and focused regressions."}

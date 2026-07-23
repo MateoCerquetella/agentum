@@ -1,1 +1,1 @@
-{"passed": true, "summary": "One tracker-authoritative work-selection slice now has a named persona, six observable criteria including current docs and SDD contracts, explicit non-goals, grounded reuse, preserved invariants, and no competing spec."}
+{"passed": true, "summary": "Spec 437 is one testable gated-run topbar persistence slice grounded in the existing desktop UI and harness event flow."}

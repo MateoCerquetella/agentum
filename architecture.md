@@ -1,279 +1,201 @@
-# Spec 431 — Architecture
+# Spec 437 — Architecture
 
-- **Spec:** `431-lets-remove-the-internal-worskpace-board`
+- **Spec:** `437-topbar-is-dissapearing-on-harness-gates`
 - **Phase:** Architect
-- **Date:** 2026-07-22
-- **Verdict:** ready for developer verification and completion
+- **Date:** 2026-07-23
+- **Verdict:** ready for developer
 
-Every implementation seam cited below was read in this worktree and exists at
-the time of this architecture review. The worktree already contains partial
-changes for this issue; the developer must preserve and finish those changes,
-not restore the retired internal-board modules.
+Every existing seam cited below was read in this worktree. The issue's original
+`components/harness/HarnessEngine.tsx` path does not exist here; the PM-refined
+spec correctly identifies the current implementation under `components/gated-run`
+and `hooks`.
 
 ## Components
 
-### 1. Desktop Tasks surfaces
+### 1. Worktree-owned harness snapshot continuity
 
-- Finalize `crates/agentum-desktop/ui/src/components/TaskPage.tsx`. This is the
-  existing global Tasks renderer and direct-launch surface. It must retain its
-  GitHub Issues, GitHub Projects, and Linear views while containing no internal
-  board client import, mirroring callback, or “Send ... to the Board” action.
-- Keep and reuse
-  `crates/agentum-desktop/ui/src/components/project-hub/ProjectTasksPage.tsx`.
-  Its existing `ProjectTasksPage` effect dispatches only
-  `repo.trackerProvider === 'github'` or `'linear'`; its existing unbound and
-  unavailable branches provide explicit tracker messaging and an
-  `openSettings` action. No replacement task-source component is needed.
-- Extend the existing structural test module
-  `crates/agentum-desktop/ui/src/components/project-hub/ProjectTasksPage.test.tsx`.
-  The named cases `renders only external tracker sources or the settings empty
-  state` and `global tasks has no internal board sync affordance` pin both
-  provider branches, the no-tracker/settings state, the external views, and the
-  absence of the retired sync symbols.
+Modify
+`crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.ts::useWorktreeHarnessRun`.
+Keep its public `{ run, refresh }` return contract, its mount-time
+`listHarnesses` read, and its single `subscribeHarnessEvents` subscription. Add
+only the state needed to retain confirmed `HarnessStatus` snapshots by the
+normalized requested workdir and to order overlapping asynchronous refreshes.
 
-Boundary: keep `crates/agentum-desktop/ui/src/lib/board-route.ts`,
-`crates/agentum-desktop/ui/src/lib/board-project-resolution.ts`, GitHub Projects
-components, Linear kanban components, and
-`crates/agentum-desktop/ui/src/components/sidebar/WorkspaceKanbanDrawer.tsx`.
-Those existing “board” names represent navigation, external tracker
-presentation, or workspace layout rather than Agentum-owned cards. This spec
-does not redesign tracker setup or navigation.
+The hook must make these decisions synchronously from its retained snapshots:
 
-### 2. Server route boundary and tracker-only work-item seams
+- A requested workdir may expose only a run whose normalized `run.workdir`
+  matches it. A snapshot from the previously selected worktree must never leak
+  into the newly selected worktree.
+- Returning to a previously visited owning worktree reuses its last confirmed
+  snapshot while the authoritative refresh is in flight, so the existing bar
+  does not render a transient `null` frame.
+- An event refresh for the active matched harness keeps the last confirmed run
+  visible until a newer successful status/list response replaces it. A slow
+  older response cannot overwrite a newer response.
+- An authoritative list response with no match clears the requested workdir's
+  retained snapshot. This preserves the existing behavior for a deleted run or
+  a worktree that never owned one.
 
-- Finalize `crates/agentum-server/src/lib.rs::router` and
-  `crates/agentum-server/src/routes/mod.rs`. The current router composes GitHub,
-  GitHub Projects, project-tracker, harness, and SDD routes but no internal
-  board route modules. Do not add tombstone handlers: Axum's unmatched-route
-  behavior is the required `404 Not Found` contract.
-- Retain `crates/agentum-server/src/lib.rs::tests::internal_board_route_families_are_unregistered`.
-  It builds the real application router and checks every retired family plus
-  representative nested paths under `/api/board`, `/goals`, `/links`,
-  `/rules`, and `/bindings`.
-- Finalize `crates/agentum-server/src/task_sink.rs` using its existing closed
-  enum pattern. `TaskSink` remains limited to `Github` and `Linear`;
-  `parse_tracker_choice` accepts only automatic/external selection;
-  `apply_tracker_transition` and `apply_blocked_transition` retain their
-  existing external results and event semantics without receiving a `Store`.
-  A legacy provider string such as `"board"` follows the existing unknown
-  provider best-effort path and cannot write persistence.
-- Preserve and compile-check every current transition caller:
-  `crates/agentum-server/src/harness/drive.rs`,
-  `crates/agentum-server/src/tracker_sync.rs`,
-  `crates/agentum-server/src/tracker_attention.rs`,
-  `crates/agentum-server/src/routes/harness.rs`, and
-  `crates/agentum-server/src/routes/mcp.rs`. These callers keep using the one
-  tracker transition seam; only GitHub/Linear are advertised as operational
-  providers.
-- Retain the focused tests
-  `task_sink::tests::only_github_and_linear_are_creation_sinks`,
-  `task_sink::tests::pinned_provider_dispatches_to_matching_tracker_arm`,
-  `task_sink::tests::legacy_board_provider_is_non_mutating_and_best_effort`,
-  `routes::harness::tests::resolve_tracker_pin_maps_d4`, and
-  `routes::mcp::tests::report_status_legacy_board_provider_is_non_writing`.
+Reuse
+`crates/agentum-desktop/ui/src/lib/harness-run.ts::findHarnessRunForWorkdir`
+and its existing `normalizeWorkdir` behavior. Reuse
+`crates/agentum-desktop/ui/src/runtime/harness-client.ts::{listHarnesses,
+getHarnessStatus,subscribeHarnessEvents}` and the existing `HarnessStatus`,
+`HarnessEvent`, and `HarnessEventStream` wire types. Do not introduce a Zustand
+slice, a second status model, polling, or another WebSocket.
 
-Boundary: `/api/github-projects`, `/api/project-trackers`, `/api/github`,
-`/api/harness`, `/api/sdd`, sessions, events, launch behavior, harness gates,
-and push streaming stay unchanged. GitHub Projects is an external tracker and
-must not be removed with the internal `/api/board*` family.
+For focused coverage, create
+`crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.test.ts`. Factor the
+small snapshot-selection/ordering transition used by the hook into IO-free,
+colocated logic so Vitest can drive gate-event and worktree-switch sequences in
+the repository's default Node test environment. Named cases:
 
-### 3. Inert legacy persistence and runtime cleanup
+- `keeps the matched snapshot selected while gate refreshes resolve in order`
+- `selects the owning snapshot when switching away and back and clears an unmatched worktree`
+- `rejects a stale response and a snapshot owned by another normalized workdir`
 
-- Keep `crates/agentum-store/src/lib.rs` as the store module boundary without
-  public internal-board CRUD modules. Retain
-  `tests::legacy_board_rows_survive_reopen_and_normal_store_work_is_inert`,
-  which inserts a historical row through `Store::pool`, reopens via
-  `Store::open`, performs ordinary session work, and compares the full row
-  snapshot.
-- Keep `crates/agentum-store/src/sessions.rs` and
-  `crates/agentum-core/src/lib.rs` tolerant of the existing optional
-  `Session.card_id`/`NewSession.card_id` field. It is serialization/database
-  compatibility only; no surviving lookup or work-selection API may use it.
-- Keep `crates/agentum-server/src/lib.rs::spawn_background_workers` limited to
-  the ordinary watchdog and external tracker workers. Keep
-  `crates/agentum-watchdog/src/lib.rs` focused on session activity,
-  compaction, and crash detection, with no internal goal reconciler or session
-  comment bridge.
-- Do not edit files under `crates/agentum-store/migrations/`. `Store::open`
-  continues to apply the historical schema, so old rows remain readable by
-  SQLite and survive startup, while no normal runtime module returns or
-  mutates them.
+Boundary: do not change harness routes, event payloads, gate semantics, session
+attachment, run retry/unlink behavior, or the worktree store. In particular,
+`crates/agentum-desktop/ui/src/store/slices/worktrees.ts::setActiveWorktree`
+continues to restore the active workspace data in one Zustand update; harness
+status remains derived by workdir in the hook.
 
-Boundary: historical tables and user data are retained. No DROP migration,
-copy, rewrite, or cleanup job is introduced. External tracker configuration and
-GitHub Projects bindings are unrelated persistence and remain operational.
+### 2. Existing progress-strip render contract
 
-### 4. Current documentation and live SDD contracts
+Keep the production mount and view components unchanged:
 
-- Update `docs/API.md` so its current HTTP contract does not advertise any
-  `/api/board*` endpoint.
-- Update `docs/DATA-MODEL.md` so `board_items` appears only as explicitly
-  labeled legacy migration compatibility, with normal runtime non-use stated.
-- Update the live embedded playbooks
-  `crates/agentum-server/src/sdd_playbooks/sdd-orchestrate.md` and
-  `crates/agentum-server/src/sdd_playbooks/sdd-spec.md` so tracker reporting
-  names GitHub/Linear-backed items and never presents the internal board as a
-  fallback or supported work-item system.
-- Keep legacy provider wire fields in
-  `crates/agentum-server/src/harness/types.rs` and
-  `crates/agentum-desktop/ui/src/runtime/harness-client.ts` so historical
-  harness files still deserialize, but label any retained board value as
-  compatibility-only.
-- Add
-  `crates/agentum-server/src/sdd.rs::tests::current_work_item_docs_are_external_only_and_legacy_schema_is_labeled`.
-  Reuse the existing embedded-playbook constants in `sdd.rs`, and read the two
-  repository docs relative to `CARGO_MANIFEST_DIR`; assert the API and live
-  playbooks do not advertise `/api/board`, `TaskSink::Board`, or a board
-  fallback, while `DATA-MODEL.md` explicitly marks `board_items` as legacy.
+- `crates/agentum-desktop/ui/src/components/Terminal.tsx::Terminal` already
+  renders one `GatedRunBar` as a root `shrink-0` strip above all workspace
+  surfaces whenever the terminal view has an active worktree.
+- `crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.tsx::GatedRunBar`
+  already resolves `worktreeId` to `worktree.path`, consumes
+  `useWorktreeHarnessRun`, and returns `null` only when there is neither a run
+  nor the existing pending-start state.
+- `GatedRunBarView` already owns the single
+  `aria-label="Gated run progress"` section, calls
+  `gatedRunHeadline(run)`, and renders the existing feature-state labels for
+  `verifying`, `ready_to_test`, `done`, and `blocked`.
 
-Boundary: archived specs and historical migrations remain historical records;
-this criterion changes current product/API documentation and live SDD
-playbooks only.
+Extend
+`crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.test.tsx` with a
+table-driven regression named
+`renders exactly one progress region across verifying, ready_to_test, done, and blocked`.
+For each status, render the existing view/host with
+`renderToStaticMarkup`, assert exactly one progress-region label, and assert the
+state's expected headline or feature label. Keep the current no-run assertion
+to pin that an unmatched worktree renders no bar.
+
+`crates/agentum-desktop/ui/src/App.tsx::App` and
+`crates/agentum-desktop/ui/src/components/error-boundaries/RecoverableRenderErrorBoundary.tsx::RecoverableRenderErrorBoundary`
+were also read. `App` keeps the terminal workbench mounted under the same
+`Suspense` and error-boundary instances; changing the boundary's `resetKey`
+clears boundary error state but does not key/remount its children. No shell,
+sidebar, titlebar, worktree-pane, or error-boundary edit is needed.
+
+Boundary: the bar remains exclusive to the active terminal workspace. Do not
+show it on full-page views, duplicate it inside a pane, redesign its markup or
+styles, or key/remount `Terminal`/`GatedRunBar` per status or worktree.
 
 ## APIs
 
-### Removed HTTP API
+No server, HTTP, WebSocket, store, or component-prop API changes are required.
 
-All methods at or below these route families are unmatched and return
-`404 Not Found`:
+- Preserve `useWorktreeHarnessRun(workdir: string | undefined):
+  WorktreeHarnessRun` and `WorktreeHarnessRun = { run: HarnessStatus |
+  undefined; refresh: () => void }`.
+- Preserve `GET /api/harness`, `GET /api/harness/{id}`, and
+  `WS /api/harness/events` usage through the existing client functions.
+- Preserve `GatedRunBar({ worktreeId })` and `GatedRunBarView` props.
+- Reuse `HarnessStatus` as the only run snapshot and
+  `findHarnessRunForWorkdir` as the ownership rule.
 
-- `/api/board`
-- `/api/board/goals`
-- `/api/board/links`
-- `/api/board/rules`
-- `/api/board/bindings`
-
-There is no redirect, `410 Gone`, compatibility handler, or replacement
-internal endpoint.
-
-### Preserved APIs and signatures
-
-- GitHub Issues/Projects, Linear, project-tracker, harness, SDD, session, and
-  event wire contracts stay unchanged.
-- `TaskSink` remains the existing closed enum with only `Github` and `Linear`.
-  `SinkCtx` retains only the current work directory and optional GitHub slug.
-- `apply_tracker_transition` and `apply_blocked_transition` keep provider,
-  tracker identity, phase/comment inputs, results, and event behavior; neither
-  receives store access.
-- `agentum_tasks_report_status` keeps its tool/result shape and advertises
-  external providers only. A historical `board` input returns a bounded,
-  non-writing best-effort result.
-- SQLite board tables and `Session.card_id` remain compatibility artifacts, not
-  application APIs.
+Any IO-free transition exported solely for the new focused test is an
+implementation detail of `useWorktreeHarnessRun.ts`; it must not become a new
+application service or public store contract.
 
 ## Data Flow
 
-### Project Tasks
-
-1. `ProjectTasksPage` reads the persisted project tracker provider.
-2. GitHub uses the existing project binding and `ProjectViewWrapper`; Linear
-   uses the existing binding and `LockedLinearProjectTasks`.
-3. Missing or unavailable configuration renders the existing settings-linked
-   empty state.
-4. No desktop path mirrors an issue into an Agentum board card or calls an
-   `/api/board*` endpoint.
-
-### Harness and SDD tracker lifecycle
-
-1. Existing harness metadata carries the external provider, stable id, and
-   optional URL.
-2. Creation/selection resolves only GitHub or Linear through `TaskSink` and
-   `resolve_tracker_pin`.
-3. Harness, SDD, MCP, sync, and attention paths call the shared transition seam.
-4. GitHub/Linear preserve their current results and event emission. A legacy
-   provider is skipped best-effort without a store handle and cannot halt the
-   harness.
-
-### Legacy database startup
-
-1. `Store::open` runs the unchanged migration set.
-2. Historical board tables and rows remain present.
-3. No router, background worker, task sink, public store method, or current UI
-   reads or writes those rows.
-4. Normal session and external-tracker work proceeds without data conversion or
-   deletion.
+1. `setActiveWorktree` updates `activeWorktreeId` and the worktree's restored
+   session/tab data; the long-lived `Terminal` receives the new id.
+2. `GatedRunBar` resolves that id against `worktreesByRepo` and calls
+   `useWorktreeHarnessRun(worktree.path)`.
+3. The hook normalizes the requested workdir, synchronously selects only that
+   workdir's retained confirmed snapshot, and starts/restarts the existing
+   authoritative list plus event subscription effect.
+4. `listHarnesses` establishes ownership through
+   `findHarnessRunForWorkdir`. Events for the matched `harness_id` trigger the
+   existing single-status read; lagged or not-yet-matched events trigger the
+   existing list reconciliation.
+5. Ordered successful responses replace the requested workdir's retained
+   snapshot. While an event response is pending, the prior matching snapshot
+   remains selected, so React updates the contents of the same
+   `GatedRunBarView` section instead of removing and recreating it.
+6. Switching to an unmatched worktree selects no snapshot and therefore no
+   bar. Switching back selects the owning worktree's retained snapshot
+   immediately, then reconciles it with the latest server status.
 
 ## Important Decisions
 
-### D1 — Remove capability at the route and type boundaries
+### D1 — Fix the data hook, not the shell mount
 
-Choose an unregistered router plus external-only `TaskSink` and store-free
-transition signatures over leaving disabled handlers or guarded board match
-arms. The chosen shape makes normal board access impossible by construction and
-uses the codebase's existing closed-enum and Axum composition patterns.
+Choose workdir-keyed snapshot continuity in `useWorktreeHarnessRun` over moving
+or duplicating `GatedRunBar`. `Terminal` already provides the correct single,
+root-level flex strip and `App` does not key-remount the workbench; the unstable
+boundary is the hook's one unkeyed React state value while its `workdir` input
+changes and asynchronous reads overlap.
 
-### D2 — Return 404 instead of adding tombstones
+### D2 — Retain the last confirmed matching snapshot during refresh
 
-Choose Axum's existing unmatched-route `404 Not Found` behavior over new `410`
-or redirect handlers because the acceptance contract requires 404 and retaining
-handlers would preserve an operational internal-board boundary.
+Choose stale-while-revalidate for the already confirmed owning run over
+clearing it before each list/status request. Harness events are hints to fetch
+the new authoritative snapshot, not evidence that ownership disappeared.
+Keeping the matching snapshot prevents the visible collapse; an authoritative
+list with no match remains the explicit eviction signal.
 
-### D3 — Preserve legacy rows instead of dropping data
+### D3 — Use a small instance-local cache, not global application state
 
-Choose unchanged migrations and inert compatibility fields over a destructive
-drop migration. Existing installations continue to open and historical user
-data remains intact; compatibility stops at schema/serialization tolerance.
+Choose a cache scoped to the mounted hook plus a monotonic response order over
+a new Zustand harness slice or process-wide subscription manager. This is
+enough to survive active-worktree switches in the existing long-lived
+`Terminal`, avoids broad store subscriptions and shell renders, and disappears
+on unmount. A global cache/provider would be a speculative abstraction for
+this regression.
 
-### D4 — Reuse current external tracker primitives
+### D4 — Test transitions as pure state plus existing SSR markup
 
-Reuse `TaskSink::{Github, Linear}`, the current transition functions,
-`ProjectTasksPage`, provider-specific views, and its empty state. A provider
-trait, replacement cache, new task router, or new empty-state component would
-be speculative for this removal.
-
-### D5 — Preserve unrelated “board” terminology
-
-Keep GitHub Projects bindings, Linear kanban, filesystem-derived harness board
-views, task-routing helpers, and workspace layout components. They describe
-external presentation or run state, not internal work-item cards; renaming them
-would broaden this issue without user value.
+Choose a colocated IO-free transition test and the existing
+`renderToStaticMarkup` component pattern over adding jsdom/testing-library.
+The UI package currently has neither DOM test dependency. This combination
+directly pins response ordering, workdir ownership, return-switch continuity,
+exactly-one markup, and all named feature states without adding dependencies.
 
 ## Acceptance Criteria Mapping
 
-| Acceptance criterion | Named plan part | Named test / verification |
-| --- | --- | --- |
-| Project Tasks uses configured GitHub/Linear or an explicit no-tracker state and has no internal cards/sync action | Component 1 | `ProjectTasksPage.test.tsx` cases `renders only external tracker sources or the settings empty state` and `global tasks has no internal board sync affordance`; desktop build |
-| Every retired `/api/board*` family and nested path returns 404 | Component 2 | `agentum_server::tests::internal_board_route_families_are_unregistered` |
-| GitHub/Linear harness creation, selection, and transitions preserve external behavior without board writes | Component 2 | `task_sink::tests::only_github_and_linear_are_creation_sinks`; `task_sink::tests::pinned_provider_dispatches_to_matching_tracker_arm`; `routes::harness::tests::resolve_tracker_pin_maps_d4`; compile-time store-free transition signatures |
-| Legacy rows survive startup and normal workspace/harness flows neither return nor mutate them | Components 2 and 3 | `agentum_store::tests::legacy_board_rows_survive_reopen_and_normal_store_work_is_inert`; server 404 matrix; `task_sink::tests::legacy_board_provider_is_non_mutating_and_best_effort`; `routes::mcp::tests::report_status_legacy_board_provider_is_non_writing` |
-| Current API/data-model docs and live SDD playbooks omit the internal board except explicit legacy compatibility | Component 4 | `sdd::tests::current_work_item_docs_are_external_only_and_legacy_schema_is_labeled` |
-| Workspace Rust library tests and desktop build pass with focused checks | Components 1–4 | all focused tests above; `cargo test --workspace --lib`; `npm run build --prefix crates/agentum-desktop/ui` |
+| ID | Acceptance criterion | Named plan part | Named test / verification |
+| --- | --- | --- | --- |
+| AC1 | The active terminal workspace has exactly one labelled progress bar for its registered run, including `verifying`, `ready_to_test`, `done`, and `blocked` | Components 1–2 | `GatedRunBar.test.tsx` — `renders exactly one progress region across verifying, ready_to_test, done, and blocked`; existing `renders nothing when no run owns the worktree` |
+| AC2 | A matched harness event updates the headline without an absent intermediate frame | Component 1, Data Flow steps 4–5 | `useWorktreeHarnessRun.test.ts` — `keeps the matched snapshot selected while gate refreshes resolve in order`; the table-driven bar test asserts the resulting copy |
+| AC3 | Switching away and back restores the owning worktree's latest status while an unmatched worktree has no bar | Component 1, Data Flow steps 1–3 and 6 | `useWorktreeHarnessRun.test.ts` — `selects the owning snapshot when switching away and back and clears an unmatched worktree` and `rejects a stale response and a snapshot owned by another normalized workdir`; existing no-run bar test |
+| AC4 | Focused Vitest regression checks exit 0 | Components 1–2 | `(cd crates/agentum-desktop/ui && npm exec vitest run src/hooks/useWorktreeHarnessRun.test.ts src/components/gated-run/GatedRunBar.test.tsx)` |
+| AC5 | Desktop UI production build exits 0 | Components 1–2 and unchanged API boundary | `npm run build --prefix crates/agentum-desktop/ui` |
 
 ## Risks
 
-- **External features called “board” are removed accidentally.** Mitigation:
-  deletions and negative assertions are limited to internal `/api/board*`,
-  board-card persistence, and the retired sync path; D5 names the external and
-  presentation-only features that remain, and their existing tests stay green.
-- **A tracker caller retains an internal fallback or is missed.** Mitigation:
-  compile all enumerated callers against the store-free transition signatures,
-  retain explicit provider-selection tests, and run the complete workspace
-  library suite.
-- **Legacy databases fail startup or lose data.** Mitigation: leave migrations
-  unchanged and run the reopen/full-row-snapshot test around an ordinary
-  session write.
-- **A background path still mutates legacy rows.** Mitigation: keep board CRUD
-  absent from the store boundary, keep the goal reconciler/comment bridge out
-  of `spawn_background_workers`, and ensure tracker functions have no store
-  parameter.
-- **Historical `provider: "board"` metadata halts an autonomous run.**
-  Mitigation: retain string deserialization and route it through the bounded
-  unknown-provider best-effort result tested in task sink and MCP tests.
-- **Current documentation drifts back toward a board fallback.** Mitigation:
-  the named SDD/docs structural test covers both embedded live playbooks and
-  current API/data-model docs in `cargo test --workspace --lib`.
-- **The removal expands into tracker setup or navigation redesign.**
-  Mitigation: preserve the existing project scope, clients, provider views,
-  direct launch behavior, and settings-linked empty state; no new abstraction
-  or route is introduced.
-
-## Developer Order
-
-1. Complete the Tasks UI cleanup and focused structural tests.
-2. Verify the real router's 404 matrix and external-only tracker selection and
-   transition seams across every named caller.
-3. Verify legacy storage is inert while retaining migrations and `card_id`
-   compatibility.
-4. Complete current docs/live playbooks and add their structural test.
-5. Run all focused tests, `cargo test --workspace --lib`, and
-   `npm run build --prefix crates/agentum-desktop/ui`.
+- **An older event response overwrites a newer gate state.** Mitigation: assign
+  a monotonic order to asynchronous list/status requests and apply a response
+  only if it is still current for the active effect/workdir.
+- **React retains the prior worktree's run when `workdir` changes.** Mitigation:
+  select snapshots by the same normalized workdir ownership rule used by
+  `findHarnessRunForWorkdir`; the new test explicitly presents a foreign run
+  and expects no selection.
+- **Snapshot retention hides actual run removal.** Mitigation: an authoritative
+  list response with no matching run evicts that workdir; the existing 404
+  fallback still re-lists, and `refresh()` still forces the same reconciliation.
+- **The fix increases backend/UI churn.** Mitigation: retain one event stream,
+  the existing mount/list and matched-status read rules, and an instance-local
+  cache; add no polling, new store subscription, duplicated bar, or shell key.
+- **Node-only tests miss browser layout behavior.** Mitigation: the production
+  layout is intentionally untouched and already pins `shrink-0`/`z-30` in the
+  existing markup test. The new tests cover the changed state logic and exact
+  region count; the production build is a final gate. Residual live-webview
+  paint timing is accepted because no layout or mount boundary changes.

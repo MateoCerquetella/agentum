@@ -5,7 +5,7 @@
 // hit the TDZ.
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { HarnessStatus } from '@/runtime/harness-client'
+import type { FeatureState, HarnessStatus } from '@/runtime/harness-client'
 
 const STORE_STATE = {
   gatedRunStartingByWorktreeId: {},
@@ -122,6 +122,63 @@ describe('GatedRunBar (host)', () => {
 })
 
 describe('GatedRunBarView', () => {
+  it('renders exactly one progress region across verifying, ready_to_test, done, and blocked', async () => {
+    const { GatedRunBarView } = await importBar()
+    const cases: Array<{
+      featureState: FeatureState
+      overrides: Partial<HarnessStatus>
+      expectedHeadline: string
+      expectedLabel: string
+    }> = [
+      {
+        featureState: 'verifying',
+        overrides: { state: 'verifying' },
+        expectedHeadline: 'Verifying Build the thing',
+        expectedLabel: 'Unit gate'
+      },
+      {
+        featureState: 'ready_to_test',
+        overrides: { state: 'running' },
+        expectedHeadline: 'Working on Build the thing',
+        expectedLabel: 'Browser QA'
+      },
+      {
+        featureState: 'done',
+        overrides: { state: 'done', phase: 'done' },
+        expectedHeadline: 'Gated run complete',
+        expectedLabel: 'Done'
+      },
+      {
+        featureState: 'blocked',
+        overrides: { state: 'blocked', phase: 'blocked', blocked_phase: 'executing' },
+        expectedHeadline: 'Blocked on Build the thing',
+        expectedLabel: 'Blocked'
+      }
+    ]
+
+    for (const testCase of cases) {
+      const run = makeRun(testCase.overrides)
+      run.features.features[0].state = testCase.featureState
+      const html = renderToStaticMarkup(
+        <GatedRunBarView
+          run={run}
+          issueLabel={null}
+          busy={false}
+          arming={false}
+          expanded={true}
+          restarting={false}
+          onToggleExpanded={() => {}}
+          onUnlink={() => {}}
+          onRetry={() => {}}
+        />
+      )
+
+      expect(html.match(/aria-label="Gated run progress"/g) ?? []).toHaveLength(1)
+      expect(html).toContain(testCase.expectedHeadline)
+      expect(html).toContain(testCase.expectedLabel)
+    }
+  })
+
   it('arms the two-tap confirm instead of unlinking on the first click', async () => {
     const { GatedRunBarView } = await importBar()
     const html = renderToStaticMarkup(

@@ -317,3 +317,12 @@
   unjustified complexity, or silent architectural deviation remains.
 - review gate PASS (attempt 2): Spec 431 is complete: tracker-only UI/runtime removal, inert legacy compatibility, current docs/playbooks, focused regression coverage, workspace library tests, and desktop build all satisfy the spec and architecture.
 - phase: entered done (from review)
+- phase: entered authoring (from done)
+- authoring gate PASS (attempt 1): Spec 437 is one testable gated-run topbar persistence slice grounded in the existing desktop UI and harness event flow.
+- phase: entered architecture (from authoring)
+- architecture gate PASS (attempt 1): Grounded minimal plan preserves the existing single root topbar and fixes workdir-scoped snapshot continuity with ordered event refreshes and focused regressions.
+- phase: entered executing (from architecture)
+- developer implementation complete (2026-07-23): `useWorktreeHarnessRun` now retains confirmed snapshots by normalized workdir, rejects stale and foreign responses, preserves the selected snapshot during event refreshes, and evicts only on an authoritative list miss. Focused continuity and exactly-one-region regressions were added.
+- phase: entered review (from executing)
+- review gate PASS (attempt 1): 12 focused Vitest checks, the harness QA entrypoint, and the desktop UI production build all pass; the existing single `GatedRunBar` production mount and component markup remain unchanged.
+- phase: entered done (from review)
