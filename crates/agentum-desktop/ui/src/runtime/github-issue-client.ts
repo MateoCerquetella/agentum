@@ -12,6 +12,8 @@ export type DraftLlmChoice = {
   model?: string
 }
 
+export type DraftIssueStyle = 'concise' | 'sdd'
+
 export type GithubIssueBody = {
   title: string
   body: string
@@ -229,7 +231,7 @@ export function draftIssueBodyPayload(input: {
   slug?: string
   agent?: ChatAgentId
   model?: string
-  style?: 'concise' | 'sdd'
+  style?: DraftIssueStyle
 }): Record<string, string> {
   return {
     workdir: input.workdir,
@@ -247,7 +249,7 @@ export async function draftGithubIssueBody(input: {
   slug?: string
   agent?: ChatAgentId
   model?: string
-  style?: 'concise' | 'sdd'
+  style?: DraftIssueStyle
   /** Abort budget — a full LLM draft; generous but bounded. */
   timeoutMs?: number
 }): Promise<DraftedGithubIssueBody> {

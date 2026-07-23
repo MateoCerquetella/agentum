@@ -60,6 +60,7 @@ import {
   draftGithubIssueBody,
   fetchGithubRepoLabels,
   scaffoldSpecFromIssue,
+  type DraftIssueStyle,
   type DraftLlmChoice
 } from '@/runtime/github-issue-client'
 import {
@@ -224,13 +225,14 @@ type ComposerCardProps = {
   onCreateIssueTitleChange: (value: string) => void
   createIssueBody: string
   onCreateIssueBodyChange: (value: string) => void
+  onApplyCreateIssueDraft: (draft: { title: string; body: string }) => void
   createIssueSubmitting: boolean
   createIssueError: string | null
   onCreateIssueSubmit: () => Promise<LinkedWorkItemSummary | null>
   /** Spec 007: "Generate description" — drafts an SDD-shaped body from the
    *  typed title + repo context into the textarea (review before filing). */
   createIssueGenerating: boolean
-  onGenerateIssueBody: (choice?: DraftLlmChoice) => void
+  onGenerateIssueBody: (choice?: DraftLlmChoice, style?: DraftIssueStyle) => void
   /** Spec 006 F1: label picker selection for the create-issue form. */
   createIssueLabels: string[]
   /** Pickable label names — `null` while the fetch is in flight; the static
@@ -1657,7 +1659,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // posted from here. Failures render inline (`createIssueError`) and leave
   // the form usable; a missing chat credential surfaces the server's
   // "set ANTHROPIC_API_KEY / sign in to Claude" message verbatim.
-  const handleGenerateIssueBody = useCallback(async (choice?: DraftLlmChoice): Promise<void> => {
+  const handleGenerateIssueBody = useCallback(async (
+    choice?: DraftLlmChoice,
+    style: DraftIssueStyle = 'sdd'
+  ): Promise<void> => {
     const title = createIssueTitle.trim()
     const repoPath = selectedRepo?.path
     if (createIssueGenerating || createIssueSubmitting) {
@@ -1681,7 +1686,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           ? `${selectedRepoSlug.owner}/${selectedRepoSlug.repo}`
           : undefined,
         agent: choice?.agent,
-        model: choice?.model
+        model: choice?.model,
+        style
       })
       setCreateIssueBody(body)
     } catch (error) {
@@ -3071,11 +3077,16 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onCreateIssueTitleChange: setCreateIssueTitle,
     createIssueBody,
     onCreateIssueBodyChange: setCreateIssueBody,
+    onApplyCreateIssueDraft: (draft) => {
+      setCreateIssueTitle(draft.title)
+      setCreateIssueBody(draft.body)
+      setCreateIssueError(null)
+    },
     createIssueSubmitting,
     createIssueError,
     onCreateIssueSubmit: handleCreateIssueSubmit,
     createIssueGenerating,
-    onGenerateIssueBody: (choice) => void handleGenerateIssueBody(choice),
+    onGenerateIssueBody: (choice, style) => void handleGenerateIssueBody(choice, style),
     createIssueLabels,
     createIssueLabelOptions,
     onToggleCreateIssueLabel: handleToggleCreateIssueLabel,

@@ -18,6 +18,16 @@ vi.mock('@/store', () => ({
   useAppStore: (selector: (s: typeof STORE_STATE) => unknown) => selector(STORE_STATE)
 }))
 
+// This suite is also run by the harness from the repository root, where the
+// UI Vite aliases are not loaded. Keep every aliased dependency behind the
+// same explicit test boundary as the store, hook, and runtime client.
+vi.mock('@/shared/tui-agent-config', () => ({
+  isTuiAgent: (tool: string) => tool === 'claude'
+}))
+
+vi.mock('@/lib/utils', async () => await import('../../lib/utils'))
+vi.mock('@/lib/harness-run', async () => await import('../../lib/harness-run'))
+
 function makeRun(overrides: Partial<HarnessStatus> = {}): HarnessStatus {
   return {
     id: 'run-1',
@@ -83,6 +93,8 @@ describe('GatedRunBar (host)', () => {
   it('renders the strip with run detail + the linked-issue chip', async () => {
     const { default: GatedRunBar } = await importBar()
     const html = renderToStaticMarkup(<GatedRunBar worktreeId="wt-1" />)
+    expect(html.trim()).not.toBe('')
+    expect(html.match(/aria-label="Gated run progress"/g)).toHaveLength(1)
     expect(html).toContain('Gated run')
     expect(html).toContain('Working on Build the thing')
     expect(html).toContain('PM spec')
@@ -93,6 +105,35 @@ describe('GatedRunBar (host)', () => {
     expect(html).toContain('Unlink issue')
     // Load-bearing vs the launcher overlay's z-20: the strip must paint above.
     expect(html).toContain('z-30')
+  })
+
+  it('renders lifecycle copy for coding, verification, browser QA, blocked, and complete', async () => {
+    const { default: GatedRunBar } = await importBar()
+    const cases: Array<{
+      runState: HarnessStatus['state']
+      featureState: HarnessStatus['features']['features'][number]['state']
+      expected: string
+    }> = [
+      { runState: 'running', featureState: 'coding', expected: 'Working on Build the thing' },
+      { runState: 'running', featureState: 'verifying', expected: 'Verifying Build the thing' },
+      {
+        runState: 'running',
+        featureState: 'ready_to_test',
+        expected: 'Browser QA for Build the thing'
+      },
+      { runState: 'blocked', featureState: 'blocked', expected: 'Blocked on Build the thing' },
+      { runState: 'done', featureState: 'done', expected: 'Gated run complete' }
+    ]
+
+    for (const testCase of cases) {
+      const run = makeRun({ state: testCase.runState })
+      run.features.features[0].state = testCase.featureState
+      hookState = { run, refresh: () => {} }
+      const html = renderToStaticMarkup(<GatedRunBar worktreeId="wt-1" />)
+      expect(html.trim()).not.toBe('')
+      expect(html.match(/aria-label="Gated run progress"/g)).toHaveLength(1)
+      expect(html).toContain(testCase.expected)
+    }
   })
 
   it('renders nothing when no run owns the worktree', async () => {
@@ -139,7 +180,7 @@ describe('GatedRunBarView', () => {
       {
         featureState: 'ready_to_test',
         overrides: { state: 'running' },
-        expectedHeadline: 'Working on Build the thing',
+        expectedHeadline: 'Browser QA for Build the thing',
         expectedLabel: 'Browser QA'
       },
       {

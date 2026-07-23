@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 027-remove-internal-workspace-board
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (027 reviewer sign-off: tracker-only work selection, inert legacy compatibility, required tests, and desktop build are green.)
+- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (027 Reviewer iteration 2 sign-off: ship-ready; real browser QA and release remain human-gated.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,33 +87,23 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-21 | Reviewer | **026 SEND-BACK → phase developer** (autonomous loop
-  step 7, Reviewer iteration 1/2; handoff
-  `handoffs/05-reviewer-to-developer.md`). Inline unbind deletes the canonical
-  row but never invalidates the mounted wizard parent, so stale connected status
-  and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
-  unbind callback and regression.
-- 2026-07-21 | Developer | **026 REVIEWER RETRY PASS → phase tester**
-  (autonomous loop step 8, Reviewer iteration 2/2; updated handoff
-  `handoffs/03-developer-to-tester.md`). Successful inline unbind now projects
-  canonical absence into the mounted wizard synchronously, clears tracker rows,
-  and rejects late old-scope completions. Focused regression, 71-test harness,
-  Vite build, and diff check are green.
-- 2026-07-21 | Tester | **026 TESTER RETRY PASS → phase reviewer** (autonomous
-  loop step 9; updated `verification.md` and
-  `handoffs/04-tester-to-reviewer.md`). Independently confirmed the inline
-  unbind fix, both harness routes, 71 focused UI tests, the exact worktree test,
-  fresh Vite build, syntax checks, and diff check. Live desktop/SSH QA remains
-  an explicit pending release gate.
-- 2026-07-21 | Reviewer | **026 SIGN-OFF → phase done** (autonomous loop step
-  10, Reviewer iteration 2/2; `review.md`). Confirmed B1 fixed, all eight ACs
-  supported, both harness routes and final focused regression green, and no
-  architecture/isolation blocker remaining. Corrected stale review-only
-  comments; live desktop/SSH QA, merge, and release remain human-gated.
-- 2026-07-22 | Author | **027 drafted → phase pm**. Narrowed issue #431 to one
-  user action: select workspace work from the configured external tracker;
-  internal board routes and fallback retire while legacy rows remain inert.
-- 2026-07-22 | Reviewer | **027 SIGN-OFF → phase done**. Confirmed external-
-  tracker-only UI/runtime behavior, retired board APIs, inert legacy rows,
-  current docs/playbooks, focused regressions, workspace tests, and desktop
-  production build are green.
+- 2026-07-23 | Developer | **027 RETRY PASS → phase tester** (Tester gate
+  iteration 2/2). `qa.sh` now names all required states, propagates a configured
+  verifier exactly, and exits 2 when unavailable; the focused 2/2/0/1 shell
+  matrix, UI/Rust checks, fmt, and diff checks pass.
+- 2026-07-23 | Tester | **027 TESTER RETRY PASS → phase reviewer**. The QA
+  seam independently passes 2/2/0/1 unavailable/pass/fail propagation, F1 and
+  legacy checks remain green, and two fresh F5 runs support 901/6/0 plus the UI
+  build. Real browser QA is explicitly release-deferred, never reported green.
+- 2026-07-23 | Reviewer | **027 SEND-BACK → phase developer** (Reviewer gate
+  iteration 1/2). Product behavior and evidence pass, but the truthful `qa.sh`
+  is ignored/untracked and would not survive a normal commit or fresh checkout;
+  expose the spec-specific gate without broadening scaffold policy.
+- 2026-07-23 | Developer | **027 REVIEWER FIX PASS → phase reviewer**. The
+  spec-local ignore rule now exposes `qa.sh` to normal collection while keeping
+  other runtime noise ignored; status visibility, 2/2/0/1 propagation, syntax,
+  scenario assertions, and diff checks pass.
+- 2026-07-23 | Reviewer | **027 SIGN-OFF → phase done** (Reviewer iteration
+  2/2). All five ACs, focused/full gates, invariants, and artifact portability
+  pass. Real browser execution, staging, merge, live writes, and release remain
+  explicit human gates; tracker update was unavailable in this runtime.

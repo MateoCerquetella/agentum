@@ -1,10 +1,8 @@
 // Spec 023: the IO shell over `lib/harness-run.ts` — resolve the engine run
 // owning a worktree (matched by workdir, architecture Q1) and keep it fresh
-// off the harness event stream. ONE `listHarnesses` on mount (never a poll —
-// AC 4); afterwards every event for the matched run re-reads just its status,
-// and while unmatched (a just-created run can register a beat before the
-// workspace opens) any run-level event re-reads the list. The stream is the
-// same auto-reconnecting WS every harness surface uses; closed on unmount.
+// from authoritative list/status snapshots. Reads are event-driven rather than
+// polled: mount, successful stream connections, lagged frames, matched run
+// events, and the explicit refresh contract.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getHarnessStatus,
@@ -83,9 +81,7 @@ export function selectWorktreeHarnessSnapshot(
 
 export type WorktreeHarnessRun = {
   run: HarnessStatus | undefined
-  /** Re-run the mount-time list read + match (e.g. after an unlink, so the
-   *  chip clears deterministically alongside the engine's `log` event — AC 7).
-   *  Bumps the effect, which re-reads and re-subscribes. */
+  /** Re-run the mount-time list read + match (e.g. after retry or unlink). */
   refresh: () => void
 }
 
@@ -134,9 +130,11 @@ export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarn
         matchedId = found?.id ?? null
         resolveRequest(requestId, found)
       } catch {
-        // Best-effort: a failed read leaves the previous snapshot in place.
+        // Failed reconciliation retains the last successful snapshot for this
+        // workdir. A later connection/event/explicit refresh can reconcile it.
       }
     }
+
     const applyOne = async (id: string): Promise<void> => {
       const requestId = beginRequest()
       try {
@@ -152,38 +150,41 @@ export function useWorktreeHarnessRun(workdir: string | undefined): WorktreeHarn
         matchedId = owned.id
         resolveRequest(requestId, owned)
       } catch {
-        // A 404 means the run was dropped from the engine — re-derive from
-        // the authoritative list so the surface clears instead of going stale.
+        // The run may have disappeared. Re-read membership so a successful
+        // no-match clears the bar, while a failed list read preserves it.
         if (isCurrent(requestId)) await applyList()
       }
     }
-    const onEvent = (ev: HarnessEvent): void => {
+
+    const onEvent = (event: HarnessEvent): void => {
       if (disposed) return
-      if (ev.type === 'lagged') {
+      if (event.type === 'lagged') {
         void applyList()
         return
       }
-      if (matchedId !== null && ev.harness_id === matchedId) {
+      if (matchedId !== null && event.harness_id === matchedId) {
         void applyOne(matchedId)
       } else if (matchedId === null) {
-        // Not matched yet: any run-level event is worth one list re-read (the
-        // run may have just registered). Event-driven, not a poll.
+        // A run can register just before its first event reaches this client.
         void applyList()
       }
     }
 
+    const onConnected = (): void => {
+      if (!disposed) void applyList()
+    }
+
     void applyList()
-    subscribeHarnessEvents(onEvent)
-      .then((s) => {
+    subscribeHarnessEvents(onEvent, onConnected)
+      .then((subscribedStream) => {
         if (disposed) {
-          s.close()
+          subscribedStream.close()
         } else {
-          stream = s
+          stream = subscribedStream
         }
       })
       .catch(() => {
-        // No event stream → the mount-time snapshot stands; the surfaces
-        // degrade to honest staleness rather than throwing or polling.
+        // The current snapshot remains useful if the stream is unavailable.
       })
 
     return () => {

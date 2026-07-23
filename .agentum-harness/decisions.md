@@ -318,11 +318,19 @@
 - review gate PASS (attempt 2): Spec 431 is complete: tracker-only UI/runtime removal, inert legacy compatibility, current docs/playbooks, focused regression coverage, workspace library tests, and desktop build all satisfy the spec and architecture.
 - phase: entered done (from review)
 - phase: entered authoring (from done)
+- authoring gate PASS (attempt 1): PM gate passed: one regression slice now has a grounded persona, user value, six observable criteria, explicit non-goals, reuse seams, invariants, and non-overlap.
+- phase: entered architecture (from authoring)
+- architecture gate PASS (attempt 1): Grounded minimal plan preserves the single existing bar, adds event-stream reconnect reconciliation, guards worktree-scoped snapshots, and maps every acceptance criterion to named focused tests and the required build.
+- phase: entered executing (from architecture)
+- phase: entered review (from executing)
+- review gate PASS (attempt 1): Spec 436 is complete: the existing gated-run bar hydrates from authoritative snapshots, reconciles matched lifecycle events, lagged frames, and reconnects without cross-worktree leakage, exposes explicit lifecycle headlines, and passes 34 focused tests plus the desktop production build.
+- phase: entered done (from review)
+- phase: entered authoring (from done)
 - authoring gate PASS (attempt 1): Spec 437 is one testable gated-run topbar persistence slice grounded in the existing desktop UI and harness event flow.
 - phase: entered architecture (from authoring)
 - architecture gate PASS (attempt 1): Grounded minimal plan preserves the existing single root topbar and fixes workdir-scoped snapshot continuity with ordered event refreshes and focused regressions.
 - phase: entered executing (from architecture)
 - developer implementation complete (2026-07-23): `useWorktreeHarnessRun` now retains confirmed snapshots by normalized workdir, rejects stale and foreign responses, preserves the selected snapshot during event refreshes, and evicts only on an authoritative list miss. Focused continuity and exactly-one-region regressions were added.
 - phase: entered review (from executing)
-- review gate PASS (attempt 1): 12 focused Vitest checks, the harness QA entrypoint, and the desktop UI production build all pass; the existing single `GatedRunBar` production mount and component markup remain unchanged.
+- review gate PASS (attempt 1): focused Vitest checks, reconnect/worktree QA, and the desktop UI production build pass; the existing single `GatedRunBar` production mount and component markup remain unchanged.
 - phase: entered done (from review)

@@ -1,6 +1,6 @@
 # Spec 437 — Keep the gated-run topbar visible
 
-- **Status:** PM ready
+- **Status:** Done
 - **Surface:** `crates/agentum-desktop/ui`
 - **Tracker:** https://github.com/MateoCerquetella/agentum/issues/437
 - **Date:** 2026-07-23
@@ -21,11 +21,11 @@ Engineers can trust that the active run's status remains visible while they moni
 
 ## Acceptance criteria
 
-- [ ] The active terminal workspace renders exactly one element labelled `Gated run progress` when its worktree path matches a registered `HarnessStatus`, including while the current feature is `verifying`, `ready_to_test`, `done`, or `blocked`.
-- [ ] A harness event that changes the matched run's state renders the updated headline and keeps the progress topbar mounted without an intermediate frame in which it is absent.
-- [ ] Switching to another worktree and back renders the owning worktree's progress topbar with its latest status, while a worktree with no matching run renders no progress topbar.
-- [ ] Focused Vitest regression checks for gate-state updates and worktree switching return exit code 0.
-- [ ] `npm run build --prefix crates/agentum-desktop/ui` returns exit code 0.
+- [x] The active terminal workspace renders exactly one element labelled `Gated run progress` when its worktree path matches a registered `HarnessStatus`, including while the current feature is `verifying`, `ready_to_test`, `done`, or `blocked`.
+- [x] A harness event that changes the matched run's state renders the updated headline and keeps the progress topbar mounted without an intermediate frame in which it is absent.
+- [x] Switching to another worktree and back renders the owning worktree's progress topbar with its latest status, while a worktree with no matching run renders no progress topbar.
+- [x] Focused Vitest regression checks for gate-state updates and worktree switching return exit code 0.
+- [x] `npm run build --prefix crates/agentum-desktop/ui` returns exit code 0.
 
 ## Scope and non-goals
 
