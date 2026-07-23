@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 029-local-watchdog-fleet-scheduler
-- **phase:** pm         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (029 direct spec drafted from fixed performance intake; PM gate next.)
+- **phase:** architect  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (029 PM PASS; handoff `01-pm-to-architect.md`.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,9 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Tester | **028 SEND-BACK → phase developer** (Tester failure
-  2/2). A preloaded Running GET can cross final stop/delete cleanup and recreate
-  observation/cache; per-session lifecycle linearization is required.
 - 2026-07-23 | Developer | **028 final stale-request fix PASS → phase tester**.
   A weak keyed lifecycle boundary linearizes agent-task loads with stop/kill,
   delete, and tool-patch retirement; 21 isolated and 839 backend tests pass.
@@ -102,3 +99,6 @@
 - 2026-07-23 | Spec | **029 drafted → phase pm**. One local fleet scheduler and
   nonce/pane-framed tmux batch contract target ≤2 healthy-cycle local invocations
   while preserving SSH behavior, cadences, events, and stale-removal safety.
+- 2026-07-23 | PM | **029 PASS → phase architect**. The 11-AC contract is one
+  bounded local performance slice; ≤2 invocations, typed framed outcomes,
+  cadence/event compatibility, SSH preservation, and stale authority are fixed.
