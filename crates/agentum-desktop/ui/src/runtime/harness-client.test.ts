@@ -27,7 +27,7 @@ describe('unlinkHarnessIssue', () => {
     vi.stubGlobal('fetch', fetchMock)
     await unlinkHarnessIssue('run-1')
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/harness/run-1/unlink-issue')
     expect(init.method).toBe('POST')
   })
@@ -58,7 +58,7 @@ describe('worktree-scoped Harness requests', () => {
       worktreeId: 'repo-1::/srv/project feature'
     })
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(JSON.parse(String(init.body))).toEqual({
       workdir: '/srv/project feature',
       worktreeId: 'repo-1::/srv/project feature'
@@ -91,7 +91,7 @@ describe('worktree-scoped Harness requests', () => {
       agentTool: 'codex'
     })
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(JSON.parse(String(init.body))).toMatchObject({
       workdir: '/srv/project feature',
       worktreeId: 'repo-1::/srv/project feature',

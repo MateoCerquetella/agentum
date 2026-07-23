@@ -149,7 +149,7 @@ describe('scaffoldSpecFromIssue', () => {
       slug: 'acme/widgets'
     })
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/api/harness/spec-from-issue')
     expect(JSON.parse(String(init.body))).toMatchObject({
       workdir: '/srv/project feature',
