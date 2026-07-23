@@ -169,11 +169,21 @@ async fn handle(
     {
         if msg.get("method").and_then(Value::as_str) == Some("tools/call") {
             if let Some(params) = msg.get_mut("params") {
-                if params.get("name").and_then(Value::as_str) == Some("agentum_browser") {
-                    if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
-                        if !a.contains_key("worktreeId") && !a.contains_key("cdpPort") {
-                            a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
-                        }
+                let tool = params.get("name").and_then(Value::as_str);
+                if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
+                    if tool == Some("agentum_browser")
+                        && !a.contains_key("worktreeId")
+                        && !a.contains_key("cdpPort")
+                    {
+                        a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
+                    } else if tool == Some("agentum_harness_run")
+                        && !a.contains_key("worktreeId")
+                    {
+                        // The MCP URL provisioned into a worktree agent already
+                        // carries its authoritative registry id. Harness launch
+                        // consumes the same identity instead of trusting a path
+                        // that could exist on both the daemon and an SSH host.
+                        a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
                     }
                 }
             }
@@ -708,12 +718,13 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 {harness_id, started}: started=false means a driver is already live \
                 (not restarted). Watch progress with agentum_harness_board or the \
                 desktop Harness view.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory containing .agentum-harness/" }
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                    "workdir": { "type": "string", "description": "Registered worktree path containing .agentum-harness/" },
+                    "worktreeId": { "type": "string", "description": "Exact registered worktree identity; normally supplied by the worktree-scoped MCP URL" }
                 },
-                "required": ["workdir"],
+                "required": ["workdir", "worktreeId"],
                 "additionalProperties": false,
             },
         }
@@ -1077,26 +1088,52 @@ async fn tool_harness_run(state: &AppState, args: &Value) -> anyhow::Result<Stri
         .get("workdir")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    // Reuse an existing registration for this project: the engine itself does
-    // NOT dedupe by workdir, and without this every MCP call would pile up a
-    // fresh run for the same project.
-    let wd = workdir.to_string_lossy().to_string();
-    let mut harness_id = None;
-    for id in state.harness.list().await {
-        if let Ok(s) = state.harness.status(id).await {
-            if s.workdir == wd {
-                harness_id = Some(id);
-                break;
-            }
-        }
+    let worktree_id = args
+        .get("worktreeId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing `worktreeId`; harness launch requires an exact registered worktree"
+            )
+        })?;
+    let (scope, host) = super::worktrees::resolve_harness_scope(state, worktree_id, raw)
+        .await
+        .map_err(|e| anyhow::anyhow!("resolve harness worktree: {e:?}"))?;
+    let workspace = crate::harness::HarnessWorkspace::scoped(scope.clone(), host.clone());
+    if !workspace.is_dir(&workspace.root()).await? {
+        anyhow::bail!(
+            "registered harness worktree does not exist on host {}: {}",
+            host.id,
+            scope.path
+        );
     }
-    let harness_id = match harness_id {
+    let mut config = crate::harness::HarnessConfig::load_from(&workspace).await?;
+    workspace
+        .strict_remote_preflight(
+            state,
+            Some(&config.features.agent_tool),
+            config.features.qa_agent_tool.as_deref(),
+            false,
+        )
+        .await?;
+    if workspace.is_remote()
+        && (config.features.execution_mode != crate::harness::ExecutionMode::Sequential
+            || config.features.max_concurrency != 1)
+    {
+        config.features.execution_mode = crate::harness::ExecutionMode::Sequential;
+        config.features.max_concurrency = 1;
+        config.save_features(&config.features).await?;
+    }
+
+    // Reuse only the exact registered worktree. A same-looking path on a
+    // different host/repo is a different scope and can never cross-attach.
+    let harness_id = match state.harness.find_by_scope(&scope).await {
         Some(id) => id,
         None => state
             .harness
-            .start(workdir)
+            .start_scoped(scope.clone(), host)
             .await
             .map_err(|e| anyhow::anyhow!("register harness: {e}"))?,
     };
@@ -1112,6 +1149,7 @@ async fn tool_harness_run(state: &AppState, args: &Value) -> anyhow::Result<Stri
     Ok(serde_json::to_string_pretty(&json!({
         "harness_id": harness_id.to_string(),
         "started": claimed,
+        "scope": scope,
         "note": if claimed {
             "drive loop kicked off in the background — watch agentum_harness_board \
              (or the desktop Harness view)"

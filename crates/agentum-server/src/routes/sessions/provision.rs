@@ -228,8 +228,10 @@ pub(crate) async fn spawn_agent_into_pane(
                             // Claude needs the --mcp-config FILE on the HOST.
                             let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
                             let json = crate::mcp_provision::config_json(&servers);
-                            match crate::host_runtime::write_remote_file(host, &host_cfg, &json)
-                                .await
+                            match crate::host_runtime::write_remote_file_contained(
+                                host, "/tmp", &host_cfg, &json,
+                            )
+                            .await
                             {
                                 Ok(()) => Some(agentum_executor::McpProvision {
                                     servers,
@@ -447,7 +449,9 @@ pub(super) async fn reprovision_session(
         HostKind::Ssh { .. } if session.tool == "claude" => {
             let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
             let json = crate::mcp_provision::config_json(&servers);
-            match crate::host_runtime::write_remote_file(host, &host_cfg, &json).await {
+            match crate::host_runtime::write_remote_file_contained(host, "/tmp", &host_cfg, &json)
+                .await
+            {
                 Ok(()) => rewrote = true,
                 Err(e) => {
                     tracing::warn!(session = %session.id, "reprovision: could not rewrite remote MCP config: {e}")

@@ -113,6 +113,20 @@ impl HarnessEngine {
         None
     }
 
+    /// Whether a registered run still pins `host_id`. Host connection records
+    /// are mutable, while a run's workspace snapshot is deliberately not; the
+    /// host routes use this to reject retarget/delete operations until every
+    /// affected run is explicitly stopped.
+    pub async fn uses_host(&self, host_id: Uuid) -> bool {
+        let runs: Vec<_> = self.runs.read().await.values().cloned().collect();
+        for run in runs {
+            if run.read().await.scope.effective_host_id() == host_id {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Register a new run from a project directory. Loads `.harness/` so a bad
     /// config fails fast (before the UI shows a run that can never start).
     pub async fn start(&self, workdir: PathBuf) -> anyhow::Result<Uuid> {
@@ -131,6 +145,7 @@ impl HarnessEngine {
 
     async fn start_workspace(&self, workspace: HarnessWorkspace) -> anyhow::Result<Uuid> {
         let config = HarnessConfig::load_from(&workspace).await?;
+        ensure_execution_policy(&workspace, &config.features)?;
         let workdir = workspace.root();
         let id = Uuid::new_v4();
 
@@ -188,6 +203,7 @@ impl HarnessEngine {
         let workspace = HarnessWorkspace::restored(scope.clone(), host);
         let workdir = workspace.root();
         let config = HarnessConfig::load_from(&workspace).await?;
+        ensure_execution_policy(&workspace, &config.features)?;
         let phase = rebuild_phase_from_decisions(&read_decisions_in(&workspace).await)
             .unwrap_or(SpecPhase::Executing);
         let run = HarnessRun {
@@ -868,6 +884,22 @@ impl HarnessEngine {
     }
 }
 
+/// The shared-worktree coordinator and patch broker are local-only. Keep this
+/// invariant in the engine (not just an HTTP request shaper), so MCP calls,
+/// restored rows, direct callers, and configs edited after registration cannot
+/// enter orchestrated execution for an SSH workspace.
+pub(super) fn ensure_execution_policy(
+    workspace: &HarnessWorkspace,
+    features: &FeatureList,
+) -> anyhow::Result<()> {
+    if workspace.is_remote()
+        && (features.execution_mode != ExecutionMode::Sequential || features.max_concurrency != 1)
+    {
+        anyhow::bail!("remote harness execution must be sequential with max_concurrency = 1");
+    }
+    Ok(())
+}
+
 impl Default for HarnessEngine {
     fn default() -> Self {
         Self::new()
@@ -1038,6 +1070,46 @@ mod tests {
         assert_eq!(status.worktree_id, status.scope.worktree_id);
         assert_eq!(status.repo_id, status.scope.repo_id);
         assert_eq!(status.host_id, Some(agentum_core::LOCAL_HOST_ID));
+        assert!(engine.uses_host(agentum_core::LOCAL_HOST_ID).await);
+    }
+
+    #[test]
+    fn remote_execution_policy_is_sequential_and_single_slot() {
+        let host_id = Uuid::new_v4();
+        let now = time::OffsetDateTime::now_utc();
+        let workspace = HarnessWorkspace::scoped(
+            HarnessScope {
+                worktree_id: Some("repo::/srv/repo/wt".into()),
+                repo_id: Some("repo".into()),
+                host_id: Some(host_id),
+                path: "/srv/repo/wt".into(),
+            },
+            agentum_core::Host {
+                id: host_id,
+                name: "remote".into(),
+                kind: agentum_core::HostKind::Ssh {
+                    user: "dev".into(),
+                    hostname: "remote.example".into(),
+                    port: 22,
+                    auth: agentum_core::SshAuth::Agent,
+                },
+                created_at: now,
+                updated_at: now,
+                last_seen_at: None,
+            },
+        );
+        let mut features = FeatureList {
+            execution_mode: ExecutionMode::Sequential,
+            max_concurrency: 1,
+            ..FeatureList::default()
+        };
+        ensure_execution_policy(&workspace, &features).unwrap();
+
+        features.execution_mode = ExecutionMode::Orchestrated;
+        assert!(ensure_execution_policy(&workspace, &features).is_err());
+        features.execution_mode = ExecutionMode::Sequential;
+        features.max_concurrency = 2;
+        assert!(ensure_execution_policy(&workspace, &features).is_err());
     }
 
     // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.

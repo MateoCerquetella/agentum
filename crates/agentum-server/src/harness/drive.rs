@@ -69,10 +69,12 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
     let engine = &state.harness;
     let workspace = engine.workspace(harness_id).await?;
     let initial_config = HarnessConfig::load_from(&workspace).await?;
+    super::ensure_execution_policy(&workspace, &initial_config.features)?;
     workspace
         .strict_remote_preflight(
             state,
             Some(&initial_config.features.agent_tool),
+            initial_config.features.qa_agent_tool.as_deref(),
             /* require_gh */ false,
         )
         .await?;
@@ -99,10 +101,9 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
     }
 
     let workdir = workspace.root();
-    let execution_mode = HarnessConfig::load_from(&workspace)
-        .await?
-        .features
-        .execution_mode;
+    let execution_config = HarnessConfig::load_from(&workspace).await?;
+    super::ensure_execution_policy(&workspace, &execution_config.features)?;
+    let execution_mode = execution_config.features.execution_mode;
     let orchestrated = execution_mode == ExecutionMode::Orchestrated;
 
     // 1b. SDD role phases wrap the feature loop (spec 013). OFF by default → a
@@ -607,12 +608,8 @@ pub(super) fn spawn_session_name(kind: &str, harness_id: Uuid) -> String {
 
 async fn pinned_harness_host(state: &AppState, harness_id: Uuid) -> anyhow::Result<(Host, Uuid)> {
     let workspace = state.harness.workspace(harness_id).await?;
-    let host_id = workspace.scope().effective_host_id();
-    let host = state
-        .store
-        .get_host(host_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("harness host is missing: {host_id}"))?;
+    let host = workspace.execution_host(state).await?;
+    let host_id = host.id;
     Ok((host, host_id))
 }
 

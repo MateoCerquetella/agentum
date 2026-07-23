@@ -159,7 +159,7 @@ pub async fn write_agent_project_config_checked(
         .await
         .context("read existing agent MCP project config")?;
     let merged = merge_agent_config(existing.as_deref(), &file, &server);
-    crate::host_runtime::write_remote_file(host, &abs, &merged)
+    crate::host_runtime::write_remote_file_contained(host, workdir, &abs, &merged)
         .await
         .with_context(|| format!("write agentum MCP config to {abs}"))?;
     Ok(true)

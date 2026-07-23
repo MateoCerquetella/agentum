@@ -62,13 +62,65 @@ impl HarnessWorkspace {
     }
 
     pub(crate) fn is_remote(&self) -> bool {
-        self.host
-            .as_ref()
-            .is_some_and(|host| matches!(host.kind, HostKind::Ssh { .. }))
+        self.scope
+            .host_id
+            .is_some_and(|host_id| host_id != agentum_core::LOCAL_HOST_ID)
+            || self
+                .host
+                .as_ref()
+                .is_some_and(|host| matches!(host.kind, HostKind::Ssh { .. }))
     }
 
     pub(crate) fn host(&self) -> Option<&Host> {
         self.host.as_ref()
+    }
+
+    /// Return the host snapshot captured when the scope was resolved, after
+    /// checking that the scope and snapshot still describe one machine.
+    ///
+    /// A restored remote scope without a host must never fall through to local
+    /// filesystem/process APIs. Likewise, a mismatched `host_id` is corrupt
+    /// scope, not permission to reinterpret the path on another machine.
+    fn bound_host(&self) -> anyhow::Result<Option<&Host>> {
+        match (&self.host, self.scope.host_id) {
+            (Some(host), Some(host_id)) if host.id != host_id => anyhow::bail!(
+                "harness host binding mismatch: scope is {host_id}, snapshot is {}",
+                host.id
+            ),
+            (None, Some(host_id)) if host_id != agentum_core::LOCAL_HOST_ID => {
+                anyhow::bail!("remote harness host is unavailable: {host_id}")
+            }
+            (Some(host), None) if !matches!(host.kind, HostKind::Local) => {
+                anyhow::bail!("remote harness scope is missing host identity")
+            }
+            (host, _) => Ok(host.as_ref()),
+        }
+    }
+
+    /// Resolve the process/session host without allowing an in-place host edit
+    /// to split one run across two machines. Workspace I/O remains pinned to
+    /// the captured snapshot; before spawning we verify the catalog still has
+    /// the same connection binding and then return that same snapshot.
+    pub(crate) async fn execution_host(&self, state: &AppState) -> anyhow::Result<Host> {
+        let expected = match self.bound_host()? {
+            Some(host) => host.clone(),
+            None => state
+                .store
+                .get_host(agentum_core::LOCAL_HOST_ID)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("local host is missing"))?,
+        };
+        let current = state
+            .store
+            .get_host(expected.id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("harness host is missing: {}", expected.id))?;
+        if !same_host_binding(&expected, &current) {
+            anyhow::bail!(
+                "harness host connection changed while the run was active; stop and re-register the run"
+            );
+        }
+        Ok(expected)
     }
 
     pub(crate) fn join(&self, relative: impl AsRef<Path>) -> anyhow::Result<PathBuf> {
@@ -161,7 +213,7 @@ resolve_path "$HARNESS_TARGET"
 
     pub(crate) async fn exists(&self, path: &Path) -> anyhow::Result<bool> {
         self.validate_path(path)?;
-        match &self.host {
+        match self.bound_host()? {
             Some(host) => {
                 Ok(crate::host_runtime::path_exists(host, &path.to_string_lossy()).await?)
             }
@@ -171,7 +223,7 @@ resolve_path "$HARNESS_TARGET"
 
     pub(crate) async fn is_dir(&self, path: &Path) -> anyhow::Result<bool> {
         self.validate_path(path)?;
-        match &self.host {
+        match self.bound_host()? {
             Some(host) => {
                 Ok(crate::host_runtime::path_is_dir(host, &path.to_string_lossy()).await?)
             }
@@ -184,7 +236,7 @@ resolve_path "$HARNESS_TARGET"
 
     pub(crate) async fn is_file(&self, path: &Path) -> anyhow::Result<bool> {
         self.validate_path(path)?;
-        match &self.host {
+        match self.bound_host()? {
             Some(host) => {
                 Ok(crate::host_runtime::path_is_file(host, &path.to_string_lossy()).await?)
             }
@@ -197,7 +249,7 @@ resolve_path "$HARNESS_TARGET"
 
     pub(crate) async fn try_read(&self, path: &Path) -> anyhow::Result<Option<String>> {
         self.validate_path(path)?;
-        match &self.host {
+        match self.bound_host()? {
             Some(host) => {
                 Ok(crate::host_runtime::read_remote_file(host, &path.to_string_lossy()).await?)
             }
@@ -217,7 +269,7 @@ resolve_path "$HARNESS_TARGET"
 
     pub(crate) async fn mkdir_all(&self, path: &Path) -> anyhow::Result<()> {
         self.validate_remote_mutation(path).await?;
-        match &self.host {
+        match self.bound_host()? {
             Some(host) => Ok(crate::host_runtime::mkdir_p(host, &path.to_string_lossy()).await?),
             None => Ok(tokio::fs::create_dir_all(path).await?),
         }
@@ -228,7 +280,7 @@ resolve_path "$HARNESS_TARGET"
         if let Some(parent) = path.parent() {
             self.mkdir_all(parent).await?;
         }
-        match &self.host {
+        match self.bound_host()? {
             Some(host) => {
                 Ok(
                     crate::host_runtime::write_remote_file(host, &path.to_string_lossy(), content)
@@ -241,7 +293,7 @@ resolve_path "$HARNESS_TARGET"
 
     pub(crate) async fn remove_file(&self, path: &Path) -> anyhow::Result<()> {
         self.validate_remote_mutation(path).await?;
-        match &self.host {
+        match self.bound_host()? {
             Some(host) => {
                 Ok(crate::host_runtime::remove_file(host, &path.to_string_lossy()).await?)
             }
@@ -282,7 +334,7 @@ resolve_path "$HARNESS_TARGET"
         args: &[String],
         env: &[(String, String)],
     ) -> anyhow::Result<crate::host_runtime::HostCommandOutput> {
-        if let Some(host) = &self.host {
+        if let Some(host) = self.bound_host()? {
             return Ok(crate::host_runtime::command_in_dir(
                 host,
                 &self.scope.path,
@@ -314,23 +366,21 @@ resolve_path "$HARNESS_TARGET"
         &self,
         state: &AppState,
         agent_tool: Option<&str>,
+        qa_agent_tool: Option<&str>,
         require_gh: bool,
     ) -> anyhow::Result<()> {
         if !self.is_remote() {
             return Ok(());
         }
-        let host = self
-            .host
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("remote harness host is missing"))?;
+        let host = self.execution_host(state).await?;
         if !self.is_dir(&self.root()).await? {
             anyhow::bail!("remote worktree does not exist: {}", self.scope.path);
         }
-        let readiness = crate::host_runtime::readiness(host).await;
+        let readiness = crate::host_runtime::readiness(&host).await;
         if !readiness.ok {
             anyhow::bail!("remote host is not ready: {}", readiness.message);
         }
-        if let Some(tool) = agent_tool {
+        for tool in required_agent_tools(agent_tool, qa_agent_tool) {
             let installed = readiness
                 .agents
                 .iter()
@@ -373,16 +423,38 @@ resolve_path "$HARNESS_TARGET"
         let local_port = crate::mcp_provision::local_mcp_port(state).ok_or_else(|| {
             anyhow::anyhow!("remote harness requires an embedded Agentum API endpoint")
         })?;
-        crate::host_runtime::ensure_reverse_tunnel(host, local_port)
+        crate::host_runtime::ensure_reverse_tunnel(&host, local_port)
             .await
             .map_err(|e| anyhow::anyhow!("remote Agentum MCP tunnel preflight failed: {e}"))?;
         Ok(())
     }
 }
 
+fn same_host_binding(expected: &Host, current: &Host) -> bool {
+    expected.id == current.id && expected.kind == current.kind
+}
+
+fn required_agent_tools<'a>(
+    primary: Option<&'a str>,
+    explicit_qa: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut tools = Vec::with_capacity(2);
+    if let Some(tool) = primary.filter(|tool| !tool.trim().is_empty()) {
+        tools.push(tool);
+    }
+    if let Some(tool) = explicit_qa.filter(|tool| !tool.trim().is_empty())
+        && !tools.contains(&tool)
+    {
+        tools.push(tool);
+    }
+    tools
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentum_core::{LOCAL_HOST_ID, SshAuth};
+    use time::OffsetDateTime;
 
     #[test]
     fn relative_join_rejects_absolute_and_traversal_paths() {
@@ -404,5 +476,71 @@ mod tests {
         workspace.append_line(&log, "- first\n").await.unwrap();
         workspace.append_line(&log, "- second\n").await.unwrap();
         assert_eq!(workspace.read(&log).await.unwrap(), "- first\n- second\n");
+    }
+
+    fn host(id: uuid::Uuid, hostname: &str) -> Host {
+        Host {
+            id,
+            name: "remote".into(),
+            kind: HostKind::Ssh {
+                user: "dev".into(),
+                hostname: hostname.into(),
+                port: 22,
+                auth: SshAuth::Agent,
+            },
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    #[test]
+    fn host_binding_ignores_display_metadata_but_rejects_connection_retargeting() {
+        let id = uuid::Uuid::new_v4();
+        let expected = host(id, "alpha.example");
+        let mut renamed = expected.clone();
+        renamed.name = "renamed".into();
+        renamed.last_seen_at = Some(OffsetDateTime::UNIX_EPOCH);
+        assert!(same_host_binding(&expected, &renamed));
+        assert!(!same_host_binding(&expected, &host(id, "beta.example")));
+    }
+
+    #[test]
+    fn restored_remote_scope_without_host_never_becomes_local() {
+        let remote_id = uuid::Uuid::new_v4();
+        let workspace = HarnessWorkspace::restored(
+            HarnessScope {
+                worktree_id: Some("repo::/srv/repo/wt".into()),
+                repo_id: Some("repo".into()),
+                host_id: Some(remote_id),
+                path: "/srv/repo/wt".into(),
+            },
+            None,
+        );
+        assert!(workspace.is_remote());
+        assert!(workspace.bound_host().is_err());
+
+        let local = HarnessWorkspace::restored(
+            HarnessScope {
+                host_id: Some(LOCAL_HOST_ID),
+                path: "/tmp/local".into(),
+                ..HarnessScope::default()
+            },
+            None,
+        );
+        assert!(local.bound_host().unwrap().is_none());
+    }
+
+    #[test]
+    fn preflight_checks_primary_and_distinct_explicit_qa_agents() {
+        assert_eq!(
+            required_agent_tools(Some("claude"), Some("codex")),
+            vec!["claude", "codex"]
+        );
+        assert_eq!(
+            required_agent_tools(Some("claude"), Some("claude")),
+            vec!["claude"]
+        );
+        assert!(required_agent_tools(None, None).is_empty());
     }
 }

@@ -235,6 +235,12 @@ struct AddBody {
 /// `POST /api/repos` — register `path`. Returns `{repo}` or `{error}` (the
 /// renderer's add-project dialogs branch on `'error' in result`).
 async fn add(Json(body): Json<AddBody>) -> Result<Json<Value>, ApiError> {
+    if body.connection_id.is_some() && body.host_id.is_none() {
+        return Err(ApiError::BadRequest(
+            "remote repo is missing hostId; reconnect or re-add the project before server-side operations"
+                .into(),
+        ));
+    }
     // Only validate existence for LOCAL paths; a remote path can't be stat'd here.
     if body.connection_id.is_none() && !StdPath::new(&body.path).exists() {
         return Ok(Json(
@@ -418,9 +424,9 @@ pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
         .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))
 }
 
-/// The server host id a repo lives on, or `None` for a local repo. `None`
-/// when the repo carries no `host_id` (a local repo, or one added before
-/// this field existed). `pub(crate)` so the worktrees route shares it.
+/// The server host id a repo lives on, or `None` for a local repo. Legacy
+/// remote rows that predate `host_id` are rejected: their path is not local
+/// merely because the newer routing field is absent.
 pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiError> {
     host_id_of(&read_repos()?, repo_id)
 }
@@ -430,16 +436,22 @@ pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiErr
 /// `Ok(Some(_))` = a server host, `Err(NotFound)` = the id isn't registered —
 /// never a silent local fallback (spec 020 D1).
 fn host_id_of(repos: &[Repo], repo_id: &str) -> Result<Option<Uuid>, ApiError> {
-    repos
+    let repo = repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .map(|repo| repo.host_id)
-        .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))
+        .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))?;
+    match (repo.host_id, repo.connection_id.as_deref()) {
+        (Some(host_id), _) => Ok(Some(host_id)),
+        (None, Some(_)) => Err(ApiError::BadRequest(format!(
+            "remote repo {repo_id} is missing hostId; reconnect or re-add the project"
+        ))),
+        (None, None) => Ok(None),
+    }
 }
 
 /// Load the [`Host`] a repo's git/worktree ops run on. Mirrors
-/// `sessions::load_host_for_session`: the repo's `host_id` (or the local
-/// host when absent) → `store.get_host`. `pub(crate)` so the worktrees
+/// `sessions::load_host_for_session`: the repo's `host_id` (or the local host
+/// for an explicitly local row) → `store.get_host`. `pub(crate)` so the worktrees
 /// route resolves the same host. A repo whose recorded host has since been
 /// deleted surfaces a clear error rather than silently running locally.
 pub(crate) async fn load_host_for_repo(state: &AppState, repo_id: &str) -> Result<Host, ApiError> {
@@ -832,6 +844,18 @@ mod tests {
         remote.host_id = Some(host);
         let repos = vec![remote.clone()];
         assert_eq!(host_id_of(&repos, &remote.id).unwrap(), Some(host));
+    }
+
+    #[test]
+    fn host_id_of_legacy_remote_never_falls_back_local() {
+        let remote = repo_with("/srv/project", Some("ssh-legacy"));
+        let err = host_id_of(std::slice::from_ref(&remote), &remote.id).unwrap_err();
+        match err {
+            ApiError::BadRequest(message) => {
+                assert!(message.contains("missing hostId"), "got: {message}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
     }
 
     #[test]

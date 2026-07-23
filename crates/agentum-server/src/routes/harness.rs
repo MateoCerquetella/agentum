@@ -198,6 +198,7 @@ async fn start(
         .strict_remote_preflight(
             &state,
             Some(&config.features.agent_tool),
+            config.features.qa_agent_tool.as_deref(),
             /* require_gh */ false,
         )
         .await
@@ -457,7 +458,7 @@ async fn spec_from_issue(
     let workspace =
         resolve_request_workspace(&state, &req.workdir, req.worktree_id.as_deref()).await?;
     workspace
-        .strict_remote_preflight(&state, None, /* require_gh */ true)
+        .strict_remote_preflight(&state, None, None, /* require_gh */ true)
         .await
         .map_err(|e| ApiError::BadRequest(format!("remote harness preflight failed: {e}")))?;
     let workdir_str = workspace.scope().path.clone();
@@ -770,7 +771,12 @@ async fn start_work(
     // remote agent and Agentum MCP path before any scaffold/backlog mutation.
     let selected_tool = req.agent_tool.as_deref().unwrap_or("claude");
     workspace
-        .strict_remote_preflight(&state, Some(selected_tool), /* require_gh */ true)
+        .strict_remote_preflight(
+            &state,
+            Some(selected_tool),
+            None,
+            /* require_gh */ true,
+        )
         .await
         .map_err(|e| ApiError::BadRequest(format!("remote harness preflight failed: {e}")))?;
 

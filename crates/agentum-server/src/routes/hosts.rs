@@ -130,6 +130,17 @@ async fn update(
 ) -> Result<Json<Host>, ApiError> {
     let id = parse_uuid(&id)?;
     let new = validate_host(new)?;
+    let current = state
+        .store
+        .get_host(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    if current.kind != new.kind && state.harness.uses_host(id).await {
+        return Err(ApiError::BadRequest(
+            "host connection is pinned by a registered harness run; stop that run before editing the connection"
+                .into(),
+        ));
+    }
     let host = state.store.update_host(id, new).await?;
     Ok(Json(host))
 }
@@ -139,6 +150,12 @@ async fn remove(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
+    if state.harness.uses_host(id).await {
+        return Err(ApiError::BadRequest(
+            "host is pinned by a registered harness run; stop that run before deleting the host"
+                .into(),
+        ));
+    }
     if state.store.delete_host(id).await? {
         Ok(StatusCode::NO_CONTENT)
     } else {
