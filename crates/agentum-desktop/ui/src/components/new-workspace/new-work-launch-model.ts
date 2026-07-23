@@ -144,7 +144,7 @@ export function canLaunchNewWork(input: {
 }): boolean {
   if (!input.hasSelectedAgent) return false;
   if (
-    !input.eligibility.eligible &&
+    'reason' in input.eligibility &&
     (input.eligibility.reason === 'agent-unavailable' ||
       input.eligibility.reason === 'setup-blocked')
   ) {

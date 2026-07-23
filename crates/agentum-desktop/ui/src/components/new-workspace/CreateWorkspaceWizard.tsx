@@ -582,6 +582,10 @@ export default function CreateWorkspaceWizard({
   )
 
   const launchBusy = launchInFlight || creating || createIssueSubmitting
+  const launchScopeLocked =
+    launchBusy ||
+    Boolean(launchCheckpoint.linkedWorkItem) ||
+    Boolean(launchCheckpoint.worktreeResult)
   const retryAvailable = isNewWorkRetryAvailable(launchProgress, launchBusy)
   const primaryLabel = step === 3
     ? newWorkBusyLabel(launchProgress) ?? (launchBusy ? 'Preparing work…' : newWorkPrimaryLabel(workSource, retryAvailable))
@@ -640,7 +644,7 @@ export default function CreateWorkspaceWizard({
               <X className="size-3.5" />
             </button>
           </div>
-          <StepDots step={step} locked={launchBusy} onJump={(target) => setStep(target)} />
+          <StepDots step={step} locked={launchScopeLocked} onJump={(target) => setStep(target)} />
           <div className="h-px bg-border" />
         </div>
 
@@ -683,7 +687,7 @@ export default function CreateWorkspaceWizard({
 
           {step === 3 ? (
             <fieldset
-              disabled={launchBusy}
+              disabled={launchScopeLocked}
               className="m-0 min-w-0 border-0 p-0 disabled:cursor-wait disabled:opacity-80"
             >
               <AgentStep
@@ -731,12 +735,12 @@ export default function CreateWorkspaceWizard({
               requiresExplicitSetupChoice={requiresExplicitSetupChoice}
               setupDecision={setupDecision}
               onSetupDecisionChange={onSetupDecisionChange}
-              locked={Boolean(launchCheckpoint.linkedWorkItem)}
+              locked={launchScopeLocked}
               canStageNewIssue={canStageConfiguredIssue}
               onRegisterIssueCreator={(creator) => {
                 configuredIssueCreatorRef.current = creator
               }}
-              worktreeLocked={Boolean(launchCheckpoint.worktreeResult)}
+              worktreeLocked={launchScopeLocked}
               repoIssuePicker={{
                 onOpenChange: onLinkPopoverOpenChange,
                 query: linkQuery,
@@ -755,7 +759,7 @@ export default function CreateWorkspaceWizard({
           className="flex flex-none flex-col-reverse gap-2.5 border-t border-border bg-muted/40 px-3 py-3 sm:flex-row sm:items-center sm:px-[18px]"
           aria-busy={step === 3 && launchBusy}
         >
-          {step > 1 && !launchCheckpoint.linkedWorkItem ? (
+          {step > 1 && !launchCheckpoint.linkedWorkItem && !launchCheckpoint.worktreeResult ? (
             <button
               type="button"
               disabled={launchBusy}
@@ -2382,7 +2386,7 @@ function AgentStep({
           </span>
         </button>
       </div>
-      {!eligibility.eligible ? <span className="text-[11px] text-amber-500">{eligibility.message}</span> : null}
+      {'message' in eligibility ? <span className="text-[11px] text-amber-500">{eligibility.message}</span> : null}
       {Object.values(progress).some((status) => status !== 'pending') ? (
         <div className="grid grid-cols-4 gap-1.5 rounded-lg border border-border p-2">
           {NEW_WORK_STAGES.map((stage) => <span key={stage} className={cn('text-center text-[10px] capitalize text-muted-foreground', progress[stage] === 'done' && 'text-emerald-500', progress[stage] === 'error' && 'text-destructive')}>{progress[stage] === 'done' ? '✓ ' : progress[stage] === 'active' ? '● ' : progress[stage] === 'error' ? '! ' : ''}{stage}</span>)}
@@ -2499,7 +2503,9 @@ function CanonicalCreateIssuePanel({
           linearTarget.scope?.kind === 'project' ? linearTarget.scope.id : undefined
       })
       if (!result.ok) {
-        setLinearError(result.error || 'Could not create the Linear issue.')
+        setLinearError(
+          ('error' in result ? result.error : null) || 'Could not create the Linear issue.'
+        )
         return null
       }
       if (result.teamId !== teamId) {

@@ -48,8 +48,10 @@ describe('CreateWorkspaceWizard canonical tracker layout', () => {
   it('locks the staged launch owner and all mutable step-three controls while busy', () => {
     expect(source).toContain('<Dialog open onOpenChange={handleDialogOpenChange}>')
     expect(source).toContain('if (!open && launchBusy) return')
-    expect(source).toContain('<StepDots step={step} locked={launchBusy}')
-    expect(source).toContain('disabled={launchBusy}\n              className="m-0 min-w-0 border-0 p-0')
+    expect(source).toContain('<StepDots step={step} locked={launchScopeLocked}')
+    expect(source).toContain('Boolean(launchCheckpoint.worktreeResult)')
+    expect(source).toContain('disabled={launchScopeLocked}\n              className="m-0 min-w-0 border-0 p-0')
+    expect(source).toContain('!launchCheckpoint.worktreeResult ? (')
     expect(source).toContain('disabled={!done || locked}')
   })
 })
