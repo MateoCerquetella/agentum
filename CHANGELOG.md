@@ -4,7 +4,7 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.96.1] — 2026-07-23
+## [0.96.2] — 2026-07-23
 
 ### Fixed
 
@@ -15,6 +15,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Project Tasks is minimal again.** The drafting choice no longer appears in
   the standalone Tasks intake, keeping worktree-specific setup in its actual
   creation path.
+
+## [0.96.1] — 2026-07-23
+
+### Fixed
+
+- **Shared-worktree lease keys are portable across operating systems.** Files
+  discovered inside worker creation directories now use stable `/`-separated
+  keys on Windows, matching execution-plan paths and allowing drift detection
+  and recovery checks to resolve the correct durable lease.
 
 ## [0.96.0] — 2026-07-22
 
