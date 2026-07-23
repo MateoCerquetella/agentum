@@ -155,7 +155,8 @@ async fn start(
 async fn list(State(state): State<AppState>) -> axum::Json<Vec<HarnessStatus>> {
     let mut out = Vec::new();
     for id in state.harness.list().await {
-        if let Ok(s) = state.harness.status(id).await {
+        if let Ok(mut s) = state.harness.status(id).await {
+            let _ = crate::harness::orchestrated::enrich_status(&state, &mut s).await;
             out.push(s);
         }
     }
@@ -167,12 +168,15 @@ async fn status(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<axum::Json<HarnessStatus>, ApiError> {
-    state
+    let mut status = state
         .harness
         .status(id)
         .await
-        .map(axum::Json)
-        .map_err(|e| ApiError::NotFound(e.to_string()))
+        .map_err(|e| ApiError::NotFound(e.to_string()))?;
+    crate::harness::orchestrated::enrich_status(&state, &mut status)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(axum::Json(status))
 }
 
 /// `POST /api/harness/{id}/run` — kick off the end-to-end drive loop in the
@@ -564,6 +568,11 @@ fn apply_start_work_knobs(
     if sdd_roles {
         list.roles = true;
     }
+    // Newly-created issue-to-run flows use the shared-worktree coordinator.
+    // Hand-authored and already-running feature lists without this field keep
+    // the sequential compatibility engine.
+    list.execution_mode = crate::harness::ExecutionMode::Orchestrated;
+    list.max_concurrency = crate::harness::orchestrated::MAX_CONCURRENCY;
 }
 
 #[derive(Debug, Serialize)]
@@ -726,6 +735,29 @@ async fn start_work(
 
 /// `DELETE /api/harness/{id}` — drop the run from the engine.
 async fn stop(State(state): State<AppState>, Path(id): Path<Uuid>) -> Result<StatusCode, ApiError> {
+    // Managed sessions share the user's worktree. Stop only their panes and
+    // release their capabilities; never roll back, stash, or discard edits.
+    for managed in state.store.harness_active_sessions(&id.to_string()).await? {
+        if let Ok(session_id) = Uuid::parse_str(&managed.session_id) {
+            let _ = super::sessions::stop_session_core(&state, session_id, false).await;
+        }
+    }
+    state
+        .store
+        .harness_release_run_sessions(&id.to_string())
+        .await?;
+    state.store.harness_release_leases(&id.to_string()).await?;
+    if state
+        .store
+        .harness_get_orchestrated_run(&id.to_string())
+        .await?
+        .is_some()
+    {
+        state
+            .store
+            .harness_update_run(&id.to_string(), "stopped", None, None)
+            .await?;
+    }
     state
         .harness
         .stop(id)

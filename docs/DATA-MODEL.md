@@ -3,6 +3,18 @@
 SQLite, WAL mode, `synchronous=NORMAL`. Weekly `VACUUM` from the
 watchdog. Schema lives in `migrations/0001_initial.sql`.
 
+## Orchestrated harness runtime
+
+Migration `0028_harness_orchestration.sql` adds durable runtime state beside
+the legacy on-disk feature list. `harness_orchestrated_runs` stores the
+validated versioned plan and coordinator checkpoint;
+`harness_orchestrated_tasks` stores bounded immutable packets and the task DAG;
+`harness_file_leases` owns exact paths and their accepted hashes;
+`harness_patch_ledger` is the write-ahead journal with recoverable preimages;
+`harness_managed_sessions` scopes coordinator/worker/reviewer sessions; and
+`harness_coordinator_decisions` is the durable decision log. These tables never
+contain worker transcripts and never represent Git commits or index state.
+
 ```sql
 CREATE TABLE sessions (
     id          TEXT PRIMARY KEY,                  -- uuid v4

@@ -394,7 +394,7 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         );
     }
 
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
 
     let app = router(state.clone());
 
@@ -442,7 +442,164 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
 /// Factored out so the
 /// in-process embedded boot (desktop) and the standalone `serve()` (TUI/daemon)
 /// stay in lockstep.
-fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
+async fn spawn_background_workers(
+    state: &AppState,
+    bus: &broadcast::Sender<Event>,
+) -> anyhow::Result<()> {
+    // Recovery is a boot gate: reconcile journals and leases before managed
+    // panes revive or a scheduler loop ticks. External edits are preserved.
+    harness::orchestrated::recover_orchestrated_runs(state).await?;
+
+    // Managed-worker liveness: a quiet worker gets one bounded nudge every
+    // five minutes; thirty minutes of genuine session inactivity is the hard
+    // stall ceiling. Blocking one task never stops unrelated ready work.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let now = time::OffsetDateTime::now_utc();
+                for run in state
+                    .store
+                    .harness_orchestrated_runs()
+                    .await
+                    .unwrap_or_default()
+                {
+                    for task in state
+                        .store
+                        .harness_tasks(&run.run_id)
+                        .await
+                        .unwrap_or_default()
+                    {
+                        if !matches!(
+                            task.status.as_str(),
+                            "dispatched" | "working" | "patch_pending"
+                        ) {
+                            continue;
+                        }
+                        let Some(raw_session) = task.worker_session.as_deref() else {
+                            continue;
+                        };
+                        let Ok(session_id) = uuid::Uuid::parse_str(raw_session) else {
+                            continue;
+                        };
+                        let Some(session) = state
+                            .store
+                            .get_session_by_id(session_id)
+                            .await
+                            .ok()
+                            .flatten()
+                        else {
+                            continue;
+                        };
+                        let last_activity = session.last_activity_at.unwrap_or(session.updated_at);
+                        let inactive_secs = (now - last_activity).whole_seconds().max(0);
+                        if inactive_secs >= 30 * 60 {
+                            let _ = state
+                                .store
+                                .harness_update_task(
+                                    &run.run_id,
+                                    &task.task_id,
+                                    "blocked",
+                                    None,
+                                    None,
+                                    Some("worker exceeded the 30-minute hard inactivity ceiling"),
+                                )
+                                .await;
+                            continue;
+                        }
+                        let last_nudge = time::OffsetDateTime::parse(
+                            &task.updated_at,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .unwrap_or(last_activity);
+                        if inactive_secs >= 5 * 60 && (now - last_nudge).whole_seconds() >= 5 * 60 {
+                            let prompt = "Agentum liveness check: this task has shown no activity for five minutes. Continue from your immutable packet, call request_verify if finished, or report a concrete blocker.";
+                            let _ = harness::inject_prompt(&state, &session, prompt).await;
+                            let _ = state
+                                .store
+                                .harness_update_task(
+                                    &run.run_id,
+                                    &task.task_id,
+                                    &task.status,
+                                    None,
+                                    None,
+                                    None,
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Managed sessions rotate at their first exact context-low signal (the
+    // fallback for CLIs that cannot report a numeric 10% remaining value).
+    {
+        let state = state.clone();
+        let mut events = bus.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = events.recv().await {
+                if event.kind != "harness.context_rotation_requested" {
+                    continue;
+                }
+                let Some(session_id) = event.session_id else {
+                    continue;
+                };
+                if let Err(error) =
+                    harness::orchestrated::rotate_managed_session(&state, session_id).await
+                {
+                    tracing::warn!(%session_id, %error, "managed harness rotation failed");
+                }
+            }
+        });
+    }
+
+    // CLIs that report an exact remaining percentage rotate at <=10%, before
+    // any compaction signal. The claim in rotate_managed_session deduplicates
+    // this ticker against the watchdog event path.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                tick.tick().await;
+                for run in state
+                    .store
+                    .harness_orchestrated_runs()
+                    .await
+                    .unwrap_or_default()
+                {
+                    for managed in state
+                        .store
+                        .harness_active_sessions(&run.run_id)
+                        .await
+                        .unwrap_or_default()
+                    {
+                        let Ok(session_id) = uuid::Uuid::parse_str(&managed.session_id) else {
+                            continue;
+                        };
+                        let context_low = state
+                            .store
+                            .get_session_by_id(session_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|session| session.ctx)
+                            .is_some_and(|remaining| remaining <= 10);
+                        if context_low {
+                            let _ =
+                                harness::orchestrated::rotate_managed_session(&state, session_id)
+                                    .await;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // Sweep stale tokens once at boot, then on a slow timer.
     let sweep_state = state.clone();
     tokio::spawn(async move {
@@ -592,6 +749,8 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
             routes::sessions::boot_drift_rescan(state).await;
         });
     }
+
+    Ok(())
 }
 
 /// Boot the API server in-process on an ephemeral loopback port with auth
@@ -632,7 +791,7 @@ pub async fn serve_embedded_loopback_with_bridge(
     let (mut state, bus) = embedded_app_state(store, addr);
     state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
     state.desktop_bridge = Some(bridge);
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
     let app = router(state);
     tracing::info!(%addr, "agentum-server listening (embedded loopback, desktop bridge)");
     tokio::spawn(async move {
@@ -664,7 +823,7 @@ pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(Sock
     let (mut state, bus) = embedded_app_state(store, addr);
     state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
 
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
 
     let app = router(state.clone());
     tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");

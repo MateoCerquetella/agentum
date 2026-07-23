@@ -104,6 +104,20 @@ fn default_agent_yolo() -> bool {
     true
 }
 
+fn default_max_concurrency() -> usize {
+    4
+}
+
+/// Missing means the original sequential feature driver.  Only newly-created
+/// gated runs opt into orchestration, preserving legacy and in-progress files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    #[default]
+    Sequential,
+    Orchestrated,
+}
+
 /// The `feature_list.json` document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureList {
@@ -167,6 +181,12 @@ pub struct FeatureList {
     /// HITL-at-QA default).
     #[serde(default)]
     pub hitl_on_block: bool,
+    /// Shared-worktree coordinator mode. Absence is deliberately sequential.
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
+    /// Scheduler ceiling, never a forced number of workers.
+    #[serde(default = "default_max_concurrency")]
+    pub max_concurrency: usize,
 }
 
 /// How the browser QA gate is executed (spec 012b).
@@ -198,6 +218,8 @@ impl Default for FeatureList {
             spec_id: None,
             roles: false,
             hitl_on_block: false,
+            execution_mode: ExecutionMode::Sequential,
+            max_concurrency: default_max_concurrency(),
         }
     }
 }
@@ -223,6 +245,8 @@ impl FeatureList {
             spec_id,
             roles,
             hitl_on_block,
+            execution_mode,
+            max_concurrency,
         } = src.clone();
         self.max_retries = max_retries;
         self.agent_tool = agent_tool;
@@ -236,6 +260,8 @@ impl FeatureList {
         self.spec_id = spec_id;
         self.roles = roles;
         self.hitl_on_block = hitl_on_block;
+        self.execution_mode = execution_mode;
+        self.max_concurrency = max_concurrency;
     }
 
     /// Inverse of the tracker-stamp loop in `plan_from_spec_inner` (spec 023
@@ -525,6 +551,34 @@ pub enum HarnessEvent {
         attempt: u32,
         summary: String,
     },
+    WorkerChanged {
+        harness_id: Uuid,
+        task_id: String,
+        session_id: Option<Uuid>,
+        state: String,
+    },
+    PatchChanged {
+        harness_id: Uuid,
+        task_id: String,
+        patch_id: String,
+        state: String,
+    },
+    OwnershipConflict {
+        harness_id: Uuid,
+        task_id: String,
+        path: String,
+        message: String,
+    },
+    TaskVerification {
+        harness_id: Uuid,
+        task_id: String,
+        success: bool,
+    },
+    CoordinatorRotated {
+        harness_id: Uuid,
+        previous_session: Uuid,
+        replacement_session: Uuid,
+    },
     Error {
         harness_id: Uuid,
         message: String,
@@ -560,6 +614,17 @@ pub struct HarnessRun {
     /// Latest role-gate verdict summary. Retained when the run blocks/parks so
     /// intervention starts with the reason instead of only a red state.
     pub gate_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestratedWorkerStatus {
+    pub task_id: String,
+    pub state: String,
+    pub session_id: Option<Uuid>,
+    pub enforcement: String,
+    pub context_remaining: Option<i64>,
+    pub patch_state: Option<String>,
+    pub conflict: Option<String>,
 }
 
 /// Config loaded from a project's `.harness/` directory.

@@ -177,4 +177,51 @@ describe('GatedRunBarView', () => {
     expect(html).toContain('w-[calc(100%+0.25rem)]')
     expect(html).toContain('relative z-10 truncate bg-background')
   })
+
+  it('renders concurrent workers, enforcement, patch state, context, and conflicts', async () => {
+    const { GatedRunBarView } = await importBar()
+    const run = makeRun({
+      execution_mode: 'orchestrated',
+      max_concurrency: 4,
+      coordinator_session: 'coordinator-session',
+      active_workers: [
+        {
+          task_id: 'T-ui',
+          state: 'patch_pending',
+          session_id: 'worker-session',
+          enforcement: 'enforced',
+          context_remaining: 42,
+          patch_state: 'prepared'
+        },
+        {
+          task_id: 'T-api',
+          state: 'blocked',
+          session_id: 'worker-2',
+          enforcement: 'best_effort',
+          conflict: 'external drift at src/api.rs'
+        }
+      ]
+    })
+    const html = renderToStaticMarkup(
+      <GatedRunBarView
+        run={run}
+        issueLabel="#42"
+        busy={false}
+        arming={false}
+        expanded={true}
+        restarting={false}
+        onToggleExpanded={() => {}}
+        onUnlink={() => {}}
+        onRetry={() => {}}
+        onSelectWorker={() => {}}
+      />
+    )
+    expect(html).toContain('2/4 active')
+    expect(html).toContain('T-ui')
+    expect(html).toContain('enforced')
+    expect(html).toContain('patch prepared')
+    expect(html).toContain('42% ctx')
+    expect(html).toContain('best_effort')
+    expect(html).toContain('external drift at src/api.rs')
+  })
 })

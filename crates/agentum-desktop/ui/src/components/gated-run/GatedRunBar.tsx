@@ -49,6 +49,7 @@ export type GatedRunBarViewProps = {
   onToggleExpanded: () => void
   onUnlink: () => void
   onRetry: () => void
+  onSelectWorker?: (sessionId: string, taskId: string) => void
 }
 
 const FEATURE_LABELS: Record<HarnessFeature['state'], string> = {
@@ -100,7 +101,8 @@ export function GatedRunBarView({
   restarting,
   onToggleExpanded,
   onUnlink,
-  onRetry
+  onRetry,
+  onSelectWorker
 }: GatedRunBarViewProps): React.JSX.Element {
   const stages = deriveGatedRunStages(run)
   const currentFeature = currentHarnessFeature(run)
@@ -289,6 +291,51 @@ export function GatedRunBarView({
             </p>
           )}
 
+          {run.execution_mode === 'orchestrated' && (run.active_workers?.length ?? 0) > 0 ? (
+            <div className="mt-2" aria-label="Active workers">
+              <div className="flex items-center gap-2 text-[9.5px] text-muted-foreground">
+                <span className="font-mono font-semibold uppercase tracking-[0.14em]">Workers</span>
+                <span>{run.active_workers?.length}/{run.max_concurrency ?? 4} active</span>
+                {run.coordinator_session ? (
+                  <span className="ml-auto font-mono">coordinator {run.coordinator_session.slice(0, 8)}</span>
+                ) : null}
+              </div>
+              <div className="mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5">
+                {run.active_workers?.map((worker) => (
+                  <button
+                    key={worker.task_id}
+                    type="button"
+                    disabled={!worker.session_id}
+                    onClick={() => worker.session_id && onSelectWorker?.(worker.session_id, worker.task_id)}
+                    className={cn(
+                      'min-w-[180px] rounded-md border px-2 py-1.5 text-left transition-colors disabled:cursor-default',
+                      worker.conflict
+                        ? 'border-amber-500/40 bg-amber-500/8'
+                        : 'border-sky-500/30 bg-sky-500/5 hover:bg-sky-500/10'
+                    )}
+                    title={worker.conflict ?? `Open worker terminal for ${worker.task_id}`}
+                  >
+                    <span className="flex items-center gap-1.5 text-[10.5px] font-medium text-foreground">
+                      <Loader2 className="size-3 animate-spin text-sky-500" aria-hidden />
+                      <span className="truncate">{worker.task_id}</span>
+                      <span className="ml-auto rounded border border-border px-1 py-px font-mono text-[8.5px] text-muted-foreground">
+                        {worker.enforcement}
+                      </span>
+                    </span>
+                    <span className="mt-1 flex items-center gap-1 text-[9.5px] text-muted-foreground">
+                      {worker.state.replaceAll('_', ' ')}
+                      {worker.patch_state ? ` · patch ${worker.patch_state}` : ''}
+                      {worker.context_remaining != null ? ` · ${worker.context_remaining}% ctx` : ''}
+                    </span>
+                    {worker.conflict ? (
+                      <span className="mt-1 block truncate text-[9.5px] text-amber-600">{worker.conflict}</span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {blocker ? (
             <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/35 bg-amber-500/8 px-2.5 py-2">
               <AlertTriangle className="mt-0.5 size-3.5 flex-none text-amber-500" aria-hidden />
@@ -406,6 +453,25 @@ export default function GatedRunBar({
       .finally(() => setRestarting(false))
   }, [refresh, restarting, run])
 
+  const handleSelectWorker = useCallback((sessionId: string, taskId: string): void => {
+    const state = useAppStore.getState()
+    const tabs = state.tabsByWorktree[worktreeId] ?? []
+    const existing = tabs.find((tab) => tab.serverSessionId === sessionId)
+    if (existing) {
+      state.setActiveTab(existing.id)
+      return
+    }
+    const rawAgent = run?.current_agent_tool ?? run?.features.agent_tool
+    const tab = state.createTab(worktreeId, undefined, undefined, {
+      activate: true,
+      recordInteraction: false,
+      persistTmux: true,
+      serverSessionId: sessionId,
+      ...(rawAgent && isTuiAgent(rawAgent) ? { launchAgent: rawAgent } : {})
+    })
+    state.setTabCustomTitle(tab.id, `Worker · ${taskId}`)
+  }, [run, worktreeId])
+
   if (!run) {
     return pending ? (
       <section
@@ -435,6 +501,7 @@ export default function GatedRunBar({
       onToggleExpanded={() => setExpanded((value) => !value)}
       onUnlink={handleUnlink}
       onRetry={handleRetry}
+      onSelectWorker={handleSelectWorker}
     />
   )
 }

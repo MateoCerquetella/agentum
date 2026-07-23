@@ -16,6 +16,7 @@ pub mod paths;
 // reach the crate-root `Store`'s private `pool` field.
 mod channels;
 mod events;
+pub mod harness_orchestration;
 mod hosts;
 mod messages;
 mod notes;
