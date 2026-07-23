@@ -197,6 +197,20 @@ fn check_no_symlink(workdir: &Path, rel: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn path_key(path: &Path) -> anyhow::Result<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(
+                part.to_str()
+                    .ok_or_else(|| anyhow::anyhow!("harness paths must be valid UTF-8"))?,
+            ),
+            _ => anyhow::bail!("path key must be relative and traversal-free"),
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 fn files_under(workdir: &Path, raw_dir: &str) -> anyhow::Result<Vec<String>> {
     let rel_dir = safe_relative(raw_dir)?;
     check_no_symlink(workdir, &rel_dir)?;
@@ -219,13 +233,7 @@ fn files_under(workdir: &Path, raw_dir: &str) -> anyhow::Result<Vec<String>> {
             if kind.is_dir() {
                 pending.push(entry.path());
             } else if kind.is_file() {
-                files.push(
-                    entry
-                        .path()
-                        .strip_prefix(workdir)?
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                files.push(path_key(entry.path().strip_prefix(workdir)?)?);
             }
         }
     }
