@@ -2,122 +2,85 @@
 
 - **Spec:** `028-bound-transcript-observers`
 - **Date:** 2026-07-23
-- **Base under test:** `87321fd2` (`e878dd6e..87321fd2` Reviewer-race closure diff)
-- **Role:** Fresh Tester after Reviewer send-back
-- **Verdict:** **SEND-BACK — AC 6 still has a reproducible stale-request race.**
+- **Base under test:** `105ca8ad` (full Spec 028 range `4f3c030c^..105ca8ad`)
+- **Role:** Fresh Tester, final autonomous attempt after failure 2/2
+- **Verdict:** **PASS — all acceptance criteria have independent executable evidence.**
 
-The generation-aware consumer fix is correct and closes the already-received-wake
-race: generation identity, transcript mutation, and `agent_tasks.updated`
-broadcast are checked/performed under the same transcript-store mutex boundary.
-The new deterministic wake test passes through SnapshotOnly,
-`stop_observing`, `retain_observers`, and `forget`.
+The final lifecycle-linearization fix closes the stale preloaded-request defect from the previous
+Tester gate. Agent-task GET/reset hold a weak-keyed per-session Tokio mutex across the authoritative
+durable load and transcript operation. Stop/kill, forced delete, and tool PATCH hold the same
+boundary from their authoritative load through durable mutation and transcript retirement. A
+request therefore completes before mutation and is caught by retirement, or enters afterward and
+loads Stopped, non-Claude, or missing durable state.
 
-The final stop/kill and delete cleanup calls also close recreation that happens
-*before* those final calls, exactly as their new route tests assert. They do not,
-however, fence an agent-task request that loaded the durable `Running` row before
-the final boundary and reaches `TranscriptStore::read(..., Live)` afterward.
-Such a request can still attach after successful stop/kill, or recreate cache and
-observation after successful deletion.
+No nested lifecycle acquisition was found: the shared `stop_session_core` owns the stop/kill/MCP
+boundary, while its HTTP and MCP callers do not acquire it separately. The weak registry retains a
+lock while any holder or waiter owns a strong reference and opportunistically prunes dead UUID
+keys, avoiding permanent historical-session tombstones.
 
 ## Independent gates
 
 | Gate | Result |
 |---|---|
-| `cargo test -p agentum-server transcript_store::tests --lib -- --nocapture` | **PASS — 10/10** |
-| `cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture` | **PASS — 2/2 committed tests** |
-| `cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture` | **PASS — 4/4** |
+| `cargo test -p agentum-server transcript_store::tests --lib -- --nocapture` | **PASS — 11/11** |
+| `cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture` | **PASS — 2/2** |
+| `cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture` | **PASS — 7/7** |
 | server-wired watchdog focused test | **PASS — 1/1** |
 | generic watchdog reconcile-hook focused test | **PASS — 1/1** |
-| `HARNESS_FEATURE_ID=transcript-observer-lifecycle bash .harness/qa.sh` | **PASS — 17/17 isolated tests**, including the real `RecommendedWatcher` smoke leg |
-| temporary stale-request regressions described below | **FAIL — 0/2; AC 6 defect reproduced** |
+| `HARNESS_FEATURE_ID=transcript-observer-lifecycle bash .harness/qa.sh` | **PASS — 21/21 isolated server tests**, including the real `RecommendedWatcher` append/retirement leg |
+| `cargo test --workspace --lib --exclude agentum-desktop` | **PASS — 839 passed, 0 failed, 2 ignored** |
 | `cargo check -p agentum-server -p agentum-watchdog` | **PASS** |
-| `cargo test --workspace --lib --exclude agentum-desktop` | **PASS — 835 passed, 0 failed, 2 ignored** |
 | `cargo fmt --all -- --check` | **PASS** |
-| `git diff --check e878dd6e..87321fd2` | **PASS** |
-| blocking-receiver source guard | **PASS — no `spawn_blocking` or `std::sync::mpsc` match in `transcript_store.rs`** |
 | `.harness/feature_list.json` parse and `bash -n .harness/{qa,verify}.sh` | **PASS** |
+| blocking-receiver source guard | **PASS — no `spawn_blocking` or `std::sync::mpsc` in `transcript_store.rs`** |
+| `git diff --check` and `git diff --check 1e174a57..105ca8ad` | **PASS** |
 
-The temporary regressions were added only to force the missing schedules, run,
-and then removed. No implementation source change remains from Tester.
+The full implementation-range inspection found only pre-existing two-space Markdown hard breaks in
+the committed Reviewer send-back report; the implementation, worktree, and final Developer diff
+are whitespace-clean.
 
 ## Acceptance-criterion map
 
 | AC | Verdict | Independent evidence |
 |---|---|---|
-| 1 | **PASS** | The production list handler remains database-only. The 500-row fixture, including 250 Claude sessions, returns every row with zero cache entries, observer creations/drops, or transcript-directory creation. |
-| 2 | **PASS** | The 16-way concurrent/repeated running-Claude test creates exactly one observer. The route selects Live for Running Claude, and the existing update kind/payload remain asserted. |
-| 3 | **PASS** | SnapshotOnly reads synchronously incorporate appended complete lines, retain a partial line until newline, attach no observer, and now reject an already-received wake after live-to-snapshot retirement. |
-| 4 | **PASS** | Non-Claude read/reset creates no entry, directory, observer, or consumer; transitioning from Claude forgets the prior observer/cache. |
-| 5 | **PASS** | Reset-first advances the selected transcript cursor to EOF and exposes only later complete lines without observation. |
-| 6 | **BLOCKED** | Mid-teardown reattachment/recreation is cleaned by the new final calls, but a GET that already loaded `Running` can execute its cached Live decision after those calls. The two forced schedules leave an observer after stop and cache+observer after delete. |
-| 7 | **PASS** | Pinned isolation/promotion, legacy fallback, complete-line parsing, response/event payloads, and the non-desktop workspace regressions remain green. |
-| 8 | **PASS** | Notify transport remains capacity-one/coalescing with no blocking receiver. The post-`recv()` barrier proves stale generations cannot mutate or emit after all four transcript retirement operations, and consumers complete after release. |
+| 1 | **PASS** | The production list handler remains database-only. The 500-row fixture, including 250 Claude sessions, returns all rows with zero transcript cache entries, observer creations/drops, or directory creation. |
+| 2 | **PASS** | Repeated and 16-way concurrent running-Claude reads create exactly one observer. The route selects `Live` only for durable Running Claude state, and update event kind/payload compatibility remains asserted. |
+| 3 | **PASS** | `SnapshotOnly` synchronously consumes newly appended complete lines, preserves partial-line behavior, and drops an existing live observer itself. Stopped route reads leave zero observers. |
+| 4 | **PASS** | Non-Claude read/reset creates no entry, directory, observer, or consumer. A live-Claude to non-Claude read forgets the prior cache and observer before returning empty. |
+| 5 | **PASS** | Reset-first selects pinned/legacy state, advances the cursor to EOF, and exposes only later complete lines without attaching observation. |
+| 6 | **PASS** | Production stop/kill/delete/tool-patch regressions and watchdog reconciliation retire the right resources without starting new observers. Deterministic actual-handler schedules park a GET after loading Running Claude, prove all four lifecycle transitions wait on the keyed boundary, then prove stop/kill/tool patch leave zero observers and forced delete leaves zero observers and zero cache entries. |
+| 7 | **PASS** | UUID-pinned isolation/promotion, legacy fallback, complete-line parsing, response schemas, and `agent_tasks.updated` payloads remain covered by focused and workspace tests. |
+| 8 | **PASS** | Notify delivery remains capacity-one/coalescing; observer drop aborts the Tokio consumer. Already-received wake regressions cover SnapshotOnly, stop, retain, and forget and prove no post-retirement mutation/event/cache recreation. The production watcher leg emits on append and stays silent after retirement. |
 
-## Reproduced blocker — stale Running request crosses the final route boundary
+## Adversarial lifecycle evidence
 
-`get_agent_tasks` loads a `Session` at `routes/agent_tasks.rs:35-39`, derives
-Live from that snapshot at `:41-45`, and later calls `TranscriptStore::read` at
-`:46-48`. There is no shared lifecycle authority spanning those operations and
-the final stop/delete boundary.
+The final handler tests exercise the exact schedule that previously failed, not a hand-modeled
+approximation:
 
-Two temporary tests copied that production ordering and asserted the required
-post-boundary state:
+1. `get_agent_tasks` acquires the UUID lifecycle guard, loads a durable Running Claude row, and
+   parks before choosing/calling `read(Live)`.
+2. A concurrent stop, kill, forced delete, or tool PATCH is launched.
+3. The lifecycle route is proved unable to reach its early transcript-retirement gate while the
+   preloaded request holds the boundary; the durable row is still Running/Claude/present.
+4. Releasing the GET lets it attach first. The lifecycle route then acquires the same boundary and
+   removes that work while committing its authoritative state transition.
+5. Completion proves zero live observers for all four paths; forced delete also proves zero cache
+   entries and no durable row. The post-tool-patch reread returns empty and cannot reattach Claude.
 
-1. **Stop/kill schedule**
-   - Load a Claude session snapshot while its durable status is `Running`.
-   - Perform early retirement, commit `Stopped`, and perform the production
-     final `stop_observing` boundary (`sessions.rs:735`).
-   - Resume the already-loaded request and call `read(..., Live)` from its stale
-     snapshot.
-   - Expected observer count: `0`; actual: `1`.
+The registry regression separately proves same-UUID exclusion and that, after holder/waiter
+completion, a subsequent UUID acquisition prunes the dead weak key. Code inspection confirms an
+`OwnedMutexGuard` keeps the lock's `Arc` alive for holders, and `lock_owned()` keeps the strong
+reference alive while waiting, so opportunistic pruning cannot split a live key into two locks.
 
-2. **Forced-delete schedule**
-   - Load a Claude session snapshot while its durable status is `Running`.
-   - Perform early forget, durable row deletion, and the production final
-     `forget` boundary (`sessions.rs:501-505`).
-   - Resume the already-loaded request and call `read(..., Live)` from its stale
-     snapshot.
-   - Expected cache count: `0`; actual: `1` (with a live observer also created).
+## Documented environment gates
 
-The focused command reported both failures:
+- `cargo test --workspace --lib` was rerun and is **environment-blocked** in
+  `agentum-desktop` because `../../target/release/libsherpa-onnx-c-api.dylib` is absent. The
+  authoritative backend substitution excluding `agentum-desktop` is green at 839 passed and 2
+  ignored.
+- `npm run build --prefix crates/agentum-desktop/ui` was rerun and is **environment-blocked** with
+  `vite: command not found` because UI dependencies are not installed. Spec 028 has no UI/browser
+  implementation surface.
 
-```text
-running 2 tests
-stale_running_request_cannot_attach_after_final_stop_boundary ... FAILED
-  assertion failed: left 1, right 0
-stale_running_request_cannot_recreate_after_final_delete_boundary ... FAILED
-  assertion failed: left 1, right 0
-test result: FAILED. 0 passed; 2 failed
-```
-
-This is not contradicted by the committed route regressions. Those deliberately
-reattach/recreate while teardown is parked and then release teardown, so the
-replacement exists before the final cleanup call. They do not park a request
-after its durable session load and resume it after final cleanup.
-
-## Required correction
-
-Introduce one per-session asynchronous lifecycle linearization boundary shared
-by transcript reads/resets and session lifecycle mutations:
-
-- hold the session's boundary across durable session load plus
-  `TranscriptStore::read`/`reset` in agent-task routes;
-- hold the same boundary across load, teardown/status mutation, and final
-  transcript retirement in stop/kill/delete; and
-- use it for tool patching so a request carrying the old Claude identity cannot
-  attach after the tool-change retirement.
-
-With that ordering, an agent-task operation either completes before lifecycle
-mutation, in which case final cleanup removes its work, or enters afterward and
-observes `Stopped`, non-Claude, or a missing row. Prefer a scoped keyed-lock
-registry with weak/ref-counted entries and opportunistic cleanup; a permanent
-per-UUID generation/tombstone map would grow with historical/deleted sessions
-and would recreate the resource-retention problem this spec is meant to solve.
-
-Add deterministic route tests that park after the agent-task durable load,
-complete successful stop/kill or forced delete through the final boundary, then
-release the request and prove zero live observers; delete must also prove zero
-cached entries. Retain the existing already-received-wake and mid-teardown tests.
-
-No `ai/STATE.md`, handoff, implementation file, dependency, commit, or external
-state was changed by Tester. This report is the only intended worktree change.
+No implementation source, dependency, state cursor, handoff, or external state was changed by
+Tester. This verification report is the only intended worktree change.

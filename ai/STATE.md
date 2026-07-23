@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** tester     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 final autonomous Tester attempt; handoff `12-developer-to-tester-04.md`.)
+- **phase:** reviewer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 final Tester PASS; handoff `13-tester-to-reviewer-02.md`.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,9 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Tester | **028 iteration 2 PASS → phase reviewer**. Fresh
-  verification closes AC 1–8 with 17 focused/runtime tests, 15 isolated QA
-  tests, and 833 green backend workspace tests.
 - 2026-07-23 | Reviewer | **028 SEND-BACK → phase developer** (Reviewer
   iteration 1/2). Generationless in-flight refresh plus stop/delete teardown
   windows can violate post-retirement quiescence; three bounded races must close.
@@ -102,3 +99,6 @@
 - 2026-07-23 | Developer | **028 final stale-request fix PASS → phase tester**.
   A weak keyed lifecycle boundary linearizes agent-task loads with stop/kill,
   delete, and tool-patch retirement; 21 isolated and 839 backend tests pass.
+- 2026-07-23 | Tester | **028 final retry PASS → phase reviewer**. Fresh
+  verification closes AC 1–8 with 22 focused tests, 21 isolated QA tests, and
+  839 green backend workspace tests; stale-request races are green.
