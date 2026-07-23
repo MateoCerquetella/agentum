@@ -60,7 +60,8 @@ export function shouldUseServerTerminals(): boolean {
  * Drop-in alternative to `connectPanePty`: ensure a server session exists for
  * this pane's workspace (workdir) and bind its tmux pane to the xterm. If the
  * server path can't establish (no workdir, session/stream failure), it falls
- * back to `connectPanePty` so the pane still works — the proven local path.
+ * back to `connectPanePty` so the pane still works — the native PTY path,
+ * which preserves the repo's local/SSH host boundary.
  */
 export function connectPaneServerSession(
   pane: ManagedPane,
@@ -297,7 +298,7 @@ export function connectPaneServerSession(
     if (disposed || localFallback) {
       return
     }
-    console.warn(`[agentum] server terminal unavailable, using local PTY: ${reason}`)
+    console.warn(`[agentum] server terminal unavailable, using native PTY: ${reason}`)
     localFallback = connectPanePty(pane, manager, deps)
   }
 

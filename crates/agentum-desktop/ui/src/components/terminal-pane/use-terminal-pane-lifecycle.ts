@@ -714,7 +714,8 @@ export function useTerminalPaneLifecycle({
         }
         applyAppearance(manager)
         // Spec 005-C: route the pane through the embedded server's tmux sessions
-        // (persistent, auto-reattaches on relaunch) or a local PTY (ephemeral)
+        // (persistent, auto-reattaches on relaunch) or a native PTY (ephemeral;
+        // local shell for local repos, OpenSSH child for SSH repos)
         // per the tab's "Run in tmux (persist)" choice. The per-tab choice is
         // stamped at creation and persisted across relaunch; tabs without an
         // explicit choice fall back to the global default. Same PanePtyBinding

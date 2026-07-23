@@ -138,11 +138,11 @@ export type PanePtyBinding = IDisposable & {
   /** Force the pane's agent to fully repaint (server path only — a SIGWINCH
    *  nudge + fresh snapshot). Backs the "force redraw" shortcut, which heals a
    *  grid corrupted by bytes the agent never drew (an OS suspend `wall`
-   *  broadcast). Absent / no-op on the local PTY path. */
+   *  broadcast). Absent / no-op on the native PTY path. */
   forceRedraw?: () => void
   /** Send raw bytes for an intercepted keyboard chord (word-nav/erase,
    *  line-nav) on the SERVER session path, whose pane has no entry in
-   *  `paneTransportsRef`. The local PTY path sends chords through that transport
+   *  `paneTransportsRef`. The native PTY path sends chords through that transport
    *  and leaves this undefined. Without it, word-motion/erase chords were
    *  swallowed in every tmux-backed (default) terminal — see keyboard-handlers. */
   sendChordInput?: (data: string) => void
@@ -1137,7 +1137,13 @@ export function connectPanePty(
   const transportOptions = {
     cwd: deps.cwd,
     env: paneEnv,
-    command: shouldDeliverStartupViaTerminalPaste ? undefined : paneStartup?.command,
+    // SSH startup has always been renderer-delivered after the first remote
+    // shell output (the relay ignored `command`). Keep that single-delivery
+    // contract now that Tauri's ephemeral path launches a real OpenSSH PTY;
+    // forwarding it into pty.spawn as well would execute the command once in
+    // the remote `-lc` shell and then type it a second time into its process.
+    command:
+      shouldDeliverStartupViaTerminalPaste || connectionId ? undefined : paneStartup?.command,
     connectionId,
     worktreeId: deps.worktreeId,
     // Why: closes the SIGKILL race documented in INVESTIGATION.md by letting

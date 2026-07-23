@@ -2089,6 +2089,8 @@ describe('connectPanePty', () => {
 
       connectPanePty(pane as never, manager as never, deps as never)
       expect(capturedDataCallback.current).not.toBeNull()
+      expect(createdTransportOptions[0]).toMatchObject({ connectionId: 'ssh-conn-1' })
+      expect(createdTransportOptions[0]?.command).toBeUndefined()
 
       // Simulate shell prompt arriving — queues the debounce timer
       capturedDataCallback.current?.('user@remote $ ')

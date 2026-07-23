@@ -261,6 +261,9 @@ describe('createIpcPtyTransport', () => {
 
     const sshTransport = createIpcPtyTransport({ connectionId: 'ssh-1' })
     await sshTransport.connect({ url: '', callbacks: {} })
+    expect(window.api.pty.spawn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ connectionId: 'ssh-1' })
+    )
     expect(sshTransport.sendInputAccepted).toBeUndefined()
   })
 
