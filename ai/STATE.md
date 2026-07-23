@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** architect  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 PM gate passed 9/9; architecture is next.)
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 architecture maps all 8 ACs; implement F1-F3.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -93,11 +93,6 @@
   row but never invalidates the mounted wizard parent, so stale connected status
   and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
   unbind callback and regression.
-- 2026-07-21 | Reviewer | **026 SIGN-OFF → phase done** (autonomous loop step
-  10, Reviewer iteration 2/2; `review.md`). Confirmed B1 fixed, all eight ACs
-  supported, both harness routes and final focused regression green, and no
-  architecture/isolation blocker remaining. Corrected stale review-only
-  comments; live desktop/SSH QA, merge, and release remain human-gated.
 - 2026-07-22 | Author | **027 drafted → phase pm**. Narrowed issue #431 to one
   user action: select workspace work from the configured external tracker;
   internal board routes and fallback retire while legacy rows remain inert.
@@ -111,3 +106,6 @@
 - 2026-07-23 | PM | **028 PM PASS → phase architect**. All 9 handoff checks
   pass; lifecycle outcomes and preserved transcript/event contracts are
   observable, with fleet tmux sampling held for Spec 029.
+- 2026-07-23 | Architect | **028 ARCHITECT PASS → phase developer**. Atomic
+  mode-aware reads own exactly-once observer attachment; a generic watchdog
+  hook only retires server-owned observers and preserves crate direction.
