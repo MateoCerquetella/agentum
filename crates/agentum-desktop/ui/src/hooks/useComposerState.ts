@@ -264,6 +264,8 @@ type ComposerCardProps = {
   onLinkQueryChange: (value: string) => void
   filteredLinkItems: GitHubWorkItem[]
   linkItemsLoading: boolean
+  linkItemsError: string | null
+  onRetryLinkItems: () => void
   linkDirectLoading: boolean
   normalizedLinkQuery: { query: string }
   onSelectLinkedItem: (item: GitHubWorkItem) => void
@@ -744,6 +746,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [linkDebouncedQuery, setLinkDebouncedQuery] = useState('')
   const [linkItems, setLinkItems] = useState<GitHubWorkItem[]>([])
   const [linkItemsLoading, setLinkItemsLoading] = useState(false)
+  const [linkItemsError, setLinkItemsError] = useState<string | null>(null)
+  const [linkItemsRefresh, setLinkItemsRefresh] = useState(0)
   const [linkDirectItem, setLinkDirectItem] = useState<GitHubWorkItem | null>(null)
   const [linkDirectLoading, setLinkDirectLoading] = useState(false)
 
@@ -1285,6 +1289,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
     let cancelled = false
     setLinkItemsLoading(true)
+    setLinkItemsError(null)
 
     const lookupRepoId = selectedRepo.id
     void api.gh
@@ -1312,6 +1317,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
               '[composer/link] issues-side partial failure in @-mention popover:',
               envelope.errors.issues
             )
+            setLinkItemsError(envelope.errors.issues)
           }
           setLinkItems(
             envelope.items.map((it) => ({
@@ -1321,9 +1327,12 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           )
         }
       })
-      .catch(() => {
+      .catch((cause: unknown) => {
         if (!cancelled) {
           setLinkItems([])
+          setLinkItemsError(
+            cause instanceof Error ? cause.message : 'Could not load repository issues.'
+          )
         }
       })
       .finally(() => {
@@ -1335,7 +1344,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     return () => {
       cancelled = true
     }
-  }, [linkPopoverOpen, selectedRepo, selectedRepoIsGit])
+  }, [linkItemsRefresh, linkPopoverOpen, selectedRepo, selectedRepoIsGit])
 
   useEffect(() => {
     if (
@@ -3129,6 +3138,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onLinkQueryChange: setLinkQuery,
     filteredLinkItems,
     linkItemsLoading,
+    linkItemsError,
+    onRetryLinkItems: () => setLinkItemsRefresh((value) => value + 1),
     linkDirectLoading,
     normalizedLinkQuery,
     onSelectLinkedItem: handleSelectLinkedItem,

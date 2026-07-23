@@ -1,5 +1,4 @@
 import type { Repo } from '@/shared/types'
-import type { ProjectBindingDto } from '@/runtime/github-projects-client'
 import type { LinearProjectDetail } from '@/shared/types'
 import type {
   ProjectTrackerGithubTarget,
@@ -25,6 +24,14 @@ export type GithubRepositoryTaskScope = Extract<
   { status: 'bound'; provider: 'github'; target: 'repository' }
 >
 
+type GithubProjectBindingIdentity = {
+  projectId: string
+  projectTitle?: string | null
+  projectOwner?: string | null
+  projectOwnerType?: string | null
+  projectNumber?: number | null
+}
+
 export function projectTaskScopeKey(input: { repoId: string } & ({ provider: 'github'; repoSlug: string; projectId: string } | { provider: 'linear'; workspaceId: string; projectId: string })): string {
   return JSON.stringify(input.provider === 'github' ? [input.repoId, 'github', input.repoSlug, input.projectId] : [input.repoId, 'linear', input.workspaceId, input.projectId])
 }
@@ -47,7 +54,7 @@ export function unboundProjectTaskScope(
   return Object.freeze({ status: 'unbound', repoId: repo.id, repoName: repo.displayName, generation, provider, reason })
 }
 
-export function githubProjectTaskScope(repo: Repo, generation: number, slug: string, binding: ProjectBindingDto): ProjectTaskScope {
+export function githubProjectTaskScope(repo: Repo, generation: number, slug: string, binding: GithubProjectBindingIdentity): ProjectTaskScope {
   if (!binding.projectId || !binding.projectOwner || (binding.projectOwnerType !== 'user' && binding.projectOwnerType !== 'organization') || !binding.projectNumber) {
     return Object.freeze({ status: 'unavailable', provider: 'github', reason: 'invalid-binding', message: 'The GitHub board binding is incomplete.', repoId: repo.id, repoName: repo.displayName, generation })
   }
@@ -72,10 +79,7 @@ export function githubTrackerTaskScope(
       repoSlug: target.repositorySlug
     })
   }
-  return githubProjectTaskScope(repo, generation, target.repositorySlug, {
-    ...binding,
-    optionNames: binding.optionNames ?? null
-  })
+  return githubProjectTaskScope(repo, generation, target.repositorySlug, binding)
 }
 
 export function linearProjectTaskScope(

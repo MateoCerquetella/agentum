@@ -212,6 +212,8 @@ export default function CreateWorkspaceWizard({
     onLinkQueryChange,
     filteredLinkItems,
     linkItemsLoading,
+    linkItemsError,
+    onRetryLinkItems,
     linkDirectLoading,
     onSelectLinkedItem,
     // Spec 013 F2: the composer's EXISTING create-issue seams — the wizard
@@ -747,6 +749,8 @@ export default function CreateWorkspaceWizard({
                 onQueryChange: onLinkQueryChange,
                 items: filteredLinkItems,
                 loading: linkItemsLoading || linkDirectLoading,
+                error: linkItemsError,
+                onRetry: onRetryLinkItems,
                 onSelect: onSelectLinkedItem
               }}
               />
@@ -1574,7 +1578,17 @@ function CanonicalTrackerSection({
               />
               {repoIssuePicker.loading ? (
                 <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-              ) : null}
+              ) : (
+                <button
+                  type="button"
+                  onClick={repoIssuePicker.onRetry}
+                  disabled={locked}
+                  aria-label="Refresh repository issues"
+                  className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary disabled:opacity-50"
+                >
+                  <RefreshCw className="size-3.5" />
+                </button>
+              )}
             </div>
             <div className="max-h-52 overflow-y-auto p-1">
               {repoIssues.length ? (
@@ -1608,7 +1622,7 @@ function CanonicalTrackerSection({
                 <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
                   {repoIssuePicker.loading
                     ? 'Loading repository issues…'
-                    : 'No matching open repository issues.'}
+                    : repoIssuePicker.error ?? 'No matching open repository issues.'}
                 </p>
               )}
             </div>
@@ -2155,6 +2169,8 @@ type RepoIssuePickerSeams = {
   onQueryChange: (value: string) => void
   items: GitHubWorkItem[]
   loading: boolean
+  error: string | null
+  onRetry: () => void
   onSelect: (item: GitHubWorkItem) => void
 }
 
