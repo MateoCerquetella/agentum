@@ -131,6 +131,67 @@ describe('gated-run progress presentation', () => {
     expect(gatedRunSessionTitle(run)).toBe('Gated run')
   })
 
+  it('identifies coding, verification, browser QA, blocked, and complete in the headline', () => {
+    const cases: Array<{
+      label: string
+      runState: HarnessStatus['state']
+      featureState: HarnessStatus['features']['features'][number]['state']
+      expected: string
+    }> = [
+      {
+        label: 'coding',
+        runState: 'running',
+        featureState: 'coding',
+        expected: 'Working on Build the thing'
+      },
+      {
+        label: 'verification',
+        runState: 'running',
+        featureState: 'verifying',
+        expected: 'Verifying Build the thing'
+      },
+      {
+        label: 'browser QA',
+        runState: 'running',
+        featureState: 'ready_to_test',
+        expected: 'Browser QA for Build the thing'
+      },
+      {
+        label: 'blocked',
+        runState: 'blocked',
+        featureState: 'blocked',
+        expected: 'Blocked on Build the thing'
+      },
+      {
+        label: 'complete',
+        runState: 'done',
+        featureState: 'done',
+        expected: 'Gated run complete'
+      }
+    ]
+
+    for (const testCase of cases) {
+      const run = makeRun({
+        state: testCase.runState,
+        phase: 'executing',
+        current_feature: 'F1',
+        features: {
+          ...makeRun().features,
+          features: [
+            {
+              id: 'F1',
+              name: 'Build the thing',
+              description: '',
+              state: testCase.featureState,
+              attempts: 1
+            }
+          ]
+        }
+      })
+      expect(gatedRunHeadline(run), testCase.label).toBe(testCase.expected)
+    }
+  })
+
   it('shows completed/current SDD stages and uses the current task in session copy', () => {
     const run = makeRun({
       phase: 'executing',

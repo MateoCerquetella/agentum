@@ -317,3 +317,11 @@
   unjustified complexity, or silent architectural deviation remains.
 - review gate PASS (attempt 2): Spec 431 is complete: tracker-only UI/runtime removal, inert legacy compatibility, current docs/playbooks, focused regression coverage, workspace library tests, and desktop build all satisfy the spec and architecture.
 - phase: entered done (from review)
+- phase: entered authoring (from done)
+- authoring gate PASS (attempt 1): PM gate passed: one regression slice now has a grounded persona, user value, six observable criteria, explicit non-goals, reuse seams, invariants, and non-overlap.
+- phase: entered architecture (from authoring)
+- architecture gate PASS (attempt 1): Grounded minimal plan preserves the single existing bar, adds event-stream reconnect reconciliation, guards worktree-scoped snapshots, and maps every acceptance criterion to named focused tests and the required build.
+- phase: entered executing (from architecture)
+- phase: entered review (from executing)
+- review gate PASS (attempt 1): Spec 436 is complete: the existing gated-run bar hydrates from authoritative snapshots, reconciles matched lifecycle events, lagged frames, and reconnects without cross-worktree leakage, exposes explicit lifecycle headlines, and passes 34 focused tests plus the desktop production build.
+- phase: entered done (from review)

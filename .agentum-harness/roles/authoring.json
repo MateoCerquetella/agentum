@@ -1,1 +1,1 @@
-{"passed": true, "summary": "One tracker-authoritative work-selection slice now has a named persona, six observable criteria including current docs and SDD contracts, explicit non-goals, grounded reuse, preserved invariants, and no competing spec."}
+{"passed": true, "summary": "PM gate passed: one regression slice now has a grounded persona, user value, six observable criteria, explicit non-goals, reuse seams, invariants, and non-overlap."}
