@@ -17,20 +17,26 @@ export function ProjectTasksPage({ repo }: { repo: Repo }): React.JSX.Element {
   const settings = useAppStore((s) => s.settings)
   const generationRef = useRef(0)
   const [scope, setScope] = useState<ProjectTaskScope>(() => loadingProjectTaskScope(repo, 0))
-  const scopeRef = useRef<ProjectTaskScope>(scope)
-  scopeRef.current = scope
-  useEffect(() => {
-    const guard = captureProjectTaskScopeGuard(scope)
-    return guard ? publishProjectTaskScopeAuthority(guard) : undefined
-  }, [scope])
 
   useEffect(() => {
     const generation = ++generationRef.current
     const loading = loadingProjectTaskScope(repo, generation)
-    scopeRef.current = loading
     setScope(loading)
     let cancelled = false
-    const publish = (next: ProjectTaskScope): void => { if (!cancelled && generationRef.current === generation && repo.id === next.repoId) { scopeRef.current = next; setScope(next) } }
+    let revokeAuthority: (() => void) | null = null
+    const publish = (next: ProjectTaskScope): void => {
+      if (cancelled || generationRef.current !== generation || repo.id !== next.repoId) return
+
+      // Descendant passive effects run before their parent's. Publishing from
+      // a separate effect after setScope therefore made a newly mounted board
+      // fail its guarded first read and never retry, leaving only the toolbar
+      // visible. Install the resolved scope's authority before rendering that
+      // scope so GitHub and Linear children can begin their initial reads.
+      revokeAuthority?.()
+      const guard = captureProjectTaskScopeGuard(next)
+      revokeAuthority = guard ? publishProjectTaskScopeAuthority(guard) : null
+      setScope(next)
+    }
     if (repo.trackerProvider !== 'github' && repo.trackerProvider !== 'linear') { publish(unboundProjectTaskScope(repo, generation)); return () => { cancelled = true } }
     if (repo.trackerProvider === 'github') {
       void getProjectBinding({ workdir: repo.path, repoId: repo.id }).then((result) => publish(result.binding ? githubProjectTaskScope(repo, generation, result.slug, result.binding) : unboundProjectTaskScope(repo, generation))).catch((cause) => publish({ status: 'unavailable', provider: 'github', reason: cause instanceof GithubProjectsBindingError && cause.code === 'auth_required' ? 'authorization' : 'transport', message: cause instanceof Error ? cause.message : 'Could not load the GitHub binding.', repoId: repo.id, repoName: repo.displayName, generation }))
@@ -46,7 +52,11 @@ export function ProjectTasksPage({ repo }: { repo: Repo }): React.JSX.Element {
         publish(linearProjectTaskScope(repo, generation, project))
       } catch (cause) { publish({ status: 'unavailable', provider: 'linear', reason: 'transport', message: cause instanceof Error ? cause.message : 'Could not load the Linear binding.', repoId: repo.id, repoName: repo.displayName, generation }) }
     })()
-    return () => { cancelled = true; generationRef.current += 1 }
+    return () => {
+      cancelled = true
+      revokeAuthority?.()
+      generationRef.current += 1
+    }
   }, [repo.id, repo.path, repo.displayName, repo.trackerProvider, repo.linearProjectBinding, settings])
 
   const openSettings = (): void => { const store = useAppStore.getState(); store.openSettingsTarget({ pane: 'repo', repoId: repo.id, sectionId: PROJECT_INTEGRATIONS_SECTION_ID }); store.openSettingsPage() }

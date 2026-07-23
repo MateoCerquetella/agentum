@@ -5,6 +5,20 @@ describe('Project Tasks structural isolation', () => {
   it('dispatches only locked providers and links to repo settings', () => { const source = readFileSync(new URL('./ProjectTasksPage.tsx', import.meta.url), 'utf8'); expect(source).toContain('lockedScope={scope}'); expect(source).toContain('LockedLinearProjectTasks'); expect(source).toContain("pane: 'repo'") })
   it('Project Hub no longer embeds global TaskPage or binding controls', () => { const source = readFileSync(new URL('./ProjectHubPage.tsx', import.meta.url), 'utf8'); expect(source).not.toContain("@/components/TaskPage"); expect(source).not.toContain('ProjectBindingEditor'); expect(source).toContain('ProjectTasksPage') })
 
+  it('publishes bound scope authority before mounting guarded tracker reads', () => {
+    const source = readFileSync(new URL('./ProjectTasksPage.tsx', import.meta.url), 'utf8')
+    const publishStart = source.indexOf('const publish = (next: ProjectTaskScope)')
+    const publishEnd = source.indexOf("if (repo.trackerProvider !== 'github'", publishStart)
+    const publishBody = source.slice(publishStart, publishEnd)
+
+    expect(publishStart).toBeGreaterThan(-1)
+    expect(publishBody.indexOf('publishProjectTaskScopeAuthority(guard)')).toBeGreaterThan(-1)
+    expect(publishBody.indexOf('publishProjectTaskScopeAuthority(guard)')).toBeLessThan(
+      publishBody.indexOf('setScope(next)')
+    )
+    expect(publishBody).toContain('revokeAuthority?.()')
+  })
+
   it('renders only external tracker sources or the settings empty state', () => {
     const source = readFileSync(new URL('./ProjectTasksPage.tsx', import.meta.url), 'utf8')
 
