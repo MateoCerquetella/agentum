@@ -324,7 +324,7 @@ export type TerminalSlice = {
       launchAgent?: TuiAgent
       /** Spec 005-C: the tab's "Run in tmux (persist)" choice. `true` → the
        *  pane runs in a persistent tmux session that auto-reattaches; `false` →
-       *  ephemeral local PTY. Omitted → global default. */
+       *  ephemeral native PTY on the repo's host. Omitted → global default. */
       persistTmux?: boolean
       /** Pin the pane to a specific embedded-server session (an external tmux
        *  attach) instead of the workdir-keyed find-or-create. */

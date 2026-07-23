@@ -144,6 +144,16 @@ compile-time asset embed. The two clients build independently:
 The desktop boots `agentum-server` in-process, so a desktop session
 and a TUI session connected to a local daemon share one SQLite store.
 
+### Desktop terminal host boundary
+
+The desktop has two terminal transports. `Run in tmux (persist)` uses the
+embedded server session/tmux stream. With persistence off, the native Tauri PTY
+path is used; for an SSH repo that PTY runs an interactive OpenSSH child and the
+shell itself still executes on the SSH target. The renderer passes the repo's
+`connectionId` to `pty_spawn`, and the Rust handler must treat it as a hard
+security boundary: an unknown, empty, or malformed remote target returns an
+error and must never fall through to `default_shell_path()` on the desktop.
+
 ---
 
 ## Adding a new agent (tool adapter)
@@ -541,4 +551,3 @@ cargo run -p agentum-desktop
 cargo test -p agentum-executor -p agentum-server --lib
 npm run build --prefix crates/agentum-desktop/ui
 ```
-

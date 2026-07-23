@@ -10,7 +10,7 @@ use serde_json::Value;
 use tauri::{Emitter, State};
 
 use crate::{
-    commands::shell::default_shell_path,
+    commands::{shell::default_shell_path, ssh},
     state::{AppState, PtyHandle, PtyOutputBuffer},
 };
 
@@ -48,6 +48,101 @@ struct SpawnConfig {
     env: Vec<(String, String)>,
     cols: u16,
     rows: u16,
+}
+
+fn quote_remote_shell(value: &str) -> Result<String, String> {
+    shlex::try_quote(value)
+        .map(|quoted| quoted.into_owned())
+        .map_err(|_| "remote terminal input contains a NUL byte".to_string())
+}
+
+fn is_valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+/// Build the one remote command passed to OpenSSH. `cwd`, environment values,
+/// and startup commands are shell-quoted independently; environment names are
+/// validated because shell quoting cannot make the left side of an assignment
+/// safe. The final `exec` makes the remote login shell the SSH channel's direct
+/// child, so killing the local ephemeral PTY hangs up the remote shell too.
+fn remote_terminal_script(
+    cwd: Option<&str>,
+    env: &[(String, String)],
+    command: Option<&str>,
+) -> Result<String, String> {
+    let mut statements = Vec::new();
+    if let Some(cwd) = cwd.map(str::trim).filter(|cwd| !cwd.is_empty()) {
+        statements.push(format!("cd {} || exit $?", quote_remote_shell(cwd)?));
+    }
+    for (name, value) in env {
+        if !is_valid_env_name(name) {
+            return Err(format!(
+                "invalid remote terminal environment variable: {name}"
+            ));
+        }
+        statements.push(format!("export {name}={}", quote_remote_shell(value)?));
+    }
+    statements.push(match command.filter(|command| !command.is_empty()) {
+        Some(command) => format!(
+            "exec \"${{SHELL:-/bin/sh}}\" -lc {}",
+            quote_remote_shell(command)?
+        ),
+        None => "exec \"${SHELL:-/bin/sh}\" -l".to_string(),
+    });
+    // An SSH server hands its command to the account's login shell. That may
+    // be fish or another non-POSIX shell, so force the same `sh -c` boundary
+    // used by the backend's remote git/tmux/fs paths before running our POSIX
+    // cd/export/exec sequence.
+    Ok(format!(
+        "sh -c {}",
+        quote_remote_shell(&statements.join("; "))?
+    ))
+}
+
+fn remote_spawn_config(
+    connection_id: &str,
+    cwd: Option<String>,
+    env: Vec<(String, String)>,
+    command: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<SpawnConfig, String> {
+    if connection_id.trim().is_empty() {
+        return Err("remote terminal is missing its SSH target id".to_string());
+    }
+    let host_kind = ssh::host_kind_for_target(connection_id)?;
+    let script = remote_terminal_script(cwd.as_deref(), &env, command.as_deref())?;
+    let ssh_command = agentum_tmux::ssh::ssh_terminal_command_for_kind(&host_kind, &script);
+    let command = ssh_command.as_std();
+
+    Ok(SpawnConfig {
+        program: command.get_program().to_string_lossy().into_owned(),
+        args: command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect(),
+        // Only explicitly configured local vars belong here (not the renderer's
+        // pane env, which the quoted remote script exports on the VPS). This
+        // carries SSH_ASKPASS securely for password targets without exposing the
+        // password in process argv.
+        env: command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                Some((
+                    key.to_string_lossy().into_owned(),
+                    value?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect(),
+        // A VPS path must never be used as the local ssh process's cwd. It may
+        // coincidentally exist on the Mac, which was part of what made the old
+        // local-host leak so confusing.
+        cwd: None,
+        cols,
+        rows,
+    })
 }
 
 // Open a PTY, spawn the program, wire the reader thread (-> "pty-data") and the
@@ -181,9 +276,10 @@ pub async fn pty_create(
 
 // The renderer's IPC terminal transport calls `pty.spawn(options)` and expects a
 // `{ id }` back (it allocates no id itself). Options: { cols, rows, cwd, env,
-// command, shellOverride, … }. `command` is an optional startup command line; when
-// absent we launch an interactive shell. Without this the transport saw `null` and
-// threw "terminal failed to spawn (no pty handle returned)".
+// command, connectionId, shellOverride, … }. `command` is an optional startup
+// command line; when absent we launch an interactive shell. A connectionId is a
+// hard host boundary: it launches OpenSSH inside the local PTY and executes the
+// shell on that target. It must never fall through to the desktop shell.
 #[tauri::command]
 pub async fn pty_spawn(
     app: tauri::AppHandle,
@@ -211,6 +307,15 @@ pub async fn pty_spawn(
         .get("shellOverride")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let connection_id = opts
+        .get("connectionId")
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "remote terminal has an invalid SSH target id".to_string())
+        })
+        .transpose()?;
     let env: Vec<(String, String)> = opts
         .get("env")
         .and_then(Value::as_object)
@@ -221,21 +326,16 @@ pub async fn pty_spawn(
         })
         .unwrap_or_default();
 
-    let program = shell_override.unwrap_or_else(default_shell_path);
-    // No command -> plain interactive shell (empty args, like pty_create). A
-    // command runs via `<shell> -c "<command>"`.
-    let args = match command {
-        Some(cmd) => vec!["-c".to_string(), cmd],
-        None => Vec::new(),
-    };
-
-    let id = uuid::Uuid::new_v4().to_string();
-    let ptys = state.ptys.clone();
-    let id_for_open = id.clone();
-    let handle = tokio::task::spawn_blocking(move || {
-        open_pty(
-            app,
-            id_for_open,
+    let config = match connection_id {
+        Some(connection_id) => remote_spawn_config(&connection_id, cwd, env, command, cols, rows)?,
+        None => {
+            let program = shell_override.unwrap_or_else(default_shell_path);
+            // No command -> plain interactive shell (empty args, like
+            // pty_create). A command runs via `<shell> -c "<command>"`.
+            let args = match command {
+                Some(cmd) => vec!["-c".to_string(), cmd],
+                None => Vec::new(),
+            };
             SpawnConfig {
                 program,
                 args,
@@ -243,11 +343,16 @@ pub async fn pty_spawn(
                 env,
                 cols,
                 rows,
-            },
-        )
-    })
-    .await
-    .map_err(map_err)??;
+            }
+        }
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let ptys = state.ptys.clone();
+    let id_for_open = id.clone();
+    let handle = tokio::task::spawn_blocking(move || open_pty(app, id_for_open, config))
+        .await
+        .map_err(map_err)??;
 
     ptys.lock().insert(id.clone(), handle);
     Ok(serde_json::json!({ "id": id }))
@@ -591,6 +696,56 @@ pub fn pty_management_restart() -> Value {
 
 #[tauri::command]
 pub fn pty_ack_cold_restore() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_terminal_script_starts_in_remote_cwd_and_exports_pane_identity() {
+        let env = vec![
+            ("AGENTUM_TAB_ID".to_string(), "tab with spaces".to_string()),
+            ("AGENTUM_PANE_KEY".to_string(), "tab:leaf".to_string()),
+        ];
+        let script = remote_terminal_script(
+            Some("/srv/project with spaces"),
+            &env,
+            Some("printf '%s' \"$HOME\""),
+        )
+        .expect("valid remote script");
+
+        let inner = format!(
+            "cd {} || exit $?; export AGENTUM_TAB_ID={}; export AGENTUM_PANE_KEY={}; exec \"${{SHELL:-/bin/sh}}\" -lc {}",
+            quote_remote_shell("/srv/project with spaces").unwrap(),
+            quote_remote_shell("tab with spaces").unwrap(),
+            quote_remote_shell("tab:leaf").unwrap(),
+            quote_remote_shell("printf '%s' \"$HOME\"").unwrap()
+        );
+        assert_eq!(
+            script,
+            format!("sh -c {}", quote_remote_shell(&inner).unwrap())
+        );
+    }
+
+    #[test]
+    fn remote_terminal_script_launches_login_shell_without_startup_command() {
+        assert_eq!(
+            remote_terminal_script(Some("/srv/app"), &[], None).unwrap(),
+            "sh -c 'cd /srv/app || exit $?; exec \"${SHELL:-/bin/sh}\" -l'"
+        );
+    }
+
+    #[test]
+    fn remote_terminal_script_rejects_environment_name_injection() {
+        let error = remote_terminal_script(
+            Some("/srv/app"),
+            &[("SAFE; touch /tmp/pwned".to_string(), "value".to_string())],
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("invalid remote terminal environment variable"));
+    }
+}
 
 #[tauri::command]
 pub fn pty_declare_pending_pane_serializer() {}

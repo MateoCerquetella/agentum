@@ -26,8 +26,10 @@ dependencies = [
 name = "agentum-desktop"
 version = "0.57.0"
 dependencies = [
+ "agentum-core",
  "agentum-server",
  "agentum-store",
+ "agentum-tmux",
  "anyhow",
  "base64 0.22.1",
  "bzip2",
@@ -50,6 +52,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sherpa-rs",
+ "shlex",
  "tar",
  "tauri",
  "tauri-build",

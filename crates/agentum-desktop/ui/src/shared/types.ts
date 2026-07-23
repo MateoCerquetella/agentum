@@ -499,10 +499,10 @@ export type TerminalTab = {
   serverSessionId?: string
   /** Spec 005-C: the tab's "Run in tmux (persist)" choice, stamped at creation.
    *  `true` → the pane runs in a persistent tmux session (server-backed) that
-   *  silently auto-reattaches on relaunch; `false` → ephemeral local PTY that
-   *  does not survive a quit. Omitted on older persisted tabs and panes created
-   *  outside the New Terminal / New Agent flows, which fall back to the global
-   *  default (`shouldUseServerTerminals`, on). */
+   *  silently auto-reattaches on relaunch; `false` → ephemeral native PTY on
+   *  the repo's host that does not survive a quit. Omitted on older persisted
+   *  tabs and panes created outside the New Terminal / New Agent flows, which
+   *  fall back to the global default (`shouldUseServerTerminals`, on). */
   persistTmux?: boolean
   /** Why: when `setActiveWorktree` bumps generation on all-dead tabs to drive a
    *  TerminalPane remount, the fresh PTY that results is caused by navigation,
