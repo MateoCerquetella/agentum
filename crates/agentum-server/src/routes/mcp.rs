@@ -719,6 +719,56 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         }
     ]);
 
+    if let Some(arr) = tools.as_array_mut() {
+        arr.extend(json!([
+            {
+                "name": "agentum_harness_task_context",
+                "description": "Worker-only: retrieve the immutable bounded packet for one orchestrated harness task. An optional exact file or symbol expands only that named context.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"},"file":{"type":"string"},"symbol":{"type":"string"}},"required":["run_id","task_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_submit_patch",
+                "description": "Worker-only: submit a capability-scoped, hash-checked create/update/delete/rename transaction to the shared-worktree patch broker.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"},"summary":{"type":"string"},"operations":{"type":"array","items":{"type":"object"}}},"required":["run_id","task_id","capability_token","summary","operations"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_request_verify",
+                "description": "Worker-only: run the task's targeted gate in the serialized verification lane. A failure returns only its relevant output tail.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","task_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_report_blocked",
+                "description": "Worker-only: report a concrete blocker without stopping independent tasks.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"},"reason":{"type":"string"}},"required":["run_id","task_id","capability_token","reason"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_run_state",
+                "description": "Coordinator-only: return durable DAG/task summaries, leases, patch ledger and managed sessions without source dumps or worker transcripts.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_dispatch",
+                "description": "Coordinator-only: dispatch one ready task to a new isolated managed worker in the same worktree; server enforces the concurrency ceiling.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","task_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_transfer_ownership",
+                "description": "Coordinator-only: transfer a frozen or idle exact-file lease between tasks after server validation.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"path":{"type":"string"},"from_task":{"type":"string"},"to_task":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","path","from_task","to_task","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_create_repair_task",
+                "description": "Coordinator-only: create a focused repair task with explicit ownership and dependencies.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"capability_token":{"type":"string"},"task":{"type":"object"}},"required":["run_id","capability_token","task"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_retry_or_block",
+                "description": "Coordinator/reviewer: retry a blocked task, block the run, or complete the run after read-only review.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"capability_token":{"type":"string"},"action":{"type":"string","enum":["retry","block","complete"]},"task_id":{"type":"string"},"reason":{"type":"string"}},"required":["run_id","capability_token","action"],"additionalProperties":false}
+            }
+        ]).as_array().cloned().unwrap_or_default());
+    }
+
     if !orchestration_enabled {
         if let Some(arr) = tools.as_array_mut() {
             arr.retain(|t| {
@@ -777,6 +827,15 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_stop_session" => tool_stop_session(state, &args).await,
         "agentum_inject_prompt" => tool_inject_prompt(state, &args).await,
         "agentum_harness_run" => tool_harness_run(state, &args).await,
+        "agentum_harness_task_context" => tool_harness_task_context(state, &args).await,
+        "agentum_harness_submit_patch" => tool_harness_submit_patch(state, &args).await,
+        "agentum_harness_request_verify" => tool_harness_request_verify(state, &args).await,
+        "agentum_harness_report_blocked" => tool_harness_report_blocked(state, &args).await,
+        "agentum_harness_run_state" => tool_harness_run_state(state, &args).await,
+        "agentum_harness_dispatch" => tool_harness_dispatch(state, &args).await,
+        "agentum_harness_transfer_ownership" => tool_harness_transfer_ownership(state, &args).await,
+        "agentum_harness_create_repair_task" => tool_harness_create_repair_task(state, &args).await,
+        "agentum_harness_retry_or_block" => tool_harness_retry_or_block(state, &args).await,
         "agentum_list_worktrees" => tool_list_worktrees().await,
         "agentum_send_message" => tool_send_message(state, &args).await,
         "agentum_check_messages" => tool_check_messages(state, &args).await,
@@ -1060,6 +1119,239 @@ async fn tool_harness_run(state: &AppState, args: &Value) -> anyhow::Result<Stri
             "a driver is already running this harness — not restarted"
         },
     }))?)
+}
+
+fn harness_arg<'a>(args: &'a Value, name: &str) -> anyhow::Result<&'a str> {
+    args.get(name)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `{name}`"))
+}
+
+async fn tool_harness_task_context(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let value = crate::harness::orchestrated::task_context(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "task_id")?,
+        harness_arg(args, "capability_token")?,
+        args.get("file").and_then(Value::as_str),
+        args.get("symbol").and_then(Value::as_str),
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+async fn tool_harness_submit_patch(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let submission: crate::harness::orchestrated::PatchSubmission =
+        serde_json::from_value(args.clone())?;
+    let run_id = uuid::Uuid::parse_str(&submission.run_id)?;
+    let task_id = submission.task_id.clone();
+    let receipt = crate::harness::orchestrated::submit_patch(state, submission).await?;
+    state
+        .harness
+        .emit(crate::harness::HarnessEvent::PatchChanged {
+            harness_id: run_id,
+            task_id,
+            patch_id: receipt.patch_id.clone(),
+            state: "accepted".into(),
+        });
+    Ok(serde_json::to_string_pretty(&receipt)?)
+}
+
+async fn tool_harness_request_verify(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let run_id = harness_arg(args, "run_id")?;
+    let task_id = harness_arg(args, "task_id")?;
+    let (success, output_tail) = crate::harness::orchestrated::verify_task(
+        state,
+        run_id,
+        task_id,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    state
+        .harness
+        .emit(crate::harness::HarnessEvent::TaskVerification {
+            harness_id: uuid::Uuid::parse_str(run_id)?,
+            task_id: task_id.to_string(),
+            success,
+        });
+    Ok(serde_json::to_string_pretty(
+        &json!({"success":success,"output_tail":output_tail}),
+    )?)
+}
+
+async fn tool_harness_report_blocked(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let run_id = harness_arg(args, "run_id")?;
+    let task_id = harness_arg(args, "task_id")?;
+    crate::harness::orchestrated::authorize_worker(
+        state,
+        run_id,
+        task_id,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    let reason = harness_arg(args, "reason")?;
+    let tail = reason
+        .char_indices()
+        .rev()
+        .take(4000)
+        .last()
+        .map_or(reason, |(start, _)| &reason[start..]);
+    state
+        .store
+        .harness_update_task(run_id, task_id, "blocked", None, None, Some(tail))
+        .await?;
+    state
+        .store
+        .harness_record_decision(
+            run_id,
+            "worker_blocked",
+            Some(&json!({"task_id":task_id,"reason":tail}).to_string()),
+        )
+        .await?;
+    Ok(json!({"blocked":true,"independent_tasks_continue":true}).to_string())
+}
+
+async fn tool_harness_run_state(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let value = crate::harness::orchestrated::run_state(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+async fn tool_harness_dispatch(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let session = crate::harness::orchestrated::dispatch_worker(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "task_id")?,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(
+        &json!({"session_id":session.id,"session_name":session.name,"task_id":harness_arg(args,"task_id")?}),
+    )?)
+}
+
+async fn tool_harness_transfer_ownership(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    crate::harness::orchestrated::transfer_ownership(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "path")?,
+        harness_arg(args, "from_task")?,
+        harness_arg(args, "to_task")?,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    Ok(json!({"transferred":true}).to_string())
+}
+
+async fn tool_harness_create_repair_task(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let task: crate::harness::orchestrated::ExecutionTask = serde_json::from_value(
+        args.get("task")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing `task`"))?,
+    )?;
+    let id = task.id.clone();
+    crate::harness::orchestrated::create_repair_task(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "capability_token")?,
+        task,
+    )
+    .await?;
+    Ok(json!({"created":true,"task_id":id}).to_string())
+}
+
+async fn tool_harness_retry_or_block(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let run_id = harness_arg(args, "run_id")?;
+    crate::harness::orchestrated::authorize_coordinator(
+        state,
+        run_id,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    let action = harness_arg(args, "action")?;
+    let reason = args.get("reason").and_then(Value::as_str).unwrap_or("");
+    match action {
+        "retry" => {
+            let task_id = harness_arg(args, "task_id")?;
+            let task = state
+                .store
+                .harness_task(run_id, task_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown task {task_id}"))?;
+            if task.status != "blocked" {
+                anyhow::bail!("task {task_id} is not blocked");
+            }
+            state
+                .store
+                .harness_update_task(run_id, task_id, "ready", None, None, None)
+                .await?;
+        }
+        "block" => {
+            state
+                .store
+                .harness_update_run(
+                    run_id,
+                    "blocked",
+                    None,
+                    Some(&json!({"reason":reason}).to_string()),
+                )
+                .await?
+        }
+        "complete" => {
+            let tasks = state.store.harness_tasks(run_id).await?;
+            if tasks.iter().any(|t| t.status != "completed") {
+                anyhow::bail!("cannot complete: tasks remain unfinished");
+            }
+            state
+                .store
+                .harness_update_run(
+                    run_id,
+                    "completed",
+                    None,
+                    Some(&json!({"review":reason}).to_string()),
+                )
+                .await?;
+            if let Some(run) = state.store.harness_get_orchestrated_run(run_id).await? {
+                if let Ok(config) =
+                    crate::harness::HarnessConfig::load(std::path::Path::new(&run.workdir)).await
+                {
+                    crate::harness::orchestrated::transition_run_tracker(
+                        state,
+                        &config,
+                        crate::task_sink::TrackerPhase::Done,
+                    )
+                    .await;
+                }
+            }
+            if let Ok(id) = uuid::Uuid::parse_str(run_id) {
+                state.harness.release_driver(id).await;
+                state
+                    .harness
+                    .set_state(id, crate::harness::HarnessState::Done)
+                    .await?;
+                state
+                    .harness
+                    .emit(crate::harness::HarnessEvent::HarnessCompleted {
+                        harness_id: id,
+                        success: true,
+                    });
+            }
+        }
+        other => anyhow::bail!("unknown action {other}"),
+    }
+    state
+        .store
+        .harness_record_decision(
+            run_id,
+            action,
+            Some(&json!({"reason":reason,"task_id":args.get("task_id")}).to_string()),
+        )
+        .await?;
+    Ok(json!({"action":action,"accepted":true}).to_string())
 }
 
 /// Reuses the same registry reader the `/api/worktrees` route uses — a tool is

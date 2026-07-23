@@ -72,6 +72,19 @@ export type HarnessFeatureList = {
   roles?: boolean
   /** Pause (vs. block) when a role gate exhausts retries (spec 013). */
   hitl_on_block?: boolean
+  /** Missing/sequential preserves the compatibility WIP=1 engine. */
+  execution_mode?: 'sequential' | 'orchestrated'
+  max_concurrency?: number
+}
+
+export type HarnessWorkerStatus = {
+  task_id: string
+  state: 'pending' | 'ready' | 'dispatched' | 'working' | 'patch_pending' | 'verifying' | 'completed' | 'blocked'
+  session_id?: string | null
+  enforcement: 'enforced' | 'best_effort' | string
+  context_remaining?: number | null
+  patch_state?: string | null
+  conflict?: string | null
 }
 
 // Exported for the spec-023 surfaces (GatedRunBar / useWorktreeHarnessRun /
@@ -96,6 +109,10 @@ export type HarnessStatus = {
   blocked_phase?: SpecPhase | null
   /** Latest role-gate verdict, retained across reconnect/reload. */
   gate_summary?: string | null
+  execution_mode?: 'sequential' | 'orchestrated'
+  max_concurrency?: number
+  coordinator_session?: string | null
+  active_workers?: HarnessWorkerStatus[]
 }
 
 type HarnessFiles = {
@@ -134,6 +151,11 @@ export type HarnessEvent =
       attempt: number
       summary: string
     }
+  | { type: 'worker_changed'; harness_id: string; task_id: string; session_id?: string | null; state: string }
+  | { type: 'patch_changed'; harness_id: string; task_id: string; patch_id: string; state: string }
+  | { type: 'ownership_conflict'; harness_id: string; task_id: string; path: string; message: string }
+  | { type: 'task_verification'; harness_id: string; task_id: string; success: boolean }
+  | { type: 'coordinator_rotated'; harness_id: string; previous_session: string; replacement_session: string }
   | { type: 'error'; harness_id: string; message: string }
   | { type: 'lagged'; skipped: number }
 

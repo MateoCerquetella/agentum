@@ -41,6 +41,8 @@ pub use types::*;
 mod helpers;
 use helpers::*;
 
+pub mod orchestrated;
+
 // The drive loop + orchestration free functions. As a child module, `drive`
 // calls `HarnessEngine`'s private methods directly (no widening needed). Only
 // the two entry points are re-exported: `drive` (the run task, called by
@@ -129,6 +131,50 @@ impl HarnessEngine {
             state: HarnessState::Idle,
         });
         Ok(id)
+    }
+
+    /// Re-register a durable orchestrated run after a daemon restart. Managed
+    /// sessions are revived separately; this restores the compatibility status
+    /// surface and keeps the logical driver claim held by the coordinator.
+    pub(crate) async fn restore_orchestrated(
+        &self,
+        id: Uuid,
+        workdir: PathBuf,
+        state: HarnessState,
+        current_session: Option<Uuid>,
+    ) -> anyhow::Result<()> {
+        if self.runs.read().await.contains_key(&id) {
+            return Ok(());
+        }
+        let config = HarnessConfig::load(&workdir).await?;
+        let phase = rebuild_phase_from_decisions(&read_decisions(&workdir).await)
+            .unwrap_or(SpecPhase::Executing);
+        let run = HarnessRun {
+            id,
+            workdir,
+            state,
+            features: config.features.clone(),
+            current_feature: None,
+            current_session,
+            current_agent_tool: current_session.map(|_| config.features.agent_tool.clone()),
+            started_at: Instant::now(),
+            agent_instructions: config.agent_instructions,
+            driving: true,
+            phase,
+            phase_attempts: 0,
+            blocked_phase: None,
+            gate_summary: None,
+        };
+        self.runs
+            .write()
+            .await
+            .entry(id)
+            .or_insert_with(|| Arc::new(RwLock::new(run)));
+        self.emit(HarnessEvent::StateChanged {
+            harness_id: id,
+            state,
+        });
+        Ok(())
     }
 
     /// Run `init.sh` (the environment smoke-test). Returns `false` (and sets the
@@ -450,6 +496,10 @@ impl HarnessEngine {
             phase_attempts: r.phase_attempts,
             blocked_phase: r.blocked_phase,
             gate_summary: r.gate_summary.clone(),
+            execution_mode: r.features.execution_mode,
+            max_concurrency: r.features.max_concurrency,
+            coordinator_session: None,
+            active_workers: Vec::new(),
         })
     }
 
@@ -572,7 +622,7 @@ impl HarnessEngine {
     /// Feature agents use `set_session`; PM/architect/reviewer and QA agents
     /// still need the same observable current-session pointer so the owning
     /// workspace can attach to every stage, not only the coding stage.
-    async fn set_current_session(
+    pub(crate) async fn set_current_session(
         &self,
         harness_id: Uuid,
         session_id: Uuid,
@@ -762,7 +812,7 @@ impl HarnessEngine {
         Ok(())
     }
 
-    fn emit(&self, event: HarnessEvent) {
+    pub(crate) fn emit(&self, event: HarnessEvent) {
         // Err only means no subscribers — fine, the event is best-effort.
         let _ = self.event_tx.send(event);
     }
@@ -797,6 +847,17 @@ pub struct HarnessStatus {
     pub blocked_phase: Option<SpecPhase>,
     #[serde(default)]
     pub gate_summary: Option<String>,
+    /// Missing/`sequential` is the compatibility engine.
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
+    #[serde(default)]
+    pub max_concurrency: usize,
+    /// In orchestrated mode `current_session` remains a compatibility pointer
+    /// to this coordinator.
+    #[serde(default)]
+    pub coordinator_session: Option<Uuid>,
+    #[serde(default)]
+    pub active_workers: Vec<OrchestratedWorkerStatus>,
 }
 
 #[cfg(test)]

@@ -27,9 +27,19 @@ const AGENT_BOOT_DELAY: Duration = Duration::from_secs(3);
 /// rather than panicking the task.
 pub async fn drive(state: AppState, harness_id: Uuid) {
     let result = drive_inner(&state, harness_id).await;
-    // Free the driver slot no matter how the loop ended so the run can be
-    // re-driven (after done/blocked/failed, or once the user re-runs).
-    state.harness.release_driver(harness_id).await;
+    // A successful orchestrated hand-off leaves the logical driver claim with
+    // the durable coordinator. Sequential runs and failed launches release it.
+    let coordinator_owns_driver = result.is_ok()
+        && state
+            .store
+            .harness_get_orchestrated_run(&harness_id.to_string())
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|run| !matches!(run.status.as_str(), "completed" | "stopped"));
+    if !coordinator_owns_driver {
+        state.harness.release_driver(harness_id).await;
+    }
     if let Err(e) = result {
         // A run removed mid-drive (user pressed Stop/unload) surfaces here as a
         // "harness not found" error — that's an intentional teardown, not a
@@ -80,6 +90,8 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
     }
 
     let workdir = engine.workdir(harness_id).await?;
+    let execution_mode = HarnessConfig::load(&workdir).await?.features.execution_mode;
+    let orchestrated = execution_mode == ExecutionMode::Orchestrated;
 
     // 1b. SDD role phases wrap the feature loop (spec 013). OFF by default → a
     // plain feature run skips straight to the loop below, behaving exactly as
@@ -96,6 +108,73 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         if engine.phase(harness_id).await? != SpecPhase::Executing {
             return Ok(());
         }
+    } else if orchestrated {
+        // Roles-off orchestration still gets one dedicated architecture/planning
+        // agent.  Workers are never asked to rediscover the repository.
+        engine
+            .set_phase(harness_id, SpecPhase::Architecture)
+            .await?;
+        if !run_role_gate(state, harness_id, &workdir, SpecPhase::Architecture).await? {
+            return Ok(());
+        }
+        engine.set_phase(harness_id, SpecPhase::Executing).await?;
+    }
+
+    if orchestrated {
+        let config = HarnessConfig::load(&workdir).await?;
+        let spec_id =
+            config.features.spec_id.clone().ok_or_else(|| {
+                anyhow::anyhow!("orchestrated execution requires features.spec_id")
+            })?;
+        let plan = super::orchestrated::load_execution_plan(&workdir, &spec_id)?;
+        let architecture = tokio::fs::read_to_string(
+            config
+                .harness_dir
+                .join("specs")
+                .join(&spec_id)
+                .join("architecture.md"),
+        )
+        .await
+        .unwrap_or_default();
+        let dirty = tokio::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&workdir)
+            .output()
+            .await
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| {
+                format!(
+                    "The shared worktree was already dirty at dispatch:\n{}",
+                    tail(&s, 2000)
+                )
+            });
+        let coordinator_token = super::orchestrated::initialize_run(
+            state,
+            harness_id,
+            &workdir,
+            &plan,
+            &architecture,
+            dirty,
+            config.features.max_concurrency,
+        )
+        .await?;
+        super::orchestrated::spawn_coordinator(state, harness_id, &config, &coordinator_token)
+            .await?;
+        engine.log(
+            harness_id,
+            None,
+            format!(
+                "orchestrated execution ready: {} tasks, concurrency ceiling {}",
+                plan.tasks.len(),
+                config
+                    .features
+                    .max_concurrency
+                    .min(super::orchestrated::MAX_CONCURRENCY)
+            ),
+        );
+        return Ok(());
     }
 
     // 2. One feature at a time.
@@ -1001,6 +1080,14 @@ async fn run_pre_feature_phases(
         .set_phase(harness_id, SpecPhase::Architecture)
         .await?;
     if !run_role_gate(state, harness_id, workdir, SpecPhase::Architecture).await? {
+        return Ok(());
+    }
+
+    let current = HarnessConfig::load(workdir).await?;
+    if current.features.execution_mode == ExecutionMode::Orchestrated {
+        // The architect owns task compilation in orchestrated mode. Its
+        // execution-plan.json is validated immediately after this phase.
+        engine.set_phase(harness_id, SpecPhase::Executing).await?;
         return Ok(());
     }
 

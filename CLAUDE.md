@@ -432,6 +432,20 @@ time, blocking advancement on a red gate.
   is decoupled from spawning so it's unit-testable with stub `verify.sh`.
   [`harness::drive`] is the live loop: init → for each pending feature
   {spawn agent → wait-for-settle → verify gate → advance / retry / block}.
+- **Shared-worktree orchestration** (`harness/orchestrated.rs`, migration 0028):
+  newly created issue-to-gated-run backlogs are stamped
+  `execution_mode: "orchestrated"` and use one coordinator plus up to four
+  isolated workers in the same worktree. The architect writes a versioned
+  `execution-plan.json`; the server validates DAG/acceptance coverage/path and
+  ownership boundaries and compiles ≤32 KB task packets. Workers are read-only
+  at the CLI boundary and mutate only through capability-scoped MCP patch
+  transactions. Leases, managed sessions, checkpoints, patch preimages, and
+  decisions live in SQLite; patch application and verification share one lane.
+  Missing `execution_mode` deliberately retains the sequential loop for legacy,
+  hand-authored, and in-progress backlogs. Managed sessions rotate at 10%
+  reported context (or their first context-low signal) and never receive the
+  watchdog's `/compact`. Stop/recovery preserve user edits; drift freezes the
+  lease instead of reverting it.
 - **Real agents, one launch path**: `spawn_feature_agent` goes through
   `routes::sessions::spawn_agent_into_pane` — the *same* helper the `start`
   route uses (extracted in this work) — so YOLO translation, loopback
