@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.5] — 2026-07-23
+
+### Fixed
+
+- **Remote-boundary security tests now validate on Windows.** Containment and
+  harness-scope fixtures use native absolute paths on every runner while still
+  exercising outside-root, traversal, identity, and path-mismatch rejection.
+
 ## [0.96.4] — 2026-07-23
 
 ### Fixed
