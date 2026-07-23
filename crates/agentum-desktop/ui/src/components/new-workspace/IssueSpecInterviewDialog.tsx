@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, Loader2, RotateCcw, Sparkles } from 'lucide-react'
 
 import {
@@ -9,9 +9,6 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { useDetectedAgents } from '@/hooks/useDetectedAgents'
-import type { ProjectTaskScope } from '@/lib/project-task-scope'
-import { captureProjectTaskScopeGuard } from '@/lib/project-task-scope-guard'
-import { isLiveProjectTaskScopeAuthority } from '@/lib/project-task-scope-authority'
 import {
   isSocraticComplete,
   resolveIntakeAfterReply,
@@ -36,7 +33,7 @@ export function IssueSpecInterviewDialog({
   open,
   onOpenChange,
   repo,
-  scope,
+  repoSlug,
   seedIntent,
   resetVersion,
   onApplyDraft
@@ -44,7 +41,7 @@ export function IssueSpecInterviewDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   repo: Repo
-  scope: Extract<ProjectTaskScope, { status: 'bound' }>
+  repoSlug?: string
   seedIntent: string
   resetVersion: number
   onApplyDraft: (draft: IssueSpecDraft) => void
@@ -53,9 +50,10 @@ export function IssueSpecInterviewDialog({
   const { detectedIds } = useDetectedAgents()
   const agent = pickChatAgent(preferredAgent, detectedIds)
   const model = agent === 'claude' ? readChatModelPreference() : undefined
-  const guard = useMemo(() => captureProjectTaskScopeGuard(scope), [scope])!
-  const guardCurrent = useCallback(() => isLiveProjectTaskScopeAuthority(guard), [guard])
-  const repoSlug = scope.provider === 'github' ? scope.repoSlug : undefined
+  const contextKey = `${repo.id}:${repo.path}:${repoSlug ?? ''}`
+  const liveContextKey = useRef(contextKey)
+  liveContextKey.current = contextKey
+  const guardCurrent = useCallback(() => liveContextKey.current === contextKey, [contextKey])
 
   const [messages, setMessages] = useState<ChatTurn[]>([])
   const [intake, setIntake] = useState<IntakeState>(socraticIntake)
@@ -65,7 +63,7 @@ export function IssueSpecInterviewDialog({
   const [extracting, setExtracting] = useState(false)
   const [contextMissing, setContextMissing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const sessionKey = `${scope.scopeKey}:${scope.generation}:${resetVersion}:${seedIntent.trim()}`
+  const sessionKey = `${contextKey}:${resetVersion}:${seedIntent.trim()}`
   const activeSession = useRef<string | null>(null)
   const messagesRef = useRef<ChatTurn[]>([])
   const intakeRef = useRef<IntakeState>(socraticIntake())

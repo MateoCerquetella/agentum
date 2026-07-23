@@ -1,20 +1,20 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('TrackerIntakePanel drafting choices', () => {
-  it('keeps the primary quick action and exposes the focused spec path in a menu', () => {
-    const source = readFileSync(new URL('./TrackerIntakePanel.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('Draft issue')
+describe('CreateWorkspaceWizard issue drafting choices', () => {
+  it('puts simple and complex drafting inside New workspace', () => {
+    const source = readFileSync(new URL('./CreateWorkspaceWizard.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('Draft simple issue')
     expect(source).toContain('More drafting options')
     expect(source).toContain('Shape into spec…')
     expect(source).toContain('IssueSpecInterviewDialog')
   })
 
-  it('returns the complex result to the existing editable intake draft', () => {
-    const source = readFileSync(new URL('./TrackerIntakePanel.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('intake.applyDraft(draft)')
-    expect(source).toContain('value={intake.title}')
-    expect(source).toContain('value={intake.body}')
+  it('returns the complex result to the worktree issue editor', () => {
+    const source = readFileSync(new URL('./CreateWorkspaceWizard.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('createIssue.onApplyDraft(draft)')
+    expect(source).toContain('value={createIssue.title}')
+    expect(source).toContain('value={createIssue.body}')
   })
 })
 

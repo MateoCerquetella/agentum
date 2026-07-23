@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  ChevronDown,
   ChevronsUpDown,
   FolderOpen,
   FolderPlus,
@@ -16,6 +17,7 @@ import {
   Search,
   Server,
   Sparkles,
+  WandSparkles,
   X
 } from 'lucide-react'
 import {
@@ -32,6 +34,12 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { api } from '@/tauri'
 import { toast } from 'sonner'
 import { searchRuntimeRepoBaseRefs } from '@/runtime/runtime-repo-client'
@@ -41,6 +49,7 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import { useDetectedAgents } from '@/hooks/useDetectedAgents'
 import { RemoteFileBrowser } from '@/components/sidebar/RemoteFileBrowser'
 import { useComposerState } from '@/hooks/useComposerState'
+import { IssueSpecInterviewDialog } from './IssueSpecInterviewDialog'
 import {
   pickQuickWorkspaceAgent,
   resolveQuickWorkspaceAgentSelection
@@ -108,7 +117,7 @@ import {
   readChatModelPreference,
   writeChatModelPreference
 } from '@/runtime/chat-preferences'
-import type { DraftLlmChoice } from '@/runtime/github-issue-client'
+import type { DraftIssueStyle, DraftLlmChoice } from '@/runtime/github-issue-client'
 import {
   getProjectBinding,
   GithubProjectsBindingError
@@ -224,6 +233,7 @@ export default function CreateWorkspaceWizard({
     onCreateIssueTitleChange,
     createIssueBody,
     onCreateIssueBodyChange,
+    onApplyCreateIssueDraft,
     createIssueLabels,
     createIssueLabelOptions,
     onToggleCreateIssueLabel,
@@ -647,6 +657,7 @@ export default function CreateWorkspaceWizard({
               quickAgent={quickAgent}
               onPick={setQuickAgentOverride}
               selectedRepoIsGit={selectedRepoIsGit}
+              repo={selectedRepo}
               repoDisplayName={selectedRepo?.displayName}
               name={name}
               onNameValueChange={onNameValueChange}
@@ -665,6 +676,7 @@ export default function CreateWorkspaceWizard({
                 onTitleChange: onCreateIssueTitleChange,
                 body: createIssueBody,
                 onBodyChange: onCreateIssueBodyChange,
+                onApplyDraft: onApplyCreateIssueDraft,
                 labels: createIssueLabels,
                 labelOptions: createIssueLabelOptions,
                 onToggleLabel: onToggleCreateIssueLabel,
@@ -1493,11 +1505,12 @@ type CreateIssueSeams = {
   onTitleChange: (value: string) => void
   body: string
   onBodyChange: (value: string) => void
+  onApplyDraft: (draft: { title: string; body: string }) => void
   labels: string[]
   labelOptions: string[] | null
   onToggleLabel: (label: string) => void
   generating: boolean
-  onGenerate: (choice?: DraftLlmChoice) => void
+  onGenerate: (choice?: DraftLlmChoice, style?: DraftIssueStyle) => void
   submitting: boolean
   error: string | null
   onSubmit: () => void
@@ -1528,6 +1541,7 @@ function AgentStep({
   quickAgent,
   onPick,
   selectedRepoIsGit,
+  repo,
   repoDisplayName,
   name,
   onNameValueChange,
@@ -1558,6 +1572,7 @@ function AgentStep({
   quickAgent: TuiAgent | null
   onPick: (agent: TuiAgent) => void
   selectedRepoIsGit: boolean
+  repo?: Repo
   repoDisplayName?: string
   name: string
   onNameValueChange: (value: string) => void
@@ -1689,6 +1704,7 @@ function AgentStep({
         fetchProjectViewTable={fetchProjectViewTable}
         getCachedProjectViewTable={getCachedProjectViewTable}
         linkedWorkItem={linkedWorkItem}
+        repo={repo}
         onPickWorkItem={onPickWorkItem}
         createIssue={createIssue}
         linear={linear}
@@ -1812,6 +1828,7 @@ function TrackerSection({
   fetchProjectViewTable,
   getCachedProjectViewTable,
   linkedWorkItem,
+  repo,
   onPickWorkItem,
   createIssue,
   linear,
@@ -1838,6 +1855,7 @@ function TrackerSection({
   ) => Promise<GetProjectViewTableResult>
   getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
   linkedWorkItem: LinkedWorkItemSummary | null
+  repo?: Repo
   onPickWorkItem: (option: WorkItemOption) => void
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
@@ -2193,8 +2211,14 @@ function TrackerSection({
       {/* Spec 013 F2/F3: create an issue from a short intent, then bind it. Only
           when nothing is linked yet and the repo is a local git repo. The file
           arm targets GitHub or Linear per the resolved tracker (F3). */}
-      {source === 'new' && canStageNewIssue ? (
-        <CreateIssuePanel createIssue={createIssue} linear={linear} resolved={resolved} deferred />
+      {source === 'new' && canStageNewIssue && repo ? (
+        <CreateIssuePanel
+          createIssue={createIssue}
+          linear={linear}
+          resolved={resolved}
+          repo={repo}
+          deferred
+        />
       ) : null}
 
       {linkedWorkItem && showLinkedSelection ? (
@@ -2232,11 +2256,13 @@ function CreateIssuePanel({
   createIssue,
   linear,
   resolved,
+  repo,
   deferred = false
 }: {
   createIssue: CreateIssueSeams
   linear: LinearCreateSeams
   resolved: PickerProjectRef | null
+  repo: Repo
   deferred?: boolean
 }): React.JSX.Element {
   const [open, setOpen] = useState(deferred)
@@ -2248,6 +2274,8 @@ function CreateIssuePanel({
   const [draftModel, setDraftModel] = useState(
     () => resolveChatModel(readChatModelPreference()).id
   )
+  const [specOpen, setSpecOpen] = useState(false)
+  const [specResetVersion, setSpecResetVersion] = useState(0)
   const draftPreferenceTouched = useRef(false)
 
   useEffect(() => {
@@ -2325,7 +2353,7 @@ function CreateIssuePanel({
   // Draft an SDD-shaped body from the TITLE (optional helper — the title is the
   // one required field now; a blank body files fine). Provider-agnostic markdown
   // that files to either tracker.
-  const handleDraft = useCallback(() => {
+  const handleDraft = useCallback((style: DraftIssueStyle = 'concise') => {
     if (!canFileIssue(createIssue.title, busy)) {
       return
     }
@@ -2334,8 +2362,14 @@ function CreateIssuePanel({
       agent: effectiveDraftAgent,
       ...(effectiveDraftAgent === 'claude' ? { model: draftModel } : {})
     }
-    createIssue.onGenerate(choice)
+    createIssue.onGenerate(choice, style)
   }, [busy, createIssue, draftModel, effectiveDraftAgent])
+
+  const handleOpenSpec = useCallback(() => {
+    if (!canFileIssue(createIssue.title, busy)) return
+    setSpecResetVersion((value) => value + 1)
+    setSpecOpen(true)
+  }, [busy, createIssue.title])
 
   const handleDraftAgentChange = useCallback(
     (agent: ChatAgentId) => {
@@ -2423,12 +2457,17 @@ function CreateIssuePanel({
   const hasBody = createIssue.body.trim().length > 0
   const canFile = canFileIssue(createIssue.title, busy)
 
+  const specSeed = [createIssue.title.trim(), createIssue.body.trim()]
+    .filter(Boolean)
+    .join('\n\n')
+
   return (
-    // Enter inside the panel files the issue (or inserts a newline in the
-    // description) — it must NOT bubble to the wizard's global key handler, which
-    // would otherwise create the whole workspace out from under a half-typed
-    // issue. Stopping propagation here is the fix for the "creates it double"
-    // report: the title <input>'s Enter used to trigger "Create workspace".
+    <>
+    {/* Enter inside the panel files the issue (or inserts a newline in the
+        description) — it must NOT bubble to the wizard's global key handler, which
+        would otherwise create the whole workspace out from under a half-typed
+        issue. Stopping propagation here is the fix for the "creates it double"
+        report: the title input's Enter used to trigger "Create workspace". */}
     <div
       className="flex flex-col gap-2.5 rounded-lg border border-border p-3"
       onKeyDown={(event) => {
@@ -2487,8 +2526,8 @@ function CreateIssuePanel({
         />
       </label>
 
-      {/* Description is OPTIONAL. "Draft with AI" fills an SDD-shaped body from
-          the title; the user can also just type, or leave it blank. */}
+      {/* Description is optional. The default AI path stays intentionally terse;
+          the menu opens the guided SDD interview for complex work. */}
       <div className="flex flex-col gap-1.5">
         <div className="flex flex-wrap items-end justify-between gap-2">
           <span className="text-[11px] text-muted-foreground">Description (optional)</span>
@@ -2538,26 +2577,64 @@ function CreateIssuePanel({
                 default model
               </span>
             )}
-            <button
-              type="button"
-              onClick={handleDraft}
-              disabled={!canFile || availableDraftAgents.length === 0}
-              className="inline-flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {phase === 'drafting' ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Sparkles className="size-3" />
-              )}
-              {phase === 'drafting' ? 'Drafting…' : hasBody ? 'Redraft' : 'Draft with AI'}
-            </button>
+            <div className="flex">
+              <button
+                type="button"
+                onClick={() => handleDraft('concise')}
+                disabled={!canFile || availableDraftAgents.length === 0}
+                className="inline-flex h-6 items-center gap-1 rounded-l-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {phase === 'drafting' ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Sparkles className="size-3" />
+                )}
+                {phase === 'drafting'
+                  ? 'Drafting…'
+                  : hasBody
+                    ? 'Redraft simple'
+                    : 'Draft simple issue'}
+              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    disabled={!canFile || availableDraftAgents.length === 0}
+                    aria-label="More drafting options"
+                    className="-ml-px inline-flex h-6 w-6 items-center justify-center rounded-r-md border border-border text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <ChevronDown className="size-3" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-60">
+                  <DropdownMenuItem onSelect={() => handleDraft('concise')}>
+                    <Sparkles className="size-3.5" />
+                    <span className="flex flex-col">
+                      <span>Simple issue</span>
+                      <span className="text-[10.5px] font-normal text-muted-foreground">
+                        A short, direct description
+                      </span>
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleOpenSpec}>
+                    <WandSparkles className="size-3.5" />
+                    <span className="flex flex-col">
+                      <span>Shape into spec…</span>
+                      <span className="text-[10.5px] font-normal text-muted-foreground">
+                        Complex issue · guided SDD
+                      </span>
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
         </div>
         <textarea
           value={createIssue.body}
           onChange={(event) => createIssue.onBodyChange(event.target.value)}
           rows={hasBody ? 6 : 3}
-          placeholder="Add details, or let AI draft an SDD-shaped description from the title."
+          placeholder="Add details, draft a simple issue, or shape a complex SDD spec."
           className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
         />
       </div>
@@ -2624,6 +2701,18 @@ function CreateIssuePanel({
 
       {inlineError ? <span className="text-[11px] text-destructive">{inlineError}</span> : null}
     </div>
+      <IssueSpecInterviewDialog
+        open={specOpen}
+        onOpenChange={setSpecOpen}
+        repo={repo}
+        seedIntent={specSeed}
+        resetVersion={specResetVersion}
+        onApplyDraft={(draft) => {
+          createIssue.onApplyDraft(draft)
+          setSpecOpen(false)
+        }}
+      />
+    </>
   )
 }
 
