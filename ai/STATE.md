@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 architecture maps all 8 ACs; implement F1-F3.)
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Developer send-back 1/2: SnapshotOnly/non-Claude transitions must retire prior live state.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -93,9 +93,6 @@
   row but never invalidates the mounted wizard parent, so stale connected status
   and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
   unbind callback and regression.
-- 2026-07-22 | Author | **027 drafted → phase pm**. Narrowed issue #431 to one
-  user action: select workspace work from the configured external tracker;
-  internal board routes and fallback retire while legacy rows remain inert.
 - 2026-07-22 | Reviewer | **027 SIGN-OFF → phase done**. Confirmed external-
   tracker-only UI/runtime behavior, retired board APIs, inert legacy rows,
   current docs/playbooks, focused regressions, workspace tests, and desktop
@@ -109,3 +106,6 @@
 - 2026-07-23 | Architect | **028 ARCHITECT PASS → phase developer**. Atomic
   mode-aware reads own exactly-once observer attachment; a generic watchdog
   hook only retires server-owned observers and preserves crate direction.
+- 2026-07-23 | Developer gate | **028 SEND-BACK → phase developer** (iteration
+  1/2). Snapshot-only and non-Claude reads must retire prior live observation/
+  cache themselves; the route regression must stop masking that transition.
