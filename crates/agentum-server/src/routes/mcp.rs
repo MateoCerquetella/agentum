@@ -169,16 +169,14 @@ async fn handle(
     {
         if msg.get("method").and_then(Value::as_str) == Some("tools/call") {
             if let Some(params) = msg.get_mut("params") {
-                let tool = params.get("name").and_then(Value::as_str);
+                let is_browser =
+                    params.get("name").and_then(Value::as_str) == Some("agentum_browser");
+                let is_harness_run =
+                    params.get("name").and_then(Value::as_str) == Some("agentum_harness_run");
                 if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
-                    if tool == Some("agentum_browser")
-                        && !a.contains_key("worktreeId")
-                        && !a.contains_key("cdpPort")
-                    {
+                    if is_browser && !a.contains_key("worktreeId") && !a.contains_key("cdpPort") {
                         a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
-                    } else if tool == Some("agentum_harness_run")
-                        && !a.contains_key("worktreeId")
-                    {
+                    } else if is_harness_run && !a.contains_key("worktreeId") {
                         // The MCP URL provisioned into a worktree agent already
                         // carries its authoritative registry id. Harness launch
                         // consumes the same identity instead of trusting a path
@@ -2706,6 +2704,17 @@ mod tests {
             assert!(tool_names(true).contains(&tool.to_string()), "{tool} on");
             assert!(tool_names(false).contains(&tool.to_string()), "{tool} off");
         }
+        let specs = tool_specs(true);
+        let harness = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "agentum_harness_run")
+            .unwrap();
+        assert_eq!(
+            harness["inputSchema"]["required"],
+            json!(["workdir", "worktreeId"])
+        );
     }
 
     #[test]
@@ -2787,16 +2796,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn harness_run_fails_fast_without_a_ready_surface() {
+    async fn harness_run_requires_registered_worktree_identity() {
         let state = fresh_state().await;
         let dir = tempfile::tempdir().unwrap();
-        // No `.agentum-harness/` → the register step fails loudly (the tool
-        // points the caller at agentum_harness_check), nothing is spawned.
+        // A path alone can name a local checkout and an SSH checkout. The tool
+        // must reject before probing either filesystem or registering a run.
         let err = tool_harness_run(&state, &json!({ "workdir": dir.path().to_string_lossy() }))
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("register harness"), "got: {err}");
+        assert!(err.contains("worktreeId"), "got: {err}");
+        assert!(state.harness.list().await.is_empty());
         assert!(tool_harness_run(&state, &json!({})).await.is_err());
     }
 }

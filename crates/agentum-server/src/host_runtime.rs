@@ -398,7 +398,8 @@ fn remote_contained_stdin_write_script(root: &str, parts: &[String]) -> Result<S
         "AGENTUM_WRITE_ROOT=$(pwd -P) || exit 40".to_string(),
     ];
     for parent in parents {
-        let component = q(&format!("./{parent}"))?;
+        let component_path = format!("./{parent}");
+        let component = q(&component_path)?;
         commands.push(format!(
             "if [ -L {component} ]; then echo 'agentum: parent symlink rejected' >&2; exit 41; fi"
         ));
@@ -415,7 +416,8 @@ fn remote_contained_stdin_write_script(root: &str, parts: &[String]) -> Result<S
                 .to_string(),
         );
     }
-    let target = q(&format!("./{filename}"))?;
+    let target_path = format!("./{filename}");
+    let target = q(&target_path)?;
     commands.push(format!(
         "if [ -L {target} ]; then echo 'agentum: final symlink rejected' >&2; exit 45; fi"
     ));

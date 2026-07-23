@@ -1,6 +1,8 @@
 import type { Repo } from '@/shared/types'
+import type { ProjectBindingDto } from '@/runtime/github-projects-client'
 import type { LinearProjectDetail } from '@/shared/types'
 import type {
+  ProjectTrackerBoardBinding,
   ProjectTrackerGithubTarget,
   ProjectTrackerLinearTarget,
   ProjectTrackerProvider
@@ -24,13 +26,7 @@ export type GithubRepositoryTaskScope = Extract<
   { status: 'bound'; provider: 'github'; target: 'repository' }
 >
 
-type GithubProjectBindingIdentity = {
-  projectId: string
-  projectTitle?: string | null
-  projectOwner?: string | null
-  projectOwnerType?: string | null
-  projectNumber?: number | null
-}
+type GithubProjectBindingIdentity = ProjectBindingDto | ProjectTrackerBoardBinding
 
 export function projectTaskScopeKey(input: { repoId: string } & ({ provider: 'github'; repoSlug: string; projectId: string } | { provider: 'linear'; workspaceId: string; projectId: string })): string {
   return JSON.stringify(input.provider === 'github' ? [input.repoId, 'github', input.repoSlug, input.projectId] : [input.repoId, 'linear', input.workspaceId, input.projectId])
