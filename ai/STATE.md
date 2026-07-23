@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Developer send-back 1/2: SnapshotOnly/non-Claude transitions must retire prior live state.)
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 paused at Developer send-back 1/2; resume from handoffs/04-developer-to-developer.md.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,12 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-21 | Reviewer | **026 SEND-BACK → phase developer** (autonomous loop
-  step 7, Reviewer iteration 1/2; handoff
-  `handoffs/05-reviewer-to-developer.md`). Inline unbind deletes the canonical
-  row but never invalidates the mounted wizard parent, so stale connected status
-  and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
-  unbind callback and regression.
 - 2026-07-22 | Reviewer | **027 SIGN-OFF → phase done**. Confirmed external-
   tracker-only UI/runtime behavior, retired board APIs, inert legacy rows,
   current docs/playbooks, focused regressions, workspace tests, and desktop
@@ -109,3 +103,6 @@
 - 2026-07-23 | Developer gate | **028 SEND-BACK → phase developer** (iteration
   1/2). Snapshot-only and non-Claude reads must retire prior live observation/
   cache themselves; the route regression must stop masking that transition.
+- 2026-07-23 | Developer | **028 paused in developer**. Continuation contract
+  `handoffs/04-developer-to-developer.md` records the uncommitted F1-F3 diff,
+  green evidence, two pending transition fixes, and environment-only blockers.
