@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Tester send-back 1/2; resume from handoffs/06-tester-sendback-01.md.)
+- **phase:** tester     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 evidence retry passed; tester resumes from handoffs/07-developer-to-tester-02.md.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,9 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Architect | **028 ARCHITECT PASS → phase developer**. Atomic
-  mode-aware reads own exactly-once observer attachment; a generic watchdog
-  hook only retires server-owned observers and preserves crate direction.
 - 2026-07-23 | Developer gate | **028 SEND-BACK → phase developer** (iteration
   1/2). Snapshot-only and non-Claude reads must retire prior live observation/
   cache themselves; the route regression must stop masking that transition.
@@ -102,3 +99,6 @@
 - 2026-07-23 | Tester | **028 SEND-BACK → phase developer** (Tester iteration
   1/2). AC 6 route/server-hook retirement and AC 8 coalescing/consumer shutdown
   need executable proof; the isolated QA leg must report only measured behavior.
+- 2026-07-23 | Developer | **028 evidence retry PASS → phase tester**. Actual
+  route/server wiring, controllable callback/consumer accounting, and a real
+  RecommendedWatcher runtime leg close AC 6/8; 833 backend tests pass.

@@ -98,9 +98,13 @@ desktop open after accumulating many completed Claude sessions.
   fixture, exactly-once live observation, passive appended reads, reset-first semantics, pinned
   promotion/legacy fallback, non-Claude behavior, and stop/crash/delete retirement; then
   `cargo fmt --all -- --check`, `cargo test --workspace --lib`, and `git diff --check` pass.
-- **`qa.sh` asserts:** with isolated temporary `AGENTUM_HOME`, `HOME`, and `TMUX_TMPDIR`, listing a
-  production-shaped historical fixture does not change observer or thread counts, while a running
-  Claude session still streams agent-task updates and stopping it retires observation.
+- **`qa.sh` asserts:** with isolated temporary `AGENTUM_HOME`, `HOME`, and `TMUX_TMPDIR`, the
+  production-shaped 500-row fixture creates no injected observers; a real production
+  `RecommendedWatcher` turns a transcript append into an `agent_tasks.updated` bus event and stays
+  silent after retirement; deterministic injected seams prove route/watchdog retirement,
+  capacity-one coalescing, and consumer completion. Portable OS-thread counts and WebSocket
+  transport are not claimed by this backend gate; `verify.sh` rejects any reintroduced
+  `spawn_blocking`/`std::sync::mpsc` receiver path and runs the same executable lifecycle suites.
 
 ## Open questions
 

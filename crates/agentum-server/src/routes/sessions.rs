@@ -1568,7 +1568,7 @@ mod tests {
         use super::super::*;
         use agentum_core::NewSession;
         use agentum_store::Store;
-        use axum::extract::{Query, State};
+        use axum::extract::{Path, Query, State};
         use tokio::sync::broadcast;
 
         async fn state_with_counting_transcripts() -> (
@@ -1585,6 +1585,37 @@ mod tests {
             let (transcripts, counts) = crate::TranscriptStore::with_counting_factory(bus);
             state.transcripts = transcripts;
             (root, state, counts)
+        }
+
+        async fn observed_claude_session(
+            state: &AppState,
+            root: &tempfile::TempDir,
+            name: &str,
+        ) -> Session {
+            let workdir = root.path().join(name);
+            std::fs::create_dir_all(&workdir).unwrap();
+            let session = state
+                .store
+                .create_session(NewSession {
+                    name: name.into(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap();
+            state.transcripts.read(
+                session.id,
+                workdir,
+                "claude",
+                crate::transcript_store::ObservationMode::Live,
+            );
+            session
         }
 
         #[tokio::test]
@@ -1670,6 +1701,46 @@ mod tests {
             {
                 let _ = std::fs::remove_dir_all(path);
             }
+        }
+
+        #[tokio::test]
+        async fn stop_kill_and_delete_routes_retire_without_starting_observers() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let stopped = observed_claude_session(&state, &root, "route-stop").await;
+            let _ = stop(State(state.clone()), Path(stopped.id.to_string())).await;
+            assert_eq!(counts.dropped(), 1);
+            assert_eq!(state.transcripts.observing_count(), 0);
+            assert_eq!(state.transcripts.cache_count(), 1);
+            assert_eq!(counts.created(), 1, "stop must never attach an observer");
+
+            let killed = observed_claude_session(&state, &root, "route-kill").await;
+            let _ = kill(State(state.clone()), Path(killed.id.to_string())).await;
+            assert_eq!(counts.dropped(), 2);
+            assert_eq!(state.transcripts.observing_count(), 0);
+            assert_eq!(state.transcripts.cache_count(), 2);
+            assert_eq!(counts.created(), 2, "kill must never attach an observer");
+
+            let deleted = observed_claude_session(&state, &root, "route-delete").await;
+            let status = delete(
+                State(state.clone()),
+                Path(deleted.id.to_string()),
+                Query(DeleteQuery { force: false }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(status, StatusCode::NO_CONTENT);
+            assert_eq!(counts.dropped(), 3);
+            assert_eq!(state.transcripts.observing_count(), 0);
+            assert_eq!(state.transcripts.cache_count(), 2);
+            assert_eq!(counts.created(), 3, "delete must never attach an observer");
+            assert!(
+                state
+                    .store
+                    .get_session_by_id(deleted.id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
         }
     }
 }

@@ -37,6 +37,11 @@ trait ObserverFactory: Send + Sync {
         project_dir: &Path,
         callback: NotifyCallback,
     ) -> notify::Result<Box<dyn ObserverGuard>>;
+
+    #[cfg(test)]
+    fn counts(&self) -> Option<ObserverCounts> {
+        None
+    }
 }
 
 struct NotifyObserverFactory;
@@ -240,13 +245,43 @@ impl TranscriptStore {
         }
 
         let (tx, mut rx) = mpsc::channel::<()>(1);
+        #[cfg(test)]
+        let observer_counts = self.observer_factory.counts();
+        #[cfg(test)]
+        let callback_counts = observer_counts.clone();
         let callback: NotifyCallback = Box::new(move |result| {
             let Ok(event) = result else {
                 return;
             };
             if is_relevant(&event.kind) {
                 // Capacity one coalesces bursts: Full means a refresh is queued.
-                let _ = tx.try_send(());
+                match tx.try_send(()) {
+                    Ok(()) =>
+                    {
+                        #[cfg(test)]
+                        if let Some(counts) = &callback_counts {
+                            counts
+                                .queued
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Full(())) => {
+                        #[cfg(test)]
+                        if let Some(counts) = &callback_counts {
+                            counts
+                                .coalesced
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Closed(())) => {
+                        #[cfg(test)]
+                        if let Some(counts) = &callback_counts {
+                            counts
+                                .closed
+                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                }
             }
         });
         let guard = match self.observer_factory.create(project_dir, callback) {
@@ -262,6 +297,8 @@ impl TranscriptStore {
         };
         let store = self.clone();
         let consumer = runtime.spawn(async move {
+            #[cfg(test)]
+            let _completion = ConsumerCompletion::started(observer_counts);
             while rx.recv().await.is_some() {
                 store.refresh(id);
             }
@@ -316,6 +353,14 @@ impl TranscriptStore {
             .lock()
             .map(|g| g.values().filter(|slot| slot.observer.is_some()).count())
             .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_state(&self, id: Uuid) -> Option<AgentTaskState> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(&id).map(|slot| slot.state.clone()))
     }
 }
 
@@ -404,6 +449,12 @@ fn is_relevant(kind: &EventKind) -> bool {
 pub(crate) struct ObserverCounts {
     created: Arc<std::sync::atomic::AtomicUsize>,
     dropped: Arc<std::sync::atomic::AtomicUsize>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+    coalesced: Arc<std::sync::atomic::AtomicUsize>,
+    closed: Arc<std::sync::atomic::AtomicUsize>,
+    consumers_started: Arc<std::sync::atomic::AtomicUsize>,
+    consumers_finished: Arc<std::sync::atomic::AtomicUsize>,
+    callbacks: Arc<Mutex<Vec<NotifyCallback>>>,
 }
 
 #[cfg(test)]
@@ -414,6 +465,66 @@ impl ObserverCounts {
 
     pub(crate) fn dropped(&self) -> usize {
         self.dropped.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn queued(&self) -> usize {
+        self.queued.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn coalesced(&self) -> usize {
+        self.coalesced.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn closed(&self) -> usize {
+        self.closed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn consumers_started(&self) -> usize {
+        self.consumers_started
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn consumers_finished(&self) -> usize {
+        self.consumers_finished
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn notify(&self, observer_index: usize, times: usize) {
+        let mut callbacks = self.callbacks.lock().unwrap();
+        let callback = callbacks
+            .get_mut(observer_index)
+            .expect("observer callback retained by counting factory");
+        for _ in 0..times {
+            callback(Ok(notify::Event::new(EventKind::Modify(
+                notify::event::ModifyKind::Data(notify::event::DataChange::Any),
+            ))));
+        }
+    }
+}
+
+#[cfg(test)]
+struct ConsumerCompletion(Option<ObserverCounts>);
+
+#[cfg(test)]
+impl ConsumerCompletion {
+    fn started(counts: Option<ObserverCounts>) -> Self {
+        if let Some(counts) = &counts {
+            counts
+                .consumers_started
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        Self(counts)
+    }
+}
+
+#[cfg(test)]
+impl Drop for ConsumerCompletion {
+    fn drop(&mut self) {
+        if let Some(counts) = &self.0 {
+            counts
+                .consumers_finished
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
@@ -427,14 +538,19 @@ impl ObserverFactory for CountingObserverFactory {
     fn create(
         &self,
         _project_dir: &Path,
-        _callback: NotifyCallback,
+        callback: NotifyCallback,
     ) -> notify::Result<Box<dyn ObserverGuard>> {
         self.counts
             .created
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.counts.callbacks.lock().unwrap().push(callback);
         Ok(Box::new(CountingObserverGuard {
             counts: self.counts.clone(),
         }))
+    }
+
+    fn counts(&self) -> Option<ObserverCounts> {
+        Some(self.counts.clone())
     }
 }
 
@@ -496,6 +612,134 @@ mod tests {
         assert_eq!(event.payload, json!({ "session_id": id.to_string() }));
         store.stop_observing(id);
         assert_eq!(counts.dropped(), 1);
+        let _ = std::fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn notify_bursts_coalesce_and_retirement_finishes_consumers_without_stale_updates() {
+        let (_root, workdir, id, path) = fixture();
+        let project_dir = path.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
+        let (bus, mut rx) = broadcast::channel(16);
+        let (store, counts) = TranscriptStore::with_counting_factory(bus);
+
+        let initial = store.read(id, workdir.clone(), "claude", ObservationMode::Live);
+        assert_eq!(initial.todos[0].content, "a");
+        let _ = rx.try_recv().expect("live attach emits the initial update");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while counts.consumers_started() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("consumer starts");
+
+        std::fs::write(&path, format!("{TODO_A}\n{TODO_B}\n")).unwrap();
+        counts.notify(0, 3);
+        assert_eq!(counts.queued(), 1, "one wake occupies the bounded channel");
+        assert_eq!(counts.coalesced(), 2, "later callbacks coalesce");
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("queued wake is consumed")
+            .expect("refresh emits an update");
+        assert_eq!(event.kind, "agent_tasks.updated");
+        assert_eq!(store.cached_state(id).unwrap().todos[0].content, "b");
+        assert!(
+            rx.try_recv().is_err(),
+            "coalesced callbacks emit no duplicate update"
+        );
+
+        store.stop_observing(id);
+        assert_eq!(counts.dropped(), 1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while counts.consumers_finished() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stop_observing aborts the consumer promptly");
+        std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
+        counts.notify(0, 1);
+        assert_eq!(counts.closed(), 1);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+                .await
+                .is_err()
+        );
+        assert_eq!(store.cached_state(id).unwrap().todos[0].content, "b");
+
+        let refreshed = store.read(id, workdir, "claude", ObservationMode::Live);
+        assert_eq!(refreshed.todos[0].content, "a");
+        let _ = rx.try_recv().expect("reattach emits an update");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while counts.consumers_started() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replacement consumer starts");
+        store.forget(id);
+        assert_eq!(counts.dropped(), 2);
+        assert_eq!(store.cache_count(), 0);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while counts.consumers_finished() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("forget aborts the replacement consumer promptly");
+        std::fs::write(&path, format!("{TODO_B}\n")).unwrap();
+        counts.notify(1, 1);
+        assert_eq!(counts.closed(), 2);
+        assert_eq!(
+            store.cache_count(),
+            0,
+            "late callback cannot recreate forgotten state"
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+                .await
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn real_notify_observer_emits_for_append_then_retirement_stays_silent() {
+        let (_root, workdir, id, path) = fixture();
+        let project_dir = path.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let (bus, mut rx) = broadcast::channel(16);
+        let store = TranscriptStore::new(bus);
+
+        store.read(id, workdir, "claude", ObservationMode::Live);
+        let _ = rx.try_recv().expect("live attach emits the initial update");
+        assert_eq!(store.observing_count(), 1);
+        std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
+        let update = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let event = rx.recv().await.expect("event bus remains open");
+                if event.kind == "agent_tasks.updated" {
+                    break event;
+                }
+            }
+        })
+        .await
+        .expect("production RecommendedWatcher observes the transcript append");
+        assert_eq!(update.payload, json!({ "session_id": id.to_string() }));
+        assert_eq!(store.cached_state(id).unwrap().todos[0].content, "a");
+
+        store.stop_observing(id);
+        assert_eq!(store.observing_count(), 0);
+        while rx.try_recv().is_ok() {}
+        std::fs::write(&path, format!("{TODO_A}\n{TODO_B}\n")).unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(300), rx.recv())
+                .await
+                .is_err()
+        );
+        assert_eq!(store.cached_state(id).unwrap().todos[0].content, "a");
         let _ = std::fs::remove_dir_all(project_dir);
     }
 

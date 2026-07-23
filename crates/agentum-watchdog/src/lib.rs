@@ -144,13 +144,16 @@ impl Watchdog {
         // First tick fires immediately; subsequent fire on cadence.
         loop {
             tick.tick().await;
-            if let Err(e) = self.reconcile().await {
+            if let Err(e) = self.reconcile_once().await {
                 tracing::warn!(error = ?e, "watchdog reconcile failed");
             }
         }
     }
 
-    async fn reconcile(&self) -> Result<(), WatchdogError> {
+    /// Run one authoritative reconciliation pass. The long-running server uses
+    /// [`Self::run`]; this seam keeps callback wiring executable in deterministic
+    /// integration tests without waiting for the five-second interval.
+    pub async fn reconcile_once(&self) -> Result<(), WatchdogError> {
         let running = self.store.list_sessions(Some(Status::Running)).await?;
         if let Some(hook) = &self.running_sessions_hook {
             hook(&running);
@@ -775,7 +778,7 @@ mod tests {
                 .unwrap()
                 .push(sessions.iter().map(|session| session.id).collect());
         });
-        watchdog.reconcile().await.unwrap();
+        watchdog.reconcile_once().await.unwrap();
 
         assert_eq!(*observed.lock().unwrap(), vec![vec![running.id]]);
         let mut tasks = watchdog.tasks.write().await;

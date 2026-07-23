@@ -33,3 +33,21 @@
   --exclude agentum-desktop`, `cargo fmt --all -- --check`, and `git diff --check` pass. The full
   workspace command remains environment-blocked by the missing release Sherpa dylib, and the UI
   build remains environment-blocked because Vite dependencies are not installed.
+
+## Tester send-back evidence closure — COMPLETE
+
+- Production stop, kill, and delete route seams now execute against the counting transcript store:
+  stop/kill drop observation while retaining cache, delete drops observation and cache, and none
+  starts an observer.
+- The production server watchdog builder is exercised through one authoritative reconcile pass;
+  it keeps the running Claude observer, retires stopped/crashed/deleted/tool-changed observers,
+  preserves passive caches, and starts none.
+- The injected observer seam retains callbacks and records queued/coalesced/closed delivery plus
+  consumer start/finish. Its regression proves capacity-one burst coalescing, a consumed queued
+  wake, prompt consumer completion after stop and forget, and no stale update/cache recreation.
+- Isolated QA now includes a real `RecommendedWatcher` append → `agent_tasks.updated` bus event →
+  retirement-silence check. It explicitly makes no portable OS-thread-count or WebSocket claim;
+  `verify.sh` rejects `spawn_blocking`/`std::sync::mpsc` receiver paths.
+- Gate evidence: transcript store **9/9**, agent-task routes **2/2**, transcript lifecycle routes
+  **3/3**, server-wired watchdog retirement **1/1**, watchdog generic hook **1/1**, isolated QA
+  **15/15**; `cargo fmt --all -- --check` and `git diff --check` pass.

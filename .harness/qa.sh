@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AutoWiki browser QA gate (spec 001).  Non-web slices pass so they aren't blocked.
+# Runtime/isolation QA gate. Non-web slices pass so they aren't blocked.
 # For wiki-view, the real browser pass is driven by the browser-verification-loop
 # skill against the running app, asserting:
 #   open Wiki -> explained empty state -> Generate -> run visible -> pages in TOC ->
@@ -25,18 +25,22 @@ if [ "$FEAT" = "side-effect-free-session-list" ] || \
     TMUX_TMPDIR="$QA_ROOT/tmux" \
     CARGO_HOME="${CARGO_HOME:-$ORIGINAL_HOME/.cargo}" \
     RUSTUP_HOME="${RUSTUP_HOME:-$ORIGINAL_HOME/.rustup}" \
-    cargo test -p agentum-server \
-      routes::sessions::tests::transcript_lifecycle_tests::listing_500_sessions_creates_zero_transcript_entries_or_observers \
-      --lib -- --nocapture
+    cargo test -p agentum-server transcript_store::tests --lib -- --nocapture
   HOME="$QA_ROOT/home" \
     AGENTUM_HOME="$QA_ROOT/agentum" \
     TMUX_TMPDIR="$QA_ROOT/tmux" \
     CARGO_HOME="${CARGO_HOME:-$ORIGINAL_HOME/.cargo}" \
     RUSTUP_HOME="${RUSTUP_HOME:-$ORIGINAL_HOME/.rustup}" \
-    cargo test -p agentum-server \
-      routes::agent_tasks::tests::running_claude_read_is_live_but_historical_read_is_snapshot_only \
-      --lib -- --nocapture
-  echo "[qa] $FEAT: historical fleet stayed at zero observers; live attach/retire passed"
+    cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture
+  HOME="$QA_ROOT/home" AGENTUM_HOME="$QA_ROOT/agentum" TMUX_TMPDIR="$QA_ROOT/tmux" \
+    CARGO_HOME="${CARGO_HOME:-$ORIGINAL_HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$ORIGINAL_HOME/.rustup}" \
+    cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture
+  HOME="$QA_ROOT/home" AGENTUM_HOME="$QA_ROOT/agentum" TMUX_TMPDIR="$QA_ROOT/tmux" \
+    CARGO_HOME="${CARGO_HOME:-$ORIGINAL_HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$ORIGINAL_HOME/.rustup}" \
+    cargo test -p agentum-server tests::server_wired_watchdog_callback_retires_only_non_running_claude_observers --lib -- --nocapture
+  echo "[qa] $FEAT: production RecommendedWatcher append->event-bus update and retirement silence passed"
+  echo "[qa] injected accounting passed for the 500-row fleet, route/watchdog retirement, capacity-one coalescing, and consumer completion"
+  echo "[qa] no portable OS-thread-count or WebSocket-transport assertion is claimed by this isolated backend gate"
   exit 0
 fi
 
