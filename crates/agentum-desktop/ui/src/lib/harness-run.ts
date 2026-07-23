@@ -130,9 +130,9 @@ export function gatedRunHeadline(status: HarnessStatus): string {
   if (status.state === 'failed') return 'Gated run failed'
   if (status.state === 'done') return 'Gated run complete'
   if (status.state === 'init_verifying') return 'Checking the workspace environment'
-  if (status.state === 'verifying') {
-    return feature ? `Verifying ${feature.name}` : 'Running the verification gate'
-  }
+  if (feature?.state === 'verifying') return `Verifying ${feature.name}`
+  if (feature?.state === 'ready_to_test') return `Browser QA for ${feature.name}`
+  if (status.state === 'verifying') return 'Running the verification gate'
   switch (status.phase) {
     case 'authoring':
       return 'PM is shaping the spec'

@@ -1,1 +1,1 @@
-{"passed": true, "summary": "Spec 431 is complete: tracker-only UI/runtime removal, inert legacy compatibility, current docs/playbooks, focused regression coverage, workspace library tests, and desktop build all satisfy the spec and architecture."}
+{"passed": true, "summary": "Spec 436 is complete: the existing gated-run bar now hydrates and reconciles authoritative worktree-scoped status across lifecycle events, lag, and reconnects; lifecycle copy, 34 focused tests, and the production build are green."}

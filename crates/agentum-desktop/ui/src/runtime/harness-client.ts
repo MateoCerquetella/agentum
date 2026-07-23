@@ -352,7 +352,8 @@ export type HarnessEventStream = { close: () => void }
  * set headers on a WS upgrade.
  */
 export async function openHarnessEventStream(
-  onEvent: (ev: HarnessEvent) => void
+  onEvent: (ev: HarnessEvent) => void,
+  onConnected?: () => void
 ): Promise<HarnessEventStream> {
   const { token } = await getServerEndpoint()
   const base = await wsUrl('/api/harness/events')
@@ -369,6 +370,7 @@ export async function openHarnessEventStream(
     ws = sock
     sock.addEventListener('open', () => {
       attempt = 0
+      onConnected?.()
     })
     sock.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') return
@@ -403,9 +405,10 @@ export async function openHarnessEventStream(
  * caller owns the lifecycle through the returned handle's `close()`.
  */
 export async function subscribeHarnessEvents(
-  onEvent: (ev: HarnessEvent) => void
+  onEvent: (ev: HarnessEvent) => void,
+  onConnected?: () => void
 ): Promise<HarnessEventStream> {
-  return openHarnessEventStream(onEvent)
+  return openHarnessEventStream(onEvent, onConnected)
 }
 
 /**
