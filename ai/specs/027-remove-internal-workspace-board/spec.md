@@ -25,6 +25,11 @@ A workspace operator selects workspace work from the project's configured extern
 
 One tracker remains authoritative, eliminating duplicate cards and status reconciliation.
 
+## Users / personas
+
+- **Workspace operator choosing the next tracked item:** needs the project Tasks view and an
+  autonomous run to agree on the configured tracker without a stale Agentum-owned mirror.
+
 ## Acceptance criteria
 
 - [x] A project's Tasks surface renders items from its configured GitHub or Linear source, or renders an explicit no-tracker empty state, and renders no internal-board cards or “Sync to Board” action.
@@ -67,3 +72,8 @@ One tracker remains authoritative, eliminating duplicate cards and status reconc
 
 Specs 016 and 025 scope external boards per project, and spec 002 starts an external ticket
 directly; none retires the remaining internal-board API and fallback described here.
+
+## Open questions
+
+None. The spec preserves configured GitHub and Linear behavior, leaves historical rows inert, and
+does not authorize data deletion or release promotion.

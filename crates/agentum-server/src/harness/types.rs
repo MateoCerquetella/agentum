@@ -78,9 +78,10 @@ pub struct Feature {
     /// prompt from `AGENTS.md` + this feature's name/description.
     #[serde(default)]
     pub prompt: Option<String>,
-    /// Which task tracker this feature mirrors (`board` / `github` / `linear`),
-    /// set when the backlog is created from a goal (spec 011/012). Drives the
-    /// lifecycle → ticket-state transitions; `None` = no external tracker.
+    /// Which external task tracker this feature mirrors (`github` / `linear`),
+    /// set when the backlog is created from a goal (spec 011/012). Legacy string
+    /// values remain deserializable for compatibility. Drives the lifecycle →
+    /// ticket-state transitions; `None` = no external tracker.
     #[serde(default)]
     pub tracker_provider: Option<String>,
     /// The external tracker item's URL, surfaced in the UI.

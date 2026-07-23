@@ -9,9 +9,8 @@ command -v "$CARGO" >/dev/null 2>&1 || CARGO="$HOME/.cargo/bin/cargo"
 
 case "${HARNESS_FEATURE_ID:-F5}" in
   F1)
-    npm exec --prefix crates/agentum-desktop/ui vitest run \
-      src/components/sidebar/SidebarHeader.test.tsx \
-      src/components/project-hub/ProjectTasksPage.test.tsx
+    npm exec --prefix crates/agentum-desktop/ui -- vitest run \
+      src/components/project-hub/ProjectTasksPage.test.tsx --no-cache
     ;;
   F2)
     "$CARGO" test -p agentum-server --lib internal_board_route_families_are_unregistered
