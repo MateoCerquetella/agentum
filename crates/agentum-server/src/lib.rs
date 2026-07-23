@@ -476,6 +476,9 @@ async fn spawn_background_workers(
                     .await
                     .unwrap_or_default()
                 {
+                    if !harness::orchestrated::run_status_allows_managed_activity(&run.status) {
+                        continue;
+                    }
                     for task in state
                         .store
                         .harness_tasks(&run.run_id)
@@ -582,6 +585,9 @@ async fn spawn_background_workers(
                     .await
                     .unwrap_or_default()
                 {
+                    if !harness::orchestrated::run_status_allows_managed_activity(&run.status) {
+                        continue;
+                    }
                     for managed in state
                         .store
                         .harness_active_sessions(&run.run_id)

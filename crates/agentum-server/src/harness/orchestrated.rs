@@ -1828,6 +1828,9 @@ async fn rotate_managed_session_claimed(state: &AppState, old_id: Uuid) -> anyho
         .harness_get_orchestrated_run(&managed.run_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("managed run disappeared"))?;
+    if !run_status_allows_managed_activity(&run.status) {
+        anyhow::bail!("managed run is not active: {}", run.status);
+    }
     let config = super::HarnessConfig::load(Path::new(&run.workdir)).await?;
     let checkpoint = run_state(state, &managed.run_id, &run.coordinator_token).await?;
     state
@@ -1923,45 +1926,96 @@ async fn rotate_managed_session_claimed(state: &AppState, old_id: Uuid) -> anyho
 /// Boot recovery: finish/roll back journals first, then freeze any lease whose
 /// durable hash no longer matches the shared worktree. External edits are
 /// preserved; resumption waits for coordinator resolution.
+const RECOVERY_QUARANTINED: &str = "recovery_quarantined";
+
+pub(crate) fn run_status_allows_managed_activity(status: &str) -> bool {
+    matches!(status, "running" | "reviewing" | "final_verifying")
+}
+
+async fn quarantine_recovery(
+    state: &AppState,
+    run_id: &str,
+    reason: impl Into<String>,
+) -> anyhow::Result<()> {
+    let reason = reason.into();
+    let checkpoint = serde_json::json!({
+        "recovery_quarantine": {
+            "reason": reason,
+            "filesystem_touched": false
+        }
+    })
+    .to_string();
+    state
+        .store
+        .harness_update_run(run_id, RECOVERY_QUARANTINED, None, Some(&checkpoint))
+        .await?;
+    tracing::warn!(%run_id, %reason, "quarantined harness recovery");
+    Ok(())
+}
+
 pub async fn recover_orchestrated_runs(state: &AppState) -> anyhow::Result<()> {
     recover_incomplete_patches(state).await?;
     for run in state.store.harness_orchestrated_runs().await? {
-        if matches!(run.status.as_str(), "completed" | "stopped") {
+        if matches!(
+            run.status.as_str(),
+            "completed" | "stopped" | RECOVERY_QUARANTINED | "blocked_remote_mode"
+        ) {
             continue;
         }
-        let scope = run.harness_scope()?;
-        let host =
-            match scope.host_id {
-                Some(host_id) => Some(state.store.get_host(host_id).await?.ok_or_else(|| {
-                    anyhow::anyhow!("orchestrated run host is missing: {host_id}")
-                })?),
-                None => None,
-            };
-        // The transactional coordinator is intentionally local-only. A stale
-        // or externally-created SSH orchestrated row must never make recovery
-        // inspect the same-looking path on the daemon.
-        if host
-            .as_ref()
-            .is_some_and(|host| matches!(host.kind, HostKind::Ssh { .. }))
-        {
-            state
-                .store
-                .harness_update_run(&run.run_id, "blocked_remote_mode", None, None)
-                .await?;
-            state
-                .harness
-                .restore_orchestrated(
-                    Uuid::parse_str(&run.run_id)?,
-                    scope,
-                    host,
-                    super::HarnessState::Blocked,
-                    run.coordinator_session
-                        .as_deref()
-                        .and_then(|id| Uuid::parse_str(id).ok()),
+        let scope = match run.harness_scope() {
+            Ok(scope) => scope,
+            Err(error) => {
+                quarantine_recovery(
+                    state,
+                    &run.run_id,
+                    format!("stored harness scope is invalid: {error}"),
                 )
                 .await?;
+                continue;
+            }
+        };
+
+        // Every non-nil host id is a registered remote binding. Orchestrated
+        // recovery is local-only, so quarantine before loading config, probing
+        // the host, or touching `scope.path`. This is intentionally identical
+        // for an online, offline, retargeted, or deleted SSH host: none may
+        // reinterpret its path on the daemon, and none may prevent startup.
+        if let Some(host_id) = scope.host_id.filter(|id| *id != LOCAL_HOST_ID) {
+            let reason = match state.store.get_host(host_id).await? {
+                None => format!("remote harness host was deleted: {host_id}"),
+                Some(host) if matches!(host.kind, HostKind::Ssh { .. }) => format!(
+                    "remote orchestrated recovery is unsupported for host {host_id}; the host may be offline or stale"
+                ),
+                Some(_) => format!("remote harness host binding changed kind under id {host_id}"),
+            };
+            quarantine_recovery(state, &run.run_id, reason).await?;
             continue;
         }
+
+        let host = match scope.host_id {
+            Some(host_id) => match state.store.get_host(host_id).await? {
+                Some(host) if matches!(host.kind, HostKind::Local) => Some(host),
+                Some(_) => {
+                    quarantine_recovery(
+                        state,
+                        &run.run_id,
+                        format!("local harness scope resolved to a remote host: {host_id}"),
+                    )
+                    .await?;
+                    continue;
+                }
+                None => {
+                    quarantine_recovery(
+                        state,
+                        &run.run_id,
+                        format!("local harness host is missing: {host_id}"),
+                    )
+                    .await?;
+                    continue;
+                }
+            },
+            None => None,
+        };
         let scoped_workdir = Path::new(&scope.path);
         let mut conflict = false;
         for lease in state.store.harness_leases(&run.run_id).await? {
@@ -2198,6 +2252,78 @@ mod tests {
                 .unwrap();
         }
         (dir, state, run, plan)
+    }
+
+    #[tokio::test]
+    async fn remote_recovery_quarantines_offline_and_deleted_hosts_without_local_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&dir.path().join("recovery.sqlite"))
+            .await
+            .unwrap();
+        let (bus, _) = tokio::sync::broadcast::channel(16);
+        let state = AppState::new(store, bus);
+        let existing = state
+            .store
+            .create_host(agentum_core::NewHost {
+                name: "offline".into(),
+                kind: HostKind::Ssh {
+                    user: "dev".into(),
+                    hostname: "203.0.113.254".into(),
+                    port: 22,
+                    auth: agentum_core::SshAuth::Agent,
+                },
+            })
+            .await
+            .unwrap();
+
+        for (run_id, host_id) in [
+            (Uuid::new_v4(), existing.id),
+            (Uuid::new_v4(), Uuid::new_v4()),
+        ] {
+            let scope = agentum_core::HarnessScope {
+                worktree_id: Some(format!("repo::/remote/{run_id}")),
+                repo_id: Some("repo".into()),
+                host_id: Some(host_id),
+                // If recovery ever falls back to local, this same-looking path
+                // would be touched. Quarantine happens before any path access.
+                path: format!("/remote/{run_id}"),
+            };
+            state
+                .store
+                .harness_create_orchestrated_run_scoped(
+                    &run_id.to_string(),
+                    &scope.path,
+                    "{}",
+                    "token",
+                    4,
+                    &scope,
+                )
+                .await
+                .unwrap();
+        }
+
+        recover_orchestrated_runs(&state).await.unwrap();
+        // A second boot is idempotent: quarantined rows stay inert.
+        recover_orchestrated_runs(&state).await.unwrap();
+        for row in state.store.harness_orchestrated_runs().await.unwrap() {
+            assert_eq!(row.status, RECOVERY_QUARANTINED);
+            assert!(
+                row.checkpoint_json
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("filesystem_touched")
+            );
+        }
+        assert!(state.harness.list().await.is_empty());
+    }
+
+    #[test]
+    fn quarantined_and_blocked_runs_cannot_revive_managed_workers() {
+        assert!(run_status_allows_managed_activity("running"));
+        assert!(run_status_allows_managed_activity("reviewing"));
+        assert!(!run_status_allows_managed_activity(RECOVERY_QUARANTINED));
+        assert!(!run_status_allows_managed_activity("blocked_remote_mode"));
+        assert!(!run_status_allows_managed_activity("recovery_conflict"));
     }
 
     #[tokio::test]
