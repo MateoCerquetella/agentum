@@ -535,7 +535,9 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       // Repo ids can be reused after remove/re-add. Drop every canonical
       // tracker bucket now so a prior provider, conflict, or load error cannot
       // flash on the newly registered project before its authoritative GET.
-      get().forgetProjectTrackerConfig(projectId)
+      // Some isolated slice consumers (including migration/test harnesses)
+      // compose the repository slice without the tracker slice.
+      get().forgetProjectTrackerConfig?.(projectId)
       const { clearRepoSlugCacheEntry } = await import('../../lib/repo-slug-index')
       clearRepoSlugCacheEntry(projectId)
 

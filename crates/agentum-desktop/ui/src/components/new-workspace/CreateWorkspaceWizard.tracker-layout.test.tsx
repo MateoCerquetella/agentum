@@ -24,6 +24,8 @@ describe('CreateWorkspaceWizard canonical tracker layout', () => {
     expect(source).toContain("provider === 'github'")
     expect(source).toContain("provider === 'linear'")
     expect(source).toContain('No issue')
+    expect(source).toContain('aria-label="Refresh repository issues"')
+    expect(source).toContain("repoIssuePicker.error ?? 'No matching open repository issues.'")
   })
 
   it('uses responsive execution controls and a staged mobile footer', () => {
