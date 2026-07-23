@@ -216,8 +216,8 @@ export type DraftedGithubIssueBody = {
 }
 
 /**
- * Draft an SDD-shaped issue body (## Problem / ## Goal / ## Acceptance
- * criteria checklist) from the typed title + local repo context (spec 007).
+ * Draft a concise or SDD-shaped issue body from the typed title + local repo
+ * context (spec 007).
  * The composer puts the result in the body TEXTAREA for review — this call
  * never files anything. Throws with the server's message on any non-2xx so
  * the form can render it inline (including the "set ANTHROPIC_API_KEY / sign
@@ -229,13 +229,15 @@ export function draftIssueBodyPayload(input: {
   slug?: string
   agent?: ChatAgentId
   model?: string
+  style?: 'concise' | 'sdd'
 }): Record<string, string> {
   return {
     workdir: input.workdir,
     title: input.title,
     ...(input.slug ? { slug: input.slug } : {}),
     ...(input.agent ? { agent: input.agent } : {}),
-    ...(input.model ? { model: input.model } : {})
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.style ? { style: input.style } : {})
   }
 }
 
@@ -245,6 +247,7 @@ export async function draftGithubIssueBody(input: {
   slug?: string
   agent?: ChatAgentId
   model?: string
+  style?: 'concise' | 'sdd'
   /** Abort budget — a full LLM draft; generous but bounded. */
   timeoutMs?: number
 }): Promise<DraftedGithubIssueBody> {

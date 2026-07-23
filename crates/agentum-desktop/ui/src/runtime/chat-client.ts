@@ -5,6 +5,7 @@
 // clarifying questions, then proposes a task breakdown the user can file into
 // GitHub or Linear. This client is conversation-only; it never creates tasks.
 import { buildChatBody, buildChatStreamBody } from '../lib/chat-body'
+import type { IntakeTarget } from '../lib/chat-body'
 import type { IntakeMode } from '../lib/socratic-intake'
 import type { ChatAgentId, TuiAgent } from '../shared/types'
 import { apiUrl, getServerEndpoint } from './server-endpoint'
@@ -103,6 +104,7 @@ async function sendChat(
     repoSlug?: string
     mode?: IntakeMode
     stage?: number
+    target?: IntakeTarget
     agent?: ChatAgentId
   }
 ): Promise<string> {
@@ -169,6 +171,8 @@ export async function streamChat(
     mode?: IntakeMode
     /** Spec 008 F2: the socratic pass (1..=5); ignored by the server for Fast. */
     stage?: number
+    /** Provider-neutral focused interview for one structured issue. */
+    target?: IntakeTarget
     signal?: AbortSignal
     onDelta?: (delta: ChatStreamDelta) => void
   } = {}
@@ -290,6 +294,12 @@ export type DraftPlan = {
   body: string
 }
 
+export type IssueSpecDraft = {
+  title: string
+  body: string
+  grounding: { repo: boolean; wiki: boolean }
+}
+
 /** Decode the server's typed error envelope — `{error:string}` or
  *  `{error:{message}}` — into a message, falling back to `fallback`. */
 function decodeError(text: string, fallback: string): string {
@@ -301,6 +311,48 @@ function decodeError(text: string, fallback: string): string {
     if (text) return text
   }
   return fallback
+}
+
+/** Extract one structured issue from a converged focused interview. Files nothing. */
+export async function previewIssueSpec(
+  messages: ChatTurn[],
+  opts?: {
+    workdir?: string
+    repoId?: string
+    repoSlug?: string
+    agent?: ChatAgentId
+    model?: string
+    signal?: AbortSignal
+  }
+): Promise<IssueSpecDraft> {
+  const url = await apiUrl('/api/chat/issue/preview')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await authHeaders())
+    },
+    body: JSON.stringify({
+      messages,
+      workdir: opts?.workdir,
+      repo_id: opts?.repoId,
+      repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined,
+      agent: opts?.agent,
+      model: opts?.model
+    }),
+    signal: opts?.signal
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(decodeError(text, `chat issue preview ${res.status}`))
+  const parsed = (text ? JSON.parse(text) : {}) as Partial<IssueSpecDraft>
+  return {
+    title: parsed.title ?? '',
+    body: parsed.body ?? '',
+    grounding: {
+      repo: parsed.grounding?.repo ?? false,
+      wiki: parsed.grounding?.wiki ?? false
+    }
+  }
 }
 
 /**

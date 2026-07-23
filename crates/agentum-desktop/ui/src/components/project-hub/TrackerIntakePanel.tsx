@@ -3,12 +3,19 @@
 // untouched ProjectBindingEditor: the tab keeps its config half, this is the
 // doing half. All behavior lives in `useTrackerIntake`; this file only renders
 // its state (the CreateIssuePanel look, adapted to the hub's card style).
-import React from 'react'
-import { CheckCircle2, ExternalLink, Loader2, Play, Sparkles } from 'lucide-react'
+import React, { useState } from 'react'
+import { CheckCircle2, ChevronDown, ExternalLink, Loader2, Play, Sparkles, WandSparkles } from 'lucide-react'
 
 import { api } from '@/tauri'
 import type { Repo } from '@/shared/types'
 import type { ProjectTaskScope } from '@/lib/project-task-scope'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import { IssueSpecInterviewDialog } from './IssueSpecInterviewDialog'
 import { useTrackerIntake } from './use-tracker-intake'
 
 export function TrackerIntakePanel({
@@ -19,6 +26,9 @@ export function TrackerIntakePanel({
   scope: Extract<ProjectTaskScope, { status: 'bound' }>
 }): React.JSX.Element {
   const intake = useTrackerIntake({ repo, scope })
+  const [specOpen, setSpecOpen] = useState(false)
+  const [specResetVersion, setSpecResetVersion] = useState(0)
+  const [specSeed, setSpecSeed] = useState('')
   const hasDraft = intake.body.trim().length > 0 || intake.title.trim().length > 0
   const filedUrl = intake.filed?.url ?? null
 
@@ -52,24 +62,73 @@ export function TrackerIntakePanel({
             value={intake.intent}
             onChange={(event) => intake.setIntent(event.target.value)}
             rows={2}
-            placeholder="Describe the work — a title and an SDD-shaped body get drafted from it."
+            placeholder="Describe the work — a concise title and description get drafted from it."
             className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
           />
         </label>
 
-        <button
-          type="button"
-          onClick={intake.draft}
-          disabled={!intake.canDraft}
-          className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-[11.5px] text-foreground transition-colors hover:border-muted-foreground/40 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {intake.phase === 'drafting' ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Sparkles className="size-3.5" />
-          )}
-          {intake.phase === 'drafting' ? 'Drafting…' : hasDraft ? 'Redraft from intent' : 'Draft issue'}
-        </button>
+        <div className="flex self-start">
+          <button
+            type="button"
+            onClick={() => {
+              setSpecOpen(false)
+              setSpecResetVersion((value) => value + 1)
+              intake.draft()
+            }}
+            disabled={!intake.canDraft}
+            className="inline-flex items-center gap-1.5 rounded-l-md border border-border px-2.5 py-1.5 text-[11.5px] text-foreground transition-colors hover:border-muted-foreground/40 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {intake.phase === 'drafting' ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="size-3.5" />
+            )}
+            {intake.phase === 'drafting' ? 'Drafting…' : hasDraft ? 'Redraft from intent' : 'Draft issue'}
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                disabled={!intake.canDraft}
+                aria-label="More drafting options"
+                className="-ml-px inline-flex w-7 items-center justify-center rounded-r-md border border-border text-foreground transition-colors hover:border-muted-foreground/40 hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ChevronDown className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuItem
+                onSelect={() => {
+                  setSpecOpen(false)
+                  setSpecResetVersion((value) => value + 1)
+                  intake.draft()
+                }}
+              >
+                <Sparkles className="size-3.5" />
+                <span className="flex flex-col">
+                  <span>Draft issue</span>
+                  <span className="text-[10.5px] font-normal text-muted-foreground">A concise issue from this intent</span>
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  const seed = intake.intent.trim()
+                  if (seed !== specSeed) {
+                    setSpecSeed(seed)
+                    setSpecResetVersion((value) => value + 1)
+                  }
+                  setSpecOpen(true)
+                }}
+              >
+                <WandSparkles className="size-3.5" />
+                <span className="flex flex-col">
+                  <span>Shape into spec…</span>
+                  <span className="text-[10.5px] font-normal text-muted-foreground">Clarify scope and done criteria</span>
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
 
         {hasDraft ? (
           <>
@@ -186,6 +245,19 @@ export function TrackerIntakePanel({
           </div>
         ) : null}
       </div>
+      <IssueSpecInterviewDialog
+        open={specOpen}
+        onOpenChange={setSpecOpen}
+        repo={repo}
+        scope={scope}
+        seedIntent={specSeed}
+        resetVersion={specResetVersion}
+        onApplyDraft={(draft) => {
+          intake.applyDraft(draft)
+          setSpecSeed('')
+          setSpecResetVersion((value) => value + 1)
+        }}
+      />
     </div>
   )
 }

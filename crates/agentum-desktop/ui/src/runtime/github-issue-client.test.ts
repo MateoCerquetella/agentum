@@ -102,4 +102,10 @@ describe('draftIssueBodyPayload', () => {
       draftIssueBodyPayload({ title: 'Draft it', workdir: '/repo', agent: 'codex' })
     ).toEqual({ title: 'Draft it', workdir: '/repo', agent: 'codex' })
   })
+
+  it('opts into a concise quick draft without changing the legacy default', () => {
+    expect(
+      draftIssueBodyPayload({ title: 'Draft it', workdir: '/repo', style: 'concise' })
+    ).toEqual({ title: 'Draft it', workdir: '/repo', style: 'concise' })
+  })
 })

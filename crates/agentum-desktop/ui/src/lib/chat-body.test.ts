@@ -37,6 +37,7 @@ describe('buildChatStreamBody', () => {
       thinking: true,
       mode: 'socratic',
       stage: 3,
+      target: 'issue_spec',
       agent: 'codex'
     })
     expect(body.repo_id).toBe('repo-2')
@@ -45,6 +46,7 @@ describe('buildChatStreamBody', () => {
     expect(body.thinking).toBe(true)
     expect(body.mode).toBe('socratic')
     expect(body.stage).toBe(3)
+    expect(body.target).toBe('issue_spec')
     expect(body.agent).toBe('codex')
   })
 
@@ -52,5 +54,6 @@ describe('buildChatStreamBody', () => {
     const body = buildChatStreamBody(turns)
     expect(body.thinking).toBe(false)
     expect(JSON.stringify(body)).not.toContain('repo_id')
+    expect(JSON.stringify(body)).not.toContain('target')
   })
 })

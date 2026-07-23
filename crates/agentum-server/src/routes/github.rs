@@ -344,6 +344,10 @@ struct DraftBodyRequest {
     /// agent is resolved, ahead of chat.toml and the backend default.
     #[serde(default)]
     model: Option<String>,
+    /// Optional output shape. Absent stays on the legacy SDD-shaped prompt;
+    /// Project Tasks opts into the concise paragraph explicitly.
+    #[serde(default)]
+    style: super::chat::DraftIssueStyle,
 }
 
 /// Spec 020 F3 (D4): which context sources actually grounded the draft. Both
@@ -363,7 +367,7 @@ struct DraftBodyResponse {
     grounding: DraftGroundingDto,
 }
 
-/// `POST /api/github/issues/draft-body` — draft an SDD-shaped issue body
+/// `POST /api/github/issues/draft-body` — draft a concise or SDD-shaped body
 /// (## Problem / ## Goal / ## Acceptance criteria checklist) from the typed
 /// title + the local repo snapshot (spec 007). Thin over the chat module's
 /// LLM plumbing; the composer fills its body textarea with the result so the
@@ -391,6 +395,7 @@ async fn draft_issue_body(
         &body.title,
         body.agent.as_deref(),
         body.model.as_deref(),
+        body.style,
     )
     .await?;
     Ok(Json(DraftBodyResponse {
@@ -682,6 +687,7 @@ mod tests {
         assert_eq!(full.slug.as_deref(), Some("acme/widgets"));
         assert_eq!(full.agent.as_deref(), Some("claude"));
         assert_eq!(full.model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(full.style, super::super::chat::DraftIssueStyle::Sdd);
 
         let minimal: DraftBodyRequest = serde_json::from_value(serde_json::json!({
             "title": "Add a widget",
@@ -691,6 +697,15 @@ mod tests {
         assert!(minimal.slug.is_none());
         assert!(minimal.agent.is_none());
         assert!(minimal.model.is_none());
+        assert_eq!(minimal.style, super::super::chat::DraftIssueStyle::Sdd);
+
+        let concise: DraftBodyRequest = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo",
+            "style": "concise"
+        }))
+        .unwrap();
+        assert_eq!(concise.style, super::super::chat::DraftIssueStyle::Concise);
 
         // A missing workdir is a deserialization error (the field is required),
         // matching the sibling create-issue contract.

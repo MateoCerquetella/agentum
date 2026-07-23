@@ -34,6 +34,9 @@ import {
 } from '@/runtime/runtime-linear-client'
 import type { IssueSideEffectGate } from '@/lib/issue-side-effect-gate'
 import { getLinkedWorkItemSuggestedName } from '@/lib/new-workspace'
+import { useDetectedAgents } from '@/hooks/useDetectedAgents'
+import { pickChatAgent } from '@/runtime/chat-client'
+import { readChatModelPreference } from '@/runtime/chat-preferences'
 
 export type TrackerIntake = {
   /** The provider locked by Project Settings. */
@@ -51,6 +54,7 @@ export type TrackerIntake = {
   setTitle: (value: string) => void
   body: string
   setBody: (value: string) => void
+  applyDraft: (draft: { title: string; body: string; grounding?: DraftGrounding }) => void
 
   phase: TrackerIntakePhase
   error: string | null
@@ -81,6 +85,10 @@ export function useTrackerIntake({
   scope: Extract<ProjectTaskScope, { status: 'bound' }>
 }): TrackerIntake {
   const openModal = useAppStore((s) => s.openModal)
+  const chatAgentSetting = useAppStore((s) => s.settings?.chatAgent)
+  const { detectedIds: detectedChatAgents } = useDetectedAgents()
+  const chatAgent = pickChatAgent(chatAgentSetting, detectedChatAgents)
+  const chatModel = chatAgent === 'claude' ? readChatModelPreference() : undefined
   // Only the runtime-target field routes the Linear RPC — selecting it (not the
   // whole settings object) keeps the probe from re-running on unrelated writes.
   const activeRuntimeEnvironmentId = useAppStore(
@@ -162,6 +170,9 @@ export function useTrackerIntake({
       const res = await draftGithubIssueBody({
         workdir,
         title: seededTitle,
+        style: 'concise',
+        agent: chatAgent,
+        ...(chatModel ? { model: chatModel } : {}),
         ...(slug ? { slug } : {})
       })
       if (!guardCurrent()) return
@@ -172,7 +183,20 @@ export function useTrackerIntake({
     } finally {
       if (guardCurrent()) setGenerating(false)
     }
-  }, [busy, guardCurrent, intent, repo.path, slug])
+  }, [busy, chatAgent, chatModel, guardCurrent, intent, repo.path, slug])
+
+  const applyDraft = useCallback((draft: {
+    title: string
+    body: string
+    grounding?: DraftGrounding
+  }): void => {
+    if (!guardCurrent()) return
+    setTitle(draft.title)
+    setBody(draft.body)
+    setGrounding(draft.grounding ?? null)
+    setFiled(null)
+    setError(null)
+  }, [guardCurrent])
 
   const fileGithub = useCallback(async (): Promise<void> => {
     const trimmedTitle = title.trim()
@@ -301,6 +325,7 @@ export function useTrackerIntake({
     setTitle,
     body,
     setBody,
+    applyDraft,
     phase,
     error,
     filed,
