@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** reviewer   <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 final Tester PASS; handoff `13-tester-to-reviewer-02.md`.)
+- **phase:** done       <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Reviewer SIGN-OFF, 0 blockers; `review.md` and handoff `14-reviewer-signoff.md`.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,9 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Reviewer | **028 SEND-BACK → phase developer** (Reviewer
-  iteration 1/2). Generationless in-flight refresh plus stop/delete teardown
-  windows can violate post-retirement quiescence; three bounded races must close.
 - 2026-07-23 | Developer | **028 race closure PASS → phase tester**. Observer
   generations fence already-awake consumers; final stop/delete boundaries close
   teardown-window recreation; 835 backend tests pass.
@@ -102,3 +99,6 @@
 - 2026-07-23 | Tester | **028 final retry PASS → phase reviewer**. Fresh
   verification closes AC 1–8 with 22 focused tests, 21 isolated QA tests, and
   839 green backend workspace tests; stale-request races are green.
+- 2026-07-23 | Reviewer | **028 SIGN-OFF → done** (0 blockers). Full lock,
+  generation, resource-bound, compatibility, and safety audit passes; release
+  remains human-gated with one Rust helper API release-note caveat.

@@ -1,7 +1,7 @@
 # Spec 028 — Bound Transcript Observers
 
 - **Number:** 028
-- **Status:** PM
+- **Status:** Done  <!-- Reviewer SIGN-OFF 2026-07-23 (`review.md`, 0 blockers); release human-gated -->
 - **Surface:** `crates/agentum-server`, `crates/agentum-watchdog`
 - **Author:** Codex
 - **Date:** 2026-07-23

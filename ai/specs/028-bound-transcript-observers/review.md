@@ -1,213 +1,206 @@
 # Spec 028 — Final review
 
 - **Date:** 2026-07-23
-- **Role:** Fresh Reviewer
-- **Reviewed commit:** `ff43ef40`
-- **Reviewed implementation/evidence range:** `4f3c030c..ff43ef40`
-- **Verdict:** **SEND-BACK**
-- **Blockers:** 3
-- **Should-fixes:** 1
+- **Role:** Fresh Reviewer, iteration 2 of 2
+- **Reviewed commit:** `62236383`
+- **Reviewed implementation/evidence range:** `4f3c030c^..62236383`
+- **Production implementation through:** `105ca8ad`
+- **Verdict:** **SIGN-OFF**
+- **Blockers:** 0
+- **Should-fixes:** 1 documentation/release note
 
-`passed: false`
+`passed: true`
 
 ## Summary
 
-The principal design is sound: session listing is side-effect free, transcript
-parser state is passive, live attachment is serialized, notify delivery is
-capacity-one and coalescing, and the watchdog dependency direction remains
-correct. AC 1, 2, 4, 5, and 7 have adequate implementation and evidence.
+Spec 028 is ready to close. The final implementation bounds live transcript work to explicitly
+read Running Claude sessions, leaves the 500-session list path database-only, and separates
+passive parser state from optional observation. The two send-back rounds are closed by two
+independent authority boundaries:
 
-Sign-off is blocked by one consumer-cancellation race and two route-retirement
-ordering races. Together they mean observation is not reliably quiescent after
-SnapshotOnly/stop/kill/delete retirement, despite the current tests and
-verification report claiming that it is. AC 3's live-to-snapshot transition,
-AC 6, and AC 8 therefore are not fully satisfied.
+1. observer generations make an already-received notify wake harmless once its attachment is
+   retired; mutation and synchronous event emission remain inside the generation check's store
+   mutex boundary; and
+2. a weak-keyed per-session Tokio mutex linearizes the durable session load performed by
+   agent-task GET/reset with stop/kill, delete, and tool-patch mutation through their final
+   transcript retirement.
+
+No correctness, security, resource-bound, or deadlock blocker remains. All eight acceptance
+criteria have implementation and executable evidence. The documented full-workspace Sherpa dylib
+and desktop Vite dependency failures are environment limitations outside this backend-only slice;
+the authoritative non-desktop backend gate is green.
 
 ## Blockers
 
-### B1 — An already-awake consumer can refresh and emit after observer retirement
-
-**Severity:** blocker  
-**Owner:** Developer; Tester must replace the missing evidence  
-**AC impact:** AC 3 transition semantics and AC 8; also the no-stale-event risk
-
-`Observer::drop` only calls `JoinHandle::abort`
-(`transcript_store.rs:68-71`). The consumer receives a wake and then enters the
-synchronous `store.refresh(id)` call (`:299-304`). `refresh` blocks on the
-store's `std::sync::Mutex`, mutates any slot still present, releases the mutex,
-and emits without checking which observer produced the wake (`:312-321`).
-
-Tokio abort is cooperative: it cancels a task when the future next yields to
-the runtime; it cannot interrupt synchronous code that is already executing.
-The following schedule is therefore valid:
-
-1. the consumer passes `rx.recv().await` and blocks in `refresh` on the store
-   mutex;
-2. a SnapshotOnly read, `stop_observing`, or `retain_observers` owns the mutex,
-   takes the observer, and calls `abort`;
-3. retirement releases the mutex and returns;
-4. the already-awake consumer acquires the mutex, refreshes the retained passive
-   slot, and emits `agent_tasks.updated` after retirement.
-
-There is a second form of the same race when the consumer refreshes under the
-mutex, is descheduled before the out-of-lock emit, and retirement completes in
-between. Abort does not retroactively cancel that synchronous send.
-
-The existing
-`notify_bursts_coalesce_and_retirement_finishes_consumers_without_stale_updates`
-test does not cover either schedule. It waits for the queued refresh event and
-state mutation to complete at lines 642-651, and only then retires at line 653.
-Its post-retirement callback assertion proves that a newly sent wake sees a
-closed channel; it does not prove that a wake already past `recv()` is harmless.
-The real watcher smoke test has the same limitation and its 300 ms silence
-window is not synchronization evidence.
-
-**Required correction:** give every attachment a monotonically unique
-generation/liveness token stored with the slot and captured by its consumer.
-The consumer must use a `refresh_if_current(id, generation)` seam that verifies
-under the store mutex that the slot still owns that generation before mutation.
-Event emission must be ordered by that same retirement boundary (for example,
-verify and synchronously broadcast while the mutex still proves the generation
-current); a check followed by an unlocked send leaves the second race open.
-Retirement clears/advances the generation before aborting the task.
-
-Add a deterministic test-only barrier/hook that pauses the consumer after
-`recv()` but before it can refresh. Retire through SnapshotOnly,
-`stop_observing`, `retain_observers`, and `forget`, release the barrier, and
-assert prompt consumer completion, no state mutation, no bus event, and no
-forgotten-slot recreation.
-
-### B2 — Stop/kill can leave an observer reattached during teardown
-
-**Severity:** blocker  
-**Owner:** Developer; Tester must exercise a successful route interleaving  
-**AC impact:** AC 6
-
-`stop_session_core` retires at `sessions.rs:698`, then awaits host lookup and up
-to five seconds of graceful teardown while the durable row still says
-`Running`. A concurrent agent-task GET during that interval selects `Live` and
-can attach a new observer. After committing `Stopped` at lines 705-722, the
-route performs no final retirement, so the replacement can survive until a
-later read or watchdog pass.
-
-The route regression does not close this race. Its created sessions are not
-marked running, the stop/kill results are discarded, and the nonexistent tmux
-targets can take the early error path. It proves that the early production
-retirement call is reached, not that a successful route remains retired across
-its asynchronous teardown window.
-
-**Required correction:** retain the early retirement, then perform a final
-`stop_observing(id)` after the stopped status is durably committed and before a
-successful response. Add a controlled teardown barrier test that performs a
-Live read during the wait, proves it can reattach, completes stop and kill
-successfully, and then proves the final observer count is zero with cache
-retained and no later stale event. The store liveness/generation boundary from
-B1 must also prevent a request/wake carrying pre-retirement authority from
-reviving work after the final boundary.
-
-### B3 — Delete can recreate cache/observation between its early forget and DB deletion
-
-**Severity:** blocker  
-**Owner:** Developer; Tester must add the route race regression  
-**AC impact:** AC 6
-
-`delete` calls `forget(id)` at `sessions.rs:460`, then performs asynchronous
-host/tmux teardown before deleting the durable row at line 499. During that
-window the row remains readable. A concurrent GET can recreate passive state,
-or for a force-deleted running Claude session attach a new observer. The route
-never forgets again. The watchdog eventually drops a recreated observer but
-intentionally retains passive cache, leaving deleted-session state stranded
-indefinitely.
-
-**Required correction:** retain the early forget, then call `forget(id)` again
-after successful durable deletion and before returning 204. Add a controlled
-route test that reads during the teardown window and proves the completed
-delete leaves both cache and observer counts at zero, including forced deletion
-of a running Claude session. As with B2, the B1 generation/liveness boundary
-must reject pre-final-boundary consumer work.
+None.
 
 ## Should-fixes
 
-### S1 — Make the lifecycle evidence and QA wording match the adversarial schedule
+### S1 — Call out the intentional Rust helper API replacement in release notes
 
-After B1-B3 are fixed, update the lifecycle test names/assertions and
-`verification.md` rather than retaining the present broad claim that stale
-wakes and route retirement are already proved. The real
-`RecommendedWatcher` test is a useful runtime smoke test, but deterministic
-barriers—not timing-only silence—must remain authoritative for shutdown races.
-The isolated QA output should identify both the real-watcher smoke leg and the
-separate deterministic interleaving proofs.
+**Severity:** should-fix (documentation only)
+
+**Owner:** Release/documentation
+
+**Ship impact:** none for the approved Spec 028 contract
+
+`TranscriptStore` is publicly re-exported from `agentum-server`, while its previous public helper
+methods (`ensure_started`, `snapshot`, and the one-argument `reset`) were replaced by the approved
+internal mode-aware/session-aware contract. No workspace caller uses those old methods, the server
+and desktop consumers compile, and the spec explicitly approves the replacement, so this is not a
+Spec 028 blocker. It is nevertheless a Rust source-compatibility change for any untracked external
+consumer of those incidental helpers and should be mentioned in release notes. HTTP response
+types, event kind/payload, database schema, watchdog construction without a hook, and all normal
+server entry points remain compatible.
 
 ## Acceptance-criteria disposition
 
-| AC | Reviewer disposition | Evidence / gap |
+| AC | Reviewer disposition | Evidence |
 |---|---|---|
-| 1 | **PASS** | The production list handler is database-only. The 500-row/250-Claude fixture returns all rows with zero cache, observer, drop, and directory side effects. |
-| 2 | **PASS** | One store mutex serializes passive-slot creation and first Live attachment; the 16-way regression records exactly one observer and preserves the exact update kind/payload. |
-| 3 | **BLOCKED** | Fresh SnapshotOnly reads synchronously consume complete appended lines without attaching. A live-to-snapshot transition is not quiescent because B1 permits its detached consumer to refresh/emit afterward. |
-| 4 | **PASS** | Non-Claude reads forget prior Claude state and return empty; fresh read/reset creates no entry, directory, observer, or consumer. A late old consumer cannot recreate an absent map entry, though its stale event risk is covered by B1/AC 8. |
-| 5 | **PASS** | Reset-first creates passive metadata, promotes/selects the transcript, clears state, advances to EOF, and exposes only post-reset complete lines. |
-| 6 | **BLOCKED** | Direct retirement and watchdog selection logic are correct, but B2 and B3 allow route-window reattachment/recreation; B1 also permits post-retirement consumer work. Current route tests do not exercise those successful interleavings. |
-| 7 | **PASS** | UUID pinning, legacy fallback, pinned promotion, complete-line cursoring, event payload, and response types are preserved by focused tests and source review. No HTTP or DB schema changed. |
-| 8 | **BLOCKED** | Capacity-one `try_send` and removal of blocking receivers are correct. Abort-on-drop alone does not terminate a consumer already executing synchronous `refresh`, and current tests do not cover that schedule. |
+| 1 | **PASS** | `routes::sessions::list` performs only `Store::list_sessions` plus JSON serialization. The production-shaped 500-row fixture (250 Claude) records zero cache entries, observer creates/drops, and transcript-directory creation. |
+| 2 | **PASS** | `read(Live)` creates/reuses the passive slot and assigns its observer while holding the store mutex. Repeated and 16-way concurrent reads create exactly one observer, synchronously return parsed state, and retain the exact `agent_tasks.updated` kind and `{session_id}` payload. |
+| 3 | **PASS** | Every non-Running durable status selects `SnapshotOnly`; the store itself retires a prior live observer before synchronously consuming complete appended lines. Complete-line/partial-line behavior and the Running-to-Stopped route transition are executable. |
+| 4 | **PASS** | A non-Claude read calls `forget` before returning the default state, including after prior live Claude state. Fresh non-Claude read/reset creates no slot, directory, observer, callback consumer, or event work. |
+| 5 | **PASS** | Session-aware reset creates only passive metadata, selects/promotes the same pinned-or-legacy path, clears state and pending tasks, advances to current EOF, and exposes only later complete lines. |
+| 6 | **PASS** | Stop/kill retire early and again after durable Stopped; forced delete forgets early and again after durable deletion; tool patch retires after the durable non-Claude mutation. Actual-handler barriers prove a preloaded Running/Claude GET finishes before all four transitions and cannot leave a live observer or deleted cache. The server-wired watchdog callback retires stopped, crashed, deleted, tool-changed, or workdir-mismatched observation without starting work. |
+| 7 | **PASS** | UUID pinning, legacy fallback, pinned-file promotion, cursor/truncation/complete-line parsing, `AgentTaskState` JSON, and `agent_tasks.updated` payload remain unchanged and covered. No HTTP or database schema changed. |
+| 8 | **PASS** | Notify uses `tokio::sync::mpsc::channel(1)` plus non-blocking `try_send`, coalescing bursts. `Observer::drop` aborts the Tokio consumer before the watcher guard is released. Deterministic post-`recv` gates prove SnapshotOnly, stop, retain, and forget reject already-awake work without mutation, event, observer, or cache resurrection. No blocking receiver path remains. |
 
-## Architecture and invariant review
+## Concurrency, ordering, and deadlock review
 
-- **Passive/live separation:** correct in the steady state. Snapshot-only reads
-  do not create directories; only Live attachment materializes a watch path.
-- **Exactly-once first attachment:** correct for repeated/concurrent Live reads
-  because slot lookup and observer assignment share one mutex boundary.
-- **Mode transitions:** non-Claude forget and SnapshotOnly take the prior
-  observer as designed, but B1 prevents the latter from being a complete
-  asynchronous quiescence boundary.
-- **Callback lifetime:** bounded channel ownership is correct; the missing
-  generation check means retained test callbacks accurately expose channel
-  closure but not in-flight task invalidation.
-- **Watchdog direction:** correct. `agentum-watchdog` exposes a generic optional
-  successful-query hook; the server captures `TranscriptStore` and supplies
-  retirement policy. There is no reverse crate dependency, new timer, or
-  observation-start path.
-- **Watchdog ordering:** the hook runs after the authoritative running-session
-  query and before per-session watcher reconciliation. Query failure skips the
-  hook, so absence is not treated as authoritative.
-- **Route ordering:** early retirement before slow/best-effort teardown is
-  desirable, but it must be paired with the final boundaries in B2-B3.
-- **No duplicate/dead production path:** the old `ensure_started`/snapshot and
-  blocking receiver implementation are removed rather than retained in
-  parallel. No duplicate parser or second reconcile timer was introduced.
-- **Existing platform invariants:** Claude UUID pinning, the centralized launch
-  path, YOLO translation, push-based pane streaming, boot-revival-before-watchdog
-  ordering, and public event/HTTP schemas are untouched.
+### Per-session lifecycle boundary
+
+The lock acquisition graph is one-way:
+
+```text
+agent-task GET/reset, PATCH, delete, stop/kill core
+  -> keyed Tokio lifecycle mutex
+  -> transcript store std::sync::Mutex
+
+notify consumer, watchdog retain hook
+  -> transcript store std::sync::Mutex only
+```
+
+No code holding the transcript-store mutex attempts to acquire a lifecycle mutex, and no HTTP or
+MCP wrapper acquires a second lifecycle guard around `stop_session_core`. The harness stop surface
+also calls that same core without wrapping it. Consequently there is no nested same-key acquisition
+or inverse lock order. Slow local/SSH teardown can hold one session's async guard, but it does not
+block unrelated session UUIDs or a Tokio worker thread on mutex acquisition.
+
+GET/reset hold the guard from before the authoritative durable load through the transcript
+operation. Stop/kill hold it from load through early retirement, teardown, durable Stopped write,
+final retirement, and response load. Delete holds it from load through the force guard, teardown,
+durable row deletion, and final forget. PATCH holds it across the durable identity load, tool
+mutation, and Claude retirement. Thus a request is ordered wholly before a transition and its work
+is retired, or wholly after it and observes Stopped, non-Claude, or missing durable state.
+
+Start and watchdog paths do not acquire the lifecycle mutex, which is correct for this design.
+Start only creates/marks Running authority and never retires transcript state; observation remains
+demand-driven and a subsequent Running read attaches it. The watchdog callback is a synchronous,
+drop-only reconciliation after a successful authoritative Running query and takes only the store
+mutex. It cannot start observation or form an inverse lock edge. A concurrent read and watchdog
+pass serialize at the store mutex; if an already-loaded read attaches just after a retirement pass,
+the next existing five-second pass retires it, preserving the bounded reconcile guarantee.
+
+### Weak registry lifetime and pruning
+
+The registry's standard mutex serializes lookup/installation. An acquisition upgrades the existing
+`Weak<AsyncMutex<()>>` or installs one lock, then `lock_owned()` transfers a strong `Arc` into the
+waiter/guard. A holder's `OwnedMutexGuard` and a queued waiter's owned lock future each keep the
+strong count nonzero. Opportunistic `retain(strong_count > 0)` therefore cannot remove and replace
+a lock while any holder or waiter exists. Cancellation drops that strong reference safely. After
+the last holder/waiter exits, the dead weak key may remain only until the next registry access,
+which prunes it; historical UUIDs do not accumulate permanent lock tombstones. The dedicated
+same-key exclusion/dead-key regression confirms both properties.
+
+### Observer generation and callback quiescence
+
+Each successful attachment receives a globally monotonic nonzero generation and stores it in the
+slot before the store mutex is released. A consumer captures only that generation. Retirement
+`take`s the observer from the slot before aborting it, so an already-awake consumer can no longer
+pass `refresh_if_current`. That method verifies the current generation under the store mutex and
+keeps file mutation and `broadcast::Sender::send` inside the same boundary. Retirement therefore
+cannot return between a successful identity check and event emission. Workdir replacement and
+forget also remove the old authority; a newly attached observer has a distinct generation.
+
+The callback owns only a capacity-one sender and never acquires either lifecycle/store mutex.
+Watcher destruction therefore cannot deadlock with retirement. A late callback observes a closed
+channel; a callback already through `recv` either completes before retirement obtains the store
+mutex or fails the generation check afterward. The deterministic synchronous post-receive gate,
+not the timing-only real-watcher smoke test, is authoritative for this schedule.
+
+## Resource-bound and 500-session review
+
+- Session list code never calls `TranscriptStore`, so 500 historical rows create neither passive
+  slots nor live resources.
+- Passive snapshots contain parser state only. A slot owns at most one `Observer`.
+- Concurrent first reads cannot duplicate attachment because create/assign is serialized by the
+  store mutex.
+- Each observer owns one bounded capacity-one channel, one Tokio task, and one watcher guard; the
+  former permanent `spawn_blocking` plus `std::sync::mpsc` receiver is absent.
+- Reconcile iterates existing slots and can only drop observers. It neither creates slots nor
+  touches transcript files.
+- Lifecycle UUID keys are weak and opportunistically pruned, so the linearization fix does not
+  replace the original observer leak with a historical lock-registry leak.
+
+## Compatibility and maintainability review
+
+- `AgentTaskState`, all HTTP status/body shapes, the `agent_tasks.updated` event name and payload,
+  session JSON, and database schemas are unchanged.
+- `Watchdog::new` remains valid; `with_running_sessions_hook` and `reconcile_once` are additive.
+- The watchdog/server dependency direction remains one-way: the lower watchdog crate accepts a
+  generic optional callback; server code captures `TranscriptStore` and supplies policy.
+- The old observation implementation is removed rather than left as a parallel path. There is one
+  parser refresh function, one live-attachment decision, one stop/kill core shared by HTTP/MCP,
+  and one existing watchdog cadence.
+- Test-only barriers and counters are fully `cfg(test)` and do not expand production state or
+  runtime synchronization.
+- S1 records the only compatibility caveat: public Rust helper methods were intentionally replaced
+  even though network/event contracts remain stable.
 
 ## Security and safety review
 
-- No authorization, credential, network-listener, command-construction, or
-  external-write boundary changed.
-- Transcript paths continue through the established workdir-to-Claude path
-  helpers; Live mode preserves the existing best-effort directory creation,
-  while passive reads avoid it.
-- Capacity-one `try_send` bounds notify burst memory and removes the permanent
-  blocked receiver thread, which is a material resource-safety improvement.
-- The blockers are lifecycle/resource correctness issues rather than data
-  exfiltration or privilege-escalation defects. B2/B3 can nevertheless retain
-  unwanted observers/cache, so they must be fixed before the performance and
-  shutdown guarantees are accepted.
+- No authorization, credential, listener, SSH command construction, tmux argument construction,
+  or externally writable path boundary changed.
+- Transcript path resolution continues through the established UUID-pinned Claude helpers.
+  Snapshot-only and non-Claude reads do not create directories; only a live Claude attachment may
+  materialize the established project directory.
+- Per-session lifecycle locks do not broaden authorization or expose state; they only order already
+  authorized operations.
+- Capacity-one delivery bounds notify burst memory, weak lifecycle entries bound historical lock
+  memory, and generation fencing prevents stale state/event publication after retirement.
 
-## Verification review
+## Independent Reviewer verification
 
-- Reviewer spot check: focused transcript-store tests **PASS, 9/9**.
-- Reviewer diff hygiene: `git diff --check 4f3c030c..ff43ef40` **PASS**.
-- Reviewer source guard: no `spawn_blocking` or `std::sync::mpsc` receiver path
-  remains in `transcript_store.rs`.
-- Tester-recorded focused/runtime/backend gates are green as listed in
-  `verification.md`; the desktop/UI environment blockers are unrelated to this
-  backend-only implementation.
-- Those green runs do not override B1-B3 because none forces the missing
-  mutex/cancellation or route-teardown schedules.
+| Command / inspection | Result |
+|---|---|
+| `cargo test -p agentum-server transcript_store::tests --lib -- --nocapture` | **PASS — 11/11** |
+| `cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture` | **PASS — 7/7** |
+| `cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture` | **PASS — 2/2** |
+| server-wired watchdog focused test | **PASS — 1/1** |
+| generic watchdog reconcile-hook focused test | **PASS — 1/1** |
+| full source/lock-order inspection of `4f3c030c^..62236383` | **PASS** |
+| blocking-receiver source inspection | **PASS — no production `spawn_blocking` or `std::sync::mpsc` receiver** |
+
+Tester independently records isolated QA **21/21**, non-desktop backend workspace **839 passed,
+0 failed, 2 ignored**, server/watchdog check, formatting, JSON/shell validation, source guard, and
+implementation diff checks green. Reviewer reproduced the focused concurrency and watchdog gates.
+
+The raw full-range `git diff --check` previously reports only Markdown hard-break spaces in the
+superseded iteration-1 review document. This final review replaces that file and is whitespace
+clean. The implementation range itself is clean.
+
+## Environment limitations
+
+- `cargo test --workspace --lib` remains blocked only in `agentum-desktop` by the absent
+  `target/release/libsherpa-onnx-c-api.dylib`; `--exclude agentum-desktop` is green.
+- `npm run build --prefix crates/agentum-desktop/ui` remains blocked because dependencies are not
+  installed (`vite: command not found`). Spec 028 changes no UI/browser code.
+
+Neither limitation weakens the executable backend evidence for this spec.
 
 ## Final verdict
 
-**SEND-BACK.** Fix B1-B3 and add deterministic regressions for the exact
-interleavings above, then rerun the focused transcript, route, server-watchdog,
-isolated QA, backend workspace, formatting, and diff gates. Spec 028 must not be
-marked done at `ff43ef40`.
+**SIGN-OFF.** No blocker remains. The prior consumer-authority, teardown-window, and stale
+preloaded-request races are closed with deterministic tests for the exact schedules. Spec 028 may
+advance to `done`; release/merge remains human-gated.
