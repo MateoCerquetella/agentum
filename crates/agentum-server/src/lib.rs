@@ -442,6 +442,16 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
 /// Factored out so the
 /// in-process embedded boot (desktop) and the standalone `serve()` (TUI/daemon)
 /// stay in lockstep.
+fn watchdog_with_transcript_retirement(
+    bus: broadcast::Sender<Event>,
+    store: Arc<Store>,
+    transcripts: TranscriptStore,
+) -> agentum_watchdog::Watchdog {
+    agentum_watchdog::Watchdog::new(bus, store).with_running_sessions_hook(move |running| {
+        transcripts.retain_observers(running);
+    })
+}
+
 async fn spawn_background_workers(
     state: &AppState,
     bus: &broadcast::Sender<Event>,
@@ -625,7 +635,8 @@ async fn spawn_background_workers(
         let bus = bus.clone();
         tokio::spawn(async move {
             routes::sessions::boot_revive_dead_sessions(&state).await;
-            agentum_watchdog::Watchdog::new(bus, state.store.clone())
+            let transcripts = state.transcripts.clone();
+            watchdog_with_transcript_retirement(bus, state.store.clone(), transcripts)
                 .run()
                 .await;
         });
@@ -873,6 +884,7 @@ async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentum_core::{NewSession, Status};
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
@@ -931,5 +943,85 @@ mod tests {
         let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
         let state = AppState::new(store, bus);
         assert_eq!(state.api_base_url, None);
+    }
+
+    #[tokio::test]
+    async fn server_wired_watchdog_callback_retires_only_non_running_claude_observers() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&root.path().join("watchdog.db")).await.unwrap());
+        let (bus, _) = broadcast::channel::<Event>(32);
+        let (transcripts, counts) = TranscriptStore::with_counting_factory(bus.clone());
+        let mut observed = Vec::new();
+        for (name, tool, status) in [
+            ("running-claude", "claude", Status::Running),
+            ("stopped-claude", "claude", Status::Stopped),
+            ("crashed-claude", "claude", Status::Crashed),
+            ("running-codex", "codex", Status::Running),
+        ] {
+            let workdir = root.path().join(name);
+            std::fs::create_dir_all(&workdir).unwrap();
+            let session = store
+                .create_session(NewSession {
+                    name: name.into(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap();
+            transcripts.read(
+                session.id,
+                workdir.clone(),
+                "claude",
+                transcript_store::ObservationMode::Live,
+            );
+            if tool != "claude" {
+                store.patch_session_tool(session.id, tool).await.unwrap();
+            }
+            store
+                .update_status_and_target(
+                    session.id,
+                    status,
+                    (status == Status::Running).then_some("missing-watchdog-test-pane"),
+                )
+                .await
+                .unwrap();
+            observed.push((session.id, workdir));
+        }
+        let deleted_id = uuid::Uuid::new_v4();
+        let deleted_workdir = root.path().join("deleted-claude");
+        std::fs::create_dir_all(&deleted_workdir).unwrap();
+        transcripts.read(
+            deleted_id,
+            deleted_workdir.clone(),
+            "claude",
+            transcript_store::ObservationMode::Live,
+        );
+        observed.push((deleted_id, deleted_workdir));
+
+        assert_eq!(counts.created(), 5);
+        assert_eq!(transcripts.observing_count(), 5);
+        let watchdog = watchdog_with_transcript_retirement(bus, store, transcripts.clone());
+        watchdog.reconcile_once().await.unwrap();
+        assert_eq!(counts.dropped(), 4);
+        assert_eq!(transcripts.observing_count(), 1);
+        assert_eq!(transcripts.cache_count(), 5);
+        assert_eq!(
+            counts.created(),
+            5,
+            "the server callback only retires observers"
+        );
+
+        transcripts.stop_observing(observed[0].0);
+        for (_, workdir) in observed {
+            if let Some(project_dir) = agentum_core::transcript::project_dir_for(&workdir) {
+                let _ = std::fs::remove_dir_all(project_dir);
+            }
+        }
     }
 }

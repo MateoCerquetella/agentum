@@ -115,6 +115,7 @@ pub struct Watchdog {
     bus: broadcast::Sender<Event>,
     store: Arc<Store>,
     tasks: Arc<RwLock<HashMap<Uuid, JoinHandle<()>>>>,
+    running_sessions_hook: Option<Arc<dyn Fn(&[Session]) + Send + Sync>>,
 }
 
 impl Watchdog {
@@ -123,7 +124,18 @@ impl Watchdog {
             bus,
             store,
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            running_sessions_hook: None,
         }
+    }
+
+    /// Supply server-owned retirement policy without introducing a dependency
+    /// from this lower-level crate back to the server.
+    pub fn with_running_sessions_hook<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&[Session]) + Send + Sync + 'static,
+    {
+        self.running_sessions_hook = Some(Arc::new(hook));
+        self
     }
 
     /// Run forever. Spawn this with `tokio::spawn`.
@@ -132,14 +144,20 @@ impl Watchdog {
         // First tick fires immediately; subsequent fire on cadence.
         loop {
             tick.tick().await;
-            if let Err(e) = self.reconcile().await {
+            if let Err(e) = self.reconcile_once().await {
                 tracing::warn!(error = ?e, "watchdog reconcile failed");
             }
         }
     }
 
-    async fn reconcile(&self) -> Result<(), WatchdogError> {
+    /// Run one authoritative reconciliation pass. The long-running server uses
+    /// [`Self::run`]; this seam keeps callback wiring executable in deterministic
+    /// integration tests without waiting for the five-second interval.
+    pub async fn reconcile_once(&self) -> Result<(), WatchdogError> {
         let running = self.store.list_sessions(Some(Status::Running)).await?;
+        if let Some(hook) = &self.running_sessions_hook {
+            hook(&running);
+        }
         let running_ids: std::collections::HashSet<Uuid> = running.iter().map(|s| s.id).collect();
 
         let mut tasks = self.tasks.write().await;
@@ -707,6 +725,67 @@ async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reconcile_passes_authoritative_running_slice_to_optional_hook_once() {
+        use agentum_core::NewSession;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            Store::open(&root.path().join("watchdog.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let running = store
+            .create_session(NewSession {
+                name: "hook-running".into(),
+                workdir: root.path().to_string_lossy().into_owned(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_status_and_target(running.id, Status::Running, Some("missing-test-pane"))
+            .await
+            .unwrap();
+        store
+            .create_session(NewSession {
+                name: "hook-idle".into(),
+                workdir: root.path().to_string_lossy().into_owned(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+
+        let observed = Arc::new(std::sync::Mutex::new(Vec::<Vec<Uuid>>::new()));
+        let observed_hook = observed.clone();
+        let (bus, _) = broadcast::channel(16);
+        let watchdog = Watchdog::new(bus, store).with_running_sessions_hook(move |sessions| {
+            observed_hook
+                .lock()
+                .unwrap()
+                .push(sessions.iter().map(|session| session.id).collect());
+        });
+        watchdog.reconcile_once().await.unwrap();
+
+        assert_eq!(*observed.lock().unwrap(), vec![vec![running.id]]);
+        let mut tasks = watchdog.tasks.write().await;
+        for (_, task) in tasks.drain() {
+            task.abort();
+        }
+    }
 
     #[test]
     fn remote_sessions_sample_slower_than_local() {

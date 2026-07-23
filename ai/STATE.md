@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 027-remove-internal-workspace-board
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (027 Reviewer iteration 2 sign-off: ship-ready; real browser QA and release remain human-gated.)
+- **current_spec:** 029-local-watchdog-fleet-scheduler
+- **phase:** architect  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (029 PM PASS; handoff `01-pm-to-architect.md`.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,23 +87,18 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Developer | **027 RETRY PASS → phase tester** (Tester gate
-  iteration 2/2). `qa.sh` now names all required states, propagates a configured
-  verifier exactly, and exits 2 when unavailable; the focused 2/2/0/1 shell
-  matrix, UI/Rust checks, fmt, and diff checks pass.
-- 2026-07-23 | Tester | **027 TESTER RETRY PASS → phase reviewer**. The QA
-  seam independently passes 2/2/0/1 unavailable/pass/fail propagation, F1 and
-  legacy checks remain green, and two fresh F5 runs support 901/6/0 plus the UI
-  build. Real browser QA is explicitly release-deferred, never reported green.
-- 2026-07-23 | Reviewer | **027 SEND-BACK → phase developer** (Reviewer gate
-  iteration 1/2). Product behavior and evidence pass, but the truthful `qa.sh`
-  is ignored/untracked and would not survive a normal commit or fresh checkout;
-  expose the spec-specific gate without broadening scaffold policy.
-- 2026-07-23 | Developer | **027 REVIEWER FIX PASS → phase reviewer**. The
-  spec-local ignore rule now exposes `qa.sh` to normal collection while keeping
-  other runtime noise ignored; status visibility, 2/2/0/1 propagation, syntax,
-  scenario assertions, and diff checks pass.
-- 2026-07-23 | Reviewer | **027 SIGN-OFF → phase done** (Reviewer iteration
-  2/2). All five ACs, focused/full gates, invariants, and artifact portability
-  pass. Real browser execution, staging, merge, live writes, and release remain
-  explicit human gates; tracker update was unavailable in this runtime.
+- 2026-07-23 | Developer | **028 final stale-request fix PASS → phase tester**.
+  A weak keyed lifecycle boundary linearizes agent-task loads with stop/kill,
+  delete, and tool-patch retirement; 21 isolated and 839 backend tests pass.
+- 2026-07-23 | Tester | **028 final retry PASS → phase reviewer**. Fresh
+  verification closes AC 1–8 with 22 focused tests, 21 isolated QA tests, and
+  839 green backend workspace tests; stale-request races are green.
+- 2026-07-23 | Reviewer | **028 SIGN-OFF → done** (0 blockers). Full lock,
+  generation, resource-bound, compatibility, and safety audit passes; release
+  remains human-gated with one Rust helper API release-note caveat.
+- 2026-07-23 | Spec | **029 drafted → phase pm**. One local fleet scheduler and
+  nonce/pane-framed tmux batch contract target ≤2 healthy-cycle local invocations
+  while preserving SSH behavior, cadences, events, and stale-removal safety.
+- 2026-07-23 | PM | **029 PASS → phase architect**. The 11-AC contract is one
+  bounded local performance slice; ≤2 invocations, typed framed outcomes,
+  cadence/event compatibility, SSH preservation, and stale authority are fixed.

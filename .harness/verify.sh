@@ -10,6 +10,20 @@ FEAT="${HARNESS_FEATURE_ID:-all}"
 echo "[verify] feature=$FEAT  root=$ROOT"
 
 case "$FEAT" in
+  side-effect-free-session-list|mode-aware-transcript-read|transcript-observer-lifecycle)
+    cargo test -p agentum-server transcript_store::tests --lib -- --nocapture
+    cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture
+    cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture
+    cargo test -p agentum-server tests::server_wired_watchdog_callback_retires_only_non_running_claude_observers --lib -- --nocapture
+    cargo test -p agentum-watchdog reconcile_passes_authoritative_running_slice_to_optional_hook_once --lib -- --nocapture
+    if rg -n 'spawn_blocking|std::sync::mpsc' crates/agentum-server/src/transcript_store.rs; then
+      echo "[verify] transcript observer reintroduced a blocking receiver path" >&2
+      exit 1
+    fi
+    cargo fmt --all -- --check
+    cargo test --workspace --lib
+    npm run build --prefix crates/agentum-desktop/ui
+    ;;
   binding-identity-fidelity)
     cargo test -p agentum-server project_trackers --lib -- --nocapture
     cargo test -p agentum-server routes::util::tests::resolve_tracker --lib -- --nocapture
@@ -35,7 +49,8 @@ case "$FEAT" in
     npm run build --prefix crates/agentum-desktop/ui
     ;;
   all)
-    cargo test -p agentum-server --lib
+    cargo fmt --all -- --check
+    cargo test --workspace --lib
     (
       cd crates/agentum-desktop/ui
       bunx vitest run \
