@@ -1,6 +1,6 @@
 # Spec 431 — Remove the internal Workspace board
 
-- **Status:** PM ready
+- **Status:** Done
 - **Surface:** `crates/agentum-desktop/ui`, `crates/agentum-server`
 - **Tracker:** https://github.com/MateoCerquetella/agentum/issues/431
 
@@ -20,12 +20,12 @@ One tracker remains authoritative, eliminating duplicate cards and status reconc
 
 ## Acceptance criteria
 
-- [ ] A project's Tasks surface renders items from its configured GitHub or Linear source, or renders an explicit no-tracker empty state, and renders no internal-board cards or “Sync to Board” action.
-- [ ] Requests to `/api/board`, `/api/board/goals`, `/api/board/links`, `/api/board/rules`, and `/api/board/bindings`, including their nested routes, return `404 Not Found`.
-- [ ] Creating, selecting, or transitioning a GitHub- or Linear-backed harness item persists or emits the existing external-tracker result without inserting or updating an internal `board_items` row.
-- [ ] Agentum starts successfully with a database containing legacy internal-board rows, and normal workspace and harness flows neither return nor mutate those rows.
-- [ ] Current API/data-model documentation and live SDD playbooks omit the internal board as an available work-item system and label retained board schema or input values as legacy compatibility only.
-- [ ] `cargo test --workspace --lib` and `npm run build --prefix crates/agentum-desktop/ui` complete successfully with focused route, tracker-flow, and Tasks-surface checks passing.
+- [x] A project's Tasks surface renders items from its configured GitHub or Linear source, or renders an explicit no-tracker empty state, and renders no internal-board cards or “Sync to Board” action.
+- [x] Requests to `/api/board`, `/api/board/goals`, `/api/board/links`, `/api/board/rules`, and `/api/board/bindings`, including their nested routes, return `404 Not Found`.
+- [x] Creating, selecting, or transitioning a GitHub- or Linear-backed harness item persists or emits the existing external-tracker result without inserting or updating an internal `board_items` row.
+- [x] Agentum starts successfully with a database containing legacy internal-board rows, and normal workspace and harness flows neither return nor mutate those rows.
+- [x] Current API/data-model documentation and live SDD playbooks omit the internal board as an available work-item system and label retained board schema or input values as legacy compatibility only.
+- [x] `cargo test --workspace --lib` and `npm run build --prefix crates/agentum-desktop/ui` complete successfully with focused route, tracker-flow, and Tasks-surface checks passing.
 
 ## Scope and non-goals
 

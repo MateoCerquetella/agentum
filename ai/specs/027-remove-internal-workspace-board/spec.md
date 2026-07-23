@@ -5,7 +5,7 @@ tracker: https://github.com/MateoCerquetella/agentum/issues/431
 # Spec 027 — Remove the internal Workspace board
 
 - **Number:** 027
-- **Status:** PM
+- **Status:** Done
 - **Surface:** `crates/agentum-desktop/ui`, `crates/agentum-server`
 - **Author:** Codex
 - **Date:** 2026-07-22
@@ -27,11 +27,11 @@ One tracker remains authoritative, eliminating duplicate cards and status reconc
 
 ## Acceptance criteria
 
-- [ ] A project's Tasks surface renders items from its configured GitHub or Linear source, or renders an explicit no-tracker empty state, and renders no internal-board cards or “Sync to Board” action.
-- [ ] Requests to the retired internal-board route families `/api/board`, `/api/board/goals`, `/api/board/links`, `/api/board/rules`, and `/api/board/bindings` return `404 Not Found`.
-- [ ] Creating, selecting, or transitioning a GitHub- or Linear-backed harness item persists or emits the existing external-tracker result without inserting or updating an internal `board_items` row.
-- [ ] Starting agentum with a database that already contains internal-board rows succeeds, while normal workspace and harness flows neither return nor mutate those rows.
-- [ ] `cargo test --workspace --lib` and `npm run build --prefix crates/agentum-desktop/ui` complete successfully with focused route, tracker-flow, and Tasks-surface checks passing.
+- [x] A project's Tasks surface renders items from its configured GitHub or Linear source, or renders an explicit no-tracker empty state, and renders no internal-board cards or “Sync to Board” action.
+- [x] Requests to the retired internal-board route families `/api/board`, `/api/board/goals`, `/api/board/links`, `/api/board/rules`, and `/api/board/bindings` return `404 Not Found`.
+- [x] Creating, selecting, or transitioning a GitHub- or Linear-backed harness item persists or emits the existing external-tracker result without inserting or updating an internal `board_items` row.
+- [x] Starting agentum with a database that already contains internal-board rows succeeds, while normal workspace and harness flows neither return nor mutate those rows.
+- [x] `cargo test --workspace --lib` and `npm run build --prefix crates/agentum-desktop/ui` complete successfully with focused route, tracker-flow, and Tasks-surface checks passing.
 
 ## Scope and non-goals
 
