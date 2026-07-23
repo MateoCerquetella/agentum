@@ -51,7 +51,7 @@
     {
       "id": "transcript-observer-lifecycle",
       "name": "Bounded transcript observer retirement",
-      "description": "Spec 028 F1-F3. Generation-checked consumers reject already-received wakes after retirement. Stop/kill perform final retirement after durable Stopped commit, delete finally forgets after durable deletion, and deterministic teardown-window reads prove recreated observation/cache cannot survive. The watchdog hook retires stopped/crashed/deleted/tool-changed observers without starting new ones; notify delivery remains bounded/coalescing.",
+      "description": "Spec 028 F1-F3. Generation-checked consumers reject already-received wakes after retirement. A weak/ref-counted per-session async lifecycle boundary linearizes authoritative agent-task loads with stop/kill/delete/tool-patch mutation and final retirement, including preloaded Running/Claude requests. Deterministic route barriers prove those mutations wait, then finish with no stale observer (and no delete cache). The watchdog hook retires stopped/crashed/deleted/tool-changed observers without starting new ones; notify delivery remains bounded/coalescing.",
       "state": "ready_to_test"
     }
   ]

@@ -71,3 +71,23 @@
   **17/17** pass. The non-desktop backend workspace passes **835 tests** with **2 ignored**;
   `cargo check -p agentum-server -p agentum-watchdog`, `cargo fmt --all -- --check`, the blocking
   receiver source guard, and `git diff --check` pass.
+
+## Tester send-back stale-request linearization — COMPLETE
+
+- `TranscriptStore` now owns a per-session async lifecycle registry keyed by UUID with weak mutex
+  entries. Concurrent holders/waiters share one lock; dead UUID keys are pruned opportunistically,
+  so deleted and historical sessions do not leave permanent lifecycle tombstones.
+- Agent-task GET/reset hold the boundary across authoritative durable load and transcript
+  read/reset. Stop/kill core holds it from load through durable Stopped mutation and final
+  retirement; delete holds it from load through durable deletion and final forget; tool PATCH
+  holds it from load through mutation and Claude-observer retirement. HTTP/MCP stop wrappers do
+  not acquire separately, avoiding nested acquisition.
+- Controlled actual-handler regressions park GET after its Running Claude load while it owns the
+  boundary, prove stop, kill, forced delete, and tool patch cannot reach their retirement gates,
+  release GET, and prove lifecycle completion leaves zero observers. Forced delete also leaves
+  zero cached entries; tool patch proves the stale Claude identity cannot attach afterward.
+- The existing observer-generation and teardown-window regressions remain intact. Focused evidence:
+  transcript store **11/11**, transcript lifecycle routes **7/7**, agent-task routes **2/2**,
+  server-wired watchdog **1/1**, and generic watchdog **1/1** pass. Isolated QA passes **21/21**;
+  the non-desktop backend workspace passes **839 tests** with **2 ignored**. Server/watchdog check,
+  formatting, JSON/shell validation, blocking-receiver source guard, and diff checks pass.

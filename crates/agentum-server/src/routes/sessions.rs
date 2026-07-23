@@ -358,6 +358,9 @@ async fn patch_session(
     Json(body): Json<PatchBody>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
+    // Keep the durable identity used by transcript reads linear with a tool
+    // mutation and its observer retirement.
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
     let session = load(&state, id).await?;
     let running = matches!(session.status, Status::Running);
 
@@ -394,6 +397,8 @@ async fn patch_session(
             let updated = state.store.patch_session_tool(id, tool).await?;
             if current.tool == "claude" && updated.tool != "claude" {
                 state.transcripts.stop_observing(id);
+                #[cfg(test)]
+                state.transcripts.pause_after_early_route_retirement().await;
             }
             let _ = state.bus.send(
                 Event::new("session.tool_changed")
@@ -445,6 +450,10 @@ async fn delete(
     Query(q): Query<DeleteQuery>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
+    // Own the boundary from the authoritative load through durable deletion
+    // and final transcript retirement. A preloaded Running GET therefore
+    // completes first and is forgotten here, or reloads after deletion.
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
     let session = load(&state, id).await?;
 
     // Guard a genuinely-running agent behind ?force=true so it isn't torn
@@ -698,6 +707,9 @@ pub(crate) async fn stop_session_core(
     id: Uuid,
     force_kill: bool,
 ) -> Result<Session, ApiError> {
+    // The shared core owns lifecycle locking; HTTP and MCP wrappers must not
+    // acquire it again. Hold it through the final post-commit retirement.
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
     let session = load(state, id).await?;
     // Stop live transcript work before host lookup or graceful tmux shutdown;
     // either can fail or wait, and a later running read can reattach if needed.
@@ -1846,6 +1858,261 @@ mod tests {
                 events.try_recv().is_err(),
                 "retired callback emitted an event"
             );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn preloaded_running_agent_task_read_finishes_before_stop_and_kill_retirement() {
+            for force_kill in [false, true] {
+                let (root, state, counts) = state_with_counting_transcripts().await;
+                let session = observed_claude_session(
+                    &state,
+                    &root,
+                    if force_kill {
+                        "preloaded-route-kill"
+                    } else {
+                        "preloaded-route-stop"
+                    },
+                )
+                .await;
+                state
+                    .store
+                    .update_status(session.id, Status::Running)
+                    .await
+                    .unwrap();
+                state.transcripts.stop_observing(session.id);
+                assert_eq!(counts.created(), 1);
+                assert_eq!(counts.dropped(), 1);
+
+                let request_gate = state.transcripts.park_next_agent_task_after_load();
+                let request_state = state.clone();
+                let id = session.id;
+                let request = tokio::spawn(async move {
+                    crate::routes::agent_tasks::get_agent_tasks(
+                        State(request_state),
+                        Path(id.to_string()),
+                    )
+                    .await
+                });
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    request_gate.wait_until_arrived(),
+                )
+                .await
+                .expect("agent-task handler parks after loading Running");
+
+                let retirement_gate = state.transcripts.park_next_route_retirement();
+                let route_state = state.clone();
+                let mut route =
+                    tokio::spawn(
+                        async move { stop_session_core(&route_state, id, force_kill).await },
+                    );
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(50),
+                        retirement_gate.wait_until_arrived(),
+                    )
+                    .await
+                    .is_err(),
+                    "stop/kill must wait behind the preloaded agent-task request"
+                );
+                assert_eq!(
+                    state
+                        .store
+                        .get_session_by_id(id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .status,
+                    Status::Running
+                );
+
+                request_gate.release();
+                let _ = request.await.unwrap().unwrap();
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    retirement_gate.wait_until_arrived(),
+                )
+                .await
+                .expect("stop/kill acquires the boundary after the request completes");
+                assert_eq!(counts.created(), 2, "the preloaded request completed first");
+                assert_eq!(counts.dropped(), 2, "early retirement removed its observer");
+                retirement_gate.release();
+
+                let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), &mut route)
+                    .await
+                    .expect("stop/kill completes")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stopped.status, Status::Stopped);
+                assert_eq!(state.transcripts.observing_count(), 0);
+                assert_eq!(state.transcripts.cache_count(), 1);
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn preloaded_running_agent_task_read_finishes_before_forced_delete_forget() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let session = observed_claude_session(&state, &root, "preloaded-route-delete").await;
+            state
+                .store
+                .update_status(session.id, Status::Running)
+                .await
+                .unwrap();
+            state.transcripts.stop_observing(session.id);
+
+            let request_gate = state.transcripts.park_next_agent_task_after_load();
+            let request_state = state.clone();
+            let id = session.id;
+            let request = tokio::spawn(async move {
+                crate::routes::agent_tasks::get_agent_tasks(
+                    State(request_state),
+                    Path(id.to_string()),
+                )
+                .await
+            });
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                request_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("agent-task handler parks after loading Running");
+
+            let retirement_gate = state.transcripts.park_next_route_retirement();
+            let route_state = state.clone();
+            let mut route = tokio::spawn(async move {
+                delete(
+                    State(route_state),
+                    Path(id.to_string()),
+                    Query(DeleteQuery { force: true }),
+                )
+                .await
+            });
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    retirement_gate.wait_until_arrived(),
+                )
+                .await
+                .is_err(),
+                "delete must wait behind the preloaded agent-task request"
+            );
+            assert!(state.store.get_session_by_id(id).await.unwrap().is_some());
+
+            request_gate.release();
+            let _ = request.await.unwrap().unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                retirement_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("delete acquires the boundary after the request completes");
+            assert_eq!(counts.created(), 2, "the preloaded request completed first");
+            assert_eq!(counts.dropped(), 2, "early forget removed its observer");
+            assert_eq!(state.transcripts.cache_count(), 0);
+            retirement_gate.release();
+
+            let status = tokio::time::timeout(std::time::Duration::from_secs(2), &mut route)
+                .await
+                .expect("forced delete completes")
+                .unwrap()
+                .unwrap();
+            assert_eq!(status, StatusCode::NO_CONTENT);
+            assert!(state.store.get_session_by_id(id).await.unwrap().is_none());
+            assert_eq!(state.transcripts.observing_count(), 0);
+            assert_eq!(state.transcripts.cache_count(), 0);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn preloaded_claude_agent_task_read_finishes_before_tool_patch_retirement() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let session = observed_claude_session(&state, &root, "preloaded-tool-patch").await;
+            state
+                .store
+                .update_status(session.id, Status::Running)
+                .await
+                .unwrap();
+            state.transcripts.stop_observing(session.id);
+
+            let request_gate = state.transcripts.park_next_agent_task_after_load();
+            let request_state = state.clone();
+            let id = session.id;
+            let request = tokio::spawn(async move {
+                crate::routes::agent_tasks::get_agent_tasks(
+                    State(request_state),
+                    Path(id.to_string()),
+                )
+                .await
+            });
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                request_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("agent-task handler parks with Claude identity");
+
+            let retirement_gate = state.transcripts.park_next_route_retirement();
+            let patch_state = state.clone();
+            let patch = tokio::spawn(async move {
+                patch_session(
+                    State(patch_state),
+                    Path(id.to_string()),
+                    Json(PatchBody {
+                        name: None,
+                        tool: Some("codex".into()),
+                        flags: None,
+                        model: None,
+                        pinned: None,
+                    }),
+                )
+                .await
+            });
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    retirement_gate.wait_until_arrived(),
+                )
+                .await
+                .is_err(),
+                "tool patch must wait behind the preloaded Claude request"
+            );
+            assert_eq!(
+                state
+                    .store
+                    .get_session_by_id(id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .tool,
+                "claude"
+            );
+
+            request_gate.release();
+            let _ = request.await.unwrap().unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                retirement_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("tool patch acquires the boundary after the request completes");
+            assert_eq!(
+                counts.created(),
+                2,
+                "the stale-Claude request completed first"
+            );
+            assert_eq!(counts.dropped(), 2, "tool retirement removed its observer");
+            retirement_gate.release();
+
+            let updated = patch.await.unwrap().unwrap().0;
+            assert_eq!(updated.tool, "codex");
+            assert_eq!(state.transcripts.observing_count(), 0);
+            let reread = crate::routes::agent_tasks::get_agent_tasks(
+                State(state.clone()),
+                Path(id.to_string()),
+            )
+            .await
+            .unwrap();
+            assert!(reread.0.is_empty());
+            assert_eq!(counts.created(), 2, "post-patch read cannot attach Claude");
         }
     }
 }

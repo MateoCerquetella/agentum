@@ -27,16 +27,19 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn get_agent_tasks(
+pub(crate) async fn get_agent_tasks(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<AgentTaskState>, ApiError> {
     let id = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
     let session = state
         .store
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    #[cfg(test)]
+    state.transcripts.pause_agent_task_after_load().await;
 
     let mode = if session.tool == "claude" && session.status == Status::Running {
         ObservationMode::Live
@@ -60,6 +63,7 @@ async fn reset_agent_tasks(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
     // Verify the session exists so a stray POST against a deleted id
     // returns 404 instead of silently succeeding.
     let session = state

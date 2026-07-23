@@ -8,14 +8,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use agentum_core::transcript::{self, AgentTaskState};
 use agentum_core::{Event, Session, Status};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::json;
 use time::OffsetDateTime;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, broadcast, mpsc};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -87,23 +87,51 @@ struct Slot {
 #[derive(Clone)]
 pub struct TranscriptStore {
     inner: Arc<Mutex<HashMap<Uuid, Slot>>>,
+    session_lifecycles: Arc<Mutex<HashMap<Uuid, Weak<AsyncMutex<()>>>>>,
     next_generation: Arc<AtomicU64>,
     bus: broadcast::Sender<Event>,
     observer_factory: Arc<dyn ObserverFactory>,
     #[cfg(test)]
     route_retirement_gate: Arc<Mutex<Option<RouteRetirementGate>>>,
+    #[cfg(test)]
+    agent_task_load_gate: Arc<Mutex<Option<RouteRetirementGate>>>,
 }
 
 impl TranscriptStore {
     pub fn new(bus: broadcast::Sender<Event>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            session_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             next_generation: Arc::new(AtomicU64::new(0)),
             bus,
             observer_factory: Arc::new(NotifyObserverFactory),
             #[cfg(test)]
             route_retirement_gate: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            agent_task_load_gate: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Serialize an authoritative session load and its transcript operation
+    /// with lifecycle mutations for the same session. Registry entries are
+    /// weak: after the final holder/waiter leaves, a later acquisition prunes
+    /// the dead key instead of retaining a UUID tombstone forever.
+    pub(crate) async fn lock_session_lifecycle(&self, id: Uuid) -> OwnedMutexGuard<()> {
+        let lock = {
+            let mut lifecycles = self
+                .session_lifecycles
+                .lock()
+                .expect("transcript lifecycle registry poisoned");
+            lifecycles.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = lifecycles.get(&id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(AsyncMutex::new(()));
+                lifecycles.insert(id, Arc::downgrade(&lock));
+                lock
+            }
+        };
+        lock.lock_owned().await
     }
 
     /// Atomically create/reuse passive state, synchronously consume complete
@@ -368,12 +396,14 @@ impl TranscriptStore {
         (
             Self {
                 inner: Arc::new(Mutex::new(HashMap::new())),
+                session_lifecycles: Arc::new(Mutex::new(HashMap::new())),
                 next_generation: Arc::new(AtomicU64::new(0)),
                 bus,
                 observer_factory: Arc::new(CountingObserverFactory {
                     counts: counts.clone(),
                 }),
                 route_retirement_gate: Arc::new(Mutex::new(None)),
+                agent_task_load_gate: Arc::new(Mutex::new(None)),
             },
             counts,
         )
@@ -414,6 +444,27 @@ impl TranscriptStore {
             gate.arrived.notify_one();
             gate.release.notified().await;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn park_next_agent_task_after_load(&self) -> RouteRetirementGate {
+        let gate = RouteRetirementGate::default();
+        *self.agent_task_load_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn pause_agent_task_after_load(&self) {
+        let gate = self.agent_task_load_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.arrived.notify_one();
+            gate.release.notified().await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_entry_count(&self) -> usize {
+        self.session_lifecycles.lock().unwrap().len()
     }
 }
 
@@ -741,6 +792,35 @@ mod tests {
         store.stop_observing(id);
         assert_eq!(counts.dropped(), 1);
         let _ = std::fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_registry_reuses_live_lock_and_prunes_dead_uuid_keys() {
+        let (bus, _) = broadcast::channel(16);
+        let (store, _counts) = TranscriptStore::with_counting_factory(bus);
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+
+        let first_guard = store.lock_session_lifecycle(first).await;
+        assert_eq!(store.lifecycle_entry_count(), 1);
+        let waiter_store = store.clone();
+        let mut waiter = tokio::spawn(async move {
+            let _guard = waiter_store.lock_session_lifecycle(first).await;
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiter)
+                .await
+                .is_err(),
+            "the same live UUID must reuse and wait on one lock"
+        );
+        drop(first_guard);
+        waiter.await.unwrap();
+
+        // The weak first key may remain until the next registry use. That use
+        // opportunistically removes it before installing the second key.
+        let second_guard = store.lock_session_lifecycle(second).await;
+        assert_eq!(store.lifecycle_entry_count(), 1);
+        drop(second_guard);
     }
 
     #[tokio::test]

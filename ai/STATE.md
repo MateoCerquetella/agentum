@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Tester failure 2/2; final autonomous fix from handoffs/11-tester-sendback-02.md.)
+- **phase:** tester     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 final autonomous Tester attempt; handoff `12-developer-to-tester-04.md`.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,9 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Developer | **028 evidence retry PASS → phase tester**. Actual
-  route/server wiring, controllable callback/consumer accounting, and a real
-  RecommendedWatcher runtime leg close AC 6/8; 833 backend tests pass.
 - 2026-07-23 | Tester | **028 iteration 2 PASS → phase reviewer**. Fresh
   verification closes AC 1–8 with 17 focused/runtime tests, 15 isolated QA
   tests, and 833 green backend workspace tests.
@@ -102,3 +99,6 @@
 - 2026-07-23 | Tester | **028 SEND-BACK → phase developer** (Tester failure
   2/2). A preloaded Running GET can cross final stop/delete cleanup and recreate
   observation/cache; per-session lifecycle linearization is required.
+- 2026-07-23 | Developer | **028 final stale-request fix PASS → phase tester**.
+  A weak keyed lifecycle boundary linearizes agent-task loads with stop/kill,
+  delete, and tool-patch retirement; 21 isolated and 839 backend tests pass.
