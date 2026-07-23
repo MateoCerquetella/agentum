@@ -266,45 +266,6 @@ pub(crate) async fn forge_get(remote: &Remote, token: &str, url: &str) -> Result
     serde_json::from_str(&body).map_err(|e| ApiError::Internal(format!("forge JSON parse: {e}")))
 }
 
-/// One reqwest write (POST/PATCH) to the forge with a JSON body. Mirrors
-/// [`forge_get`] (same per-forge auth headers + error mapping); used by the
-/// board→tracker push path (spec 016b).
-pub(crate) async fn forge_send(
-    remote: &Remote,
-    token: &str,
-    method: reqwest::Method,
-    url: &str,
-    body: &Value,
-) -> Result<Value, ApiError> {
-    let client = reqwest::Client::new();
-    // Serialize manually + set Content-Type so we don't depend on reqwest's
-    // optional `json` feature (forge_get parses responses manually too).
-    let mut req = client
-        .request(method, url)
-        .header("User-Agent", "agentum")
-        .header("Content-Type", "application/json")
-        .body(body.to_string());
-    req = match remote.kind {
-        ForgeKind::Github => req
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Accept", "application/vnd.github+json"),
-        ForgeKind::Gitlab => req.header("PRIVATE-TOKEN", token),
-    };
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| ApiError::Internal(format!("forge request failed: {e}")))?;
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(ApiError::Custom(
-            axum::http::StatusCode::BAD_GATEWAY,
-            json!({ "error": format!("forge returned {status}"), "detail": body }),
-        ));
-    }
-    serde_json::from_str(&body).map_err(|e| ApiError::Internal(format!("forge JSON parse: {e}")))
-}
-
 /// URL-encode a GitLab project path (`owner/repo` → `owner%2Frepo`).
 fn gl_project(project: &str) -> String {
     project.replace('/', "%2F")

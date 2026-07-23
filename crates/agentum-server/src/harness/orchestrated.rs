@@ -846,28 +846,32 @@ pub async fn submit_patch(
             None,
         )
         .await?;
+    let operations_json = serde_json::to_string(&submission.operations)?;
+    let preimages_json = serde_json::to_string(&preimages)?;
     state
         .store
-        .harness_insert_patch(
-            &patch_id,
-            &submission.run_id,
-            &submission.task_id,
-            &submission.summary,
-            &serde_json::to_string(&submission.operations)?,
-            &serde_json::to_string(&preimages)?,
-            "prepared",
-        )
+        .harness_insert_patch(&agentum_store::harness_orchestration::HarnessPatchInsert {
+            patch_id: &patch_id,
+            run_id: &submission.run_id,
+            task_id: &submission.task_id,
+            summary: &submission.summary,
+            operations_json: &operations_json,
+            preimages_json: &preimages_json,
+            status: "prepared",
+        })
         .await?;
     state
         .store
         .harness_update_patch(&patch_id, "applying", None)
         .await?;
     let applied = (|| -> anyhow::Result<()> {
-        for (_operation_index, op) in submission.operations.iter().enumerate() {
+        for (operation_index, op) in submission.operations.iter().enumerate() {
             #[cfg(test)]
-            if submission.summary == "__inject_failure_after_first__" && _operation_index == 1 {
+            if submission.summary == "__inject_failure_after_first__" && operation_index == 1 {
                 anyhow::bail!("injected patch application failure");
             }
+            #[cfg(not(test))]
+            let _ = operation_index;
             match op {
                 PatchOperation::Create { path, content }
                 | PatchOperation::Update { path, content, .. } => {
@@ -1171,13 +1175,15 @@ async fn spawn_reviewer(
     let config = super::HarnessConfig::load(Path::new(&run.workdir)).await?;
     let reviewer = spawn_managed(
         state,
-        run_id,
-        None,
-        "reviewer",
-        Path::new(&run.workdir),
-        &config.features.agent_tool,
-        config.features.agent_model.clone(),
-        "reviewer",
+        ManagedSpawn {
+            run_id,
+            task_id: None,
+            role: "reviewer",
+            workdir: Path::new(&run.workdir),
+            tool: &config.features.agent_tool,
+            model: config.features.agent_model.as_deref(),
+            scope: "reviewer",
+        },
     )
     .await?;
     let patches = state.store.harness_patches(&run.run_id).await?;
@@ -1310,16 +1316,29 @@ pub async fn transition_run_tracker(
     }
 }
 
+struct ManagedSpawn<'a> {
+    run_id: Uuid,
+    task_id: Option<&'a str>,
+    role: &'a str,
+    workdir: &'a Path,
+    tool: &'a str,
+    model: Option<&'a str>,
+    scope: &'a str,
+}
+
 async fn spawn_managed(
     state: &AppState,
-    run_id: Uuid,
-    task_id: Option<&str>,
-    role: &str,
-    workdir: &Path,
-    tool: &str,
-    model: Option<String>,
-    scope: &str,
+    request: ManagedSpawn<'_>,
 ) -> anyhow::Result<agentum_core::Session> {
+    let ManagedSpawn {
+        run_id,
+        task_id,
+        role,
+        workdir,
+        tool,
+        model,
+        scope,
+    } = request;
     let host = state
         .store
         .get_host(LOCAL_HOST_ID)
@@ -1336,7 +1355,7 @@ async fn spawn_managed(
                 name,
                 workdir: workdir.to_string_lossy().into_owned(),
                 tool: tool.to_string(),
-                model,
+                model: model.map(str::to_owned),
                 flags: managed_flags(tool),
                 card_id: None,
                 worktree_path: None,
@@ -1371,13 +1390,15 @@ pub async fn spawn_coordinator(
 ) -> anyhow::Result<agentum_core::Session> {
     let session = spawn_managed(
         state,
-        run_id,
-        None,
-        "coordinator",
-        &config.workdir,
-        &config.features.agent_tool,
-        config.features.agent_model.clone(),
-        "coordinator",
+        ManagedSpawn {
+            run_id,
+            task_id: None,
+            role: "coordinator",
+            workdir: &config.workdir,
+            tool: &config.features.agent_tool,
+            model: config.features.agent_model.as_deref(),
+            scope: "coordinator",
+        },
     )
     .await?;
     state
@@ -1440,15 +1461,18 @@ pub async fn dispatch_worker(
     if active == 0 {
         transition_run_tracker(state, &config, crate::task_sink::TrackerPhase::InProgress).await;
     }
+    let scope = format!("task:{task_id}");
     let session = spawn_managed(
         state,
-        Uuid::parse_str(run_id)?,
-        Some(task_id),
-        "worker",
-        Path::new(&run.workdir),
-        &config.features.agent_tool,
-        config.features.agent_model.clone(),
-        &format!("task:{task_id}"),
+        ManagedSpawn {
+            run_id: Uuid::parse_str(run_id)?,
+            task_id: Some(task_id),
+            role: "worker",
+            workdir: Path::new(&run.workdir),
+            tool: &config.features.agent_tool,
+            model: config.features.agent_model.as_deref(),
+            scope: &scope,
+        },
     )
     .await?;
     let effective_enforcement = enforcement(&session.tool);
@@ -1780,13 +1804,15 @@ async fn rotate_managed_session_claimed(state: &AppState, old_id: Uuid) -> anyho
         .await?;
     let replacement = spawn_managed(
         state,
-        Uuid::parse_str(&managed.run_id)?,
-        managed.task_id.as_deref(),
-        &managed.role,
-        Path::new(&run.workdir),
-        &config.features.agent_tool,
-        config.features.agent_model.clone(),
-        &managed.capability_scope,
+        ManagedSpawn {
+            run_id: Uuid::parse_str(&managed.run_id)?,
+            task_id: managed.task_id.as_deref(),
+            role: &managed.role,
+            workdir: Path::new(&run.workdir),
+            tool: &config.features.agent_tool,
+            model: config.features.agent_model.as_deref(),
+            scope: &managed.capability_scope,
+        },
     )
     .await?;
     let prompt = if managed.role == "coordinator" {

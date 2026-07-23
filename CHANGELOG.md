@@ -4,6 +4,28 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.0] — 2026-07-22
+
+### Added
+
+- **Project Tasks now supports quick and structured issue drafting.** The
+  primary action produces a concise issue description, while “Shape into
+  spec…” opens a focused five-pass interview and returns one structured issue
+  to the existing editable review form.
+- **Harness runs can orchestrate isolated workers in one shared worktree.** A
+  coordinator validates the execution DAG and ownership boundaries, while
+  capability-scoped worker patches, leases, checkpoints, and recovery state
+  are persisted and applied through a serialized verification lane.
+
+### Fixed
+
+- **Project tracker tasks load on the first visit.** The Tasks page now starts
+  its provider read when it mounts instead of waiting for a later state change,
+  eliminating the blank tracker panel.
+- **Quick issue drafts stay genuinely concise.** The server enforces a plain
+  paragraph with no markdown headings or checklists and caps output at 120
+  words even when the selected model ignores formatting instructions.
+
 ## [0.95.0] — 2026-07-22
 
 ### Added

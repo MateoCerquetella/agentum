@@ -3864,8 +3864,7 @@ mod tests {
     fn concise_draft_sanitizer_flattens_markdown_and_caps_words() {
         let raw = format!(
             "## Problem\n\n- [ ] First concrete sentence.\n- Second sentence. {}",
-            std::iter::repeat("word")
-                .take(140)
+            std::iter::repeat_n("word", 140)
                 .collect::<Vec<_>>()
                 .join(" ")
         );

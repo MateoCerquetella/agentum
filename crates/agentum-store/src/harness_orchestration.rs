@@ -72,6 +72,16 @@ pub struct HarnessPatchRow {
     pub updated_at: String,
 }
 
+pub struct HarnessPatchInsert<'a> {
+    pub patch_id: &'a str,
+    pub run_id: &'a str,
+    pub task_id: &'a str,
+    pub summary: &'a str,
+    pub operations_json: &'a str,
+    pub preimages_json: &'a str,
+    pub status: &'a str,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct HarnessManagedSessionRow {
     pub session_id: String,
@@ -398,23 +408,24 @@ impl Store {
         Ok(changed == 1)
     }
 
-    pub async fn harness_insert_patch(
-        &self,
-        patch_id: &str,
-        run_id: &str,
-        task_id: &str,
-        summary: &str,
-        operations_json: &str,
-        preimages_json: &str,
-        status: &str,
-    ) -> Result<()> {
+    pub async fn harness_insert_patch(&self, patch: &HarnessPatchInsert<'_>) -> Result<()> {
         let ts = now()?;
         sqlx::query(
             "INSERT INTO harness_patch_ledger
              (patch_id,run_id,task_id,summary,operations_json,preimages_json,status,created_at,updated_at)
              VALUES (?,?,?,?,?,?,?,?,?)",
-        ).bind(patch_id).bind(run_id).bind(task_id).bind(summary).bind(operations_json)
-        .bind(preimages_json).bind(status).bind(&ts).bind(&ts).execute(&self.pool).await?;
+        )
+        .bind(patch.patch_id)
+        .bind(patch.run_id)
+        .bind(patch.task_id)
+        .bind(patch.summary)
+        .bind(patch.operations_json)
+        .bind(patch.preimages_json)
+        .bind(patch.status)
+        .bind(&ts)
+        .bind(&ts)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
