@@ -3,8 +3,8 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 027-remove-internal-workspace-board
-- **phase:** done  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (027 reviewer sign-off: tracker-only work selection, inert legacy compatibility, required tests, and desktop build are green.)
+- **current_spec:** 028-bound-transcript-observers
+- **phase:** pm  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 drafted from the approved staged performance plan; PM gate is next.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -93,12 +93,6 @@
   row but never invalidates the mounted wizard parent, so stale connected status
   and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
   unbind callback and regression.
-- 2026-07-21 | Developer | **026 REVIEWER RETRY PASS → phase tester**
-  (autonomous loop step 8, Reviewer iteration 2/2; updated handoff
-  `handoffs/03-developer-to-tester.md`). Successful inline unbind now projects
-  canonical absence into the mounted wizard synchronously, clears tracker rows,
-  and rejects late old-scope completions. Focused regression, 71-test harness,
-  Vite build, and diff check are green.
 - 2026-07-21 | Tester | **026 TESTER RETRY PASS → phase reviewer** (autonomous
   loop step 9; updated `verification.md` and
   `handoffs/04-tester-to-reviewer.md`). Independently confirmed the inline
@@ -117,3 +111,6 @@
   tracker-only UI/runtime behavior, retired board APIs, inert legacy rows,
   current docs/playbooks, focused regressions, workspace tests, and desktop
   production build are green.
+- 2026-07-23 | Author | **028 drafted → phase pm**. Bounded the slice to
+  transcript observer lifecycle: session listing is side-effect-free, historical
+  reads are synchronous snapshots, and only running Claude sessions observe.
