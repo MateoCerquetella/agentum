@@ -1625,7 +1625,11 @@ mod tests {
                     workdir: workdir.to_string_lossy().into_owned(),
                     tool: "claude".into(),
                     model: None,
-                    flags: vec![],
+                    // These tests exercise transcript lifecycle ordering, not
+                    // local tmux teardown. Mark the fixture external so stop
+                    // and kill use the non-destructive detach path and remain
+                    // hermetic on runners (notably macOS) without tmux.
+                    flags: vec![EXTERNAL_TMUX_FLAG.into()],
                     card_id: None,
                     worktree_path: None,
                     worktree_branch: None,

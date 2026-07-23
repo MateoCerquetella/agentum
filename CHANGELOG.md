@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.4] — 2026-07-23
+
+### Fixed
+
+- **Cross-platform lifecycle validation no longer depends on a local tmux.**
+  Transcript stop/kill race tests use the non-destructive external-session path,
+  so macOS validates observer retirement without requiring a host tmux binary.
+
 ## [0.96.3] — 2026-07-23
 
 ### Added
