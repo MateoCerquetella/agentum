@@ -4,6 +4,18 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.1] — 2026-07-23
+
+### Fixed
+
+- **Simple and complex issue drafting now lives in the New workspace flow.**
+  Step 3’s New issue editor defaults to a concise draft and exposes the guided
+  SDD interview from the adjacent menu; the resulting issue stays editable and
+  is linked before the worktree starts.
+- **Project Tasks is minimal again.** The drafting choice no longer appears in
+  the standalone Tasks intake, keeping worktree-specific setup in its actual
+  creation path.
+
 ## [0.96.0] — 2026-07-22
 
 ### Added
