@@ -39,7 +39,7 @@ if [ "$FEAT" = "side-effect-free-session-list" ] || \
     CARGO_HOME="${CARGO_HOME:-$ORIGINAL_HOME/.cargo}" RUSTUP_HOME="${RUSTUP_HOME:-$ORIGINAL_HOME/.rustup}" \
     cargo test -p agentum-server tests::server_wired_watchdog_callback_retires_only_non_running_claude_observers --lib -- --nocapture
   echo "[qa] $FEAT: production RecommendedWatcher append->event-bus update and retirement silence passed"
-  echo "[qa] injected accounting passed for the 500-row fleet, route/watchdog retirement, capacity-one coalescing, and consumer completion"
+  echo "[qa] deterministic gates passed for already-received wakes and stop/kill/delete teardown-window reattachment, plus 500-row accounting, watchdog retirement, capacity-one coalescing, and consumer completion"
   echo "[qa] no portable OS-thread-count or WebSocket-transport assertion is claimed by this isolated backend gate"
   exit 0
 fi

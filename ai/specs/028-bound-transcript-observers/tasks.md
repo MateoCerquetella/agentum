@@ -51,3 +51,23 @@
 - Gate evidence: transcript store **9/9**, agent-task routes **2/2**, transcript lifecycle routes
   **3/3**, server-wired watchdog retirement **1/1**, watchdog generic hook **1/1**, isolated QA
   **15/15**; `cargo fmt --all -- --check` and `git diff --check` pass.
+
+## Reviewer send-back B1–B3 closure — COMPLETE
+
+- Every observer attachment has a monotonically unique generation stored with the observer and
+  captured by its consumer. The consumer verifies that generation under the store mutex before
+  mutation and emits within that same boundary; retirement clears authority before abort.
+- A synchronous post-receive gate parks an already-awake consumer through SnapshotOnly,
+  `stop_observing`, `retain_observers`, and `forget`, then proves completion without stale mutation,
+  event emission, observer recreation, or forgotten-cache recreation.
+- Stop and kill retain early retirement and retire again after the durable Stopped commit. A
+  controlled successful teardown test reattaches from a concurrent Running read and proves the
+  final observer count is zero while the cached snapshot remains.
+- Forced running delete retains early forget and forgets again after durable row deletion. Its
+  controlled concurrent read recreates cache/observation during teardown, then proves both counts
+  are zero after the 204 response.
+- Gate evidence: transcript store **10/10**, transcript lifecycle routes **4/4**, agent-task routes
+  **2/2**, server-wired watchdog retirement **1/1**, watchdog generic hook **1/1**, and isolated QA
+  **17/17** pass. The non-desktop backend workspace passes **835 tests** with **2 ignored**;
+  `cargo check -p agentum-server -p agentum-watchdog`, `cargo fmt --all -- --check`, the blocking
+  receiver source guard, and `git diff --check` pass.

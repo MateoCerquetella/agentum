@@ -51,7 +51,7 @@
     {
       "id": "transcript-observer-lifecycle",
       "name": "Bounded transcript observer retirement",
-      "description": "Spec 028 F1-F3. Stop/kill and tool changes stop observation, delete forgets cached state, and the watchdog running-session hook retires stopped/crashed/deleted/tool-changed observers without starting new ones. Notify delivery is bounded/coalescing and observer drop aborts its consumer.",
+      "description": "Spec 028 F1-F3. Generation-checked consumers reject already-received wakes after retirement. Stop/kill perform final retirement after durable Stopped commit, delete finally forgets after durable deletion, and deterministic teardown-window reads prove recreated observation/cache cannot survive. The watchdog hook retires stopped/crashed/deleted/tool-changed observers without starting new ones; notify delivery remains bounded/coalescing.",
       "state": "ready_to_test"
     }
   ]

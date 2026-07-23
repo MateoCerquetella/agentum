@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Reviewer send-back 1/2; resume from handoffs/09-reviewer-sendback-01.md.)
+- **phase:** tester     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Reviewer race closure passed; tester resumes from handoffs/10-developer-to-tester-03.md.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,9 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Developer | **028 retry PASS → phase tester**. Snapshot-only reads
-  now drop prior observers and non-Claude reads forget prior Claude state; focused
-  tests, isolated QA, non-desktop workspace tests, formatting, and diff checks pass.
 - 2026-07-23 | Tester | **028 SEND-BACK → phase developer** (Tester iteration
   1/2). AC 6 route/server-hook retirement and AC 8 coalescing/consumer shutdown
   need executable proof; the isolated QA leg must report only measured behavior.
@@ -102,3 +99,6 @@
 - 2026-07-23 | Reviewer | **028 SEND-BACK → phase developer** (Reviewer
   iteration 1/2). Generationless in-flight refresh plus stop/delete teardown
   windows can violate post-retirement quiescence; three bounded races must close.
+- 2026-07-23 | Developer | **028 race closure PASS → phase tester**. Observer
+  generations fence already-awake consumers; final stop/delete boundaries close
+  teardown-window recreation; 835 backend tests pass.

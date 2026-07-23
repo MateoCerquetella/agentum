@@ -458,6 +458,8 @@ async fn delete(
     // Deletion owns both observer and parser-state retirement. Do this before
     // best-effort tmux teardown so an unreachable host cannot leak a watcher.
     state.transcripts.forget(id);
+    #[cfg(test)]
+    state.transcripts.pause_after_early_route_retirement().await;
 
     // Best-effort tmux teardown, then always remove the record. Two things this
     // must NOT do — both previously surfaced as "can't delete the session":
@@ -497,6 +499,10 @@ async fn delete(
     }
 
     state.store.delete_session(id).await?;
+    // A concurrent read can recreate passive/live transcript state while the
+    // durable row still exists during teardown. Successful deletion is the
+    // final authority boundary, so clear anything recreated in that window.
+    state.transcripts.forget(id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -696,6 +702,8 @@ pub(crate) async fn stop_session_core(
     // Stop live transcript work before host lookup or graceful tmux shutdown;
     // either can fail or wait, and a later running read can reattach if needed.
     state.transcripts.stop_observing(id);
+    #[cfg(test)]
+    state.transcripts.pause_after_early_route_retirement().await;
     let host = load_host_for_session(state, &session).await?;
     let target = tmux_target(&session);
     if is_external(&session) {
@@ -721,6 +729,10 @@ pub(crate) async fn stop_session_core(
             .update_status_and_target(id, Status::Stopped, None)
             .await?;
     }
+    // Keep the early retirement above for prompt teardown, then close the
+    // window in which a concurrent read could observe the still-Running row
+    // and reattach. The durable Stopped commit is authoritative.
+    state.transcripts.stop_observing(id);
     state.hook_tokens.lock().unwrap().remove(&id);
     emit_stopped(state, &session, if force_kill { "kill" } else { "stop" }).await;
     load(state, id).await
@@ -1703,43 +1715,136 @@ mod tests {
             }
         }
 
-        #[tokio::test]
-        async fn stop_kill_and_delete_routes_retire_without_starting_observers() {
-            let (root, state, counts) = state_with_counting_transcripts().await;
-            let stopped = observed_claude_session(&state, &root, "route-stop").await;
-            let _ = stop(State(state.clone()), Path(stopped.id.to_string())).await;
-            assert_eq!(counts.dropped(), 1);
-            assert_eq!(state.transcripts.observing_count(), 0);
-            assert_eq!(state.transcripts.cache_count(), 1);
-            assert_eq!(counts.created(), 1, "stop must never attach an observer");
-
-            let killed = observed_claude_session(&state, &root, "route-kill").await;
-            let _ = kill(State(state.clone()), Path(killed.id.to_string())).await;
-            assert_eq!(counts.dropped(), 2);
-            assert_eq!(state.transcripts.observing_count(), 0);
-            assert_eq!(state.transcripts.cache_count(), 2);
-            assert_eq!(counts.created(), 2, "kill must never attach an observer");
-
-            let deleted = observed_claude_session(&state, &root, "route-delete").await;
-            let status = delete(
-                State(state.clone()),
-                Path(deleted.id.to_string()),
-                Query(DeleteQuery { force: false }),
-            )
-            .await
-            .unwrap();
-            assert_eq!(status, StatusCode::NO_CONTENT);
-            assert_eq!(counts.dropped(), 3);
-            assert_eq!(state.transcripts.observing_count(), 0);
-            assert_eq!(state.transcripts.cache_count(), 2);
-            assert_eq!(counts.created(), 3, "delete must never attach an observer");
-            assert!(
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn successful_stop_and_kill_finally_retire_observers_reattached_during_teardown() {
+            for force_kill in [false, true] {
+                let (root, state, counts) = state_with_counting_transcripts().await;
+                let session = observed_claude_session(
+                    &state,
+                    &root,
+                    if force_kill {
+                        "route-kill"
+                    } else {
+                        "route-stop"
+                    },
+                )
+                .await;
                 state
                     .store
-                    .get_session_by_id(deleted.id)
+                    .update_status(session.id, Status::Running)
+                    .await
+                    .unwrap();
+                let mut events = state.bus.subscribe();
+                let gate = state.transcripts.park_next_route_retirement();
+                let route_state = state.clone();
+                let route = tokio::spawn(async move {
+                    stop_session_core(&route_state, session.id, force_kill).await
+                });
+
+                tokio::time::timeout(std::time::Duration::from_secs(1), gate.wait_until_arrived())
+                    .await
+                    .expect("route reaches the controlled teardown window");
+                assert_eq!(counts.dropped(), 1, "early retirement must remain prompt");
+                assert_eq!(state.transcripts.observing_count(), 0);
+                let still_running = state
+                    .store
+                    .get_session_by_id(session.id)
                     .await
                     .unwrap()
-                    .is_none()
+                    .unwrap();
+                assert_eq!(still_running.status, Status::Running);
+
+                state.transcripts.read(
+                    session.id,
+                    std::path::PathBuf::from(&still_running.workdir),
+                    &still_running.tool,
+                    crate::transcript_store::ObservationMode::Live,
+                );
+                assert_eq!(counts.created(), 2, "live read reattaches during teardown");
+                assert_eq!(state.transcripts.observing_count(), 1);
+                while events.try_recv().is_ok() {}
+
+                gate.release();
+                let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), route)
+                    .await
+                    .expect("successful teardown completes")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stopped.status, Status::Stopped);
+                assert_eq!(counts.dropped(), 2, "final retirement drops replacement");
+                assert_eq!(state.transcripts.observing_count(), 0);
+                assert_eq!(state.transcripts.cache_count(), 1, "stop retains snapshot");
+
+                while events.try_recv().is_ok() {}
+                counts.notify(1, 1);
+                assert!(
+                    events.try_recv().is_err(),
+                    "retired callback emitted an event"
+                );
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn forced_running_delete_finally_forgets_state_recreated_during_teardown() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let session = observed_claude_session(&state, &root, "route-force-delete").await;
+            state
+                .store
+                .update_status(session.id, Status::Running)
+                .await
+                .unwrap();
+            let mut events = state.bus.subscribe();
+            let gate = state.transcripts.park_next_route_retirement();
+            let route_state = state.clone();
+            let id = session.id;
+            let route = tokio::spawn(async move {
+                delete(
+                    State(route_state),
+                    Path(id.to_string()),
+                    Query(DeleteQuery { force: true }),
+                )
+                .await
+            });
+
+            tokio::time::timeout(std::time::Duration::from_secs(1), gate.wait_until_arrived())
+                .await
+                .expect("delete reaches the controlled teardown window");
+            assert_eq!(counts.dropped(), 1, "early forget remains prompt");
+            assert_eq!(state.transcripts.cache_count(), 0);
+            let still_running = state.store.get_session_by_id(id).await.unwrap().unwrap();
+            assert_eq!(still_running.status, Status::Running);
+
+            state.transcripts.read(
+                id,
+                std::path::PathBuf::from(&still_running.workdir),
+                &still_running.tool,
+                crate::transcript_store::ObservationMode::Live,
+            );
+            assert_eq!(
+                counts.created(),
+                2,
+                "live read recreates state during teardown"
+            );
+            assert_eq!(state.transcripts.cache_count(), 1);
+            assert_eq!(state.transcripts.observing_count(), 1);
+            while events.try_recv().is_ok() {}
+
+            gate.release();
+            let status = tokio::time::timeout(std::time::Duration::from_secs(2), route)
+                .await
+                .expect("forced delete completes")
+                .unwrap()
+                .unwrap();
+            assert_eq!(status, StatusCode::NO_CONTENT);
+            assert_eq!(counts.dropped(), 2, "final forget drops replacement");
+            assert_eq!(state.transcripts.observing_count(), 0);
+            assert_eq!(state.transcripts.cache_count(), 0);
+            assert!(state.store.get_session_by_id(id).await.unwrap().is_none());
+
+            counts.notify(1, 1);
+            assert!(
+                events.try_recv().is_err(),
+                "retired callback emitted an event"
             );
         }
     }

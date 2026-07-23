@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agentum_core::transcript::{self, AgentTaskState};
@@ -61,6 +62,7 @@ impl ObserverFactory for NotifyObserverFactory {
 /// Owns every live-observation resource. The consumer is aborted before the
 /// watcher guard is released, so a late callback cannot keep a task alive.
 struct Observer {
+    generation: u64,
     consumer: JoinHandle<()>,
     _guard: Box<dyn ObserverGuard>,
 }
@@ -85,16 +87,22 @@ struct Slot {
 #[derive(Clone)]
 pub struct TranscriptStore {
     inner: Arc<Mutex<HashMap<Uuid, Slot>>>,
+    next_generation: Arc<AtomicU64>,
     bus: broadcast::Sender<Event>,
     observer_factory: Arc<dyn ObserverFactory>,
+    #[cfg(test)]
+    route_retirement_gate: Arc<Mutex<Option<RouteRetirementGate>>>,
 }
 
 impl TranscriptStore {
     pub fn new(bus: broadcast::Sender<Event>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: Arc::new(AtomicU64::new(0)),
             bus,
             observer_factory: Arc::new(NotifyObserverFactory),
+            #[cfg(test)]
+            route_retirement_gate: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -137,7 +145,8 @@ impl TranscriptStore {
 
             match mode {
                 ObservationMode::Live if slot.observer.is_none() => {
-                    match self.create_observer(id, &project_dir) {
+                    let generation = self.next_observer_generation();
+                    match self.create_observer(id, generation, &project_dir) {
                         Some(observer) => {
                             slot.observer = Some(observer);
                             // Preserve the existing initial update notification.
@@ -149,7 +158,7 @@ impl TranscriptStore {
                     }
                 }
                 ObservationMode::SnapshotOnly => {
-                    slot.observer.take();
+                    retire_observer(slot);
                 }
                 ObservationMode::Live => {}
             }
@@ -206,7 +215,7 @@ impl TranscriptStore {
         if let Ok(mut guard) = self.inner.lock()
             && let Some(slot) = guard.get_mut(&id)
         {
-            slot.observer.take();
+            retire_observer(slot);
         }
     }
 
@@ -224,7 +233,7 @@ impl TranscriptStore {
                     && Path::new(&session.workdir) == slot.workdir
             });
             if !keep {
-                slot.observer.take();
+                retire_observer(slot);
             }
         }
     }
@@ -236,7 +245,16 @@ impl TranscriptStore {
         }
     }
 
-    fn create_observer(&self, id: Uuid, project_dir: &Path) -> Option<Observer> {
+    fn next_observer_generation(&self) -> u64 {
+        self.next_generation
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                generation.checked_add(1)
+            })
+            .expect("transcript observer generation exhausted")
+            + 1
+    }
+
+    fn create_observer(&self, id: Uuid, generation: u64, project_dir: &Path) -> Option<Observer> {
         if !project_dir.exists()
             && let Err(error) = std::fs::create_dir_all(project_dir)
         {
@@ -249,6 +267,8 @@ impl TranscriptStore {
         let observer_counts = self.observer_factory.counts();
         #[cfg(test)]
         let callback_counts = observer_counts.clone();
+        #[cfg(test)]
+        let consumer_counts = observer_counts.clone();
         let callback: NotifyCallback = Box::new(move |result| {
             let Ok(event) = result else {
                 return;
@@ -300,23 +320,38 @@ impl TranscriptStore {
             #[cfg(test)]
             let _completion = ConsumerCompletion::started(observer_counts);
             while rx.recv().await.is_some() {
-                store.refresh(id);
+                #[cfg(test)]
+                if let Some(gate) = consumer_counts
+                    .as_ref()
+                    .and_then(ObserverCounts::take_consumer_wake_gate)
+                {
+                    gate.park();
+                }
+                store.refresh_if_current(id, generation);
             }
         });
         Some(Observer {
+            generation,
             consumer,
             _guard: guard,
         })
     }
 
-    fn refresh(&self, id: Uuid) {
-        let changed = {
-            let Ok(mut guard) = self.inner.lock() else {
-                return;
-            };
-            guard.get_mut(&id).is_some_and(refresh_slot)
+    /// Refresh only while `generation` is still the slot's live authority.
+    /// The synchronous broadcast stays inside the same mutex boundary as the
+    /// identity check and mutation, so retirement cannot complete between a
+    /// successful check and a stale event emission.
+    fn refresh_if_current(&self, id: Uuid, generation: u64) {
+        let Ok(mut guard) = self.inner.lock() else {
+            return;
         };
-        if changed {
+        let Some(slot) = guard.get_mut(&id) else {
+            return;
+        };
+        if slot.observer.as_ref().map(|observer| observer.generation) != Some(generation) {
+            return;
+        }
+        if refresh_slot(slot) {
             self.emit_updated(id);
         }
     }
@@ -333,10 +368,12 @@ impl TranscriptStore {
         (
             Self {
                 inner: Arc::new(Mutex::new(HashMap::new())),
+                next_generation: Arc::new(AtomicU64::new(0)),
                 bus,
                 observer_factory: Arc::new(CountingObserverFactory {
                     counts: counts.clone(),
                 }),
+                route_retirement_gate: Arc::new(Mutex::new(None)),
             },
             counts,
         )
@@ -361,6 +398,48 @@ impl TranscriptStore {
             .lock()
             .ok()
             .and_then(|guard| guard.get(&id).map(|slot| slot.state.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn park_next_route_retirement(&self) -> RouteRetirementGate {
+        let gate = RouteRetirementGate::default();
+        *self.route_retirement_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn pause_after_early_route_retirement(&self) {
+        let gate = self.route_retirement_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.arrived.notify_one();
+            gate.release.notified().await;
+        }
+    }
+}
+
+/// Clear the slot's live authority before aborting its consumer. An already
+/// received wake may continue through synchronous code after `abort`, but its
+/// generation can no longer pass `refresh_if_current`.
+fn retire_observer(slot: &mut Slot) {
+    let observer = slot.observer.take();
+    drop(observer);
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(crate) struct RouteRetirementGate {
+    arrived: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[cfg(test)]
+impl RouteRetirementGate {
+    pub(crate) async fn wait_until_arrived(&self) {
+        self.arrived.notified().await;
+    }
+
+    pub(crate) fn release(&self) {
+        self.release.notify_one();
     }
 }
 
@@ -455,6 +534,7 @@ pub(crate) struct ObserverCounts {
     consumers_started: Arc<std::sync::atomic::AtomicUsize>,
     consumers_finished: Arc<std::sync::atomic::AtomicUsize>,
     callbacks: Arc<Mutex<Vec<NotifyCallback>>>,
+    consumer_wake_gate: Arc<Mutex<Option<ConsumerWakeGate>>>,
 }
 
 #[cfg(test)]
@@ -499,6 +579,54 @@ impl ObserverCounts {
                 notify::event::ModifyKind::Data(notify::event::DataChange::Any),
             ))));
         }
+    }
+
+    fn park_next_consumer_wake(&self) -> ConsumerWakeGate {
+        let gate = ConsumerWakeGate::default();
+        *self.consumer_wake_gate.lock().unwrap() = Some(gate.clone());
+        gate
+    }
+
+    fn take_consumer_wake_gate(&self) -> Option<ConsumerWakeGate> {
+        self.consumer_wake_gate.lock().unwrap().take()
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct ConsumerWakeGate {
+    state: Arc<(Mutex<ConsumerWakeGateState>, std::sync::Condvar)>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct ConsumerWakeGateState {
+    arrived: bool,
+    released: bool,
+}
+
+#[cfg(test)]
+impl ConsumerWakeGate {
+    /// Synchronously park after `recv()` so Tokio abort cannot cancel the
+    /// consumer until the test releases the already-awake task.
+    fn park(&self) {
+        let (lock, wake) = &*self.state;
+        let mut state = lock.lock().unwrap();
+        state.arrived = true;
+        wake.notify_all();
+        while !state.released {
+            state = wake.wait(state).unwrap();
+        }
+    }
+
+    fn arrived(&self) -> bool {
+        self.state.0.lock().unwrap().arrived
+    }
+
+    fn release(&self) {
+        let (lock, wake) = &*self.state;
+        lock.lock().unwrap().released = true;
+        wake.notify_all();
     }
 }
 
@@ -703,6 +831,93 @@ mod tests {
                 .is_err()
         );
         let _ = std::fs::remove_dir_all(project_dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn already_received_wakes_are_rejected_by_every_retirement_boundary() {
+        #[derive(Clone, Copy, Debug)]
+        enum Retirement {
+            SnapshotOnly,
+            StopObserving,
+            RetainObservers,
+            Forget,
+        }
+
+        for retirement in [
+            Retirement::SnapshotOnly,
+            Retirement::StopObserving,
+            Retirement::RetainObservers,
+            Retirement::Forget,
+        ] {
+            let (_root, workdir, id, path) = fixture();
+            let project_dir = path.parent().unwrap().to_path_buf();
+            std::fs::create_dir_all(&project_dir).unwrap();
+            std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
+            let (bus, mut rx) = broadcast::channel(16);
+            let (store, counts) = TranscriptStore::with_counting_factory(bus);
+
+            let initial = store.read(id, workdir.clone(), "claude", ObservationMode::Live);
+            assert_eq!(initial.todos[0].content, "a");
+            while rx.try_recv().is_ok() {}
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while counts.consumers_started() != 1 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("consumer starts");
+
+            let gate = counts.park_next_consumer_wake();
+            counts.notify(0, 1);
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while !gate.arrived() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("consumer parks after receiving the wake");
+
+            match retirement {
+                Retirement::SnapshotOnly => {
+                    store.read(id, workdir.clone(), "claude", ObservationMode::SnapshotOnly);
+                }
+                Retirement::StopObserving => store.stop_observing(id),
+                Retirement::RetainObservers => store.retain_observers(&[]),
+                Retirement::Forget => store.forget(id),
+            }
+            assert_eq!(store.observing_count(), 0, "{retirement:?}");
+            assert_eq!(counts.dropped(), 1, "{retirement:?}");
+
+            // Make the parked wake observably stale only after authority has
+            // retired. Without the generation check it would apply TODO_B and
+            // broadcast after the retirement call returned.
+            std::fs::write(&path, format!("{TODO_A}\n{TODO_B}\n")).unwrap();
+            gate.release();
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while counts.consumers_finished() != 1 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("already-awake consumer finishes promptly after release");
+
+            assert_eq!(counts.created(), 1, "{retirement:?} recreated observation");
+            assert!(
+                rx.try_recv().is_err(),
+                "{retirement:?} emitted a stale event"
+            );
+            match retirement {
+                Retirement::Forget => {
+                    assert_eq!(store.cache_count(), 0, "forgotten slot was recreated")
+                }
+                _ => assert_eq!(
+                    store.cached_state(id).unwrap().todos[0].content,
+                    "a",
+                    "{retirement:?} allowed a stale mutation"
+                ),
+            }
+            let _ = std::fs::remove_dir_all(project_dir);
+        }
     }
 
     #[tokio::test]
