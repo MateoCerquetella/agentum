@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** pm  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 drafted from the approved staged performance plan; PM gate is next.)
+- **phase:** architect  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 PM gate passed 9/9; architecture is next.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -93,12 +93,6 @@
   row but never invalidates the mounted wizard parent, so stale connected status
   and issue rows remain selectable; AC 2 and AC 6 are blocked pending a typed
   unbind callback and regression.
-- 2026-07-21 | Tester | **026 TESTER RETRY PASS → phase reviewer** (autonomous
-  loop step 9; updated `verification.md` and
-  `handoffs/04-tester-to-reviewer.md`). Independently confirmed the inline
-  unbind fix, both harness routes, 71 focused UI tests, the exact worktree test,
-  fresh Vite build, syntax checks, and diff check. Live desktop/SSH QA remains
-  an explicit pending release gate.
 - 2026-07-21 | Reviewer | **026 SIGN-OFF → phase done** (autonomous loop step
   10, Reviewer iteration 2/2; `review.md`). Confirmed B1 fixed, all eight ACs
   supported, both harness routes and final focused regression green, and no
@@ -114,3 +108,6 @@
 - 2026-07-23 | Author | **028 drafted → phase pm**. Bounded the slice to
   transcript observer lifecycle: session listing is side-effect-free, historical
   reads are synchronous snapshots, and only running Claude sessions observe.
+- 2026-07-23 | PM | **028 PM PASS → phase architect**. All 9 handoff checks
+  pass; lifecycle outcomes and preserved transcript/event contracts are
+  observable, with fleet tmux sampling held for Spec 029.
