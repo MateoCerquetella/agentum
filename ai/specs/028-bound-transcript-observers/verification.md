@@ -2,96 +2,122 @@
 
 - **Spec:** `028-bound-transcript-observers`
 - **Date:** 2026-07-23
-- **Base under test:** `ff53faac` (`9baca2a1..ff53faac` evidence-retry diff)
-- **Role:** Fresh Tester, iteration 2 of 2
-- **Verdict:** **PASS — AC 1–8 have executable evidence and the required backend gates are green.**
+- **Base under test:** `87321fd2` (`e878dd6e..87321fd2` Reviewer-race closure diff)
+- **Role:** Fresh Tester after Reviewer send-back
+- **Verdict:** **SEND-BACK — AC 6 still has a reproducible stale-request race.**
 
-The iteration-1 send-back is closed. The added tests exercise the production
-stop/kill/delete route functions and the server's real watchdog-construction
-seam, while the observer seam now drives callbacks and accounts for bounded
-delivery and consumer completion. The isolated QA route also executes a real
-`notify::RecommendedWatcher` append/update/retirement cycle and reports only
-the behavior it measures.
+The generation-aware consumer fix is correct and closes the already-received-wake
+race: generation identity, transcript mutation, and `agent_tasks.updated`
+broadcast are checked/performed under the same transcript-store mutex boundary.
+The new deterministic wake test passes through SnapshotOnly,
+`stop_observing`, `retain_observers`, and `forget`.
+
+The final stop/kill and delete cleanup calls also close recreation that happens
+*before* those final calls, exactly as their new route tests assert. They do not,
+however, fence an agent-task request that loaded the durable `Running` row before
+the final boundary and reaches `TranscriptStore::read(..., Live)` afterward.
+Such a request can still attach after successful stop/kill, or recreate cache and
+observation after successful deletion.
 
 ## Independent gates
 
 | Gate | Result |
 |---|---|
-| `cargo test -p agentum-server transcript_store::tests --lib -- --nocapture` | **PASS — 9/9** |
-| `cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture` | **PASS — 2/2** |
-| `cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture` | **PASS — 3/3** |
-| `cargo test -p agentum-server tests::server_wired_watchdog_callback_retires_only_non_running_claude_observers --lib -- --nocapture` | **PASS — 1/1** |
-| `cargo test -p agentum-watchdog reconcile_passes_authoritative_running_slice_to_optional_hook_once --lib -- --nocapture` | **PASS — 1/1** |
-| `HARNESS_FEATURE_ID=mode-aware-transcript-read bash .harness/qa.sh` | **PASS — 15/15 isolated tests**, including the real production watcher leg |
-| blocking-receiver source guard (`rg 'spawn_blocking\|std::sync::mpsc' ...`) | **PASS — no match** |
+| `cargo test -p agentum-server transcript_store::tests --lib -- --nocapture` | **PASS — 10/10** |
+| `cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture` | **PASS — 2/2 committed tests** |
+| `cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture` | **PASS — 4/4** |
+| server-wired watchdog focused test | **PASS — 1/1** |
+| generic watchdog reconcile-hook focused test | **PASS — 1/1** |
+| `HARNESS_FEATURE_ID=transcript-observer-lifecycle bash .harness/qa.sh` | **PASS — 17/17 isolated tests**, including the real `RecommendedWatcher` smoke leg |
+| temporary stale-request regressions described below | **FAIL — 0/2; AC 6 defect reproduced** |
 | `cargo check -p agentum-server -p agentum-watchdog` | **PASS** |
-| `cargo test --workspace --lib --exclude agentum-desktop` | **PASS — 833 passed, 0 failed, 2 ignored** |
+| `cargo test --workspace --lib --exclude agentum-desktop` | **PASS — 835 passed, 0 failed, 2 ignored** |
 | `cargo fmt --all -- --check` | **PASS** |
-| `git diff --check` before this report | **PASS** |
+| `git diff --check e878dd6e..87321fd2` | **PASS** |
+| blocking-receiver source guard | **PASS — no `spawn_blocking` or `std::sync::mpsc` match in `transcript_store.rs`** |
+| `.harness/feature_list.json` parse and `bash -n .harness/{qa,verify}.sh` | **PASS** |
 
-The first raw Cargo invocation found `cargo` absent from `PATH`; all reruns
-prepended the already-installed `/Users/mateocerquetella/.cargo/bin`. Nothing
-was installed. Per the task constraint, desktop/UI dependencies were not
-installed and UI gates were not run. The backend-equivalent legs of
-`.harness/verify.sh` were run directly because that script also requires the
-known unavailable desktop Sherpa dylib and UI toolchain.
+The temporary regressions were added only to force the missing schedules, run,
+and then removed. No implementation source change remains from Tester.
 
 ## Acceptance-criterion map
 
 | AC | Verdict | Independent evidence |
 |---|---|---|
-| 1 | **PASS** | The production `list` handler contains no transcript call. Its 500-row fixture returns all rows, including 250 Claude rows, while cache count, observer create/drop counts, and transcript-directory existence remain zero. |
-| 2 | **PASS** | A 16-way barrier test proves repeated/concurrent running-Claude reads attach exactly one observer. Route mode selection is executable, and the exact `agent_tasks.updated` kind plus `{ "session_id": ... }` payload remain asserted. |
-| 3 | **PASS** | Snapshot-only reads synchronously consume newly appended complete lines, retain a partial line until newline, and attach no observer. The route selects snapshot mode for every non-running status; a live-to-stopped read also retires the prior observer. |
-| 4 | **PASS** | Non-Claude read/reset returns empty with no entry, directory, observer, or consumer. Transitioning a previously observed Claude session to a non-Claude read forgets its cached state and drops its observer. |
-| 5 | **PASS** | Reset as the first interaction creates only passive metadata, moves the selected cursor to EOF, clears state, and exposes only a later post-reset todo. No observer is created. |
-| 6 | **PASS** | The route regression invokes production stop, kill, and delete functions against a counting store: stop/kill drop observation and retain cache; delete drops observation and cache; none attaches. The server-built watchdog runs one authoritative production reconcile and keeps only the running Claude observer while retiring stopped, crashed, deleted, and running-but-tool-changed sessions; passive caches remain and create count does not increase. The generic watchdog hook test separately proves one callback per successful authoritative query. |
-| 7 | **PASS** | Focused tests preserve UUID-pinned promotion, legacy fallback, and complete-line parsing. Agent-task route serialization and the 833-test backend workspace suite remain green; the implementation diff introduces no HTTP schema change. |
-| 8 | **PASS** | Production source uses `tokio::sync::mpsc::channel(1)`, `try_send`, and observer-owned `JoinHandle::abort`, with no blocking receiver path. The controllable callback regression proves a three-notify burst records one queued wake and two coalesced sends, consumes one update with no duplicate, observes consumer completion within one second after both stop and forget, then records closed sends with no stale bus event, state mutation, or forgotten-cache recreation. The real watcher test independently proves append-to-event delivery and post-retirement silence. |
+| 1 | **PASS** | The production list handler remains database-only. The 500-row fixture, including 250 Claude sessions, returns every row with zero cache entries, observer creations/drops, or transcript-directory creation. |
+| 2 | **PASS** | The 16-way concurrent/repeated running-Claude test creates exactly one observer. The route selects Live for Running Claude, and the existing update kind/payload remain asserted. |
+| 3 | **PASS** | SnapshotOnly reads synchronously incorporate appended complete lines, retain a partial line until newline, attach no observer, and now reject an already-received wake after live-to-snapshot retirement. |
+| 4 | **PASS** | Non-Claude read/reset creates no entry, directory, observer, or consumer; transitioning from Claude forgets the prior observer/cache. |
+| 5 | **PASS** | Reset-first advances the selected transcript cursor to EOF and exposes only later complete lines without observation. |
+| 6 | **BLOCKED** | Mid-teardown reattachment/recreation is cleaned by the new final calls, but a GET that already loaded `Running` can execute its cached Live decision after those calls. The two forced schedules leave an observer after stop and cache+observer after delete. |
+| 7 | **PASS** | Pinned isolation/promotion, legacy fallback, complete-line parsing, response/event payloads, and the non-desktop workspace regressions remain green. |
+| 8 | **PASS** | Notify transport remains capacity-one/coalescing with no blocking receiver. The post-`recv()` barrier proves stale generations cannot mutate or emit after all four transcript retirement operations, and consumers complete after release. |
 
-## Iteration-1 blocker closure
+## Reproduced blocker — stale Running request crosses the final route boundary
 
-### B1 — AC 6 production lifecycle and reconcile wiring: CLOSED
+`get_agent_tasks` loads a `Session` at `routes/agent_tasks.rs:35-39`, derives
+Live from that snapshot at `:41-45`, and later calls `TranscriptStore::read` at
+`:46-48`. There is no shared lifecycle authority spanning those operations and
+the final stop/delete boundary.
 
-The new route test reaches `stop`, `kill`, and `delete`, not only lower-level
-store helpers. The new server test constructs the watchdog through
-`watchdog_with_transcript_retirement`—the same helper used by
-`spawn_background_workers`—and calls the production `reconcile_once` path.
-Create/drop/cache assertions cover all required retirement classes and the
-no-start invariant.
+Two temporary tests copied that production ordering and asserted the required
+post-boundary state:
 
-### B2 — AC 8 bounded delivery and consumer termination: CLOSED
+1. **Stop/kill schedule**
+   - Load a Claude session snapshot while its durable status is `Running`.
+   - Perform early retirement, commit `Stopped`, and perform the production
+     final `stop_observing` boundary (`sessions.rs:735`).
+   - Resume the already-loaded request and call `read(..., Live)` from its stale
+     snapshot.
+   - Expected observer count: `0`; actual: `1`.
 
-The counting factory retains its actual notify callbacks and exposes queue,
-coalesced, closed, consumer-started, and consumer-finished counters. The test
-fills the capacity-one channel before yielding, observes one refresh, aborts
-both stop and forget consumers, and invokes stale callbacks afterward. This is
-executable evidence for the asynchronous behaviors that were source-only in
-iteration 1.
+2. **Forced-delete schedule**
+   - Load a Claude session snapshot while its durable status is `Running`.
+   - Perform early forget, durable row deletion, and the production final
+     `forget` boundary (`sessions.rs:501-505`).
+   - Resume the already-loaded request and call `read(..., Live)` from its stale
+     snapshot.
+   - Expected cache count: `0`; actual: `1` (with a live observer also created).
 
-### B3 — QA truthfulness: CLOSED
+The focused command reported both failures:
 
-The isolated QA branch runs the nine transcript-store tests, including
-`real_notify_observer_emits_for_append_then_retirement_stays_silent`, plus the
-three route, two agent-task, and one server-wiring tests. Its output explicitly
-disclaims portable OS-thread counts and WebSocket transport. The printed claims
-match the tests that ran.
+```text
+running 2 tests
+stale_running_request_cannot_attach_after_final_stop_boundary ... FAILED
+  assertion failed: left 1, right 0
+stale_running_request_cannot_recreate_after_final_delete_boundary ... FAILED
+  assertion failed: left 1, right 0
+test result: FAILED. 0 passed; 2 failed
+```
 
-## Negative, race, and error audit
+This is not contradicted by the committed route regressions. Those deliberately
+reattach/recreate while teardown is parked and then release teardown, so the
+replacement exists before the final cleanup call. They do not park a request
+after its durable session load and resume it after final cleanup.
 
-- Concurrent first live reads remain serialized and exactly-once.
-- Snapshot/live and Claude/non-Claude transitions retire prior live work.
-- Partial JSONL, reset-first, pinned promotion, fallback, and empty non-Claude
-  behavior remain covered.
-- Stop/kill retire before host lookup or tmux teardown, so teardown errors cannot
-  leak the observer; delete forgets state before best-effort teardown.
-- A callback queued before retirement is either consumed before the retirement
-  lock completes or its consumer is aborted. After retirement returns, retained
-  test callbacks see a closed channel and cannot emit, mutate, or recreate state.
-- Observer construction failure remains best-effort and retryable by inspection:
-  the passive slot remains with `observer: None`, so a later live read retries.
-- Watchdog query failure does not invoke retirement because the hook follows the
-  successful `list_sessions(Running)` query.
+## Required correction
 
-No implementation file, `ai/STATE.md`, handoff, commit, dependency, or external
+Introduce one per-session asynchronous lifecycle linearization boundary shared
+by transcript reads/resets and session lifecycle mutations:
+
+- hold the session's boundary across durable session load plus
+  `TranscriptStore::read`/`reset` in agent-task routes;
+- hold the same boundary across load, teardown/status mutation, and final
+  transcript retirement in stop/kill/delete; and
+- use it for tool patching so a request carrying the old Claude identity cannot
+  attach after the tool-change retirement.
+
+With that ordering, an agent-task operation either completes before lifecycle
+mutation, in which case final cleanup removes its work, or enters afterward and
+observes `Stopped`, non-Claude, or a missing row. Prefer a scoped keyed-lock
+registry with weak/ref-counted entries and opportunistic cleanup; a permanent
+per-UUID generation/tombstone map would grow with historical/deleted sessions
+and would recreate the resource-retention problem this spec is meant to solve.
+
+Add deterministic route tests that park after the agent-task durable load,
+complete successful stop/kill or forced delete through the final boundary, then
+release the request and prove zero live observers; delete must also prove zero
+cached entries. Retain the existing already-received-wake and mid-teardown tests.
+
+No `ai/STATE.md`, handoff, implementation file, dependency, commit, or external
 state was changed by Tester. This report is the only intended worktree change.

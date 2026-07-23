@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** tester     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Reviewer race closure passed; tester resumes from handoffs/10-developer-to-tester-03.md.)
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Tester failure 2/2; final autonomous fix from handoffs/11-tester-sendback-02.md.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,9 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-23 | Tester | **028 SEND-BACK → phase developer** (Tester iteration
-  1/2). AC 6 route/server-hook retirement and AC 8 coalescing/consumer shutdown
-  need executable proof; the isolated QA leg must report only measured behavior.
 - 2026-07-23 | Developer | **028 evidence retry PASS → phase tester**. Actual
   route/server wiring, controllable callback/consumer accounting, and a real
   RecommendedWatcher runtime leg close AC 6/8; 833 backend tests pass.
@@ -102,3 +99,6 @@
 - 2026-07-23 | Developer | **028 race closure PASS → phase tester**. Observer
   generations fence already-awake consumers; final stop/delete boundaries close
   teardown-window recreation; 835 backend tests pass.
+- 2026-07-23 | Tester | **028 SEND-BACK → phase developer** (Tester failure
+  2/2). A preloaded Running GET can cross final stop/delete cleanup and recreate
+  observation/cache; per-session lifecycle linearization is required.
