@@ -4,7 +4,7 @@
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
 - **current_spec:** 028-bound-transcript-observers
-- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 paused at Developer send-back 1/2; resume from handoffs/04-developer-to-developer.md.)
+- **phase:** tester     <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (028 Developer retry passed; tester starts from handoffs/05-developer-to-tester.md.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
@@ -87,13 +87,6 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-22 | Reviewer | **027 SIGN-OFF → phase done**. Confirmed external-
-  tracker-only UI/runtime behavior, retired board APIs, inert legacy rows,
-  current docs/playbooks, focused regressions, workspace tests, and desktop
-  production build are green.
-- 2026-07-23 | Author | **028 drafted → phase pm**. Bounded the slice to
-  transcript observer lifecycle: session listing is side-effect-free, historical
-  reads are synchronous snapshots, and only running Claude sessions observe.
 - 2026-07-23 | PM | **028 PM PASS → phase architect**. All 9 handoff checks
   pass; lifecycle outcomes and preserved transcript/event contracts are
   observable, with fleet tmux sampling held for Spec 029.
@@ -106,3 +99,6 @@
 - 2026-07-23 | Developer | **028 paused in developer**. Continuation contract
   `handoffs/04-developer-to-developer.md` records the uncommitted F1-F3 diff,
   green evidence, two pending transition fixes, and environment-only blockers.
+- 2026-07-23 | Developer | **028 retry PASS → phase tester**. Snapshot-only reads
+  now drop prior observers and non-Claude reads forget prior Claude state; focused
+  tests, isolated QA, non-desktop workspace tests, formatting, and diff checks pass.

@@ -10,6 +10,15 @@ FEAT="${HARNESS_FEATURE_ID:-all}"
 echo "[verify] feature=$FEAT  root=$ROOT"
 
 case "$FEAT" in
+  side-effect-free-session-list|mode-aware-transcript-read|transcript-observer-lifecycle)
+    cargo test -p agentum-server transcript_store::tests --lib -- --nocapture
+    cargo test -p agentum-server routes::agent_tasks::tests --lib -- --nocapture
+    cargo test -p agentum-server routes::sessions::tests::transcript_lifecycle_tests --lib -- --nocapture
+    cargo test -p agentum-watchdog reconcile_passes_authoritative_running_slice_to_optional_hook_once --lib -- --nocapture
+    cargo fmt --all -- --check
+    cargo test --workspace --lib
+    npm run build --prefix crates/agentum-desktop/ui
+    ;;
   binding-identity-fidelity)
     cargo test -p agentum-server project_trackers --lib -- --nocapture
     cargo test -p agentum-server routes::util::tests::resolve_tracker --lib -- --nocapture
@@ -35,7 +44,8 @@ case "$FEAT" in
     npm run build --prefix crates/agentum-desktop/ui
     ;;
   all)
-    cargo test -p agentum-server --lib
+    cargo fmt --all -- --check
+    cargo test --workspace --lib
     (
       cd crates/agentum-desktop/ui
       bunx vitest run \

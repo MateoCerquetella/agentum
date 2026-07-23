@@ -35,6 +35,24 @@
       "name": "New Workspace closed tracker issue scope",
       "description": "Spec 026 F2. Carry the server-resolved slug through TrackerSection, filter mixed-Project rows to that repository, reject deferred prior-repo completions using repo+slug+Project scope, clear linked work on repo switch, and persist exact-or-absent create coordinates. Verify: focused New Workspace/runtime/worktree Vitest, Vite production build, and git diff --check. QA: Agentum/xcode-theme, same-Project race, SSH, and linked/unlinked persistence require a real current-build desktop and must remain pending until run.",
       "state": "ready_to_test"
+    },
+    {
+      "id": "side-effect-free-session-list",
+      "name": "Historical session listing has no transcript side effects",
+      "description": "Spec 028 F2. GET /api/sessions remains a database-only query. The production-shaped 500-session fixture (250 Claude rows) must return every row while injected observer creation/drop counts and transcript cache count remain zero.",
+      "state": "ready_to_test"
+    },
+    {
+      "id": "mode-aware-transcript-read",
+      "name": "Atomic live and snapshot-only transcript reads",
+      "description": "Spec 028 F1-F2. Running Claude reads attach exactly one observer under repeated/concurrent access; historical reads synchronously consume appended complete lines without observation; reset-first, pinned promotion, legacy fallback, non-Claude behavior, and exact update payload remain pinned.",
+      "state": "ready_to_test"
+    },
+    {
+      "id": "transcript-observer-lifecycle",
+      "name": "Bounded transcript observer retirement",
+      "description": "Spec 028 F1-F3. Stop/kill and tool changes stop observation, delete forgets cached state, and the watchdog running-session hook retires stopped/crashed/deleted/tool-changed observers without starting new ones. Notify delivery is bounded/coalescing and observer drop aborts its consumer.",
+      "state": "ready_to_test"
     }
   ]
 }

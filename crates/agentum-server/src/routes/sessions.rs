@@ -162,14 +162,6 @@ async fn list(
         None => None,
     };
     let rows = state.store.list_sessions(status).await?;
-    // Lazy-start a transcript watcher per known session so plan/todo
-    // updates stream live. `ensure_started` is idempotent — calling it
-    // for sessions that already have a watcher is cheap.
-    for s in &rows {
-        state
-            .transcripts
-            .ensure_started(s.id, PathBuf::from(&s.workdir), &s.tool);
-    }
     Ok(Json(rows))
 }
 
@@ -400,6 +392,9 @@ async fn patch_session(
         }
         if tool != current.tool {
             let updated = state.store.patch_session_tool(id, tool).await?;
+            if current.tool == "claude" && updated.tool != "claude" {
+                state.transcripts.stop_observing(id);
+            }
             let _ = state.bus.send(
                 Event::new("session.tool_changed")
                     .with_session(updated.id, &updated.name)
@@ -459,6 +454,10 @@ async fn delete(
             "session is running; pass ?force=true to kill and remove".into(),
         ));
     }
+
+    // Deletion owns both observer and parser-state retirement. Do this before
+    // best-effort tmux teardown so an unreachable host cannot leak a watcher.
+    state.transcripts.forget(id);
 
     // Best-effort tmux teardown, then always remove the record. Two things this
     // must NOT do — both previously surfaced as "can't delete the session":
@@ -694,6 +693,9 @@ pub(crate) async fn stop_session_core(
     force_kill: bool,
 ) -> Result<Session, ApiError> {
     let session = load(state, id).await?;
+    // Stop live transcript work before host lookup or graceful tmux shutdown;
+    // either can fail or wait, and a later running read can reattach if needed.
+    state.transcripts.stop_observing(id);
     let host = load_host_for_session(state, &session).await?;
     let target = tmux_target(&session);
     if is_external(&session) {
@@ -1559,6 +1561,115 @@ mod tests {
             assert_eq!(ev.kind, "agent.hook");
             assert_eq!(ev.session_id, Some(sess.id));
             assert_eq!(ev.payload["kind"], "tool_done");
+        }
+    }
+
+    mod transcript_lifecycle_tests {
+        use super::super::*;
+        use agentum_core::NewSession;
+        use agentum_store::Store;
+        use axum::extract::{Query, State};
+        use tokio::sync::broadcast;
+
+        async fn state_with_counting_transcripts() -> (
+            tempfile::TempDir,
+            AppState,
+            crate::transcript_store::ObserverCounts,
+        ) {
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::open(&root.path().join("sessions.sqlite"))
+                .await
+                .unwrap();
+            let (bus, _) = broadcast::channel(32);
+            let mut state = AppState::new(store, bus.clone());
+            let (transcripts, counts) = crate::TranscriptStore::with_counting_factory(bus);
+            state.transcripts = transcripts;
+            (root, state, counts)
+        }
+
+        #[tokio::test]
+        async fn listing_500_sessions_creates_zero_transcript_entries_or_observers() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let workdir = root.path().join("workspace");
+            std::fs::create_dir_all(&workdir).unwrap();
+            let transcript_dir = agentum_core::transcript::project_dir_for(&workdir).unwrap();
+            assert!(!transcript_dir.exists());
+            for index in 0..500 {
+                state
+                    .store
+                    .create_session(NewSession {
+                        name: format!("history-{index}"),
+                        workdir: workdir.to_string_lossy().into_owned(),
+                        tool: if index % 2 == 0 { "claude" } else { "codex" }.into(),
+                        model: None,
+                        flags: vec![],
+                        card_id: None,
+                        worktree_path: None,
+                        worktree_branch: None,
+                        worktree_base_ref: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+
+            let response = list(State(state.clone()), Query(ListQuery { status: None }))
+                .await
+                .unwrap();
+            assert_eq!(response.0.len(), 500);
+            assert_eq!(counts.created(), 0);
+            assert_eq!(counts.dropped(), 0);
+            assert_eq!(state.transcripts.cache_count(), 0);
+            assert!(!transcript_dir.exists());
+        }
+
+        #[tokio::test]
+        async fn patching_away_from_claude_retires_live_observation() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let workdir = root.path().join("workspace");
+            std::fs::create_dir_all(&workdir).unwrap();
+            let session = state
+                .store
+                .create_session(NewSession {
+                    name: "tool-change".into(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap();
+            state.transcripts.read(
+                session.id,
+                workdir,
+                "claude",
+                crate::transcript_store::ObservationMode::Live,
+            );
+            assert_eq!(counts.created(), 1);
+
+            let _ = patch_session(
+                State(state.clone()),
+                Path(session.id.to_string()),
+                Json(PatchBody {
+                    name: None,
+                    tool: Some("codex".into()),
+                    flags: None,
+                    model: None,
+                    pinned: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(counts.dropped(), 1);
+            assert_eq!(state.transcripts.observing_count(), 0);
+            if let Some(path) =
+                agentum_core::transcript::project_dir_for(std::path::Path::new(&session.workdir))
+            {
+                let _ = std::fs::remove_dir_all(path);
+            }
         }
     }
 }

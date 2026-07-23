@@ -6,7 +6,39 @@
 #   select a page renders markdown -> Architecture shows a mermaid diagram ->
 #   an internal [[link]] navigates.  (Screenshot evidence per task.)
 set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
 FEAT="${HARNESS_FEATURE_ID:-}"
+
+if [ "$FEAT" = "side-effect-free-session-list" ] || \
+   [ "$FEAT" = "mode-aware-transcript-read" ] || \
+   [ "$FEAT" = "transcript-observer-lifecycle" ]; then
+  QA_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/agentum-spec-028-qa.XXXXXX")"
+  ORIGINAL_HOME="$HOME"
+  cleanup_spec_028() {
+    rm -rf -- "$QA_ROOT"
+  }
+  trap cleanup_spec_028 EXIT
+  mkdir -p "$QA_ROOT/home" "$QA_ROOT/agentum" "$QA_ROOT/tmux"
+  echo "[qa] $FEAT: isolated HOME/AGENTUM_HOME/TMUX_TMPDIR=$QA_ROOT"
+  HOME="$QA_ROOT/home" \
+    AGENTUM_HOME="$QA_ROOT/agentum" \
+    TMUX_TMPDIR="$QA_ROOT/tmux" \
+    CARGO_HOME="${CARGO_HOME:-$ORIGINAL_HOME/.cargo}" \
+    RUSTUP_HOME="${RUSTUP_HOME:-$ORIGINAL_HOME/.rustup}" \
+    cargo test -p agentum-server \
+      routes::sessions::tests::transcript_lifecycle_tests::listing_500_sessions_creates_zero_transcript_entries_or_observers \
+      --lib -- --nocapture
+  HOME="$QA_ROOT/home" \
+    AGENTUM_HOME="$QA_ROOT/agentum" \
+    TMUX_TMPDIR="$QA_ROOT/tmux" \
+    CARGO_HOME="${CARGO_HOME:-$ORIGINAL_HOME/.cargo}" \
+    RUSTUP_HOME="${RUSTUP_HOME:-$ORIGINAL_HOME/.rustup}" \
+    cargo test -p agentum-server \
+      routes::agent_tasks::tests::running_claude_read_is_live_but_historical_read_is_snapshot_only \
+      --lib -- --nocapture
+  echo "[qa] $FEAT: historical fleet stayed at zero observers; live attach/retire passed"
+  exit 0
+fi
 
 if [ "$FEAT" = "binding-identity-fidelity" ] || [ "$FEAT" = "wizard-closed-tracker-scope" ]; then
   echo "[qa] $FEAT: PENDING — requires a current-build desktop and named safe local/SSH fixtures" >&2

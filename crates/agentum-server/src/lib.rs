@@ -625,7 +625,11 @@ async fn spawn_background_workers(
         let bus = bus.clone();
         tokio::spawn(async move {
             routes::sessions::boot_revive_dead_sessions(&state).await;
+            let transcripts = state.transcripts.clone();
             agentum_watchdog::Watchdog::new(bus, state.store.clone())
+                .with_running_sessions_hook(move |running| {
+                    transcripts.retain_observers(running);
+                })
                 .run()
                 .await;
         });
