@@ -22,7 +22,7 @@ import { useAppStore } from '@/store'
 import { isTuiAgent } from '@/shared/tui-agent-config'
 import { cn } from '@/lib/utils'
 import {
-  runHarness,
+  restartHarness,
   unlinkHarnessIssue,
   type HarnessFeature,
   type HarnessStatus
@@ -454,8 +454,11 @@ export default function GatedRunBar({
   const handleRetry = useCallback((): void => {
     if (!run || restarting) return
     setRestarting(true)
-    runHarness(run.id)
+    restartHarness(run.id)
       .then(() => {
+        // `restartHarness` resolves only after a worker (or a legitimate
+        // workerless terminal state) is visible. This toast therefore reports
+        // observed progress, not merely the route's background-task 202.
         toast.success('Gated run restarted.')
         refresh()
       })

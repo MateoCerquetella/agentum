@@ -333,6 +333,63 @@ export function runHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}/run`, { method: 'POST' })
 }
 
+export type RestartHarnessOptions = {
+  /** How long an accepted retry may take to produce a worker (default 30s). */
+  timeoutMs?: number
+  /** Status polling interval while the background driver starts (default 500ms). */
+  pollIntervalMs?: number
+}
+
+const RESTART_SUCCESS_WITHOUT_WORKER: ReadonlySet<HarnessState> = new Set([
+  'awaiting_confirmation',
+  'done'
+])
+
+/**
+ * Retry a stopped run and wait for observable evidence that it actually
+ * restarted. `POST /run` only means the background driver was accepted; it
+ * does not prove init, remote provisioning, or worker launch succeeded. The
+ * old retry button toasted success at that acceptance boundary, which could
+ * leave a failed bar saying “Gated run restarted.” with no live worker.
+ */
+export async function restartHarness(
+  id: string,
+  options: RestartHarnessOptions = {}
+): Promise<HarnessStatus> {
+  const timeoutMs = Math.max(0, options.timeoutMs ?? 30_000)
+  const pollIntervalMs = Math.max(0, options.pollIntervalMs ?? 500)
+  await runHarness(id)
+
+  const deadline = Date.now() + timeoutMs
+  let sawProgress = false
+  do {
+    const status = await getHarnessStatus(id)
+    if (
+      status.current_session ||
+      status.coordinator_session ||
+      RESTART_SUCCESS_WITHOUT_WORKER.has(status.state)
+    ) {
+      return status
+    }
+
+    if (status.state === 'failed' || status.state === 'blocked') {
+      if (sawProgress) {
+        throw new Error('Gated run failed again before a worker started.')
+      }
+    } else {
+      sawProgress = true
+    }
+
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remaining)))
+  } while (true)
+
+  throw new Error(
+    `Gated run retry was accepted, but no worker started within ${Math.ceil(timeoutMs / 1000)}s.`
+  )
+}
+
 /** `POST /api/harness/{id}/init` — run init.sh only (manual env check). */
 function initHarness(id: string): Promise<boolean> {
   return request(`/api/harness/${id}/init`, { method: 'POST' })

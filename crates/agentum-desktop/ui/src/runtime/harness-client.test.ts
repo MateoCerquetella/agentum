@@ -3,6 +3,7 @@
 // stubbed per test.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  restartHarness,
   startGatedWork,
   startHarness,
   subscribeHarnessEvents,
@@ -99,6 +100,68 @@ describe('worktree-scoped Harness requests', () => {
       slug: 'acme/widgets',
       agentTool: 'codex'
     })
+  })
+})
+
+describe('restartHarness', () => {
+  const status = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'run-1',
+    workdir: '/srv/project',
+    state: 'failed',
+    features: {
+      features: [],
+      max_retries: 2,
+      agent_tool: 'claude',
+      settle_grace_secs: 8,
+      settle_timeout_secs: 1200,
+      agent_yolo: true
+    },
+    elapsed_secs: 1,
+    agent_instructions: '',
+    ...overrides
+  })
+
+  it('does not resolve at the 202 boundary and waits for a visible worker', async () => {
+    const responses = [
+      new Response('', { status: 202 }),
+      Response.json(status()),
+      Response.json(status({ state: 'init_verifying' })),
+      Response.json(status({ state: 'running', current_session: 'session-1' }))
+    ]
+    const fetchMock = vi.fn(() => Promise.resolve(responses.shift()!))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const restarted = await restartHarness('run-1', { timeoutMs: 1_000, pollIntervalMs: 0 })
+
+    expect(restarted.current_session).toBe('session-1')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/harness/run-1/run')
+  })
+
+  it('rejects when an accepted retry fails again before launching a worker', async () => {
+    const responses = [
+      new Response('', { status: 202 }),
+      Response.json(status({ state: 'init_verifying' })),
+      Response.json(status())
+    ]
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(responses.shift()!)))
+
+    await expect(
+      restartHarness('run-1', { timeoutMs: 1_000, pollIntervalMs: 0 })
+    ).rejects.toThrow('failed again before a worker started')
+  })
+
+  it('rejects a retry that never produces observable progress', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn()
+        .mockResolvedValueOnce(new Response('', { status: 202 }))
+        .mockResolvedValue(Response.json(status()))
+    )
+
+    await expect(
+      restartHarness('run-1', { timeoutMs: 0, pollIntervalMs: 0 })
+    ).rejects.toThrow('no worker started within 0s')
   })
 })
 
