@@ -59,21 +59,36 @@ describe('CreateWorkspaceWizard canonical tracker layout', () => {
     expect(source).toContain('disabled={!done || locked}')
   })
 
-  it('keeps the durable launch stages in a visible side rail with cancel', () => {
-    expect(source).toContain('<NewWorkProgressRail')
+  it('keeps the durable launch stages in a visible bottom panel with cancel', () => {
+    const body = source.indexOf('{/* Body */}')
+    const progress = source.indexOf('<NewWorkProgressPanel')
+    const footer = source.indexOf('{/* Footer */}')
+
+    expect(progress).toBeGreaterThan(body)
+    expect(progress).toBeLessThan(footer)
     expect(source).toContain('aria-label="Workspace creation progress"')
     expect(source).toContain('NEW_WORK_STAGES.map((stage, index)')
     expect(source).toContain('These stages stay visible while your workspace is prepared.')
     expect(source).toContain('disabled={busy}')
     expect(source).toContain('Cancel')
+    expect(source).toContain('grid grid-cols-2 gap-2 sm:grid-cols-4')
+    expect(source).not.toContain('NewWorkProgressRail')
+    expect(source).not.toContain('md:w-[238px]')
+    expect(source).not.toContain('md:border-l')
     expect(source).not.toContain('Object.values(progress).some')
   })
 
-  it('moves the dialog from its title row without allowing it off-screen', () => {
-    expect(source).toContain('data-dialog-drag-handle')
+  it('uses the top title bar as the drag surface without a dedicated grip icon', () => {
+    const dragHandle = source.indexOf('data-dialog-drag-handle')
+    const wizardNavigation = source.indexOf('{/* Wizard navigation */}')
+
+    expect(dragHandle).toBeGreaterThan(-1)
+    expect(dragHandle).toBeLessThan(wizardNavigation)
     expect(source).toContain('onPointerDown={handleDialogDragStart}')
     expect(source).toContain('onPointerMove={handleDialogDragMove}')
-    expect(source).toContain('style={{ translate: `${dialogOffset.x}px ${dialogOffset.y}px` }}')
+    expect(source).toContain('left: `calc(50% + ${dialogOffset.x}px)`')
+    expect(source).toContain('top: `calc(50% + ${dialogOffset.y}px)`')
+    expect(source).not.toContain('GripHorizontal')
     expect(source).toContain('clampDialogOffset({')
   })
 })
