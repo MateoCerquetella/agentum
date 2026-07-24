@@ -1335,23 +1335,37 @@ prunable gitdir file points to non-existent location
         }
     }
 
+    fn absolute_test_worktree_path(name: &str) -> String {
+        std::env::temp_dir()
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
     fn harness_scope_requires_exact_registry_identity_and_path() {
         let host_id = uuid::Uuid::new_v4();
-        let rows = vec![registered_worktree("repo::/srv/repo/wt", "repo")];
-        let scope =
-            scope_from_registry(&rows, "repo::/srv/repo/wt", "/srv/repo/wt/", host_id).unwrap();
-        assert_eq!(scope.worktree_id.as_deref(), Some("repo::/srv/repo/wt"));
+        let worktree_path = absolute_test_worktree_path("agentum-harness-scope-wt");
+        let worktree_id = format!("repo::{worktree_path}");
+        let rows = vec![registered_worktree(&worktree_id, "repo")];
+        let claimed_workdir = format!("{worktree_path}/");
+        let scope = scope_from_registry(&rows, &worktree_id, &claimed_workdir, host_id).unwrap();
+        assert_eq!(scope.worktree_id.as_deref(), Some(worktree_id.as_str()));
         assert_eq!(scope.repo_id.as_deref(), Some("repo"));
         assert_eq!(scope.host_id, Some(host_id));
-        assert_eq!(scope.path, "/srv/repo/wt");
+        assert_eq!(scope.path, worktree_path);
 
+        let missing_id = format!(
+            "repo::{}",
+            absolute_test_worktree_path("agentum-harness-scope-missing")
+        );
         assert!(matches!(
-            scope_from_registry(&rows, "repo::/srv/repo/missing", "/srv/repo/wt", host_id),
+            scope_from_registry(&rows, &missing_id, &scope.path, host_id),
             Err(ApiError::NotFound(_))
         ));
+        let lookalike = absolute_test_worktree_path("agentum-harness-scope-lookalike");
         assert!(matches!(
-            scope_from_registry(&rows, "repo::/srv/repo/wt", "/tmp/local-lookalike", host_id),
+            scope_from_registry(&rows, &worktree_id, &lookalike, host_id),
             Err(ApiError::BadRequest(_))
         ));
     }
@@ -1359,19 +1373,23 @@ prunable gitdir file points to non-existent location
     #[test]
     fn harness_scope_rejects_tampered_repo_prefix_and_traversal() {
         let host_id = uuid::Uuid::new_v4();
-        let tampered = vec![registered_worktree("other::/srv/repo/wt", "repo")];
+        let worktree_path = absolute_test_worktree_path("agentum-harness-scope-tampered");
+        let tampered_id = format!("other::{worktree_path}");
+        let tampered = vec![registered_worktree(&tampered_id, "repo")];
         assert!(matches!(
-            scope_from_registry(&tampered, "other::/srv/repo/wt", "/srv/repo/wt", host_id),
+            scope_from_registry(&tampered, &tampered_id, &worktree_path, host_id),
             Err(ApiError::BadRequest(_))
         ));
-        let traversal = vec![registered_worktree("repo::/srv/repo/../secret", "repo")];
+        let traversal_path = std::env::temp_dir()
+            .join("agentum-harness-scope")
+            .join("..")
+            .join("secret")
+            .to_string_lossy()
+            .into_owned();
+        let traversal_id = format!("repo::{traversal_path}");
+        let traversal = vec![registered_worktree(&traversal_id, "repo")];
         assert!(matches!(
-            scope_from_registry(
-                &traversal,
-                "repo::/srv/repo/../secret",
-                "/srv/repo/../secret",
-                host_id
-            ),
+            scope_from_registry(&traversal, &traversal_id, &traversal_path, host_id),
             Err(ApiError::BadRequest(_))
         ));
     }

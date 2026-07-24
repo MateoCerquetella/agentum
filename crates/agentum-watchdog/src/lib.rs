@@ -109,13 +109,15 @@ pub enum WatchdogError {
     Tmux(#[from] agentum_tmux::TmuxError),
 }
 
+type RunningSessionsHook = Arc<dyn Fn(&[Session]) + Send + Sync>;
+
 /// Orchestrator. Holds the broadcast bus + a map of in-flight per-session
 /// task handles.
 pub struct Watchdog {
     bus: broadcast::Sender<Event>,
     store: Arc<Store>,
     tasks: Arc<RwLock<HashMap<Uuid, JoinHandle<()>>>>,
-    running_sessions_hook: Option<Arc<dyn Fn(&[Session]) + Send + Sync>>,
+    running_sessions_hook: Option<RunningSessionsHook>,
 }
 
 impl Watchdog {

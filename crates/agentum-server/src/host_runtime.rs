@@ -461,9 +461,15 @@ pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<Stri
     match &host.kind {
         HostKind::Local => Ok(std::fs::read_to_string(abs_path).ok()),
         HostKind::Ssh { .. } => {
-            let mut cmd =
-                ssh_command_opts(host, &format!("cat {}", q(abs_path)?), SshMux::Interactive);
-            let out = cmd.output().await.map_err(map_ssh_io)?;
+            // Keep reads on the same bounded, stale-ControlMaster-recovering
+            // path as every other short-lived SSH operation. A raw
+            // `Command::output()` here could wait forever on a wedged pooled
+            // socket. Harness registration reads several contract files in
+            // sequence, so one wedged read stranded the run before its worker
+            // was attached while the UI had already accepted the retry.
+            let out = ssh_output(host, &format!("cat {}", q(abs_path)?), SSH_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
             Ok(remote_file_read_result(out.status.success(), &out.stdout))
         }
     }
@@ -546,12 +552,19 @@ mod tests {
 
     #[test]
     fn contained_path_rejects_outside_and_traversal_targets() {
+        let root = std::env::temp_dir().join("agentum-contained-root");
+        let inside = root.join(".cursor").join("mcp.json");
+        let outside = root
+            .with_file_name("agentum-contained-root-lookalike")
+            .join("mcp.json");
+        let traversal = root.join("..").join("outside").join("mcp.json");
+        let root = root.to_string_lossy();
         assert_eq!(
-            contained_path_parts("/srv/repo", "/srv/repo/.cursor/mcp.json").unwrap(),
+            contained_path_parts(&root, &inside.to_string_lossy()).unwrap(),
             vec![".cursor", "mcp.json"]
         );
-        assert!(contained_path_parts("/srv/repo", "/srv/repository/mcp.json").is_err());
-        assert!(contained_path_parts("/srv/repo", "/srv/repo/../outside/mcp.json").is_err());
+        assert!(contained_path_parts(&root, &outside.to_string_lossy()).is_err());
+        assert!(contained_path_parts(&root, &traversal.to_string_lossy()).is_err());
         assert!(contained_path_parts("relative", "relative/mcp.json").is_err());
     }
 
