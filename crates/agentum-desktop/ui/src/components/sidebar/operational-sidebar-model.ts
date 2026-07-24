@@ -246,6 +246,13 @@ export function buildOperationalSidebarRows({
     // unseen completion otherwise outranks working liveness: split panes can
     // have one agent waiting for review while another continues executing.
     const continuation = fact.status === 'permission' ? undefined : fact.continuation
+    // `isUnread` is the durable worktree-level attention contract used by the
+    // amber bell. It covers working→idle completions that do not leave a
+    // pane-level `done` hook behind, so Queue must treat it as a continuation
+    // even when `selectOperationalContinuation` cannot recover that pane event.
+    const isReadyToContinue = fact.status !== 'permission' && Boolean(
+      continuation || worktree.isUnread
+    )
     const agentLabel = continuation?.agentLabel ?? fact.agentLabel
     if (
       normalizedQuery &&
@@ -259,10 +266,12 @@ export function buildOperationalSidebarRows({
       continue
     }
 
-    const statusMeta = continuation ? CONTINUATION_META : STATUS_META[fact.status]
+    const statusMeta = isReadyToContinue ? CONTINUATION_META : STATUS_META[fact.status]
     const timestamp =
       continuation !== undefined
         ? finiteTimestamp(continuation.stateTimestamp)
+        : isReadyToContinue
+          ? finiteTimestamp(fact.stateTimestamp) ?? finiteTimestamp(worktree.lastActivityAt)
         : fact.status === 'inactive'
           ? finiteTimestamp(worktree.lastActivityAt)
           : finiteTimestamp(fact.stateTimestamp)
