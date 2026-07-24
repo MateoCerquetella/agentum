@@ -210,10 +210,14 @@ import {
 } from './worktree-section-activity'
 import {
   buildOperationalSidebarRows,
+  selectOperationalContinuation,
   selectOperationalStatusTimestamp,
   type OperationalWorkspaceFact
 } from './operational-sidebar-model'
-import { selectLiveAgentStatusEntriesForWorktree } from './worktree-agent-row-selectors'
+import {
+  selectLiveAgentStatusEntriesForWorktree,
+  selectRetainedAgentEntriesForWorktree
+} from './worktree-agent-row-selectors'
 import { useNow } from '@/components/dashboard/useNow'
 import { runWorktreeBatchDelete } from './delete-worktree-flow'
 
@@ -242,6 +246,7 @@ const EMPTY_PROJECT_GROUPS: readonly ProjectGroup[] = []
 // open. When it's closed — the overwhelmingly common case — this component would
 // otherwise re-render on every agent status ping from every pane (O(agents) jank).
 const EMPTY_AGENT_STATUS_BY_PANE_KEY: AppState['agentStatusByPaneKey'] = {}
+const EMPTY_ACKNOWLEDGED_AGENTS: AppState['acknowledgedAgentsByPaneKey'] = {}
 const EXPANDING_CARD_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS = 300
 const WORKTREE_SIDEBAR_SCROLL_STYLE: React.CSSProperties = {
   // Why: TanStack Virtual owns scroll correction. Native browser anchoring can
@@ -3958,6 +3963,11 @@ const WorktreeList = React.memo(function WorktreeList({
   const sectionActivityServerByWorktreeId = useAppStore(
     (s) => s.serverWorktreeActivityByWorktreeId
   )
+  const operationalAcknowledgedAgentsByPaneKey = useAppStore((s) =>
+    groupBy === 'operational'
+      ? (s.acknowledgedAgentsByPaneKey ?? EMPTY_ACKNOWLEDGED_AGENTS)
+      : EMPTY_ACKNOWLEDGED_AGENTS
+  )
 
   const sortEpoch = useAppStore((s) => s.sortEpoch)
 
@@ -4479,7 +4489,11 @@ const WorktreeList = React.memo(function WorktreeList({
     const now = Date.now()
     const facts = new Map<string, OperationalWorkspaceFact>()
     for (const worktree of worktrees) {
-      const entries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
+      const liveEntries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
+      const retainedEntries = selectRetainedAgentEntriesForWorktree(current, worktree.id).map(
+        (retained) => retained.entry
+      )
+      const entries = retainedEntries.length > 0 ? [...liveEntries, ...retainedEntries] : liveEntries
       const status = resolveWorktreeStatusFromState(sectionActivityState, worktree.id, now)
       let latest = entries[0]
       for (const entry of entries) {
@@ -4488,11 +4502,15 @@ const WorktreeList = React.memo(function WorktreeList({
       facts.set(worktree.id, {
         status,
         agentLabel: latest?.agentType ?? worktree.createdWithAgent,
-        stateTimestamp: selectOperationalStatusTimestamp(status, entries, now)
+        stateTimestamp: selectOperationalStatusTimestamp(status, entries, now),
+        continuation: selectOperationalContinuation(
+          entries,
+          operationalAcknowledgedAgentsByPaneKey
+        )
       })
     }
     return facts
-  }, [sectionActivityState, worktrees])
+  }, [operationalAcknowledgedAgentsByPaneKey, sectionActivityState, worktrees])
 
   // Build flat row list for rendering
   const rows: Row[] = useMemo(() => {
