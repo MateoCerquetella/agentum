@@ -33,6 +33,7 @@ pub mod cdp_screencast;
 pub mod endpoint;
 mod error;
 pub mod git;
+pub mod github_projects;
 pub mod harness;
 mod headers;
 pub mod host_install_hints;
@@ -45,11 +46,14 @@ mod pane_repair;
 pub mod planner;
 pub mod playwright_mcp;
 mod port_wait;
+pub mod provision;
 pub mod ratelimit;
 mod routes;
-mod rules;
+pub mod sdd;
 pub mod task_sink;
 pub mod tls;
+pub mod tracker_attention;
+pub mod tracker_sync;
 mod transcript_store;
 pub mod usage;
 pub(crate) mod wiki;
@@ -85,6 +89,14 @@ pub struct StreamCheckpoint {
 /// stall, etc.) won't drop a state-change event the user is staring
 /// at.
 const EVENT_BUS_CAPACITY: usize = 1024;
+
+/// The composite key for [`AppState::wiki_keys`]: `(repo_id, path, host_id)` —
+/// `host_id` is `LOCAL_HOST_ID` (the nil UUID) for local repos. A change to any
+/// component (repo re-added, moved, re-homed to another host) builds a
+/// *different* key → cache miss → re-resolve; that lookup-time
+/// self-invalidation is the whole staleness story (spec 009 D-A3), no
+/// mutation hooks.
+pub type WikiKeyCacheKey = (String, String, uuid::Uuid);
 
 /// Login + register attempts per remote IP per window.
 const AUTH_RATE_LIMIT_ATTEMPTS: usize = 8;
@@ -123,6 +135,18 @@ pub struct AppState {
     /// a full snapshot.
     pub stream_positions:
         Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, StreamCheckpoint>>>,
+    /// repo→wiki-key cache (spec 009 D-A3): a hit skips the per-call
+    /// `git remote get-url` subprocess in `routes::wiki::resolve_target` — the
+    /// macOS TCC-prompt trigger (and, over SSH, a network round trip). Keyed by
+    /// `(repo_id, path, host_id)` (`LOCAL_HOST_ID` = the nil UUID for local
+    /// repos) so a moved or re-homed repo builds a *different* key and
+    /// self-invalidates on lookup — no repo-mutation hook needed. Positive-only:
+    /// only a successful, non-empty remote resolution (a `git__…` key) is ever
+    /// cached; the `path__<hash>` fallback never is (over SSH a transport
+    /// failure is indistinguishable from "no origin", and caching it would pin
+    /// the repo to the wrong wiki until restart). `std::sync::Mutex` like
+    /// `stream_positions`: never held across an `.await`.
+    pub wiki_keys: Arc<std::sync::Mutex<std::collections::HashMap<WikiKeyCacheKey, String>>>,
     /// Short hostname of the box this daemon runs on. Cached once at
     /// boot so the `/api/health` reads are zero-cost. Clients use it to
     /// label the "this server" row with a meaningful identity (e.g.
@@ -186,6 +210,10 @@ pub struct AppState {
     /// background [`harness::drive`] task operate on the same in-memory runs +
     /// event bus. Cheap to construct; always present.
     pub harness: Arc<harness::HarnessEngine>,
+    /// Live per-session SDD loops (issue #313). Server-owned so the desktop's
+    /// Loop toggle renders one truth across clients/reloads; workers remove
+    /// their own entry when they end and announce it as `sdd.loop.stopped`.
+    pub sdd_loops: routes::sdd::SddLoops,
     /// Live `/api/events` WebSocket client count. The host-metrics ticker
     /// gates its sysinfo sampling on THIS, not `bus.receiver_count()`: the
     /// goal reconciler and comment bridge hold permanent bus subscriptions,
@@ -221,6 +249,7 @@ impl AppState {
             cert_fingerprint: Arc::new(cert_fingerprint),
             transcripts,
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: detect_short_hostname(),
             no_auth: false,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -234,6 +263,7 @@ impl AppState {
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
             harness: Arc::new(harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
             events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
@@ -278,14 +308,6 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::uploads::router())
         .merge(routes::agents::router())
         .merge(routes::agent_tasks::router())
-        .merge(routes::board::router())
-        .merge(routes::board_goals::router())
-        .merge(routes::board_links::router())
-        .merge(routes::board_rules::router())
-        // 016a: server-side board←GitHub pull + durable tracker bindings. Adds
-        // `/api/board/bindings*` only; #58's `POST /api/board/sync` stays in
-        // `board::router()` above, untouched.
-        .merge(routes::board_sync::router())
         .merge(routes::notes::router())
         .merge(routes::wiki::router())
         .merge(routes::preferences::router())
@@ -303,11 +325,17 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::fs::router())
         .merge(routes::git::router())
         .merge(routes::repos::router())
+        .merge(routes::project_trackers::router())
         .merge(routes::worktrees::router())
         .merge(routes::forge::router())
         .merge(routes::github::router())
+        // Spec 010 F1: Projects v2 board bindings (discover/bind/read/unbind).
+        .merge(routes::github_projects::router())
+        // Spec 010 F3: workspace provisioning (repo-from-template + the ensure).
+        .merge(routes::provision::router())
         .merge(routes::usage::router())
         .merge(routes::harness::router())
+        .merge(routes::sdd::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::require_token,
@@ -366,7 +394,7 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         );
     }
 
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
 
     let app = router(state.clone());
 
@@ -410,11 +438,184 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
 }
 
 /// Spawn the always-on background workers shared by every server boot path:
-/// the auth-session sweeper, the watchdog, the goal-status reconciler, the
-/// session→comment bridge, and the host-metrics ticker. Factored out so the
+/// the auth-session sweeper, watchdog, tracker workers, and host-metrics ticker.
+/// Factored out so the
 /// in-process embedded boot (desktop) and the standalone `serve()` (TUI/daemon)
 /// stay in lockstep.
-fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
+fn watchdog_with_transcript_retirement(
+    bus: broadcast::Sender<Event>,
+    store: Arc<Store>,
+    transcripts: TranscriptStore,
+) -> agentum_watchdog::Watchdog {
+    agentum_watchdog::Watchdog::new(bus, store).with_running_sessions_hook(move |running| {
+        transcripts.retain_observers(running);
+    })
+}
+
+async fn spawn_background_workers(
+    state: &AppState,
+    bus: &broadcast::Sender<Event>,
+) -> anyhow::Result<()> {
+    // Recovery is a boot gate: reconcile journals and leases before managed
+    // panes revive or a scheduler loop ticks. External edits are preserved.
+    harness::orchestrated::recover_orchestrated_runs(state).await?;
+
+    // Managed-worker liveness: a quiet worker gets one bounded nudge every
+    // five minutes; thirty minutes of genuine session inactivity is the hard
+    // stall ceiling. Blocking one task never stops unrelated ready work.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let now = time::OffsetDateTime::now_utc();
+                for run in state
+                    .store
+                    .harness_orchestrated_runs()
+                    .await
+                    .unwrap_or_default()
+                {
+                    if !harness::orchestrated::run_status_allows_managed_activity(&run.status) {
+                        continue;
+                    }
+                    for task in state
+                        .store
+                        .harness_tasks(&run.run_id)
+                        .await
+                        .unwrap_or_default()
+                    {
+                        if !matches!(
+                            task.status.as_str(),
+                            "dispatched" | "working" | "patch_pending"
+                        ) {
+                            continue;
+                        }
+                        let Some(raw_session) = task.worker_session.as_deref() else {
+                            continue;
+                        };
+                        let Ok(session_id) = uuid::Uuid::parse_str(raw_session) else {
+                            continue;
+                        };
+                        let Some(session) = state
+                            .store
+                            .get_session_by_id(session_id)
+                            .await
+                            .ok()
+                            .flatten()
+                        else {
+                            continue;
+                        };
+                        let last_activity = session.last_activity_at.unwrap_or(session.updated_at);
+                        let inactive_secs = (now - last_activity).whole_seconds().max(0);
+                        if inactive_secs >= 30 * 60 {
+                            let _ = state
+                                .store
+                                .harness_update_task(
+                                    &run.run_id,
+                                    &task.task_id,
+                                    "blocked",
+                                    None,
+                                    None,
+                                    Some("worker exceeded the 30-minute hard inactivity ceiling"),
+                                )
+                                .await;
+                            continue;
+                        }
+                        let last_nudge = time::OffsetDateTime::parse(
+                            &task.updated_at,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .unwrap_or(last_activity);
+                        if inactive_secs >= 5 * 60 && (now - last_nudge).whole_seconds() >= 5 * 60 {
+                            let prompt = "Agentum liveness check: this task has shown no activity for five minutes. Continue from your immutable packet, call request_verify if finished, or report a concrete blocker.";
+                            let _ = harness::inject_prompt(&state, &session, prompt).await;
+                            let _ = state
+                                .store
+                                .harness_update_task(
+                                    &run.run_id,
+                                    &task.task_id,
+                                    &task.status,
+                                    None,
+                                    None,
+                                    None,
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Managed sessions rotate at their first exact context-low signal (the
+    // fallback for CLIs that cannot report a numeric 10% remaining value).
+    {
+        let state = state.clone();
+        let mut events = bus.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = events.recv().await {
+                if event.kind != "harness.context_rotation_requested" {
+                    continue;
+                }
+                let Some(session_id) = event.session_id else {
+                    continue;
+                };
+                if let Err(error) =
+                    harness::orchestrated::rotate_managed_session(&state, session_id).await
+                {
+                    tracing::warn!(%session_id, %error, "managed harness rotation failed");
+                }
+            }
+        });
+    }
+
+    // CLIs that report an exact remaining percentage rotate at <=10%, before
+    // any compaction signal. The claim in rotate_managed_session deduplicates
+    // this ticker against the watchdog event path.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                tick.tick().await;
+                for run in state
+                    .store
+                    .harness_orchestrated_runs()
+                    .await
+                    .unwrap_or_default()
+                {
+                    if !harness::orchestrated::run_status_allows_managed_activity(&run.status) {
+                        continue;
+                    }
+                    for managed in state
+                        .store
+                        .harness_active_sessions(&run.run_id)
+                        .await
+                        .unwrap_or_default()
+                    {
+                        let Ok(session_id) = uuid::Uuid::parse_str(&managed.session_id) else {
+                            continue;
+                        };
+                        let context_low = state
+                            .store
+                            .get_session_by_id(session_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|session| session.ctx)
+                            .is_some_and(|remaining| remaining <= 10);
+                        if context_low {
+                            let _ =
+                                harness::orchestrated::rotate_managed_session(&state, session_id)
+                                    .await;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // Sweep stale tokens once at boot, then on a slow timer.
     let sweep_state = state.clone();
     tokio::spawn(async move {
@@ -429,26 +630,58 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         }
     });
 
-    let watchdog = agentum_watchdog::Watchdog::new(bus.clone(), state.store.clone());
-    tokio::spawn(watchdog.run());
-
-    // Goal-status auto-progression reconciler: enforces `goal.status = max(child
-    // statuses)` and fires the planner auto-stop on first child arrival.
+    // Boot revival, then the watchdog — strictly in that order, on one task.
+    // An OS reboot kills the local tmux server while the store still says
+    // `running`; the sweep respawns those panes (Claude resumes its
+    // conversation via the transcript-aware adapter). It must finish before
+    // the watchdog's first reconcile, which samples every running session's
+    // pane and would mark the not-yet-revived ones crashed (issue #267).
     {
-        let store = state.store.clone();
+        let state = state.clone();
         let bus = bus.clone();
         tokio::spawn(async move {
-            agentum_watchdog::run_goal_reconciler(store, bus).await;
+            routes::sessions::boot_revive_dead_sessions(&state).await;
+            let transcripts = state.transcripts.clone();
+            watchdog_with_transcript_retirement(bus, state.store.clone(), transcripts)
+                .run()
+                .await;
         });
     }
 
-    // Watchdog → comment bridge: converts agent.*/session.crashed events into
-    // [system] comments on the bound card's thread.
+    // Spec 012 F2: session-start → tracker InProgress. A bus subscriber (never
+    // inline in the launch path — invariant #2) that, on `session.started` in a
+    // bound worktree, drives the linked item to In Progress via the one existing
+    // write seam. Best-effort/monotonic — an unbound or already-advanced
+    // worktree is a no-op.
     {
         let store = state.store.clone();
         let bus = bus.clone();
         tokio::spawn(async move {
-            agentum_watchdog::run_session_comment_bridge(store, bus).await;
+            tracker_sync::run_session_start_reactor(store, bus).await;
+        });
+    }
+
+    // Spec 012 F3/F4: the PR/merge poller. No inbound webhooks on a self-hosted
+    // daemon (invariant #6) → a bounded, backed-off `gh` loop drives InReview on
+    // the first non-draft PR and Done on merge for each bound github worktree.
+    // The bus rides in so an applied transition emits `tracker.phase_changed`
+    // (spec 014 F1).
+    {
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            tracker_sync::run_pr_merge_poller(bus).await;
+        });
+    }
+
+    // Spec 014 F4: the watchdog→tracker attention worker. Crashed or
+    // sustained-awaiting sessions in a bound worktree flag the issue with the
+    // existing `status/blocked` escalation; recovery re-applies the persisted
+    // phase (which clears the label). Best-effort, per-worktree episode dedupe.
+    {
+        let store = state.store.clone();
+        let bus = bus.clone();
+        tokio::spawn(async move {
+            tracker_attention::run_tracker_attention_worker(store, bus).await;
         });
     }
 
@@ -533,6 +766,8 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
             routes::sessions::boot_drift_rescan(state).await;
         });
     }
+
+    Ok(())
 }
 
 /// Boot the API server in-process on an ephemeral loopback port with auth
@@ -573,7 +808,7 @@ pub async fn serve_embedded_loopback_with_bridge(
     let (mut state, bus) = embedded_app_state(store, addr);
     state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
     state.desktop_bridge = Some(bridge);
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
     let app = router(state);
     tracing::info!(%addr, "agentum-server listening (embedded loopback, desktop bridge)");
     tokio::spawn(async move {
@@ -605,7 +840,7 @@ pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(Sock
     let (mut state, bus) = embedded_app_state(store, addr);
     state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
 
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
 
     let app = router(state.clone());
     tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");
@@ -655,6 +890,42 @@ async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentum_core::{NewSession, Status};
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn internal_board_route_families_are_unregistered() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let addr: SocketAddr = "127.0.0.1:5544".parse().unwrap();
+        let (state, _bus) = embedded_app_state(store, addr);
+        let app = router(state);
+
+        for path in [
+            "/api/board",
+            "/api/board/1",
+            "/api/board/goals",
+            "/api/board/goals/1/harness-plan",
+            "/api/board/links",
+            "/api/board/links/1/2/blocks",
+            "/api/board/rules",
+            "/api/board/rules/todo",
+            "/api/board/bindings",
+            "/api/board/bindings/1/sync",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::NOT_FOUND,
+                "retired internal-board route {path} must not be exposed"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn embedded_app_state_carries_its_url_and_is_no_auth() {
@@ -678,5 +949,85 @@ mod tests {
         let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
         let state = AppState::new(store, bus);
         assert_eq!(state.api_base_url, None);
+    }
+
+    #[tokio::test]
+    async fn server_wired_watchdog_callback_retires_only_non_running_claude_observers() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&root.path().join("watchdog.db")).await.unwrap());
+        let (bus, _) = broadcast::channel::<Event>(32);
+        let (transcripts, counts) = TranscriptStore::with_counting_factory(bus.clone());
+        let mut observed = Vec::new();
+        for (name, tool, status) in [
+            ("running-claude", "claude", Status::Running),
+            ("stopped-claude", "claude", Status::Stopped),
+            ("crashed-claude", "claude", Status::Crashed),
+            ("running-codex", "codex", Status::Running),
+        ] {
+            let workdir = root.path().join(name);
+            std::fs::create_dir_all(&workdir).unwrap();
+            let session = store
+                .create_session(NewSession {
+                    name: name.into(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap();
+            transcripts.read(
+                session.id,
+                workdir.clone(),
+                "claude",
+                transcript_store::ObservationMode::Live,
+            );
+            if tool != "claude" {
+                store.patch_session_tool(session.id, tool).await.unwrap();
+            }
+            store
+                .update_status_and_target(
+                    session.id,
+                    status,
+                    (status == Status::Running).then_some("missing-watchdog-test-pane"),
+                )
+                .await
+                .unwrap();
+            observed.push((session.id, workdir));
+        }
+        let deleted_id = uuid::Uuid::new_v4();
+        let deleted_workdir = root.path().join("deleted-claude");
+        std::fs::create_dir_all(&deleted_workdir).unwrap();
+        transcripts.read(
+            deleted_id,
+            deleted_workdir.clone(),
+            "claude",
+            transcript_store::ObservationMode::Live,
+        );
+        observed.push((deleted_id, deleted_workdir));
+
+        assert_eq!(counts.created(), 5);
+        assert_eq!(transcripts.observing_count(), 5);
+        let watchdog = watchdog_with_transcript_retirement(bus, store, transcripts.clone());
+        watchdog.reconcile_once().await.unwrap();
+        assert_eq!(counts.dropped(), 4);
+        assert_eq!(transcripts.observing_count(), 1);
+        assert_eq!(transcripts.cache_count(), 5);
+        assert_eq!(
+            counts.created(),
+            5,
+            "the server callback only retires observers"
+        );
+
+        transcripts.stop_observing(observed[0].0);
+        for (_, workdir) in observed {
+            if let Some(project_dir) = agentum_core::transcript::project_dir_for(&workdir) {
+                let _ = std::fs::remove_dir_all(project_dir);
+            }
+        }
     }
 }

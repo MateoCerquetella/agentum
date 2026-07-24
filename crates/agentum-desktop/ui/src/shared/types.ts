@@ -73,6 +73,21 @@ type RepoKind = 'git' | 'folder'
  * - `'origin'`: explicit origin. Same precedence.
  */
 export type IssueSourcePreference = 'upstream' | 'origin' | 'auto'
+
+/**
+ * Per-repo choice of which tracker harness runs drive ticket transitions
+ * against. `undefined` is treated identically to `'auto'` (detect) — the same
+ * forward-compat convention as `issueSourcePreference`, so persisted records
+ * that predate the field keep today's detection behavior.
+ */
+export type TrackerProviderPreference = 'auto' | 'github' | 'linear'
+export type LinearProjectBinding = Readonly<{
+  workspaceId: string
+  workspaceName: string
+  projectId: string
+  projectName: string
+  projectUrl?: string
+}>
 export type ExternalWorktreeVisibility = 'hide' | 'show'
 
 export type Repo = {
@@ -97,6 +112,12 @@ export type Repo = {
    *  identically to `'auto'`; writers leave it undefined on creation so
    *  existing persisted records stay forward-compatible. */
   issueSourcePreference?: IssueSourcePreference
+  /** Tracker the harness drives ticket transitions against for this repo.
+   *  `undefined` is treated identically to `'auto'`; writers leave it
+   *  undefined until the user picks in settings. */
+  trackerProvider?: TrackerProviderPreference
+  /** Exact Linear board owned by this Agentum project. IDs are authoritative. */
+  linearProjectBinding?: LinearProjectBinding | null
   /** Controls whether worktrees Agentum did not create appear in the sidebar. */
   externalWorktreeVisibility?: ExternalWorktreeVisibility
   /** True when the repo predates hidden-by-default external worktrees. */
@@ -242,6 +263,13 @@ export type Worktree = {
   // to typecheck and load without migration.
   linkedGitLabMR?: number | null
   linkedGitLabIssue?: number | null
+  // Spec 014 F2: the persisted tracker bind coords + last-written pipeline
+  // phase, exposed by /api/worktrees/detected (camelCase keys added server-
+  // side). Optional so older fixtures/persisted rows typecheck; null/absent
+  // for an unbound worktree — the chip renders nothing then (fail-closed).
+  trackerProvider?: string | null
+  trackerUrl?: string | null
+  trackerPhase?: 'todo' | 'in_progress' | 'in_review' | 'ready_to_test' | 'done' | null
   isArchived: boolean
   isUnread: boolean
   isPinned: boolean
@@ -1808,6 +1836,11 @@ export type TuiAgent =
 
 export type TaskViewPresetId = 'all' | 'issues' | 'review' | 'my-issues' | 'my-prs' | 'prs'
 
+/** The agents the Chat / create-issues pipeline can run (a subset of TuiAgent —
+ *  the server has a backend for exactly these; see `routes/chat_agent.rs`).
+ *  `claude` is the default; the pick persists in `GlobalSettings.chatAgent`. */
+export type ChatAgentId = 'claude' | 'codex'
+
 /** Where the repo setup script runs when a worktree is created.
  *  - 'new-tab': open a background tab titled "Setup" and leave focus on the first tab (default).
  *  - 'split-vertical': split the initial terminal pane with a vertical divider.
@@ -2219,6 +2252,11 @@ export type GlobalSettings = {
    *  landed won't have the key; `getDefaultSettings()` hydrates the empty
    *  default via the persistence merge. */
   githubProjects?: GitHubProjectSettings
+  /** Which agent powers the Chat intake + the issue-creation AI calls
+   *  (`/api/chat*`, `/api/github/issues/draft-body`). `null`/absent ⇒ the
+   *  server default (`claude`) — same null-means-factory-default pattern as
+   *  `defaultTuiAgent`, so existing profiles need no migration. */
+  chatAgent?: ChatAgentId | null
   /** AI-generated commit messages: agent + model + per-model thinking +
    *  user-customizable prompt suffix. Optional so existing profiles do not
    *  require a migration step before this feature lands. */
@@ -2449,6 +2487,15 @@ export type StatusBarItem =
   | 'io'
 type FloatingTerminalTriggerLocation = 'floating-button' | 'status-bar'
 
+export type TaskLinearContext = {
+  kind: 'project' | 'view'
+  id: string
+  workspaceId: LinearConcreteWorkspaceId
+  model?: LinearCustomViewModel
+}
+
+export const GLOBAL_TASK_PROJECT_SCOPE = 'global'
+
 export type TaskResumeState = {
   githubMode?: 'items' | 'project'
   githubItemsPreset?: TaskViewPresetId | null
@@ -2457,12 +2504,13 @@ export type TaskResumeState = {
   linearMode?: 'issues' | 'projects' | 'views'
   linearPreset?: 'assigned' | 'created' | 'all' | 'completed'
   linearQuery?: string
-  linearContext?: {
-    kind: 'project' | 'view'
-    id: string
-    workspaceId: LinearConcreteWorkspaceId
-    model?: LinearCustomViewModel
-  }
+  linearContext?: TaskLinearContext
+  /** Spec 009: per-repo Linear project/view bindings, keyed by repo id (or the
+   *  reserved GLOBAL_TASK_PROJECT_SCOPE bucket when no repo is active). The
+   *  legacy global `linearContext` above is still sanitized for backward-compat
+   *  hydration but is never read for resolution (hard-cut migration, spec 009
+   *  architecture D2). */
+  linearContextByRepo?: Record<string, TaskLinearContext>
 }
 
 export type RightSidebarTab = 'explorer' | 'search' | 'source-control' | 'checks' | 'ports'
@@ -2474,7 +2522,7 @@ export type PersistedUIState = {
   rightSidebarOpen: boolean
   rightSidebarTab: RightSidebarTab
   rightSidebarWidth: number
-  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
+  groupBy: 'operational' | 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
   sortBy: 'name' | 'smart' | 'recent' | 'repo' | 'manual'
   /** Deprecated; the Active only filter is retired and ignored on hydration. */
   showActiveOnly: boolean

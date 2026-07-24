@@ -15,6 +15,7 @@ import type {
 import { isGitRepoKind } from '../../../../shared/repo-kind'
 import { sanitizeRepoIcon } from '../../../../shared/repo-icon'
 import { normalizeRepoBadgeColor } from '../../../../shared/repo-badge-color'
+import { normalizeLinearProjectBinding } from '../../shared/linear-project-binding'
 import { getProjectGroupSubtreeIds } from '../../../../shared/project-groups'
 import { getRepoIdFromWorktreeId } from './worktree-helpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
@@ -75,6 +76,8 @@ type RepoUpdate = Partial<
     | 'kind'
     | 'symlinkPaths'
     | 'issueSourcePreference'
+    | 'trackerProvider'
+    | 'linearProjectBinding'
     | 'externalWorktreeVisibility'
     | 'externalWorktreeVisibilityPromptDismissedAt'
     | 'projectGroupId'
@@ -103,6 +106,11 @@ function sanitizeRepoUpdate(updates: RepoUpdate): RepoUpdate {
   }
   if ('worktreeBasePath' in sanitized && sanitized.worktreeBasePath !== undefined) {
     sanitized.worktreeBasePath = sanitized.worktreeBasePath.trim() || undefined
+  }
+  if ('linearProjectBinding' in sanitized) {
+    const binding = normalizeLinearProjectBinding(sanitized.linearProjectBinding)
+    if (binding === undefined) delete sanitized.linearProjectBinding
+    else sanitized.linearProjectBinding = binding
   }
   return sanitized
 }
@@ -524,6 +532,12 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       get().clearAgentumHookTrustForRepo(projectId)
       const repoPath = get().repos.find((repo) => repo.id === projectId)?.path
       get().evictGitHubRepoCaches(projectId, repoPath)
+      // Repo ids can be reused after remove/re-add. Drop every canonical
+      // tracker bucket now so a prior provider, conflict, or load error cannot
+      // flash on the newly registered project before its authoritative GET.
+      // Some isolated slice consumers (including migration/test harnesses)
+      // compose the repository slice without the tracker slice.
+      get().forgetProjectTrackerConfig?.(projectId)
       const { clearRepoSlugCacheEntry } = await import('../../lib/repo-slug-index')
       clearRepoSlugCacheEntry(projectId)
 
@@ -620,13 +634,15 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
           activeTabType: activeFileCleared ? 'terminal' : s.activeTabType,
           lastVisitedAtByWorktreeId: nextLastVisitedAtByWorktreeId,
           sortEpoch: s.sortEpoch + 1,
-          // Why: removing the last repo while in settings leaves activeView as
-          // 'settings', which renders an empty settings pane instead of Landing.
-          // Also clear activeWorktreeId so App renders Landing (it checks
-          // !activeWorktreeId). Without this, the terminal surface shows instead.
+          // Why: removing the last repo leaves no workspace, so land on Mission
+          // Control. Use 'activity' (not 'terminal'+null) so it renders through the
+          // right-sidebar-SUPPRESSED slot — the 'terminal' && !activeWorktreeId
+          // fallback keeps the right sidebar mounted and squeezes the dashboard
+          // (spec 013 F1). Clearing activeWorktreeId also gets us out of any stale
+          // settings/terminal surface.
           ...(nextRepos.length === 0
             ? {
-                activeView: 'terminal' as const,
+                activeView: 'activity' as const,
                 activeWorktreeId: null,
                 activeRepoId: null
               }

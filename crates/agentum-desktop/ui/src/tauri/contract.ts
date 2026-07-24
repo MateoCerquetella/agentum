@@ -181,6 +181,7 @@ export interface AgentumApi {
     enqueuePRRefresh: ApiMethod
     getProjectViewTable: ApiMethod
     issue: ApiMethod
+    issueProjectStatus: ApiMethod
     listAccessibleProjects: ApiMethod
     listAssignableUsersBySlug: ApiMethod
     listIssueTypesBySlug: ApiMethod

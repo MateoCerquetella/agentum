@@ -84,6 +84,26 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
             ]
           },
           {
+            title: 'Project Integrations',
+            description: 'Choose the external board owned by this project.',
+            keywords: [
+              repo.displayName,
+              'tracker',
+              'integrations',
+              'github',
+              'github projects',
+              'linear',
+              'linear project',
+              'board binding',
+              'status mapping',
+              'issues',
+              'tickets',
+              'harness',
+              'auto detect',
+              'none'
+            ]
+          },
+          {
             title: 'Worktree Symlinks',
             description: 'Paths to symlink from the primary checkout into newly created worktrees.',
             keywords: [

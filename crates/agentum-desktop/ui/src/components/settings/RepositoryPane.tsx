@@ -20,6 +20,7 @@ import { useAppStore } from '../../store'
 import { getRepositoryIconSectionId } from './repository-settings-targets'
 import { RepositoryIconPicker } from './RepositoryIconPicker'
 import { getRepositoryPaneSearchEntries } from './repository-search'
+import { ProjectIntegrationsSection } from './ProjectIntegrationsSection'
 export { getRepositoryPaneSearchEntries }
 
 type RepositoryPaneProps = {
@@ -142,6 +143,7 @@ export function RepositoryPane({
   const mcpEntries = allEntries.filter((entry) => entry.title === 'MCP Configs')
   const symlinkEntries = allEntries.filter((entry) => entry.title === 'Worktree Symlinks')
   const sourceControlAiEntries = allEntries.filter((entry) => entry.title === 'Source Control AI')
+  const trackerEntries = allEntries.filter((entry) => entry.title === 'Project Integrations')
   const removeProjectLabel =
     confirmingRemove === repo.id ? 'Confirm Remove Project' : 'Remove Project'
 
@@ -161,10 +163,29 @@ export function RepositoryPane({
       />
     ) : null
 
-  // Why: Identity (name, icon, base ref) stays at the top so it's the first
-  // thing a user sees. Setup commands follow immediately because they're the
-  // most-edited surface and should beat MCP/symlinks/sparse-presets.
+  // The canonical tracker comes first because New Work, Project Tasks, and
+  // automation consume it. Identity and setup controls follow in their
+  // established order.
+  const trackerSection =
+    !isFolder &&
+    (forceFullPaneForRepoMatch || matchesSettingsSearch(searchQuery, trackerEntries)) ? (
+      <section key="tracker" className="space-y-4">
+        <SearchableSetting
+          title="Project Integrations"
+          description="Choose the external tracker owned by this project."
+          keywords={[repo.displayName, 'integrations', 'tracker', 'github projects', 'linear project', 'board', 'status mapping']}
+          className="space-y-2"
+          forceVisible={forceFullPaneForRepoMatch}
+        >
+          <ProjectIntegrationsSection repo={repo} />
+        </SearchableSetting>
+      </section>
+    ) : null
+
   const visibleSections = [
+    // Tracker is the first project-specific decision: downstream task lists,
+    // New Work, and automation all consume this one canonical target.
+    trackerSection,
     forceFullPaneForRepoMatch || matchesSettingsSearch(searchQuery, identityEntries) ? (
       <section key="identity" className="relative space-y-8">
         <div className="flex items-start justify-between gap-4">

@@ -86,21 +86,6 @@ export const GENERAL_NAVIGATION_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   }
 ]
 
-export const GENERAL_CLI_SEARCH_ENTRIES: SettingsSearchEntry[] = [
-  {
-    title: 'Agentum CLI',
-    description: 'Register or remove the Agentum CLI command.',
-    keywords: ['cli', 'path', 'terminal', 'command', 'shell command'],
-    cmdJKeywords: ['cli', 'path', 'command', 'shell command'],
-    targetSectionId: 'cli'
-  },
-  {
-    title: 'Agent skill',
-    description: 'Install the Agentum skill so agents know to use the Agentum CLI.',
-    keywords: ['skill', 'agents', 'npx']
-  }
-]
-
 export const GENERAL_UPDATE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'Check for Updates',
@@ -152,7 +137,6 @@ export const GENERAL_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   ...GENERAL_NETWORK_SEARCH_ENTRIES,
   ...GENERAL_NAVIGATION_SEARCH_ENTRIES,
   ...GENERAL_EDITOR_SEARCH_ENTRIES,
-  ...GENERAL_CLI_SEARCH_ENTRIES,
   ...GENERAL_CACHE_TIMER_SEARCH_ENTRIES,
   ...GENERAL_UPDATE_SEARCH_ENTRIES,
   ...GENERAL_SUPPORT_SEARCH_ENTRIES

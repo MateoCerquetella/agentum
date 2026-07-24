@@ -3,13 +3,36 @@
 > Single source of truth for where SDD work stands. Each role updates this on
 > handoff. Read it first (`/sdd-status`) before starting any phase.
 
-- **current_spec:** 008-finish-the-loop
-- **phase:** done         <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (008 **SHIP-READY — Reviewer SIGN-OFF 2026-07-03**, `review.md`, 0 blockers, HEAD `9d9be973`. All 18 focus items PASS (2 D5 sacred mechanics behavior-preserving line-by-line; apply_blocked_transition never-Err + honest 5-name remove-set; Fast byte-identical; live test asserts the real leg; no new auth holes). 1 Should-fix = project-wide CI typecheck follow-up (vite≠tsc), NOT a 008 defect; 3 leave-as-is nits. Commits `51705bf2`+`3b6dbd33`+`9423b86f`. **RELEASE = HUMAN**: promote develop→staging→main + D5 live tests (real claude) + qa.sh browser + AC-12 installed demo (Mateo). 007 RELEASED v0.55.0; 006 RELEASED v0.54.0)
+- **current_spec:** 029-local-watchdog-fleet-scheduler
+- **phase:** developer  <!-- idle | spec | pm | architect | developer | tester | reviewer | done -->  (029 Architect PASS; implement F1 → F2 → F3 from handoff `02-architect-to-developer.md`.)
 - **mode:** auto         <!-- HITL (human in the loop) | auto -->  (set by /sdd-loop 2026-07-01; NEEDS-HUMAN exit is the safety valve; RELEASE stays human-gated)
 - **execution:** harness <!-- features land via the .harness/ engine + green gate -->
 
 ## Active send-backs
 
+- **020-ssh-host-tracker-plumbing** — **SHIP-READY** (Reviewer SIGN-OFF
+  2026-07-13, `review.md` @ `cc4bde36`, 0 blockers; spec Status → Done).
+  Commits F1 `09726c46` F2 `e8fb31a8` F3 `820712d9` on `fixes-new-workspace`,
+  on top of ship-ready 015. **RELEASE = HUMAN**: ONE train with 015 (same
+  branch) — PR → develop → staging qa.sh (live dyaus binding, SSH filing +
+  grounding note, Start-work direct launch, host-down 422-flavor vs slug-route
+  502, gh authed on the remote) → main + tag. Follow-up ticket (reviewer
+  should-fixes): SF1 ProjectHubPage:86 Tasks-tab binding read not
+  repoId-threaded — bound SSH repo's Tasks tab never auto-enters board mode;
+  SF2 SSH-repoId issue FETCH composes local neutral_cwd with remote gh —
+  caller-less today but the live wire will trip the deferred QA leg (fix
+  before/at QA); SF3 tasks.md wording.
+- **015-host-aware-start-and-tracker-intake** — **SHIP-READY** (Reviewer
+  SIGN-OFF 2026-07-13, `review.md` @ `aa8ce9e3`, 0 blockers). Commits F1
+  `ff7290ee` F2 `d7d64f33` F3 `3ec6f028` on `fixes-new-workspace`, unpushed.
+  **RELEASE = HUMAN (Mateo)**: PR → develop, promote → staging (`status/qa`;
+  qa.sh legs: live VPS add/pick/create AC 3-4-7, choose-hop AC 5, real filing
+  AC 10, board+gated run AC 11) → main + tag. Release notes: one-time remote
+  re-add + onUse zero-match shift. F1+F2 SAME train. Follow-up ticket: S1
+  residual selectors→findRepoByPathPreferLocal + doctor check, S2 reposUpdate
+  doc comment, S3 reject connectionId:"". NOTE: 019 (SSH tracker plumbing)
+  builds on these commits — 015 ships first. 010's AC-11 live demo also still
+  PENDING/human.
 - **003-chat-issue-preview** — CODE COMPLETE + SHIPPED to develop (issue **#198**,
   PR **#199**, `feat/chat-board-revamp`). All 4 increments gated. ⏭ Browser QA at
   STAGING + tagged release = Mateo-gated. [Merged into this worktree 2026-07-01;
@@ -64,67 +87,18 @@
 ## Decision log
 
 <!-- append one line per decision, newest last: `YYYY-MM-DD — <decision>`; keep only the last 5 (older history lives in git) -->
-- 2026-07-03 | Developer | **008 F1 CODE-COMPLETE + GREEN** (`tasks.md`; F1 only,
-  F2/F3 deferred to next developer iterations). Built in architecture order:
-  Step1 `wait_for_settle→SettleOutcome` loud-log ×4 sites (#15 1800s hang);
-  Step2 `apply_blocked_transition`+`status/blocked` GitHub-only label, TrackerPhase
-  stays 4 (D-A), remove-set widened to 5-minus-target, `record_feature_failure`→
-  (blocked,attempts) (#16); Step4 pure `start-gated-run-precondition`/`composer-modal-props`
-  + armed-!repoId toast + server-error-detail + `subscribeHarnessRunErrors` bridge
-  (#2 #226 edge, #5); Step5 `#[ignore]` `harness_start_work_live{,_roles}.rs` +
-  `gh_in_dir` honors AGENTUM_GH_BIN; Step3 (sacred, LAST) `await_repl_ready→bool`
-  + `inject_prompt→Result<bool>`, send-sequence BYTE-IDENTICAL, loud readiness log
-  ×4 (#14a). Gates: server 546/0/5, executor 21/0, fmt+clippy clean, vite green,
-  vitest 14/0. 4 documented deviations. ⚠️ Step3 D5 merge gate = the 2 live tests
-  green is a HUMAN pre-release step (real claude, not CI-runnable). Phase STAYS
-  developer → F2 next.
-- 2026-07-03 | Developer | **008 F2 CODE-COMPLETE + GREEN** (chat Fast/Complex
-  intake, AC 5–8; tasks.md F2 section). Server (`chat.rs`): `IntakeMode{Fast,
-  Socratic}` + `{mode,stage}` serde-default on ChatRequest; `intake_grounding_blocks`
-  extracted VERBATIM (Fast byte-identical, pinned); `build_intake_instructions`
-  router; `socratic_stage_instructions`+`socratic_pass_body` (5 passes WHO/WHAT/
-  WHY/done/risks, reflect-back, stage5→"Preview issues"); `chat_auth_gate` shared
-  no-creds gate (Complex surfaces NO_CREDS by construction). Client: pure
-  `lib/socratic-intake.ts` reducer (one pass/turn, cap5, Fast never advances) +
-  localStorage `Conversation.intake` (D1 no new table) + two ChatPage buttons +
-  Enter-stays-Fast. Gates: server 552/0/5 (F1 546 held), vitest 10/0 new, fmt+
-  clippy clean, vite green; full vitest 139-fail = PROVEN pre-existing baseline
-  (0 new). Invariants held: interviewer_instructions byte-identical, compose_issue_body
-  untouched (D8), stateless (D1), no forced thinking (D2), no sticky (D4), F1/F3
-  surfaces untouched. Phase STAYS developer → **F3 (goal-first workspace) LAST**.
-- 2026-07-03 | Developer | **008 F3 CODE-COMPLETE → SPEC DONE, phase → tester**
-  (goal-first workspace, AC 9–11; tasks.md F3 section; handoff
-  `03-developer-to-tester.md`). New pure `lib/workspace-goal-step.ts`
-  (deriveWorkspaceGoalSeed/isGoalStepReady/firstGoalStepBlocker/
-  OPTIONAL_WORKSPACE_STEPS/shouldStartAtGoalStep/revealDetails) + thin
-  `NewWorkspaceGoalStep.tsx` (goal textarea + reused RepoCombobox workdir) +
-  modal renders it as default first screen, "Skip to details" → today's composer
-  (D3); goal+workdir required, worktree/scaffold/tracker skippable (D9);
-  `useComposerState` NEVER edited (props only), F1's initialStartGatedRunProp
-  intact. Gates: vite+tsc green, `workspace-goal-step.test.ts` 15/0, F1+F2+F3
-  pure suites 34/0 (F1/F2 held), full vitest +15 passing 0 new (139 baseline).
-  AC 11 full run = qa.sh/human. 3 deviations documented. **F1+F2+F3 all
-  code-complete → tester.**
-- 2026-07-03 | Tester | **008 verdict PASS-WITH-DEFERRALS** (`verification.md`,
-  HEAD `9423b86f`; handoff `04-tester-to-reviewer.md`). Independently re-ran
-  every gate — server 552/0/5, executor 21/0, fmt+clippy clean, 3 live binaries
-  compile #[ignore], vite green, spec-008 vitest 34/0; full vitest 139-fail
-  baseline corroborated PRE-EXISTING via 4 methods (disjoint set / no-reference
-  grep / diff-scope / failure-kind). All 11 deviations ACCURATE against code;
-  sacred surfaces clean (inject_prompt send-sequence byte-identical, await_repl_ready
-  poll logic unchanged, apply_blocked_transition Ok-Skipped-never-Err, compose_issue_body
-  + useComposerState internals untouched, F1 initialStartGatedRunProp preserved).
-  NO defect, no AC FAIL. AC 5–10 PASS now; AC 1–4/11 PASS(deferred qa.sh+D5 live);
-  AC 12 PASS(deferred Mateo installed demo). 4 Info nits (top: "tsc"=vite-transpile
-  +vitest not full tsc; 139 baseline real+out-of-scope). Phase → reviewer.
-- 2026-07-03 | Reviewer | **008 SIGN-OFF → SHIP-READY** (`review.md`, HEAD
-  `9d9be973`, 0 blockers). All 18 focus items PASS w/ quoted evidence: both D5
-  sacred mechanics behavior-preserving line-by-line (`inject_prompt` send-sequence
-  + `await_repl_ready` poll/trust unchanged, only return type); `apply_blocked_transition`
-  never-`Err` + honest 5-name remove-set (board can't lie either direction); no
-  D6 shell injection (argv exec); Fast byte-identical (construction + pin); live
-  test asserts the REAL leg (MARKER in pane = prompt landed, not hollow); F3
-  preserves F1 Tasks hop; no new `is_public` holes; D1–D9 honored. 1 Should-fix
-  = project-wide CI typecheck (vite≠full tsc), NOT a 008 defect → follow-up
-  ticket. 3 leave-as-is nits. spec.md Status → Done. Phase → done. **RELEASE =
-  HUMAN** (promote + D5 live tests + qa.sh + AC-12 installed demo).
+- 2026-07-23 | Tester | **028 final retry PASS → phase reviewer**. Fresh
+  verification closes AC 1–8 with 22 focused tests, 21 isolated QA tests, and
+  839 green backend workspace tests; stale-request races are green.
+- 2026-07-23 | Reviewer | **028 SIGN-OFF → done** (0 blockers). Full lock,
+  generation, resource-bound, compatibility, and safety audit passes; release
+  remains human-gated with one Rust helper API release-note caveat.
+- 2026-07-23 | Spec | **029 drafted → phase pm**. One local fleet scheduler and
+  nonce/pane-framed tmux batch contract target ≤2 healthy-cycle local invocations
+  while preserving SSH behavior, cadences, events, and stale-removal safety.
+- 2026-07-23 | PM | **029 PASS → phase architect**. The 11-AC contract is one
+  bounded local performance slice; ≤2 invocations, typed framed outcomes,
+  cadence/event compatibility, SSH preservation, and stale authority are fixed.
+- 2026-07-23 | Architect | **029 PASS → phase developer**. One framed fleet
+  probe plus optional confirm/action finish proves the ≤2 bound; watchdog owns
+  generations/deadlines and one shared ordered local/remote session machine.

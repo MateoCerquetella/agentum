@@ -1,25 +1,11 @@
 import React from 'react'
-import {
-  BookText,
-  Columns3,
-  MessagesSquare,
-  Radar,
-  Search,
-  type LucideIcon
-} from 'lucide-react'
+import { FolderGit2, Radar, Search, type LucideIcon } from 'lucide-react'
 import { useAppStore } from '@/store'
-import { useRepoMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
 import type { GlobalSettings } from '../../../../shared/types'
-import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
-import {
-  normalizeVisibleTaskProviders,
-  restoreAvailableDefaultTaskProvider,
-  resolveVisibleTaskProvider
-} from '../../../../shared/task-providers'
 import { useActivityUnreadCount } from '@/components/activity/useActivityUnreadCount'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
+import { requestOperationalSidebarSearchFocus } from '@/lib/operational-sidebar-search-focus'
 
 export function shouldShowAgentsButton(
   settings: Pick<GlobalSettings, 'experimentalActivity'> | null | undefined
@@ -96,113 +82,28 @@ function PrimaryNavItem({
   )
 }
 
-const SidebarNav = React.memo(function SidebarNav() {
+export function SidebarNav(): React.JSX.Element {
   const worktreePaletteShortcut = useShortcutLabel('worktree.palette')
-  const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
-  const openHarnessPage = useAppStore((s) => s.openHarnessPage)
-  const openWikiPage = useAppStore((s) => s.openWikiPage)
-  const setActiveView = useAppStore((s) => s.setActiveView)
+  const openProjectsPage = useAppStore((s) => s.openProjectsPage)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
-  const repos = useAppStore((s) => s.repos)
-  const repoMap = useRepoMap()
-  const canBrowseTasks = repos.some((repo) => isGitRepoKind(repo))
-  // Why: the setting is opt-out (default true). `!== false` keeps the button
-  // visible for users whose persisted settings predate this field.
-  const showTasksButton = useAppStore((s) => s.settings?.showTasksButton !== false)
-  const rawVisibleTaskProviders = useAppStore((s) => s.settings?.visibleTaskProviders)
-  const defaultTaskSource = useAppStore((s) => s.settings?.defaultTaskSource ?? 'github')
-  const preflightStatus = useAppStore((s) => s.preflightStatus)
-  const preflightStatusChecked = useAppStore((s) => s.preflightStatusChecked)
-  const refreshPreflightStatus = useAppStore((s) => s.refreshPreflightStatus)
-  const linearStatus = useAppStore((s) => s.linearStatus)
-  const linearStatusChecked = useAppStore((s) => s.linearStatusChecked)
-  const checkLinearConnection = useAppStore((s) => s.checkLinearConnection)
-  const preferredVisibleTaskProviders = React.useMemo(
-    () => normalizeVisibleTaskProviders(rawVisibleTaskProviders),
-    [rawVisibleTaskProviders]
-  )
-  const visibleTaskProviders = React.useMemo(
-    () =>
-      restoreAvailableDefaultTaskProvider(
-        preferredVisibleTaskProviders,
-        {
-          gitlabInstalled: preflightStatus?.glab?.installed === true,
-          linearConnected: linearStatus.connected === true
-        },
-        defaultTaskSource
-      ),
-    [
-      defaultTaskSource,
-      linearStatus.connected,
-      preferredVisibleTaskProviders,
-      preflightStatus?.glab?.installed
-    ]
-  )
-  const resolvedDefaultTaskSource = React.useMemo(
-    () => resolveVisibleTaskProvider(defaultTaskSource, visibleTaskProviders),
-    [defaultTaskSource, visibleTaskProviders]
-  )
+  const groupBy = useAppStore((s) => s.groupBy)
 
-  React.useEffect(() => {
-    if (!preflightStatusChecked) {
-      void refreshPreflightStatus()
-    }
-    if (!linearStatusChecked) {
-      void checkLinearConnection()
-    }
-  }, [checkLinearConnection, linearStatusChecked, preflightStatusChecked, refreshPreflightStatus])
-
-  // Why: warm the GitHub work-item cache on hover/focus so by the time the
-  // user's click finishes the round-trip has either completed or is already
-  // in-flight. Shaves ~200–600ms off perceived page-load latency.
-  const prefetchWorkItems = useAppStore((s) => s.prefetchWorkItems)
-  const activeRepoId = useAppStore((s) => s.activeRepoId)
-  const defaultTaskViewPreset = useAppStore((s) => s.settings?.defaultTaskViewPreset ?? 'all')
-  const handlePrefetch = React.useCallback(() => {
-    if (!canBrowseTasks || resolvedDefaultTaskSource !== 'github') {
-      return
-    }
-    const activeRepo = activeRepoId ? (repoMap.get(activeRepoId) ?? null) : null
-    const activeGitRepo = activeRepo && isGitRepoKind(activeRepo) ? activeRepo : null
-    const firstGitRepo = activeGitRepo ?? repos.find((r) => isGitRepoKind(r))
-    if (firstGitRepo?.path) {
-      // Why: warm the exact cache key the page will read on mount — must
-      // match TaskPage's `initialTaskQuery` derived from the same default
-      // preset, otherwise the prefetch lands in a key the page never reads
-      // and we pay the full round-trip after click.
-      prefetchWorkItems(
-        firstGitRepo.id,
-        firstGitRepo.path,
-        PER_REPO_FETCH_LIMIT,
-        getTaskPresetQuery(defaultTaskViewPreset)
-      )
-    }
-  }, [
-    activeRepoId,
-    canBrowseTasks,
-    defaultTaskViewPreset,
-    prefetchWorkItems,
-    repoMap,
-    repos,
-    resolvedDefaultTaskSource
-  ])
-
-  const tasksActive = activeView === 'tasks'
   const activityActive = activeView === 'activity'
-  const harnessActive = activeView === 'harness'
-  const wikiActive = activeView === 'wiki'
+  // The hub ('project') is a destination *inside* Projects, so the rail item
+  // stays lit while the user is in either — one section, two depths.
+  const projectsActive = activeView === 'projects' || activeView === 'project'
   // Why: Mission Control is now the always-on home, so its "needs you" badge is
   // always tracked (no longer gated behind the old experimental Agents button).
   const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
 
   return (
     <div className="flex flex-col gap-0.5 px-2 pt-2 pb-1">
-      {/* Primary workflow rail (Phase 1 nav shell, #48): Mission Control → Chat
-          → Board mirrors the spec → board → agent pipeline. Settings lives in
-          the bottom toolbar, so the rail reads Home → Chat → Board → Settings
-          top-to-bottom. */}
+      {/* Primary workflow rail (Phase 1 nav shell, #48): Mission Control →
+          Projects. Settings lives in the bottom toolbar. The Board is
+          no longer a rail entry (spec 016): it lives inside each project's
+          hub (Projects → project → Tasks). */}
       <PrimaryNavItem
         icon={Radar}
         label="Mission Control"
@@ -210,49 +111,27 @@ const SidebarNav = React.memo(function SidebarNav() {
         onClick={openActivityPage}
         badge={activityUnreadCount}
       />
+      {/* Projects replaces both the old global Wiki rail item (spec 009 D1)
+          and the v0.59.0 per-repo sidebar group (#274 — Mateo: repos never
+          list in the sidebar). It opens the full Projects page; a project's
+          surfaces (Chat / Wiki / Board / Sessions) are chosen inside the hub. */}
       <PrimaryNavItem
-        icon={MessagesSquare}
-        label="Chat"
-        active={harnessActive}
-        onClick={openHarnessPage}
+        icon={FolderGit2}
+        label="Projects"
+        active={projectsActive}
+        onClick={openProjectsPage}
       />
-      <PrimaryNavItem icon={BookText} label="Wiki" active={wikiActive} onClick={openWikiPage} />
 
-      {/* Secondary utilities: external task trackers, the goals pipeline, and
-          fuzzy search. Tasks + Goals fold into Board in Phase 2/3. */}
-      {showTasksButton ? (
-        <button
-          type="button"
-          onClick={() => {
-            if (!canBrowseTasks) {
-              return
-            }
-            openTaskPage()
-          }}
-          onPointerEnter={handlePrefetch}
-          onFocus={handlePrefetch}
-          disabled={!canBrowseTasks}
-          aria-current={tasksActive ? 'page' : undefined}
-          className={cn(
-            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight transition-colors',
-            tasksActive
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : 'text-sidebar-foreground/60 hover:bg-sidebar-foreground/8',
-            !canBrowseTasks && 'cursor-not-allowed opacity-50 hover:bg-transparent'
-          )}
-        >
-          {/* "Board" = the Tasks view: your GitHub/Linear issues. Chat creates
-              issues that show up here. (Tasks renamed to Board, #48 redo.) */}
-          <Columns3
-            className={cn('size-4 shrink-0', navIconClass(tasksActive))}
-            strokeWidth={tasksActive ? 2.25 : 1.75}
-          />
-          <span className="flex-1">Board</span>
-        </button>
-      ) : null}
+      {/* Secondary utility: fuzzy search. */}
       <button
         type="button"
-        onClick={() => openModal('worktree-palette')}
+        onClick={() => {
+          if (groupBy === 'operational') {
+            requestOperationalSidebarSearchFocus()
+          } else {
+            openModal('worktree-palette')
+          }
+        }}
         aria-label="Search worktrees and browser tabs"
         className="group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] font-medium tracking-tight text-sidebar-foreground/60 transition-colors hover:bg-sidebar-foreground/8"
       >
@@ -266,6 +145,6 @@ const SidebarNav = React.memo(function SidebarNav() {
       </button>
     </div>
   )
-})
+}
 
-export default SidebarNav
+export default React.memo(SidebarNav)

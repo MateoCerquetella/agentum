@@ -63,10 +63,14 @@ describe('deriveIssueSideEffectGate', () => {
     })
   })
 
-  it('fails with remote-repo when the repo has a connectionId', () => {
+  it('passes for an SSH repo because the server resolves the worktree host', () => {
     expect(
       deriveIssueSideEffectGate(issue('https://github.com/o/r/issues/1'), 'ssh-conn-1')
-    ).toEqual({ eligible: false, reason: 'remote-repo' })
+    ).toEqual({
+      eligible: true,
+      slug: { owner: 'o', repo: 'r' },
+      number: 1
+    })
   })
 })
 
@@ -74,9 +78,6 @@ describe('describeIssueSideEffectSkip', () => {
   it('names the action and the reason', () => {
     expect(describeIssueSideEffectSkip('scaffold-spec', 'no-linked-item')).toBe(
       'Spec scaffold skipped: no issue is linked to this workspace anymore.'
-    )
-    expect(describeIssueSideEffectSkip('start-gated-run', 'remote-repo')).toBe(
-      'Gated run not started: the selected repo is remote (SSH) — this runs locally only.'
     )
   })
 
@@ -87,8 +88,7 @@ describe('describeIssueSideEffectSkip', () => {
     const reasons: IssueSideEffectSkipReason[] = [
       'no-linked-item',
       'not-an-issue',
-      'not-github-url',
-      'remote-repo'
+      'not-github-url'
     ]
     const messages = reasons.map((reason) => describeIssueSideEffectSkip('start-gated-run', reason))
     for (const message of messages) {
@@ -96,7 +96,7 @@ describe('describeIssueSideEffectSkip', () => {
       // Non-empty reason copy after the prefix — never a bare label.
       expect(message.length).toBeGreaterThan('Gated run not started: '.length)
     }
-    // All four are pairwise distinct (no two reasons collapse to one message).
+    // All reasons are pairwise distinct (no two reasons collapse to one message).
     expect(new Set(messages).size).toBe(reasons.length)
   })
 })

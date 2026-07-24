@@ -132,5 +132,15 @@ jobs:
           for ext in dylib so dll; do
             cp target/release/*sherpa*."$ext" target/release/*onnxruntime*."$ext" target/debug/deps/ 2>/dev/null || true
           done
+      # Windows hosted runners do not consistently export HOME. Several tests
+      # temporarily override and restore it while exercising config isolation;
+      # seed one authoritative value so parallel registry readers never observe
+      # a transient "no home directory" state.
+      - name: Expose Windows home to tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $homePath = [Environment]::GetFolderPath('UserProfile')
+          "HOME=$homePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: cargo test (run)
         run: cargo test --all

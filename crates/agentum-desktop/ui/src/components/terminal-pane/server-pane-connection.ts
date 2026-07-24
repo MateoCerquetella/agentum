@@ -13,7 +13,7 @@ import type { PtyConnectionDeps } from './pty-connection-types'
 import { useAppStore } from '@/store'
 import { ensureWorkspaceSession, sessionName } from '@/runtime/workspace-session'
 import { resolveServerHostIdForConnection } from '@/runtime/server-host-client'
-import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
+import { getConnectionId } from '@/lib/connection-context'
 import {
   bindServerSessionTerminal,
   type ServerSessionTerminalBinding
@@ -23,6 +23,7 @@ import { makePaneKey } from '../../../../shared/stable-pane-id'
 import { createPaneActivityTracker, type PaneActivityTracker } from './pane-activity-tracker'
 import type { AgentType } from '../../../../shared/agent-status-types'
 import { registerServerSessionActivity } from '@/runtime/server-session-activity'
+import { isTuiAgent } from '../../../../shared/tui-agent-config'
 
 /** The tab's launch agent (claude/codex/…) drives the server session's tool;
  *  a plain terminal tab has none, so it runs a shell. */
@@ -323,10 +324,10 @@ export function connectPaneServerSession(
         // SSH target). Resolve it to a server host id so the session's tmux pane
         // runs ON THE REMOTE over SSH — the same path the TUI uses. Local repos
         // have no connectionId and run on the local host (hostId undefined).
-        const state = useAppStore.getState()
-        const worktree = getWorktreeMapFromState(state).get(deps.worktreeId)
-        const repo = worktree ? getRepoMapFromState(state).get(worktree.repoId) : null
-        const connectionId = repo?.connectionId ?? null
+        // Composite worktree ids retain their repo ownership even before SSH
+        // worktree discovery completes. Use the shared resolver so this path
+        // cannot downgrade a remote session to localhost during that window.
+        const connectionId = getConnectionId(deps.worktreeId) ?? null
         const hostId = connectionId
           ? await resolveServerHostIdForConnection(connectionId)
           : undefined
@@ -352,6 +353,22 @@ export function connectPaneServerSession(
           : await ensureWorkspaceSession({ workdir, tool, hostId, name: sessionNameForTab })
         if (disposed) {
           return
+        }
+        if (pinnedSessionId) {
+          // A pinned id names an existing process, so its persisted tool is the
+          // display truth even when the restored tab carries stale launch intent.
+          if (isTuiAgent(session.tool)) {
+            useAppStore.getState().setTabLaunchAgent(deps.tabId, session.tool)
+          } else {
+            useAppStore.getState().clearTabLaunchAgent(deps.tabId)
+          }
+        } else if (session.tool !== tool) {
+          // Never bind a newly requested Codex/Claude/etc tab to a differently
+          // provisioned process. ensureWorkspaceSession also checks this; keep
+          // the boundary guard here so future callers cannot weaken it silently.
+          throw new Error(
+            `server session tool mismatch: requested ${tool}, received ${session.tool}`
+          )
         }
         // Only type an `onlyIfFresh` launch command into a FRESHLY spawned
         // pane (bare shell). Reattached panes still run whatever was in them —

@@ -3,8 +3,8 @@
 //! A tmux pane has exactly ONE `pipe-pane` slot. The external-tmux attach
 //! route used to let an agentum-MANAGED (`agentum-*`) session acquire a
 //! second, EXTERNAL-flagged session row bound to the same pane. The duplicate
-//! could never stream (its `pipe-pane -o` no-ops against the managed
-//! session's pipe), and detaching it ran `unpipe_pane` on the shared pane —
+//! could never stream (`pipe_pane`'s `#{pane_pipe}` guard leaves the managed
+//! session's live pipe in place), and detaching it ran `unpipe_pane` on the shared pane —
 //! silently freezing the real session: output stops, keystrokes never echo.
 //!
 //! The attach route no longer creates such duplicates and the detach paths
@@ -15,7 +15,7 @@
 //! 1. Delete every EXTERNAL-flagged row whose (host, resolved target)
 //!    collides with a non-external row. Record-only — the pane, the tmux
 //!    session, and the surviving row are untouched.
-//! 2. Re-arm `pipe-pane -o` for local managed sessions that plausibly own a
+//! 2. Re-arm `pipe-pane` for local managed sessions that plausibly own a
 //!    live pane (Running/Idle), so a pipe disarmed by the old bug resumes
 //!    feeding the session log without waiting for the next stream connect
 //!    (which also re-arms, lazily, since the same fix).
@@ -77,9 +77,10 @@ pub(crate) async fn repair_pane_bindings(store: Arc<agentum_store::Store>) {
         }
     }
 
-    // Re-arm local managed pipes. `-o` makes this a no-op for healthy panes;
-    // dead/missing targets just fail and are ignored. External bindings are
-    // excluded: their panes are user-owned and heal lazily at stream connect.
+    // Re-arm local managed pipes. `pipe_pane` probes `#{pane_pipe}` and skips
+    // healthy panes (a blind `-o` re-arm would TOGGLE their pipes off — issue
+    // #270); dead/missing targets just fail and are ignored. External bindings
+    // are excluded: their panes are user-owned and heal lazily at stream connect.
     for s in &all {
         if is_external(s)
             || s.host_id.is_some_and(|h| h != LOCAL_HOST_ID)

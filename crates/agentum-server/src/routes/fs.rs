@@ -135,6 +135,43 @@ fn is_protected_media_dir(_path: &Path) -> bool {
     false
 }
 
+/// Click-to-open dirs (spec 009 AC-6 / D-A7): macOS also TCC-gates `~/Desktop`,
+/// `~/Documents`, `~/Downloads`, and network/removable volumes. Unlike the media
+/// dirs above, repos LEGITIMATELY live in these — a hard bail would break the
+/// workdir picker. So they list on an explicit user click (today's behavior,
+/// unchanged) but never on an automatic/prefetch read — see the `prefetch` seam
+/// in [`ListQuery`]. macOS-only, like its sibling.
+#[cfg(target_os = "macos")]
+fn is_click_to_open_dir(path: &Path) -> bool {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) => is_click_to_open_dir_in(path, &home),
+        None => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_click_to_open_dir_in(path: &Path, home: &Path) -> bool {
+    let under_home = ["Desktop", "Documents", "Downloads"].iter().any(|name| {
+        let protected = home.join(name);
+        // Component-aware (`starts_with` on `Path`), so `~/Documents2` is NOT a
+        // match — only the folder itself and things genuinely inside it.
+        path == protected || path.starts_with(&protected)
+    });
+    if under_home {
+        return true;
+    }
+    // At-or-under any mounted volume root (`/Volumes/<name>[/…]`). Listing
+    // `/Volumes` itself only names the mounts — that's fine; descending INTO a
+    // volume is what can fire the network-volume prompt.
+    let volumes = Path::new("/Volumes");
+    path.starts_with(volumes) && path != volumes
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_click_to_open_dir(_path: &Path) -> bool {
+    false
+}
+
 /// `GET /api/fs/entries?path=…&show_hidden=&host_id=` — list a directory's dirs
 /// AND files (the workdir picker's `/list` is dirs-only). Host-aware: a local
 /// host reads the filesystem directly; an SSH host lists over the connection via
@@ -157,7 +194,11 @@ async fn list_entries(
     let resolved = resolve(&q.path.unwrap_or_default())?;
     // Never read a macOS-protected media folder — reading it is what fires the
     // privacy prompt. Present it as empty (bail before any metadata/read_dir).
-    if is_protected_media_dir(&resolved) {
+    // Then the click-to-open seam (spec 009 D-A7): an AUTOMATIC read
+    // (`prefetch=true` — which any future prefetch caller MUST set) of
+    // Desktop/Documents/Downloads or a network volume is also presented as
+    // empty; an explicit click (`prefetch=false`, the default) still lists.
+    if is_protected_media_dir(&resolved) || (q.prefetch && is_click_to_open_dir(&resolved)) {
         let parent = resolved.parent().map(|p| p.to_string_lossy().to_string());
         return Ok(Json(EntriesResp {
             path: resolved.to_string_lossy().to_string(),
@@ -239,6 +280,17 @@ struct ListQuery {
     /// Host to list on. Missing means the daemon's local machine.
     #[serde(default)]
     host_id: Option<Uuid>,
+    /// Automatic-read marker (spec 009 D-A7). Any FUTURE caller that lists a
+    /// directory WITHOUT an explicit user click on it (prefetch, background
+    /// indexing, eager tree expansion, …) MUST set `prefetch=true` — the
+    /// click-to-open guard then returns an empty listing for TCC-gated
+    /// locations (Desktop/Documents/Downloads, network volumes) instead of
+    /// reading them, which is what fires the macOS prompt. Default `false`
+    /// (explicit navigation) keeps today's behavior bit-identical; no
+    /// automatic caller exists at the time of writing (D3 audit), so this is
+    /// dormant enforcement + a regression guard.
+    #[serde(default)]
+    prefetch: bool,
 }
 
 #[derive(Serialize)]
@@ -277,7 +329,11 @@ async fn list_dir(
 
     // Never read a macOS-protected media folder — reading it is what fires the
     // privacy prompt. Present it as empty (bail before any metadata/read_dir).
-    if is_protected_media_dir(&resolved) {
+    // Then the click-to-open seam (spec 009 D-A7): an AUTOMATIC read
+    // (`prefetch=true` — which any future prefetch caller MUST set) of
+    // Desktop/Documents/Downloads or a network volume is also presented as
+    // empty; an explicit click (`prefetch=false`, the default) still lists.
+    if is_protected_media_dir(&resolved) || (q.prefetch && is_click_to_open_dir(&resolved)) {
         let parent = resolved.parent().map(|p| p.to_string_lossy().to_string());
         return Ok(Json(ListResp {
             path: resolved.to_string_lossy().to_string(),
@@ -657,5 +713,54 @@ mod tests {
             home
         ));
         assert!(!is_protected_media_dir_in(Path::new("/Users/tester"), home));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn click_to_open_dirs_gate_prefetch_but_not_clicks() {
+        let home = Path::new("/Users/tester");
+        // The click-to-open set: user-content dirs + network-volume roots,
+        // including anything inside them…
+        assert!(is_click_to_open_dir_in(
+            Path::new("/Users/tester/Desktop"),
+            home
+        ));
+        assert!(is_click_to_open_dir_in(
+            Path::new("/Users/tester/Documents"),
+            home
+        ));
+        assert!(is_click_to_open_dir_in(
+            Path::new("/Users/tester/Downloads"),
+            home
+        ));
+        assert!(is_click_to_open_dir_in(
+            Path::new("/Users/tester/Documents/notes/proj"),
+            home
+        ));
+        assert!(is_click_to_open_dir_in(Path::new("/Volumes/NAS"), home));
+        assert!(is_click_to_open_dir_in(
+            Path::new("/Volumes/NAS/media/repo"),
+            home
+        ));
+        // …but code locations, lookalike names, $HOME itself, and the /Volumes
+        // index (it only names the mounts) are not.
+        assert!(!is_click_to_open_dir_in(
+            Path::new("/Users/tester/Developer/proj"),
+            home
+        ));
+        assert!(!is_click_to_open_dir_in(
+            Path::new("/Users/tester/Documents2"),
+            home
+        ));
+        assert!(!is_click_to_open_dir_in(Path::new("/Users/tester"), home));
+        assert!(!is_click_to_open_dir_in(Path::new("/Volumes"), home));
+        // The enforcement decision at the seam: ONLY an automatic (prefetch)
+        // read of a click-to-open dir is suppressed — an explicit click on it
+        // still lists, and a prefetch of a normal project dir still lists.
+        let gated =
+            |prefetch: bool, path: &str| prefetch && is_click_to_open_dir_in(Path::new(path), home);
+        assert!(gated(true, "/Users/tester/Desktop")); // prefetch + protected ⇒ empty
+        assert!(!gated(false, "/Users/tester/Desktop")); // click + protected ⇒ lists
+        assert!(!gated(true, "/Users/tester/Developer/proj")); // prefetch + normal ⇒ lists
     }
 }

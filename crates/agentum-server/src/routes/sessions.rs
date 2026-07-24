@@ -39,7 +39,7 @@ use streaming::{stream_remote_session, stream_session};
 mod provision;
 use super::util::parse_uuid;
 use provision::{Reprovision, reprovision_session};
-pub(crate) use provision::{boot_drift_rescan, spawn_agent_into_pane};
+pub(crate) use provision::{boot_drift_rescan, boot_revive_dead_sessions, spawn_agent_into_pane};
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -162,14 +162,6 @@ async fn list(
         None => None,
     };
     let rows = state.store.list_sessions(status).await?;
-    // Lazy-start a transcript watcher per known session so plan/todo
-    // updates stream live. `ensure_started` is idempotent — calling it
-    // for sessions that already have a watcher is cheap.
-    for s in &rows {
-        state
-            .transcripts
-            .ensure_started(s.id, PathBuf::from(&s.workdir), &s.tool);
-    }
     Ok(Json(rows))
 }
 
@@ -366,6 +358,9 @@ async fn patch_session(
     Json(body): Json<PatchBody>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
+    // Keep the durable identity used by transcript reads linear with a tool
+    // mutation and its observer retirement.
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
     let session = load(&state, id).await?;
     let running = matches!(session.status, Status::Running);
 
@@ -400,6 +395,11 @@ async fn patch_session(
         }
         if tool != current.tool {
             let updated = state.store.patch_session_tool(id, tool).await?;
+            if current.tool == "claude" && updated.tool != "claude" {
+                state.transcripts.stop_observing(id);
+                #[cfg(test)]
+                state.transcripts.pause_after_early_route_retirement().await;
+            }
             let _ = state.bus.send(
                 Event::new("session.tool_changed")
                     .with_session(updated.id, &updated.name)
@@ -450,6 +450,10 @@ async fn delete(
     Query(q): Query<DeleteQuery>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
+    // Own the boundary from the authoritative load through durable deletion
+    // and final transcript retirement. A preloaded Running GET therefore
+    // completes first and is forgotten here, or reloads after deletion.
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
     let session = load(&state, id).await?;
 
     // Guard a genuinely-running agent behind ?force=true so it isn't torn
@@ -459,6 +463,12 @@ async fn delete(
             "session is running; pass ?force=true to kill and remove".into(),
         ));
     }
+
+    // Deletion owns both observer and parser-state retirement. Do this before
+    // best-effort tmux teardown so an unreachable host cannot leak a watcher.
+    state.transcripts.forget(id);
+    #[cfg(test)]
+    state.transcripts.pause_after_early_route_retirement().await;
 
     // Best-effort tmux teardown, then always remove the record. Two things this
     // must NOT do — both previously surfaced as "can't delete the session":
@@ -498,6 +508,10 @@ async fn delete(
     }
 
     state.store.delete_session(id).await?;
+    // A concurrent read can recreate passive/live transcript state while the
+    // durable row still exists during teardown. Successful deletion is the
+    // final authority boundary, so clear anything recreated in that window.
+    state.transcripts.forget(id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -602,7 +616,20 @@ async fn start(
     // All launch conventions (YOLO translation, loopback env, Claude hook, MCP
     // wiring, pipe-pane, status flip) live in the shared spawn helper so the
     // harness-engine driver goes through the exact same path.
-    spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await?;
+    if let Err(e) = spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await {
+        // Lost a spawn race: the boot revival sweep (or a concurrent /start)
+        // can create this pane between the has_session probe above and our
+        // spawn, which tmux rejects as a duplicate name. If the pane exists
+        // NOW the session is running — report a reattach rather than a 500
+        // the client would surface as a dead tab.
+        if crate::host_runtime::has_session(&host, &target)
+            .await
+            .unwrap_or(false)
+        {
+            return Ok(Json(session_with_spawned(load(&state, id).await?, false)));
+        }
+        return Err(e);
+    }
     Ok(Json(session_with_spawned(load(&state, id).await?, true)))
 }
 
@@ -659,29 +686,7 @@ async fn stop(
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
-    let target = tmux_target(&session);
-    if is_external(&session) {
-        // Detach only: the tmux session belongs to the user. Disarm the
-        // log pipe and keep the target so a later start can reattach.
-        unpipe_external(&state, &host, &session, &target).await;
-        state
-            .store
-            .update_status_and_target(id, Status::Stopped, Some(&target))
-            .await?;
-    } else {
-        crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
-        state
-            .store
-            .update_status_and_target(id, Status::Stopped, None)
-            .await?;
-    }
-    state.hook_tokens.lock().unwrap().remove(&id);
-    emit_stopped(&state, &session, "stop").await;
-    Ok(Json(load(&state, id).await?))
+    Ok(Json(stop_session_core(&state, id, false).await?))
 }
 
 async fn kill(
@@ -689,29 +694,60 @@ async fn kill(
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
+    Ok(Json(stop_session_core(&state, id, true).await?))
+}
+
+/// Shared core of the `stop`/`kill` routes AND the MCP `agentum_stop_session`
+/// tool — the lifecycle END that `agentum_spawn_session` was missing (#378).
+/// `force_kill` picks kill over graceful stop for agentum-owned panes; an
+/// external (user-owned) tmux session is only ever detached, never destroyed,
+/// regardless of mode.
+pub(crate) async fn stop_session_core(
+    state: &AppState,
+    id: Uuid,
+    force_kill: bool,
+) -> Result<Session, ApiError> {
+    // The shared core owns lifecycle locking; HTTP and MCP wrappers must not
+    // acquire it again. Hold it through the final post-commit retirement.
+    let _lifecycle = state.transcripts.lock_session_lifecycle(id).await;
+    let session = load(state, id).await?;
+    // Stop live transcript work before host lookup or graceful tmux shutdown;
+    // either can fail or wait, and a later running read can reattach if needed.
+    state.transcripts.stop_observing(id);
+    #[cfg(test)]
+    state.transcripts.pause_after_early_route_retirement().await;
+    let host = load_host_for_session(state, &session).await?;
     let target = tmux_target(&session);
     if is_external(&session) {
-        // Even a kill must not destroy a user-owned tmux session —
-        // detach (disarm the pipe) and keep the target for reattach.
-        unpipe_external(&state, &host, &session, &target).await;
+        // Detach only: the tmux session belongs to the user. Disarm the
+        // log pipe and keep the target so a later start can reattach.
+        unpipe_external(state, &host, &session, &target).await;
         state
             .store
             .update_status_and_target(id, Status::Stopped, Some(&target))
             .await?;
     } else {
-        crate::host_runtime::kill_session(&host, &target)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if force_kill {
+            crate::host_runtime::kill_session(&host, &target)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        } else {
+            crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
+                .await
+                .map_err(|e| ApiError::Internal(e.to_string()))?;
+        }
         state
             .store
             .update_status_and_target(id, Status::Stopped, None)
             .await?;
     }
+    // Keep the early retirement above for prompt teardown, then close the
+    // window in which a concurrent read could observe the still-Running row
+    // and reattach. The durable Stopped commit is authoritative.
+    state.transcripts.stop_observing(id);
     state.hook_tokens.lock().unwrap().remove(&id);
-    emit_stopped(&state, &session, "kill").await;
-    Ok(Json(load(&state, id).await?))
+    emit_stopped(state, &session, if force_kill { "kill" } else { "stop" }).await;
+    load(state, id).await
 }
 
 /// Persist + broadcast a `session.stopped` event so the UI gets a benign
@@ -738,7 +774,10 @@ async fn load(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
         .ok_or_else(|| ApiError::NotFound(id.to_string()))
 }
 
-async fn load_host_for_session(state: &AppState, session: &Session) -> Result<Host, ApiError> {
+pub(crate) async fn load_host_for_session(
+    state: &AppState,
+    session: &Session,
+) -> Result<Host, ApiError> {
     let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
     state
         .store
@@ -877,12 +916,26 @@ async fn submit(
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
-    let host = load_host_for_session(&state, &session).await?;
+    submit_prompt_core(&state, session, body.text).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Shared core of the `/submit` route AND the MCP `agentum_inject_prompt` tool
+/// (#378 — the push channel; the mailbox is pull-only): validate the session is
+/// live up front, then deliver in the BACKGROUND. Errors after the checks are
+/// logged, not surfaced — a busy agent can take tens of seconds to idle, and
+/// neither an HTTP response nor an MCP call should block on that.
+pub(crate) async fn submit_prompt_core(
+    state: &AppState,
+    session: Session,
+    text: String,
+) -> Result<(), ApiError> {
+    let host = load_host_for_session(state, &session).await?;
     let target = session
         .tmux_target
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("session is not running".into()))?;
-    let text = body.text.trim().to_string();
+    let text = text.trim().to_string();
     if text.is_empty() {
         return Err(ApiError::BadRequest("`text` must not be empty".into()));
     }
@@ -894,15 +947,14 @@ async fn submit(
             "tmux session not active for this session".into(),
         ));
     }
-    // Robust two-step delivery in the background (see doc comment). Errors are logged,
-    // not surfaced — the up-front checks above already rejected a dead/missing session.
+    // Robust two-step delivery (see the `/submit` doc comment).
     let state = state.clone();
     tokio::spawn(async move {
         if let Err(e) = crate::harness::inject_prompt(&state, &session, &text).await {
             tracing::warn!(target: "agentum::sessions::submit", error = %e, "submit delivery failed");
         }
     });
-    Ok(StatusCode::ACCEPTED)
+    Ok(())
 }
 
 // ---------- WS /stream ----------
@@ -1266,6 +1318,7 @@ mod tests {
                 cert_fingerprint: Arc::new(String::new()),
                 transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
                 stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 hostname: "test".to_string(),
                 no_auth: true,
                 clipboard_pending: Arc::new(
@@ -1277,6 +1330,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
@@ -1412,6 +1466,7 @@ mod tests {
                 cert_fingerprint: Arc::new(String::new()),
                 transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
                 stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 hostname: "test".to_string(),
                 no_auth: true,
                 clipboard_pending: Arc::new(
@@ -1423,6 +1478,7 @@ mod tests {
                 api_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
@@ -1529,6 +1585,534 @@ mod tests {
             assert_eq!(ev.kind, "agent.hook");
             assert_eq!(ev.session_id, Some(sess.id));
             assert_eq!(ev.payload["kind"], "tool_done");
+        }
+    }
+
+    mod transcript_lifecycle_tests {
+        use super::super::*;
+        use agentum_core::NewSession;
+        use agentum_store::Store;
+        use axum::extract::{Path, Query, State};
+        use tokio::sync::broadcast;
+
+        async fn state_with_counting_transcripts() -> (
+            tempfile::TempDir,
+            AppState,
+            crate::transcript_store::ObserverCounts,
+        ) {
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::open(&root.path().join("sessions.sqlite"))
+                .await
+                .unwrap();
+            let (bus, _) = broadcast::channel(32);
+            let mut state = AppState::new(store, bus.clone());
+            let (transcripts, counts) = crate::TranscriptStore::with_counting_factory(bus);
+            state.transcripts = transcripts;
+            (root, state, counts)
+        }
+
+        async fn observed_claude_session(
+            state: &AppState,
+            root: &tempfile::TempDir,
+            name: &str,
+        ) -> Session {
+            let workdir = root.path().join(name);
+            std::fs::create_dir_all(&workdir).unwrap();
+            let session = state
+                .store
+                .create_session(NewSession {
+                    name: name.into(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap();
+            state.transcripts.read(
+                session.id,
+                workdir,
+                "claude",
+                crate::transcript_store::ObservationMode::Live,
+            );
+            session
+        }
+
+        #[tokio::test]
+        async fn listing_500_sessions_creates_zero_transcript_entries_or_observers() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let workdir = root.path().join("workspace");
+            std::fs::create_dir_all(&workdir).unwrap();
+            let transcript_dir = agentum_core::transcript::project_dir_for(&workdir).unwrap();
+            assert!(!transcript_dir.exists());
+            for index in 0..500 {
+                state
+                    .store
+                    .create_session(NewSession {
+                        name: format!("history-{index}"),
+                        workdir: workdir.to_string_lossy().into_owned(),
+                        tool: if index % 2 == 0 { "claude" } else { "codex" }.into(),
+                        model: None,
+                        flags: vec![],
+                        card_id: None,
+                        worktree_path: None,
+                        worktree_branch: None,
+                        worktree_base_ref: None,
+                    })
+                    .await
+                    .unwrap();
+            }
+
+            let response = list(State(state.clone()), Query(ListQuery { status: None }))
+                .await
+                .unwrap();
+            assert_eq!(response.0.len(), 500);
+            assert_eq!(counts.created(), 0);
+            assert_eq!(counts.dropped(), 0);
+            assert_eq!(state.transcripts.cache_count(), 0);
+            assert!(!transcript_dir.exists());
+        }
+
+        #[tokio::test]
+        async fn patching_away_from_claude_retires_live_observation() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let workdir = root.path().join("workspace");
+            std::fs::create_dir_all(&workdir).unwrap();
+            let session = state
+                .store
+                .create_session(NewSession {
+                    name: "tool-change".into(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap();
+            state.transcripts.read(
+                session.id,
+                workdir,
+                "claude",
+                crate::transcript_store::ObservationMode::Live,
+            );
+            assert_eq!(counts.created(), 1);
+
+            let _ = patch_session(
+                State(state.clone()),
+                Path(session.id.to_string()),
+                Json(PatchBody {
+                    name: None,
+                    tool: Some("codex".into()),
+                    flags: None,
+                    model: None,
+                    pinned: None,
+                }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(counts.dropped(), 1);
+            assert_eq!(state.transcripts.observing_count(), 0);
+            if let Some(path) =
+                agentum_core::transcript::project_dir_for(std::path::Path::new(&session.workdir))
+            {
+                let _ = std::fs::remove_dir_all(path);
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn successful_stop_and_kill_finally_retire_observers_reattached_during_teardown() {
+            for force_kill in [false, true] {
+                let (root, state, counts) = state_with_counting_transcripts().await;
+                let session = observed_claude_session(
+                    &state,
+                    &root,
+                    if force_kill {
+                        "route-kill"
+                    } else {
+                        "route-stop"
+                    },
+                )
+                .await;
+                state
+                    .store
+                    .update_status(session.id, Status::Running)
+                    .await
+                    .unwrap();
+                let mut events = state.bus.subscribe();
+                let gate = state.transcripts.park_next_route_retirement();
+                let route_state = state.clone();
+                let route = tokio::spawn(async move {
+                    stop_session_core(&route_state, session.id, force_kill).await
+                });
+
+                tokio::time::timeout(std::time::Duration::from_secs(1), gate.wait_until_arrived())
+                    .await
+                    .expect("route reaches the controlled teardown window");
+                assert_eq!(counts.dropped(), 1, "early retirement must remain prompt");
+                assert_eq!(state.transcripts.observing_count(), 0);
+                let still_running = state
+                    .store
+                    .get_session_by_id(session.id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(still_running.status, Status::Running);
+
+                state.transcripts.read(
+                    session.id,
+                    std::path::PathBuf::from(&still_running.workdir),
+                    &still_running.tool,
+                    crate::transcript_store::ObservationMode::Live,
+                );
+                assert_eq!(counts.created(), 2, "live read reattaches during teardown");
+                assert_eq!(state.transcripts.observing_count(), 1);
+                while events.try_recv().is_ok() {}
+
+                gate.release();
+                let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), route)
+                    .await
+                    .expect("successful teardown completes")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stopped.status, Status::Stopped);
+                assert_eq!(counts.dropped(), 2, "final retirement drops replacement");
+                assert_eq!(state.transcripts.observing_count(), 0);
+                assert_eq!(state.transcripts.cache_count(), 1, "stop retains snapshot");
+
+                while events.try_recv().is_ok() {}
+                counts.notify(1, 1);
+                assert!(
+                    events.try_recv().is_err(),
+                    "retired callback emitted an event"
+                );
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn forced_running_delete_finally_forgets_state_recreated_during_teardown() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let session = observed_claude_session(&state, &root, "route-force-delete").await;
+            state
+                .store
+                .update_status(session.id, Status::Running)
+                .await
+                .unwrap();
+            let mut events = state.bus.subscribe();
+            let gate = state.transcripts.park_next_route_retirement();
+            let route_state = state.clone();
+            let id = session.id;
+            let route = tokio::spawn(async move {
+                delete(
+                    State(route_state),
+                    Path(id.to_string()),
+                    Query(DeleteQuery { force: true }),
+                )
+                .await
+            });
+
+            tokio::time::timeout(std::time::Duration::from_secs(1), gate.wait_until_arrived())
+                .await
+                .expect("delete reaches the controlled teardown window");
+            assert_eq!(counts.dropped(), 1, "early forget remains prompt");
+            assert_eq!(state.transcripts.cache_count(), 0);
+            let still_running = state.store.get_session_by_id(id).await.unwrap().unwrap();
+            assert_eq!(still_running.status, Status::Running);
+
+            state.transcripts.read(
+                id,
+                std::path::PathBuf::from(&still_running.workdir),
+                &still_running.tool,
+                crate::transcript_store::ObservationMode::Live,
+            );
+            assert_eq!(
+                counts.created(),
+                2,
+                "live read recreates state during teardown"
+            );
+            assert_eq!(state.transcripts.cache_count(), 1);
+            assert_eq!(state.transcripts.observing_count(), 1);
+            while events.try_recv().is_ok() {}
+
+            gate.release();
+            let status = tokio::time::timeout(std::time::Duration::from_secs(2), route)
+                .await
+                .expect("forced delete completes")
+                .unwrap()
+                .unwrap();
+            assert_eq!(status, StatusCode::NO_CONTENT);
+            assert_eq!(counts.dropped(), 2, "final forget drops replacement");
+            assert_eq!(state.transcripts.observing_count(), 0);
+            assert_eq!(state.transcripts.cache_count(), 0);
+            assert!(state.store.get_session_by_id(id).await.unwrap().is_none());
+
+            counts.notify(1, 1);
+            assert!(
+                events.try_recv().is_err(),
+                "retired callback emitted an event"
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn preloaded_running_agent_task_read_finishes_before_stop_and_kill_retirement() {
+            for force_kill in [false, true] {
+                let (root, state, counts) = state_with_counting_transcripts().await;
+                let session = observed_claude_session(
+                    &state,
+                    &root,
+                    if force_kill {
+                        "preloaded-route-kill"
+                    } else {
+                        "preloaded-route-stop"
+                    },
+                )
+                .await;
+                state
+                    .store
+                    .update_status(session.id, Status::Running)
+                    .await
+                    .unwrap();
+                state.transcripts.stop_observing(session.id);
+                assert_eq!(counts.created(), 1);
+                assert_eq!(counts.dropped(), 1);
+
+                let request_gate = state.transcripts.park_next_agent_task_after_load();
+                let request_state = state.clone();
+                let id = session.id;
+                let request = tokio::spawn(async move {
+                    crate::routes::agent_tasks::get_agent_tasks(
+                        State(request_state),
+                        Path(id.to_string()),
+                    )
+                    .await
+                });
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    request_gate.wait_until_arrived(),
+                )
+                .await
+                .expect("agent-task handler parks after loading Running");
+
+                let retirement_gate = state.transcripts.park_next_route_retirement();
+                let route_state = state.clone();
+                let mut route =
+                    tokio::spawn(
+                        async move { stop_session_core(&route_state, id, force_kill).await },
+                    );
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(50),
+                        retirement_gate.wait_until_arrived(),
+                    )
+                    .await
+                    .is_err(),
+                    "stop/kill must wait behind the preloaded agent-task request"
+                );
+                assert_eq!(
+                    state
+                        .store
+                        .get_session_by_id(id)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .status,
+                    Status::Running
+                );
+
+                request_gate.release();
+                let _ = request.await.unwrap().unwrap();
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    retirement_gate.wait_until_arrived(),
+                )
+                .await
+                .expect("stop/kill acquires the boundary after the request completes");
+                assert_eq!(counts.created(), 2, "the preloaded request completed first");
+                assert_eq!(counts.dropped(), 2, "early retirement removed its observer");
+                retirement_gate.release();
+
+                let stopped = tokio::time::timeout(std::time::Duration::from_secs(2), &mut route)
+                    .await
+                    .expect("stop/kill completes")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(stopped.status, Status::Stopped);
+                assert_eq!(state.transcripts.observing_count(), 0);
+                assert_eq!(state.transcripts.cache_count(), 1);
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn preloaded_running_agent_task_read_finishes_before_forced_delete_forget() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let session = observed_claude_session(&state, &root, "preloaded-route-delete").await;
+            state
+                .store
+                .update_status(session.id, Status::Running)
+                .await
+                .unwrap();
+            state.transcripts.stop_observing(session.id);
+
+            let request_gate = state.transcripts.park_next_agent_task_after_load();
+            let request_state = state.clone();
+            let id = session.id;
+            let request = tokio::spawn(async move {
+                crate::routes::agent_tasks::get_agent_tasks(
+                    State(request_state),
+                    Path(id.to_string()),
+                )
+                .await
+            });
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                request_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("agent-task handler parks after loading Running");
+
+            let retirement_gate = state.transcripts.park_next_route_retirement();
+            let route_state = state.clone();
+            let mut route = tokio::spawn(async move {
+                delete(
+                    State(route_state),
+                    Path(id.to_string()),
+                    Query(DeleteQuery { force: true }),
+                )
+                .await
+            });
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    retirement_gate.wait_until_arrived(),
+                )
+                .await
+                .is_err(),
+                "delete must wait behind the preloaded agent-task request"
+            );
+            assert!(state.store.get_session_by_id(id).await.unwrap().is_some());
+
+            request_gate.release();
+            let _ = request.await.unwrap().unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                retirement_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("delete acquires the boundary after the request completes");
+            assert_eq!(counts.created(), 2, "the preloaded request completed first");
+            assert_eq!(counts.dropped(), 2, "early forget removed its observer");
+            assert_eq!(state.transcripts.cache_count(), 0);
+            retirement_gate.release();
+
+            let status = tokio::time::timeout(std::time::Duration::from_secs(2), &mut route)
+                .await
+                .expect("forced delete completes")
+                .unwrap()
+                .unwrap();
+            assert_eq!(status, StatusCode::NO_CONTENT);
+            assert!(state.store.get_session_by_id(id).await.unwrap().is_none());
+            assert_eq!(state.transcripts.observing_count(), 0);
+            assert_eq!(state.transcripts.cache_count(), 0);
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn preloaded_claude_agent_task_read_finishes_before_tool_patch_retirement() {
+            let (root, state, counts) = state_with_counting_transcripts().await;
+            let session = observed_claude_session(&state, &root, "preloaded-tool-patch").await;
+            state
+                .store
+                .update_status(session.id, Status::Running)
+                .await
+                .unwrap();
+            state.transcripts.stop_observing(session.id);
+
+            let request_gate = state.transcripts.park_next_agent_task_after_load();
+            let request_state = state.clone();
+            let id = session.id;
+            let request = tokio::spawn(async move {
+                crate::routes::agent_tasks::get_agent_tasks(
+                    State(request_state),
+                    Path(id.to_string()),
+                )
+                .await
+            });
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                request_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("agent-task handler parks with Claude identity");
+
+            let retirement_gate = state.transcripts.park_next_route_retirement();
+            let patch_state = state.clone();
+            let patch = tokio::spawn(async move {
+                patch_session(
+                    State(patch_state),
+                    Path(id.to_string()),
+                    Json(PatchBody {
+                        name: None,
+                        tool: Some("codex".into()),
+                        flags: None,
+                        model: None,
+                        pinned: None,
+                    }),
+                )
+                .await
+            });
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    retirement_gate.wait_until_arrived(),
+                )
+                .await
+                .is_err(),
+                "tool patch must wait behind the preloaded Claude request"
+            );
+            assert_eq!(
+                state
+                    .store
+                    .get_session_by_id(id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .tool,
+                "claude"
+            );
+
+            request_gate.release();
+            let _ = request.await.unwrap().unwrap();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                retirement_gate.wait_until_arrived(),
+            )
+            .await
+            .expect("tool patch acquires the boundary after the request completes");
+            assert_eq!(
+                counts.created(),
+                2,
+                "the stale-Claude request completed first"
+            );
+            assert_eq!(counts.dropped(), 2, "tool retirement removed its observer");
+            retirement_gate.release();
+
+            let updated = patch.await.unwrap().unwrap().0;
+            assert_eq!(updated.tool, "codex");
+            assert_eq!(state.transcripts.observing_count(), 0);
+            let reread = crate::routes::agent_tasks::get_agent_tasks(
+                State(state.clone()),
+                Path(id.to_string()),
+            )
+            .await
+            .unwrap();
+            assert!(reread.0.is_empty());
+            assert_eq!(counts.created(), 2, "post-patch read cannot attach Claude");
         }
     }
 }

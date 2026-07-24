@@ -76,6 +76,51 @@ describe('getWorkspaceSeedName', () => {
     ).toBe('pr-42')
   })
 
+  it('prefers the linked title slug over the bare issue/PR number', () => {
+    expect(
+      getWorkspaceSeedName({
+        explicitName: '',
+        prompt: '',
+        linkedIssueNumber: 7,
+        linkedPR: null,
+        linkedTitle: 'feat: reorder the New Workspace wizard'
+      })
+    ).toBe('feat-reorder-the-new-workspace-wizard')
+    expect(
+      getWorkspaceSeedName({
+        explicitName: '',
+        prompt: '',
+        linkedIssueNumber: null,
+        linkedPR: 42,
+        linkedTitle: 'Fix flaky login'
+      })
+    ).toBe('fix-flaky-login')
+  })
+
+  it('falls back to issue-N when the linked title slugs to empty', () => {
+    expect(
+      getWorkspaceSeedName({
+        explicitName: '',
+        prompt: '',
+        linkedIssueNumber: 7,
+        linkedPR: null,
+        linkedTitle: '🚀🚀🚀'
+      })
+    ).toBe('issue-7')
+  })
+
+  it('prefers an explicit name over the linked title', () => {
+    expect(
+      getWorkspaceSeedName({
+        explicitName: 'my-workspace',
+        prompt: '',
+        linkedIssueNumber: 7,
+        linkedPR: null,
+        linkedTitle: 'feat: reorder the New Workspace wizard'
+      })
+    ).toBe('my-workspace')
+  })
+
   it('slugifies and truncates very long prompts', () => {
     const longPrompt =
       'Investigate the flaky login regression on iOS where the session cookie is dropped after background refresh and users get bounced to the splash screen.'

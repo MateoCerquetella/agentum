@@ -268,6 +268,9 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     terminalScopeHistoryByWorktree: true,
     defaultTuiAgent: null,
     disabledTuiAgents: [],
+    // Why: null ⇒ the server's built-in default (Claude) — a profile that
+    // never opened the picker behaves exactly as before the setting existed.
+    chatAgent: null,
     skipDeleteWorktreeConfirm: false,
     skipRunningTerminalCloseConfirm: false,
     defaultTaskViewPreset: 'all',
@@ -321,7 +324,8 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
       pinned: [],
       recent: [],
       lastViewByProject: {},
-      activeProject: null
+      activeProject: null,
+      activeProjectByRepo: {}
     },
     // Why: default-on uses the user's default agent when it supports
     // non-interactive commit-message generation. Keep agent/model maps empty
@@ -394,7 +398,7 @@ export function getDefaultUIState(): PersistedUIState {
     rightSidebarOpen: true,
     rightSidebarTab: 'explorer',
     rightSidebarWidth: 350,
-    groupBy: 'repo',
+    groupBy: 'operational',
     sortBy: 'recent',
     showActiveOnly: false,
     hideSleepingWorkspaces: DEFAULT_HIDE_SLEEPING_WORKSPACES,

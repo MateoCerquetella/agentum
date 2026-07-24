@@ -169,11 +169,19 @@ async fn handle(
     {
         if msg.get("method").and_then(Value::as_str) == Some("tools/call") {
             if let Some(params) = msg.get_mut("params") {
-                if params.get("name").and_then(Value::as_str) == Some("agentum_browser") {
-                    if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
-                        if !a.contains_key("worktreeId") && !a.contains_key("cdpPort") {
-                            a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
-                        }
+                let is_browser =
+                    params.get("name").and_then(Value::as_str) == Some("agentum_browser");
+                let is_harness_run =
+                    params.get("name").and_then(Value::as_str) == Some("agentum_harness_run");
+                if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
+                    if is_browser && !a.contains_key("worktreeId") && !a.contains_key("cdpPort") {
+                        a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
+                    } else if is_harness_run && !a.contains_key("worktreeId") {
+                        // The MCP URL provisioned into a worktree agent already
+                        // carries its authoritative registry id. Harness launch
+                        // consumes the same identity instead of trusting a path
+                        // that could exist on both the daemon and an SSH host.
+                        a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
                     }
                 }
             }
@@ -215,7 +223,15 @@ async fn dispatch(
                 .unwrap_or(DEFAULT_PROTOCOL_VERSION);
             Ok(json!({
                 "protocolVersion": pv,
-                "capabilities": { "tools": { "listChanged": false } },
+                // `prompts` = the server-owned SDD playbooks (crate::sdd). Agents
+                // that render MCP prompts as slash commands (Claude Code, Gemini
+                // CLI) get native /sdd-*; everyone else reaches the same bodies
+                // through the `agentum_sdd` tool — tools/call is the lowest
+                // common denominator every MCP client supports.
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "prompts": { "listChanged": false },
+                },
                 "serverInfo": { "name": "agentum", "version": state.version },
                 // Top-level guidance surfaced to every connecting agent. The browser
                 // steer is the point: without it agents reach for claude-in-chrome /
@@ -227,6 +243,8 @@ async fn dispatch(
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_specs(orchestration_enabled(state).await) })),
         "tools/call" => call_tool(state, params).await,
+        "prompts/list" => Ok(prompts_list()),
+        "prompts/get" => prompts_get(params),
         other => Err((-32601, format!("method not found: {other}"))),
     }
 }
@@ -265,9 +283,22 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         {
             "name": "agentum_list_sessions",
             "description": "List the agent sessions agentum manages on this machine \
-                (each is one tmux pane running an agent CLI). Returns name, tool, \
-                status, and working directory. Use to see sibling agents/worktrees.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+                (each is one tmux pane running an agent CLI). Returns \
+                {total_matching, returned, truncated, sessions:[{id, name, tool, \
+                status, workdir}]}. A long-lived install accumulates hundreds of \
+                rows, so the page is capped (`limit`, default 50) — filter with \
+                `status` (exact, e.g. Running), `name_contains`, or \
+                `workdir_contains` instead of paging through everything.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "status": { "type": "string", "description": "Exact status filter (case-insensitive): Running|Stopped|Crashed|…" },
+                    "name_contains": { "type": "string", "description": "Substring filter on the session name" },
+                    "workdir_contains": { "type": "string", "description": "Substring filter on the working directory" },
+                    "limit": { "type": "integer", "description": "Max sessions to return (default 50, cap 500)" }
+                },
+                "additionalProperties": false,
+            },
         },
         {
             "name": "agentum_spawn_session",
@@ -280,7 +311,11 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 the agent CLI (claude|codex|cursor|gemini|… — default claude); optional \
                 `model`; `flags` are extra CLI args; `yolo` skips permission prompts \
                 (pushed as the canonical marker and translated per tool). Returns the new \
-                session's id, name, tool, status, and workdir.",
+                session's id, name, tool, status, and workdir. Mailbox timing: a message \
+                sent right after spawn can land BEFORE the new agent's first \
+                agentum_check_messages poll — make its bootstrap prompt poll the mailbox \
+                in a retry loop (every ~20s), or push directly with \
+                agentum_inject_prompt. End the session later with agentum_stop_session.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -552,16 +587,68 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
         },
         {
             "name": "agentum_report_status",
-            "description": "Report a work item's pipeline phase to its tracker: GitHub = flip the status/* label, Linear = move the workflow state, board = move the card column. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, ready_to_test, done).",
+            "description": "Report a work item's pipeline phase to its external tracker: GitHub = flip the status/* label, Linear = move the workflow state. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, in_review, ready_to_test, done).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "provider": { "type": "string", "enum": ["github", "linear", "board"] },
-                    "id": { "type": "string", "description": "The tracker's stable handle: board card key (AG-12), Linear identifier (ENG-42), or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
-                    "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear/board." },
-                    "phase": { "type": "string", "enum": ["todo", "in_progress", "ready_to_test", "done"] }
+                    "provider": { "type": "string", "enum": ["github", "linear"] },
+                    "id": { "type": "string", "description": "The tracker's stable handle: Linear identifier (ENG-42) or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
+                    "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear." },
+                    "phase": { "type": "string", "enum": ["todo", "in_progress", "in_review", "ready_to_test", "done"] }
                 },
                 "required": ["provider", "phase"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_sdd_loop_control",
+            "description": "Start, stop, or inspect the server-owned SDD loop for an agentum session. This is the control-plane companion to `agentum_sdd_loop`, which is only the end-of-step agent check-in. Use `agentum_list_sessions` to obtain the session UUID, then call action `start` to inject autonomous `sdd-orchestrate` steps, `status` to inspect progress, or `stop` to cancel further injections. Starting is idempotent and uses the same generation/event/step-cap machinery as the desktop Loop toggle.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "Agentum session UUID (obtain from agentum_list_sessions)" },
+                    "action": { "type": "string", "enum": ["start", "stop", "status"] },
+                    "max_steps": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Optional unattended step cap for action=start (default 10)" }
+                },
+                "required": ["session", "action"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_sdd_loop",
+            "description": "Check in with the per-session SDD loop that injected the current \
+                step prompt. Call it at the END of every loop step: `done: true` when the work \
+                is complete (the spec's phase is done or there is no actionable next step) — \
+                this stops the loop so no further step prompts are injected; `done: false` to \
+                keep the loop running, with `summary` as a one-line progress note. Always safe \
+                to call: with no active loop on the session (or from an earlier activation) it \
+                returns success and stops nothing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "The session uuid, exactly as given in the step prompt" },
+                    "done": { "type": "boolean", "description": "true = work complete, stop the loop; false = more to do, keep looping" },
+                    "summary": { "type": "string", "description": "One-line progress note; surfaced on the next step event when done is false" },
+                    "generation": { "type": "integer", "description": "The loop generation from the step prompt; a mismatch makes the check-in a no-op" }
+                },
+                "required": ["session", "done"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_sdd",
+            "description": "Fetch a server-owned SDD (spec-driven development) playbook. \
+                Call with no arguments to list the available playbooks (sdd-spec, \
+                sdd-spec-socratic, sdd-orchestrate, sdd-status, sdd-handoff, sdd-init); \
+                call with `name` to fetch one — then FOLLOW the returned playbook exactly. \
+                These are the same playbooks the desktop SDD buttons and the SDD loop \
+                deliver; agentum owns the bodies so every agent gets the same procedure.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Playbook to fetch, e.g. `sdd-spec`. Omit to list all." },
+                    "args": { "type": "string", "description": "Optional free-form arguments for the playbook (e.g. `autonomous` or a spec id for sdd-orchestrate)." }
+                },
                 "additionalProperties": false,
             },
         },
@@ -580,8 +667,116 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 "required": ["workdir", "entry"],
                 "additionalProperties": false,
             },
+        },
+        {
+            "name": "agentum_stop_session",
+            "description": "Stop or kill an agent session by id or name — the lifecycle \
+                END for agentum_spawn_session (#378), the same core as the desktop \
+                stop/kill actions. `mode` 'stop' (default) ends the pane gracefully; \
+                'kill' hard-kills it. An external (user-owned) tmux session is only \
+                detached, never destroyed. The session row and pane log survive as \
+                evidence; the pane is gone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "Session id (uuid) or unique session name" },
+                    "mode": { "type": "string", "enum": ["stop", "kill"], "description": "stop = graceful (default), kill = hard" }
+                },
+                "required": ["session"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_inject_prompt",
+            "description": "Inject a prompt DIRECTLY into a running agent session's REPL \
+                and submit it — the push channel (#378); the mailbox is pull and needs \
+                the recipient to poll. Same robust delivery as the SDD loop / the \
+                `/submit` route: waits for the REPL to go idle (accepting Claude's \
+                one-time workspace-trust dialog), types the text, then submits with a \
+                SEPARATE Enter so a multi-line prompt isn't swallowed as a paste. \
+                Delivery is asynchronous — the tool returns once queued; a busy agent \
+                can take tens of seconds to idle. `session` is an id or name.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session": { "type": "string", "description": "Session id (uuid) or unique session name" },
+                    "prompt": { "type": "string", "description": "The prompt to type into the REPL and submit" }
+                },
+                "required": ["session", "prompt"],
+                "additionalProperties": false,
+            },
+        },
+        {
+            "name": "agentum_harness_run",
+            "description": "Register (or reuse) a project's harness run and kick off the \
+                verify-gated drive loop in the background — the MCP equivalent of \
+                POST /api/harness + POST /{id}/run, completing the Goals surface \
+                (scaffold → plan → check → RUN, #378). Requires a ready \
+                `.agentum-harness/` (probe with agentum_harness_check). Returns \
+                {harness_id, started}: started=false means a driver is already live \
+                (not restarted). Watch progress with agentum_harness_board or the \
+                desktop Harness view.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                    "workdir": { "type": "string", "description": "Registered worktree path containing .agentum-harness/" },
+                    "worktreeId": { "type": "string", "description": "Exact registered worktree identity; normally supplied by the worktree-scoped MCP URL" }
+                },
+                "required": ["workdir", "worktreeId"],
+                "additionalProperties": false,
+            },
         }
     ]);
+
+    if let Some(arr) = tools.as_array_mut() {
+        arr.extend(json!([
+            {
+                "name": "agentum_harness_task_context",
+                "description": "Worker-only: retrieve the immutable bounded packet for one orchestrated harness task. An optional exact file or symbol expands only that named context.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"},"file":{"type":"string"},"symbol":{"type":"string"}},"required":["run_id","task_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_submit_patch",
+                "description": "Worker-only: submit a capability-scoped, hash-checked create/update/delete/rename transaction to the shared-worktree patch broker.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"},"summary":{"type":"string"},"operations":{"type":"array","items":{"type":"object"}}},"required":["run_id","task_id","capability_token","summary","operations"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_request_verify",
+                "description": "Worker-only: run the task's targeted gate in the serialized verification lane. A failure returns only its relevant output tail.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","task_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_report_blocked",
+                "description": "Worker-only: report a concrete blocker without stopping independent tasks.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"},"reason":{"type":"string"}},"required":["run_id","task_id","capability_token","reason"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_run_state",
+                "description": "Coordinator-only: return durable DAG/task summaries, leases, patch ledger and managed sessions without source dumps or worker transcripts.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_dispatch",
+                "description": "Coordinator-only: dispatch one ready task to a new isolated managed worker in the same worktree; server enforces the concurrency ceiling.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"task_id":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","task_id","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_transfer_ownership",
+                "description": "Coordinator-only: transfer a frozen or idle exact-file lease between tasks after server validation.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"path":{"type":"string"},"from_task":{"type":"string"},"to_task":{"type":"string"},"capability_token":{"type":"string"}},"required":["run_id","path","from_task","to_task","capability_token"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_create_repair_task",
+                "description": "Coordinator-only: create a focused repair task with explicit ownership and dependencies.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"capability_token":{"type":"string"},"task":{"type":"object"}},"required":["run_id","capability_token","task"],"additionalProperties":false}
+            },
+            {
+                "name": "agentum_harness_retry_or_block",
+                "description": "Coordinator/reviewer: retry a blocked task, block the run, or complete the run after read-only review.",
+                "inputSchema": {"type":"object","properties":{"run_id":{"type":"string"},"capability_token":{"type":"string"},"action":{"type":"string","enum":["retry","block","complete"]},"task_id":{"type":"string"},"reason":{"type":"string"}},"required":["run_id","capability_token","action"],"additionalProperties":false}
+            }
+        ]).as_array().cloned().unwrap_or_default());
+    }
 
     if !orchestration_enabled {
         if let Some(arr) = tools.as_array_mut() {
@@ -636,8 +831,20 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
     }
 
     let outcome: anyhow::Result<String> = match name {
-        "agentum_list_sessions" => tool_list_sessions(state).await,
+        "agentum_list_sessions" => tool_list_sessions(state, &args).await,
         "agentum_spawn_session" => tool_spawn_session(state, &args).await,
+        "agentum_stop_session" => tool_stop_session(state, &args).await,
+        "agentum_inject_prompt" => tool_inject_prompt(state, &args).await,
+        "agentum_harness_run" => tool_harness_run(state, &args).await,
+        "agentum_harness_task_context" => tool_harness_task_context(state, &args).await,
+        "agentum_harness_submit_patch" => tool_harness_submit_patch(state, &args).await,
+        "agentum_harness_request_verify" => tool_harness_request_verify(state, &args).await,
+        "agentum_harness_report_blocked" => tool_harness_report_blocked(state, &args).await,
+        "agentum_harness_run_state" => tool_harness_run_state(state, &args).await,
+        "agentum_harness_dispatch" => tool_harness_dispatch(state, &args).await,
+        "agentum_harness_transfer_ownership" => tool_harness_transfer_ownership(state, &args).await,
+        "agentum_harness_create_repair_task" => tool_harness_create_repair_task(state, &args).await,
+        "agentum_harness_retry_or_block" => tool_harness_retry_or_block(state, &args).await,
         "agentum_list_worktrees" => tool_list_worktrees().await,
         "agentum_send_message" => tool_send_message(state, &args).await,
         "agentum_check_messages" => tool_check_messages(state, &args).await,
@@ -651,6 +858,9 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_harness_check" => tool_harness_check(&args).await,
         "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
         "agentum_report_status" => tool_report_status(state, &args).await,
+        "agentum_sdd_loop_control" => tool_sdd_loop_control(state, &args).await,
+        "agentum_sdd_loop" => tool_sdd_loop(state, &args).await,
+        "agentum_sdd" => tool_sdd(&args),
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -724,7 +934,12 @@ async fn tool_spawn_session(state: &AppState, args: &Value) -> anyhow::Result<St
     }))?)
 }
 
-async fn tool_list_sessions(state: &AppState) -> anyhow::Result<String> {
+/// Default page size for `agentum_list_sessions` (#378): the raw table on a
+/// long-lived install runs to hundreds of rows (~93 KB observed), which blows
+/// MCP result limits — so the tool pages by default and reports truncation.
+const DEFAULT_SESSION_PAGE: usize = 50;
+
+async fn tool_list_sessions(state: &AppState, args: &Value) -> anyhow::Result<String> {
     let sessions = state.store.list_sessions(None).await?;
     let rows: Vec<Value> = sessions
         .iter()
@@ -738,7 +953,441 @@ async fn tool_list_sessions(state: &AppState) -> anyhow::Result<String> {
             })
         })
         .collect();
-    Ok(serde_json::to_string_pretty(&Value::Array(rows))?)
+    Ok(serde_json::to_string_pretty(&apply_session_filters(
+        rows, args,
+    ))?)
+}
+
+/// Filter + bound the session listing (#378). Pure over the projected JSON
+/// rows → unit-testable without a store. `status` is an exact (case-insensitive)
+/// match; the `*_contains` filters are substrings; `limit` caps the page (the
+/// envelope's `truncated` says whether anything was cut).
+fn apply_session_filters(rows: Vec<Value>, args: &Value) -> Value {
+    let want = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .map(str::to_ascii_lowercase)
+    };
+    let (status, name_c, workdir_c) = (
+        want("status"),
+        want("name_contains"),
+        want("workdir_contains"),
+    );
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|l| l.clamp(1, 500) as usize)
+        .unwrap_or(DEFAULT_SESSION_PAGE);
+    let field = |r: &Value, k: &str| {
+        r.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    };
+    let kept: Vec<Value> = rows
+        .into_iter()
+        .filter(|r| {
+            status.as_deref().is_none_or(|s| field(r, "status") == s)
+                && name_c
+                    .as_deref()
+                    .is_none_or(|n| field(r, "name").contains(n))
+                && workdir_c
+                    .as_deref()
+                    .is_none_or(|w| field(r, "workdir").contains(w))
+        })
+        .collect();
+    let total = kept.len();
+    let page: Vec<Value> = kept.into_iter().take(limit).collect();
+    json!({
+        "total_matching": total,
+        "returned": page.len(),
+        "truncated": total > page.len(),
+        "sessions": page,
+    })
+}
+
+/// Resolve a session reference — uuid first, then unique name — for the
+/// lifecycle/injection tools (#378). Agents usually hold the NAME (it's the
+/// mailbox handle); the uuid is what spawn returned.
+async fn resolve_session_ref(
+    state: &AppState,
+    sref: &str,
+) -> anyhow::Result<agentum_core::Session> {
+    if let Ok(id) = uuid::Uuid::parse_str(sref) {
+        if let Some(s) = state.store.get_session_by_id(id).await? {
+            return Ok(s);
+        }
+    }
+    state
+        .store
+        .get_session_by_name(sref)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no session with id or name `{sref}`"))
+}
+
+/// End a session — a thin view over [`super::sessions::stop_session_core`],
+/// the same core the desktop stop/kill routes use (#378: spawn finally has a
+/// lifecycle end on the MCP surface).
+async fn tool_stop_session(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let sref = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session` (id or name)"))?;
+    let mode = args.get("mode").and_then(Value::as_str).unwrap_or("stop");
+    let force_kill = match mode {
+        "stop" => false,
+        "kill" => true,
+        other => anyhow::bail!("unknown `mode` {other:?} (stop|kill)"),
+    };
+    let session = resolve_session_ref(state, sref).await?;
+    let stopped = super::sessions::stop_session_core(state, session.id, force_kill)
+        .await
+        .map_err(|e| anyhow::anyhow!("{mode} session: {e}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "id": stopped.id.to_string(),
+        "name": stopped.name,
+        "status": format!("{:?}", stopped.status),
+        "mode": mode,
+    }))?)
+}
+
+/// Push a prompt into a running session's REPL — a thin view over
+/// [`super::sessions::submit_prompt_core`] (the `/submit` route's core), which
+/// itself reuses the harness's robust two-step `inject_prompt` delivery (#378).
+async fn tool_inject_prompt(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let sref = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session` (id or name)"))?;
+    let prompt = args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `prompt`"))?;
+    let session = resolve_session_ref(state, sref).await?;
+    let name = session.name.clone();
+    super::sessions::submit_prompt_core(state, session, prompt.to_string())
+        .await
+        .map_err(|e| anyhow::anyhow!("inject prompt: {e}"))?;
+    Ok(serde_json::to_string_pretty(&json!({
+        "queued": true,
+        "session": name,
+        "note": "delivery is asynchronous — the prompt is typed once the REPL idles \
+                 (can take tens of seconds on a busy agent) and submitted with a \
+                 separate Enter",
+    }))?)
+}
+
+/// Register (or reuse) + run a project's harness — the MCP equivalent of
+/// `POST /api/harness` + `POST /{id}/run` (#378: Goals were preparable via
+/// scaffold/plan/check but not launchable). Same background kick as the route;
+/// the drive loop owns its own error handling (emits Error + Failed state).
+async fn tool_harness_run(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let raw = args
+        .get("workdir")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
+    let worktree_id = args
+        .get("worktreeId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing `worktreeId`; harness launch requires an exact registered worktree"
+            )
+        })?;
+    let (scope, host) = super::worktrees::resolve_harness_scope(state, worktree_id, raw)
+        .await
+        .map_err(|e| anyhow::anyhow!("resolve harness worktree: {e:?}"))?;
+    let workspace = crate::harness::HarnessWorkspace::scoped(scope.clone(), host.clone());
+    if !workspace.is_dir(&workspace.root()).await? {
+        anyhow::bail!(
+            "registered harness worktree does not exist on host {}: {}",
+            host.id,
+            scope.path
+        );
+    }
+    let mut config = crate::harness::HarnessConfig::load_from(&workspace).await?;
+    workspace
+        .strict_remote_preflight(
+            state,
+            Some(&config.features.agent_tool),
+            config.features.qa_agent_tool.as_deref(),
+            false,
+        )
+        .await?;
+    if workspace.is_remote()
+        && (config.features.execution_mode != crate::harness::ExecutionMode::Sequential
+            || config.features.max_concurrency != 1)
+    {
+        config.features.execution_mode = crate::harness::ExecutionMode::Sequential;
+        config.features.max_concurrency = 1;
+        config.save_features(&config.features).await?;
+    }
+
+    // Reuse only the exact registered worktree. A same-looking path on a
+    // different host/repo is a different scope and can never cross-attach.
+    let harness_id = match state.harness.find_by_scope(&scope).await {
+        Some(id) => id,
+        None => state
+            .harness
+            .start_scoped(scope.clone(), host)
+            .await
+            .map_err(|e| anyhow::anyhow!("register harness: {e}"))?,
+    };
+    let claimed = state
+        .harness
+        .claim_driver(harness_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("claim driver: {e}"))?;
+    if claimed {
+        let st = state.clone();
+        tokio::spawn(async move { crate::harness::drive(st, harness_id).await });
+    }
+    Ok(serde_json::to_string_pretty(&json!({
+        "harness_id": harness_id.to_string(),
+        "started": claimed,
+        "scope": scope,
+        "note": if claimed {
+            "drive loop kicked off in the background — watch agentum_harness_board \
+             (or the desktop Harness view)"
+        } else {
+            "a driver is already running this harness — not restarted"
+        },
+    }))?)
+}
+
+fn harness_arg<'a>(args: &'a Value, name: &str) -> anyhow::Result<&'a str> {
+    args.get(name)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `{name}`"))
+}
+
+async fn tool_harness_task_context(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let value = crate::harness::orchestrated::task_context(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "task_id")?,
+        harness_arg(args, "capability_token")?,
+        args.get("file").and_then(Value::as_str),
+        args.get("symbol").and_then(Value::as_str),
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+async fn tool_harness_submit_patch(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let submission: crate::harness::orchestrated::PatchSubmission =
+        serde_json::from_value(args.clone())?;
+    let run_id = uuid::Uuid::parse_str(&submission.run_id)?;
+    let task_id = submission.task_id.clone();
+    let receipt = crate::harness::orchestrated::submit_patch(state, submission).await?;
+    state
+        .harness
+        .emit(crate::harness::HarnessEvent::PatchChanged {
+            harness_id: run_id,
+            task_id,
+            patch_id: receipt.patch_id.clone(),
+            state: "accepted".into(),
+        });
+    Ok(serde_json::to_string_pretty(&receipt)?)
+}
+
+async fn tool_harness_request_verify(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let run_id = harness_arg(args, "run_id")?;
+    let task_id = harness_arg(args, "task_id")?;
+    let (success, output_tail) = crate::harness::orchestrated::verify_task(
+        state,
+        run_id,
+        task_id,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    state
+        .harness
+        .emit(crate::harness::HarnessEvent::TaskVerification {
+            harness_id: uuid::Uuid::parse_str(run_id)?,
+            task_id: task_id.to_string(),
+            success,
+        });
+    Ok(serde_json::to_string_pretty(
+        &json!({"success":success,"output_tail":output_tail}),
+    )?)
+}
+
+async fn tool_harness_report_blocked(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let run_id = harness_arg(args, "run_id")?;
+    let task_id = harness_arg(args, "task_id")?;
+    crate::harness::orchestrated::authorize_worker(
+        state,
+        run_id,
+        task_id,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    let reason = harness_arg(args, "reason")?;
+    let tail = reason
+        .char_indices()
+        .rev()
+        .take(4000)
+        .last()
+        .map_or(reason, |(start, _)| &reason[start..]);
+    state
+        .store
+        .harness_update_task(run_id, task_id, "blocked", None, None, Some(tail))
+        .await?;
+    state
+        .store
+        .harness_record_decision(
+            run_id,
+            "worker_blocked",
+            Some(&json!({"task_id":task_id,"reason":tail}).to_string()),
+        )
+        .await?;
+    Ok(json!({"blocked":true,"independent_tasks_continue":true}).to_string())
+}
+
+async fn tool_harness_run_state(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let value = crate::harness::orchestrated::run_state(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+async fn tool_harness_dispatch(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let session = crate::harness::orchestrated::dispatch_worker(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "task_id")?,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    Ok(serde_json::to_string_pretty(
+        &json!({"session_id":session.id,"session_name":session.name,"task_id":harness_arg(args,"task_id")?}),
+    )?)
+}
+
+async fn tool_harness_transfer_ownership(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    crate::harness::orchestrated::transfer_ownership(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "path")?,
+        harness_arg(args, "from_task")?,
+        harness_arg(args, "to_task")?,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    Ok(json!({"transferred":true}).to_string())
+}
+
+async fn tool_harness_create_repair_task(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let task: crate::harness::orchestrated::ExecutionTask = serde_json::from_value(
+        args.get("task")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing `task`"))?,
+    )?;
+    let id = task.id.clone();
+    crate::harness::orchestrated::create_repair_task(
+        state,
+        harness_arg(args, "run_id")?,
+        harness_arg(args, "capability_token")?,
+        task,
+    )
+    .await?;
+    Ok(json!({"created":true,"task_id":id}).to_string())
+}
+
+async fn tool_harness_retry_or_block(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let run_id = harness_arg(args, "run_id")?;
+    crate::harness::orchestrated::authorize_coordinator(
+        state,
+        run_id,
+        harness_arg(args, "capability_token")?,
+    )
+    .await?;
+    let action = harness_arg(args, "action")?;
+    let reason = args.get("reason").and_then(Value::as_str).unwrap_or("");
+    match action {
+        "retry" => {
+            let task_id = harness_arg(args, "task_id")?;
+            let task = state
+                .store
+                .harness_task(run_id, task_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown task {task_id}"))?;
+            if task.status != "blocked" {
+                anyhow::bail!("task {task_id} is not blocked");
+            }
+            state
+                .store
+                .harness_update_task(run_id, task_id, "ready", None, None, None)
+                .await?;
+        }
+        "block" => {
+            state
+                .store
+                .harness_update_run(
+                    run_id,
+                    "blocked",
+                    None,
+                    Some(&json!({"reason":reason}).to_string()),
+                )
+                .await?
+        }
+        "complete" => {
+            let tasks = state.store.harness_tasks(run_id).await?;
+            if tasks.iter().any(|t| t.status != "completed") {
+                anyhow::bail!("cannot complete: tasks remain unfinished");
+            }
+            state
+                .store
+                .harness_update_run(
+                    run_id,
+                    "completed",
+                    None,
+                    Some(&json!({"review":reason}).to_string()),
+                )
+                .await?;
+            if let Some(run) = state.store.harness_get_orchestrated_run(run_id).await? {
+                if let Ok(config) =
+                    crate::harness::HarnessConfig::load(std::path::Path::new(&run.workdir)).await
+                {
+                    crate::harness::orchestrated::transition_run_tracker(
+                        state,
+                        &config,
+                        crate::task_sink::TrackerPhase::Done,
+                    )
+                    .await;
+                }
+            }
+            if let Ok(id) = uuid::Uuid::parse_str(run_id) {
+                state.harness.release_driver(id).await;
+                state
+                    .harness
+                    .set_state(id, crate::harness::HarnessState::Done)
+                    .await?;
+                state
+                    .harness
+                    .emit(crate::harness::HarnessEvent::HarnessCompleted {
+                        harness_id: id,
+                        success: true,
+                    });
+            }
+        }
+        other => anyhow::bail!("unknown action {other}"),
+    }
+    state
+        .store
+        .harness_record_decision(
+            run_id,
+            action,
+            Some(&json!({"reason":reason,"task_id":args.get("task_id")}).to_string()),
+        )
+        .await?;
+    Ok(json!({"action":action,"accepted":true}).to_string())
 }
 
 /// Reuses the same registry reader the `/api/worktrees` route uses — a tool is
@@ -1156,7 +1805,9 @@ fn parse_report_status_args(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `phase`"))?;
     let phase = crate::task_sink::parse_tracker_phase(phase_str).ok_or_else(|| {
-        anyhow::anyhow!("unknown `phase` {phase_str:?} (todo|in_progress|ready_to_test|done)")
+        anyhow::anyhow!(
+            "unknown `phase` {phase_str:?} (todo|in_progress|in_review|ready_to_test|done)"
+        )
     })?;
     let url = args.get("url").and_then(Value::as_str).map(str::to_string);
     let id = match args.get("id").and_then(Value::as_str) {
@@ -1193,20 +1844,241 @@ fn report_status_text(
     }
 }
 
+/// How long `agentum_report_status` waits for the transition seam before
+/// answering with a "still running" note (#377). A COLD first call on the
+/// github arm chains up to 7 sequential `gh` invocations (5 label
+/// ensure-creates + the edit + a Projects write), each individually bounded at
+/// 30s — worst case minutes, which outlives MCP client timeouts and surfaced
+/// to callers as a raw socket close (the best-effort contract violated at the
+/// transport layer). The work is detached, so on deadline it keeps running and
+/// the labels/state still land.
+const REPORT_STATUS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// #377: answer within `deadline` no matter what the seam does. Applied/Skipped
+/// map through [`report_status_text`]; a panic inside the detached transition
+/// becomes a readable note (isolated from the HTTP task, so the response can't
+/// die with it); a deadline overrun reports "still running". Pure over the
+/// JoinHandle → unit-testable with scripted tasks.
+async fn bounded_transition_text(
+    handle: tokio::task::JoinHandle<anyhow::Result<crate::task_sink::TransitionResult>>,
+    deadline: std::time::Duration,
+    provider: &str,
+    phase: crate::task_sink::TrackerPhase,
+) -> String {
+    match tokio::time::timeout(deadline, handle).await {
+        Err(_) => format!(
+            "skipped (tracker still running in the background after {}s — the {provider} \
+             update may still land; re-check the ticket rather than retrying immediately)",
+            deadline.as_secs()
+        ),
+        Ok(Err(join)) => format!("skipped (tracker crashed, non-fatal): {join}"),
+        Ok(Ok(outcome)) => report_status_text(outcome, provider, phase),
+    }
+}
+
 /// Report a work item's pipeline phase to its tracker — a thin arm over
 /// [`crate::task_sink::apply_tracker_transition`] (spec 005 F4), the same seam
 /// the harness's own transitions use. Never reimplements label/state mechanics.
+/// The seam runs DETACHED and deadline-bounded (#377) so a stalled `gh` chain
+/// or a panic can never take the MCP response down with it.
 async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<String> {
     let (provider, id, url, phase) = parse_report_status_args(args)?;
-    let outcome = crate::task_sink::apply_tracker_transition(
-        &state.store,
-        &provider,
-        &id,
-        url.as_deref(),
-        phase,
-    )
-    .await;
-    Ok(report_status_text(outcome, &provider, phase))
+    let bus = state.bus.clone();
+    let prov = provider.clone();
+    let handle = tokio::spawn(async move {
+        crate::task_sink::apply_tracker_transition(
+            &prov,
+            &id,
+            url.as_deref(),
+            phase,
+            crate::task_sink::TrackerEmit {
+                bus: &bus,
+                worktree_id: None,
+            },
+        )
+        .await
+    });
+    Ok(bounded_transition_text(handle, REPORT_STATUS_DEADLINE, &provider, phase).await)
+}
+
+/// Parse + validate `agentum_sdd_loop` inputs (spec 016 F1). Pure →
+/// unit-testable without AppState. Errors here are CALLER bugs (missing
+/// `session`/`done`, a junk uuid) and DO surface as `isError: true`; everything
+/// downstream — no live loop, a stale generation — is a SUCCESS string by
+/// contract, so the check-in can never fail an agent's turn.
+fn parse_sdd_loop_args(
+    args: &Value,
+) -> anyhow::Result<(uuid::Uuid, Option<u64>, bool, Option<String>)> {
+    let session = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session`"))?;
+    let session = uuid::Uuid::parse_str(session)
+        .map_err(|_| anyhow::anyhow!("`session` is not a uuid: {session}"))?;
+    let done = args
+        .get("done")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("missing `done` (boolean)"))?;
+    let generation = args.get("generation").and_then(Value::as_u64);
+    let summary = args
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok((session, generation, done, summary))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SddLoopControlAction {
+    Start,
+    Stop,
+    Status,
+}
+
+/// Parse the MCP control-plane shape separately from the agent check-in shape.
+/// Keeping the verbs distinct is a safety property: a controller cannot
+/// accidentally stop a loop by being interpreted as `done:true`.
+fn parse_sdd_loop_control_args(
+    args: &Value,
+) -> anyhow::Result<(uuid::Uuid, SddLoopControlAction, Option<u32>)> {
+    let session = args
+        .get("session")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("missing `session`"))?;
+    let session = uuid::Uuid::parse_str(session)
+        .map_err(|_| anyhow::anyhow!("`session` is not a uuid: {session}"))?;
+    let action = match args.get("action").and_then(Value::as_str) {
+        Some("start") => SddLoopControlAction::Start,
+        Some("stop") => SddLoopControlAction::Stop,
+        Some("status") => SddLoopControlAction::Status,
+        Some(other) => {
+            return Err(anyhow::anyhow!(
+                "unknown `action` {other:?} (expected start, stop, or status)"
+            ));
+        }
+        None => return Err(anyhow::anyhow!("missing `action`")),
+    };
+    let max_steps = match args.get("max_steps") {
+        None => None,
+        Some(value) => {
+            let raw = value
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("`max_steps` must be an integer from 1 to 100"))?;
+            if !(1..=100).contains(&raw) {
+                return Err(anyhow::anyhow!(
+                    "`max_steps` must be an integer from 1 to 100"
+                ));
+            }
+            Some(raw as u32)
+        }
+    };
+    if max_steps.is_some() && action != SddLoopControlAction::Start {
+        return Err(anyhow::anyhow!(
+            "`max_steps` is only valid when `action` is `start`"
+        ));
+    }
+    Ok((session, action, max_steps))
+}
+
+/// MCP start/stop/status over the same server-owned loop seam as the desktop
+/// toggle. The response is compact JSON text so agents can reliably read the
+/// authoritative active/step/max_steps tuple from a normal MCP tool result.
+async fn tool_sdd_loop_control(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let (session, action, max_steps) = parse_sdd_loop_control_args(args)?;
+    let loop_state = match action {
+        SddLoopControlAction::Status => super::sdd::read_loop_state(state, session),
+        SddLoopControlAction::Start => {
+            super::sdd::set_loop_active(state, session, true, max_steps).await?
+        }
+        SddLoopControlAction::Stop => {
+            super::sdd::set_loop_active(state, session, false, None).await?
+        }
+    };
+    Ok(json!({
+        "session": session,
+        "active": loop_state.active,
+        "step": loop_state.step,
+        "max_steps": loop_state.max_steps,
+    })
+    .to_string())
+}
+
+/// SDD-loop check-in — a thin arm over [`super::sdd::agent_checkin`] (spec 016
+/// F1); the loop mechanics stay in `routes/sdd.rs` beside the map they mutate.
+async fn tool_sdd_loop(state: &AppState, args: &Value) -> anyhow::Result<String> {
+    let (session, generation, done, summary) = parse_sdd_loop_args(args)?;
+    Ok(super::sdd::agent_checkin(state, session, generation, done, summary).await)
+}
+
+/// Fetch (or list) the server-owned SDD playbooks. This is the universal
+/// delivery path — the bootstrap line the SDD buttons/loop inject tells the
+/// agent to call this; agents whose client renders MCP prompts can use
+/// `prompts/get` instead, but `tools/call` works everywhere.
+fn tool_sdd(args: &Value) -> anyhow::Result<String> {
+    let name = args.get("name").and_then(Value::as_str);
+    let extra = args.get("args").and_then(Value::as_str);
+    match name {
+        None => {
+            let list = crate::sdd::playbooks()
+                .into_iter()
+                .map(|p| format!("- `{}` ({}): {}", p.name, p.title, p.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(format!(
+                "Available SDD playbooks (fetch one with {{\"name\": …}}):\n{list}"
+            ))
+        }
+        Some(name) => {
+            let playbook = crate::sdd::get(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown playbook `{name}` — call agentum_sdd with no arguments to list them"
+                )
+            })?;
+            Ok(crate::sdd::full_prompt(&playbook, extra))
+        }
+    }
+}
+
+/// MCP `prompts/list`: the SDD playbooks as native prompts. Clients that
+/// surface these as slash commands (Claude Code, Gemini CLI) get `/sdd-*`
+/// with zero per-agent installation.
+fn prompts_list() -> Value {
+    let prompts: Vec<Value> = crate::sdd::playbooks()
+        .into_iter()
+        .map(|p| {
+            json!({
+                "name": p.name,
+                "title": p.title,
+                "description": p.description,
+                "arguments": [{
+                    "name": "args",
+                    "description": "Optional free-form arguments (e.g. `autonomous` or a spec id for sdd-orchestrate)",
+                    "required": false,
+                }],
+            })
+        })
+        .collect();
+    json!({ "prompts": prompts })
+}
+
+/// MCP `prompts/get`: resolve one playbook into a user-role message.
+fn prompts_get(params: Option<&Value>) -> Result<Value, (i64, String)> {
+    let name = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .ok_or((-32602, "missing prompt name".to_string()))?;
+    let playbook =
+        crate::sdd::get(name).ok_or_else(|| (-32602, format!("unknown prompt: {name}")))?;
+    let args = params
+        .and_then(|p| p.get("arguments"))
+        .and_then(|a| a.get("args"))
+        .and_then(Value::as_str);
+    Ok(json!({
+        "description": playbook.description,
+        "messages": [{
+            "role": "user",
+            "content": { "type": "text", "text": crate::sdd::full_prompt(&playbook, args) },
+        }],
+    }))
 }
 
 #[cfg(test)]
@@ -1319,6 +2191,62 @@ mod tests {
     }
 
     #[test]
+    fn agentum_sdd_is_advertised_regardless_of_the_orchestration_gate() {
+        assert!(tool_names(true).contains(&"agentum_sdd".to_string()));
+        assert!(tool_names(false).contains(&"agentum_sdd".to_string()));
+    }
+
+    #[test]
+    fn tool_sdd_lists_fetches_and_rejects_unknown_playbooks() {
+        // No name → a discoverable list of all six playbooks.
+        let list = tool_sdd(&json!({})).unwrap();
+        for name in [
+            "sdd-spec",
+            "sdd-spec-socratic",
+            "sdd-orchestrate",
+            "sdd-status",
+        ] {
+            assert!(list.contains(name), "list mentions {name}");
+        }
+        // Named fetch → the playbook body (with args appended when given).
+        let body = tool_sdd(&json!({ "name": "sdd-orchestrate", "args": "autonomous" })).unwrap();
+        assert!(
+            body.contains("validate_handoff"),
+            "carries the real procedure"
+        );
+        assert!(body.contains("Arguments: autonomous"));
+        // Unknown → an actionable error, not a silent empty result.
+        let err = tool_sdd(&json!({ "name": "sdd-nope" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sdd-nope") && err.contains("list"));
+    }
+
+    #[test]
+    fn prompts_surface_serves_the_sdd_playbooks() {
+        let list = prompts_list();
+        let names: Vec<&str> = list["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["name"].as_str())
+            .collect();
+        assert_eq!(names.len(), 6);
+        assert!(names.contains(&"sdd-spec"));
+
+        let got = prompts_get(Some(&json!({
+            "name": "sdd-status",
+            "arguments": { "args": "" },
+        })))
+        .unwrap();
+        let text = got["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("STATE.md"));
+
+        let err = prompts_get(Some(&json!({ "name": "nope" }))).unwrap_err();
+        assert_eq!(err.0, -32602);
+    }
+
+    #[test]
     fn tool_catalog_is_well_formed() {
         // Every advertised tool needs name + description + object inputSchema,
         // or agents reject the listing.
@@ -1359,6 +2287,97 @@ mod tests {
         }
         assert!(off.contains(&"agentum_list_worktrees".to_string()));
         assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());
+    }
+
+    // --- spec 016 F1: agentum_sdd_loop ---
+
+    #[test]
+    fn sdd_loop_tool_is_advertised_regardless_of_the_orchestration_gate() {
+        // Loop control, not the mailbox/DAG surface: deliberately NOT in
+        // ORCHESTRATION_TOOLS, so it is advertised (and callable) whenever the
+        // MCP server itself is on.
+        assert!(!is_orchestration_tool("agentum_sdd_loop"));
+        assert!(tool_names(true).contains(&"agentum_sdd_loop".to_string()));
+        assert!(tool_names(false).contains(&"agentum_sdd_loop".to_string()));
+    }
+
+    #[test]
+    fn sdd_loop_control_is_advertised_regardless_of_the_orchestration_gate() {
+        assert!(!is_orchestration_tool("agentum_sdd_loop_control"));
+        assert!(tool_names(true).contains(&"agentum_sdd_loop_control".to_string()));
+        assert!(tool_names(false).contains(&"agentum_sdd_loop_control".to_string()));
+    }
+
+    #[test]
+    fn parse_sdd_loop_control_args_separates_control_from_checkin() {
+        let u = uuid::Uuid::new_v4();
+        assert!(parse_sdd_loop_control_args(&json!({})).is_err());
+        assert!(
+            parse_sdd_loop_control_args(&json!({ "session": "nope", "action": "start" })).is_err()
+        );
+        assert!(
+            parse_sdd_loop_control_args(&json!({ "session": u.to_string(), "action": "continue" }))
+                .is_err()
+        );
+        assert!(
+            parse_sdd_loop_control_args(
+                &json!({ "session": u.to_string(), "action": "status", "max_steps": 4 })
+            )
+            .is_err(),
+            "step caps only make sense for start"
+        );
+        assert!(
+            parse_sdd_loop_control_args(
+                &json!({ "session": u.to_string(), "action": "start", "max_steps": 0 })
+            )
+            .is_err()
+        );
+
+        let (id, action, max_steps) = parse_sdd_loop_control_args(
+            &json!({ "session": u.to_string(), "action": "start", "max_steps": 12 }),
+        )
+        .unwrap();
+        assert_eq!(id, u);
+        assert_eq!(action, SddLoopControlAction::Start);
+        assert_eq!(max_steps, Some(12));
+
+        let (_, action, max_steps) =
+            parse_sdd_loop_control_args(&json!({ "session": u.to_string(), "action": "status" }))
+                .unwrap();
+        assert_eq!(action, SddLoopControlAction::Status);
+        assert_eq!(max_steps, None);
+    }
+
+    #[test]
+    fn parse_sdd_loop_args_requires_session_and_done() {
+        let u = uuid::Uuid::new_v4();
+
+        // Missing session / missing done / junk uuid → caller errors.
+        assert!(parse_sdd_loop_args(&json!({ "done": true })).is_err());
+        assert!(parse_sdd_loop_args(&json!({ "session": u.to_string() })).is_err());
+        assert!(parse_sdd_loop_args(&json!({ "session": "not-a-uuid", "done": true })).is_err());
+        // A stringly-typed `done` is a caller bug, never coerced.
+        assert!(parse_sdd_loop_args(&json!({ "session": u.to_string(), "done": "true" })).is_err());
+
+        // Minimal valid shape: generation + summary are optional.
+        let (id, generation, done, summary) =
+            parse_sdd_loop_args(&json!({ "session": u.to_string(), "done": false })).unwrap();
+        assert_eq!(id, u);
+        assert_eq!(generation, None);
+        assert!(!done);
+        assert_eq!(summary, None);
+
+        // Full shape.
+        let (_, generation, done, summary) = parse_sdd_loop_args(&json!({
+            "session": u.to_string(),
+            "done": true,
+            "generation": 7,
+            "summary": "F1 green",
+        }))
+        .unwrap();
+        assert_eq!(generation, Some(7));
+        assert!(done);
+        assert_eq!(summary.as_deref(), Some("F1 green"));
     }
 
     // --- spec 005 F4: agentum_report_status ---
@@ -1431,6 +2450,46 @@ mod tests {
         );
     }
 
+    /// `in_review` is a first-class phase (the SDD Reviewer step reports it) —
+    /// it must parse AND be advertised in the tool spec's enum, or a
+    /// schema-respecting client can never send it.
+    #[test]
+    fn report_status_accepts_in_review() {
+        use crate::task_sink::TrackerPhase;
+
+        let (_, _, _, phase) = parse_report_status_args(&json!({
+            "provider": "github",
+            "url": "https://github.com/owner/repo/issues/42",
+            "phase": "in_review",
+        }))
+        .unwrap();
+        assert_eq!(phase, TrackerPhase::InReview);
+
+        let specs = tool_specs(true);
+        let phase_enum = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agentum_report_status")
+            .expect("agentum_report_status is in the catalog")["inputSchema"]["properties"]["phase"]
+            ["enum"]
+            .clone();
+        assert!(
+            phase_enum.as_array().unwrap().contains(&json!("in_review")),
+            "tool-spec phase enum must advertise in_review, got {phase_enum}"
+        );
+        let provider_enum = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agentum_report_status")
+            .unwrap()["inputSchema"]["properties"]["provider"]["enum"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(provider_enum, vec![json!("github"), json!("linear")]);
+    }
+
     /// The AC 9 pin: every outcome shape — including a seam `Err` — maps to a
     /// normal text result. A tracker hiccup is a readable "skipped" note, never
     /// a tool error.
@@ -1444,11 +2503,11 @@ mod tests {
         );
         assert_eq!(
             report_status_text(
-                Ok(TransitionResult::Skipped("no board card with key X".into())),
+                Ok(TransitionResult::Skipped("unknown tracker provider".into())),
                 "board",
                 TrackerPhase::Todo,
             ),
-            "skipped: no board card with key X"
+            "skipped: unknown tracker provider"
         );
         let text = report_status_text(
             Err(anyhow::anyhow!("network down")),
@@ -1484,6 +2543,7 @@ mod tests {
             cert_fingerprint: Arc::new(String::new()),
             transcripts: crate::TranscriptStore::new(broadcast::channel(16).0),
             stream_positions: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: "test".to_string(),
             no_auth: true,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -1493,50 +2553,75 @@ mod tests {
             api_base_url: None,
             desktop_bridge: None,
             harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
+            sdd_loops: Default::default(),
             events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
-    /// Wire-level delegation (board arm, no subprocess): the tool moves a real
-    /// board card's column through `apply_tracker_transition` — proof the arm
-    /// delegates to the seam rather than reimplementing tracker mechanics.
     #[tokio::test]
-    async fn report_status_moves_a_board_card() {
+    async fn sdd_loop_control_delegates_to_the_shared_loop_state() {
         let state = fresh_state().await;
-        let card = state
+        let session = state
             .store
-            .create_board_item(agentum_core::NewBoardItem {
-                title: "Add OAuth login".into(),
-                body: None,
-                lbl: Some("feat".into()),
-                status: Some("todo".into()),
-                workdir: None,
-                parent_goal_id: None,
-                tool: None,
+            .create_session(agentum_core::NewSession {
+                name: "mcp-loop-control".into(),
+                workdir: "/tmp/mcp-loop-control".into(),
+                tool: "claude".into(),
                 model: None,
-                session_id: None,
-                priority: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
             })
             .await
             .unwrap();
 
-        let text = tool_report_status(
+        let status = tool_sdd_loop_control(
             &state,
-            &json!({ "provider": "board", "id": card.key, "phase": "in_progress" }),
+            &json!({ "session": session.id.to_string(), "action": "status" }),
         )
         .await
         .unwrap();
-        assert_eq!(text, "applied: board → InProgress");
+        let status: Value = serde_json::from_str(&status).unwrap();
+        assert_eq!(status["session"], session.id.to_string());
+        assert_eq!(status["active"], false);
+        assert_eq!(status["step"], 0);
+        assert_eq!(status["max_steps"], 0);
 
-        let moved = state
-            .store
-            .list_board_items()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|c| c.key == card.key)
-            .unwrap();
-        assert_eq!(moved.status, "doing");
+        let stopped = tool_sdd_loop_control(
+            &state,
+            &json!({ "session": session.id.to_string(), "action": "stop" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&stopped).unwrap()["active"],
+            false
+        );
+
+        let err = tool_sdd_loop_control(
+            &state,
+            &json!({ "session": session.id.to_string(), "action": "start" }),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("session is not running"), "got: {err}");
+    }
+
+    /// Legacy board metadata remains readable as input but is a bounded,
+    /// non-writing best-effort skip through the shared transition seam.
+    #[tokio::test]
+    async fn report_status_legacy_board_provider_is_non_writing() {
+        let state = fresh_state().await;
+        let text = tool_report_status(
+            &state,
+            &json!({ "provider": "board", "id": "AG-12", "phase": "in_progress" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(text, "skipped: unknown tracker provider \"board\"");
 
         // Unknown provider flows to the seam's Skipped — visible, non-fatal.
         let text = tool_report_status(
@@ -1546,5 +2631,182 @@ mod tests {
         .await
         .unwrap();
         assert!(text.starts_with("skipped:"), "got: {text}");
+    }
+
+    // --- #377: the seam can stall or crash; the tool must always answer ---
+
+    /// The transport pin: a stalled tracker chain answers with a "still
+    /// running" note before the client's own timeout, a panic inside the seam
+    /// is isolated to a readable note (the old behavior killed the whole HTTP
+    /// response → the client saw a raw socket close), and a fast outcome still
+    /// reads exactly as before.
+    #[tokio::test]
+    async fn report_status_bounds_a_stalled_or_crashing_tracker() {
+        use crate::task_sink::{TrackerPhase, TransitionResult};
+
+        // Stall: outlives the deadline → note, never a hang or an Err.
+        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            Ok(TransitionResult::Applied)
+        });
+        let text = bounded_transition_text(
+            h,
+            std::time::Duration::from_millis(40),
+            "github",
+            TrackerPhase::InProgress,
+        )
+        .await;
+        assert!(
+            text.starts_with("skipped (tracker still running"),
+            "got: {text}"
+        );
+
+        // Panic inside the seam: isolated into the best-effort note.
+        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> =
+            tokio::spawn(async { panic!("label table hole") });
+        let text = bounded_transition_text(
+            h,
+            std::time::Duration::from_secs(5),
+            "github",
+            TrackerPhase::Done,
+        )
+        .await;
+        assert!(
+            text.starts_with("skipped (tracker crashed, non-fatal):"),
+            "got: {text}"
+        );
+
+        // Fast success is byte-identical to the pre-#377 text.
+        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> =
+            tokio::spawn(async { Ok(TransitionResult::Applied) });
+        let text = bounded_transition_text(
+            h,
+            std::time::Duration::from_secs(5),
+            "board",
+            TrackerPhase::Todo,
+        )
+        .await;
+        assert_eq!(text, "applied: board → Todo");
+    }
+
+    // --- #378: session lifecycle end, pane injection, harness run, bounded list ---
+
+    #[test]
+    fn lifecycle_and_run_tools_are_in_the_catalog_ungated() {
+        // Control-plane verbs like spawn: advertised regardless of the
+        // orchestration gate (they are not the mailbox/DAG surface).
+        for tool in [
+            "agentum_stop_session",
+            "agentum_inject_prompt",
+            "agentum_harness_run",
+        ] {
+            assert!(!is_orchestration_tool(tool));
+            assert!(tool_names(true).contains(&tool.to_string()), "{tool} on");
+            assert!(tool_names(false).contains(&tool.to_string()), "{tool} off");
+        }
+        let specs = tool_specs(true);
+        let harness = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "agentum_harness_run")
+            .unwrap();
+        assert_eq!(
+            harness["inputSchema"]["required"],
+            json!(["workdir", "worktreeId"])
+        );
+    }
+
+    #[test]
+    fn session_filters_bound_and_select_the_listing() {
+        let rows: Vec<Value> = (0..120)
+            .map(|i| {
+                json!({
+                    "id": format!("id-{i}"),
+                    "name": if i % 2 == 0 { format!("worker-{i}") } else { format!("terminal-{i}") },
+                    "tool": "claude",
+                    "status": if i < 100 { "Stopped" } else { "Running" },
+                    "workdir": if i < 60 { "/projects/alpha" } else { "/projects/beta" },
+                })
+            })
+            .collect();
+
+        // No filters: capped at the default page with the truncation flagged —
+        // the ~93 KB whole-table dump (#378) can't happen again.
+        let out = apply_session_filters(rows.clone(), &json!({}));
+        assert_eq!(out["total_matching"], 120);
+        assert_eq!(out["returned"], 50);
+        assert_eq!(out["truncated"], true);
+
+        // Status is exact + case-insensitive; substring filters compose.
+        let out = apply_session_filters(rows.clone(), &json!({ "status": "running" }));
+        assert_eq!(out["total_matching"], 20);
+        assert_eq!(out["truncated"], false);
+        let out = apply_session_filters(
+            rows.clone(),
+            &json!({ "name_contains": "worker", "workdir_contains": "beta" }),
+        );
+        assert_eq!(out["total_matching"], 30);
+
+        // The limit clamps to something sane in both directions.
+        let out = apply_session_filters(rows.clone(), &json!({ "limit": 0 }));
+        assert_eq!(out["returned"], 1);
+        let out = apply_session_filters(rows, &json!({ "limit": 10 }));
+        assert_eq!(out["returned"], 10);
+        assert_eq!(out["truncated"], true);
+    }
+
+    #[tokio::test]
+    async fn stop_session_rejects_unknown_sessions_and_modes() {
+        let state = fresh_state().await;
+        // Unknown ref (neither uuid nor name) → an actionable caller error.
+        let err = tool_stop_session(&state, &json!({ "session": "nope-123" }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no session"), "got: {err}");
+        // A junk mode is a caller bug, never coerced.
+        let err = tool_stop_session(&state, &json!({ "session": "x", "mode": "vaporize" }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown `mode`"), "got: {err}");
+        // Missing session arg entirely.
+        assert!(tool_stop_session(&state, &json!({})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn inject_prompt_requires_a_live_session() {
+        let state = fresh_state().await;
+        assert!(
+            tool_inject_prompt(&state, &json!({ "prompt": "hi" }))
+                .await
+                .is_err()
+        );
+        assert!(
+            tool_inject_prompt(&state, &json!({ "session": "ghost" }))
+                .await
+                .is_err()
+        );
+        let err = tool_inject_prompt(&state, &json!({ "session": "ghost", "prompt": "hi" }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no session"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn harness_run_requires_registered_worktree_identity() {
+        let state = fresh_state().await;
+        let dir = tempfile::tempdir().unwrap();
+        // A path alone can name a local checkout and an SSH checkout. The tool
+        // must reject before probing either filesystem or registering a run.
+        let err = tool_harness_run(&state, &json!({ "workdir": dir.path().to_string_lossy() }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("worktreeId"), "got: {err}");
+        assert!(state.harness.list().await.is_empty());
+        assert!(tool_harness_run(&state, &json!({})).await.is_err());
     }
 }

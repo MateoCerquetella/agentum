@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import TabBar from '../tab-bar/TabBar'
+import { SddBarGate } from '../sdd/SddBar'
 import CloseTerminalDialog from '../terminal-pane/CloseTerminalDialog'
 import { useRunningTerminalCloseGuard } from '../terminal-pane/use-running-terminal-close-guard'
 import { TabBarQuickCommandsButton } from '../tab-bar/TabBarQuickCommandsButton'
@@ -377,6 +378,18 @@ export default function TabGroupPanel({
             split moves to remount xterm or reparent Electron `<webview>`,
             losing TUI state or reloading the page. */}
       </div>
+      {/* SDD quick-inject bar + Loop toggle (issue #313), one per group under
+          its pane body. This is the SPLIT-GROUP (real) render path — the
+          Terminal.tsx placement only covers the legacy no-layout fallback,
+          which modern workspaces never hit (the v0.72.0/v0.72.1 invisibility
+          bug). The bar sits below the anchor body, so the overlay-positioned
+          terminal pane shrinks above it. */}
+      {activeTab?.contentType === 'terminal'
+        ? (() => {
+            const tab = terminalTabs.find((t) => t.id === activeTab.entityId)
+            return tab ? <SddBarGate key={tab.id} tab={tab} /> : null
+          })()
+        : null}
       <CloseTerminalDialog
         open={closeGuard.dialog.open}
         dontAskAgain={closeGuard.dialog.dontAskAgain}

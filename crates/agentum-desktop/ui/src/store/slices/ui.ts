@@ -11,6 +11,7 @@ import type {
   PersistedTrustedAgentumHooks,
   PersistedUIState,
   StatusBarItem,
+  TaskLinearContext,
   TaskProvider,
   TaskResumeState,
   TaskViewPresetId,
@@ -21,6 +22,8 @@ import type {
   AgentActivityDisplayMode,
   WorktreeCardProperty
 } from '../../../../shared/types'
+import { GLOBAL_TASK_PROJECT_SCOPE } from '../../../../shared/types'
+import { taskProjectScopeKey } from '../../../../shared/task-project-scope'
 import type { LaunchSource } from '../../../../shared/telemetry-events'
 import { tuiAgentToAgentKind } from '../../../../shared/agent-kind'
 import { PET_SIZE_DEFAULT, PET_SIZE_MAX, PET_SIZE_MIN } from '../../../../shared/types'
@@ -210,25 +213,23 @@ const LINEAR_TASK_PREFETCH_LIMIT = 36
 // hook-status entries these acks pair with.
 const HYDRATE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
-// One-time migration so existing users land on the new hosts-first sidebar.
-// They carry an explicit persisted `groupBy: 'repo'` (the OLD default), which
-// would otherwise hide host grouping. On the first rehydrate after this ships
-// we force 'host' once and set a localStorage flag; afterwards the user's
-// explicit choice (including switching back to 'repo') is respected.
-const GROUPBY_HOST_MIGRATION_KEY = 'agentum-groupby-host-migrated'
-function migrateGroupByToHostOnce(
-  persisted: UISlice['groupBy'] | 'parent' | undefined
-): UISlice['groupBy'] {
-  const resolved: UISlice['groupBy'] = persisted === 'parent' ? 'host' : (persisted ?? 'host')
-  try {
-    if (typeof localStorage !== 'undefined' && !localStorage.getItem(GROUPBY_HOST_MIGRATION_KEY)) {
-      localStorage.setItem(GROUPBY_HOST_MIGRATION_KEY, '1')
-      return 'host'
-    }
-  } catch {
-    // localStorage unavailable (SSR/headless) — fall through to the resolved value.
+const VALID_WORKTREE_GROUPS = new Set<UISlice['groupBy']>([
+  'operational',
+  'none',
+  'workspace-status',
+  'repo',
+  'pr-status',
+  'host'
+])
+
+/** Preserve every explicit supported preference; default only absent/corrupt data. */
+export function normalizePersistedGroupBy(persisted: unknown): UISlice['groupBy'] {
+  if (persisted === 'parent') {
+    return 'host'
   }
-  return resolved
+  return VALID_WORKTREE_GROUPS.has(persisted as UISlice['groupBy'])
+    ? (persisted as UISlice['groupBy'])
+    : 'operational'
 }
 
 const VALID_TASK_PRESETS = new Set<TaskViewPresetId>([
@@ -360,7 +361,33 @@ function createAgentSendTargetModeInstanceId(): string {
   return `${Date.now()}:${agentSendTargetModeInstanceCounter}`
 }
 
-function sanitizeTaskResumeState(value: unknown): TaskResumeState | undefined {
+function sanitizeLinearContext(value: unknown): TaskLinearContext | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+  const context = value as Record<string, unknown>
+  if (
+    (context.kind !== 'project' && context.kind !== 'view') ||
+    typeof context.id !== 'string' ||
+    !context.id.trim() ||
+    typeof context.workspaceId !== 'string' ||
+    !context.workspaceId.trim() ||
+    context.workspaceId === 'all'
+  ) {
+    return undefined
+  }
+  return {
+    kind: context.kind,
+    id: context.id,
+    workspaceId: context.workspaceId,
+    model: context.model === 'issue' || context.model === 'project' ? context.model : undefined
+  }
+}
+
+function sanitizeTaskResumeState(
+  value: unknown,
+  validRepoIds?: ReadonlySet<string>
+): TaskResumeState | undefined {
   if (!value || typeof value !== 'object') {
     return undefined
   }
@@ -395,22 +422,28 @@ function sanitizeTaskResumeState(value: unknown): TaskResumeState | undefined {
   if (typeof input.linearQuery === 'string') {
     next.linearQuery = input.linearQuery
   }
-  if (input.linearContext && typeof input.linearContext === 'object') {
-    const context = input.linearContext as Record<string, unknown>
-    if (
-      (context.kind === 'project' || context.kind === 'view') &&
-      typeof context.id === 'string' &&
-      context.id.trim() &&
-      typeof context.workspaceId === 'string' &&
-      context.workspaceId.trim() &&
-      context.workspaceId !== 'all'
-    ) {
-      next.linearContext = {
-        kind: context.kind,
-        id: context.id,
-        workspaceId: context.workspaceId,
-        model: context.model === 'issue' || context.model === 'project' ? context.model : undefined
+  const legacyLinearContext = sanitizeLinearContext(input.linearContext)
+  if (legacyLinearContext) {
+    next.linearContext = legacyLinearContext
+  }
+  if (input.linearContextByRepo && typeof input.linearContextByRepo === 'object') {
+    const contexts: Record<string, TaskLinearContext> = {}
+    for (const [repoId, rawContext] of Object.entries(input.linearContextByRepo)) {
+      if (
+        repoId === '__proto__' ||
+        repoId === 'prototype' ||
+        repoId === 'constructor' ||
+        (validRepoIds && repoId !== GLOBAL_TASK_PROJECT_SCOPE && !validRepoIds.has(repoId))
+      ) {
+        continue
       }
+      const context = sanitizeLinearContext(rawContext)
+      if (context) {
+        contexts[repoId] = context
+      }
+    }
+    if (Object.keys(contexts).length > 0) {
+      next.linearContextByRepo = contexts
     }
   }
 
@@ -437,23 +470,81 @@ export type UISlice = {
   acknowledgedAgentsByPaneKey: Record<string, number>
   acknowledgeAgents: (paneKeys: string[]) => void
   unacknowledgeAgents: (paneKeys: string[]) => void
-  activeView: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeTasks: 'terminal' | 'settings' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeSettings: 'terminal' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeActivity: 'terminal' | 'settings' | 'tasks' | 'skills' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeSkills: 'terminal' | 'settings' | 'tasks' | 'activity' | 'harness' | 'wiki' | 'project'
-  previousViewBeforeHarness: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'wiki' | 'project'
-  previousViewBeforeWiki: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
-  previousViewBeforeProject: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'wiki'
+  activeView:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeTasks:
+    | 'terminal'
+    | 'settings'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeSettings:
+    | 'terminal'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeActivity:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'skills'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeSkills:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'harness'
+    | 'project'
+    | 'projects'
+  previousViewBeforeHarness:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'project'
+    | 'projects'
+  /** Where the hub returns on close — 'projects' when it was opened from the
+   *  Projects page, so back-navigation lands on the picker, not a terminal. */
+  previousViewBeforeProject:
+    | 'terminal'
+    | 'settings'
+    | 'tasks'
+    | 'activity'
+    | 'skills'
+    | 'harness'
+    | 'projects'
+  previousViewBeforeProjects: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
   /** Which tab the Project Hub shows (ADE redesign: a project opens as a hub
-   *  with per-project Chat / Wiki / Tasks / Sessions). Survives tab switches
-   *  within a session; the repo itself is `activeRepoId`. */
-  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'sessions'
+   *  with per-project Chat / Wiki / Tasks / Tracker / Sessions). Survives tab
+   *  switches within a session; the repo itself is `activeRepoId`. */
+  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
   setProjectHubTab: (tab: UISlice['projectHubTab']) => void
   /** Open the per-project hub for a repo (sidebar project click). Sets the
    *  active repo, seeds the embedded Tasks tab's repo preselection, and
-   *  switches the main view. */
-  openProjectHub: (repoId: string, tab?: UISlice['projectHubTab']) => void
+   *  switches the main view. `seed.taskSource` picks the Tasks tab's tracker
+   *  (spec 016: re-routed bare board openers land a Linear filed-card on the
+   *  Linear tab) — NOT a detail payload; detail opens stay on openTaskPage. */
+  openProjectHub: (
+    repoId: string,
+    tab?: UISlice['projectHubTab'],
+    seed?: { taskSource?: TaskProvider }
+  ) => void
   closeProjectHub: () => void
   setActiveView: (view: UISlice['activeView']) => void
   taskPageData: {
@@ -466,6 +557,7 @@ export type UISlice = {
   }
   taskResumeState: TaskResumeState | undefined
   setTaskResumeState: (updates: Partial<TaskResumeState>) => void
+  setLinearContextForRepo: (context: TaskLinearContext | undefined) => void
   githubTaskDrawerWorkItem: GitHubWorkItem | null
   setGithubTaskDrawerWorkItem: (item: GitHubWorkItem | null) => void
   newWorkspaceDraft: {
@@ -505,8 +597,9 @@ export type UISlice = {
   closeSkillsPage: () => void
   openHarnessPage: () => void
   closeHarnessPage: () => void
-  openWikiPage: () => void
-  closeWikiPage: () => void
+  /** Open the Projects page (the card-grid picker; per Mateo the sidebar
+   *  never lists repos — projects are chosen inside this page, then the hub). */
+  openProjectsPage: () => void
   setNewWorkspaceDraft: (draft: NonNullable<UISlice['newWorkspaceDraft']>) => void
   clearNewWorkspaceDraft: () => void
   openSettingsPage: () => void
@@ -581,7 +674,7 @@ export type UISlice = {
   clearAgentumHookTrustForRepo: (repoId: string) => void
   setupScriptPromptDismissedRepoIds: string[]
   dismissSetupScriptPrompt: (repoId: string) => void
-  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
+  groupBy: 'operational' | 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
   setGroupBy: (g: UISlice['groupBy']) => void
   sortBy: 'name' | 'smart' | 'recent' | 'repo' | 'manual'
   setSortBy: (s: UISlice['sortBy']) => void
@@ -869,20 +962,31 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeActivity: 'terminal',
   previousViewBeforeSkills: 'terminal',
   previousViewBeforeHarness: 'terminal',
-  previousViewBeforeWiki: 'terminal',
   previousViewBeforeProject: 'terminal',
+  previousViewBeforeProjects: 'terminal',
   projectHubTab: 'chat',
   setProjectHubTab: (tab) => set({ projectHubTab: tab }),
-  openProjectHub: (repoId, tab) => {
+  openProjectHub: (repoId, tab, seed) => {
     // Why: the hub's embedded Tasks tab is the full TaskPage seeded from
     // taskPageData at mount — preselect the hub's repo here so it scopes
     // correctly without going through openTaskPage (which would also flip
     // activeView to 'tasks' and record Board history).
-    get().setActiveRepo(repoId)
     set((state) => ({
+      activeRepoId: repoId,
       activeView: 'project',
       projectHubTab: tab ?? state.projectHubTab,
-      taskPageData: { preselectedRepoId: repoId },
+      // Invalidate the target repo's session binding in the SAME store write
+      // that seeds its TaskPage. A previously cached/corrupt identity must not
+      // get one render under the newly opened repo while ProjectHubPage's
+      // async binding fetch is still starting. Other repos stay cached.
+      projectBindingByRepo: {
+        ...state.projectBindingByRepo,
+        [repoId]: { status: 'loading' }
+      },
+      taskPageData: {
+        preselectedRepoId: repoId,
+        ...(seed?.taskSource ? { taskSource: seed.taskSource } : {})
+      },
       previousViewBeforeProject:
         state.activeView === 'project' ? state.previousViewBeforeProject : state.activeView
     }))
@@ -1005,7 +1109,38 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   },
   setTaskResumeState: (updates) =>
     set((s) => {
-      const next = { ...s.taskResumeState, ...updates }
+      const { linearContext, ...plainUpdates } = updates
+      const next: TaskResumeState = { ...s.taskResumeState, ...plainUpdates }
+      // Keep every existing TaskPage call site safe while the persisted shape
+      // moves from the legacy global slot to a repo-scoped map.
+      if (Object.prototype.hasOwnProperty.call(updates, 'linearContext')) {
+        const scopeKey = taskProjectScopeKey(s.activeRepoId)
+        const linearContextByRepo = { ...s.taskResumeState?.linearContextByRepo }
+        if (linearContext) {
+          linearContextByRepo[scopeKey] = linearContext
+        } else {
+          delete linearContextByRepo[scopeKey]
+        }
+        next.linearContext = undefined
+        next.linearContextByRepo = linearContextByRepo
+      }
+      api.ui.set({ taskResumeState: next }).catch(console.error)
+      return { taskResumeState: next }
+    }),
+  setLinearContextForRepo: (context) =>
+    set((s) => {
+      const scopeKey = taskProjectScopeKey(s.activeRepoId)
+      const linearContextByRepo = { ...s.taskResumeState?.linearContextByRepo }
+      if (context) {
+        linearContextByRepo[scopeKey] = context
+      } else {
+        delete linearContextByRepo[scopeKey]
+      }
+      const next: TaskResumeState = {
+        ...s.taskResumeState,
+        linearContext: undefined,
+        linearContextByRepo
+      }
       api.ui.set({ taskResumeState: next }).catch(console.error)
       return { taskResumeState: next }
     }),
@@ -1076,15 +1211,13 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: state.previousViewBeforeHarness
     })),
-  openWikiPage: () =>
+  openProjectsPage: () =>
     set((state) => ({
-      activeView: 'wiki',
-      previousViewBeforeWiki:
-        state.activeView === 'wiki' ? state.previousViewBeforeWiki : state.activeView
-    })),
-  closeWikiPage: () =>
-    set((state) => ({
-      activeView: state.previousViewBeforeWiki
+      activeView: 'projects',
+      previousViewBeforeProjects:
+        state.activeView === 'projects' || state.activeView === 'project'
+          ? state.previousViewBeforeProjects
+          : state.activeView
     })),
   setNewWorkspaceDraft: (draft) => set({ newWorkspaceDraft: draft }),
   clearNewWorkspaceDraft: () => set({ newWorkspaceDraft: null }),
@@ -1227,7 +1360,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       return { setupScriptPromptDismissedRepoIds: next }
     }),
 
-  groupBy: 'host',
+  groupBy: 'operational',
   // Why: group keys are mode-specific (e.g. repo id vs PR status), so
   // collapsed state from one mode is meaningless in another. Clearing
   // also prevents unbounded accumulation of stale keys across mode switches.
@@ -1507,13 +1640,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         ),
         rightSidebarOpen: typeof ui.rightSidebarOpen === 'boolean' ? ui.rightSidebarOpen : true,
         rightSidebarTab: normalizePersistedRightSidebarTab(ui.rightSidebarTab),
-        // Why: hosts-first is the new default layout. New/legacy-undefined and
-        // the legacy 'parent' value resolve to 'host'. Existing users carried an
-        // explicit persisted 'repo' (the OLD default), which would hide the new
-        // layout — so a ONE-TIME migration lands everyone on 'host' the first
-        // time this ships, after which their explicit choice (incl. switching
-        // back to 'repo') is respected. The localStorage flag makes it one-shot.
-        groupBy: migrateGroupByToHostOnce(ui.groupBy as UISlice['groupBy'] | 'parent' | undefined),
+        // Operational is the default only for absent/corrupt state. Explicit
+        // choices remain stable across upgrades; legacy parent means host.
+        groupBy: normalizePersistedGroupBy(ui.groupBy),
         sortBy,
         // Why: Active-only was retired. Force the old persisted flag off so an
         // old profile cannot invisibly keep narrowing the workspace list.
@@ -1566,7 +1695,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         browserDefaultUrl: ui.browserDefaultUrl ?? null,
         browserDefaultSearchEngine: ui.browserDefaultSearchEngine ?? null,
         browserKagiSessionLink: normalizeKagiSessionLink(ui.browserKagiSessionLink ?? ''),
-        taskResumeState: sanitizeTaskResumeState(ui.taskResumeState),
+        taskResumeState: sanitizeTaskResumeState(ui.taskResumeState, validRepoIds),
         featureTipsSeenIds: normalizeFeatureTipIds(ui.featureTipsSeenIds),
         featureInteractions: normalizeFeatureInteractions(ui.featureInteractions),
         trustedAgentumHooks: filterTrustedAgentumHooksToValidRepos(

@@ -4,6 +4,265 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.2] — 2026-07-23
+
+### Fixed
+
+- **Simple and complex issue drafting now lives in the New workspace flow.**
+  Step 3’s New issue editor defaults to a concise draft and exposes the guided
+  SDD interview from the adjacent menu; the resulting issue stays editable and
+  is linked before the worktree starts.
+- **Project Tasks is minimal again.** The drafting choice no longer appears in
+  the standalone Tasks intake, keeping worktree-specific setup in its actual
+  creation path.
+
+## [0.96.1] — 2026-07-23
+
+### Fixed
+
+- **Shared-worktree lease keys are portable across operating systems.** Files
+  discovered inside worker creation directories now use stable `/`-separated
+  keys on Windows, matching execution-plan paths and allowing drift detection
+  and recovery checks to resolve the correct durable lease.
+
+## [0.96.0] — 2026-07-22
+
+### Added
+
+- **Project Tasks now supports quick and structured issue drafting.** The
+  primary action produces a concise issue description, while “Shape into
+  spec…” opens a focused five-pass interview and returns one structured issue
+  to the existing editable review form.
+- **Harness runs can orchestrate isolated workers in one shared worktree.** A
+  coordinator validates the execution DAG and ownership boundaries, while
+  capability-scoped worker patches, leases, checkpoints, and recovery state
+  are persisted and applied through a serialized verification lane.
+
+### Fixed
+
+- **Project tracker tasks load on the first visit.** The Tasks page now starts
+  its provider read when it mounts instead of waiting for a later state change,
+  eliminating the blank tracker panel.
+- **Quick issue drafts stay genuinely concise.** The server enforces a plain
+  paragraph with no markdown headings or checklists and caps output at 120
+  words even when the selected model ignores formatting instructions.
+
+## [0.95.0] — 2026-07-22
+
+### Added
+
+- **Workspaces can start without an issue.** The new-work wizard offers a
+  manual-work option that skips issue creation and linking while preserving the
+  selected repository, agent, and model.
+- **SSH repositories support issue-first work.** Existing GitHub issues can be
+  searched and selected for SSH-backed projects, and new issues are created
+  against the repository's configured identity instead of requiring a local
+  checkout.
+
+### Fixed
+
+- **Failed gated runs recover cleanly.** Agentum tears down stale harness
+  sessions before recording failure and exposes a retry action instead of
+  leaving the run indefinitely stuck.
+- **SDD progress remains visible and aligned.** The gated-run header stays
+  mounted while Autopilot starts, and the connector correctly follows PM Spec,
+  Architecture, Plan tasks, Build, and Review.
+
+## [0.94.0] — 2026-07-22
+
+### Changed
+
+- **Project trackers are now the only active work-item source.** Agentum uses
+  each project's configured GitHub Project or Linear workspace for task views,
+  gated-run transitions, and work selection; the retired internal Workspace
+  board is no longer exposed through the desktop or HTTP API.
+- **Legacy board data is compatibility-only.** Existing database rows survive
+  upgrades without being read, reconciled, or mutated during normal work.
+
+### Fixed
+
+- **Gated runs no longer require an unconfigured tracker provider.** SDD and
+  harness transitions use the repository's existing GitHub or Linear binding,
+  avoiding spurious architecture blockers for unsupported integrations.
+- **Tracker-empty projects have a clear recovery path.** Project Tasks shows
+  explicit configuration and empty-state guidance instead of dead board
+  actions or broken navigation.
+
+## [0.93.0] — 2026-07-22
+
+### Added
+
+- **Project-owned integration settings.** Each Agentum project now configures
+  its own GitHub Project or Linear board from that project's settings instead
+  of relying on a global integration selection.
+- **Issue-first workspace creation.** New work can begin by drafting and filing
+  the issue before the workspace is created, with the chosen agent and model
+  carried through the flow.
+- **Operational sidebar triage.** Workspace activity, status, age, and agent
+  state are easier to scan while keeping project colors and authoritative
+  tracker status visible.
+
+### Fixed
+
+- **External boards are strictly isolated by project.** Project pages reject
+  account-wide Linear navigation, stale GitHub Project identities, cached rows,
+  and late responses from any other project.
+- **Project switches fail closed.** An unbound or unresolved project shows only
+  its own picker or configuration path and never borrows another project's
+  board, issue list, or task mode.
+
+## [0.92.3] — 2026-07-22
+
+### Fixed
+
+- **Windows CI keeps a stable home directory during parallel tests.** The
+  workflow initializes `HOME` from the native Windows user-profile API before
+  registry tests run, so environment-isolation restores cannot leave readers
+  without a home path.
+
+## [0.92.2] — 2026-07-22
+
+### Fixed
+
+- **Windows home resolution covers native runner environments.** When `HOME`
+  and `USERPROFILE` are absent, Agentum now resolves the standard
+  `%HOMEDRIVE%%HOMEPATH%` pair used by Windows services and CI runners.
+
+## [0.92.1] — 2026-07-22
+
+### Fixed
+
+- **Windows release validation is cross-platform.** Home-directory expansion
+  falls back to `%USERPROFILE%`, SDD playbook frontmatter accepts CRLF files,
+  and browser-scope coverage uses native absolute paths on every runner.
+
+## [0.92.0] — 2026-07-22
+
+### Added
+
+- **Gated runs now show observable live progress.** The workspace and harness
+  surfaces expose the active feature, phase, gate, attempt, and latest useful
+  event instead of leaving a newly started run on an opaque picker screen.
+
+### Fixed
+
+- **GitHub Project status is authoritative in the sidebar.** Duplicate local
+  phase chips are removed, confirmed board status reconciles stale local state,
+  and failed writes remain retryable until the remote tracker acknowledges them.
+- **Local merges into `develop` advance linked tracker work.** The tracker poller
+  detects completed local integration without requiring a remote PR merge first.
+- **SDD toolbar actions preserve the selected session.** Injection and loop
+  controls remain bound to the visible agent session across refreshes and pane
+  identity changes.
+- **Project colors are visible in the sidebar again** while retaining neutral
+  fallbacks for projects without a configured color.
+- **Release-tag CI is green under strict Clippy.** Test-only compatibility code,
+  environment-serialized async tests, and the SDD stop seam no longer trip the
+  `-D warnings` gate.
+
+## [0.91.0] — 2026-07-21
+
+### Fixed
+
+- **Linear work no longer leaks between Project Hubs.** Embedded Tasks surfaces
+  fail closed to the active repository's bound Linear project (or its project
+  picker) and never restore or fetch the account-wide Issues/Views landing.
+- **Standalone Tasks remains intentionally cross-project.** The global Tasks
+  page keeps its Linear Issues, Projects, and Views modes while project-scoped
+  hubs expose only data that belongs to their active project.
+
+## [0.90.0] — 2026-07-21
+
+### Added
+
+- **Tracker configuration is owned by each Agentum project.** GitHub Project
+  bindings, Linear targets, task preferences, and migration provenance now live
+  behind the registered repository identity instead of a globally active board.
+- **Local and SSH repositories use the same configuration path.** The server
+  resolves the selected repository on its registered host and keeps writes,
+  deletes, migrations, and issue intake scoped to that project.
+- **Chat and issue drafting can use a selected installed AI engine,** with the
+  Claude model preference retained when Claude is chosen.
+- **Agentum's SDD control plane includes the gated PM → Architect → Developer →
+  Tester → Reviewer orchestration playbooks and handoff contracts.**
+
+### Changed
+
+- **New Workspace shows only the selected project's tracker and issues.** Rows
+  are filtered to the server-resolved repository, grouped by Project status,
+  searchable, refreshable, and guarded by a repository + slug + Project scope.
+- **Legacy tracker state migrates deterministically.** Migrated mismatches can
+  repair from the exact repository origin; explicit configurations remain
+  user-owned and surface a reconfigure error instead of being overwritten.
+
+### Fixed
+
+- **Wrong-project issues can no longer leak into New Workspace.** Unbound,
+  loading, failed, or mismatched selected projects never borrow the globally
+  active Project or its cached rows.
+- **Project switches and inline unbinds invalidate tracker data immediately.**
+  Late responses from the previous scope are rejected, the connected state is
+  cleared, and linked workspace coordinates always come from the visible issue.
+
+## [0.89.0] — 2026-07-21
+
+### Added
+
+- **Project colors now follow you across the IDE.** The configured project color
+  appears in the Projects grid, project hub and file explorer headers, New
+  Workspace repository picker, and command palette, while custom project icons
+  remain intact.
+
+## [0.88.0] — 2026-07-21
+
+### Fixed
+
+- **GitHub Project boards are isolated per repository.** Switching from Agentum
+  to another repository such as Freebee now invalidates the target repository's
+  binding atomically and waits for verification. An unbound or still-loading
+  repository shows its own project picker or loading state and can never reuse
+  the previous repository's project identity, table, or cached board.
+- **Legacy Tasks routes use the same repository-scoped binding loader,** so the
+  isolation guarantee also holds when navigating through the `tracker` alias.
+
+## [0.87.0] — 2026-07-20
+
+### Added
+
+- **Harness sessions show their live SDD-loop status.** The desktop now exposes
+  the active SDD phase and state directly in a harness session, making progress
+  and required attention visible while an agent works.
+- **Chat and issue creation can target a selected agent.**
+- **Tracker projects are scoped per repository,** preventing projects from one
+  repository leaking into another repository's task intake.
+
+### Changed
+
+- **Gated runs are surfaced and can be unlinked** from their workspace so the
+  harness state stays understandable and recoverable.
+- **Workspace and board synchronization is faster.** The store uses returning
+  upserts, backend query round-trips are reduced, and the desktop uses constant-
+  time workspace lookups and memoized status synchronization.
+
+### Fixed
+
+- **Codex MCP HTTP authentication uses `bearer_token_env_var`,** restoring
+  compatibility with current Codex configuration.
+- **The New Workspace tracker no longer reloads issues on each return to step
+  three.**
+
+## [0.57.1] — 2026-07-20
+
+### Fixed
+
+- **Codex MCP bearer token rejection.** Codex CLI no longer supports the inline
+  `bearer_token` field on streamable HTTP MCP servers — it is now rejected at
+  config parse time with `bearer_token is not supported for streamable_http`.
+  Replaced with `bearer_token_env_var = "AGENTUM_MCP_TOKEN"` and the token is
+  exported as an environment variable in the pane before launch. The
+  `ToolAdapter` trait gained a new `mcp_env()` method for adapters that need to
+  inject environment variables alongside MCP args. (openai/codex#5011, #4904)
+
 ## [0.31.0] — 2026-06-25
 
 ### Added

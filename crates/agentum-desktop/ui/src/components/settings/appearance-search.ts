@@ -63,6 +63,24 @@ export const THEME_ENTRIES: SettingsSearchEntry[] = [
   }
 ]
 
+export const COLOR_THEME_ENTRIES: SettingsSearchEntry[] = [
+  {
+    title: 'Color Theme',
+    description: 'Recolor the whole app with a color theme (Dracula, Catppuccin, …).',
+    keywords: [
+      'color theme',
+      'colour',
+      'palette',
+      'dracula',
+      'catppuccin',
+      'gruvbox',
+      'accent',
+      'appearance',
+      'app theme'
+    ]
+  }
+]
+
 export const ZOOM_ENTRIES: SettingsSearchEntry[] = [
   {
     title: 'UI Zoom',
@@ -114,6 +132,7 @@ export const SIDEBAR_ENTRIES: SettingsSearchEntry[] = [
 
 export const APPEARANCE_PANE_SEARCH_ENTRIES: SettingsSearchEntry[] = [
   ...THEME_ENTRIES,
+  ...COLOR_THEME_ENTRIES,
   ...TYPOGRAPHY_ENTRIES,
   ...ZOOM_ENTRIES,
   ...TERMINAL_APPEARANCE_SEARCH_ENTRIES,

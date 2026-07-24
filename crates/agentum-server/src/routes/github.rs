@@ -10,24 +10,36 @@
 //! The desktop already snapshots a Linear issue's `description` into linked
 //! context (`lib/linear-linked-work-item.ts`); GitHub work items carry no body
 //! in memory, so the read is the one missing piece. Both routes reuse the same
-//! `gh` runner (`gh_in_dir` / `TaskSink`) and slug resolver
-//! (`resolve_github_slug`) the board issue-creation path uses, so there is no
-//! new shell/auth surface: `gh` runs on the local host with the user's own auth
-//! from a neutral cwd (`$HOME`), addressed by `--repo <slug>` exactly like
-//! issue creation.
+//! `gh` runner (`gh_in_dir` / `TaskSink`) and the shared slug resolver
+//! (`util::resolve_tracker_slug`) the board issue-creation path mirrors, so
+//! there is no new shell/auth surface: `gh` runs with the user's own auth from
+//! a neutral cwd (`$HOME`), addressed by `--repo <slug>`. Slug resolution is
+//! host-aware via an optional `repoId` (spec 020 F1); create/labels keep
+//! their `gh` on the LOCAL host (the credential that files/reads), while the
+//! issue *fetch* runs `gh` on the repo's resolved host.
 
-use agentum_core::LOCAL_HOST_ID;
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::AppState;
 use crate::error::ApiError;
 use crate::task_sink::{NewFeature, SinkCtx, TaskSink};
+
+fn issue_fetch_cwd(host_kind: &agentum_core::HostKind, resolved_workdir: &str) -> String {
+    match host_kind {
+        agentum_core::HostKind::Local => crate::task_sink::neutral_cwd()
+            .to_string_lossy()
+            .into_owned(),
+        // A daemon-local $HOME path is meaningless over SSH. `--repo` keeps
+        // gh repository selection explicit, so the authoritative remote
+        // worktree is a safe, existing cwd.
+        agentum_core::HostKind::Ssh { .. } => resolved_workdir.to_string(),
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -49,6 +61,10 @@ pub struct IssueQuery {
     /// hint is supplied. Required so we never read `origin` from the server's own
     /// cwd by accident.
     pub workdir: String,
+    /// Spec 020 F1: resolve the host (and run `gh`) on this registered repo's
+    /// host instead of the local one. Absent = local (pre-020 byte-for-byte).
+    #[serde(default, rename = "repoId")]
+    pub repo_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,13 +93,18 @@ pub(crate) struct FetchedIssue {
     pub slug: String,
 }
 
-/// Fetch a single issue's title + body + URL via the local `gh` from a neutral
-/// cwd (`$HOME`), addressed by `--repo <slug>` — identical mechanics to issue
-/// creation. Shared by `GET /api/github/issue` and the spec-from-issue scaffold
-/// (spec 004 F4), which needs the server-authoritative body as the transform's
-/// input rather than trusting a client-supplied one.
+/// Fetch a single issue's title + body + URL via `gh` from a neutral cwd
+/// (`$HOME`), addressed by `--repo <slug>`. The host is repoId-aware
+/// (spec 020 F1): both the `origin` read AND the `gh issue view` run on the
+/// repo's resolved host (fetch already threaded `&host` into `gh_in_dir`, so
+/// for an SSH repoId `gh` must be installed/authed there — the remote host
+/// owns the repo); absent repoId = local, byte-identical to pre-020. Shared
+/// by `GET /api/github/issue` and the spec-from-issue scaffold (spec 004 F4),
+/// which needs the server-authoritative body as the transform's input rather
+/// than trusting a client-supplied one.
 pub(crate) async fn fetch_github_issue(
     state: &AppState,
+    repo_id: Option<&str>,
     workdir: &str,
     number: &str,
     slug_hint: Option<&str>,
@@ -99,15 +120,16 @@ pub(crate) async fn fetch_github_issue(
         return Err(ApiError::BadRequest("`workdir` is required".into()));
     }
 
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
+    let host = super::util::resolve_tracker_host(state, repo_id).await?;
 
+    // Host-aware `~` expand before the origin read (`git -C` runs with no
+    // shell, so a stored local `~/…` workdir would fail resolution
+    // spuriously): local expands, a remote repoId's workdir passes through
+    // verbatim (#359's fix, shared with `resolve_tracker_slug`).
+    let workdir = super::util::effective_workdir(&host, workdir)?;
     // Prefer the `owner/repo` hint (zero I/O); fall back to the project's
     // `origin` read. Reuses the exact resolver the board issue path uses.
-    let slug = super::board_goals::resolve_github_slug(&host, workdir, slug_hint)
+    let slug = super::util::resolve_github_slug(&host, &workdir, slug_hint)
         .await
         .map_err(|reason| {
             ApiError::BadRequest(format!("could not resolve a GitHub repo: {reason:?}"))
@@ -115,8 +137,7 @@ pub(crate) async fn fetch_github_issue(
 
     // `gh` is addressed by `--repo <slug>` and run from a neutral cwd ($HOME) so
     // a stray `.git`/`GH_REPO` can't redirect it — identical to issue creation.
-    let cwd = crate::task_sink::neutral_cwd();
-    let cwd = cwd.to_string_lossy();
+    let cwd = issue_fetch_cwd(&host.kind, &workdir);
     let out = crate::host_runtime::gh_in_dir(
         &host,
         &cwd,
@@ -155,7 +176,14 @@ async fn get_issue(
     State(state): State<AppState>,
     Query(q): Query<IssueQuery>,
 ) -> Result<Json<IssueBody>, ApiError> {
-    let issue = fetch_github_issue(&state, &q.workdir, &q.number, q.slug.as_deref()).await?;
+    let issue = fetch_github_issue(
+        &state,
+        q.repo_id.as_deref(),
+        &q.workdir,
+        &q.number,
+        q.slug.as_deref(),
+    )
+    .await?;
     // The wire shape predates the shared fetch — `url` is fetched but not
     // returned here, so existing clients see no change.
     Ok(Json(IssueBody {
@@ -176,6 +204,10 @@ struct CreateIssueBody {
     /// `owner/repo` fast path (skips the origin read when well-formed).
     #[serde(default)]
     slug: Option<String>,
+    /// Spec 020 F1: resolve the slug on this registered repo's host instead
+    /// of the local one. Absent = local (pre-020 behavior byte-for-byte).
+    #[serde(default)]
+    repo_id: Option<String>,
     /// Spec 006 F1: labels applied at creation via the existing `gh --label`
     /// plumbing (task_sink.rs). Absent = today's behavior, byte-identical.
     #[serde(default)]
@@ -224,25 +256,26 @@ async fn create_issue(
         return Err(ApiError::BadRequest("`workdir` is required".into()));
     }
 
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
+    // Only the slug *resolution* is host-aware (spec 020 F1 §2.3.3): an
+    // explicit repoId reads `origin` on the repo's own host. Same typed
+    // `no_github_repo` envelope as the Chat-issues route so the UI branches
+    // on one code for both entry points.
+    let slug = super::util::resolve_tracker_slug(
+        &state,
+        body.repo_id.as_deref(),
+        &body.workdir,
+        body.slug.as_deref(),
+    )
+    .await?;
 
-    let slug = match super::board_goals::resolve_github_slug(&host, workdir, body.slug.as_deref())
-        .await
-    {
-        Ok(slug) => slug,
-        // Same typed envelope as the Chat-issues route so the UI branches on
-        // one `no_github_repo` code for both entry points.
-        Err(_) => {
-            return Err(ApiError::Custom(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                json!({ "error": { "code": "no_github_repo", "message": "no GitHub repo resolved for this project" } }),
-            ));
-        }
-    };
+    // Filing stays LOCAL by the old-019 contract: TaskSink::Github's
+    // explicit-slug arm runs `gh` from `$HOME`, addressed by `--repo <slug>`
+    // — slug-only, so it works from any machine whose `gh` is authed for the
+    // repo. Author attribution below must therefore come from the SAME local
+    // credential that filed, hence the explicit local host here (never the
+    // repo's host). Derived before the create so a missing local host still
+    // fails before any `gh` call, as it always has.
+    let host = super::util::resolve_tracker_host(&state, None).await?;
 
     let feature = NewFeature {
         title: title.to_string(),
@@ -252,17 +285,15 @@ async fn create_issue(
     let fref = TaskSink::Github
         .create_feature(
             &SinkCtx {
-                store: &state.store,
                 // The explicit-slug GitHub arm runs `gh` from `$HOME`; workdir
                 // is passed for shape only (same note as the Chat path).
                 workdir: std::path::Path::new(workdir),
-                parent_goal_id: None,
                 slug: Some(&slug),
             },
             &feature,
         )
         .await
-        .map_err(|e| super::board_goals::map_sink_error(TaskSink::Github, &e))?;
+        .map_err(map_github_sink_error)?;
 
     let number = issue_number_from_ref_id(&fref.id)?;
     // Spec 006 F4: fetched AFTER the successful create — a login failure must
@@ -277,6 +308,34 @@ async fn create_issue(
     }))
 }
 
+fn map_github_sink_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    let (code, message) = if message.contains("failed to run `gh`") {
+        (
+            "no_gh",
+            "GitHub CLI (`gh`) is not installed or not on PATH.".to_string(),
+        )
+    } else {
+        let lower = message.to_ascii_lowercase();
+        let code = if lower.contains("no default remote repository")
+            || lower.contains("not a git repository")
+            || lower.contains("none of the git remotes")
+            || lower.contains("could not determine")
+        {
+            "not_github_repo"
+        } else {
+            "gh_failed"
+        };
+        (code, message)
+    };
+    ApiError::Custom(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        serde_json::json!({
+            "error": { "code": code, "message": message, "provider": "github" }
+        }),
+    )
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DraftBodyRequest {
@@ -287,14 +346,39 @@ struct DraftBodyRequest {
     /// Optional `owner/repo` hint, threaded into the prompt for grounding.
     #[serde(default)]
     slug: Option<String>,
+    /// Spec 394: which agent drafts the body (`"claude"` default, `"codex"`) —
+    /// the desktop sends the Settings chat-agent pick; absent ⇒ `chat.toml`
+    /// → Claude (back-compat).
+    #[serde(default)]
+    agent: Option<String>,
+    /// Optional request-scoped model. The chat resolver applies this after the
+    /// agent is resolved, ahead of chat.toml and the backend default.
+    #[serde(default)]
+    model: Option<String>,
+    /// Optional output shape. Absent stays on the legacy SDD-shaped prompt;
+    /// Project Tasks opts into the concise paragraph explicitly.
+    #[serde(default)]
+    style: super::chat::DraftIssueStyle,
+}
+
+/// Spec 020 F3 (D4): which context sources actually grounded the draft. Both
+/// reads are local-by-design, so for an SSH repo's dir both come back false —
+/// the intake panel keys its honest "drafted without repo grounding" note on
+/// `repo == false`, never on client-side host inference.
+#[derive(Debug, Serialize)]
+struct DraftGroundingDto {
+    repo: bool,
+    wiki: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct DraftBodyResponse {
     body: String,
+    /// Always present, add-only — old readers of `{body}` are unaffected.
+    grounding: DraftGroundingDto,
 }
 
-/// `POST /api/github/issues/draft-body` — draft an SDD-shaped issue body
+/// `POST /api/github/issues/draft-body` — draft a concise or SDD-shaped body
 /// (## Problem / ## Goal / ## Acceptance criteria checklist) from the typed
 /// title + the local repo snapshot (spec 007). Thin over the chat module's
 /// LLM plumbing; the composer fills its body textarea with the result so the
@@ -307,18 +391,31 @@ async fn draft_issue_body(
     if workdir.is_empty() {
         return Err(ApiError::BadRequest("`workdir` is required".into()));
     }
+    // Expand `~`/trailing-slash so the repo-context + wiki reads below hit the
+    // real directory (fs ops don't expand `~` either) — twin of the resolver fix.
+    let workdir = super::util::expand_workdir(workdir)?;
+    let workdir = workdir.to_string_lossy();
     // Title validation (blank → 400) lives in the shared helper so every
     // future caller inherits it.
     let drafted = super::chat::draft_issue_body(
-        Some(workdir),
+        Some(&workdir),
         body.slug
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty()),
         &body.title,
+        body.agent.as_deref(),
+        body.model.as_deref(),
+        body.style,
     )
     .await?;
-    Ok(Json(DraftBodyResponse { body: drafted }))
+    Ok(Json(DraftBodyResponse {
+        body: drafted.body,
+        grounding: DraftGroundingDto {
+            repo: drafted.grounded_repo,
+            wiki: drafted.grounded_wiki,
+        },
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,6 +424,10 @@ pub struct LabelsQuery {
     pub workdir: String,
     /// `owner/repo` fast path (skips the origin read when well-formed).
     pub slug: Option<String>,
+    /// Spec 020 F1: resolve the slug on this registered repo's host instead
+    /// of the local one. Absent = local (pre-020 behavior byte-for-byte).
+    #[serde(default, rename = "repoId")]
+    pub repo_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -360,28 +461,21 @@ async fn list_labels(
     State(state): State<AppState>,
     Query(q): Query<LabelsQuery>,
 ) -> Result<Json<LabelsResponse>, ApiError> {
-    let workdir = q.workdir.trim();
-    if workdir.is_empty() {
-        return Err(ApiError::BadRequest("`workdir` is required".into()));
-    }
+    // Only the slug *resolution* is host-aware (spec 020 F1 §2.3.4): an
+    // explicit repoId reads `origin` on the repo's own host.
+    let slug = super::util::resolve_tracker_slug(
+        &state,
+        q.repo_id.as_deref(),
+        &q.workdir,
+        q.slug.as_deref(),
+    )
+    .await?;
 
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| ApiError::Internal("local host missing".into()))?;
-
-    let slug = match super::board_goals::resolve_github_slug(&host, workdir, q.slug.as_deref())
-        .await
-    {
-        Ok(slug) => slug,
-        Err(_) => {
-            return Err(ApiError::Custom(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                json!({ "error": { "code": "no_github_repo", "message": "no GitHub repo resolved for this project" } }),
-            ));
-        }
-    };
+    // `gh label list` stays LOCAL: it is a slug-addressed GitHub API read, and
+    // the local `gh` (the user's own auth) reaches any slug it is authed for —
+    // the same local-credential contract as create's filing path. Today's
+    // behavior for every reachable case.
+    let host = super::util::resolve_tracker_host(&state, None).await?;
 
     let cwd = crate::task_sink::neutral_cwd();
     let cwd = cwd.to_string_lossy();
@@ -455,6 +549,24 @@ mod tests {
     }
 
     #[test]
+    fn issue_fetch_cwd_is_remote_path_on_ssh() {
+        let ssh = agentum_core::HostKind::Ssh {
+            user: "dev".into(),
+            hostname: "forge.example".into(),
+            port: 22,
+            auth: agentum_core::SshAuth::Agent,
+        };
+        assert_eq!(
+            issue_fetch_cwd(&ssh, "/srv/repo/worktree"),
+            "/srv/repo/worktree"
+        );
+        assert_eq!(
+            issue_fetch_cwd(&agentum_core::HostKind::Local, "/srv/repo/worktree"),
+            crate::task_sink::neutral_cwd().to_string_lossy()
+        );
+    }
+
+    #[test]
     fn create_issue_rejects_blank_title() {
         // The handler's title gate is a plain trim + empty check; pin the
         // deserialized shape + the rejection contract here (a full handler
@@ -478,6 +590,41 @@ mod tests {
         .unwrap();
         assert_eq!(ok.title.trim(), "Add a widget");
         assert_eq!(ok.slug.as_deref(), Some("acme/widgets"));
+        // Spec 020 F1: absent repoId → None (pre-020 requests byte-identical).
+        assert_eq!(ok.repo_id, None);
+
+        let with_repo: CreateIssueBody = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo",
+            "repoId": "r-1"
+        }))
+        .unwrap();
+        assert_eq!(with_repo.repo_id.as_deref(), Some("r-1"));
+    }
+
+    /// Spec 020 F1: the two query DTOs accept the camelCase `repoId` and
+    /// default it to None — the wire pin for the host-threading identity.
+    #[test]
+    fn issue_and_labels_queries_accept_repo_id() {
+        let q: IssueQuery = serde_json::from_value(serde_json::json!({
+            "number": "7", "workdir": "/tmp/repo", "repoId": "r-1"
+        }))
+        .unwrap();
+        assert_eq!(q.repo_id.as_deref(), Some("r-1"));
+        let q: IssueQuery = serde_json::from_value(serde_json::json!({
+            "number": "7", "workdir": "/tmp/repo"
+        }))
+        .unwrap();
+        assert_eq!(q.repo_id, None);
+
+        let q: LabelsQuery = serde_json::from_value(serde_json::json!({
+            "workdir": "/tmp/repo", "repoId": "r-1"
+        }))
+        .unwrap();
+        assert_eq!(q.repo_id.as_deref(), Some("r-1"));
+        let q: LabelsQuery =
+            serde_json::from_value(serde_json::json!({ "workdir": "/tmp/repo" })).unwrap();
+        assert_eq!(q.repo_id, None);
     }
 
     #[test]
@@ -555,16 +702,21 @@ mod tests {
     // ── Spec 007: draft-body wire shape ─────────────────────────────────
 
     #[test]
-    fn draft_body_request_deserializes_with_and_without_slug() {
+    fn draft_body_request_deserializes_with_and_without_llm_choice() {
         let full: DraftBodyRequest = serde_json::from_value(serde_json::json!({
             "title": "Add a widget",
             "workdir": "/tmp/repo",
-            "slug": "acme/widgets"
+            "slug": "acme/widgets",
+            "agent": "claude",
+            "model": "claude-opus-4-8"
         }))
         .unwrap();
         assert_eq!(full.title, "Add a widget");
         assert_eq!(full.workdir, "/tmp/repo");
         assert_eq!(full.slug.as_deref(), Some("acme/widgets"));
+        assert_eq!(full.agent.as_deref(), Some("claude"));
+        assert_eq!(full.model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(full.style, super::super::chat::DraftIssueStyle::Sdd);
 
         let minimal: DraftBodyRequest = serde_json::from_value(serde_json::json!({
             "title": "Add a widget",
@@ -572,6 +724,17 @@ mod tests {
         }))
         .unwrap();
         assert!(minimal.slug.is_none());
+        assert!(minimal.agent.is_none());
+        assert!(minimal.model.is_none());
+        assert_eq!(minimal.style, super::super::chat::DraftIssueStyle::Sdd);
+
+        let concise: DraftBodyRequest = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo",
+            "style": "concise"
+        }))
+        .unwrap();
+        assert_eq!(concise.style, super::super::chat::DraftIssueStyle::Concise);
 
         // A missing workdir is a deserialization error (the field is required),
         // matching the sibling create-issue contract.
@@ -582,11 +745,34 @@ mod tests {
     }
 
     #[test]
-    fn draft_body_response_serializes_body_field() {
-        let json = serde_json::to_string(&DraftBodyResponse {
+    fn draft_body_response_serializes_body_and_grounding() {
+        // Spec 020 F3 (D4): `grounding` is always present and add-only — old
+        // readers of `{body}` keep working; the intake panel keys its honest
+        // note on `grounding.repo == false`.
+        let ungrounded = serde_json::to_string(&DraftBodyResponse {
             body: "## Problem".into(),
+            grounding: DraftGroundingDto {
+                repo: false,
+                wiki: false,
+            },
         })
         .unwrap();
-        assert_eq!(json, "{\"body\":\"## Problem\"}");
+        assert_eq!(
+            ungrounded,
+            "{\"body\":\"## Problem\",\"grounding\":{\"repo\":false,\"wiki\":false}}"
+        );
+
+        let grounded = serde_json::to_string(&DraftBodyResponse {
+            body: "## Problem".into(),
+            grounding: DraftGroundingDto {
+                repo: true,
+                wiki: true,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            grounded,
+            "{\"body\":\"## Problem\",\"grounding\":{\"repo\":true,\"wiki\":true}}"
+        );
     }
 }

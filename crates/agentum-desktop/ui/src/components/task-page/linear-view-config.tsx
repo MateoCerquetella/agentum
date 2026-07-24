@@ -23,8 +23,6 @@ export type LinearIssueListRow =
   | { type: 'section'; key: string; label: string; count: number }
   | { type: 'issue'; issue: LinearIssue }
 
-export const LINEAR_BOARD_DRAG_ISSUE_MIME = 'application/x-agentum-linear-issue-id'
-
 export const LINEAR_MODE_OPTIONS: { id: LinearMode; label: string }[] = [
   { id: 'issues', label: 'Issues' },
   { id: 'projects', label: 'Projects' },

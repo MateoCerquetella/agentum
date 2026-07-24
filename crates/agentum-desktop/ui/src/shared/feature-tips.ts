@@ -4,11 +4,11 @@ import {
   type FeatureInteractionState
 } from './feature-interactions'
 
-export type FeatureTipId = 'voice-dictation' | 'agentum-cli'
+export type FeatureTipId = 'voice-dictation'
 
 type FeatureTipPriority = 'new' | 'unseen'
 
-type FeatureTipAction = 'enable-voice' | 'setup-cli'
+type FeatureTipAction = 'enable-voice'
 
 export type FeatureTip = {
   id: FeatureTipId
@@ -23,23 +23,11 @@ export type FeatureTip = {
 }
 
 export type CompletedFeatureTipState = {
-  cliInstalled: boolean
   voiceDictationEnabled: boolean
   featureInteractions?: FeatureInteractionState
 }
 
 export const FEATURE_TIPS = [
-  {
-    id: 'agentum-cli',
-    priority: 'new',
-    eyebrow: 'Tip',
-    title: 'Let agents drive Agentum with the Agentum CLI',
-    description:
-      'Add scheduled automations and terminal control. Agent messaging and coordination are already built into the agentum MCP.',
-    action: 'setup-cli',
-    ctaLabel: 'Install CLI & Skills',
-    completedByFeatureInteractions: []
-  },
   {
     id: 'voice-dictation',
     priority: 'unseen',
@@ -75,9 +63,6 @@ export function normalizeFeatureTipIds(value: unknown): FeatureTipId[] {
 
 export function getCompletedFeatureTipIds(state: CompletedFeatureTipState): Set<FeatureTipId> {
   const completedIds = new Set<FeatureTipId>()
-  if (state.cliInstalled) {
-    completedIds.add('agentum-cli')
-  }
   if (state.voiceDictationEnabled) {
     completedIds.add('voice-dictation')
   }

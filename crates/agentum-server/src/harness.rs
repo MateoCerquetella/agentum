@@ -26,20 +26,25 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
+
+use agentum_core::{HarnessScope, Host};
 
 // Harness data types + on-disk `.agentum-harness/` operations live in `types`;
 // the engine, drive loop, and gate helpers below still reference them directly
 // via this glob re-export (which also preserves the `harness::Foo` public API).
 mod types;
+mod workspace;
 pub use types::*;
+pub(crate) use workspace::HarnessWorkspace;
 
 // Prompt builders + verdict parsers + small utilities; `pub(crate)` items the
 // drive/gate code calls. Internal (not re-exported in the public surface).
 mod helpers;
 use helpers::*;
+
+pub mod orchestrated;
 
 // The drive loop + orchestration free functions. As a child module, `drive`
 // calls `HarnessEngine`'s private methods directly (no widening needed). Only
@@ -48,7 +53,7 @@ use helpers::*;
 // at crate visibility.
 mod drive;
 pub use drive::drive;
-pub(crate) use drive::{inject_prompt, teardown_session, wait_for_settle};
+pub(crate) use drive::{SettleOutcome, inject_prompt, teardown_session, wait_for_settle};
 
 /// Manages every concurrent harness run + the event bus they publish on.
 pub struct HarnessEngine {
@@ -90,30 +95,83 @@ impl HarnessEngine {
         None
     }
 
+    /// Resolve an existing run by authoritative scope. Registered worktrees
+    /// match by worktree id (so identical-looking paths on two hosts never
+    /// collide); legacy local callers retain path matching.
+    pub async fn find_by_scope(&self, scope: &HarnessScope) -> Option<Uuid> {
+        let runs = self.runs.read().await;
+        for (id, run) in runs.iter() {
+            let run = run.read().await;
+            let matched = match &scope.worktree_id {
+                Some(worktree_id) => run.scope.worktree_id.as_ref() == Some(worktree_id),
+                None => run.scope.worktree_id.is_none() && run.scope.path == scope.path,
+            };
+            if matched {
+                return Some(*id);
+            }
+        }
+        None
+    }
+
+    /// Whether a registered run still pins `host_id`. Host connection records
+    /// are mutable, while a run's workspace snapshot is deliberately not; the
+    /// host routes use this to reject retarget/delete operations until every
+    /// affected run is explicitly stopped.
+    pub async fn uses_host(&self, host_id: Uuid) -> bool {
+        let runs: Vec<_> = self.runs.read().await.values().cloned().collect();
+        for run in runs {
+            if run.read().await.scope.effective_host_id() == host_id {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Register a new run from a project directory. Loads `.harness/` so a bad
     /// config fails fast (before the UI shows a run that can never start).
     pub async fn start(&self, workdir: PathBuf) -> anyhow::Result<Uuid> {
-        let config = HarnessConfig::load(&workdir).await?;
+        self.start_workspace(HarnessWorkspace::local(workdir)).await
+    }
+
+    /// Register a run against the server-resolved worktree/host scope.
+    pub(crate) async fn start_scoped(
+        &self,
+        scope: HarnessScope,
+        host: Host,
+    ) -> anyhow::Result<Uuid> {
+        self.start_workspace(HarnessWorkspace::scoped(scope, host))
+            .await
+    }
+
+    async fn start_workspace(&self, workspace: HarnessWorkspace) -> anyhow::Result<Uuid> {
+        let config = HarnessConfig::load_from(&workspace).await?;
+        ensure_execution_policy(&workspace, &config.features)?;
+        let workdir = workspace.root();
         let id = Uuid::new_v4();
 
         // Restore the SDD phase from the durable decision log so a re-registered
         // run (store wipe, daemon restart) resumes where it left off (spec 013).
         // Defaults to `Executing` for a fresh or pre-013 run.
-        let phase = rebuild_phase_from_decisions(&read_decisions(&workdir).await)
+        let phase = rebuild_phase_from_decisions(&read_decisions_in(&workspace).await)
             .unwrap_or(SpecPhase::Executing);
 
         let run = HarnessRun {
             id,
             workdir,
+            scope: workspace.scope().clone(),
+            workspace,
             state: HarnessState::Idle,
             features: config.features.clone(),
             current_feature: None,
             current_session: None,
+            current_agent_tool: None,
             started_at: Instant::now(),
             agent_instructions: config.agent_instructions.clone(),
             driving: false,
             phase,
             phase_attempts: 0,
+            blocked_phase: None,
+            gate_summary: None,
         };
 
         self.runs
@@ -128,25 +186,73 @@ impl HarnessEngine {
         Ok(id)
     }
 
+    /// Re-register a durable orchestrated run after a daemon restart. Managed
+    /// sessions are revived separately; this restores the compatibility status
+    /// surface and keeps the logical driver claim held by the coordinator.
+    pub(crate) async fn restore_orchestrated(
+        &self,
+        id: Uuid,
+        scope: HarnessScope,
+        host: Option<Host>,
+        state: HarnessState,
+        current_session: Option<Uuid>,
+    ) -> anyhow::Result<()> {
+        if self.runs.read().await.contains_key(&id) {
+            return Ok(());
+        }
+        let workspace = HarnessWorkspace::restored(scope.clone(), host);
+        let workdir = workspace.root();
+        let config = HarnessConfig::load_from(&workspace).await?;
+        ensure_execution_policy(&workspace, &config.features)?;
+        let phase = rebuild_phase_from_decisions(&read_decisions_in(&workspace).await)
+            .unwrap_or(SpecPhase::Executing);
+        let run = HarnessRun {
+            id,
+            workdir,
+            scope,
+            workspace,
+            state,
+            features: config.features.clone(),
+            current_feature: None,
+            current_session,
+            current_agent_tool: current_session.map(|_| config.features.agent_tool.clone()),
+            started_at: Instant::now(),
+            agent_instructions: config.agent_instructions,
+            driving: true,
+            phase,
+            phase_attempts: 0,
+            blocked_phase: None,
+            gate_summary: None,
+        };
+        self.runs
+            .write()
+            .await
+            .entry(id)
+            .or_insert_with(|| Arc::new(RwLock::new(run)));
+        self.emit(HarnessEvent::StateChanged {
+            harness_id: id,
+            state,
+        });
+        Ok(())
+    }
+
     /// Run `init.sh` (the environment smoke-test). Returns `false` (and sets the
     /// run `Failed`) on a non-zero exit. A missing `init.sh` is a pass.
     pub async fn run_init(&self, harness_id: Uuid) -> anyhow::Result<bool> {
-        let workdir = self.workdir(harness_id).await?;
+        let workspace = self.workspace(harness_id).await?;
         self.set_state(harness_id, HarnessState::InitVerifying)
             .await?;
         self.emit(HarnessEvent::InitStarted { harness_id });
 
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let (success, output) = match config.init_script {
             Some(script) => {
-                let out = Command::new("bash")
-                    .arg(&script)
-                    .current_dir(&workdir)
-                    .output()
+                let out = workspace
+                    .run("bash", &[script.to_string_lossy().into_owned()], &[])
                     .await?;
                 (
-                    out.status.success(),
-                    combine_output(&out.stdout, &out.stderr),
+                    out.success,
+                    combine_output(&out.stdout, out.stderr.as_bytes()),
                 )
             }
             None => (true, "no init.sh — skipping environment check".to_string()),
@@ -180,7 +286,7 @@ impl HarnessEngine {
         harness_id: Uuid,
         feature_id: &str,
     ) -> anyhow::Result<(bool, String)> {
-        let workdir = self.workdir(harness_id).await?;
+        let workspace = self.workspace(harness_id).await?;
         self.set_feature_state(harness_id, feature_id, FeatureState::Verifying)
             .await?;
         self.set_state(harness_id, HarnessState::Verifying).await?;
@@ -189,31 +295,30 @@ impl HarnessEngine {
             feature_id: feature_id.to_string(),
         });
 
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let (success, output) = if let Some(script) = config.verify_script {
-            let out = Command::new("bash")
-                .arg(&script)
-                .env("HARNESS_FEATURE_ID", feature_id)
-                .current_dir(&workdir)
-                .output()
+            let out = workspace
+                .run(
+                    "bash",
+                    &[script.to_string_lossy().into_owned()],
+                    &[("HARNESS_FEATURE_ID".into(), feature_id.into())],
+                )
                 .await?;
             (
-                out.status.success(),
-                combine_output(&out.stdout, &out.stderr),
+                out.success,
+                combine_output(&out.stdout, out.stderr.as_bytes()),
             )
         } else {
-            match Command::new("npm")
-                .args(["run", "verify"])
-                .current_dir(&workdir)
-                .output()
+            match workspace
+                .run("npm", &["run".into(), "verify".into()], &[])
                 .await
             {
-                Ok(out) => (
-                    out.status.success(),
-                    combine_output(&out.stdout, &out.stderr),
+                Ok(out) if out.code != Some(127) => (
+                    out.success,
+                    combine_output(&out.stdout, out.stderr.as_bytes()),
                 ),
                 // No verify.sh and no `npm run verify`: nothing to gate on.
-                Err(_) => (
+                Ok(_) | Err(_) => (
                     true,
                     "no verify.sh and no `npm run verify` — gate skipped".to_string(),
                 ),
@@ -241,7 +346,7 @@ impl HarnessEngine {
         harness_id: Uuid,
         feature_id: &str,
     ) -> anyhow::Result<(bool, String)> {
-        let workdir = self.workdir(harness_id).await?;
+        let workspace = self.workspace(harness_id).await?;
         self.set_feature_state(harness_id, feature_id, FeatureState::ReadyToTest)
             .await?;
         self.log(
@@ -250,17 +355,18 @@ impl HarnessEngine {
             "unit gate green — running browser QA gate (qa.sh)",
         );
 
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let (success, output) = if let Some(script) = config.qa_script {
-            let out = Command::new("bash")
-                .arg(&script)
-                .env("HARNESS_FEATURE_ID", feature_id)
-                .current_dir(&workdir)
-                .output()
+            let out = workspace
+                .run(
+                    "bash",
+                    &[script.to_string_lossy().into_owned()],
+                    &[("HARNESS_FEATURE_ID".into(), feature_id.into())],
+                )
                 .await?;
             (
-                out.status.success(),
-                combine_output(&out.stdout, &out.stderr),
+                out.success,
+                combine_output(&out.stdout, out.stderr.as_bytes()),
             )
         } else {
             (
@@ -281,11 +387,11 @@ impl HarnessEngine {
         self.set_feature_state(harness_id, feature_id, FeatureState::Done)
             .await?;
 
-        let (workdir, feature) = {
+        let (workspace, feature) = {
             let run = self.get_run(harness_id).await?;
             let r = run.read().await;
             (
-                r.workdir.clone(),
+                r.workspace.clone(),
                 r.features
                     .features
                     .iter()
@@ -294,7 +400,7 @@ impl HarnessEngine {
             )
         };
         if let Some(feature) = feature {
-            let config = HarnessConfig::load(&workdir).await?;
+            let config = HarnessConfig::load_from(&workspace).await?;
             config.write_handoff(&feature, output).await?;
             self.emit(HarnessEvent::HandoffWritten {
                 harness_id,
@@ -363,7 +469,7 @@ impl HarnessEngine {
         output: &str,
     ) -> anyhow::Result<(bool, u32)> {
         let run = self.get_run(harness_id).await?;
-        let (blocked, attempts, workdir, features_snapshot) = {
+        let (blocked, attempts, workspace, features_snapshot) = {
             let mut r = run.write().await;
             let max_retries = r.features.max_retries;
             let mut blocked = false;
@@ -379,11 +485,11 @@ impl HarnessEngine {
                     feature.state = FeatureState::Coding;
                 }
             }
-            (blocked, attempts, r.workdir.clone(), r.features.clone())
+            (blocked, attempts, r.workspace.clone(), r.features.clone())
         };
 
         // Persist outside the lock-held mutation above.
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         config.save_features(&features_snapshot).await?;
 
         let new_state = if blocked {
@@ -436,14 +542,25 @@ impl HarnessEngine {
         Ok(HarnessStatus {
             id: r.id,
             workdir: r.workdir.to_string_lossy().into_owned(),
+            scope: r.scope.clone(),
+            worktree_id: r.scope.worktree_id.clone(),
+            repo_id: r.scope.repo_id.clone(),
+            host_id: r.scope.host_id,
             state: r.state,
             features: r.features.clone(),
             current_feature: r.current_feature.clone(),
             current_session: r.current_session,
+            current_agent_tool: r.current_agent_tool.clone(),
             elapsed_secs: r.started_at.elapsed().as_secs(),
             agent_instructions: r.agent_instructions.clone(),
             phase: r.phase,
             phase_attempts: r.phase_attempts,
+            blocked_phase: r.blocked_phase,
+            gate_summary: r.gate_summary.clone(),
+            execution_mode: r.features.execution_mode,
+            max_concurrency: r.features.max_concurrency,
+            coordinator_session: None,
+            active_workers: Vec::new(),
         })
     }
 
@@ -457,6 +574,11 @@ impl HarnessEngine {
         let run = self.get_run(harness_id).await?;
         let r = run.read().await;
         Ok(r.workdir.clone())
+    }
+
+    pub(crate) async fn workspace(&self, harness_id: Uuid) -> anyhow::Result<HarnessWorkspace> {
+        let run = self.get_run(harness_id).await?;
+        Ok(run.read().await.workspace.clone())
     }
 
     /// Atomically claim the driver slot. Returns `false` if a drive loop is
@@ -486,7 +608,7 @@ impl HarnessEngine {
     /// silently skip past it to the next pending feature (`next_pending_feature`
     /// ignores `Blocked`). Returns how many were reset.
     pub async fn reset_blocked_features(&self, harness_id: Uuid) -> anyhow::Result<usize> {
-        let (reset_ids, workdir, snapshot) = {
+        let (reset_ids, workspace, snapshot) = {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             let mut reset_ids = Vec::new();
@@ -498,10 +620,10 @@ impl HarnessEngine {
                     reset_ids.push(f.id.clone());
                 }
             }
-            (reset_ids, r.workdir.clone(), r.features.clone())
+            (reset_ids, r.workspace.clone(), r.features.clone())
         };
         if !reset_ids.is_empty() {
-            let config = HarnessConfig::load(&workdir).await?;
+            let config = HarnessConfig::load_from(&workspace).await?;
             config.save_features(&snapshot).await?;
             for id in &reset_ids {
                 self.emit(HarnessEvent::FeatureStateChanged {
@@ -521,6 +643,7 @@ impl HarnessEngine {
             let mut r = run.write().await;
             r.current_feature = None;
             r.current_session = None;
+            r.current_agent_tool = None;
         }
     }
 
@@ -542,12 +665,14 @@ impl HarnessEngine {
         harness_id: Uuid,
         session_id: Uuid,
         feature_id: &str,
+        agent_tool: &str,
     ) -> anyhow::Result<()> {
         {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             r.current_session = Some(session_id);
             r.current_feature = Some(feature_id.to_string());
+            r.current_agent_tool = Some(agent_tool.to_string());
         }
         self.set_feature_state(harness_id, feature_id, FeatureState::Coding)
             .await?;
@@ -555,6 +680,33 @@ impl HarnessEngine {
             harness_id,
             feature_id: feature_id.to_string(),
             session_id,
+        });
+        Ok(())
+    }
+
+    /// Publish an interactive role/QA session without changing feature state.
+    /// Feature agents use `set_session`; PM/architect/reviewer and QA agents
+    /// still need the same observable current-session pointer so the owning
+    /// workspace can attach to every stage, not only the coding stage.
+    pub(crate) async fn set_current_session(
+        &self,
+        harness_id: Uuid,
+        session_id: Uuid,
+        agent_tool: &str,
+        feature_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        {
+            let run = self.get_run(harness_id).await?;
+            let mut r = run.write().await;
+            r.current_session = Some(session_id);
+            r.current_agent_tool = Some(agent_tool.to_string());
+            r.current_feature = feature_id.map(str::to_string);
+        }
+        self.emit(HarnessEvent::CurrentSessionChanged {
+            harness_id,
+            session_id,
+            feature_id: feature_id.map(str::to_string),
+            agent_tool: agent_tool.to_string(),
         });
         Ok(())
     }
@@ -600,17 +752,17 @@ impl HarnessEngine {
         feature_id: &str,
         state: FeatureState,
     ) -> anyhow::Result<()> {
-        let (workdir, features_snapshot) = {
+        let (workspace, features_snapshot) = {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             if let Some(feature) = r.features.features.iter_mut().find(|f| f.id == feature_id) {
                 feature.state = state;
             }
-            (r.workdir.clone(), r.features.clone())
+            (r.workspace.clone(), r.features.clone())
         };
         // Persist the board to disk so the on-disk feature_list.json stays the
         // single source of truth even mid-run.
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         config.save_features(&features_snapshot).await?;
 
         self.emit(HarnessEvent::FeatureStateChanged {
@@ -621,23 +773,60 @@ impl HarnessEngine {
         Ok(())
     }
 
+    /// Spec 023 Part B (AC 5–6): detach the run's tracker issue WITHOUT
+    /// deleting the run — clear the per-feature stamps in memory AND persist
+    /// the cleared backlog. The stamps live on disk (the setter rewrites
+    /// `feature_list.json`), so a session-only mute would silently re-link on
+    /// a reload/restart; persisting is the desired "unlinked the wrong issue"
+    /// semantics (architecture Q3). Once cleared, `transition_tracker`'s
+    /// `tracker_provider` guard makes every later transition a silent no-op
+    /// (AC 6); features, gates, and `handoff.md` are untouched. A tracker
+    /// hiccup is logged, never fatal — the unlink itself is local and always
+    /// succeeds once the run exists.
+    pub async fn unlink_issue(&self, harness_id: Uuid) -> anyhow::Result<()> {
+        let (workspace, features_snapshot) = {
+            let run = self.get_run(harness_id).await?;
+            let mut r = run.write().await;
+            r.features.clear_tracker();
+            (r.workspace.clone(), r.features.clone())
+        };
+        // Same persist path as `set_feature_state`: the on-disk
+        // feature_list.json stays the single source of truth even mid-run.
+        let config = HarnessConfig::load_from(&workspace).await?;
+        config.save_features(&features_snapshot).await?;
+        self.log(
+            harness_id,
+            None,
+            "tracker issue unlinked — status transitions are now a no-op",
+        );
+        Ok(())
+    }
+
     /// Advance the run to a new SDD phase (spec 013): update in-memory state,
     /// reset the gate attempt counter, append a durable marker to `decisions.md`
     /// (the canonical record [`rebuild_phase_from_decisions`] reads on rescan),
     /// and emit `PhaseChanged`.
     async fn set_phase(&self, harness_id: Uuid, to: SpecPhase) -> anyhow::Result<()> {
-        let (workdir, from) = {
+        let (workspace, from) = {
             let run = self.get_run(harness_id).await?;
             let mut r = run.write().await;
             let from = r.phase;
+            if matches!(to, SpecPhase::Blocked | SpecPhase::AwaitingConfirm) {
+                r.blocked_phase = Some(from);
+            } else {
+                r.blocked_phase = None;
+                r.gate_summary = None;
+            }
             r.phase = to;
-            r.phase_attempts = 0;
-            (r.workdir.clone(), from)
+            if !matches!(to, SpecPhase::Blocked | SpecPhase::AwaitingConfirm) {
+                r.phase_attempts = 0;
+            }
+            (r.workspace.clone(), from)
         };
         if from != to {
             // One canonical "entered <phase>" marker per transition.
-            let _ = append_decision(
-                &workdir,
+            let _ = append_decision_in(
+                &workspace,
                 &format!("phase: entered {} (from {})", to.slug(), from.slug()),
             )
             .await;
@@ -665,22 +854,50 @@ impl HarnessEngine {
         Ok(r.phase_attempts)
     }
 
+    /// Retain the latest role verdict alongside the status snapshot. Events
+    /// remain the live transport; this field closes the reload/reconnect gap.
+    async fn set_gate_summary(
+        &self,
+        harness_id: Uuid,
+        summary: impl Into<String>,
+    ) -> anyhow::Result<()> {
+        let run = self.get_run(harness_id).await?;
+        run.write().await.gate_summary = Some(summary.into());
+        Ok(())
+    }
+
     /// Reload the in-memory backlog from disk after `decompose` rewrites
     /// `feature_list.json` via [`plan_from_spec`]. `next_pending_feature` reads
     /// the in-memory list, so without this the freshly-derived features are
     /// invisible to the loop.
     async fn reload_features(&self, harness_id: Uuid) -> anyhow::Result<()> {
-        let workdir = self.workdir(harness_id).await?;
-        let config = HarnessConfig::load(&workdir).await?;
+        let workspace = self.workspace(harness_id).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let run = self.get_run(harness_id).await?;
         run.write().await.features = config.features;
         Ok(())
     }
 
-    fn emit(&self, event: HarnessEvent) {
+    pub(crate) fn emit(&self, event: HarnessEvent) {
         // Err only means no subscribers — fine, the event is best-effort.
         let _ = self.event_tx.send(event);
     }
+}
+
+/// The shared-worktree coordinator and patch broker are local-only. Keep this
+/// invariant in the engine (not just an HTTP request shaper), so MCP calls,
+/// restored rows, direct callers, and configs edited after registration cannot
+/// enter orchestrated execution for an SSH workspace.
+pub(super) fn ensure_execution_policy(
+    workspace: &HarnessWorkspace,
+    features: &FeatureList,
+) -> anyhow::Result<()> {
+    if workspace.is_remote()
+        && (features.execution_mode != ExecutionMode::Sequential || features.max_concurrency != 1)
+    {
+        anyhow::bail!("remote harness execution must be sequential with max_concurrency = 1");
+    }
+    Ok(())
 }
 
 impl Default for HarnessEngine {
@@ -694,10 +911,22 @@ impl Default for HarnessEngine {
 pub struct HarnessStatus {
     pub id: Uuid,
     pub workdir: String,
+    /// Full authoritative scope for new clients.
+    #[serde(default)]
+    pub scope: HarnessScope,
+    /// Flat compatibility fields consumed by the desktop status model.
+    #[serde(default)]
+    pub worktree_id: Option<String>,
+    #[serde(default)]
+    pub repo_id: Option<String>,
+    #[serde(default)]
+    pub host_id: Option<Uuid>,
     pub state: HarnessState,
     pub features: FeatureList,
     pub current_feature: Option<String>,
     pub current_session: Option<Uuid>,
+    #[serde(default)]
+    pub current_agent_tool: Option<String>,
     pub elapsed_secs: u64,
     pub agent_instructions: String,
     /// Current SDD phase (spec 013). `executing` for a plain feature run.
@@ -706,6 +935,21 @@ pub struct HarnessStatus {
     /// Role-gate retry counter for the current phase (spec 013).
     #[serde(default)]
     pub phase_attempts: u32,
+    #[serde(default)]
+    pub blocked_phase: Option<SpecPhase>,
+    #[serde(default)]
+    pub gate_summary: Option<String>,
+    /// Missing/`sequential` is the compatibility engine.
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
+    #[serde(default)]
+    pub max_concurrency: usize,
+    /// In orchestrated mode `current_session` remains a compatibility pointer
+    /// to this coordinator.
+    #[serde(default)]
+    pub coordinator_session: Option<Uuid>,
+    #[serde(default)]
+    pub active_workers: Vec<OrchestratedWorkerStatus>,
 }
 
 #[cfg(test)]
@@ -713,7 +957,7 @@ mod tests {
     use super::*;
     // Types/fns these tests use that the (slimmed) non-test imports no longer
     // pull in, plus the two drive-internal fns under test (now in `drive`).
-    use super::drive::{SettleOutcome, resolve_qa_mode, wait_for_settle};
+    use super::drive::{SettleOutcome, resolve_qa_mode, spawn_session_name, wait_for_settle};
     use agentum_core::Event;
     use std::path::Path;
     use std::time::Duration;
@@ -788,12 +1032,84 @@ mod tests {
     async fn start_then_next_pending() {
         let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
         let engine = HarnessEngine::new();
-        let id = engine.start(wd).await.unwrap();
-        assert_eq!(engine.status(id).await.unwrap().state, HarnessState::Idle);
+        let id = engine.start(wd.clone()).await.unwrap();
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.state, HarnessState::Idle);
+        assert_eq!(status.scope.path, wd.to_string_lossy());
+        assert!(status.worktree_id.is_none());
+        assert!(status.repo_id.is_none());
+        assert!(status.host_id.is_none());
         assert_eq!(
             engine.next_pending_feature(id).await.unwrap().unwrap().id,
             "feat-1"
         );
+    }
+
+    #[tokio::test]
+    async fn scoped_start_surfaces_authoritative_identity() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let now = time::OffsetDateTime::now_utc();
+        let host = agentum_core::Host {
+            id: agentum_core::LOCAL_HOST_ID,
+            name: "local".into(),
+            kind: agentum_core::HostKind::Local,
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        };
+        let scope = HarnessScope {
+            worktree_id: Some(format!("repo::{}", wd.display())),
+            repo_id: Some("repo".into()),
+            host_id: Some(agentum_core::LOCAL_HOST_ID),
+            path: wd.to_string_lossy().into_owned(),
+        };
+        let engine = HarnessEngine::new();
+        let id = engine.start_scoped(scope.clone(), host).await.unwrap();
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.scope, scope);
+        assert_eq!(status.worktree_id, status.scope.worktree_id);
+        assert_eq!(status.repo_id, status.scope.repo_id);
+        assert_eq!(status.host_id, Some(agentum_core::LOCAL_HOST_ID));
+        assert!(engine.uses_host(agentum_core::LOCAL_HOST_ID).await);
+    }
+
+    #[test]
+    fn remote_execution_policy_is_sequential_and_single_slot() {
+        let host_id = Uuid::new_v4();
+        let now = time::OffsetDateTime::now_utc();
+        let workspace = HarnessWorkspace::scoped(
+            HarnessScope {
+                worktree_id: Some("repo::/srv/repo/wt".into()),
+                repo_id: Some("repo".into()),
+                host_id: Some(host_id),
+                path: "/srv/repo/wt".into(),
+            },
+            agentum_core::Host {
+                id: host_id,
+                name: "remote".into(),
+                kind: agentum_core::HostKind::Ssh {
+                    user: "dev".into(),
+                    hostname: "remote.example".into(),
+                    port: 22,
+                    auth: agentum_core::SshAuth::Agent,
+                },
+                created_at: now,
+                updated_at: now,
+                last_seen_at: None,
+            },
+        );
+        let mut features = FeatureList {
+            execution_mode: ExecutionMode::Sequential,
+            max_concurrency: 1,
+            ..FeatureList::default()
+        };
+        ensure_execution_policy(&workspace, &features).unwrap();
+
+        features.execution_mode = ExecutionMode::Orchestrated;
+        assert!(ensure_execution_policy(&workspace, &features).is_err());
+        features.execution_mode = ExecutionMode::Sequential;
+        features.max_concurrency = 2;
+        assert!(ensure_execution_policy(&workspace, &features).is_err());
     }
 
     // Drives the bash `verify.sh`/`qa.sh` gate — the Harness Engine is Unix-shell-based.
@@ -1311,14 +1627,40 @@ mod tests {
         let engine = HarnessEngine::new();
         let id = engine.start(wd).await.unwrap();
         engine
-            .set_session(id, Uuid::new_v4(), "feat-1")
+            .set_session(id, Uuid::new_v4(), "feat-1", "claude")
             .await
             .unwrap();
-        assert!(engine.status(id).await.unwrap().current_feature.is_some());
+        let active = engine.status(id).await.unwrap();
+        assert!(active.current_feature.is_some());
+        assert_eq!(active.current_agent_tool.as_deref(), Some("claude"));
         engine.clear_current(id).await;
         let s = engine.status(id).await.unwrap();
         assert!(s.current_feature.is_none());
         assert!(s.current_session.is_none());
+        assert!(s.current_agent_tool.is_none());
+    }
+
+    #[tokio::test]
+    async fn blocked_role_status_retains_stage_attempt_and_summary() {
+        let (_d, wd) = setup("#!/bin/bash\nexit 0\n").await;
+        let engine = HarnessEngine::new();
+        let id = engine.start(wd).await.unwrap();
+        engine.set_phase(id, SpecPhase::Authoring).await.unwrap();
+        assert_eq!(engine.bump_phase_attempt(id).await.unwrap(), 1);
+        engine
+            .set_gate_summary(id, "goal is missing an observable outcome")
+            .await
+            .unwrap();
+        engine.set_phase(id, SpecPhase::Blocked).await.unwrap();
+
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.phase, SpecPhase::Blocked);
+        assert_eq!(status.blocked_phase, Some(SpecPhase::Authoring));
+        assert_eq!(status.phase_attempts, 1);
+        assert_eq!(
+            status.gate_summary.as_deref(),
+            Some("goal is missing an observable outcome")
+        );
     }
 
     #[tokio::test]
@@ -1355,6 +1697,60 @@ mod tests {
             elapsed < Duration::from_secs(5),
             "must not wait out the full timeout on an early settle, got {elapsed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn settle_ignores_initial_boot_classification() {
+        // The watchdog's first classification of a fresh pane emits
+        // `agent.finished {"initial": true}` (the REPL booting to idle, ~1s
+        // after spawn). That is NOT the agent finishing its injected turn:
+        // counting it settled the wait at the grace boundary and tore down a
+        // just-started agent (#302). It must be ignored — with no real settle
+        // signal after it, the wait falls through at the settle timeout.
+        let (tx, _keepalive) = broadcast::channel::<Event>(16);
+        let sid = Uuid::new_v4();
+        let grace = Duration::from_millis(50);
+        let timeout = Duration::from_millis(400);
+
+        let tx2 = tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            let _ = tx2.send(
+                Event::new("agent.finished")
+                    .with_session(sid, "s")
+                    .with_payload(serde_json::json!({"initial": true})),
+            );
+        });
+
+        let begin = std::time::Instant::now();
+        let outcome = wait_for_settle(&tx, sid, grace, timeout).await;
+        assert_eq!(
+            outcome,
+            SettleOutcome::TimedOut,
+            "a boot-time initial classification must never count as a settle"
+        );
+        assert!(begin.elapsed() >= timeout, "should wait out the timeout");
+    }
+
+    #[test]
+    fn spawn_session_names_are_unique_per_spawn_and_valid() {
+        // sessions.name is UNIQUE and old harness rows are only marked
+        // stopped, so a retry/re-drive reusing the previous spawn's name
+        // failed the whole run with AlreadyExists (#302). Every spawn must
+        // mint a fresh, tmux-safe, validate_name-legal name that still
+        // carries the run correlation prefix.
+        let run = Uuid::new_v4();
+        let a = spawn_session_name("pm", run);
+        let b = spawn_session_name("pm", run);
+        assert_ne!(a, b, "two spawns of the same role must not collide");
+        let prefix = format!("harness-pm-{}-", &run.simple().to_string()[..8]);
+        assert!(a.starts_with(&prefix) && b.starts_with(&prefix));
+        agentum_core::validate_name(&a).expect("name must satisfy validate_name");
+
+        // A long kind (hand-written backlog ids) is clamped, not a panic or an
+        // over-64-char name.
+        let long = spawn_session_name(&"x".repeat(100), run);
+        agentum_core::validate_name(&long).expect("clamped name must stay legal");
     }
 
     #[tokio::test]
@@ -2224,5 +2620,102 @@ mod surface_tests {
             tracker_url: None,
         });
         assert_eq!(shared_tracker_provenance(&list), None);
+    }
+
+    /// Spec 023 Part B: the primitive is the exact inverse of the
+    /// `plan_from_spec_inner` stamp loop — EVERY feature is cleared, so
+    /// `shared_tracker_provenance` finds nothing afterwards (the AC 6
+    /// precondition: the transition arm no-ops on `tracker_provider: None`).
+    #[test]
+    fn clear_tracker_removes_provenance() {
+        let mut list = FeatureList::default();
+        for i in 1..=3 {
+            list.features.push(Feature {
+                id: format!("F{i}"),
+                name: format!("Feature {i}"),
+                description: String::new(),
+                state: FeatureState::Pending,
+                attempts: 0,
+                last_error: None,
+                prompt: None,
+                tracker_provider: Some("github".into()),
+                tracker_url: Some("https://github.com/o/r/issues/42".into()),
+            });
+        }
+        assert!(shared_tracker_provenance(&list).is_some());
+        list.clear_tracker();
+        assert_eq!(shared_tracker_provenance(&list), None);
+        assert!(
+            list.features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none())
+        );
+    }
+
+    /// Spec 023 Part B (AC 5): unlink clears the tracker stamps on EVERY
+    /// feature — in memory, on disk, and for `shared_tracker_provenance` —
+    /// while the run itself (state, backlog shape) survives untouched (AC 6:
+    /// "the run otherwise continues normally").
+    #[tokio::test]
+    async fn unlink_issue_clears_stamps_in_memory_and_on_disk() {
+        let dir = TempDir::new().unwrap();
+        let harness_dir = dir.path().join(".harness");
+        std::fs::create_dir_all(&harness_dir).unwrap();
+        let url = "https://github.com/acme/widgets/issues/42";
+        let stamped = |id: &str, name: &str| Feature {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            state: FeatureState::Pending,
+            attempts: 0,
+            last_error: None,
+            prompt: None,
+            tracker_provider: Some("github".into()),
+            tracker_url: Some(url.into()),
+        };
+        let list = FeatureList {
+            features: vec![stamped("F1", "One"), stamped("F2", "Two")],
+            ..FeatureList::default()
+        };
+        std::fs::write(
+            harness_dir.join("feature_list.json"),
+            serde_json::to_string_pretty(&list).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(harness_dir.join("AGENTS.md"), "# Agent Instructions\n").unwrap();
+
+        let engine = HarnessEngine::new();
+        let id = engine.start(dir.path().to_path_buf()).await.unwrap();
+        engine.unlink_issue(id).await.unwrap();
+
+        // In memory: every feature cleared, provenance gone, run intact.
+        let status = engine.status(id).await.unwrap();
+        assert_eq!(status.state, HarnessState::Idle);
+        assert_eq!(status.features.features.len(), 2);
+        assert!(
+            status
+                .features
+                .features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none())
+        );
+        assert_eq!(shared_tracker_provenance(&status.features), None);
+
+        // On disk: the cleared backlog is what a reload/restart sees (Q3) —
+        // the unlink survives, never silently re-linking.
+        let cfg = HarnessConfig::load(dir.path()).await.unwrap();
+        assert!(
+            cfg.features
+                .features
+                .iter()
+                .all(|f| f.tracker_provider.is_none() && f.tracker_url.is_none())
+        );
+    }
+
+    /// Spec 023 Part B: an unknown id errors — the route's 404 source.
+    #[tokio::test]
+    async fn unlink_issue_unknown_id_errors() {
+        let engine = HarnessEngine::new();
+        assert!(engine.unlink_issue(Uuid::new_v4()).await.is_err());
     }
 }

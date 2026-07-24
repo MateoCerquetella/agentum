@@ -18,8 +18,10 @@ import {
   CommandItem,
   CommandList
 } from '@/components/ui/command'
+import { openBoardSurface } from '@/lib/board-route'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { branchName } from '@/lib/git-utils'
+import RepoBadgeLabel from '@/components/repo/RepoBadgeLabel'
 import {
   getSettingsTargetFromSectionId,
   useSettingsNavigationMetadata
@@ -63,7 +65,6 @@ export default function CommandPalette(): React.JSX.Element {
   const openModal = useAppStore((s) => s.openModal)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
   const openHarnessPage = useAppStore((s) => s.openHarnessPage)
-  const openTaskPage = useAppStore((s) => s.openTaskPage)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
   const repos = useAppStore((s) => s.repos)
@@ -105,7 +106,10 @@ export default function CommandPalette(): React.JSX.Element {
       label: 'Board',
       hint: 'GitHub / GitLab / Linear issues',
       icon: Columns3,
-      run: go(() => openTaskPage())
+      // Spec 016 D2: a repo resolves → its hub's Tasks tab; none → the
+      // Projects page (the fallback IS the no-git-repo handling — the palette
+      // never had a gate to preserve).
+      run: go(() => openBoardSurface())
     },
     {
       id: 'view-color-theme',
@@ -235,9 +239,12 @@ export default function CommandPalette(): React.JSX.Element {
                   <span className="truncate font-medium">{worktree.displayName}</span>
                   <span className="truncate text-[12px] text-muted-foreground">{branch}</span>
                   {repo?.displayName ? (
-                    <span className="ml-auto truncate pl-3 text-[12px] text-muted-foreground">
-                      {repo.displayName}
-                    </span>
+                    <RepoBadgeLabel
+                      name={repo.displayName}
+                      color={repo.badgeColor}
+                      className="ml-auto max-w-[42%] pl-3 text-[12px] text-muted-foreground"
+                      badgeClassName="size-2 rounded-[2px]"
+                    />
                   ) : null}
                 </CommandItem>
               )

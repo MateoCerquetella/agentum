@@ -25,6 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import TabBar from './tab-bar/TabBar'
 import TerminalPane from './terminal-pane/TerminalPane'
+import { SddBarGate } from './sdd/SddBar'
 import CloseTerminalDialog from './terminal-pane/CloseTerminalDialog'
 import { useRunningTerminalCloseGuard } from './terminal-pane/use-running-terminal-close-guard'
 import {
@@ -53,7 +54,7 @@ import {
   handleSwitchTerminalTab
 } from '../hooks/ipc-tab-switch'
 import TabGroupSplitLayout from './tab-group/TabGroupSplitLayout'
-import WorkspaceAgentLauncher from './WorkspaceAgentLauncher'
+import GatedRunSurface from './gated-run/GatedRunSurface'
 import { shouldRepairActiveTerminalTab } from './terminal/active-terminal-repair'
 import { addBackgroundMountedTerminalWorktree } from './terminal/background-terminal-worktree-mount'
 import {
@@ -63,6 +64,8 @@ import {
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { appendUniqueOpenFileIds } from './terminal/unsaved-close-queue'
 import CodexRestartChip from './CodexRestartChip'
+import HarnessSpecBanner from './HarnessSpecBanner'
+import GatedRunBar from './gated-run/GatedRunBar'
 import {
   findActivityTerminalPortal,
   useActivityTerminalPortals,
@@ -273,6 +276,14 @@ function Terminal(): React.JSX.Element | null {
     tabs.length === 0 &&
     worktreeBrowserTabs.length === 0 &&
     worktreeFiles.length === 0
+  // The SDD bar targets the active tab's server session (issue #313); the
+  // agent-or-shell decision lives in SddBarGate (useTabAgent live signals),
+  // so plain shell tabs get no bar while ANY tab actually running an agent —
+  // launched, attached, or started by hand — gets one.
+  const sddCandidateTab =
+    activeView === 'terminal' && activeTabType === 'terminal' && activeWorktreeId
+      ? (tabsByWorktree[activeWorktreeId] ?? []).find((t) => t.id === activeTabId)
+      : undefined
   const getEffectiveLayoutForWorktree = useCallback(
     (worktreeId: string) =>
       getEffectiveLayout(worktreeId, layoutByWorktree, groupsByWorktree, activeGroupIdByWorktree),
@@ -1559,14 +1570,35 @@ function Terminal(): React.JSX.Element | null {
     >
       <EditorAutosaveController />
 
+      {/* Spec 015: harness-spec offer for a just-created workspace. Mounted
+          ONCE here at the root — a normal flex strip ABOVE both the launcher
+          overlay (z-20, below) and the split surfaces, so it is visible in
+          every render path (the #313 lesson: never mount only in the legacy
+          fallback). Renders null unless the offer slice has an entry for this
+          worktree. */}
+      {activeView === 'terminal' && activeWorktreeId ? (
+        <HarnessSpecBanner worktreeId={activeWorktreeId} />
+      ) : null}
+
+      {/* Spec 023 Part B: the gated run's persistent workspace strip — live
+          run state + the linked-issue chip with the two-tap "Unlink issue"
+          (AC 7). Same root-strip mount + z-30 paint order as the banner above;
+          renders null unless a run owns this worktree. */}
+      {activeView === 'terminal' && activeWorktreeId ? (
+        <GatedRunBar worktreeId={activeWorktreeId} />
+      ) : null}
+
       {/* Empty-state: an active workspace with no open session shows the agent
           launcher (pick what to start) instead of auto-spawning a blank terminal.
           Rendered as an absolute, viewport-bounded overlay (z-above the empty
           surfaces) so it always fills exactly the content area — never growing it
-          past the window — regardless of sibling flex sizing. */}
+          past the window — regardless of sibling flex sizing.
+          Spec 023 Part A: GatedRunSurface swaps the launcher for a "Gated run
+          starting…" state while an owned gated run boots (AC 1); it renders
+          the launcher itself in every other case. */}
       {activeView === 'terminal' && activeWorktreeId && activeWorktreeHasNoSurface ? (
         <div className="absolute inset-0 z-20">
-          <WorkspaceAgentLauncher worktreeId={activeWorktreeId} />
+          <GatedRunSurface worktreeId={activeWorktreeId} />
         </div>
       ) : null}
 
@@ -1750,6 +1782,12 @@ function Terminal(): React.JSX.Element | null {
                 )
               })}
           </div>
+
+          {/* SDD quick-inject bar + Loop toggle for the active agent tab
+              (issue #313). Sits below the pane, mirroring the design mock;
+              keyed by tab so per-tab state (preview, notices) never leaks
+              across sessions. */}
+          {sddCandidateTab && <SddBarGate key={sddCandidateTab.id} tab={sddCandidateTab} />}
 
           {/* Browser panes container — all browser panes for the active worktree
               stay mounted so webview DOM state (scroll position, form inputs, etc.)
