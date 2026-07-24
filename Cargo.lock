@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agentum-core"
-version = "0.96.7"
+version = "0.96.8"
 dependencies = [
  "anyhow",
  "serde",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-desktop"
-version = "0.96.7"
+version = "0.96.8"
 dependencies = [
  "agentum-core",
  "agentum-server",
@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-executor"
-version = "0.96.7"
+version = "0.96.8"
 dependencies = [
  "agentum-core",
  "thiserror 2.0.18",
@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-server"
-version = "0.96.7"
+version = "0.96.8"
 dependencies = [
  "agentum-core",
  "agentum-executor",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-store"
-version = "0.96.7"
+version = "0.96.8"
 dependencies = [
  "agentum-core",
  "anyhow",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-tmux"
-version = "0.96.7"
+version = "0.96.8"
 dependencies = [
  "agentum-core",
  "shlex",
@@ -157,7 +157,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-watchdog"
-version = "0.96.7"
+version = "0.96.8"
 dependencies = [
  "agentum-core",
  "agentum-executor",

@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.8] — 2026-07-24
+
+### Fixed
+
+- **New Workspace now behaves like a conventional movable window.** The full
+  top title bar is the drag surface with no separate grip icon, and creation
+  progress is presented in a responsive bottom panel instead of a right rail.
+
 ## [0.96.7] — 2026-07-24
 
 ### Fixed
