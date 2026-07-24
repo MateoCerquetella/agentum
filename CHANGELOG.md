@@ -4,6 +4,29 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.6] — 2026-07-24
+
+### Added
+
+- **The Queue now distinguishes completed turns that still need review.**
+  Unseen agent completions appear under Needs You as Ready to continue, remain
+  durable across retained pane state and restarts, and move to Settled after
+  the exact pane is viewed without hiding higher-priority permission requests.
+- **Workspace creation keeps progress visible and the dialog movable.** The
+  final setup step shows every durable preparation stage in a side rail with a
+  cancel action, while the title bar can move the dialog without letting it
+  drift outside the viewport.
+
+### Fixed
+
+- **Gated runs deliver agent prompts reliably.** Codex startup waits for the
+  real idle composer after MCP initialization, and role-sized prompts are split
+  below tmux's command-message limit instead of disappearing as oversized
+  `send-keys` calls.
+- **Gated-run retries now report actual recovery.** Retry waits for a worker or
+  coordinator to appear, surfaces a repeated failure or timeout, and bounds SSH
+  contract reads so a stale pooled connection cannot strand startup silently.
+
 ## [0.96.5] — 2026-07-23
 
 ### Fixed
