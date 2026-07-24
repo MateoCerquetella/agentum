@@ -892,16 +892,17 @@ mod tests {
     }
 
     #[test]
-    fn encode_input_hex_lines_splits_long_pastes_at_4k() {
-        // A paste bigger than 4 KiB must span multiple lines: one line is one
-        // remote `tmux send-keys`, and an oversized command trips tmux's
-        // ~16 KB message cap — swallowed remotely, i.e. a silently lost paste.
-        let paste = vec![b'a'; 4096 + 3];
+    fn encode_input_hex_lines_splits_long_pastes_at_tmux_safe_bound() {
+        // A paste bigger than the shared safe bound must span multiple lines:
+        // one line is one remote `tmux send-keys`, and an oversized command is
+        // swallowed remotely, i.e. a silently lost paste.
+        let chunk = agentum_tmux::SEND_KEYS_HEX_CHUNK_BYTES;
+        let paste = vec![b'a'; chunk + 3];
         let out = encode_input_hex_lines(&paste);
         let lines: Vec<&[u8]> = out.split(|b| *b == b'\n').collect();
         // split() yields a trailing empty slice after the final newline.
         assert_eq!(lines.len(), 3, "expected 2 lines: {}", lines.len() - 1);
-        assert_eq!(lines[0].len(), 4096 * 3 - 1); // "61 61 … 61"
+        assert_eq!(lines[0].len(), chunk * 3 - 1); // "61 61 … 61"
         assert_eq!(lines[1], b"61 61 61");
         assert_eq!(lines[2], b"");
         // Lossless: decoding every hex pair reproduces the paste.

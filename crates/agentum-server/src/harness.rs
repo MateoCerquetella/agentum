@@ -957,7 +957,9 @@ mod tests {
     use super::*;
     // Types/fns these tests use that the (slimmed) non-test imports no longer
     // pull in, plus the two drive-internal fns under test (now in `drive`).
-    use super::drive::{SettleOutcome, resolve_qa_mode, spawn_session_name, wait_for_settle};
+    use super::drive::{
+        SettleOutcome, repl_pane_is_ready, resolve_qa_mode, spawn_session_name, wait_for_settle,
+    };
     use agentum_core::Event;
     use std::path::Path;
     use std::time::Duration;
@@ -1483,6 +1485,33 @@ mod tests {
         let s = "a".repeat(10);
         assert_eq!(tail(&s, 100), s);
         assert!(tail(&s, 3).ends_with("aaa"));
+    }
+
+    #[test]
+    fn repl_ready_recognizes_current_codex_idle_footer() {
+        let idle = "OpenAI Codex (v0.145.0)\nmodel: gpt-5.6-sol /model to change\npermissions: YOLO mode\n› Find and fix a bug";
+        assert!(repl_pane_is_ready("codex", &idle.to_lowercase()));
+
+        let still_starting = "Starting MCP servers (1/2)\nmodel: gpt-5.6-sol /model to change";
+        assert!(
+            !repl_pane_is_ready("codex", &still_starting.to_lowercase()),
+            "do not paste into Codex while MCP startup still owns the screen"
+        );
+        assert!(
+            !repl_pane_is_ready("claude", &idle.to_lowercase()),
+            "Codex copy must not become a generic readiness signal"
+        );
+    }
+
+    #[test]
+    fn repl_ready_keeps_existing_claude_markers() {
+        for pane in [
+            "bypass permissions on",
+            "shift+tab to cycle",
+            "? for shortcuts",
+        ] {
+            assert!(repl_pane_is_ready("claude", pane));
+        }
     }
 
     fn feat(id: &str) -> Feature {

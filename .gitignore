@@ -33,3 +33,7 @@ crates/agentum-desktop/ui/dist
 # Runtime upload sink — written by the dashboard's drag-drop / paste flow.
 # Local data, not source — should never enter the repo.
 .agentum-uploads/
+
+# Per-worktree Harness Engine runtime state. Harness contracts are generated for
+# the active task and must not be inherited by every new git worktree.
+/.harness/

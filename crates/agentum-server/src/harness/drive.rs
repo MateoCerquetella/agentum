@@ -1216,12 +1216,10 @@ async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) -> 
             tokio::time::sleep(Duration::from_millis(900)).await;
             continue;
         }
-        // Idle REPL footer → ready for input. Covers YOLO ("bypass permissions
-        // on" / "shift+tab to cycle") and default ("? for shortcuts") modes.
-        if pane.contains("bypass permissions on")
-            || pane.contains("shift+tab to cycle")
-            || pane.contains("? for shortcuts")
-        {
+        // Idle REPL footer → ready for input. Covers Claude's YOLO/default
+        // modes and Codex's current idle footer. Keep this tool-aware: broad
+        // startup-card text can appear before an agent has focused its input.
+        if repl_pane_is_ready(&session.tool, &pane) {
             // A beat to ensure the input is focused before we type.
             tokio::time::sleep(Duration::from_millis(400)).await;
             return true;
@@ -1230,6 +1228,23 @@ async fn await_repl_ready(state: &AppState, session: &agentum_core::Session) -> 
     // ~56 s elapsed without ever seeing the idle footer — the prompt will be
     // typed blind. Report it so the caller can warn (spec 008 F1 #14a).
     false
+}
+
+/// Whether a visible, lower-cased agent pane has reached its idle composer.
+/// Pure so agent TUI copy changes can be pinned without spawning a real agent.
+pub(super) fn repl_pane_is_ready(tool: &str, pane: &str) -> bool {
+    if pane.contains("bypass permissions on")
+        || pane.contains("shift+tab to cycle")
+        || pane.contains("? for shortcuts")
+    {
+        return true;
+    }
+
+    // Codex 0.145 renders this stable command hint beside the selected model
+    // only after the MCP-startup screen clears and the composer is available.
+    tool.eq_ignore_ascii_case("codex")
+        && pane.contains("/model to change")
+        && !pane.contains("starting mcp server")
 }
 
 /// Hand the agent a prompt: wait for the REPL to be ready (accepting the trust
