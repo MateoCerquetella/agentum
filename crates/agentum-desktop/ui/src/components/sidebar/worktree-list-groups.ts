@@ -43,7 +43,7 @@ export type OperationalWorkspaceMeta = {
   presentation: 'operational-rich' | 'operational-settled'
   section: OperationalSection
   status: 'permission' | 'working' | 'done' | 'active' | 'inactive'
-  statusLabel: 'Needs input' | 'Working' | 'Ready' | 'Active' | 'Settled'
+  statusLabel: 'Needs input' | 'Ready to continue' | 'Working' | 'Settled'
   projectName?: string
   agentLabel?: string
   stateTimestamp?: number
