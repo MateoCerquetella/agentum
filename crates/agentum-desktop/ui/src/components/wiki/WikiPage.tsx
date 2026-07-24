@@ -1,10 +1,8 @@
-// Wiki — the browse surface for AutoWiki (spec 001), a MULTI-REPO hub.
-//
-// agentum manages many projects, so the Wiki is a hub over ALL of them, not the
-// single active workspace. Left: a Projects rail listing every repo the store
-// knows (`s.repos`), each with a wiki-status dot. Select a project → its wiki in
-// the main pane, reusing the existing 2-pane TOC + the editor `MarkdownPreview`
-// (mermaid + `[[Title]]` links come for free).
+// Wiki — the browse surface for AutoWiki (spec 001), embedded in the Project
+// Hub's Wiki tab and pinned to ONE project (spec 009 D1: the standalone
+// multi-repo hub with its Projects rail was deleted; projects are reached via
+// the sidebar Projects group → Project Hub). Renders the 2-pane TOC + the
+// editor `MarkdownPreview` (mermaid + `[[Title]]` links come for free).
 //
 // The backend is keyed by the repo's GIT IDENTITY (not the checkout path): the
 // same repo cloned locally AND over SSH resolves to ONE shared wiki. So the UI
@@ -18,7 +16,7 @@
 // generate time (mirrors Chat); a wiki lives in the app data dir, and an opt-in
 // "Save to repo" writes a committable copy back into `<repo>/.agentum/wiki`.
 //
-// Per-selected-repo states mirror the `GET /api/wiki` discriminator:
+// Per-repo states mirror the `GET /api/wiki` discriminator:
 //   empty → the explained empty state + a "Generate wiki" button
 //   running → an observable "generating…" indicator (a real session)
 //   failed → the recorded error — never a half-empty success
@@ -29,7 +27,6 @@ import {
   BookText,
   Check,
   FileText,
-  FolderGit2,
   Loader2,
   RefreshCw,
   Save
@@ -50,9 +47,13 @@ import {
   type WikiIndexResponse,
   type WikiPageMeta
 } from '@/runtime/wiki-client'
-
-/** Poll cadence while a generation run is in flight. */
-const RUNNING_POLL_MS = 3000
+import { subscribeServerEvents } from '@/runtime/server-events-bus'
+import {
+  applyWikiEvent,
+  commandForSocketOpen,
+  prettifySlug,
+  wikiProbePlan
+} from './wiki-view-state'
 
 /** Picker defaults persist across restarts (same pattern as the Chat pickers).
  *  `MODEL_KEY` empty string = "the agent's own default model". */
@@ -65,14 +66,6 @@ function readStored(key: string, fallback: string): string {
   } catch {
     return fallback
   }
-}
-
-/** The one-word status shown as a dot in the Projects rail. */
-type RepoWikiStatus = WikiIndexResponse['state'] | 'error' | 'loading'
-
-/** Last path segment — the human name for a repo/project. */
-function repoName(path: string): string {
-  return path.split('/').filter(Boolean).pop() ?? path
 }
 
 /** `<workdir>/.agentum/wiki/<slug>.md` — a stable synthetic path for
@@ -97,12 +90,13 @@ function pageToDocument(workdir: string, page: WikiPageMeta): MarkdownDocument {
 export default function WikiPage({
   pinnedRepoId
 }: {
-  /** Project Hub embed: lock the wiki to one project and drop the Projects
-   *  rail + page title (the hub renders its own chrome). */
-  pinnedRepoId?: string
-} = {}): React.JSX.Element {
+  /** The Project Hub embed contract: the wiki is locked to one project (the
+   *  hub renders its own chrome — this page has no title or project rail).
+   *  Required since spec 009 F1: the standalone multi-repo view is gone, so
+   *  there is no "unpinned" mode left. */
+  pinnedRepoId: string
+}): React.JSX.Element {
   const repos = useAppStore((s) => s.repos)
-  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const detectedAgentIds = useAppStore((s) => s.detectedAgentIds)
   const ensureDetectedAgents = useAppStore((s) => s.ensureDetectedAgents)
 
@@ -112,24 +106,12 @@ export default function WikiPage({
     void ensureDetectedAgents()
   }, [ensureDetectedAgents])
 
-  // Which project's wiki we're viewing. Default to the active repo, else the
-  // first; keep it valid as repos come and go.
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(pinnedRepoId ?? null)
-  useEffect(() => {
-    if (pinnedRepoId) {
-      setSelectedRepoId(pinnedRepoId)
-      return
-    }
-    setSelectedRepoId((cur) => {
-      if (cur && repos.some((r) => r.id === cur)) return cur
-      if (activeRepoId && repos.some((r) => r.id === activeRepoId)) return activeRepoId
-      return repos[0]?.id ?? null
-    })
-  }, [repos, activeRepoId, pinnedRepoId])
-
+  // The pinned project's repo record. Null only transiently (e.g. the repo was
+  // just removed while its hub is still mounted) — renderBody shows a neutral
+  // loading state for that frame.
   const selectedRepo = useMemo(
-    () => repos.find((r) => r.id === selectedRepoId) ?? null,
-    [repos, selectedRepoId]
+    () => repos.find((r) => r.id === pinnedRepoId) ?? null,
+    [repos, pinnedRepoId]
   )
   const repoId = selectedRepo?.id ?? null
   const workdir = selectedRepo?.path ?? null
@@ -168,29 +150,6 @@ export default function WikiPage({
   }, [detectedAgentIds])
   const modelOptions = tool === 'claude' ? CHAT_MODELS : []
 
-  // Per-repo status for the rail dots — a lightweight sweep so you can see which
-  // projects already have a wiki, across ALL of them at a glance. Remote repos are
-  // probed too now (the wiki is git-keyed, so a shared one resolves for them).
-  const [repoStatuses, setRepoStatuses] = useState<Record<string, RepoWikiStatus>>({})
-  const sweep = useCallback(async (): Promise<void> => {
-    // Hub embed: the rail is hidden, so only the pinned project needs a probe.
-    const targets = pinnedRepoId ? repos.filter((r) => r.id === pinnedRepoId) : repos
-    const entries = await Promise.all(
-      targets.map(async (r): Promise<[string, RepoWikiStatus]> => {
-        try {
-          const res = await getWiki(r.id)
-          return [r.id, res.state]
-        } catch {
-          return [r.id, 'error']
-        }
-      })
-    )
-    setRepoStatuses(Object.fromEntries(entries))
-  }, [repos, pinnedRepoId])
-  useEffect(() => {
-    void sweep()
-  }, [sweep])
-
   // ---- the selected project's wiki ----
   const [index, setIndex] = useState<WikiIndexResponse | null>(null)
   const [indexError, setIndexError] = useState<string | null>(null)
@@ -208,6 +167,22 @@ export default function WikiPage({
   // response for the old repo from clobbering the new one.
   const reqToken = useRef(0)
 
+  // Synchronous mirror of `index` so the events subscription (which lives
+  // outside the render cycle) always reduces from the CURRENT state.
+  const indexRef = useRef<WikiIndexResponse | null>(null)
+
+  // The one owner of index transitions: on running→ready, drop the page cache —
+  // a partially-written page fetched mid-run must not survive as the final
+  // content (spec 009 D-A6); the ready view re-reads each page fresh.
+  const applyIndex = useCallback((next: WikiIndexResponse | null): void => {
+    if (indexRef.current?.state === 'running' && next?.state === 'ready') {
+      setPageCache({})
+      setPageError(null)
+    }
+    indexRef.current = next
+    setIndex(next)
+  }, [])
+
   const refreshIndex = useCallback(
     async (id: string): Promise<void> => {
       const token = ++reqToken.current
@@ -216,21 +191,23 @@ export default function WikiPage({
       try {
         const next = await getWiki(id)
         if (token !== reqToken.current) return
-        setIndex(next)
-        setRepoStatuses((prev) => ({ ...prev, [id]: next.state }))
+        applyIndex(next)
       } catch (err) {
         if (token !== reqToken.current) return
-        setIndex(null)
+        applyIndex(null)
         setIndexError(err instanceof Error ? err.message : String(err))
       } finally {
         if (token === reqToken.current) setLoadingIndex(false)
       }
     },
-    []
+    [applyIndex]
   )
 
   // Reload whenever the selected project changes; reset page selection + cache so
-  // nothing leaks across projects.
+  // nothing leaks across projects. The probe plan is exactly the pinned repo
+  // (spec 009 AC-4 — `wiki-view-state.ts` makes the one-repo-only contract
+  // explicit and unit-tested), so this effect issues exactly ONE `GET /api/wiki`
+  // (the events subscription's onOpen may add one more for the same repo).
   useEffect(() => {
     setActiveSlug(null)
     setPageCache({})
@@ -238,22 +215,47 @@ export default function WikiPage({
     setSaveMsg(null)
     if (!repoId) {
       reqToken.current += 1
-      setIndex(null)
+      applyIndex(null)
       setIndexError(null)
       setLoadingIndex(false)
       return
     }
-    void refreshIndex(repoId)
-  }, [repoId, refreshIndex])
+    for (const id of wikiProbePlan(repoId)) void refreshIndex(id)
+  }, [repoId, refreshIndex, applyIndex])
 
-  // Poll while a run is in flight for the selected project.
+  // Push-based status (spec 009 AC-7): ride the ONE shared /api/events socket.
+  // `running` frames merge progressively-written pages into the view;
+  // `ready`/`failed` frames are REFETCH commands — the view flips to `ready`
+  // only from a validated GET (discriminator honesty, D-A6). `onOpen` refetches
+  // per the bus contract (fires at subscribe time if the socket is already
+  // open, and on every reconnect) — which is also why there is NO fallback
+  // poll: against the embedded loopback server a dead socket means dead HTTP
+  // too, and the reconnect gap heals right here (D-A5).
   useEffect(() => {
-    if (!repoId || index?.state !== 'running') return
-    const timer = setInterval(() => void refreshIndex(repoId), RUNNING_POLL_MS)
-    return () => clearInterval(timer)
-  }, [repoId, index?.state, refreshIndex])
+    if (!repoId) return
+    return subscribeServerEvents({
+      onEvent: (ev) => {
+        const outcome = applyWikiEvent(indexRef.current, repoId, ev)
+        if (outcome.index !== indexRef.current) applyIndex(outcome.index)
+        if (outcome.command === 'refetch') void refreshIndex(repoId)
+      },
+      onOpen: () => {
+        if (commandForSocketOpen() === 'refetch') void refreshIndex(repoId)
+      }
+    })
+  }, [repoId, refreshIndex, applyIndex])
 
-  const pages = index?.state === 'ready' ? index.pages : null
+  const readyPages = index?.state === 'ready' ? index.pages : null
+
+  // Progressive TOC (spec 009 AC-8): while a run is in flight, already-written
+  // pages render under prettified slug titles; the validated index replaces
+  // them with real titles at Ready.
+  const runningPages = useMemo<WikiPageMeta[] | null>(() => {
+    if (index?.state !== 'running' || !index.pages || index.pages.length === 0) return null
+    return index.pages.map((slug) => ({ slug, title: prettifySlug(slug) }))
+  }, [index])
+
+  const pages = readyPages ?? runningPages
 
   useEffect(() => {
     if (!pages || pages.length === 0) return
@@ -263,7 +265,12 @@ export default function WikiPage({
   }, [pages])
 
   useEffect(() => {
-    if (!repoId || !activeSlug || index?.state !== 'ready') return
+    // Pages are fetchable while `ready` AND while `running` (a listed slug is
+    // on disk — `GET /api/wiki/{slug}` reads the file regardless of state);
+    // mid-run fetches may be partial, which is why applyIndex drops the cache
+    // on the running→ready transition.
+    if (!repoId || !activeSlug) return
+    if (index?.state !== 'ready' && index?.state !== 'running') return
     if (pageCache[activeSlug] !== undefined) {
       setPageError(null)
       return
@@ -299,14 +306,13 @@ export default function WikiPage({
         tool,
         model: model || undefined
       })
-      setIndex({ state: 'running', sessionId })
-      setRepoStatuses((prev) => ({ ...prev, [repoId]: 'running' }))
+      applyIndex({ state: 'running', sessionId, pages: [] })
     } catch (err) {
       setIndexError(err instanceof Error ? err.message : String(err))
     } finally {
       setGenerating(false)
     }
-  }, [repoId, generating, isRemote, tool, model])
+  }, [repoId, generating, isRemote, tool, model, applyIndex])
 
   const handleSaveToRepo = useCallback(async (): Promise<void> => {
     if (!repoId || saving || isRemote) return
@@ -349,22 +355,9 @@ export default function WikiPage({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-        {/* Hub embed keeps the action strip (generate/save are per-project) but
-            drops the page title — the hub header already names the project. */}
-        <div className="flex items-center gap-2">
-          {pinnedRepoId ? null : (
-            <>
-              <BookText className="size-4 text-muted-foreground" />
-              <h1 className="text-sm font-semibold tracking-tight">Wiki</h1>
-              {repos.length > 0 ? (
-                <span className="text-xs text-muted-foreground">
-                  · {repos.length} project{repos.length === 1 ? '' : 's'}
-                </span>
-              ) : null}
-            </>
-          )}
-        </div>
+      {/* Action strip only (generate/save are per-project) — no page title,
+          the hub header already names the project. */}
+      <header className="flex items-center justify-end gap-3 border-b border-border px-4 py-2.5">
         {index?.state === 'ready' && !isRemote ? (
           <div className="flex items-center gap-2">
             {controls}
@@ -407,45 +400,27 @@ export default function WikiPage({
         </div>
       ) : null}
 
-      {repos.length === 0 ? (
-        <CenteredState
-          icon={<FolderGit2 className="size-8 text-muted-foreground/60" />}
-          title="No projects yet"
-          description="Add a project from the sidebar, then generate a navigable wiki for it here."
-        />
-      ) : (
-        <div className="flex min-h-0 flex-1">
-          {pinnedRepoId ? null : (
-            <RepoRail
-              repos={repos}
-              statuses={repoStatuses}
-              selectedRepoId={selectedRepoId}
-              onSelect={setSelectedRepoId}
-            />
-          )}
-          <div className="min-w-0 flex-1">
-            {renderBody({
-              repoId,
-              workdir,
-              isRemote,
-              index,
-              loadingIndex,
-              indexError,
-              generating,
-              pages,
-              activeSlug,
-              setActiveSlug,
-              pageCache,
-              loadingPage,
-              pageError,
-              markdownDocuments,
-              controls,
-              onGenerate: handleGenerate,
-              onOpenDocument: handleOpenDocument
-            })}
-          </div>
-        </div>
-      )}
+      <div className="min-h-0 min-w-0 flex-1">
+        {renderBody({
+          repoId,
+          workdir,
+          isRemote,
+          index,
+          loadingIndex,
+          indexError,
+          generating,
+          pages,
+          activeSlug,
+          setActiveSlug,
+          pageCache,
+          loadingPage,
+          pageError,
+          markdownDocuments,
+          controls,
+          onGenerate: handleGenerate,
+          onOpenDocument: handleOpenDocument
+        })}
+      </div>
     </div>
   )
 }
@@ -509,70 +484,7 @@ function GenerationControls({
   )
 }
 
-// ---- the Projects rail ------------------------------------------------------
-
-type RailRepo = { id: string; path: string; connectionId: string | null }
-
-function statusDot(status: RepoWikiStatus | undefined): React.JSX.Element {
-  const cls =
-    status === 'ready'
-      ? 'bg-emerald-500'
-      : status === 'running'
-        ? 'bg-amber-500 animate-pulse'
-        : status === 'failed'
-          ? 'bg-destructive'
-          : 'bg-muted-foreground/25'
-  return <span className={cn('size-1.5 shrink-0 rounded-full', cls)} aria-hidden />
-}
-
-function RepoRail({
-  repos,
-  statuses,
-  selectedRepoId,
-  onSelect
-}: {
-  repos: RailRepo[]
-  statuses: Record<string, RepoWikiStatus>
-  selectedRepoId: string | null
-  onSelect: (id: string) => void
-}): React.JSX.Element {
-  return (
-    <nav className="w-56 shrink-0 overflow-y-auto border-r border-border bg-sidebar/40 p-2">
-      <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
-        Projects
-      </div>
-      <ul className="flex flex-col gap-0.5">
-        {repos.map((r) => {
-          const isActive = r.id === selectedRepoId
-          return (
-            <li key={r.id}>
-              <button
-                type="button"
-                onClick={() => onSelect(r.id)}
-                aria-current={isActive ? 'true' : undefined}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
-                  isActive
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                    : 'text-sidebar-foreground/70 hover:bg-sidebar-foreground/8'
-                )}
-              >
-                {statusDot(statuses[r.id])}
-                <FolderGit2 className="size-3.5 shrink-0 opacity-70" />
-                <span className="truncate">{repoName(r.path)}</span>
-                {r.connectionId != null ? (
-                  <span className="ml-auto text-[10px] uppercase text-muted-foreground/60">ssh</span>
-                ) : null}
-              </button>
-            </li>
-          )
-        })}
-      </ul>
-    </nav>
-  )
-}
-
-// ---- the selected project's wiki body --------------------------------------
+// ---- the pinned project's wiki body -----------------------------------------
 
 type BodyProps = {
   repoId: string | null
@@ -680,13 +592,16 @@ function renderBody(p: BodyProps): React.JSX.Element {
     )
   }
 
-  if (state === 'running') {
+  // A run with nothing written yet — full-pane indicator. Once pages start
+  // landing this falls through to the TOC layout behind the generating banner
+  // (spec 009 AC-8, progressive render).
+  if (state === 'running' && (!p.pages || p.pages.length === 0)) {
     const sessionId = p.index?.state === 'running' ? p.index.sessionId : null
     return (
       <CenteredState
         icon={<Loader2 className="size-6 animate-spin text-muted-foreground" />}
         title="Generating wiki…"
-        description="An agent is reading the repo and writing the wiki pages. This can take a few minutes; the page refreshes itself when it's done."
+        description="An agent is reading the repo and writing the wiki pages. This can take a few minutes; pages appear here as they are written."
         action={
           sessionId ? (
             <code className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">
@@ -724,8 +639,9 @@ function renderBody(p: BodyProps): React.JSX.Element {
     )
   }
 
-  // state === 'ready'
+  // state === 'ready', or 'running' with progressively-written pages.
   const pages = p.pages ?? []
+  // Only reachable when ready (a running state with zero pages returned above).
   if (pages.length === 0) {
     return (
       <CenteredState
@@ -753,56 +669,70 @@ function renderBody(p: BodyProps): React.JSX.Element {
 
   const activeSlug = p.activeSlug
   const content = activeSlug ? p.pageCache[activeSlug] : undefined
+  const isGenerating = state === 'running'
 
   return (
-    <div className="flex h-full min-h-0">
-      <nav className="w-60 shrink-0 overflow-y-auto border-r border-border bg-sidebar/40 p-2">
-        <ul className="flex flex-col gap-0.5">
-          {pages.map((page) => {
-            const isActive = page.slug === activeSlug
-            return (
-              <li key={page.slug}>
-                <button
-                  type="button"
-                  onClick={() => p.setActiveSlug(page.slug)}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={cn(
-                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
-                    isActive
-                      ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                      : 'text-sidebar-foreground/70 hover:bg-sidebar-foreground/8'
-                  )}
-                >
-                  <FileText className="size-3.5 shrink-0 opacity-70" />
-                  <span className="truncate">{page.title}</span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      </nav>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Unmissable while the progressive TOC renders mid-run: these titles are
+          prettified slugs and the set is still growing (spec 009 AC-8). */}
+      {isGenerating ? (
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-2 border-b border-border bg-primary/10 px-4 py-2 text-xs font-medium text-foreground"
+        >
+          <Loader2 className="size-3.5 animate-spin" />
+          Generating wiki… pages appear below as the agent writes them.
+        </div>
+      ) : null}
+      <div className="flex min-h-0 flex-1">
+        <nav className="w-60 shrink-0 overflow-y-auto border-r border-border bg-sidebar/40 p-2">
+          <ul className="flex flex-col gap-0.5">
+            {pages.map((page) => {
+              const isActive = page.slug === activeSlug
+              return (
+                <li key={page.slug}>
+                  <button
+                    type="button"
+                    onClick={() => p.setActiveSlug(page.slug)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+                      isActive
+                        ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                        : 'text-sidebar-foreground/70 hover:bg-sidebar-foreground/8'
+                    )}
+                  >
+                    <FileText className="size-3.5 shrink-0 opacity-70" />
+                    <span className="truncate">{page.title}</span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </nav>
 
-      <div className="min-w-0 flex-1">
-        {activeSlug && content !== undefined ? (
-          <MarkdownPreview
-            key={activeSlug}
-            content={content}
-            filePath={p.workdir ? pagePath(p.workdir, activeSlug) : `wiki/${activeSlug}.md`}
-            scrollCacheKey={`wiki:${activeSlug}`}
-            markdownDocuments={p.markdownDocuments}
-            onOpenDocument={p.onOpenDocument}
-          />
-        ) : p.pageError ? (
-          <CenteredState
-            icon={<AlertTriangle className="size-8 text-destructive" />}
-            title="Couldn't load this page"
-            description={p.pageError}
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="size-6 animate-spin text-muted-foreground" />
-          </div>
-        )}
+        <div className="min-w-0 flex-1">
+          {activeSlug && content !== undefined ? (
+            <MarkdownPreview
+              key={activeSlug}
+              content={content}
+              filePath={p.workdir ? pagePath(p.workdir, activeSlug) : `wiki/${activeSlug}.md`}
+              scrollCacheKey={`wiki:${activeSlug}`}
+              markdownDocuments={p.markdownDocuments}
+              onOpenDocument={p.onOpenDocument}
+            />
+          ) : p.pageError ? (
+            <CenteredState
+              icon={<AlertTriangle className="size-8 text-destructive" />}
+              title="Couldn't load this page"
+              description={p.pageError}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="size-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

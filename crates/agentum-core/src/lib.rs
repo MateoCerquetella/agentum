@@ -9,9 +9,131 @@ use std::str::FromStr;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-pub mod board_schema;
 pub mod profiles;
 pub mod transcript;
+
+/// Canonical, durable tracker ownership for one registered Agentum project.
+/// Credentials deliberately remain in their provider-specific global stores;
+/// this value contains only target identity, automation mapping and view state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerConfig {
+    pub schema_version: u32,
+    pub repo_id: String,
+    pub revision: i64,
+    pub provider: Option<ProjectTrackerProvider>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<ProjectTrackerGithubTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear: Option<ProjectTrackerLinearTarget>,
+    #[serde(default)]
+    pub task_preferences: ProjectTrackerPreferences,
+    pub provenance: ProjectTrackerProvenance,
+}
+
+pub const PROJECT_TRACKER_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectTrackerProvider {
+    Github,
+    Linear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectTrackerProvenance {
+    Configured,
+    Migrated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerGithubTarget {
+    pub repository_slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_binding: Option<ProjectTrackerBoardBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerLinearTarget {
+    pub workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ProjectTrackerLinearScope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerLinearScope {
+    pub kind: ProjectTrackerLinearScopeKind,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectTrackerLinearScopeKind {
+    Project,
+    View,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<ProjectTrackerProviderPreferences>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear: Option<ProjectTrackerProviderPreferences>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerProviderPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hidden_field_ids_by_view: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// Serialized twin of the existing GitHub Projects binding. The server
+/// converts at the compatibility boundary, retaining one canonical row while
+/// preserving the established JSON/wire shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerBoardBinding {
+    pub project_id: String,
+    pub status_field_id: String,
+    pub status_mapping: ProjectTrackerStatusMapping,
+    pub done_closes_issue: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_owner_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_number: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_names: Option<ProjectTrackerStatusMapping>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTrackerStatusMapping {
+    pub todo: String,
+    pub in_progress: String,
+    #[serde(default)]
+    pub in_review: String,
+    pub ready_to_test: String,
+    pub done: String,
+    pub blocked: String,
+}
 
 /// Crate-wide lock serializing every test that mutates process-global
 /// environment (`HOME`/`USERPROFILE`/`XDG_CONFIG_HOME`). cargo runs tests in
@@ -21,24 +143,38 @@ pub mod transcript;
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub use board_schema::{
-    RequiredField, TransitionCtx, required_fields_for, validate_against, validate_transition,
-};
-
 /// Cross-platform user home directory, std-only (no `dirs`/`directories`
 /// dependency — `agentum-core` stays filesystem-light on purpose).
 ///
-/// Resolves `$HOME` on Unix and falls back to `%USERPROFILE%` on Windows,
-/// where `HOME` is conventionally unset. Returns `None` when neither is
-/// present (a misconfigured environment, not a normal one).
+/// Resolves `$HOME` on Unix and falls back to `%USERPROFILE%`, then the native
+/// `%HOMEDRIVE%%HOMEPATH%` pair on Windows, where `HOME` is conventionally
+/// unset. Returns `None` when none of those sources are present.
 ///
 /// Note: this does *not* read `$XDG_CONFIG_HOME` or any app-specific
 /// override (`$AGENTUM_HOME`) — those are layered on by callers
 /// (`profiles::default_path`, the store's path resolver) *on top of* this
 /// base. This helper only answers "where is the user's home directory".
 pub fn home_dir() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    home_dir_from_parts(
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+        std::env::var_os("HOMEDRIVE"),
+        std::env::var_os("HOMEPATH"),
+    )
+}
+
+fn home_dir_from_parts(
+    home: Option<std::ffi::OsString>,
+    user_profile: Option<std::ffi::OsString>,
+    home_drive: Option<std::ffi::OsString>,
+    home_path: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    home.or(user_profile)
+        .or_else(|| {
+            let mut combined = home_drive?;
+            combined.push(home_path?);
+            Some(combined)
+        })
         .map(std::path::PathBuf::from)
 }
 
@@ -48,8 +184,6 @@ pub enum CoreError {
     InvalidStatus(String),
     #[error("invalid session name: {0}")]
     InvalidName(String),
-    #[error("invalid link kind: {0}")]
-    ParseLinkKind(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +284,43 @@ pub struct NewHost {
 }
 
 pub const LOCAL_HOST_ID: Uuid = Uuid::nil();
+
+/// Authoritative location of a harness run.
+///
+/// `path` is meaningful on `host_id`; it must never be interpreted on the
+/// daemon's machine when a registered `worktree_id` points at an SSH host.
+/// The identity fields are optional only for the legacy, workdir-only local
+/// harness API. Registered worktrees always carry all three ids (the local
+/// host is represented by [`LOCAL_HOST_ID`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessScope {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<Uuid>,
+    pub path: String,
+}
+
+impl HarnessScope {
+    /// Compatibility scope for callers that only supplied a local workdir.
+    pub fn local_path(path: impl Into<String>) -> Self {
+        Self {
+            worktree_id: None,
+            repo_id: None,
+            host_id: None,
+            path: path.into(),
+        }
+    }
+
+    /// The concrete host used for execution. Legacy local scopes intentionally
+    /// omit `host_id` on the wire but still execute on the local pseudo-host.
+    pub fn effective_host_id(&self) -> Uuid {
+        self.host_id.unwrap_or(LOCAL_HOST_ID)
+    }
+}
 
 /// Structured readiness report for a host, produced by a single
 /// preflight (one SSH round trip for `HostKind::Ssh`, local `which`
@@ -296,9 +467,8 @@ pub struct Session {
     /// migration 0009.
     #[serde(default)]
     pub pinned: bool,
-    /// Board card this session is bound to. Set when the planner spawns
-    /// a session for a goal card (session.card_id = goal.id); NULL for
-    /// all other sessions. Added in migration 0015.
+    /// Deprecated compatibility field retained so historical session rows and
+    /// serialized payloads still load. New runtime flows always leave it NULL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_id: Option<i64>,
     /// Absolute filesystem path of the git worktree this session runs in.
@@ -407,9 +577,8 @@ pub struct NewSession {
     pub model: Option<String>,
     #[serde(default)]
     pub flags: Vec<String>,
-    /// Board card to bind this session to. Used by the planner spawn
-    /// path (POST /api/board/goals) to record which goal card spawned
-    /// this planning session. NULL for all other sessions.
+    /// Deprecated compatibility input for historical serialized requests.
+    /// New runtime flows always pass `None`.
     #[serde(default)]
     pub card_id: Option<i64>,
     /// Resolved worktree fields. The HTTP layer accepts a `WorktreeSpec`
@@ -524,254 +693,6 @@ pub enum WatchdogKind {
     Warn,
     Compact,
     Crash,
-}
-
-// ---------- board items ----------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BoardItem {
-    pub id: i64,
-    /// Human-friendly identifier, e.g. `AG-7`. Derived from `id` at insert.
-    pub key: String,
-    pub title: String,
-    pub body: Option<String>,
-    /// Free-form column name. `todo` | `doing` | `done` are the conventional
-    /// columns; users can introduce custom ones.
-    pub status: String,
-    /// Identifier of whoever currently holds the item. Free-form so both
-    /// agent sessions (a session id) and web actors (`web-…`) can claim.
-    pub claimed_by: Option<String>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    pub updated_at: OffsetDateTime,
-    /// Ticket type — colors the foot label pill.
-    /// One of: `bug` | `feat` | `chore` | `spike`. Free-form String so
-    /// users can introduce custom labels without a schema change.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lbl: Option<String>,
-    /// Tool ecosystem — colors the foot dot.
-    /// `claude` | `codex` | `gemini` | `hermes` are the recognized values;
-    /// others fall back to neutral grey.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<String>,
-    /// Working directory the agent should run in. Carried so a ticket
-    /// can be spawned into a session without re-asking the user where
-    /// the work lives. Free-form absolute path; the server doesn't
-    /// validate that it exists (the agent itself will surface that).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workdir: Option<String>,
-    /// Optional model hint (e.g. `claude-opus-4-8`, `gpt-5`). Passes
-    /// through to the spawned session's `--model` flag when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// agentum session id that this ticket is being worked in. Set when
-    /// the user spawns a session from the ticket; nullable so cards
-    /// without an active session can still render the Start affordance.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    /// Manual ordering within a column. Lower priority floats to the top
-    /// of the column; drag-to-reorder rewrites this on the affected
-    /// column. Default 0 — fresh rows append at the bottom because the
-    /// secondary sort is `created_at ASC`.
-    #[serde(default)]
-    pub priority: i64,
-    /// Goal card this item is a child of. Set when the planner creates a
-    /// child card under a goal (lbl="goal") card; NULL for standalone
-    /// cards and for the goal card itself. Added in migration 0015.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_goal_id: Option<i64>,
-    /// Web URL of the external issue this card mirrors (the stable dedupe
-    /// key for tracker sync). NULL for native agentum cards. Migration 0022.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_url: Option<String>,
-    /// Source of an external card — `github` | `linear` | `gitlab`. Drives
-    /// the card's source badge + open-in-tracker link. NULL when native.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_provider: Option<String>,
-    /// Stable provider-native id (GitHub issue *number* as text). The two-way
-    /// sync reconcile (spec 016a) matches a card by `(external_provider,
-    /// external_id)` rather than the mutable `external_url`, so a host/owner
-    /// rename can't ping-pong identity. NULL for native cards. Migration 0023.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_id: Option<String>,
-    /// RFC3339 timestamp of the last sync that touched this card. Kept as a
-    /// string (not `OffsetDateTime`) since it round-trips straight from the
-    /// `external_synced_at` TEXT column and is only ever displayed/compared.
-    /// Migration 0023.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_synced_at: Option<String>,
-}
-
-/// A durable binding from the board to an external issue tracker (spec 016a).
-/// `project` is `owner/repo` for GitHub. The server-side sync engine reads
-/// these to know which tracker(s) to pull. Added in migration 0023.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrackerBinding {
-    pub id: i64,
-    /// `github` (016a) | `linear` | `gitlab` (later slices). 016a only persists
-    /// `github` bindings (binding creation rejects other providers).
-    pub provider: String,
-    /// `owner/repo` for GitHub.
-    pub project: String,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-    #[serde(with = "time::serde::rfc3339")]
-    pub updated_at: OffsetDateTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewBoardItem {
-    pub title: String,
-    #[serde(default)]
-    pub body: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub lbl: Option<String>,
-    #[serde(default)]
-    pub tool: Option<String>,
-    #[serde(default)]
-    pub workdir: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub priority: Option<i64>,
-    /// Goal card this child item belongs to. Set by the planner when
-    /// creating child cards under a goal. NULL for standalone items and
-    /// the goal card itself.
-    #[serde(default)]
-    pub parent_goal_id: Option<i64>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct BoardPatch {
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    pub body: Option<Option<String>>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    pub lbl: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    pub tool: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    pub workdir: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    pub model: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    pub session_id: Option<Option<String>>,
-    #[serde(default)]
-    pub priority: Option<i64>,
-    /// Double-Option per the existing pattern: `None` = field omitted
-    /// (no-op), `Some(None)` = detach from goal (set NULL), `Some(Some(id))`
-    /// = attach or re-attach to a different goal. This is critical for
-    /// letting the planner watchdog detach a child from its goal when the
-    /// goal is completed or the child is promoted.
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    pub parent_goal_id: Option<Option<i64>>,
-}
-
-/// Distinguishes "field omitted" from "field set to null" so a PATCH can
-/// explicitly clear `body`.
-fn deserialize_optional_field<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Ok(Some(Option::<T>::deserialize(de)?))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaimRequest {
-    /// Free-form actor identifier. Server stores it in `claimed_by` as-is.
-    pub claimed_by: String,
-}
-
-/// Threaded comment on a board item. `author` is free-form so both
-/// human actors (`web-…`) and agent ids can post without a separate
-/// users table. Comments are render-only — no edit/delete endpoints
-/// yet; that's a future ask if the audit-trail vibe takes off.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BoardComment {
-    pub id: i64,
-    pub board_id: i64,
-    pub author: String,
-    pub body: String,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewBoardComment {
-    pub author: String,
-    pub body: String,
-}
-
-/// Batch reorder payload. The dashboard sends one of these per drag-
-/// to-reorder drop; the server writes them in a single transaction so
-/// the column is always consistent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReorderEntry {
-    pub id: i64,
-    pub priority: i64,
-}
-
-// ---------- board links ----------
-
-/// Kind of directed edge between two board items. Stored as a TEXT
-/// column in `board_links` via `as_str()` / `FromStr`.
-///
-/// `ParentOf` records the planner-created parent→child relationship
-/// (the parent goal "owns" the child card). `Blocks` records a
-/// dependency edge: the `from_card_id` card must complete before the
-/// `to_card_id` card can start (Phase 3 gate enforces this on PATCH).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkKind {
-    ParentOf,
-    Blocks,
-}
-
-impl LinkKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LinkKind::ParentOf => "parent_of",
-            LinkKind::Blocks => "blocks",
-        }
-    }
-}
-
-impl fmt::Display for LinkKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for LinkKind {
-    type Err = CoreError;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "parent_of" => Ok(LinkKind::ParentOf),
-            "blocks" => Ok(LinkKind::Blocks),
-            other => Err(CoreError::ParseLinkKind(other.to_string())),
-        }
-    }
-}
-
-/// A directed edge between two board items persisted in `board_links`.
-/// `from_card_id → to_card_id` with a `kind` discriminator. The
-/// `created_at` is immutable — links are insert-or-delete only.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BoardLink {
-    pub from_card_id: i64,
-    pub to_card_id: i64,
-    pub kind: LinkKind,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
 }
 
 // ---------- notes ----------
@@ -890,6 +811,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn home_dir_falls_back_to_windows_drive_and_path() {
+        let resolved = home_dir_from_parts(
+            None,
+            None,
+            Some(std::ffi::OsString::from("C:")),
+            Some(std::ffi::OsString::from(r"\Users\runneradmin")),
+        );
+        assert_eq!(
+            resolved,
+            Some(std::path::PathBuf::from(r"C:\Users\runneradmin"))
+        );
+    }
+
+    #[test]
     fn status_roundtrip() {
         for s in ["idle", "running", "stopped", "crashed"] {
             let parsed: Status = s.parse().unwrap();
@@ -906,36 +841,8 @@ mod tests {
         assert!(validate_name("dot.dot").is_err());
     }
 
-    /// Confirms that `BoardItem.parent_goal_id` round-trips through
-    /// serde_json correctly for the three cases:
-    ///   1. `Some(42)` — present and serialises as `"parent_goal_id": 42`.
-    ///   2. `None` — absent (skip_serializing_if omits the key).
-    ///   3. Missing from input — deserialises to `None` via `#[serde(default)]`.
-    #[test]
-    fn parent_goal_id_round_trips_via_serde() {
-        // Case 1: Some(42) — round-trips through the JSON wire.
-        let json_with = r#"{"id":1,"key":"AG-1","title":"t","status":"todo","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","parent_goal_id":42}"#;
-        let item: BoardItem = serde_json::from_str(json_with).unwrap();
-        assert_eq!(item.parent_goal_id, Some(42));
-        let reserialized = serde_json::to_string(&item).unwrap();
-        assert!(
-            reserialized.contains("\"parent_goal_id\":42"),
-            "expected parent_goal_id in output: {reserialized}"
-        );
-
-        // Case 2: None — skip_serializing_if omits the key entirely.
-        let json_without = r#"{"id":2,"key":"AG-2","title":"t","status":"todo","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
-        let item2: BoardItem = serde_json::from_str(json_without).unwrap();
-        assert_eq!(item2.parent_goal_id, None);
-        let reserialized2 = serde_json::to_string(&item2).unwrap();
-        assert!(
-            !reserialized2.contains("parent_goal_id"),
-            "expected parent_goal_id absent from output: {reserialized2}"
-        );
-    }
-
-    /// Confirms that `Session.card_id` round-trips analogously to
-    /// `BoardItem.parent_goal_id` (same serde attribute pattern).
+    /// Confirms that the deprecated `Session.card_id` compatibility field
+    /// continues to round-trip for historical serialized sessions.
     ///
     /// Uses `serde_json::to_value` + field surgery rather than a
     /// hand-written JSON string because `Session` has required RFC3339
@@ -996,98 +903,5 @@ mod tests {
         // Round-trip through JSON: decode back and compare.
         let decoded: Session = serde_json::from_str(&re2).unwrap();
         assert_eq!(decoded.card_id, Some(7));
-    }
-
-    /// Exercises the three distinct serde states of
-    /// `BoardPatch.parent_goal_id`:
-    ///   - Field absent → `None` (no-op, leave column alone).
-    ///   - Field = `null` → `Some(None)` (detach child from goal).
-    ///   - Field = number → `Some(Some(id))` (set or change goal).
-    #[test]
-    fn board_patch_parent_goal_id_distinguishes_omitted_explicit_null_and_value() {
-        // Omitted → None (the store should ignore the field).
-        let omitted: BoardPatch = serde_json::from_str(r#"{}"#).unwrap();
-        assert!(
-            omitted.parent_goal_id.is_none(),
-            "omitted field must be None"
-        );
-
-        // Explicit null → Some(None) (the store should clear the column).
-        let explicit_null: BoardPatch =
-            serde_json::from_str(r#"{"parent_goal_id": null}"#).unwrap();
-        assert_eq!(
-            explicit_null.parent_goal_id,
-            Some(None),
-            "explicit null must be Some(None)"
-        );
-
-        // Number → Some(Some(42)) (the store should write 42).
-        let with_value: BoardPatch = serde_json::from_str(r#"{"parent_goal_id": 42}"#).unwrap();
-        assert_eq!(
-            with_value.parent_goal_id,
-            Some(Some(42)),
-            "value must be Some(Some(42))"
-        );
-    }
-
-    /// Exercises the three distinct serde states of `BoardPatch.session_id`
-    /// per Phase 2 CONTEXT D-10:
-    ///   - Field absent → `None` (no-op, store ignores session_id).
-    ///   - Field = `null` → `Some(None)` (explicit unbind: clear session_id).
-    ///   - Field = string → `Some(Some(_))` (explicit rebind to new session).
-    ///
-    /// This is the Phase 2 contract pin. The field already exists from Phase 1;
-    /// this test locks the deserialization shape so plan 02-03's PATCH wiring
-    /// cannot silently regress the double-Option pattern.
-    #[test]
-    fn board_patch_session_id_distinguishes_omitted_explicit_null_and_value() {
-        // Omitted → None (the store must leave session_id column unchanged).
-        let omitted: BoardPatch = serde_json::from_str(r#"{}"#).unwrap();
-        assert!(
-            omitted.session_id.is_none(),
-            "omitted session_id field must be None"
-        );
-
-        // Explicit null → Some(None) (the store should clear the column).
-        let explicit_null: BoardPatch = serde_json::from_str(r#"{"session_id": null}"#).unwrap();
-        assert_eq!(
-            explicit_null.session_id,
-            Some(None),
-            "explicit null must be Some(None)"
-        );
-
-        // String → Some(Some("uuid-string")) (the store should write the value).
-        let with_value: BoardPatch =
-            serde_json::from_str(r#"{"session_id": "uuid-string"}"#).unwrap();
-        assert_eq!(
-            with_value.session_id,
-            Some(Some("uuid-string".to_string())),
-            "value must be Some(Some(_))"
-        );
-    }
-
-    // Plan-checker iter-1 W-4: pin BoardPatch: Clone at compile time so plan
-    // 02-03's PATCH-handler can call `patch.clone()` without a conditional
-    // fallback. Zero-cost: const-eval forces the trait bound check.
-    const _: fn() = || {
-        fn _assert_clone<T: Clone>() {}
-        _assert_clone::<BoardPatch>();
-    };
-
-    /// Verifies `LinkKind` as_str / FromStr / unknown-string error path.
-    #[test]
-    fn link_kind_round_trips() {
-        assert_eq!(LinkKind::ParentOf.as_str(), "parent_of");
-        assert_eq!(LinkKind::Blocks.as_str(), "blocks");
-
-        assert_eq!("parent_of".parse::<LinkKind>().unwrap(), LinkKind::ParentOf);
-        assert_eq!("blocks".parse::<LinkKind>().unwrap(), LinkKind::Blocks);
-
-        let err = "nope".parse::<LinkKind>();
-        assert!(
-            err.is_err(),
-            "unknown string should produce ParseLinkKind error"
-        );
-        assert!(matches!(err.unwrap_err(), CoreError::ParseLinkKind(_)));
     }
 }

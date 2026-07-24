@@ -13,6 +13,9 @@ use super::*;
 /// longer than the 12s probe budget, so host-aware git gets its own,
 /// roomier timeout. Still bounded so a hung remote can't wedge a request.
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Harness init/verify/QA scripts legitimately run full builds and browser
+/// suites. Do not inherit the short git transport budget.
+const HARNESS_COMMAND_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Captured output of a command run on a host. Unlike [`ssh_stdout`], a
 /// non-zero exit is NOT an error — callers inspect `success`/`stderr`
@@ -34,6 +37,67 @@ impl HostCommandOutput {
     /// stdout as lossy UTF-8 (callers trim as needed).
     pub fn stdout_string(&self) -> String {
         String::from_utf8_lossy(&self.stdout).into_owned()
+    }
+}
+
+/// Run an arbitrary argv in `cwd` on `host` and capture its output. This is
+/// the host-aware command seam used by the sequential harness for `bash
+/// init.sh`, verification scripts, and compatibility `npm run verify`.
+/// Arguments and environment values are shell-quoted independently on SSH;
+/// environment keys are restricted to portable identifier characters.
+pub async fn command_in_dir(
+    host: &Host,
+    cwd: &str,
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+) -> Result<HostCommandOutput> {
+    match &host.kind {
+        HostKind::Local => {
+            let out = Command::new(program)
+                .args(args)
+                .envs(env.iter().map(|(k, v)| (k, v)))
+                .current_dir(cwd)
+                .output()
+                .await?;
+            Ok(HostCommandOutput {
+                success: out.status.success(),
+                code: out.status.code(),
+                stdout: out.stdout,
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            })
+        }
+        HostKind::Ssh { .. } => {
+            let mut inner = format!("cd {} && env", q(cwd)?);
+            for (key, value) in env {
+                if key.is_empty()
+                    || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    || key.as_bytes()[0].is_ascii_digit()
+                {
+                    return Err(HostRuntimeError::Quote);
+                }
+                inner.push(' ');
+                inner.push_str(key);
+                inner.push('=');
+                inner.push_str(&q(value)?);
+            }
+            inner.push(' ');
+            inner.push_str(&q(program)?);
+            for arg in args {
+                inner.push(' ');
+                inner.push_str(&q(arg)?);
+            }
+            let script = format!("sh -c {}", q(&inner)?);
+            let out = ssh_output(host, &script, HARNESS_COMMAND_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            Ok(HostCommandOutput {
+                success: out.status.success(),
+                code: out.status.code(),
+                stdout: out.stdout,
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            })
+        }
     }
 }
 
@@ -185,6 +249,53 @@ pub async fn path_exists(host: &Host, abs_path: &str) -> Result<bool> {
                 .await
                 .map_err(map_ssh_io)?;
             Ok(out.status.success())
+        }
+    }
+}
+
+async fn path_test(host: &Host, flag: &str, abs_path: &str) -> Result<bool> {
+    match &host.kind {
+        HostKind::Local => {
+            let metadata = tokio::fs::metadata(abs_path).await;
+            Ok(match (flag, metadata) {
+                ("-d", Ok(m)) => m.is_dir(),
+                ("-f", Ok(m)) => m.is_file(),
+                (_, Err(e)) if e.kind() == std::io::ErrorKind::NotFound => false,
+                (_, Err(e)) => return Err(e.into()),
+                _ => false,
+            })
+        }
+        HostKind::Ssh { .. } => {
+            let script = format!("sh -c {}", q(&format!("test {flag} {}", q(abs_path)?))?);
+            let out = ssh_output(host, &script, SSH_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            Ok(out.status.success())
+        }
+    }
+}
+
+/// Whether `abs_path` is a directory on `host`.
+pub async fn path_is_dir(host: &Host, abs_path: &str) -> Result<bool> {
+    path_test(host, "-d", abs_path).await
+}
+
+/// Whether `abs_path` is a regular file on `host`.
+pub async fn path_is_file(host: &Host, abs_path: &str) -> Result<bool> {
+    path_test(host, "-f", abs_path).await
+}
+
+/// Remove one exact file on `host`. A missing file is a successful no-op.
+pub async fn remove_file(host: &Host, abs_path: &str) -> Result<()> {
+    match &host.kind {
+        HostKind::Local => match tokio::fs::remove_file(abs_path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        },
+        HostKind::Ssh { .. } => {
+            let script = format!("sh -c {}", q(&format!("rm -f -- {}", q(abs_path)?))?);
+            ssh_checked(host, &script).await
         }
     }
 }

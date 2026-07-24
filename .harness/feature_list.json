@@ -23,6 +23,36 @@
       "name": "Desktop Wiki view (TOC + MarkdownPreview + mermaid + nav)",
       "description": "Add the desktop Wiki surface. New crates/agentum-desktop/ui/src/components/wiki/WikiPage.tsx: 2-pane (left TOC from index.json pages; right standalone <MarkdownPreview content filePath scrollCacheKey markdownDocuments onOpenDocument/> per architecture.md §3.4 — reuse AS-IS, no extraction) with explained EMPTY state (single 'Generate wiki' button), RUNNING state (tie to sessionId / /api/events), and FAILURE state (show .status.json error — AC-9, never half-empty). New runtime/wiki-client.ts: getWiki/getWikiPage/generateWiki over runtime/server-http.ts. Wire the 'wiki' view (architecture.md §3.5): add 'wiki' to the activeView union AND all 5 previousViewBefore* unions + a previousViewBeforeWiki field (store/slices/ui.ts:440-445); openWikiPage/closeWikiPage (~:1033); lazy WikiPage import (App.tsx:221) + switch case (~:1755); a <PrimaryNavItem label='Wiki' onClick={openWikiPage}/> in SidebarNav.tsx (~:201). Internal [[Title]] links navigate via onOpenDocument (map pages to MarkdownDocument with name=title). Gate: npm run build --prefix crates/agentum-desktop/ui (green) + qa.sh browser checks. Refs: architecture.md §3.4, §3.5, §4.",
       "state": "ready_to_test"
+    },
+    {
+      "id": "binding-identity-fidelity",
+      "name": "New Workspace repository-owned tracker binding",
+      "description": "Spec 026 F1. Validate the canonical Repo.id row against the server-resolved repository slug, CAS-repair only migrated mismatches, preserve configured mismatches with tracker_target_mismatch, and keep local/SSH resolution fail-closed. Verify: focused project_trackers and resolve_tracker Rust tests plus git diff --check. QA: the live local/SSH desktop matrix is mandatory and must remain pending until run with named safe fixtures.",
+      "state": "ready_to_test"
+    },
+    {
+      "id": "wizard-closed-tracker-scope",
+      "name": "New Workspace closed tracker issue scope",
+      "description": "Spec 026 F2. Carry the server-resolved slug through TrackerSection, filter mixed-Project rows to that repository, reject deferred prior-repo completions using repo+slug+Project scope, clear linked work on repo switch, and persist exact-or-absent create coordinates. Verify: focused New Workspace/runtime/worktree Vitest, Vite production build, and git diff --check. QA: Agentum/xcode-theme, same-Project race, SSH, and linked/unlinked persistence require a real current-build desktop and must remain pending until run.",
+      "state": "ready_to_test"
+    },
+    {
+      "id": "side-effect-free-session-list",
+      "name": "Historical session listing has no transcript side effects",
+      "description": "Spec 028 F2. GET /api/sessions remains a database-only query. The production-shaped 500-session fixture (250 Claude rows) must return every row while injected observer creation/drop counts and transcript cache count remain zero.",
+      "state": "done"
+    },
+    {
+      "id": "mode-aware-transcript-read",
+      "name": "Atomic live and snapshot-only transcript reads",
+      "description": "Spec 028 F1-F2. Running Claude reads attach exactly one observer under repeated/concurrent access; historical reads synchronously consume appended complete lines without observation; reset-first, pinned promotion, legacy fallback, non-Claude behavior, and exact update payload remain pinned.",
+      "state": "done"
+    },
+    {
+      "id": "transcript-observer-lifecycle",
+      "name": "Bounded transcript observer retirement",
+      "description": "Spec 028 F1-F3. Generation-checked consumers reject already-received wakes after retirement. A weak/ref-counted per-session async lifecycle boundary linearizes authoritative agent-task loads with stop/kill/delete/tool-patch mutation and final retirement, including preloaded Running/Claude requests. Deterministic route barriers prove those mutations wait, then finish with no stale observer (and no delete cache). The watchdog hook retires stopped/crashed/deleted/tool-changed observers without starting new ones; notify delivery remains bounded/coalescing.",
+      "state": "done"
     }
   ]
 }

@@ -6,7 +6,7 @@
 import { apiUrl, wsUrl, getServerEndpoint } from './server-endpoint'
 import { reconnectBackoffMs as backoffMs } from './reconnect-backoff'
 
-type FeatureState =
+export type FeatureState =
   | 'pending'
   | 'coding'
   | 'verifying'
@@ -26,7 +26,7 @@ type HarnessState =
   | 'failed'
 
 /** SDD phase a run is in, layered above the feature backlog (spec 013). */
-type SpecPhase =
+export type SpecPhase =
   | 'authoring'
   | 'architecture'
   | 'decompose'
@@ -39,7 +39,7 @@ type SpecPhase =
 /** The SDD role behind an agent-played gate (spec 013). */
 type RoleKind = 'pm' | 'architect' | 'reviewer'
 
-type Feature = {
+export type HarnessFeature = {
   id: string
   name: string
   description: string
@@ -47,14 +47,14 @@ type Feature = {
   attempts: number
   last_error?: string | null
   prompt?: string | null
-  /** Task tracker this feature mirrors (`board` / `github` / `linear`). */
+  /** External task tracker this feature mirrors (`github` / `linear`). */
   tracker_provider?: string | null
-  /** The tracker item's URL (null for the internal board). */
+  /** The external tracker item's URL. */
   tracker_url?: string | null
 }
 
-type FeatureList = {
-  features: Feature[]
+export type HarnessFeatureList = {
+  features: HarnessFeature[]
   max_retries: number
   agent_tool: string
   agent_model?: string | null
@@ -72,21 +72,52 @@ type FeatureList = {
   roles?: boolean
   /** Pause (vs. block) when a role gate exhausts retries (spec 013). */
   hitl_on_block?: boolean
+  /** Missing/sequential preserves the compatibility WIP=1 engine. */
+  execution_mode?: 'sequential' | 'orchestrated'
+  max_concurrency?: number
 }
 
-type HarnessStatus = {
+export type HarnessWorkerStatus = {
+  task_id: string
+  state: 'pending' | 'ready' | 'dispatched' | 'working' | 'patch_pending' | 'verifying' | 'completed' | 'blocked'
+  session_id?: string | null
+  enforcement: 'enforced' | 'best_effort' | string
+  context_remaining?: number | null
+  patch_state?: string | null
+  conflict?: string | null
+}
+
+// Exported for the spec-023 surfaces (GatedRunBar / useWorktreeHarnessRun /
+// lib/harness-run.ts): the wire shapes stay faithful to
+// `crates/agentum-server/src/harness.rs` (serde snake_case).
+export type HarnessStatus = {
   id: string
   workdir: string
+  /** Authoritative workspace identity. Missing only on legacy local runs. */
+  worktree_id?: string | null
+  repo_id?: string | null
+  /** Server host id pinned when the run was registered. */
+  host_id?: string | null
   state: HarnessState
-  features: FeatureList
+  features: HarnessFeatureList
   current_feature?: string | null
   current_session?: string | null
+  /** Validated by the UI before becoming a tab launch-agent hint. */
+  current_agent_tool?: string | null
   elapsed_secs: number
   agent_instructions: string
   /** Current SDD phase (spec 013); `executing` for a plain feature run. */
   phase?: SpecPhase
   /** Role-gate retry counter for the current phase (spec 013). */
   phase_attempts?: number
+  /** Concrete SDD stage that entered terminal `blocked`. */
+  blocked_phase?: SpecPhase | null
+  /** Latest role-gate verdict, retained across reconnect/reload. */
+  gate_summary?: string | null
+  execution_mode?: 'sequential' | 'orchestrated'
+  max_concurrency?: number
+  coordinator_session?: string | null
+  active_workers?: HarnessWorkerStatus[]
 }
 
 type HarnessFiles = {
@@ -98,12 +129,19 @@ type HarnessFiles = {
 }
 
 // `HarnessEvent` is a serde-tagged enum: `{ "type": "...", ...fields }`.
-type HarnessEvent =
+export type HarnessEvent =
   | { type: 'state_changed'; harness_id: string; state: HarnessState }
   | { type: 'feature_state_changed'; harness_id: string; feature_id: string; state: FeatureState }
   | { type: 'init_started'; harness_id: string }
   | { type: 'init_completed'; harness_id: string; success: boolean; output: string }
   | { type: 'agent_spawned'; harness_id: string; feature_id: string; session_id: string }
+  | {
+      type: 'current_session_changed'
+      harness_id: string
+      session_id: string
+      feature_id?: string | null
+      agent_tool: string
+    }
   | { type: 'log'; harness_id: string; feature_id?: string | null; message: string }
   | { type: 'verify_started'; harness_id: string; feature_id: string }
   | { type: 'verify_completed'; harness_id: string; feature_id: string; success: boolean; output: string }
@@ -118,6 +156,11 @@ type HarnessEvent =
       attempt: number
       summary: string
     }
+  | { type: 'worker_changed'; harness_id: string; task_id: string; session_id?: string | null; state: string }
+  | { type: 'patch_changed'; harness_id: string; task_id: string; patch_id: string; state: string }
+  | { type: 'ownership_conflict'; harness_id: string; task_id: string; path: string; message: string }
+  | { type: 'task_verification'; harness_id: string; task_id: string; success: boolean }
+  | { type: 'coordinator_rotated'; harness_id: string; previous_session: string; replacement_session: string }
   | { type: 'error'; harness_id: string; message: string }
   | { type: 'lagged'; skipped: number }
 
@@ -144,15 +187,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) : undefined) as T
 }
 
-/** `POST /api/harness` — register a run from a project dir containing `.harness/`. */
-function startHarness(workdir: string): Promise<{ harness_id: string }> {
-  return request('/api/harness', { method: 'POST', body: JSON.stringify({ workdir }) })
+export type HarnessWorktreeTarget = {
+  workdir: string
+  /** Authoritative identity; the server resolves host/path from it. */
+  worktreeId: string
+}
+
+/** `POST /api/harness` — register a run from a worktree containing a Harness. */
+export function startHarness(input: HarnessWorktreeTarget): Promise<{ harness_id: string }> {
+  return request('/api/harness', {
+    method: 'POST',
+    body: JSON.stringify({
+      workdir: input.workdir,
+      worktreeId: input.worktreeId
+    })
+  })
 }
 
 /** Wire shape of `POST /api/harness/start-work` (spec 005 F1 — camelCase,
  *  matching the newer `SpecFromIssueResponse` precedent). */
 export type StartGatedWorkResult = {
   harnessId: string
+  worktreeId?: string
+  repoId?: string
+  hostId?: string
+  executionMode?: 'sequential' | 'orchestrated'
   specId: string
   specExisted: boolean
   planned: number
@@ -170,46 +229,33 @@ export type StartGatedWorkResult = {
  */
 export function startGatedWork(input: {
   workdir: string
+  /** Authoritative identity for local and SSH worktrees. */
+  worktreeId: string
   number: number
   slug?: string
   agentTool?: string
   agentModel?: string
+  /** Spec 021 (#379): the repo's tracker pin (`auto`/`github`/`linear`).
+   *  Absent/`auto` keeps the issue-driven path's GitHub stamping. */
+  tracker?: string
 }): Promise<StartGatedWorkResult> {
   return request('/api/harness/start-work', {
     method: 'POST',
     body: JSON.stringify({
       workdir: input.workdir,
+      worktreeId: input.worktreeId,
       number: String(input.number),
       ...(input.slug ? { slug: input.slug } : {}),
       ...(input.agentTool ? { agentTool: input.agentTool } : {}),
-      ...(input.agentModel ? { agentModel: input.agentModel } : {})
+      ...(input.agentModel ? { agentModel: input.agentModel } : {}),
+      ...(input.tracker ? { tracker: input.tracker } : {})
     })
   })
 }
 
-type PlanGoalHarnessResult = {
-  /** Which task manager backed the features: "board" | "github" | "linear". */
-  provider: string
-  workdir: string
-  feature_count: number
-  features: FeatureList
-}
-
-/**
- * `POST /api/board/goals/{id}/harness-plan` — turn a goal's planner-produced
- * child cards into the harness backlog (spec 011 chat-to-features). Writes
- * `feature_list.json` and leaves the harness **Idle**; the user reviews the
- * board and then runs it (human-gated). When an external task manager is
- * configured (GitHub/Linear) the cards are mirrored there and `provider`
- * reflects it; otherwise the internal board is the source of truth.
- */
-function planGoalHarness(goalId: number): Promise<PlanGoalHarnessResult> {
-  return request(`/api/board/goals/${goalId}/harness-plan`, { method: 'POST' })
-}
-
 /** Call one of agentum's MCP tools over JSON-RPC at `POST /mcp`. Returns the
  *  tool's text payload. Used for the spec-010 surface tools that have no REST
- *  route (scaffold/plan/board/…). */
+ *  route (scaffold/plan/…). */
 async function callMcpTool(
   name: string,
   args: Record<string, unknown>
@@ -273,17 +319,17 @@ export function setHarnessSettings(patch: Partial<HarnessSettings>): Promise<Har
 }
 
 /** `GET /api/harness` — status for every registered run. */
-function listHarnesses(): Promise<HarnessStatus[]> {
+export function listHarnesses(): Promise<HarnessStatus[]> {
   return request('/api/harness')
 }
 
 /** `GET /api/harness/{id}` — one run's status snapshot. */
-function getHarnessStatus(id: string): Promise<HarnessStatus> {
+export function getHarnessStatus(id: string): Promise<HarnessStatus> {
   return request(`/api/harness/${id}`)
 }
 
 /** `POST /api/harness/{id}/run` — kick off the end-to-end drive loop. */
-function runHarness(id: string): Promise<void> {
+export function runHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}/run`, { method: 'POST' })
 }
 
@@ -310,8 +356,18 @@ function stopHarness(id: string): Promise<void> {
   return request(`/api/harness/${id}`, { method: 'DELETE' })
 }
 
+/**
+ * `POST /api/harness/{id}/unlink-issue` — detach the run's tracker issue
+ * (spec 023 Part B, AC 5) WITHOUT deleting the run: the server clears every
+ * feature's `tracker_provider`/`tracker_url` and persists `feature_list.json`,
+ * so later state transitions post nothing to the old issue (AC 6).
+ */
+export function unlinkHarnessIssue(id: string): Promise<void> {
+  return request(`/api/harness/${id}/unlink-issue`, { method: 'POST' })
+}
+
 /** Handle for the live harness event stream. */
-type HarnessEventStream = { close: () => void }
+export type HarnessEventStream = { close: () => void }
 
 /**
  * Open `WS /api/harness/events` and forward each parsed `HarnessEvent`. Auto-
@@ -319,8 +375,9 @@ type HarnessEventStream = { close: () => void }
  * is always recoverable). The token rides in `?token=` because browsers can't
  * set headers on a WS upgrade.
  */
-async function openHarnessEventStream(
-  onEvent: (ev: HarnessEvent) => void
+export async function openHarnessEventStream(
+  onEvent: (ev: HarnessEvent) => void,
+  onConnected?: () => void
 ): Promise<HarnessEventStream> {
   const { token } = await getServerEndpoint()
   const base = await wsUrl('/api/harness/events')
@@ -337,6 +394,7 @@ async function openHarnessEventStream(
     ws = sock
     sock.addEventListener('open', () => {
       attempt = 0
+      onConnected?.()
     })
     sock.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') return
@@ -362,6 +420,19 @@ async function openHarnessEventStream(
       ws?.close()
     }
   }
+}
+
+/**
+ * Subscribe to the FULL harness event stream — every event for every run
+ * (spec 023 Part A). Thin exported wrap over the same auto-reconnecting
+ * events WS: unlike `subscribeHarnessRunErrors` it never self-closes, so the
+ * caller owns the lifecycle through the returned handle's `close()`.
+ */
+export async function subscribeHarnessEvents(
+  onEvent: (ev: HarnessEvent) => void,
+  onConnected?: () => void
+): Promise<HarnessEventStream> {
+  return openHarnessEventStream(onEvent, onConnected)
 }
 
 /**

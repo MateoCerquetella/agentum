@@ -600,13 +600,17 @@ function ClaudeSwitcherMenu({
     false,
     getWindowsTerminalCapabilityOwnerKey(settings?.activeRuntimeEnvironmentId)
   )
-  const claudeAccountSyncKey = useAppStore((s) => {
-    const settings = s.settings
+  // Derive the sync key from the already-subscribed `settings` via useMemo so
+  // the JSON.stringify + map/join (and its string allocation) only runs when
+  // settings actually change. As a Zustand selector this ran on EVERY store
+  // mutation (terminal activity, worktree frames, …) even though the value
+  // rarely changes — pure wasted work + GC churn on a chatty store.
+  const claudeAccountSyncKey = useMemo(() => {
     if (!settings) {
       return 'no-settings'
     }
     return `${settings.activeClaudeManagedAccountId ?? 'system'}:${JSON.stringify(settings.activeClaudeManagedAccountIdsByRuntime ?? null)}:${settings.claudeManagedAccounts.map((account) => `${account.id}:${account.updatedAt}`).join('|')}`
-  })
+  }, [settings])
   const accountState = getClaudeStatusAccountsFromSettings(settings) ?? accounts
 
   useEffect(() => {

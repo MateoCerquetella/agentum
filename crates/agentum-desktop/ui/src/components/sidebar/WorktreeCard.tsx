@@ -84,6 +84,13 @@ type WorktreeCardProps = {
   ) => void
   onCardDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void
   nativeDragEnabled?: boolean
+  operationalMeta?: {
+    presentation: 'operational-rich' | 'operational-settled'
+    projectName?: string
+    statusLabel: string
+    agentLabel?: string
+    ageLabel?: string
+  }
 }
 
 const EMPTY_WORKSPACE_PORTS = []
@@ -118,7 +125,8 @@ const WorktreeCard = React.memo(function WorktreeCard({
   lineageChildCount = 0,
   lineageCollapsed = false,
   lineageChildren,
-  onLineageToggle
+  onLineageToggle,
+  operationalMeta
 }: WorktreeCardProps) {
   const openModal = useAppStore((s) => s.openModal)
   const openTaskPage = useAppStore((s) => s.openTaskPage)
@@ -128,7 +136,9 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const fetchIssue = useAppStore((s) => s.fetchIssue)
   const fetchLinearIssue = useAppStore((s) => s.fetchLinearIssue)
   const cardProps = useAppStore((s) => s.worktreeCardProperties)
-  const compactCards = settings?.experimentalCompactWorktreeCards === true
+  const compactCards = operationalMeta
+    ? operationalMeta.presentation === 'operational-settled'
+    : settings?.experimentalCompactWorktreeCards === true
   const handleEditIssue = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
@@ -468,12 +478,8 @@ const WorktreeCard = React.memo(function WorktreeCard({
   )
 
   const unreadTooltip = worktree.isUnread ? 'Mark read' : 'Mark unread'
-  const childWorkspaceLabel = `${lineageChildCount} child ${
-    lineageChildCount === 1 ? 'workspace' : 'workspaces'
-  }`
-  const childWorkspaceShortLabel = `${lineageChildCount} ${
-    lineageChildCount === 1 ? 'child' : 'children'
-  }`
+  const childWorkspaceLabel = `${lineageChildCount} child ${lineageChildCount === 1 ? 'workspace' : 'workspaces'}`
+  const childWorkspaceShortLabel = `${lineageChildCount} ${lineageChildCount === 1 ? 'child' : 'children'}`
   const showLineageChildChip = lineageChildCount > 0 && onLineageToggle !== undefined
 
   const handleDragStart = useCallback(
@@ -527,7 +533,11 @@ const WorktreeCard = React.memo(function WorktreeCard({
         author: null,
         repoId: repo.id
       }
-      openTaskPage({ taskSource: 'github', preselectedRepoId: repo.id, openGitHubWorkItem: item })
+      openTaskPage({
+        taskSource: 'github',
+        preselectedRepoId: repo.id,
+        openGitHubWorkItem: item
+      })
     },
     [metaIssue, openTaskPage, repo]
   )
@@ -604,10 +614,15 @@ const WorktreeCard = React.memo(function WorktreeCard({
         linearIssue={metaLinearIssue}
         comment={metaComment}
         detailsAfter={hasPorts ? <WorktreeCardPortsDetails ports={workspacePorts} /> : null}
+        worktreeId={worktree.id}
+        workdir={repo?.path}
+        repoId={repo?.id}
         onEditIssue={handleEditIssue}
         onEditComment={handleEditComment}
         onOpenGitHubIssueInAgentum={
-          metaIssue && 'url' in metaIssue && metaIssue.url ? handleOpenGitHubIssueInAgentum : undefined
+          metaIssue && 'url' in metaIssue && metaIssue.url
+            ? handleOpenGitHubIssueInAgentum
+            : undefined
         }
         onOpenLinearIssueInAgentum={linearIssue?.url ? handleOpenLinearIssueInAgentum : undefined}
       >
@@ -705,6 +720,17 @@ const WorktreeCard = React.memo(function WorktreeCard({
 
       {/* Content area */}
       <div className="flex-1 min-w-0 overflow-hidden flex flex-col gap-1.5">
+        {operationalMeta?.presentation === 'operational-rich' ? (
+          <div className="flex min-w-0 items-center justify-between gap-2 px-0.5 text-[10px] leading-none">
+            <span className="truncate font-medium text-muted-foreground">
+              {operationalMeta.projectName}
+            </span>
+            <span className="shrink-0 font-medium text-foreground/75">
+              {operationalMeta.statusLabel}
+              {operationalMeta.ageLabel ? ` ${operationalMeta.ageLabel}` : ''}
+            </span>
+          </div>
+        ) : null}
         {/* Header row: Title */}
         <div className="flex items-center justify-between min-w-0 gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -754,6 +780,13 @@ const WorktreeCard = React.memo(function WorktreeCard({
               onEditingChange={setTitleRenaming}
               onRename={handleRenameTitle}
             />
+
+            {operationalMeta?.presentation === 'operational-settled' &&
+            operationalMeta.ageLabel ? (
+              <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+                {operationalMeta.ageLabel}
+              </span>
+            ) : null}
 
             {!compactCards && worktree.isMainWorktree && !isFolder && (
               <Tooltip>
@@ -918,17 +951,27 @@ const WorktreeCard = React.memo(function WorktreeCard({
              naturally when agents appear/disappear. When agents directly
              follow the title, counterbalance the card stack gap so both rows
              read as one compact header group. */}
-        {showDetailedCardProperties && cardProps.includes('inline-agents') && (
-          <WorktreeCardAgents
-            worktreeId={worktree.id}
-            className={hasMetaRow || remoteBranchConflict ? 'mt-0' : '-mt-1'}
-          />
-        )}
+        {operationalMeta == null &&
+          showDetailedCardProperties &&
+          cardProps.includes('inline-agents') && (
+            <WorktreeCardAgents
+              worktreeId={worktree.id}
+              className={hasMetaRow || remoteBranchConflict ? 'mt-0' : '-mt-1'}
+            />
+          )}
+
+        {operationalMeta?.presentation === 'operational-rich' && operationalMeta.agentLabel ? (
+          <div className="truncate px-0.5 text-[10.5px] leading-none text-muted-foreground">
+            {operationalMeta.agentLabel}
+          </div>
+        ) : null}
 
         {showLineageChildChip && (
           <div
             className="relative mt-1 flex min-w-0 justify-start"
-            style={{ color: 'color-mix(in srgb, var(--muted-foreground) 42%, var(--sidebar))' }}
+            style={{
+              color: 'color-mix(in srgb, var(--muted-foreground) 42%, var(--sidebar))'
+            }}
           >
             <Tooltip>
               <TooltipTrigger asChild>

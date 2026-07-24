@@ -40,6 +40,19 @@ import type { GitHubPRFileViewedState, GitHubWorkItem, GitHubWorkItemDetails, Gi
 
 const IS_MAC = navigator.userAgent.includes('Mac')
 
+/** #379: open the item on its tracker via the Tauri opener, LOUDLY. A missing
+ *  URL or a rejected shell_open_url used to no-op with zero feedback — the
+ *  "the button does nothing" class of report. */
+function openItemUrl(url: string | undefined | null): void {
+  if (!url) {
+    toast.error('This item has no URL to open.')
+    return
+  }
+  void Promise.resolve(api.shell.openUrl(url)).catch((error: unknown) => {
+    toast.error(`Could not open the link: ${String(error)}`)
+  })
+}
+
 type GitHubItemDialogProps = {
   workItem: GitHubWorkItem | null
   repoPath: string | null
@@ -812,7 +825,7 @@ export default function GitHubItemDialog({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => api.shell.openUrl(workItem.url)}
+                      onClick={() => openItemUrl(workItem.url)}
                       aria-label="Open on GitHub"
                     >
                       <ExternalLink className="size-4" />
@@ -864,7 +877,7 @@ export default function GitHubItemDialog({
                         <Plus className="size-4" />
                         Start new workspace
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => api.shell.openUrl(workItem.url)}>
+                      <DropdownMenuItem onSelect={() => openItemUrl(workItem.url)}>
                         <ExternalLink className="size-4" />
                         Open on GitHub
                       </DropdownMenuItem>
@@ -1006,7 +1019,7 @@ export default function GitHubItemDialog({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    onClick={() => api.shell.openUrl(workItem.url)}
+                    onClick={() => openItemUrl(workItem.url)}
                     aria-label="Open on GitHub"
                   >
                     <ExternalLink className="size-4" />

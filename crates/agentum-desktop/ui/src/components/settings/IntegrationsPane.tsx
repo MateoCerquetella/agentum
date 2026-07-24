@@ -537,6 +537,7 @@ export function IntegrationsPane(): React.JSX.Element {
         {/* Rendered regardless of gh auth status — gh is the default tracker,
             and the labels are plain config (no gh call happens here). */}
         <GithubStatusLabelsEditor />
+
       </div>
 
       {/* GitLab */}

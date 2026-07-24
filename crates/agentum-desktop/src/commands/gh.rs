@@ -1042,15 +1042,8 @@ pub fn gh_list_assignable_users_by_slug() -> Vec<Value> {
     Vec::new()
 }
 
-#[tauri::command]
-pub fn gh_update_project_item_field() -> Value {
-    not_available()
-}
-
-#[tauri::command]
-pub fn gh_clear_project_item_field() -> Value {
-    not_available()
-}
+// gh_update_project_item_field / gh_clear_project_item_field live in
+// gh_projects.rs with the rest of the ProjectV2 surface.
 
 #[tauri::command]
 pub fn gh_update_issue_type_by_slug() -> Value {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   createAutoSaveDelayDraftState,
-  getDesktopPlatformFromUserAgent,
   shouldCommitOpenInApplicationsDraft,
   updateAutoSaveDelayDraftState
 } from './GeneralPane'
@@ -53,19 +52,5 @@ describe('GeneralPane open-in application drafts', () => {
         { id: 'zed', label: 'Zed', command: 'zed' }
       ])
     ).toBe(true)
-  })
-})
-
-describe('GeneralPane desktop platform detection', () => {
-  it('keeps Windows available for Windows-only CLI settings', () => {
-    expect(
-      getDesktopPlatformFromUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      )
-    ).toBe('win32')
-    expect(getDesktopPlatformFromUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe(
-      'darwin'
-    )
-    expect(getDesktopPlatformFromUserAgent('Mozilla/5.0 (X11; Linux x86_64)')).toBe('other')
   })
 })

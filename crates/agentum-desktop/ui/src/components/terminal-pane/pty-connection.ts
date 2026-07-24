@@ -9,10 +9,10 @@ import {
 } from '@/lib/agent-status'
 import { scheduleRuntimeGraphSync } from '@/runtime/sync-runtime-graph'
 import { useAppStore } from '@/store'
-import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
 import type { PtyConnectResult } from './pty-transport'
 import { createIpcPtyTransport } from './pty-transport'
 import { createRemoteRuntimePtyTransport } from './remote-runtime-pty-transport'
+import { getConnectionId } from '@/lib/connection-context'
 import { shouldSeedCacheTimerOnInitialTitle } from './cache-timer-seeding'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { safeFit } from '@/lib/pane-manager/pane-tree-ops'
@@ -1103,12 +1103,13 @@ export function connectPanePty(
     AGENTUM_WORKTREE_ID: deps.worktreeId
   }
 
-  // Why: remote repos route PTY spawn through the SSH provider. Resolve the
-  // repo's connectionId from the store so the transport passes it to pty:spawn.
+  // Why: remote repos route PTY spawn through the SSH provider. Resolve through
+  // the shared connection-context helper rather than requiring a discovered
+  // Worktree object: restored/new SSH tabs can mount from their composite
+  // `repoId::remotePath` before worktreesByRepo contains that worktree. Losing
+  // the connection in that window makes pty:spawn silently start on localhost.
   const state = useAppStore.getState()
-  const worktree = getWorktreeMapFromState(state).get(deps.worktreeId)
-  const repo = worktree ? getRepoMapFromState(state).get(worktree.repoId) : null
-  const connectionId = repo?.connectionId ?? null
+  const connectionId = getConnectionId(deps.worktreeId) ?? null
   const tab = (state.tabsByWorktree[deps.worktreeId] ?? []).find((t) => t.id === deps.tabId)
   const shellOverride = tab?.shellOverride
   const shouldSuppressForegroundCursor = isLocalNativeWindowsPty({

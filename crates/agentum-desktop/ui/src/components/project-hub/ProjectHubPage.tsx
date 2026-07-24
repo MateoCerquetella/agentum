@@ -6,41 +6,32 @@
 // into the hub's single project scope), so the hub adds navigation, not a
 // parallel implementation. The rail's Chat / Wiki / Board entries stay the
 // global, cross-project views.
-import React, { lazy, Suspense, useEffect, useMemo } from 'react'
+import React, { lazy, Suspense, useMemo } from 'react'
 import { ChevronLeft } from 'lucide-react'
 
 import { useAppStore } from '@/store'
-import type { AppState } from '@/store/types'
 import { useActiveRepo, useWorktreesForRepo } from '@/store/selectors'
 import { selectServerWorktreeActivity } from '@/store/slices/server-worktree-activity'
 import { cn } from '@/lib/utils'
-import { getTaskPresetQuery, PER_REPO_FETCH_LIMIT } from '@/lib/new-workspace'
-import { isGitRepoKind } from '@/shared/repo-kind'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
+import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { ProjectSessionsList } from './ProjectSessionsList'
+import { ProjectTasksPage } from './ProjectTasksPage'
 
 // Lazy like App.tsx's page mounts: the hub chunk stays small and each surface
 // loads on first tab visit (Chat/Wiki/TaskPage are already split chunks).
 const ChatPage = lazy(() => import('@/components/harness/ChatPage'))
 const WikiPage = lazy(() => import('@/components/wiki/WikiPage'))
-const TaskPage = lazy(() => import('@/components/TaskPage'))
 
-type HubTab = 'chat' | 'wiki' | 'tasks' | 'sessions'
-
-// The GitHub work-items cache key the Board reads on mount — the exact recipe
-// openTaskPage uses for its warm-up prefetch (resume-state custom query wins,
-// else the resume/default preset). Reading the same key means the hub's Tasks
-// badge always counts what the Tasks tab will actually show.
-function boardWorkItemsQuery(s: AppState): string {
-  const resume = s.taskResumeState
-  return resume?.githubItemsPreset === null
-    ? (resume.githubItemsQuery ?? '').trim()
-    : getTaskPresetQuery(resume?.githubItemsPreset ?? s.settings?.defaultTaskViewPreset ?? 'all')
-}
+type HubTab = 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
 
 const TABS: Array<{ id: HubTab; label: string }> = [
   { id: 'chat', label: 'Chat' },
   { id: 'wiki', label: 'Wiki' },
+  // #379 (Mateo): Tracker and Tasks are ONE surface — the board binding +
+  // intake now live in a collapsible strip atop the Tasks tab. The 'tracker'
+  // tab id survives in the store union for deep-link compat; it lands on
+  // Tasks with the strip expanded.
   { id: 'tasks', label: 'Tasks' },
   { id: 'sessions', label: 'Sessions' }
 ]
@@ -50,41 +41,6 @@ export default function ProjectHubPage(): React.JSX.Element {
   const tab = useAppStore((s) => s.projectHubTab)
   const setProjectHubTab = useAppStore((s) => s.setProjectHubTab)
   const closeProjectHub = useAppStore((s) => s.closeProjectHub)
-
-  // The embedded TaskPage seeds its repo selection from taskPageData at MOUNT,
-  // and a detour through the global Board (rail click, palette) wipes that
-  // data (openTaskPage replaces it; closeTaskPage clears it). Re-assert the
-  // hub's repo before letting TaskPage mount — the render gate below holds the
-  // tab back for the one frame the effect needs, so it can never seed from
-  // stale data and silently show every repo's issues.
-  const taskDataSeeded = useAppStore((s) =>
-    repo != null && s.taskPageData.preselectedRepoId === repo.id
-  )
-  useEffect(() => {
-    if (!repo || tab !== 'tasks' || taskDataSeeded) return
-    useAppStore.setState((s) => ({
-      taskPageData: { ...s.taskPageData, preselectedRepoId: repo.id }
-    }))
-  }, [repo, tab, taskDataSeeded])
-
-  // Tasks-tab badge (ADE prototype "Tasks <count>"): open-item count from the
-  // work-items cache. Null (no badge) until the key is warm — the prefetch
-  // below usually makes it so by the time the header paints.
-  const taskCount = useAppStore((s) => {
-    if (!repo || !isGitRepoKind(repo)) return null
-    return (
-      s.getCachedWorkItems(repo.id, PER_REPO_FETCH_LIMIT, boardWorkItemsQuery(s))?.length ?? null
-    )
-  })
-  useEffect(() => {
-    if (!repo?.path || !isGitRepoKind(repo)) return
-    const s = useAppStore.getState()
-    // GitHub only — mirroring the rail's prefetch gate; for Linear/GitLab
-    // defaults the badge simply stays absent rather than firing gh for data
-    // the user's Tasks tab doesn't lead with.
-    if ((s.settings?.defaultTaskSource ?? 'github') !== 'github') return
-    s.prefetchWorkItems(repo.id, repo.path, PER_REPO_FETCH_LIMIT, boardWorkItemsQuery(s))
-  }, [repo])
 
   const worktrees = useWorktreesForRepo(repo?.id ?? null)
   const visibleWorktrees = useMemo(() => worktrees.filter((w) => !w.isArchived), [worktrees])
@@ -132,11 +88,12 @@ export default function ProjectHubPage(): React.JSX.Element {
             className="size-4 shrink-0 text-muted-foreground"
             iconClassName="size-3.5"
           />
+          <RepoBadgeMark color={repo.badgeColor} className="size-1.5 rounded-full" />
           <h1 className="truncate text-[14px] font-semibold tracking-tight">{repo.displayName}</h1>
         </div>
         <nav className="ml-3 flex items-center gap-0.5" aria-label="Project sections">
           {TABS.map(({ id, label }) => {
-            const isActive = tab === id
+            const isActive = (tab === 'tracker' ? 'tasks' : tab) === id
             return (
               <button
                 key={id}
@@ -151,11 +108,6 @@ export default function ProjectHubPage(): React.JSX.Element {
                 )}
               >
                 {label}
-                {id === 'tasks' && taskCount != null ? (
-                  <span className="rounded-full bg-foreground/10 px-1.5 py-px font-mono text-[10px] leading-normal">
-                    {taskCount}
-                  </span>
-                ) : null}
                 {id === 'sessions' ? (
                   <span
                     className={cn(
@@ -179,7 +131,7 @@ export default function ProjectHubPage(): React.JSX.Element {
               transcript state) re-seeds instead of leaking across projects. */}
           {tab === 'chat' ? <ChatPage key={repo.id} pinnedRepo={repo} /> : null}
           {tab === 'wiki' ? <WikiPage key={repo.id} pinnedRepoId={repo.id} /> : null}
-          {tab === 'tasks' && taskDataSeeded ? <TaskPage key={repo.id} embedded /> : null}
+          {tab === 'tasks' || tab === 'tracker' ? <ProjectTasksPage key={repo.id} repo={repo} /> : null}
           {tab === 'sessions' ? <ProjectSessionsList repoId={repo.id} /> : null}
         </Suspense>
       </div>

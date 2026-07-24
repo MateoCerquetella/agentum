@@ -7,7 +7,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use agentum_core::{Event, HostKind, LOCAL_HOST_ID, NewSession, Status};
+use agentum_core::{Event, Host, HostKind, LOCAL_HOST_ID, NewSession, Status};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -27,16 +27,36 @@ const AGENT_BOOT_DELAY: Duration = Duration::from_secs(3);
 /// rather than panicking the task.
 pub async fn drive(state: AppState, harness_id: Uuid) {
     let result = drive_inner(&state, harness_id).await;
-    // Free the driver slot no matter how the loop ended so the run can be
-    // re-driven (after done/blocked/failed, or once the user re-runs).
-    state.harness.release_driver(harness_id).await;
+    // A successful orchestrated hand-off leaves the logical driver claim with
+    // the durable coordinator. Sequential runs and failed launches release it.
+    let coordinator_owns_driver = result.is_ok()
+        && state
+            .store
+            .harness_get_orchestrated_run(&harness_id.to_string())
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|run| !matches!(run.status.as_str(), "completed" | "stopped"));
+    if !coordinator_owns_driver {
+        state.harness.release_driver(harness_id).await;
+    }
     if let Err(e) = result {
         // A run removed mid-drive (user pressed Stop/unload) surfaces here as a
         // "harness not found" error — that's an intentional teardown, not a
         // failure. Only surface a real error if the run still exists.
-        if state.harness.status(harness_id).await.is_ok() {
+        if let Ok(status) = state.harness.status(harness_id).await {
             warn!(%harness_id, error = %e, "harness run failed");
             state.harness.emit_error(harness_id, e.to_string());
+            // A failed spawn/delivery must not leave a dead session pinned as
+            // the run's current surface. The persistent progress bar remains
+            // visible and can retry the run, while the stale pane stops looking
+            // like work is still in progress.
+            if let Some(session_id) = status.current_session
+                && let Ok(Some(session)) = state.store.get_session_by_id(session_id).await
+            {
+                teardown_session(&state, &session).await;
+            }
+            state.harness.clear_current(harness_id).await;
             let _ = state
                 .harness
                 .set_state(harness_id, HarnessState::Failed)
@@ -47,6 +67,17 @@ pub async fn drive(state: AppState, harness_id: Uuid) {
 
 async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
+    let initial_config = HarnessConfig::load_from(&workspace).await?;
+    super::ensure_execution_policy(&workspace, &initial_config.features)?;
+    workspace
+        .strict_remote_preflight(
+            state,
+            Some(&initial_config.features.agent_tool),
+            initial_config.features.qa_agent_tool.as_deref(),
+            /* require_gh */ false,
+        )
+        .await?;
 
     // 1. Environment smoke-test.
     engine.log(harness_id, None, "running init.sh");
@@ -69,14 +100,18 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         );
     }
 
-    let workdir = engine.workdir(harness_id).await?;
+    let workdir = workspace.root();
+    let execution_config = HarnessConfig::load_from(&workspace).await?;
+    super::ensure_execution_policy(&workspace, &execution_config.features)?;
+    let execution_mode = execution_config.features.execution_mode;
+    let orchestrated = execution_mode == ExecutionMode::Orchestrated;
 
     // 1b. SDD role phases wrap the feature loop (spec 013). OFF by default → a
     // plain feature run skips straight to the loop below, behaving exactly as
     // before. When on, PM/architect gates + decompose run first; the feature
     // loop is the `Executing` phase; the reviewer gate runs after all are green.
     let phases_on = {
-        let cfg = HarnessConfig::load(&workdir).await?;
+        let cfg = HarnessConfig::load_from(&workspace).await?;
         cfg.features.roles && cfg.features.spec_id.is_some()
     };
     if phases_on {
@@ -86,6 +121,72 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         if engine.phase(harness_id).await? != SpecPhase::Executing {
             return Ok(());
         }
+    } else if orchestrated {
+        // Roles-off orchestration still gets one dedicated architecture/planning
+        // agent.  Workers are never asked to rediscover the repository.
+        engine
+            .set_phase(harness_id, SpecPhase::Architecture)
+            .await?;
+        if !run_role_gate(state, harness_id, &workdir, SpecPhase::Architecture).await? {
+            return Ok(());
+        }
+        engine.set_phase(harness_id, SpecPhase::Executing).await?;
+    }
+
+    if orchestrated {
+        let config = HarnessConfig::load_from(&workspace).await?;
+        let spec_id =
+            config.features.spec_id.clone().ok_or_else(|| {
+                anyhow::anyhow!("orchestrated execution requires features.spec_id")
+            })?;
+        let plan = super::orchestrated::load_execution_plan(&workdir, &spec_id)?;
+        let architecture = workspace
+            .try_read(
+                &config
+                    .harness_dir
+                    .join("specs")
+                    .join(&spec_id)
+                    .join("architecture.md"),
+            )
+            .await?
+            .unwrap_or_default();
+        let dirty = workspace
+            .run("git", &["status".into(), "--porcelain".into()], &[])
+            .await
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| {
+                format!(
+                    "The shared worktree was already dirty at dispatch:\n{}",
+                    tail(&s, 2000)
+                )
+            });
+        let coordinator_token = super::orchestrated::initialize_run(
+            state,
+            harness_id,
+            &workdir,
+            &plan,
+            &architecture,
+            dirty,
+            config.features.max_concurrency,
+        )
+        .await?;
+        super::orchestrated::spawn_coordinator(state, harness_id, &config, &coordinator_token)
+            .await?;
+        engine.log(
+            harness_id,
+            None,
+            format!(
+                "orchestrated execution ready: {} tasks, concurrency ceiling {}",
+                plan.tasks.len(),
+                config
+                    .features
+                    .max_concurrency
+                    .min(super::orchestrated::MAX_CONCURRENCY)
+            ),
+        );
+        return Ok(());
     }
 
     // 2. One feature at a time.
@@ -122,7 +223,7 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         engine.set_state(harness_id, HarnessState::Running).await?;
 
         // 3. Reload config (agent tool/model/timeouts may have been edited).
-        let config = HarnessConfig::load(&workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let session = spawn_feature_agent(state, harness_id, &workdir, &config, &feature).await?;
         // The agent is now coding this feature → move its ticket to "In Progress"
         // (best-effort; never halts the run).
@@ -148,15 +249,17 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
         // must not send the agent hunting for a missing file. Handles the legacy
         // `.harness` dir by deriving the dir name from config.harness_dir, not
         // the HARNESS_DIR const (spec 005 F2).
-        let spec_rel = config.features.spec_id.as_deref().and_then(|sid| {
-            let dir = config
-                .harness_dir
-                .file_name()?
-                .to_string_lossy()
-                .into_owned();
-            let rel = format!("{dir}/specs/{sid}/spec.md");
-            workdir.join(&rel).exists().then_some(rel)
-        });
+        let spec_rel = if let Some(sid) = config.features.spec_id.as_deref() {
+            match config.harness_dir.file_name() {
+                Some(dir) => {
+                    let rel = format!("{}/specs/{sid}/spec.md", dir.to_string_lossy());
+                    workspace.is_file(&workdir.join(&rel)).await?.then_some(rel)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         let prompt =
             build_feature_prompt(&config.agent_instructions, &feature, spec_rel.as_deref());
         if !inject_prompt(state, &session, &prompt).await? {
@@ -222,10 +325,23 @@ async fn drive_inner(state: &AppState, harness_id: Uuid) -> anyhow::Result<()> {
             let qa_mode = resolve_qa_mode(&config, agent_qa_capable);
             let (qa_ok, qa_out) = match qa_mode {
                 QaMode::Agent => {
-                    run_qa_agent_gate(
+                    let result = run_qa_agent_gate(
                         state, harness_id, &workdir, &config, &feature, grace, timeout,
                     )
-                    .await?
+                    .await?;
+                    // The QA pane is intentionally torn down once its verdict
+                    // lands. Restore the still-live coding session as current
+                    // so retries/SDD controls return to the agent that receives
+                    // gate feedback.
+                    engine
+                        .set_current_session(
+                            harness_id,
+                            session.id,
+                            &config.features.agent_tool,
+                            Some(&feature.id),
+                        )
+                        .await?;
+                    result
                 }
                 _ => engine.run_qa_once(harness_id, &feature.id).await?,
             };
@@ -320,7 +436,6 @@ async fn handle_gate_failure(
         // re-halts the already-halted run.
         if let Some(provider) = feature.tracker_provider.as_deref() {
             match crate::task_sink::apply_blocked_transition(
-                &state.store,
                 provider,
                 &feature.id,
                 feature.tracker_url.as_deref(),
@@ -328,6 +443,14 @@ async fn handle_gate_failure(
                 gate_label,
                 attempts,
                 &tail(output, 2000),
+                // Retries-exhausted always explains itself on the issue; only
+                // the spec-014 attention worker suppresses inside a cooldown.
+                /* with_comment */
+                true,
+                crate::task_sink::TrackerEmit {
+                    bus: &state.bus,
+                    worktree_id: None,
+                },
             )
             .await
             {
@@ -385,15 +508,18 @@ async fn transition_tracker(
         return;
     };
     let engine = &state.harness;
-    match crate::task_sink::apply_tracker_transition(
-        &state.store,
+    let result = crate::task_sink::apply_tracker_transition(
         provider,
         &feature.id,
         feature.tracker_url.as_deref(),
         phase,
+        crate::task_sink::TrackerEmit {
+            bus: &state.bus,
+            worktree_id: None,
+        },
     )
-    .await
-    {
+    .await;
+    match &result {
         Ok(crate::task_sink::TransitionResult::Applied) => {
             engine.log(harness_id, Some(&feature.id), format!("ticket → {phase:?}"))
         }
@@ -408,6 +534,83 @@ async fn transition_tracker(
             format!("ticket transition to {phase:?} failed (non-fatal): {e}"),
         ),
     }
+    if !matches!(result, Ok(crate::task_sink::TransitionResult::Applied)) {
+        spawn_tracker_transition_retry(state, harness_id, feature, phase);
+    }
+}
+
+/// Keep an unacknowledged lifecycle write pending without stalling the harness.
+/// Five capped-backoff attempts cover transient auth/network/Projects failures;
+/// every failure emits `tracker.sync_pending`, and later lifecycle observers
+/// (session/PR/merge) remain able to retry beyond this bounded worker.
+fn spawn_tracker_transition_retry(
+    state: &AppState,
+    harness_id: Uuid,
+    feature: &Feature,
+    phase: crate::task_sink::TrackerPhase,
+) {
+    let Some(provider) = feature.tracker_provider.clone() else {
+        return;
+    };
+    let tracker_id = feature.id.clone();
+    let tracker_url = feature.tracker_url.clone();
+    let bus = state.bus.clone();
+    let engine = state.harness.clone();
+    tokio::spawn(async move {
+        for attempt in 1..=5u32 {
+            let delay = std::time::Duration::from_secs(2u64.saturating_pow(attempt).min(60));
+            tokio::time::sleep(delay).await;
+            let result = crate::task_sink::apply_tracker_transition(
+                &provider,
+                &tracker_id,
+                tracker_url.as_deref(),
+                phase,
+                crate::task_sink::TrackerEmit {
+                    bus: &bus,
+                    worktree_id: None,
+                },
+            )
+            .await;
+            if matches!(result, Ok(crate::task_sink::TransitionResult::Applied)) {
+                engine.log(
+                    harness_id,
+                    Some(&tracker_id),
+                    format!("ticket → {phase:?} (sync retry {attempt})"),
+                );
+                return;
+            }
+            tracing::warn!(
+                feature = %tracker_id,
+                ?phase,
+                attempt,
+                ?result,
+                "tracker transition remains pending"
+            );
+        }
+    });
+}
+
+/// A per-SPAWN unique, tmux-safe session name: `harness-<kind>-<run8>-<nonce4>`.
+///
+/// The nonce is load-bearing: `sessions.name` is UNIQUE and harness session
+/// rows are only marked stopped (never deleted), so a role-gate retry, a QA
+/// re-run, or a re-drive of an existing run that reused the previous spawn's
+/// name would fail `create_session_on_host` with AlreadyExists and take the
+/// WHOLE run to `Failed` (#302). `kind` is clamped so the name stays within
+/// `validate_name`'s 64-char cap (safe to byte-slice: inputs are ASCII —
+/// `sanitize` output and role slugs).
+pub(super) fn spawn_session_name(kind: &str, harness_id: Uuid) -> String {
+    let kind = &kind[..kind.len().min(40)];
+    let run = harness_id.simple().to_string();
+    let nonce = Uuid::new_v4().simple().to_string();
+    format!("harness-{kind}-{}-{}", &run[..8], &nonce[..4])
+}
+
+async fn pinned_harness_host(state: &AppState, harness_id: Uuid) -> anyhow::Result<(Host, Uuid)> {
+    let workspace = state.harness.workspace(harness_id).await?;
+    let host = workspace.execution_host(state).await?;
+    let host_id = host.id;
+    Ok((host, host_id))
 }
 
 /// Create + start a real agent session scoped to one feature.
@@ -418,15 +621,9 @@ async fn spawn_feature_agent(
     config: &HarnessConfig,
     feature: &Feature,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
+    let (host, host_id) = pinned_harness_host(state, harness_id).await?;
 
-    // A unique, tmux-safe session name per feature+run.
-    let short = harness_id.simple().to_string();
-    let name = format!("harness-{}-{}", sanitize(&feature.id), &short[..8]);
+    let name = spawn_session_name(&sanitize(&feature.id), harness_id);
 
     // The harness is non-interactive — push the canonical YOLO marker so the
     // agent runs without permission prompts (the shared spawn path translates it
@@ -451,12 +648,17 @@ async fn spawn_feature_agent(
     };
     let session = state
         .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .create_session_on_host(new, Some(host_id))
         .await?;
 
     state
         .harness
-        .set_session(harness_id, session.id, &feature.id)
+        .set_session(
+            harness_id,
+            session.id,
+            &feature.id,
+            &config.features.agent_tool,
+        )
         .await?;
 
     let target = agentum_tmux::target_for(&session.name);
@@ -513,13 +715,8 @@ async fn spawn_qa_agent(
     config: &HarnessConfig,
     feature: &Feature,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
-    let short = harness_id.simple().to_string();
-    let name = format!("harness-qa-{}-{}", sanitize(&feature.id), &short[..8]);
+    let (host, host_id) = pinned_harness_host(state, harness_id).await?;
+    let name = spawn_session_name(&format!("qa-{}", sanitize(&feature.id)), harness_id);
     let flags = if config.features.agent_yolo {
         vec![agentum_executor::YOLO_MARKER.to_string()]
     } else {
@@ -543,12 +740,16 @@ async fn spawn_qa_agent(
     };
     let session = state
         .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .create_session_on_host(new, Some(host_id))
         .await?;
     let target = agentum_tmux::target_for(&session.name);
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn QA agent: {e}"))?;
+    state
+        .harness
+        .set_current_session(harness_id, session.id, &session.tool, Some(&feature.id))
+        .await?;
     info!(%harness_id, feature = %feature.id, session = %session.id, "harness spawned QA agent");
     Ok(session)
 }
@@ -569,6 +770,7 @@ async fn run_qa_agent_gate(
     timeout: Duration,
 ) -> anyhow::Result<(bool, String)> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
     engine
         .set_feature_state(harness_id, &feature.id, FeatureState::ReadyToTest)
         .await?;
@@ -577,9 +779,9 @@ async fn run_qa_agent_gate(
     // we never read a previous attempt's result.
     let verdict_abs = qa_verdict_path(&config.harness_dir, &feature.id);
     if let Some(parent) = verdict_abs.parent() {
-        tokio::fs::create_dir_all(parent).await.ok();
+        workspace.mkdir_all(parent).await.ok();
     }
-    tokio::fs::remove_file(&verdict_abs).await.ok();
+    workspace.remove_file(&verdict_abs).await.ok();
     let verdict_rel = verdict_abs
         .strip_prefix(workdir)
         .map(|p| p.to_string_lossy().into_owned())
@@ -625,7 +827,7 @@ async fn run_qa_agent_gate(
     }
     teardown_session(state, &session).await;
 
-    match tokio::fs::read_to_string(&verdict_abs).await {
+    match workspace.read(&verdict_abs).await {
         Ok(raw) => match parse_qa_verdict(&raw) {
             Ok((passed, summary)) => Ok((passed, summary)),
             Err(e) => Ok((
@@ -644,9 +846,13 @@ async fn run_qa_agent_gate(
 
 /// Read the spec under review for a role gate (spec 013). Best-effort: an empty
 /// string if the spec is absent (the gate will then most likely emit CONCERNS).
-async fn read_spec_md(harness_dir: &Path, spec_id: &str) -> String {
+async fn read_spec_md(
+    workspace: &super::HarnessWorkspace,
+    harness_dir: &Path,
+    spec_id: &str,
+) -> String {
     let path = harness_dir.join("specs").join(spec_id).join("spec.md");
-    tokio::fs::read_to_string(path).await.unwrap_or_default()
+    workspace.read(&path).await.unwrap_or_default()
 }
 
 /// Spawn a real agent session for a **role gate** (spec 013). Mirrors
@@ -659,13 +865,8 @@ async fn spawn_role_agent(
     config: &HarnessConfig,
     role: RoleKind,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
-    let short = harness_id.simple().to_string();
-    let name = format!("harness-{}-{}", role.as_str(), &short[..8]);
+    let (host, host_id) = pinned_harness_host(state, harness_id).await?;
+    let name = spawn_session_name(role.as_str(), harness_id);
     let flags = if config.features.agent_yolo {
         vec![agentum_executor::YOLO_MARKER.to_string()]
     } else {
@@ -684,12 +885,16 @@ async fn spawn_role_agent(
     };
     let session = state
         .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
+        .create_session_on_host(new, Some(host_id))
         .await?;
     let target = agentum_tmux::target_for(&session.name);
     crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
         .await
         .map_err(|e| anyhow::anyhow!("failed to spawn role agent: {e}"))?;
+    state
+        .harness
+        .set_current_session(harness_id, session.id, &session.tool, None)
+        .await?;
     info!(%harness_id, role = %role.as_str(), session = %session.id, "harness spawned role agent");
     Ok(session)
 }
@@ -707,12 +912,13 @@ async fn run_role_gate(
     phase: SpecPhase,
 ) -> anyhow::Result<bool> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
     let Some(role) = phase.role() else {
         return Ok(true); // a non-agent phase (e.g. Decompose) — nothing to gate
     };
 
     loop {
-        let config = HarnessConfig::load(workdir).await?;
+        let config = HarnessConfig::load_from(&workspace).await?;
         let spec_id = config
             .features
             .spec_id
@@ -720,15 +926,15 @@ async fn run_role_gate(
             .ok_or_else(|| anyhow::anyhow!("role gate requires features.spec_id"))?;
         let grace = Duration::from_secs(config.features.settle_grace_secs);
         let timeout = Duration::from_secs(config.features.settle_timeout_secs);
-        let spec_md = read_spec_md(&config.harness_dir, &spec_id).await;
+        let spec_md = read_spec_md(&workspace, &config.harness_dir, &spec_id).await;
 
         // Verdict file under <harness_dir>/roles/<phase>.json; clear any stale one
         // first so we never read a previous attempt's result.
         let verdict_abs = role_verdict_path(&config.harness_dir, phase);
         if let Some(parent) = verdict_abs.parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+            workspace.mkdir_all(parent).await.ok();
         }
-        tokio::fs::remove_file(&verdict_abs).await.ok();
+        workspace.remove_file(&verdict_abs).await.ok();
         let verdict_rel = verdict_abs
             .strip_prefix(workdir)
             .map(|p| p.to_string_lossy().into_owned())
@@ -759,9 +965,7 @@ async fn run_role_gate(
         {
             engine.log(harness_id, None, settle_timeout_message(timeout));
         }
-        teardown_session(state, &session).await;
-
-        let (passed, summary) = match tokio::fs::read_to_string(&verdict_abs).await {
+        let (passed, summary) = match workspace.read(&verdict_abs).await {
             Ok(raw) => match parse_role_verdict(&raw) {
                 Ok(v) => v,
                 Err(e) => (
@@ -779,6 +983,7 @@ async fn run_role_gate(
         };
 
         let attempt = engine.bump_phase_attempt(harness_id).await?;
+        engine.set_gate_summary(harness_id, summary.clone()).await?;
         engine.emit(HarnessEvent::GateResult {
             harness_id,
             role,
@@ -794,8 +999,10 @@ async fn run_role_gate(
             config.features.hitl_on_block,
         ) {
             GateDecision::Advance => {
-                let _ = append_decision(
-                    workdir,
+                teardown_session(state, &session).await;
+                engine.clear_current(harness_id).await;
+                let _ = append_decision_in(
+                    &workspace,
                     &format!("{} gate PASS (attempt {attempt}): {summary}", phase.slug()),
                 )
                 .await;
@@ -807,6 +1014,8 @@ async fn run_role_gate(
                 return Ok(true);
             }
             GateDecision::Retry => {
+                teardown_session(state, &session).await;
+                engine.clear_current(harness_id).await;
                 engine.log(
                     harness_id,
                     None,
@@ -819,8 +1028,8 @@ async fn run_role_gate(
                 continue;
             }
             GateDecision::Block => {
-                let _ = append_decision(
-                    workdir,
+                let _ = append_decision_in(
+                    &workspace,
                     &format!(
                         "{} gate BLOCKED after {attempt} attempts: {summary}",
                         phase.slug()
@@ -840,8 +1049,8 @@ async fn run_role_gate(
                 return Ok(false);
             }
             GateDecision::AwaitConfirm => {
-                let _ = append_decision(
-                    workdir,
+                let _ = append_decision_in(
+                    &workspace,
                     &format!(
                         "{} gate AWAITING HUMAN after {attempt} attempts: {summary}",
                         phase.slug()
@@ -877,6 +1086,7 @@ async fn run_pre_feature_phases(
     workdir: &Path,
 ) -> anyhow::Result<()> {
     let engine = &state.harness;
+    let workspace = engine.workspace(harness_id).await?;
 
     engine.set_phase(harness_id, SpecPhase::Authoring).await?;
     if !run_role_gate(state, harness_id, workdir, SpecPhase::Authoring).await? {
@@ -889,11 +1099,19 @@ async fn run_pre_feature_phases(
         return Ok(());
     }
 
+    let current = HarnessConfig::load_from(&workspace).await?;
+    if current.features.execution_mode == ExecutionMode::Orchestrated {
+        // The architect owns task compilation in orchestrated mode. Its
+        // execution-plan.json is validated immediately after this phase.
+        engine.set_phase(harness_id, SpecPhase::Executing).await?;
+        return Ok(());
+    }
+
     // Agentless decompose: derive the verify-gated backlog from the (now
     // PM-refined) spec, re-apply the run knobs the fresh list would reset, then
     // make it visible to the feature loop.
     engine.set_phase(harness_id, SpecPhase::Decompose).await?;
-    let config = HarnessConfig::load(workdir).await?;
+    let config = HarnessConfig::load_from(&workspace).await?;
     let spec_id = config
         .features
         .spec_id
@@ -911,9 +1129,9 @@ async fn run_pre_feature_phases(
     // list-level knobs, never per-feature stamps.
     let mut derived = match shared_tracker_provenance(&config.features) {
         Some((provider, url)) => {
-            plan_from_spec_with_tracker(workdir, &spec_id, &provider, &url).await?
+            plan_from_spec_with_tracker_in(&workspace, &spec_id, &provider, &url).await?
         }
-        None => plan_from_spec(workdir, &spec_id).await?,
+        None => plan_from_spec_in(&workspace, &spec_id).await?,
     };
     derived.copy_knobs_from(&config.features);
     config.save_features(&derived).await?;
@@ -1066,7 +1284,7 @@ pub(crate) async fn inject_prompt(
     Ok(ready)
 }
 
-/// Gracefully stop an agent's pane + mark the session stopped. Best-effort.
+/// Gracefully mark an agent stopped + retire its pane. Best-effort.
 pub(crate) async fn teardown_session(state: &AppState, session: &agentum_core::Session) {
     let host = match state
         .store
@@ -1081,11 +1299,15 @@ pub(crate) async fn teardown_session(state: &AppState, session: &agentum_core::S
             .tmux_target
             .clone()
             .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
-        let _ = crate::host_runtime::kill_session(&host, &target).await;
+        // Persist first: the watchdog can observe the pane disappear between
+        // kill and the following DB write. The old order misclassified normal
+        // harness teardown as `session.crashed`, which could strand recovery
+        // surfaces on a dead "current" agent.
         let _ = state
             .store
             .update_status_and_target(session.id, Status::Stopped, None)
             .await;
+        let _ = crate::host_runtime::kill_session(&host, &target).await;
     }
 }
 
@@ -1174,6 +1396,15 @@ pub(crate) async fn wait_for_settle(
                 }
                 match ev.kind.as_str() {
                     "agent.awaiting_input" | "agent.finished" => {
+                        // The watchdog's FIRST classification of a fresh pane
+                        // arrives as one of these kinds with {"initial": true} —
+                        // the REPL booting to its idle prompt, not the agent
+                        // finishing the injected turn. Counting it as a settle
+                        // tears a just-started agent down at the grace boundary
+                        // (#302), so boot-time classifications never settle.
+                        if ev.payload.get("initial").and_then(|v| v.as_bool()) == Some(true) {
+                            continue;
+                        }
                         if start.elapsed() >= grace {
                             return SettleOutcome::Settled;
                         }

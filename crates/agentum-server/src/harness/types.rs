@@ -10,6 +10,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::workspace::HarnessWorkspace;
+
 /// Canonical per-project harness directory (spec 010). Holds the committable
 /// deliverables: `AGENTS.md`, `feature_list.json`, `init.sh`, `verify.sh`,
 /// `handoff.md`. Supersedes the legacy `.harness/`.
@@ -78,12 +80,13 @@ pub struct Feature {
     /// prompt from `AGENTS.md` + this feature's name/description.
     #[serde(default)]
     pub prompt: Option<String>,
-    /// Which task tracker this feature mirrors (`board` / `github` / `linear`),
-    /// set when the backlog is created from a goal (spec 011/012). Drives the
-    /// lifecycle → ticket-state transitions; `None` = no external tracker.
+    /// Which external task tracker this feature mirrors (`github` / `linear`),
+    /// set when the backlog is created from a goal (spec 011/012). Legacy string
+    /// values remain deserializable for compatibility. Drives the lifecycle →
+    /// ticket-state transitions; `None` = no external tracker.
     #[serde(default)]
     pub tracker_provider: Option<String>,
-    /// The tracker item's URL, surfaced in the UI (None for the internal board).
+    /// The external tracker item's URL, surfaced in the UI.
     #[serde(default)]
     pub tracker_url: Option<String>,
 }
@@ -102,6 +105,20 @@ fn default_settle_timeout_secs() -> u64 {
 }
 fn default_agent_yolo() -> bool {
     true
+}
+
+fn default_max_concurrency() -> usize {
+    4
+}
+
+/// Missing means the original sequential feature driver.  Only newly-created
+/// gated runs opt into orchestration, preserving legacy and in-progress files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    #[default]
+    Sequential,
+    Orchestrated,
 }
 
 /// The `feature_list.json` document.
@@ -167,6 +184,12 @@ pub struct FeatureList {
     /// HITL-at-QA default).
     #[serde(default)]
     pub hitl_on_block: bool,
+    /// Shared-worktree coordinator mode. Absence is deliberately sequential.
+    #[serde(default)]
+    pub execution_mode: ExecutionMode,
+    /// Scheduler ceiling, never a forced number of workers.
+    #[serde(default = "default_max_concurrency")]
+    pub max_concurrency: usize,
 }
 
 /// How the browser QA gate is executed (spec 012b).
@@ -198,6 +221,8 @@ impl Default for FeatureList {
             spec_id: None,
             roles: false,
             hitl_on_block: false,
+            execution_mode: ExecutionMode::Sequential,
+            max_concurrency: default_max_concurrency(),
         }
     }
 }
@@ -223,6 +248,8 @@ impl FeatureList {
             spec_id,
             roles,
             hitl_on_block,
+            execution_mode,
+            max_concurrency,
         } = src.clone();
         self.max_retries = max_retries;
         self.agent_tool = agent_tool;
@@ -236,6 +263,22 @@ impl FeatureList {
         self.spec_id = spec_id;
         self.roles = roles;
         self.hitl_on_block = hitl_on_block;
+        self.execution_mode = execution_mode;
+        self.max_concurrency = max_concurrency;
+    }
+
+    /// Inverse of the tracker-stamp loop in `plan_from_spec_inner` (spec 023
+    /// Part B, AC 5): clear `tracker_provider`/`tracker_url` on EVERY feature.
+    /// The setter stamps all, so the clear must hit all — a partial clear
+    /// leaves [`shared_tracker_provenance`] finding a stamped feature and the
+    /// transition arm keeps posting to the old issue (AC 6 fails). Persistence
+    /// is the caller's job (`HarnessConfig::save_features`, the same
+    /// pretty-JSON write the setter path uses).
+    pub(crate) fn clear_tracker(&mut self) {
+        for f in &mut self.features {
+            f.tracker_provider = None;
+            f.tracker_url = None;
+        }
     }
 }
 
@@ -466,6 +509,14 @@ pub enum HarnessEvent {
         feature_id: String,
         session_id: Uuid,
     },
+    /// A role/QA agent became the run's interactive session. Feature coding
+    /// keeps the older `AgentSpawned` event for compatibility.
+    CurrentSessionChanged {
+        harness_id: Uuid,
+        session_id: Uuid,
+        feature_id: Option<String>,
+        agent_tool: String,
+    },
     Log {
         harness_id: Uuid,
         feature_id: Option<String>,
@@ -503,6 +554,34 @@ pub enum HarnessEvent {
         attempt: u32,
         summary: String,
     },
+    WorkerChanged {
+        harness_id: Uuid,
+        task_id: String,
+        session_id: Option<Uuid>,
+        state: String,
+    },
+    PatchChanged {
+        harness_id: Uuid,
+        task_id: String,
+        patch_id: String,
+        state: String,
+    },
+    OwnershipConflict {
+        harness_id: Uuid,
+        task_id: String,
+        path: String,
+        message: String,
+    },
+    TaskVerification {
+        harness_id: Uuid,
+        task_id: String,
+        success: bool,
+    },
+    CoordinatorRotated {
+        harness_id: Uuid,
+        previous_session: Uuid,
+        replacement_session: Uuid,
+    },
     Error {
         harness_id: Uuid,
         message: String,
@@ -514,10 +593,18 @@ pub enum HarnessEvent {
 pub struct HarnessRun {
     pub id: Uuid,
     pub workdir: PathBuf,
+    /// Authoritative worktree/repo/host/path identity resolved by the server.
+    pub scope: agentum_core::HarnessScope,
+    /// Host-pinned filesystem/command runtime. Never serialized (it may contain
+    /// SSH credentials); status exposes only `scope`.
+    pub(crate) workspace: HarnessWorkspace,
     pub state: HarnessState,
     pub features: FeatureList,
     pub current_feature: Option<String>,
     pub current_session: Option<Uuid>,
+    /// Tool behind `current_session`; the desktop validates this before using
+    /// it as the attached tab's agent identity/SDD-bar hint.
+    pub current_agent_tool: Option<String>,
     pub started_at: Instant,
     pub agent_instructions: String,
     /// Set once [`drive`] has been kicked off so the run can't be driven twice.
@@ -528,12 +615,31 @@ pub struct HarnessRun {
     pub phase: SpecPhase,
     /// How many times the current phase's gate has run (role-gate retry counter).
     pub phase_attempts: u32,
+    /// The concrete SDD stage that transitioned into terminal `Blocked`.
+    /// Keeping this separate avoids the useless `blocked · blocked` status and
+    /// lets the UI say whether PM, architecture, or review needs attention.
+    pub blocked_phase: Option<SpecPhase>,
+    /// Latest role-gate verdict summary. Retained when the run blocks/parks so
+    /// intervention starts with the reason instead of only a red state.
+    pub gate_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestratedWorkerStatus {
+    pub task_id: String,
+    pub state: String,
+    pub session_id: Option<Uuid>,
+    pub enforcement: String,
+    pub context_remaining: Option<i64>,
+    pub patch_state: Option<String>,
+    pub conflict: Option<String>,
 }
 
 /// Config loaded from a project's `.harness/` directory.
 #[derive(Debug, Clone)]
 pub struct HarnessConfig {
     pub workdir: PathBuf,
+    pub(crate) workspace: HarnessWorkspace,
     /// The resolved harness dir — `.agentum-harness/` or the legacy `.harness/`.
     /// All reads/writes go through this so a project never mixes the two.
     pub harness_dir: PathBuf,
@@ -559,8 +665,22 @@ pub struct HarnessFiles {
 impl HarnessConfig {
     /// Load harness config from a project directory (the parent of `.harness/`).
     pub async fn load(workdir: &Path) -> anyhow::Result<Self> {
-        let harness_dir = resolve_harness_dir(workdir);
-        if !harness_dir.is_dir() {
+        Self::load_from(&HarnessWorkspace::local(workdir)).await
+    }
+
+    /// Load config through the host-aware workspace pinned to the run.
+    pub(crate) async fn load_from(workspace: &HarnessWorkspace) -> anyhow::Result<Self> {
+        let workdir = workspace.root();
+        let canonical = workdir.join(HARNESS_DIR);
+        let legacy = workdir.join(LEGACY_HARNESS_DIR);
+        let harness_dir = if workspace.is_dir(&canonical).await? {
+            canonical
+        } else if workspace.is_dir(&legacy).await? {
+            legacy
+        } else {
+            canonical
+        };
+        if !workspace.is_dir(&harness_dir).await? {
             anyhow::bail!(
                 "no {HARNESS_DIR}/ (or legacy {LEGACY_HARNESS_DIR}/) directory found in {}",
                 workdir.display()
@@ -568,15 +688,15 @@ impl HarnessConfig {
         }
 
         let agents_md = harness_dir.join("AGENTS.md");
-        let agent_instructions = if agents_md.exists() {
-            tokio::fs::read_to_string(&agents_md).await?
+        let agent_instructions = if workspace.is_file(&agents_md).await? {
+            workspace.read(&agents_md).await?
         } else {
             String::new()
         };
 
         let features_json = harness_dir.join("feature_list.json");
-        let features: FeatureList = if features_json.exists() {
-            let content = tokio::fs::read_to_string(&features_json).await?;
+        let features: FeatureList = if workspace.is_file(&features_json).await? {
+            let content = workspace.read(&features_json).await?;
             serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("feature_list.json is invalid: {e}"))?
         } else {
@@ -598,16 +718,23 @@ impl HarnessConfig {
         }
 
         let init_script = harness_dir.join("init.sh");
-        let init_script = init_script.exists().then_some(init_script);
+        let init_script = workspace
+            .is_file(&init_script)
+            .await?
+            .then_some(init_script);
 
         let verify_script = harness_dir.join("verify.sh");
-        let verify_script = verify_script.exists().then_some(verify_script);
+        let verify_script = workspace
+            .is_file(&verify_script)
+            .await?
+            .then_some(verify_script);
 
         let qa_script = harness_dir.join("qa.sh");
-        let qa_script = qa_script.exists().then_some(qa_script);
+        let qa_script = workspace.is_file(&qa_script).await?.then_some(qa_script);
 
         Ok(Self {
-            workdir: workdir.to_path_buf(),
+            workdir,
+            workspace: workspace.clone(),
             harness_dir,
             agent_instructions,
             features,
@@ -622,7 +749,7 @@ impl HarnessConfig {
     pub async fn save_features(&self, features: &FeatureList) -> anyhow::Result<()> {
         let path = self.harness_dir.join("feature_list.json");
         let content = serde_json::to_string_pretty(features)?;
-        tokio::fs::write(&path, content).await?;
+        self.workspace.write(&path, &content).await?;
         Ok(())
     }
 
@@ -644,22 +771,55 @@ impl HarnessConfig {
             attempts = feature.attempts,
             output = output.trim(),
         );
-        tokio::fs::write(&path, content).await?;
+        self.workspace.write(&path, &content).await?;
         Ok(())
     }
 
     /// Read the current `.harness/` file contents for the viewer.
     pub async fn read_files(workdir: &Path) -> HarnessFiles {
-        let dir = resolve_harness_dir(workdir);
-        async fn read(p: PathBuf) -> Option<String> {
-            tokio::fs::read_to_string(p).await.ok()
-        }
+        Self::read_files_from(&HarnessWorkspace::local(workdir)).await
+    }
+
+    pub(crate) async fn read_files_from(workspace: &HarnessWorkspace) -> HarnessFiles {
+        let canonical = workspace
+            .join(HARNESS_DIR)
+            .unwrap_or_else(|_| workspace.root().join(HARNESS_DIR));
+        let legacy = workspace
+            .join(LEGACY_HARNESS_DIR)
+            .unwrap_or_else(|_| workspace.root().join(LEGACY_HARNESS_DIR));
+        let dir = if workspace.is_dir(&canonical).await.unwrap_or(false) {
+            canonical
+        } else if workspace.is_dir(&legacy).await.unwrap_or(false) {
+            legacy
+        } else {
+            canonical
+        };
         HarnessFiles {
-            agents_md: read(dir.join("AGENTS.md")).await,
-            feature_list_json: read(dir.join("feature_list.json")).await,
-            init_sh: read(dir.join("init.sh")).await,
-            verify_sh: read(dir.join("verify.sh")).await,
-            handoff_md: read(dir.join("handoff.md")).await,
+            agents_md: workspace
+                .try_read(&dir.join("AGENTS.md"))
+                .await
+                .ok()
+                .flatten(),
+            feature_list_json: workspace
+                .try_read(&dir.join("feature_list.json"))
+                .await
+                .ok()
+                .flatten(),
+            init_sh: workspace
+                .try_read(&dir.join("init.sh"))
+                .await
+                .ok()
+                .flatten(),
+            verify_sh: workspace
+                .try_read(&dir.join("verify.sh"))
+                .await
+                .ok()
+                .flatten(),
+            handoff_md: workspace
+                .try_read(&dir.join("handoff.md"))
+                .await
+                .ok()
+                .flatten(),
         }
     }
 }
@@ -676,15 +836,21 @@ pub struct HarnessScaffold {
 /// Scaffold a fresh `.agentum-harness/` skeleton into `workdir` — the only thing
 /// agentum writes into a repo (spec 010a). Idempotent: existing files are kept.
 pub async fn scaffold_harness(workdir: &Path) -> anyhow::Result<HarnessScaffold> {
-    let dir = workdir.join(HARNESS_DIR);
-    tokio::fs::create_dir_all(&dir).await?;
+    scaffold_harness_in(&HarnessWorkspace::local(workdir)).await
+}
+
+pub(crate) async fn scaffold_harness_in(
+    workspace: &HarnessWorkspace,
+) -> anyhow::Result<HarnessScaffold> {
+    let dir = workspace.join(HARNESS_DIR)?;
+    workspace.mkdir_all(&dir).await?;
     let mut out = HarnessScaffold::default();
     for (name, body) in scaffold_files() {
         let path = dir.join(name);
-        if path.exists() {
+        if workspace.exists(&path).await? {
             continue;
         }
-        tokio::fs::write(&path, body).await?;
+        workspace.write(&path, &body).await?;
         out.written.push(format!("{HARNESS_DIR}/{name}"));
     }
     Ok(out)
@@ -925,7 +1091,14 @@ pub fn derive_backlog_from_spec(spec_md: &str) -> FeatureList {
 /// `.agentum-harness/feature_list.json`. Returns the derived list; errors if the
 /// spec.md is missing or has no criteria (no silent empty backlog).
 pub async fn plan_from_spec(workdir: &Path, spec_id: &str) -> anyhow::Result<FeatureList> {
-    plan_from_spec_inner(workdir, spec_id, None).await
+    plan_from_spec_in(&HarnessWorkspace::local(workdir), spec_id).await
+}
+
+pub(crate) async fn plan_from_spec_in(
+    workspace: &HarnessWorkspace,
+    spec_id: &str,
+) -> anyhow::Result<FeatureList> {
+    plan_from_spec_inner(workspace, spec_id, None).await
 }
 
 /// [`plan_from_spec`] + stamp tracker provenance onto every derived feature
@@ -940,7 +1113,16 @@ pub async fn plan_from_spec_with_tracker(
     provider: &str,
     url: &str,
 ) -> anyhow::Result<FeatureList> {
-    plan_from_spec_inner(workdir, spec_id, Some((provider, url))).await
+    plan_from_spec_with_tracker_in(&HarnessWorkspace::local(workdir), spec_id, provider, url).await
+}
+
+pub(crate) async fn plan_from_spec_with_tracker_in(
+    workspace: &HarnessWorkspace,
+    spec_id: &str,
+    provider: &str,
+    url: &str,
+) -> anyhow::Result<FeatureList> {
+    plan_from_spec_inner(workspace, spec_id, Some((provider, url))).await
 }
 
 /// Shared core: derive the backlog from the spec's checkboxes, stamp the spec's
@@ -950,13 +1132,14 @@ pub async fn plan_from_spec_with_tracker(
 /// point the agent at the spec file; the role gates stay off (`roles: false`),
 /// so spec-013's phase machinery is untouched by the stamp.
 async fn plan_from_spec_inner(
-    workdir: &Path,
+    workspace: &HarnessWorkspace,
     spec_id: &str,
     tracker: Option<(&str, &str)>,
 ) -> anyhow::Result<FeatureList> {
-    let dir = workdir.join(HARNESS_DIR);
+    let dir = workspace.join(HARNESS_DIR)?;
     let spec_md = dir.join("specs").join(spec_id).join("spec.md");
-    let content = tokio::fs::read_to_string(&spec_md)
+    let content = workspace
+        .read(&spec_md)
         .await
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", spec_md.display()))?;
     let mut list = derive_backlog_from_spec(&content);
@@ -973,12 +1156,13 @@ async fn plan_from_spec_inner(
             f.tracker_url = Some(url.to_string());
         }
     }
-    tokio::fs::create_dir_all(&dir).await?;
-    tokio::fs::write(
-        dir.join("feature_list.json"),
-        serde_json::to_string_pretty(&list)?,
-    )
-    .await?;
+    workspace.mkdir_all(&dir).await?;
+    workspace
+        .write(
+            &dir.join("feature_list.json"),
+            &serde_json::to_string_pretty(&list)?,
+        )
+        .await?;
     Ok(list)
 }
 
@@ -993,14 +1177,25 @@ pub async fn update_backlog_knobs(
     workdir: &Path,
     apply: impl FnOnce(&mut FeatureList),
 ) -> anyhow::Result<FeatureList> {
-    let path = resolve_harness_dir(workdir).join("feature_list.json");
-    let content = tokio::fs::read_to_string(&path)
+    update_backlog_knobs_in(&HarnessWorkspace::local(workdir), apply).await
+}
+
+pub(crate) async fn update_backlog_knobs_in(
+    workspace: &HarnessWorkspace,
+    apply: impl FnOnce(&mut FeatureList),
+) -> anyhow::Result<FeatureList> {
+    let config = HarnessConfig::load_from(workspace).await?;
+    let path = config.harness_dir.join("feature_list.json");
+    let content = workspace
+        .read(&path)
         .await
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
     let mut list: FeatureList = serde_json::from_str(&content)
         .map_err(|e| anyhow::anyhow!("feature_list.json is invalid: {e}"))?;
     apply(&mut list);
-    tokio::fs::write(&path, serde_json::to_string_pretty(&list)?).await?;
+    workspace
+        .write(&path, &serde_json::to_string_pretty(&list)?)
+        .await?;
     Ok(list)
 }
 
@@ -1128,7 +1323,7 @@ pub fn issue_spec_id(number: &str, title: &str) -> String {
 
 /// One feature to seed into a harness backlog, carrying the tracker provenance
 /// so the engine can later drive ticket-state transitions (spec 012). `id` is the
-/// tracker's stable handle (board key, issue number, Linear identifier).
+/// tracker's stable handle (GitHub issue number or Linear identifier).
 #[derive(Debug, Clone)]
 pub struct BacklogFeature {
     pub id: String,
@@ -1142,7 +1337,7 @@ pub struct BacklogFeature {
 /// `.agentum-harness/feature_list.json` (spec 011 — chat-to-features).
 ///
 /// Unlike [`plan_from_spec`], the features come from the *task tracker* (the
-/// internal board / GitHub / Linear), which is the source of truth; this only
+/// GitHub or Linear, which remains the source of truth; this only
 /// derives the harness backlog from them. Every feature starts `Pending` and the
 /// harness is left **Idle** — this function never registers or runs anything, so
 /// the user reviews the board and explicitly clicks Run (human-gated, per spec).
@@ -1237,25 +1432,49 @@ pub async fn check_bootstrap(workdir: &Path) -> BootstrapReport {
 /// "why," never overwritten (unlike the lossy rolling `STATE.md`). Creates the
 /// surface dir + file on first use.
 pub async fn append_decision(workdir: &Path, entry: &str) -> anyhow::Result<()> {
-    use tokio::io::AsyncWriteExt;
-    let dir = resolve_harness_dir(workdir);
-    tokio::fs::create_dir_all(&dir).await?;
-    let mut f = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("decisions.md"))
-        .await?;
-    f.write_all(format!("- {}\n", entry.trim()).as_bytes())
-        .await?;
-    // Dropping a tokio File does NOT flush — the buffered write lands on the
-    // blocking pool later, so two quick appends can reach the OS out of order
-    // (surfaced as a Windows CI race in decision_log_is_append_only).
-    f.flush().await?;
-    Ok(())
+    append_decision_in(&HarnessWorkspace::local(workdir), entry).await
+}
+
+pub(crate) async fn append_decision_in(
+    workspace: &HarnessWorkspace,
+    entry: &str,
+) -> anyhow::Result<()> {
+    // The decision log is also the first durable harness artifact for the
+    // compatibility API, so do not require an existing surface here. Prefer
+    // an existing canonical/legacy directory, otherwise create canonical.
+    let canonical = workspace.join(HARNESS_DIR)?;
+    let legacy = workspace.join(LEGACY_HARNESS_DIR)?;
+    let harness_dir = if workspace.is_dir(&canonical).await? {
+        canonical
+    } else if workspace.is_dir(&legacy).await? {
+        legacy
+    } else {
+        canonical
+    };
+    workspace
+        .append_line(
+            &harness_dir.join("decisions.md"),
+            &format!("- {}\n", entry.trim()),
+        )
+        .await
 }
 
 /// Read the decision log (empty string if there is none).
 pub async fn read_decisions(workdir: &Path) -> String {
-    let path = resolve_harness_dir(workdir).join("decisions.md");
-    tokio::fs::read_to_string(path).await.unwrap_or_default()
+    read_decisions_in(&HarnessWorkspace::local(workdir)).await
+}
+
+pub(crate) async fn read_decisions_in(workspace: &HarnessWorkspace) -> String {
+    let dir = match HarnessConfig::load_from(workspace).await {
+        Ok(config) => config.harness_dir,
+        Err(_) => workspace
+            .join(HARNESS_DIR)
+            .unwrap_or_else(|_| workspace.root().join(HARNESS_DIR)),
+    };
+    workspace
+        .try_read(&dir.join("decisions.md"))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }

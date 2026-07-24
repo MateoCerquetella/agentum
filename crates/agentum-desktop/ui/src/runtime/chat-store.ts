@@ -12,8 +12,16 @@
 // preserves the exact `agentum.chat.conversations.v1` storage contract that
 // chat-history owns, and the in-flight streams are imperative async processes
 // holding AbortControllers — not serializable app state.
-import { advanceIntake, type IntakeMode, type IntakeState, normalizeIntake, SOCRATIC_FIRST_STAGE } from '../lib/socratic-intake'
-import { type ChatStreamDelta, streamChat } from './chat-client'
+import { applyContextDelta, clearContextMissing, type ContextMissingMap } from '../lib/chat-context-status'
+import {
+  type IntakeMode,
+  type IntakeState,
+  normalizeIntake,
+  resolveIntakeAfterReply,
+  SOCRATIC_FIRST_STAGE,
+  stripSocraticControl
+} from '../lib/socratic-intake'
+import { type ChatAgentId, type ChatStreamDelta, resolveChatAgent, streamChat } from './chat-client'
 import {
   type Conversation,
   type FiledResult,
@@ -31,6 +39,10 @@ export type ChatSnapshot = {
   streaming: Readonly<Record<string, true>>
   /** Last stream failure per conversation — cleared on the next send. */
   errors: Readonly<Record<string, string>>
+  /** Conversations whose last stream reported missing repo context (spec 009
+   *  #361) — drives the "couldn't read this project" warning. Same lifecycle
+   *  as `errors`: cleared on the next send, and by a later `context: ok`. */
+  contextMissing: ContextMissingMap
 }
 
 /** Drop a trailing still-empty assistant placeholder — the residue of a reload
@@ -48,7 +60,8 @@ function pruneInterrupted(list: Conversation[]): Conversation[] {
 let snapshot: ChatSnapshot = {
   conversations: pruneInterrupted(loadConversations()),
   streaming: {},
-  errors: {}
+  errors: {},
+  contextMissing: {}
 }
 
 const listeners = new Set<() => void>()
@@ -157,6 +170,10 @@ export function sendChatMessage(opts: {
   thinking: boolean
   workdir?: string
   repoId?: string
+  /** Spec 394: the global Settings chat-agent pick. The turn runs on this
+   *  agent; it's stamped on the conversation as display metadata (never a
+   *  per-conversation override — reopening keeps following the global pick). */
+  agent?: ChatAgentId
   /** Spec 008 F2: intake mode for a NEW conversation (`'fast'` default). A
    *  CONTINUING thread inherits its stored mode/stage, so this is ignored for it
    *  — the mode is chosen once, at the entry button (D4: per-feature, no sticky
@@ -168,6 +185,7 @@ export function sendChatMessage(opts: {
   if (!text || snapshot.streaming[convoId]) return convoId
 
   const now = Date.now()
+  const agent = resolveChatAgent(opts.agent)
   const userTurn: StoredTurn = { role: 'user', content: text }
   // A conversationId that no longer exists (deleted under the caller's feet)
   // falls through to the create branch WITH the same id, so the reply lands
@@ -177,28 +195,30 @@ export function sendChatMessage(opts: {
   // is excluded). streamChat strips the UI-only fields itself.
   const history = [...(existing?.messages ?? []), userTurn]
 
-  // Spec 008 F2: a continuing thread inherits its stored intake; a NEW thread
-  // starts in the picked mode at pass 1. The stage SENT this turn is the stored
-  // (or initial) one; we persist the ADVANCED stage below so the next user turn
-  // runs the next pass — the client-owned "one pass per turn, never skips" rule.
+  // Spec 008 F2 + #257: a continuing thread inherits its stored intake; a NEW
+  // thread starts in the picked mode at pass 1. The stage SENT this turn is the
+  // stored (or initial) one. The NEXT stage is no longer advanced eagerly here —
+  // it's resolved from the model's trailing control marker when the reply
+  // finishes (advance/stay/done), so a vague answer re-runs its pass and the
+  // interview converges only when the model says the spec is defined.
   const intakeNow: IntakeState = existing?.intake
     ? normalizeIntake(existing.intake)
     : { mode: opts.mode ?? 'fast', stage: SOCRATIC_FIRST_STAGE }
-  const intakeNext: IntakeState = advanceIntake(intakeNow)
 
   const messages: StoredTurn[] = [...history, { role: 'assistant', content: '', thinking: '' }]
   const convo: Conversation = existing
-    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, updatedAt: now, intake: intakeNext }
+    ? { ...existing, messages, model: opts.model, thinking: opts.thinking, agent, updatedAt: now, intake: intakeNow }
     : {
         id: convoId,
         title: titleFromMessages([userTurn]),
         messages,
         model: opts.model,
         thinking: opts.thinking,
+        agent,
         createdAt: now,
         updatedAt: now,
         repoId: opts.repoId,
-        intake: intakeNext
+        intake: intakeNow
       }
 
   const ac = new AbortController()
@@ -210,21 +230,35 @@ export function sendChatMessage(opts: {
   commit({
     conversations: upsertConversation(snapshot.conversations, convo),
     streaming: { ...snapshot.streaming, [convoId]: true },
-    errors
+    errors,
+    // A fresh send resets the context warning — this turn's stream re-reports.
+    contextMissing: clearContextMissing(snapshot.contextMissing, convoId)
   })
 
   let content = ''
   let reasoning = ''
   void streamChat(history, {
     workdir: opts.workdir,
-    model: opts.model,
+    // Spec 009 (#361): repoId used to stop HERE (stored on the conversation,
+    // never sent) — the server needs it to resolve the repo's host for SSH
+    // context gathering.
+    repoId: opts.repoId,
+    // A Claude model id must not leak to the Codex backend.
+    model: agent === 'claude' ? opts.model : undefined,
     thinking: opts.thinking,
+    agent,
     // Spec 008 F2: drive the server's per-stage prompt with THIS turn's intake
     // (Fast ignores stage). The stored stage was already advanced for next turn.
     mode: intakeNow.mode,
     stage: intakeNow.stage,
     signal: ac.signal,
     onDelta: (d: ChatStreamDelta) => {
+      if (d.type === 'context') {
+        // Leads the stream on workspace-backed requests; `missing` raises the
+        // blind-context banner for this conversation (spec 009 #361).
+        commit({ contextMissing: applyContextDelta(snapshot.contextMissing, convoId, d.state) })
+        return
+      }
       if (d.type === 'text') content += d.text
       else if (d.type === 'thinking') reasoning += d.text
       else return
@@ -232,8 +266,25 @@ export function sendChatMessage(opts: {
     }
   })
     .then(() => {
-      // Bump updatedAt so the finished conversation floats to the top.
-      patchConversation(convoId, (c) => ({ ...c, updatedAt: Date.now() }))
+      // #257: the finished reply's trailing control marker moves the Socratic
+      // stage machine (advance / stay / done — resolveIntakeAfterReply falls
+      // back to the legacy one-pass advance when no marker is present), and is
+      // stripped so the transcript never shows the machine channel. An aborted
+      // stream skips this, so the same pass re-runs on the next turn. Also
+      // bumps updatedAt so the finished conversation floats to the top.
+      const intakeAfter = resolveIntakeAfterReply(intakeNow, content)
+      const stripped = stripSocraticControl(content)
+      patchConversation(convoId, (c) => {
+        let msgs = c.messages
+        if (stripped !== content) {
+          msgs = msgs.slice()
+          const last = msgs[msgs.length - 1]
+          if (last && last.role === 'assistant') {
+            msgs[msgs.length - 1] = { ...last, content: stripped }
+          }
+        }
+        return { ...c, messages: msgs, intake: intakeAfter, updatedAt: Date.now() }
+      })
     })
     .catch((e: unknown) => {
       // Aborted (Stop) keeps whatever streamed; a real failure surfaces the

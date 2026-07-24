@@ -22,14 +22,35 @@ import {
   ConductorReviewIcon
 } from './workspace-status-icons'
 import { cloneDefaultWorkspaceStatuses } from '../../../../shared/workspace-statuses'
+import { applyPersistedHostOrder } from './sidebar-host-order'
+import type { SshConnectionStatus } from '../../../../shared/ssh-types'
 import type { SortBy } from './smart-sort'
 import type { AppState } from '@/store/types'
 import { getGitHubPRCacheKey, getLegacyGitHubPRCacheKey } from '@/store/slices/github-cache-key'
 import { UNGROUPED_PROJECT_GROUP_KEY } from '../../../../shared/project-groups'
 
+export type WorktreeGroupBy =
+  | 'operational'
+  | 'none'
+  | 'workspace-status'
+  | 'repo'
+  | 'pr-status'
+  | 'host'
 
+export type OperationalSection = 'needs-you' | 'active' | 'settled'
 
-export type WorktreeGroupBy = 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
+export type OperationalWorkspaceMeta = {
+  presentation: 'operational-rich' | 'operational-settled'
+  section: OperationalSection
+  status: 'permission' | 'working' | 'done' | 'active' | 'inactive'
+  statusLabel: 'Needs input' | 'Working' | 'Ready' | 'Active' | 'Settled'
+  projectName?: string
+  agentLabel?: string
+  stateTimestamp?: number
+  /** Card-facing name; relativeAge is retained for model consumers. */
+  ageLabel?: string
+  relativeAge?: string
+}
 
 /** A host as rendered in the sidebar tree. `key` is `local` or `ssh:<id>`. */
 export type SidebarHost = {
@@ -38,6 +59,14 @@ export type SidebarHost = {
   label: string
   detail?: string
   status?: 'reachable' | 'connecting' | 'down' | 'unknown'
+  /** Raw SSH transport status backing `status` — lets the header render the
+   *  precise label ("Reconnecting…" vs "Auth failed") instead of one generic
+   *  "down" wording. Absent for the local host. */
+  sshStatus?: SshConnectionStatus
+  /** Last transport error, when the SSH layer reported one (shown on hover). */
+  sshError?: string | null
+  /** SSH target id (the `ssh:<id>` key suffix) — enables host-level reconnect. */
+  connectionId?: string
   /** Whether `tmux` is installed on the host (sessions run inside it). Drives
    *  the host header's tmux indicator. Undefined until readiness resolves. */
   tmuxInstalled?: boolean
@@ -46,6 +75,34 @@ export type SidebarHost = {
    *  per-host "in tmux right now" signal — distinct from `tmuxInstalled`
    *  ("tmux is available") — and drives the muted glyph on the host header. */
   hasTmux?: boolean
+}
+
+/**
+ * Collapse the SSH transport status into the sidebar host's coarse state.
+ * Every not-connected transport state maps to 'down' (not 'unknown'): a host
+ * whose relay is disconnected, auth-failed, or mid-outage cannot stream its
+ * sessions, and the old mapping (only 'error' → 'down') left outages rendered
+ * as a pale "unknown" dot while the sessions under it just looked dead.
+ * 'unknown' is reserved for hosts with no transport record at all.
+ */
+export function sidebarHostStatus(
+  sshStatus: SshConnectionStatus | undefined
+): NonNullable<SidebarHost['status']> {
+  switch (sshStatus) {
+    case 'connected':
+      return 'reachable'
+    case 'connecting':
+    case 'deploying-relay':
+    case 'reconnecting':
+      return 'connecting'
+    case 'disconnected':
+    case 'auth-failed':
+    case 'reconnection-failed':
+    case 'error':
+      return 'down'
+    case undefined:
+      return 'unknown'
+  }
 }
 
 /** Minimal session shape the per-host tmux check needs. Mirrors the relevant
@@ -158,6 +215,15 @@ type WorktreeRow = {
   lineageChildCount: number
   lineageGroupKey?: string
   lineageCollapsed?: boolean
+  presentation?: 'operational-rich' | 'operational-settled'
+  operationalMeta?: OperationalWorkspaceMeta
+}
+
+export type OperationalSettledDisclosureRow = {
+  type: 'operational-settled-disclosure'
+  key: 'operational:settled:disclosure'
+  remainingCount: number
+  expanded: boolean
 }
 
 export type ImportedWorktreesCardCandidate = {
@@ -195,6 +261,7 @@ export type Row =
   | ImportedWorktreesCardRow
   | HostHeaderRow
   | RemoteTmuxCardRow
+  | OperationalSettledDisclosureRow
 
 export type PRGroupKey = 'done' | 'in-review' | 'in-progress' | 'closed'
 
@@ -893,13 +960,20 @@ type HostRowBlock = { hostKey: string; headerCount: number; rows: Row[] }
  *   1. A leading "Pinned" section stays at the very top, above all hosts.
  *   2. Each repo header + its following non-header rows form a block; the
  *      block's host is derived from the repo header's `connectionId`.
- *   3. Blocks are bucketed by host (local first, then first-seen order) and
- *      emitted under a `host-header` row. A collapsed `host:<key>` hides its body.
+ *   3. Blocks are bucketed by host (local first, then the persisted SSH order
+ *      when supplied, else first-seen order) and emitted under a `host-header`
+ *      row. A collapsed `host:<key>` hides its body.
+ *
+ * `hostOrder` is the user's persisted SSH host order (spec 383). Absent/empty →
+ * today's behavior verbatim (local first, remaining hosts first-seen), because
+ * `applyPersistedHostOrder(order, [])` pins local first and keeps the rest in
+ * first-seen order. Local is never part of the reorderable set.
  */
 export function groupRowsByHost(
   repoRows: Row[],
   hostForKey: (hostKey: string) => SidebarHost,
-  collapsedGroups: Set<string>
+  collapsedGroups: Set<string>,
+  hostOrder?: readonly string[]
 ): Row[] {
   const result: Row[] = []
   const pinnedBlock: Row[] = []
@@ -941,10 +1015,12 @@ export function groupRowsByHost(
     }
     byHost.get(block.hostKey)!.push(block)
   }
-  order.sort((a, b) => (a === LOCAL_HOST_KEY ? -1 : b === LOCAL_HOST_KEY ? 1 : 0))
+  // Local first, then the persisted SSH order (stale ids dropped, newly-added
+  // hosts appended). Empty `hostOrder` reproduces the prior local-first sort.
+  const orderedHostKeys = applyPersistedHostOrder(order, hostOrder ?? [])
 
   result.push(...pinnedBlock)
-  for (const hostKey of order) {
+  for (const hostKey of orderedHostKeys) {
     const hostBlocks = byHost.get(hostKey)!
     const headerKey = getHostHeaderKey(hostKey)
     result.push({

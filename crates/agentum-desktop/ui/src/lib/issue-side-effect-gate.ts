@@ -12,20 +12,21 @@ export type IssueSideEffectSkipReason =
   | 'no-linked-item'
   | 'not-an-issue'
   | 'not-github-url'
-  | 'remote-repo'
 
 export type IssueSideEffectGate =
   | { eligible: true; slug: RepoSlug; number: number }
   | { eligible: false; reason: IssueSideEffectSkipReason }
 
 /**
- * Eligibility for the linked-issue side effects: a linked *github.com issue*
- * targeting a *local* repo (the scaffold/start-work endpoints write into the
- * new worktree's local path).
+ * Eligibility for the linked-issue side effects: a linked *github.com issue*.
+ * The Harness routes resolve the created worktree's host from its authoritative
+ * worktree id, so SSH is no longer a client-side exclusion. Keep the connection
+ * argument temporarily so older callers can migrate without changing their
+ * render-time dependency lists in the same release.
  */
 export function deriveIssueSideEffectGate(
   item: { type: string; url: string } | null | undefined,
-  repoConnectionId: string | null | undefined
+  _repoConnectionId: string | null | undefined
 ): IssueSideEffectGate {
   if (!item) {
     return { eligible: false, reason: 'no-linked-item' }
@@ -37,17 +38,13 @@ export function deriveIssueSideEffectGate(
   if (!link || link.type !== 'issue') {
     return { eligible: false, reason: 'not-github-url' }
   }
-  if (repoConnectionId) {
-    return { eligible: false, reason: 'remote-repo' }
-  }
   return { eligible: true, slug: link.slug, number: link.number }
 }
 
 const SKIP_REASON_COPY: Record<IssueSideEffectSkipReason, string> = {
   'no-linked-item': 'no issue is linked to this workspace anymore.',
   'not-an-issue': 'the linked item is not an issue.',
-  'not-github-url': "the linked issue's URL is not a github.com issue link.",
-  'remote-repo': 'the selected repo is remote (SSH) — this runs locally only.'
+  'not-github-url': "the linked issue's URL is not a github.com issue link."
 }
 
 /**

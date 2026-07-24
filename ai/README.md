@@ -13,6 +13,17 @@ ai/
   skills/                     # how-to checklists the SDD skills read
     write_spec.md
     validate_handoff.md
+    orchestrate.md
+  orchestration/
+    hitl_policy.md             # auto vs HITL gates and stop conditions
+  roles/                       # one phase brief loaded at a time
+    pm.md
+    architect.md
+    developer.md
+    tester.md
+    reviewer.md
+  contracts/templates/
+    handoff_contract.md
   specs/
     _template/spec.md         # copy this to start a new spec
     <NNN>-<name>/spec.md       # one focused, incremental spec per slice

@@ -28,6 +28,7 @@ type SidebarWorkspaceOptionsMenuProps = {
 }
 
 const GROUP_BY_OPTIONS = [
+  { id: 'operational', label: 'Queue' },
   { id: 'host', label: 'Host' },
   { id: 'repo', label: 'Project' },
   { id: 'workspace-status', label: 'Status' },

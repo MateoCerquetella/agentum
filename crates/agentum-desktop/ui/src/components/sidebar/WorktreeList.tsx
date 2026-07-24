@@ -64,6 +64,7 @@ import {
   type WorktreeAttention
 } from './smart-attention'
 import { track } from '@/lib/telemetry'
+import { toast } from 'sonner'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import { deriveRunningAgentSendTargets } from '@/lib/running-agent-targets'
 import { rightSidebarShowsPullRequestData } from '@/lib/right-sidebar-visibility'
@@ -82,8 +83,10 @@ import {
   groupRowsByHost,
   getHostHeaderKey,
   hostKeyForRepo,
-  hostKeysWithOpenTmux
+  hostKeysWithOpenTmux,
+  sidebarHostStatus
 } from './worktree-list-groups'
+import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import { HostGroupHeader } from './HostGroupHeader'
 import { TmuxSessionsModal, type TmuxSessionsModalHost } from './TmuxSessionsModal'
 import { SessionActivityCard } from './SessionActivityCard'
@@ -127,6 +130,7 @@ import { focusActiveSessionSurface } from '@/lib/focus-session-surface'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { SCROLL_TO_CURRENT_WORKSPACE_REVEAL_REQUEST_EVENT } from '@/lib/scroll-to-current-workspace-status'
 import { useRepoHeaderDrag } from './project-header-drag'
+import { loadHostOrder, saveHostOrder } from './sidebar-host-order'
 import WorktreeContextMenu, { CLOSE_ALL_CONTEXT_MENUS_EVENT } from './WorktreeContextMenu'
 import {
   getProjectContextMenuTarget,
@@ -198,11 +202,19 @@ import {
 import { buildImportedWorktreesCardCandidates } from './imported-worktrees-card-candidates'
 import {
   buildWorktreeSectionActivitySummaries,
+  resolveWorktreeStatusFromState,
   reuseSectionActivitySummariesIfEqual,
   EMPTY_WORKTREE_SECTION_ACTIVITY,
   type WorktreeSectionActivityState,
   type WorktreeSectionActivitySummary
 } from './worktree-section-activity'
+import {
+  buildOperationalSidebarRows,
+  selectOperationalStatusTimestamp,
+  type OperationalWorkspaceFact
+} from './operational-sidebar-model'
+import { selectLiveAgentStatusEntriesForWorktree } from './worktree-agent-row-selectors'
+import { useNow } from '@/components/dashboard/useNow'
 import { runWorktreeBatchDelete } from './delete-worktree-flow'
 
 export {
@@ -461,6 +473,9 @@ type VirtualizedWorktreeViewportProps = {
   // hidden repos on reorder.
   allRepoIds: string[]
   reorderRepos: (orderedIds: string[]) => void
+  // Commit a new SSH host order (spec 383). Receives the full reordered list of
+  // SSH host keys (`ssh:<connId>`); the local host is pinned first and excluded.
+  reorderHosts: (orderedSshKeys: string[]) => void
   prCache: Record<string, unknown> | null
   workspaceStatuses: readonly WorkspaceStatusDefinition[]
   projectGroups?: readonly ProjectGroup[]
@@ -487,6 +502,7 @@ type VirtualizedWorktreeViewportProps = {
   showInlineAgentCards: boolean
   showSectionStatus: boolean
   sectionActivityByGroupKey: ReadonlyMap<string, WorktreeSectionActivitySummary>
+  onSettledExpandedChange: (expanded: boolean) => void
   // Why: broad grouping changes still remount the viewport, while add/delete
   // stays mounted for row-key anchoring and layout animation. These refs bridge
   // both paths so the virtualizer never falls back to scrollTop 0.
@@ -732,6 +748,12 @@ export function getRenderRowKey(row: RenderRow): string {
   if (row.type === 'host-header') {
     return `host:${row.key}`
   }
+  if (row.type === 'remote-tmux-card') {
+    return `remote-tmux:${row.key}`
+  }
+  if (row.type === 'operational-settled-disclosure') {
+    return `operational:${row.key}`
+  }
   return `wt:${row.worktree.id}`
 }
 
@@ -745,7 +767,11 @@ export function getWorktreeDragGroups(rows: Row[]): WorktreeDragGroup[] {
       groups.push({ key: current.key, worktreeIds: current.ids })
       continue
     }
-    if (row.type === 'imported-worktrees-card') {
+    if (
+      row.type === 'imported-worktrees-card' ||
+      row.type === 'remote-tmux-card' ||
+      row.type === 'operational-settled-disclosure'
+    ) {
       continue
     }
     // Host-header rows are a super-level above repo groups — not a drag group
@@ -833,6 +859,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   repoOrder,
   allRepoIds,
   reorderRepos,
+  reorderHosts,
   prCache,
   workspaceStatuses,
   projectGroups = [],
@@ -846,6 +873,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   showInlineAgentCards,
   showSectionStatus,
   sectionActivityByGroupKey,
+  onSettledExpandedChange,
   scrollOffsetRef,
   scrollAnchorRef
 }: VirtualizedWorktreeViewportProps) {
@@ -986,6 +1014,26 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
     orderedRepoIds: allRepoIds,
     onCommit: reorderRepos,
     getScrollContainer: () => scrollRef.current
+  })
+  // SSH host keys in current display order (host headers only, local excluded).
+  // The reorder controller commits permutations of this list; the local host is
+  // never in it, so it can never be dragged or displaced from first (spec 383).
+  const orderedSshHostKeys = useMemo(
+    () =>
+      rows
+        .filter((row): row is Extract<Row, { type: 'host-header' }> => row.type === 'host-header')
+        .filter((row) => row.host.kind === 'ssh')
+        .map((row) => row.host.key),
+    [rows]
+  )
+  // Reordering is only meaningful with 2+ SSH hosts to shuffle. The controller
+  // is still constructed unconditionally (hook order) but inert otherwise.
+  const canReorderHostHeaders = groupBy === 'host' && orderedSshHostKeys.length > 1
+  const hostDrag = useRepoHeaderDrag({
+    orderedRepoIds: orderedSshHostKeys,
+    onCommit: reorderHosts,
+    getScrollContainer: () => scrollRef.current,
+    headerIdAttr: 'data-host-header-id'
   })
   const worktreeDragGroups = useMemo(() => getWorktreeDragGroups(rows), [rows])
   const worktreeDragUnitGroups = useMemo(() => getWorktreeDragUnitGroups(rows), [rows])
@@ -2849,6 +2897,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               style={{ top: `${repoDrag.state.dropIndicatorY}px` }}
             />
           ) : null}
+          {canReorderHostHeaders &&
+          hostDrag.state.draggingRepoId !== null &&
+          hostDrag.state.dropIndicatorY !== null ? (
+            <div
+              role="presentation"
+              className="pointer-events-none absolute left-2 right-2 z-10 border-t border-dashed border-muted-foreground/70"
+              style={{ top: `${hostDrag.state.dropIndicatorY}px` }}
+            />
+          ) : null}
           {worktreeDragState.draggingWorktreeId !== null &&
           worktreeDragState.dropIndicatorY !== null ? (
             <div
@@ -2868,6 +2925,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
             }
 
             if (row.type === 'host-header') {
+              const hostConnectionId =
+                row.host.kind === 'ssh' ? row.host.connectionId : undefined
               return (
                 <div
                   key={vItem.key}
@@ -2897,6 +2956,29 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         kind: row.host.kind
                       })
                     }
+                    onReconnect={
+                      hostConnectionId
+                        ? async () => {
+                            const result = await connectSshTargetViaServer(hostConnectionId)
+                            if (result.ok) {
+                              toast.success(result.message)
+                            } else {
+                              toast.error(result.message)
+                            }
+                          }
+                        : undefined
+                    }
+                    // SSH hosts only: make the header a reorder handle. The local
+                    // host passes no dragId/handler, so it stays pinned first.
+                    dragId={
+                      canReorderHostHeaders && row.host.kind === 'ssh' ? row.host.key : undefined
+                    }
+                    onHeaderPointerDown={
+                      canReorderHostHeaders && row.host.kind === 'ssh'
+                        ? hostDrag.onHandlePointerDown
+                        : undefined
+                    }
+                    isDragging={hostDrag.state.draggingRepoId === row.host.key}
                   />
                 </div>
               )
@@ -2975,7 +3057,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     data-workspace-status={headerWorkspaceStatus ?? undefined}
                     data-workspace-pin-drop-target={isPinnedHeader ? '' : undefined}
                     className={cn(
-                      'group flex h-7 w-full items-center gap-1.5 pr-1 text-left transition-all',
+                      'group flex h-7 w-full items-center gap-1.5 pr-1 text-left text-sidebar-foreground transition-all',
                       'cursor-pointer',
                       // Hub-open indicator: the project currently shown as the
                       // hub view reads as active, mirroring worktree cards.
@@ -3116,6 +3198,13 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                           <row.icon className="size-3" />
                         )}
                       </div>
+                    ) : null}
+
+                    {row.repo ? (
+                      <RepoBadgeMark
+                        color={repoHeaderColor}
+                        className="size-2 shrink-0 rounded-[2px]"
+                      />
                     ) : null}
 
                     <div className="min-w-0 flex-1">
@@ -3396,6 +3485,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                               }
                             : undefined
                         }
+                        operationalMeta={itemRow.operationalMeta}
                       />
                     </div>
                   </div>
@@ -3630,6 +3720,37 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
               )
             }
 
+            if (row.type === 'operational-settled-disclosure') {
+              return (
+                <div
+                  key={vItem.key}
+                  role="presentation"
+                  data-worktree-virtual-row
+                  data-worktree-virtual-row-key={String(vItem.key)}
+                  data-index={vItem.index}
+                  ref={measureVirtualRowElement}
+                  className="absolute left-0 right-0 top-0 flex justify-center py-1"
+                  style={{ transform: getVirtualRowTransform(vItem.start) }}
+                >
+                  <button
+                    type="button"
+                    aria-expanded={row.expanded}
+                    onClick={() => onSettledExpandedChange(!row.expanded)}
+                    className="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                  >
+                    {row.expanded ? 'Show less' : `Show ${row.remainingCount} more`}
+                  </button>
+                </div>
+              )
+            }
+
+            // Reserved row type; buildRows does not currently emit it. Keep it
+            // out of the worktree branch so future emission cannot dereference
+            // a missing worktree while its dedicated presentation is added.
+            if (row.type === 'remote-tmux-card') {
+              return null
+            }
+
 
             const itemWorkspaceStatus =
               groupBy === 'workspace-status'
@@ -3712,6 +3833,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
 type WorktreeListProps = {
   scrollOffsetRef: React.MutableRefObject<number>
   scrollAnchorRef: React.MutableRefObject<VirtualizedScrollAnchor>
+  operationalQuery: string
+  settledExpanded: boolean
+  onSettledExpandedChange: (expanded: boolean) => void
 }
 
 export function installWorktreeVisibleRefreshVisibilityListener(onChange: () => void): () => void {
@@ -3721,8 +3845,12 @@ export function installWorktreeVisibleRefreshVisibilityListener(onChange: () => 
 
 const WorktreeList = React.memo(function WorktreeList({
   scrollOffsetRef,
-  scrollAnchorRef
+  scrollAnchorRef,
+  operationalQuery,
+  settledExpanded,
+  onSettledExpandedChange
 }: WorktreeListProps) {
+  const operationalNow = useNow(30_000)
   // ── Granular selectors (each is a primitive or shallow-stable ref) ──
   const allWorktrees = useAllWorktrees()
   const repoMap = useRepoMap()
@@ -3826,6 +3954,10 @@ const WorktreeList = React.memo(function WorktreeList({
     (s) => s.migrationUnsupportedByPtyId
   )
   const sectionActivityRetainedAgentsByPaneKey = useAppStore((s) => s.retainedAgentsByPaneKey)
+  const sectionActivityAwaitingInputByPaneKey = useAppStore((s) => s.awaitingInputByPaneKey)
+  const sectionActivityServerByWorktreeId = useAppStore(
+    (s) => s.serverWorktreeActivityByWorktreeId
+  )
 
   const sortEpoch = useAppStore((s) => s.sortEpoch)
 
@@ -4213,6 +4345,15 @@ const WorktreeList = React.memo(function WorktreeList({
     },
     [reorderReposAction]
   )
+  // Persisted SSH host order (spec 383) — a renderer-only preference in
+  // localStorage, no backend write. Seeded once from storage so a restart
+  // replays the same sequence; a drop updates state (immediate re-render) and
+  // persists in one step.
+  const [hostOrder, setHostOrder] = useState<string[]>(() => loadHostOrder())
+  const handleReorderHosts = useCallback((orderedSshKeys: string[]) => {
+    setHostOrder(orderedSshKeys)
+    saveHostOrder(orderedSshKeys)
+  }, [])
   // Why: host mode is a post-processing layer on top of repo grouping; the
   // inner builder always gets 'repo' so host headers can bucket repo groups.
   const effectiveGroupBy: WorktreeGroupBy = groupBy === 'host' ? 'repo' : groupBy
@@ -4231,15 +4372,19 @@ const WorktreeList = React.memo(function WorktreeList({
       // agentStatusEpoch, so read the current map without subscribing to it.
       agentStatusByPaneKey: current.agentStatusByPaneKey,
       migrationUnsupportedByPtyId: sectionActivityMigrationUnsupportedByPtyId,
-      retainedAgentsByPaneKey: sectionActivityRetainedAgentsByPaneKey
+      retainedAgentsByPaneKey: sectionActivityRetainedAgentsByPaneKey,
+      awaitingInputByPaneKey: sectionActivityAwaitingInputByPaneKey,
+      serverWorktreeActivityByWorktreeId: sectionActivityServerByWorktreeId
     }
   }, [
     sectionActivityAgentStatusEpoch,
+    sectionActivityAwaitingInputByPaneKey,
     sectionActivityBrowserTabsByWorktree,
     sectionActivityMigrationUnsupportedByPtyId,
     sectionActivityPtyIdsByTabId,
     sectionActivityRetainedAgentsByPaneKey,
     sectionActivityRuntimePaneTitlesByTabId,
+    sectionActivityServerByWorktreeId,
     sectionActivityTabsByWorktree
   ])
   // Identity-stable across rebuilds: the epoch-driven useMemo re-runs on every
@@ -4299,18 +4444,12 @@ const WorktreeList = React.memo(function WorktreeList({
       const meta = hostMetaByKey[hostKey]
       const isSsh = hostKey.startsWith('ssh:')
       const connectionId = isSsh ? hostKey.slice('ssh:'.length) : undefined
-      const status: SidebarHost['status'] = !isSsh
-        ? 'reachable'
-        : (() => {
-            const s = connectionId ? sshConnectionStates.get(connectionId)?.status : undefined
-            return s === 'connected'
-              ? 'reachable'
-              : s === 'connecting'
-                ? 'connecting'
-                : s === 'error'
-                  ? 'down'
-                  : 'unknown'
-          })()
+      const connection = connectionId ? sshConnectionStates.get(connectionId) : undefined
+      // A target with no transport record yet behaves like a disconnected one
+      // (mirrors SshStatusSegment): its sessions can't stream either way, and
+      // defaulting gives the host header a Reconnect affordance from the start.
+      const sshStatus = isSsh ? (connection?.status ?? 'disconnected') : undefined
+      const status: SidebarHost['status'] = !isSsh ? 'reachable' : sidebarHostStatus(sshStatus)
       return {
         key: hostKey,
         kind: isSsh ? 'ssh' : 'local',
@@ -4323,6 +4462,9 @@ const WorktreeList = React.memo(function WorktreeList({
             : 'This Mac'),
         detail: meta?.detail,
         status,
+        sshStatus,
+        sshError: connection?.error,
+        connectionId,
         tmuxInstalled: meta?.tmuxInstalled,
         // Truthful per-host signal: this host has a live tmux-backed session
         // right now (computed from the session list in the hosts slice).
@@ -4332,8 +4474,38 @@ const WorktreeList = React.memo(function WorktreeList({
     [hostMetaByKey, hostsWithTmux, sshConnectionStates, sshTargetLabels]
   )
 
+  const operationalFactsByWorktreeId = useMemo(() => {
+    const current = useAppStore.getState()
+    const now = Date.now()
+    const facts = new Map<string, OperationalWorkspaceFact>()
+    for (const worktree of worktrees) {
+      const entries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
+      const status = resolveWorktreeStatusFromState(sectionActivityState, worktree.id, now)
+      let latest = entries[0]
+      for (const entry of entries) {
+        if (!latest || entry.updatedAt > latest.updatedAt) latest = entry
+      }
+      facts.set(worktree.id, {
+        status,
+        agentLabel: latest?.agentType ?? worktree.createdWithAgent,
+        stateTimestamp: selectOperationalStatusTimestamp(status, entries, now)
+      })
+    }
+    return facts
+  }, [sectionActivityState, worktrees])
+
   // Build flat row list for rendering
   const rows: Row[] = useMemo(() => {
+    if (groupBy === 'operational') {
+      return buildOperationalSidebarRows({
+        worktrees,
+        repoMap,
+        factsByWorktreeId: operationalFactsByWorktreeId,
+        query: operationalQuery,
+        settledExpanded,
+        now: operationalNow
+      })
+    }
     const built = buildRows(
       effectiveGroupBy,
       worktrees,
@@ -4353,10 +4525,16 @@ const WorktreeList = React.memo(function WorktreeList({
       placeholderRepoIds,
       importedWorktreesByRepo
     )
-    return groupBy === 'host' ? groupRowsByHost(built, hostForKey, effectiveCollapsedGroups) : built
+    return groupBy === 'host'
+      ? groupRowsByHost(built, hostForKey, effectiveCollapsedGroups, hostOrder)
+      : built
   }, [
     effectiveGroupBy,
     groupBy,
+    operationalFactsByWorktreeId,
+    operationalNow,
+    operationalQuery,
+    settledExpanded,
     worktrees,
     repoMap,
     prCache,
@@ -4370,7 +4548,8 @@ const WorktreeList = React.memo(function WorktreeList({
     projectGroups,
     placeholderRepoIds,
     importedWorktreesByRepo,
-    hostForKey
+    hostForKey,
+    hostOrder
   ])
   // Why: header/mode changes can shift entire groups, so remount the
   // virtualizer for those broad structure changes. Do not key on rows.length:
@@ -5012,7 +5191,7 @@ const WorktreeList = React.memo(function WorktreeList({
     importedWorktreesByRepo.size === 0
   // Why: Project Group headers can render before workspace rows load, but when
   // active filters hide everything the Clear Filters empty state must win.
-  if (rows.length === 0 || filtersHideAllRows) {
+  if (rows.length === 0 || (groupBy !== 'operational' && filtersHideAllRows)) {
     return (
       <div data-worktree-sidebar-container className="relative min-h-0 flex-1">
         <div className="worktree-sidebar-scrollbar flex h-full flex-col overflow-y-scroll overflow-x-hidden pl-1 scrollbar-sleek pt-px">
@@ -5130,6 +5309,7 @@ const WorktreeList = React.memo(function WorktreeList({
         repoOrder={repoOrder}
         allRepoIds={allRepoIds}
         reorderRepos={handleReorderRepos}
+        reorderHosts={handleReorderHosts}
         prCache={prCache}
         workspaceStatuses={workspaceStatuses}
         projectGroups={projectGroups}
@@ -5143,6 +5323,7 @@ const WorktreeList = React.memo(function WorktreeList({
         showInlineAgentCards={cardProps.includes('inline-agents')}
         showSectionStatus={showSectionStatus}
         sectionActivityByGroupKey={sectionActivityByGroupKey}
+        onSettledExpandedChange={onSettledExpandedChange}
         scrollOffsetRef={scrollOffsetRef}
         scrollAnchorRef={scrollAnchorRef}
       />

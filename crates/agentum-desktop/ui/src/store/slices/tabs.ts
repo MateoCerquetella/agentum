@@ -26,6 +26,7 @@ import {
   updateGroup
 } from './tab-group-state'
 import { buildHydratedTabState } from './tabs-hydration'
+import { viewAfterWorktreeClose } from './worktree-close-view'
 import { buildOrphanTerminalCleanupPatch, getOrphanTerminalIds } from './terminal-orphan-helpers'
 import { createBrowserUuid } from '@/lib/browser-uuid'
 import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
@@ -717,6 +718,7 @@ export const createTabsSlice: StateCreator<AppState, [], [], TabsSlice> = (set, 
         ...(shouldDeactivateWorktree
           ? {
               activeWorktreeId: null,
+              activeView: viewAfterWorktreeClose(true, current.activeView),
               activeTabId: null,
               activeBrowserTabId: null,
               activeFileId: null,

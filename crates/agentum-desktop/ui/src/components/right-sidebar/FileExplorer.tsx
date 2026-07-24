@@ -445,6 +445,7 @@ function FileExplorerInner(): React.JSX.Element {
       >
         <FileExplorerToolbar
           repoName={repoName}
+          repoColor={activeRepo?.badgeColor}
           worktreePath={worktreePath}
           connectionId={activeRepo?.connectionId ?? null}
           refresh={manualRefresh}
@@ -503,6 +504,7 @@ function FileExplorerInner(): React.JSX.Element {
               isLoading={isLoading}
               error={hasError ? rootError : null}
               isEmpty={isEmptyState && !isLoading && !hasError}
+              onRetry={manualRefresh.handleRefresh}
             />
           )}
           {showTree && (

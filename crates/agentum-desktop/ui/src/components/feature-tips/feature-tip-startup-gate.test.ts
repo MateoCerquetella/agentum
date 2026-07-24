@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getDefaultOnboardingState, getDefaultVoiceSettings } from '../../../../shared/constants'
-import type { CliInstallStatus } from '../../../../shared/cli-install-types'
 import type { GlobalSettings, OnboardingState } from '../../../../shared/types'
-import { getFeatureTipsAppOpenDecision, isCliFeatureTipCompleted } from './feature-tip-startup-gate'
+import { getFeatureTipsAppOpenDecision } from './feature-tip-startup-gate'
 
 const existingUserOnboarding: OnboardingState = {
   ...getDefaultOnboardingState(),
@@ -22,30 +21,11 @@ function makeSettings(voiceEnabled = false): Pick<GlobalSettings, 'voice'> {
   }
 }
 
-function makeCliStatus(overrides: Partial<CliInstallStatus> = {}): CliInstallStatus {
-  return {
-    platform: 'darwin',
-    commandName: 'agentum',
-    supported: true,
-    state: 'installed',
-    commandPath: '/usr/local/bin/agentum',
-    pathDirectory: '/usr/local/bin',
-    pathConfigured: true,
-    launcherPath: '/Applications/Agentum.app/Contents/MacOS/agentum',
-    installMethod: 'symlink',
-    currentTarget: null,
-    unsupportedReason: null,
-    detail: null,
-    ...overrides
-  }
-}
-
 describe('feature tip startup gate', () => {
-  it('opens the CLI feature tip first for an existing user on app open', () => {
+  it('opens the voice tip for an existing user on app open', () => {
     expect(
       getFeatureTipsAppOpenDecision({
         activeModal: 'none',
-        cliInstalled: false,
         featureTipsSeenIds: [],
         featureInteractions: {},
         onboarding: existingUserOnboarding,
@@ -54,14 +34,13 @@ describe('feature tip startup gate', () => {
         settings: makeSettings(),
         suppressedByOnboardingThisSession: false
       })
-    ).toEqual({ kind: 'open', tipId: 'agentum-cli' })
+    ).toEqual({ kind: 'open', tipId: 'voice-dictation' })
   })
 
   it('suppresses feature tips for first-time users while onboarding is showing', () => {
     expect(
       getFeatureTipsAppOpenDecision({
         activeModal: 'none',
-        cliInstalled: false,
         featureTipsSeenIds: [],
         featureInteractions: {},
         onboarding: firstTimeOnboarding,
@@ -77,7 +56,6 @@ describe('feature tip startup gate', () => {
     expect(
       getFeatureTipsAppOpenDecision({
         activeModal: 'none',
-        cliInstalled: false,
         featureTipsSeenIds: [],
         featureInteractions: {},
         onboarding: existingUserOnboarding,
@@ -89,11 +67,10 @@ describe('feature tip startup gate', () => {
     ).toEqual({ kind: 'skip' })
   })
 
-  it('opens the CLI tip after the voice tip was marked seen', () => {
+  it('does not open after every tip was marked seen', () => {
     expect(
       getFeatureTipsAppOpenDecision({
         activeModal: 'none',
-        cliInstalled: false,
         featureTipsSeenIds: ['voice-dictation'],
         featureInteractions: {},
         onboarding: existingUserOnboarding,
@@ -102,84 +79,19 @@ describe('feature tip startup gate', () => {
         settings: makeSettings(),
         suppressedByOnboardingThisSession: false
       })
-    ).toEqual({ kind: 'open', tipId: 'agentum-cli' })
+    ).toEqual({ kind: 'skip' })
   })
 
-  it('opens the CLI tip after voice dictation is already enabled', () => {
+  it('does not open the voice tip once voice dictation is already enabled', () => {
     expect(
       getFeatureTipsAppOpenDecision({
         activeModal: 'none',
-        cliInstalled: false,
         featureTipsSeenIds: [],
         featureInteractions: {},
         onboarding: existingUserOnboarding,
         persistedUIReady: true,
         promptedThisSession: false,
         settings: makeSettings(true),
-        suppressedByOnboardingThisSession: false
-      })
-    ).toEqual({ kind: 'open', tipId: 'agentum-cli' })
-  })
-
-  it('does not open after every tip was marked seen', () => {
-    expect(
-      getFeatureTipsAppOpenDecision({
-        activeModal: 'none',
-        cliInstalled: false,
-        featureTipsSeenIds: ['voice-dictation', 'agentum-cli'],
-        featureInteractions: {},
-        onboarding: existingUserOnboarding,
-        persistedUIReady: true,
-        promptedThisSession: false,
-        settings: makeSettings(),
-        suppressedByOnboardingThisSession: false
-      })
-    ).toEqual({ kind: 'skip' })
-  })
-
-  it('does not open the CLI tip after the CLI is installed', () => {
-    expect(
-      getFeatureTipsAppOpenDecision({
-        activeModal: 'none',
-        cliInstalled: true,
-        featureTipsSeenIds: ['voice-dictation'],
-        featureInteractions: {},
-        onboarding: existingUserOnboarding,
-        persistedUIReady: true,
-        promptedThisSession: false,
-        settings: makeSettings(),
-        suppressedByOnboardingThisSession: false
-      })
-    ).toEqual({ kind: 'skip' })
-  })
-
-  it('waits for CLI install status before opening the CLI tip', () => {
-    expect(
-      getFeatureTipsAppOpenDecision({
-        activeModal: 'none',
-        cliInstalled: null,
-        featureTipsSeenIds: ['voice-dictation'],
-        featureInteractions: {},
-        onboarding: existingUserOnboarding,
-        persistedUIReady: true,
-        promptedThisSession: false,
-        settings: makeSettings(),
-        suppressedByOnboardingThisSession: false
-      })
-    ).toEqual({ kind: 'skip' })
-  })
-
-  it('waits for CLI install status before opening later tips', () => {
-    expect(
-      getFeatureTipsAppOpenDecision({
-        activeModal: 'none',
-        cliInstalled: null,
-        featureTipsSeenIds: [],
-        featureInteractions: {},
-        onboarding: existingUserOnboarding,
-        persistedUIReady: true,
-        promptedThisSession: false,
-        settings: makeSettings(),
         suppressedByOnboardingThisSession: false
       })
     ).toEqual({ kind: 'skip' })
@@ -189,7 +101,6 @@ describe('feature tip startup gate', () => {
     expect(
       getFeatureTipsAppOpenDecision({
         activeModal: 'none',
-        cliInstalled: true,
         featureTipsSeenIds: [],
         featureInteractions: {
           'voice-dictation': { firstInteractedAt: 100, interactionCount: 1 }
@@ -201,22 +112,5 @@ describe('feature tip startup gate', () => {
         suppressedByOnboardingThisSession: false
       })
     ).toEqual({ kind: 'skip' })
-  })
-
-  it('requires an installed CLI to also be configured on PATH', () => {
-    expect(isCliFeatureTipCompleted(makeCliStatus())).toBe(true)
-    expect(isCliFeatureTipCompleted(makeCliStatus({ pathConfigured: false }))).toBe(false)
-  })
-
-  it('treats unsupported CLI setup as completed for feature tips', () => {
-    expect(
-      isCliFeatureTipCompleted(
-        makeCliStatus({
-          supported: false,
-          state: 'unsupported',
-          pathConfigured: false
-        })
-      )
-    ).toBe(true)
   })
 })

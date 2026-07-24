@@ -13,7 +13,6 @@ import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
-import { type SyncIssueInput, syncExternalIssues } from '@/runtime/board-client'
 import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
@@ -55,6 +54,11 @@ import IssueSourceSelector, { issueSourceChipClass } from '@/components/github/I
 import { TaskKanbanBoard } from '@/components/tasks/TaskKanbanBoard'
 import { TWO_COLUMNS, githubColumn } from '@/components/tasks/task-kanban'
 import { transitionGithubIssue } from '@/components/tasks/task-kanban-github'
+import {
+  resolveBoardProject,
+  type BoardBindingState
+} from '@/lib/board-project-resolution'
+import { useKanbanPointerDrag } from '@/lib/use-kanban-pointer-drag'
 import { reconcileLinearTeamSelection } from '@/components/task-page-linear-team-selection'
 import { parseTaskQuery, stripRepoQualifiers, withQualifier } from '../../../shared/task-query'
 import {
@@ -66,6 +70,8 @@ import { GitHubMarkdownComposer } from '@/components/github/GitHubMarkdownCompos
 import { buildGitHubRepoUrl, parseGitHubIssueOrPRLink } from '@/lib/github-links'
 import {
   findGithubWorkItemWorkspaceAttachment,
+  buildGithubWorkItemWorkspaceAttachmentIndex,
+  lookupGithubWorkItemWorkspaceAttachment,
   getGithubWorkItemWorkspaceAttachmentLabel
 } from '@/lib/github-work-item-workspace-attachment'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
@@ -91,6 +97,10 @@ import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import { isGitRepoKind } from '../../../shared/repo-kind'
+import {
+  resolveLinearContextForRepo,
+  taskProjectScopeKey
+} from '../../../shared/task-project-scope'
 import {
   buildTaskPageRepoSourceState,
   deriveTaskPageGitHubWorkItemsFetchOptions,
@@ -152,7 +162,6 @@ import {
   groupLinearIssues,
   type LinearDisplayProperty,
   type LinearGroupBy,
-  type LinearGroupSection,
   type LinearOrderBy
 } from './task-page/linear-helpers'
 import { formatRelativeTime } from '@/lib/relative-time'
@@ -167,13 +176,26 @@ import {
   GITHUB_TASK_STICKY_ID_CELL_CLASS,
   GITHUB_TASK_STICKY_TITLE_CELL_CLASS
 } from './task-page/github-grid-styles'
-import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_BOARD_DRAG_ISSUE_MIME, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
+import { DEFAULT_LINEAR_DISPLAY_PROPERTIES, LINEAR_CUSTOM_VIEW_MODEL_OPTIONS, LINEAR_DISPLAY_PROPERTIES, LINEAR_GROUP_OPTIONS, LINEAR_MODE_OPTIONS, LINEAR_ORDER_OPTIONS, LINEAR_PRESETS, LINEAR_VIEW_OPTIONS, LinearIssueListRow, LinearMode, LinearPresetId, LinearProjectTab, LinearViewMode } from './task-page/linear-view-config'
 import { SOURCE_OPTIONS, TaskSource } from './task-page/source-config'
 import { hasDivergentSources, hasUpstreamCandidateDivergence } from './task-page/source-divergence'
+import { embeddedGithubModeForResolution } from './task-page/embedded-github-mode'
+import {
+  linearModeOptionsForScope,
+  resolveInitialLinearMode,
+  shouldFetchLinearIssueLanding
+} from './task-page/linear-project-scope'
 
 const TASK_SEARCH_DEBOUNCE_MS = 300
 const LINEAR_ITEM_LIMIT = 36
 const PR_CHECKS_EAGER_PREFETCH_LIMIT = 20
+// Spec 016: stable "no binding entry yet" identity so the embedded resolver
+// memo doesn't churn while the hub effect is still writing the store entry.
+// An absent embedded entry means the hub has not verified this repo yet. It
+// must never mean "verified unbound": treating it as loaded/null briefly
+// rendered an honest picker before the binding request, and—more importantly—
+// made an uninitialized cache indistinguishable from a completed lookup.
+const EMBEDDED_BINDING_PENDING: BoardBindingState = { status: 'loading' }
 
 export default function TaskPage({
   embedded = false
@@ -189,6 +211,7 @@ export default function TaskPage({
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
   const taskResumeState = useAppStore((s) => s.taskResumeState)
   const setTaskResumeState = useAppStore((s) => s.setTaskResumeState)
+  const activeRepoId = useAppStore((s) => s.activeRepoId)
   const pageData = useAppStore((s) => s.taskPageData)
   const routedOpenTaskPage = useAppStore((s) => s.openTaskPage)
   const openTaskPage = useMemo(() => {
@@ -206,6 +229,12 @@ export default function TaskPage({
   const repos = useAppStore((s) => s.repos)
   const repoMap = useRepoMap()
   const allWorktrees = useAllWorktrees()
+  // O(1) work-item → workspace lookup, rebuilt only when worktrees change.
+  // Replaces a per-row worktrees.find() scan in the work-item list render.
+  const workspaceAttachmentIndex = useMemo(
+    () => buildGithubWorkItemWorkspaceAttachmentIndex(allWorktrees),
+    [allWorktrees]
+  )
   const openModal = useAppStore((s) => s.openModal)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const fetchWorkItemsAcrossRepos = useAppStore((s) => s.fetchWorkItemsAcrossRepos)
@@ -355,7 +384,16 @@ export default function TaskPage({
   const defaultTaskViewPreset = normalizeGitHubTaskPreset(settings?.defaultTaskViewPreset ?? 'all')
   const initialTaskQuery = getTaskPresetQuery(defaultTaskViewPreset)
 
-  const preferredTaskSource = pageData.taskSource ?? defaultTaskSource
+  // #379: an embedded hub Tasks tab defaults its provider from the repo's
+  // trackerProvider pin — a Linear-pinned project opens on its Linear list.
+  // An explicit sidebar source click (pageData.taskSource) and manual tab
+  // switches still win; 'auto'/absent falls to the saved default.
+  const embeddedPinnedSource = useMemo<TaskSource | null>(() => {
+    if (!embedded || !pageData.preselectedRepoId) return null
+    const pin = repos.find((r) => r.id === pageData.preselectedRepoId)?.trackerProvider
+    return pin === 'linear' || pin === 'github' ? pin : null
+  }, [embedded, pageData.preselectedRepoId, repos])
+  const preferredTaskSource = pageData.taskSource ?? embeddedPinnedSource ?? defaultTaskSource
   const [taskSource, setTaskSource] = useState<TaskSource>(
     resolveVisibleTaskProvider(preferredTaskSource, visibleTaskProviders)
   )
@@ -365,6 +403,10 @@ export default function TaskPage({
   const githubSearchPersistReadyRef = useRef(false)
   const linearSearchPersistReadyRef = useRef(false)
   const [taskResumeApplied, setTaskResumeApplied] = useState(false)
+  const visibleLinearModeOptions = useMemo(
+    () => linearModeOptionsForScope(LINEAR_MODE_OPTIONS, embedded),
+    [embedded]
+  )
 
   // Why: pageData.taskSource changes when the user clicks a specific source
   // icon in the sidebar while the task page is already open. useState only
@@ -404,10 +446,57 @@ export default function TaskPage({
   // the user is on the GitHub task source — actual entry into Project mode is
   // gated on a non-null `activeProject` once they pick one.
   const projectModeVisible = taskSource === 'github'
-  const [githubMode, setGithubMode] = useState<'items' | 'project'>('items')
+  // Default the Board to the GitHub Projects (Projects v2) view rather than the
+  // Issues list. A user's explicit switch to Issues persists via
+  // `taskResumeState.githubMode` (see the resume effect below), so this only
+  // sets the first-open default; when no project is linked, Project mode shows
+  // its "Choose a project" prompt.
+  const [githubMode, setGithubMode] = useState<'items' | 'project'>('project')
   // Tasks-as-Kanban (#2): the GitHub issues view can render as a board where
   // dragging a card between Open/Done pushes the new state back to GitHub.
   const [taskViewMode, setTaskViewMode] = useState<'list' | 'kanban'>('list')
+
+  // Spec 016 (§3.3): the embedded hub board derives its GitHub mode from the
+  // per-repo resolution, applied to LOCAL state only — the global
+  // taskResumeState slot is never written from inside a hub, so stale-mode
+  // leaks in either direction (hub→global, global→hub) are structurally
+  // impossible.
+  const embeddedRepoId = embedded ? (pageData.preselectedRepoId ?? null) : null
+  const embeddedBindingEntry = useAppStore((s) =>
+    embeddedRepoId ? s.projectBindingByRepo[embeddedRepoId] : undefined
+  )
+  const embeddedResolution = useMemo(() => {
+    if (!embeddedRepoId) {
+      return null
+    }
+    return resolveBoardProject({
+      repoId: embeddedRepoId,
+      settings: settings?.githubProjects,
+      bindingState: embeddedBindingEntry ?? EMBEDDED_BINDING_PENDING
+    })
+  }, [embeddedRepoId, settings?.githubProjects, embeddedBindingEntry])
+  // Re-fire only when the resolution identity CHANGES — a user's manual
+  // Projects/Issues toggle inside the hub must not be fought by re-asserting
+  // the same resolution on every render.
+  const lastAppliedEmbeddedResolutionRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!embeddedResolution || embeddedResolution.source === 'pending') {
+      // pending: the initial 'project' state shows the wrapper skeleton — no
+      // flash, nothing to apply yet.
+      return
+    }
+    const identity = embeddedResolution.project
+      ? `${embeddedResolution.source}:${embeddedResolution.project.ownerType}:${embeddedResolution.project.owner}:${embeddedResolution.project.number}`
+      : embeddedResolution.source
+    if (lastAppliedEmbeddedResolutionRef.current === identity) {
+      return
+    }
+    lastAppliedEmbeddedResolutionRef.current = identity
+    // Bound repos render their board; unbound repos stay on this same surface
+    // and render the repo-scoped picker. Never hide an honest `none` result by
+    // falling through to the unrelated Items/Kanban view.
+    setGithubMode(embeddedGithubModeForResolution(embeddedResolution))
+  }, [embeddedResolution])
 
   // ── GitLab task-source state ──────────────────────────────────────
   // Why: parallel to Linear's slim per-source state. Skips workItemsCache
@@ -837,62 +926,6 @@ export default function TaskPage({
   const [linearGroupBy, setLinearGroupBy] = useState<LinearGroupBy>('none')
   const [linearOrderBy, setLinearOrderBy] = useState<LinearOrderBy>('priority')
 
-  // ── Fold to Board (#48) ──────────────────────────────────────────────────
-  // The Tasks view is a sync source for the Board: map the loaded issues of the
-  // active provider into board cards (idempotent upsert keyed on issue URL), so
-  // GitHub/Linear issues flow in as cards on the one board.
-  // Why routed (not raw setActiveView): from the embedded hub Tasks tab this
-  // is a real navigation to the full Board page — openTaskPage records
-  // previousViewBeforeTasks ('project') so Esc/X return to the hub instead of
-  // whatever stale view the last Board visit left behind.
-  const routedOpenBoardPage = useAppStore((s) => s.openTaskPage)
-  const [syncingToBoard, setSyncingToBoard] = useState(false)
-  const syncTasksToBoard = useCallback(async () => {
-    let inputs: SyncIssueInput[] = []
-    if (taskSource === 'github') {
-      // Issues only — PRs aren't board tickets.
-      inputs = pages
-        .flat()
-        .filter((it) => it.type === 'issue')
-        .map((it) => ({
-          external_url: it.url,
-          external_provider: 'github',
-          title: it.title,
-          status: it.state === 'closed' ? 'done' : 'todo',
-          lbl: 'github'
-        }))
-    } else if (taskSource === 'linear') {
-      inputs = linearIssues.map((it) => ({
-        external_url: it.url,
-        external_provider: 'linear',
-        title: it.title,
-        body: it.description,
-        status:
-          it.state.type === 'completed' || it.state.type === 'canceled'
-            ? 'done'
-            : it.state.type === 'started'
-              ? 'doing'
-              : 'todo',
-        lbl: 'linear'
-      }))
-    }
-    if (inputs.length === 0) {
-      toast.info('No issues loaded to sync to the Board.')
-      return
-    }
-    setSyncingToBoard(true)
-    try {
-      const { synced } = await syncExternalIssues(inputs)
-      toast.success(
-        `Synced ${synced.length} ${taskSource} issue${synced.length === 1 ? '' : 's'} to the Board.`,
-        { action: { label: 'Open Board', onClick: () => routedOpenBoardPage() } }
-      )
-    } catch (e) {
-      toast.error(`Sync to Board failed: ${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setSyncingToBoard(false)
-    }
-  }, [taskSource, pages, linearIssues, routedOpenBoardPage])
   const [linearDisplayProperties, setLinearDisplayProperties] = useState<
     ReadonlySet<LinearDisplayProperty>
   >(() => new Set(DEFAULT_LINEAR_DISPLAY_PROPERTIES))
@@ -938,14 +971,12 @@ export default function TaskPage({
   const [linearCustomViewContentsError, setLinearCustomViewContentsError] = useState<string | null>(
     null
   )
-  const [linearBoardDraggingIssueId, setLinearBoardDraggingIssueId] = useState<string | null>(null)
-  const [linearBoardDragOverKey, setLinearBoardDragOverKey] = useState<string | null>(null)
   const [linearBoardUpdatingIssueIds, setLinearBoardUpdatingIssueIds] = useState<
     ReadonlySet<string>
   >(() => new Set())
   const lastLinearRequestRef = useRef<{ nonce: number; signature: string } | null>(null)
   const landingLinearRefreshKeysRef = useRef<ReadonlySet<string>>(new Set())
-  const linearContextResumeAttemptedRef = useRef(false)
+  const linearContextResumeAttemptedRef = useRef<string | null>(null)
 
   const patchScopedLinearIssue = useCallback((issueId: string, patch: Partial<LinearIssue>) => {
     const patchResult = (result: LinearCollectionResult<LinearIssue>) => ({
@@ -1041,7 +1072,11 @@ export default function TaskPage({
     )
     setRepoSelection(resolvedInitialSelection)
 
-    const nextGithubMode = taskResumeState?.githubMode ?? 'items'
+    // Embedded (spec 016 §3.3): skip the global resume slot — a stale 'items'
+    // from a standalone visit must not leak into a bound repo's hub. The
+    // initial 'project' holds the wrapper skeleton until the per-repo
+    // resolution effect above applies.
+    const nextGithubMode = embedded ? 'project' : (taskResumeState?.githubMode ?? 'project')
     setGithubMode(nextGithubMode)
 
     const preset = taskResumeState?.githubItemsPreset
@@ -1060,7 +1095,7 @@ export default function TaskPage({
 
     const linearPreset = taskResumeState?.linearPreset ?? 'all'
     const linearQuery = taskResumeState?.linearQuery ?? ''
-    setLinearMode(taskResumeState?.linearMode ?? 'issues')
+    setLinearMode(resolveInitialLinearMode(embedded, taskResumeState?.linearMode))
     setActiveLinearPreset(linearPreset)
     setLinearSearchInput(linearQuery)
     setAppliedLinearSearch(linearQuery)
@@ -1079,17 +1114,32 @@ export default function TaskPage({
   ])
 
   useEffect(() => {
-    const context = taskResumeState?.linearContext
+    const context = resolveLinearContextForRepo(taskResumeState, activeRepoId)
+    const scopeKey = taskProjectScopeKey(activeRepoId)
+    const attemptKey = context ? `${scopeKey}:${context.kind}:${context.id}` : scopeKey
     if (
-      linearContextResumeAttemptedRef.current ||
+      linearContextResumeAttemptedRef.current === attemptKey ||
       !taskResumeApplied ||
       taskSource !== 'linear' ||
-      !linearStatus.connected ||
-      !context
+      !linearStatus.connected
     ) {
       return
     }
-    linearContextResumeAttemptedRef.current = true
+    linearContextResumeAttemptedRef.current = attemptKey
+    if (!context) {
+      clearSelectedLinearIssue()
+      setSelectedLinearProject(null)
+      setSelectedLinearProjectDetail(null)
+      setSelectedLinearCustomView(null)
+      setLinearProjectParentView(null)
+      // The standalone Tasks page may honestly fall back to its broad Issues
+      // landing. The embedded hub may not: without a repo-bound context that
+      // landing is account-wide and was the source of cross-project rows.
+      if (embedded) {
+        setLinearMode('projects')
+      }
+      return
+    }
     let cancelled = false
 
     if (context.kind === 'project') {
@@ -1162,10 +1212,13 @@ export default function TaskPage({
     fetchLinearCustomView,
     fetchLinearProject,
     listLinearCustomViews,
+    activeRepoId,
+    clearSelectedLinearIssue,
+    embedded,
     linearStatus.connected,
     setTaskResumeState,
     taskResumeApplied,
-    taskResumeState?.linearContext,
+    taskResumeState,
     taskSource
   ])
 
@@ -1563,48 +1616,9 @@ export default function TaskPage({
   )
   const linearStatusBoardEnabled = linearGroupBy === 'none' || linearGroupBy === 'status'
 
-  const handleLinearBoardCardDragStart = useCallback(
-    (issue: LinearIssue, event: React.DragEvent<HTMLDivElement>) => {
-      if (!linearStatusBoardEnabled || linearBoardUpdatingIssueIds.has(issue.id)) {
-        event.preventDefault()
-        return
-      }
-      event.dataTransfer.effectAllowed = 'move'
-      event.dataTransfer.setData(LINEAR_BOARD_DRAG_ISSUE_MIME, issue.id)
-      event.dataTransfer.setData('text/plain', issue.id)
-      setLinearBoardDraggingIssueId(issue.id)
-    },
-    [linearBoardUpdatingIssueIds, linearStatusBoardEnabled]
-  )
-
-  const handleLinearBoardDragOver = useCallback(
-    (section: LinearGroupSection, event: React.DragEvent<HTMLElement>) => {
-      if (!linearStatusBoardEnabled || !getLinearStatusSectionState(section)) {
-        return
-      }
-      event.preventDefault()
-      event.dataTransfer.dropEffect = 'move'
-      setLinearBoardDragOverKey(section.key)
-    },
-    [linearStatusBoardEnabled]
-  )
-
-  const handleLinearBoardDrop = useCallback(
-    async (section: LinearGroupSection, event: React.DragEvent<HTMLElement>) => {
-      event.preventDefault()
-      event.stopPropagation()
-      setLinearBoardDragOverKey(null)
-
-      const targetState = getLinearStatusSectionState(section)
-      if (!linearStatusBoardEnabled || !targetState) {
-        return
-      }
-
-      const issueId =
-        event.dataTransfer.getData(LINEAR_BOARD_DRAG_ISSUE_MIME) || linearBoardDraggingIssueId
-      const issue = filteredLinearIssues.find((item) => item.id === issueId)
+  const moveLinearIssueToState = useCallback(
+    async (issue: LinearIssue, targetState: LinearIssue['state']) => {
       if (
-        !issue ||
         linearBoardUpdatingIssueIds.has(issue.id) ||
         (issue.state.name === targetState.name && issue.state.type === targetState.type)
       ) {
@@ -1667,16 +1681,25 @@ export default function TaskPage({
         })
       }
     },
-    [
-      filteredLinearIssues,
-      linearBoardDraggingIssueId,
-      linearBoardUpdatingIssueIds,
-      linearStatusBoardEnabled,
-      patchScopedLinearIssue,
-      patchLinearIssue,
-      settings
-    ]
+    [linearBoardUpdatingIssueIds, patchScopedLinearIssue, patchLinearIssue, settings]
   )
+
+  const linearBoardRef = useRef<HTMLDivElement>(null)
+  const {
+    dragCardId: linearBoardDraggingIssueId,
+    overColumnKey: linearBoardDragOverKey,
+    onBoardPointerDownCapture: onLinearBoardPointerDownCapture
+  } = useKanbanPointerDrag({
+    boardRef: linearBoardRef,
+    onDrop: (cardId, columnKey) => {
+      const section = linearBoardSections.find((s) => s.key === columnKey)
+      const targetState = section ? getLinearStatusSectionState(section) : null
+      const issue = filteredLinearIssues.find((item) => item.id === cardId)
+      if (linearStatusBoardEnabled && issue && targetState) {
+        void moveLinearIssueToState(issue, targetState)
+      }
+    }
+  })
 
   const toggleLinearDisplayProperty = useCallback((property: LinearDisplayProperty): void => {
     if (property === 'team') {
@@ -2762,7 +2785,7 @@ export default function TaskPage({
     if (taskSource !== 'linear') {
       return
     }
-    if (linearMode !== 'issues') {
+    if (!shouldFetchLinearIssueLanding(embedded, linearMode)) {
       return
     }
     if (!linearStatus.connected) {
@@ -2846,6 +2869,7 @@ export default function TaskPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     taskSource,
+    embedded,
     linearMode,
     linearStatus.connected,
     selectedLinearWorkspaceId,
@@ -3169,7 +3193,7 @@ export default function TaskPage({
         linearMode,
         linearContext: undefined
       })
-      linearContextResumeAttemptedRef.current = false
+      linearContextResumeAttemptedRef.current = null
       setLinearIssues([])
       setLinearError(null)
       setLinearLoading(true)
@@ -3353,13 +3377,21 @@ export default function TaskPage({
                               key={mode.id}
                               type="button"
                               onClick={() => {
+                                // Embedded: local mode only — the global resume
+                                // slot stays untouched from inside a per-project
+                                // view (same discipline as the repo combobox's
+                                // updateSettings gate below).
                                 if (mode.id === 'project') {
                                   setGithubMode('project')
-                                  setTaskResumeState({ githubMode: 'project' })
+                                  if (!embedded) {
+                                    setTaskResumeState({ githubMode: 'project' })
+                                  }
                                   return
                                 }
                                 setGithubMode('items')
-                                setTaskResumeState({ githubMode: 'items' })
+                                if (!embedded) {
+                                  setTaskResumeState({ githubMode: 'items' })
+                                }
                                 handleSelectGithubTaskKind(mode.id)
                               }}
                               className={cn(
@@ -3581,28 +3613,6 @@ export default function TaskPage({
                             {githubTasksBusy ? 'Refreshing GitHub work…' : 'Refresh GitHub work'}
                           </TooltipContent>
                         </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              onClick={syncTasksToBoard}
-                              disabled={syncingToBoard}
-                              aria-busy={syncingToBoard}
-                              aria-label="Send GitHub issues to the Board"
-                              className="size-8 cursor-pointer border-border/50 bg-transparent hover:bg-muted/50 backdrop-blur-md disabled:pointer-events-auto disabled:cursor-wait supports-[backdrop-filter]:bg-transparent"
-                            >
-                              {syncingToBoard ? (
-                                <LoaderCircle className="size-4 animate-spin" />
-                              ) : (
-                                <FolderKanban className="size-4" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom" sideOffset={6}>
-                            Send these issues to the Board
-                          </TooltipContent>
-                        </Tooltip>
                       </div>
                     </div>
 
@@ -3686,7 +3696,7 @@ export default function TaskPage({
                         role="group"
                         aria-label="Linear task mode"
                       >
-                        {LINEAR_MODE_OPTIONS.map((mode) => {
+                        {visibleLinearModeOptions.map((mode) => {
                           const active = linearMode === mode.id
                           return (
                             <button
@@ -3771,30 +3781,6 @@ export default function TaskPage({
                             Refresh Linear
                           </TooltipContent>
                         </Tooltip>
-                        {linearMode === 'issues' ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                onClick={syncTasksToBoard}
-                                disabled={syncingToBoard}
-                                aria-busy={syncingToBoard}
-                                aria-label="Send Linear issues to the Board"
-                                className="size-8 border-border/50 bg-transparent hover:bg-muted/50 backdrop-blur-md supports-[backdrop-filter]:bg-transparent"
-                              >
-                                {syncingToBoard ? (
-                                  <LoaderCircle className="size-4 animate-spin" />
-                                ) : (
-                                  <FolderKanban className="size-4" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom" sideOffset={6}>
-                              Send these issues to the Board
-                            </TooltipContent>
-                          </Tooltip>
-                        ) : null}
                       </div>
                     </div>
 
@@ -4086,7 +4072,7 @@ export default function TaskPage({
             )
           ) : taskSource === 'github' && githubMode === 'project' ? (
             <div className="mt-3 flex min-h-0 min-w-0 max-h-full flex-col overflow-hidden rounded-md border border-border/50 bg-muted/50 shadow-sm">
-              <ProjectViewWrapper />
+              <ProjectViewWrapper repoId={embeddedRepoId} />
             </div>
           ) : taskSource === 'github' &&
             taskViewMode === 'kanban' &&
@@ -4272,8 +4258,8 @@ export default function TaskPage({
                   {!showGitHubTaskSkeletons &&
                     filteredWorkItems.map((item) => {
                       const itemRepo = repoMap.get(item.repoId) ?? null
-                      const attachedWorkspace = findGithubWorkItemWorkspaceAttachment(
-                        allWorktrees,
+                      const attachedWorkspace = lookupGithubWorkItemWorkspaceAttachment(
+                        workspaceAttachmentIndex,
                         item.repoId,
                         item.type,
                         item.number
@@ -5212,12 +5198,20 @@ export default function TaskPage({
                 ) : null}
 
                 {linearViewMode === 'board' ? (
-                  <div className="grid min-w-0 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div
+                    ref={linearBoardRef}
+                    onPointerDownCapture={onLinearBoardPointerDownCapture}
+                    className="grid min-w-0 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3"
+                  >
                     {linearBoardSections.map((section) => (
                       <section
                         key={section.key}
-                        onDragOver={(event) => handleLinearBoardDragOver(section, event)}
-                        onDrop={(event) => void handleLinearBoardDrop(section, event)}
+                        data-kanban-column-key={section.key}
+                        data-kanban-column-droppable={
+                          linearStatusBoardEnabled && getLinearStatusSectionState(section)
+                            ? undefined
+                            : 'false'
+                        }
                         className={cn(
                           'min-h-0 rounded-md border border-border/50 bg-muted/20 transition-[border-color,box-shadow]',
                           linearBoardDragOverKey === section.key &&
@@ -5247,17 +5241,12 @@ export default function TaskPage({
                                 key={issue.id}
                                 role="button"
                                 tabIndex={0}
-                                draggable={linearStatusBoardEnabled && !updating}
+                                data-kanban-card-id={
+                                  linearStatusBoardEnabled && !updating ? issue.id : undefined
+                                }
                                 aria-current={selected ? 'true' : undefined}
                                 data-current={selected ? 'true' : undefined}
                                 aria-disabled={updating ? 'true' : undefined}
-                                onDragStart={(event) =>
-                                  handleLinearBoardCardDragStart(issue, event)
-                                }
-                                onDragEnd={() => {
-                                  setLinearBoardDraggingIssueId(null)
-                                  setLinearBoardDragOverKey(null)
-                                }}
                                 onClick={() => openLinearDetailPage(issue)}
                                 onKeyDown={(e) => {
                                   if (e.target !== e.currentTarget) {
@@ -5287,7 +5276,12 @@ export default function TaskPage({
                                       {issue.title}
                                     </h3>
                                   </div>
-                                  <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                                  {/* Action buttons opt out of drag so a jittery
+                                      click never gets eaten. */}
+                                  <div
+                                    data-kanban-no-drag=""
+                                    className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100"
+                                  >
                                     <Button
                                       variant="ghost"
                                       size="icon-xs"

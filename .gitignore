@@ -22,8 +22,11 @@ crates/agentum-desktop/ui/dist
 .env.local
 *.log
 
-# Claude Code workspace metadata
-.claude/
+# Claude Code workspace metadata — ignore everything except the tracked,
+# team-wide settings file (permission allowlist). `.claude/` would exclude
+# the directory itself, making the negation unreachable, hence `/*`.
+.claude/*
+!.claude/settings.json
 .syncthing.*
 .playwright-mcp/
 

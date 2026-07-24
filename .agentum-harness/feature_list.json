@@ -1,0 +1,27 @@
+{
+  "features": [
+    {
+      "id": "F1",
+      "name": "First feature",
+      "description": "Describe one observable behavior; the engine drives it behind verify.sh.",
+      "state": "pending",
+      "attempts": 0,
+      "last_error": null,
+      "prompt": null,
+      "tracker_provider": null,
+      "tracker_url": null
+    }
+  ],
+  "max_retries": 3,
+  "agent_tool": "claude",
+  "agent_model": null,
+  "settle_grace_secs": 8,
+  "settle_timeout_secs": 1800,
+  "agent_yolo": true,
+  "hitl_at_qa": false,
+  "qa_mode": "auto",
+  "qa_agent_tool": null,
+  "spec_id": null,
+  "roles": false,
+  "hitl_on_block": false
+}

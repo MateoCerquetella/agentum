@@ -8,7 +8,7 @@ import type {
   Worktree,
   WorktreeCardProperty
 } from '../../../../shared/types'
-import { createUISlice } from './ui'
+import { createUISlice, normalizePersistedGroupBy } from './ui'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createSettingsSearchState } from './settings-search-state'
 import type { AppState } from '../types'
@@ -69,6 +69,9 @@ function createUIStore(): StoreApi<AppState> {
   return createStore<any>()((...args: any[]) => ({
     repos: [],
     worktreesByRepo: {},
+    activeRepoId: null,
+    projectBindingByRepo: {},
+    setActiveRepo: (repoId: string | null) => args[0]({ activeRepoId: repoId }),
     rightSidebarOpen: false,
     rightSidebarWidth: 280,
     ...createSettingsSearchState(args[0]),
@@ -458,6 +461,24 @@ describe('createUISlice agent send target mode', () => {
 })
 
 describe('createUISlice hydratePersistedUI', () => {
+  it('defaults fresh and absent grouping to operational without overwriting explicit choices', () => {
+    expect(getDefaultUIState().groupBy).toBe('operational')
+    expect(createUIStore().getState().groupBy).toBe('operational')
+    expect(normalizePersistedGroupBy(undefined)).toBe('operational')
+    expect(normalizePersistedGroupBy('corrupt')).toBe('operational')
+    expect(normalizePersistedGroupBy('parent')).toBe('host')
+    for (const explicit of [
+      'operational',
+      'host',
+      'repo',
+      'workspace-status',
+      'pr-status',
+      'none'
+    ] as const) {
+      expect(normalizePersistedGroupBy(explicit)).toBe(explicit)
+    }
+  })
+
   it('defaults persisted right sidebar visibility to open', () => {
     expect(getDefaultUIState().rightSidebarOpen).toBe(true)
   })
@@ -1072,6 +1093,65 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(setUI).toHaveBeenCalledWith({ taskResumeState: expected })
   })
 
+  it('persists and clears Linear contexts under only the active repo', () => {
+    const setUI = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('window', { api: { ui: { set: setUI } } })
+    const store = createUIStore()
+    const contextX = { kind: 'project' as const, id: 'project-x', workspaceId: 'workspace-1' }
+    const contextY = { kind: 'view' as const, id: 'view-y', workspaceId: 'workspace-1' }
+
+    store.setState({ activeRepoId: 'repo-x' })
+    store.getState().setTaskResumeState({ linearContext: contextX })
+    store.setState({ activeRepoId: 'repo-y' })
+    store.getState().setTaskResumeState({ linearContext: contextY })
+    store.setState({ activeRepoId: 'repo-x' })
+    store.getState().setTaskResumeState({ linearContext: undefined })
+
+    expect(store.getState().taskResumeState).toMatchObject({
+      linearContextByRepo: { 'repo-y': contextY }
+    })
+    expect(store.getState().taskResumeState?.linearContextByRepo?.['repo-x']).toBeUndefined()
+    expect(store.getState().taskResumeState?.linearContext).toBeUndefined()
+  })
+
+  it('hydrates legacy Linear context safely without treating it as repo-scoped', () => {
+    const store = createUIStore()
+    store.setState({ repos: [{ id: 'repo-x' }] as AppState['repos'] })
+
+    expect(() =>
+      store.getState().hydratePersistedUI(
+        makePersistedUI({
+          taskResumeState: {
+            linearContext: { kind: 'project', id: 'legacy', workspaceId: 'workspace-1' }
+          }
+        })
+      )
+    ).not.toThrow()
+    expect(store.getState().taskResumeState?.linearContext?.id).toBe('legacy')
+    expect(store.getState().taskResumeState?.linearContextByRepo).toBeUndefined()
+  })
+
+  it('sanitizes scoped Linear contexts and prunes deleted repos on hydrate', () => {
+    const store = createUIStore()
+    store.setState({ repos: [{ id: 'repo-x' }] as AppState['repos'] })
+    store.getState().hydratePersistedUI(
+      makePersistedUI({
+        taskResumeState: {
+          linearContextByRepo: {
+            'repo-x': { kind: 'project', id: 'project-x', workspaceId: 'workspace-1' },
+            'repo-deleted': { kind: 'project', id: 'stale', workspaceId: 'workspace-1' },
+            global: { kind: 'view', id: 'global-view', workspaceId: 'workspace-1', model: 'issue' }
+          }
+        }
+      })
+    )
+
+    expect(store.getState().taskResumeState?.linearContextByRepo).toEqual({
+      'repo-x': { kind: 'project', id: 'project-x', workspaceId: 'workspace-1' },
+      global: { kind: 'view', id: 'global-view', workspaceId: 'workspace-1', model: 'issue' }
+    })
+  })
+
   it('keeps fixed card properties when toggling Agent activity', () => {
     const setUI = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('window', { api: { ui: { set: setUI } } })
@@ -1254,6 +1334,46 @@ describe('createUISlice new workspace draft', () => {
       number: 42,
       title: 'Legacy issue',
       url: 'https://github.com/acme/repo/issues/42'
+    })
+  })
+})
+
+describe('createUISlice project hub scoping', () => {
+  it('atomically invalidates only the target repo binding when switching projects', () => {
+    const store = createUIStore()
+    const agentumBinding = {
+      status: 'loaded' as const,
+      binding: {
+        projectOwner: 'MateoCerquetella',
+        projectOwnerType: 'user',
+        projectNumber: 2
+      }
+    }
+
+    // Model the dangerous runtime state directly: Freebee has a stale cached
+    // Agentum binding before the sidebar switch begins.
+    store.setState({
+      activeRepoId: 'agentum',
+      activeView: 'project',
+      projectHubTab: 'tasks',
+      taskPageData: { preselectedRepoId: 'agentum' },
+      projectBindingByRepo: {
+        agentum: agentumBinding,
+        freebee: agentumBinding
+      }
+    })
+
+    store.getState().openProjectHub('freebee', 'tasks')
+
+    expect(store.getState()).toMatchObject({
+      activeRepoId: 'freebee',
+      activeView: 'project',
+      projectHubTab: 'tasks',
+      taskPageData: { preselectedRepoId: 'freebee' },
+      projectBindingByRepo: {
+        agentum: agentumBinding,
+        freebee: { status: 'loading' }
+      }
     })
   })
 })

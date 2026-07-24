@@ -1059,6 +1059,64 @@ describe('createWorktree base status merge', () => {
     resetRemoteRuntimeMocks()
   })
 
+  it('persists exact selected tracker coordinates and omits them for an unlinked create', async () => {
+    const store = createTestStore()
+    mockApi.worktrees.create
+      .mockResolvedValueOnce({
+        worktree: makeWorktree({
+          id: 'repo1::/path/linked',
+          repoId: 'repo1',
+          path: '/path/linked'
+        })
+      })
+      .mockResolvedValueOnce({
+        worktree: makeWorktree({
+          id: 'repo1::/path/unlinked',
+          repoId: 'repo1',
+          path: '/path/unlinked'
+        })
+      })
+
+    const selectedUrl = 'https://github.com/acme/widgets/issues/42'
+    await store
+      .getState()
+      .createWorktree(
+        'repo1',
+        'linked',
+        'origin/main',
+        'inherit',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'github',
+        selectedUrl
+      )
+    await store.getState().createWorktree('repo1', 'unlinked', 'origin/main')
+
+    expect(mockApi.worktrees.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        repoId: 'repo1',
+        name: 'linked',
+        trackerProvider: 'github',
+        trackerUrl: selectedUrl
+      })
+    )
+    const unlinkedPayload = mockApi.worktrees.create.mock.calls[1]?.[0]
+    expect(unlinkedPayload).not.toHaveProperty('trackerProvider')
+    expect(unlinkedPayload).not.toHaveProperty('trackerUrl')
+  })
+
   it('passes linked work item and creation agent metadata through the create IPC payload', async () => {
     const store = createTestStore()
     const wt = makeWorktree({

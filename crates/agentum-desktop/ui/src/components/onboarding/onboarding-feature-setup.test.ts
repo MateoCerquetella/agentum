@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { CliInstallStatus } from '../../../../shared/cli-install-types'
 import type {
   ComputerUsePermissionSetupResult,
   ComputerUsePermissionStatusResult
@@ -19,21 +18,6 @@ import {
   type OnboardingFeatureSetupDeps,
   type OnboardingFeatureSetupSelection
 } from './onboarding-feature-setup'
-
-const INSTALLED_CLI_STATUS: CliInstallStatus = {
-  platform: 'darwin',
-  commandName: 'agentum',
-  commandPath: '/usr/local/bin/agentum',
-  pathDirectory: '/usr/local/bin',
-  pathConfigured: true,
-  launcherPath: '/Applications/Agentum.app/Contents/MacOS/Agentum',
-  installMethod: 'symlink',
-  supported: true,
-  state: 'installed',
-  currentTarget: '/Applications/Agentum.app/Contents/MacOS/Agentum',
-  unsupportedReason: null,
-  detail: null
-}
 
 const GRANTED_COMPUTER_USE_STATUS: ComputerUsePermissionStatusResult = {
   platform: 'darwin',
@@ -66,9 +50,6 @@ function createDeps(
     storage,
     clipboardWrites,
     serverOrchestrationWrites,
-    getCliStatus: vi.fn(async () => INSTALLED_CLI_STATUS),
-    showCliRegistrationPrompt: vi.fn(async () => undefined),
-    installCli: vi.fn(async () => INSTALLED_CLI_STATUS),
     writeClipboardText: vi.fn(async (text: string) => {
       clipboardWrites.push(text)
     }),
@@ -181,10 +162,7 @@ describe('onboarding feature setup runner', () => {
       computerUsePermissionsOpened: true,
       warnings: []
     })
-    // No skill to install → no CLI registration and no clipboard write.
-    expect(deps.getCliStatus).not.toHaveBeenCalled()
-    expect(deps.showCliRegistrationPrompt).not.toHaveBeenCalled()
-    expect(deps.installCli).not.toHaveBeenCalled()
+    // No skill to install → no clipboard write.
     expect(deps.clipboardWrites).toEqual([])
     // Computer Use still needs the macOS privacy grants.
     expect(deps.getComputerUsePermissionStatus).toHaveBeenCalledTimes(1)
@@ -211,9 +189,6 @@ describe('onboarding feature setup runner', () => {
     expect(result.skillCommandsCopied).toBe(false)
     expect(result.skillInstallCommand).toBeNull()
     expect(result.computerUsePermissionsOpened).toBe(false)
-    expect(deps.getCliStatus).not.toHaveBeenCalled()
-    expect(deps.showCliRegistrationPrompt).not.toHaveBeenCalled()
-    expect(deps.installCli).not.toHaveBeenCalled()
     expect(deps.getComputerUsePermissionStatus).not.toHaveBeenCalled()
     expect(deps.openComputerUsePermissionSetup).not.toHaveBeenCalled()
     expect(deps.storage.get(BROWSER_USE_ENABLED_STORAGE_KEY)).toBe('0')

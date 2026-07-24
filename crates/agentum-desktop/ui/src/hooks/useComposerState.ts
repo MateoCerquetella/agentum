@@ -14,6 +14,7 @@ import {
   normalizeGitHubLinkQuery
 } from '@/lib/github-links'
 import { openCreatedWorkspace } from '@/lib/open-created-workspace'
+import { gatedRunResultOwnsWorktree } from '@/lib/gated-run-ownership'
 import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../shared/tui-agent-selection'
 import { isGitRepoKind } from '../../../shared/repo-kind'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
@@ -25,6 +26,7 @@ import type {
   GitLabWorkItem,
   LinearIssue,
   AgentumHooks,
+  CreateWorktreeResult,
   SetupDecision,
   SetupRunPolicy,
   SparsePreset,
@@ -57,13 +59,16 @@ import {
   createGithubIssue,
   draftGithubIssueBody,
   fetchGithubRepoLabels,
-  scaffoldSpecFromIssue
+  scaffoldSpecFromIssue,
+  type DraftIssueStyle,
+  type DraftLlmChoice
 } from '@/runtime/github-issue-client'
 import {
   deriveIssueSideEffectGate,
   describeIssueSideEffectSkip
 } from '@/lib/issue-side-effect-gate'
 import { firstStartGatedRunBlocker } from '@/lib/start-gated-run-precondition'
+import { linkedWorkItemAfterRepoChange } from '@/components/new-workspace/create-workspace-wizard-model'
 import {
   getHarnessSettings,
   startGatedWork,
@@ -87,9 +92,18 @@ import {
 } from '@/lib/new-workspace-ssh-gate'
 import { getSuggestedCreatureName } from '@/components/sidebar/worktree-name-suggestions'
 import type { SmartWorkspaceNameSelection } from '@/components/new-workspace/SmartWorkspaceNameField'
+import { deriveTrackerBindCoords } from '@/components/new-workspace/work-item-picker-model'
 import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { normalizeSparseDirectoryLines, sparseDirectoriesMatch } from '@/lib/sparse-paths'
 import { joinPath } from '@/lib/path'
+import type {
+  ExecutionMode,
+  NewWorkCheckpoint,
+  NewWorkStage,
+  NewWorkStageStatus
+} from '@/components/new-workspace/new-work-launch-model'
+import { isLiveProjectTaskScopeAuthority } from '@/lib/project-task-scope-authority'
+import { projectTaskScopeGuardMatchesTracker } from '@/lib/project-task-scope-guard'
 import { importExternalPathsToRuntime } from '@/runtime/runtime-file-client'
 import {
   checkRuntimeHooks,
@@ -150,6 +164,7 @@ export type UseComposerStateOptions = {
    *  full composer needs for linked-item prompt previews. */
   enableIssueAutomation?: boolean
   createGateMode?: 'full' | 'quick'
+  requiredProjectTaskScope?: Readonly<{ scopeKey: string; generation: number; repoId: string }>
 }
 
 type ComposerCardProps = {
@@ -194,8 +209,16 @@ type ComposerCardProps = {
   onRemoveAttachment: (pathValue: string) => void
   linkedWorkItem: LinkedWorkItemSummary | null
   onRemoveLinkedWorkItem: () => void
+  /** Bind an existing work item (spec 012 New Workspace issue picker). The one
+   *  attach seam — setting the composer's `linkedWorkItem` so the create path
+   *  persists the tracker bind (see `deriveTrackerBindCoords`). */
+  applyLinkedWorkItem: (
+    item: GitHubWorkItem,
+    options?: { preserveBranchNameOverride?: boolean }
+  ) => void
   /** True when the composer should offer "Create GitHub issue": nothing is
-   *  linked yet and the selected repo is a local git repo (spec 004 F3). */
+   *  linked yet and the selected repo is a git repo. SSH repos resolve their
+   *  slug through `repoId`; filing still uses the authenticated local `gh`. */
   canCreateGithubIssue: boolean
   createIssueOpen: boolean
   onCreateIssueOpenChange: (open: boolean) => void
@@ -203,13 +226,14 @@ type ComposerCardProps = {
   onCreateIssueTitleChange: (value: string) => void
   createIssueBody: string
   onCreateIssueBodyChange: (value: string) => void
+  onApplyCreateIssueDraft: (draft: { title: string; body: string }) => void
   createIssueSubmitting: boolean
   createIssueError: string | null
-  onCreateIssueSubmit: () => void
+  onCreateIssueSubmit: () => Promise<LinkedWorkItemSummary | null>
   /** Spec 007: "Generate description" — drafts an SDD-shaped body from the
    *  typed title + repo context into the textarea (review before filing). */
   createIssueGenerating: boolean
-  onGenerateIssueBody: () => void
+  onGenerateIssueBody: (choice?: DraftLlmChoice, style?: DraftIssueStyle) => void
   /** Spec 006 F1: label picker selection for the create-issue form. */
   createIssueLabels: string[]
   /** Pickable label names — `null` while the fetch is in flight; the static
@@ -240,6 +264,8 @@ type ComposerCardProps = {
   onLinkQueryChange: (value: string) => void
   filteredLinkItems: GitHubWorkItem[]
   linkItemsLoading: boolean
+  linkItemsError: string | null
+  onRetryLinkItems: () => void
   linkDirectLoading: boolean
   normalizedLinkQuery: { query: string }
   onSelectLinkedItem: (item: GitHubWorkItem) => void
@@ -307,9 +333,18 @@ export type UseComposerStateResult = {
   promptTextareaRef: React.RefObject<HTMLTextAreaElement | null>
   nameInputRef: React.RefObject<HTMLInputElement | null>
   submit: () => Promise<void>
-  submitQuick: (agent: TuiAgent | null) => Promise<void>
+  submitQuick: (agent: TuiAgent | null, options?: QuickSubmitOptions) => Promise<void>
   /** Invoked by the Enter handler to re-check whether submission should fire. */
   createDisabled: boolean
+}
+
+export type QuickSubmitOptions = {
+  /** `null` explicitly suppresses an item already held by the composer. */
+  linkedWorkItem?: LinkedWorkItemSummary | null
+  executionMode?: ExecutionMode
+  checkpoint?: NewWorkCheckpoint
+  onCheckpoint?: (next: NewWorkCheckpoint) => void
+  onProgress?: (stage: NewWorkStage, status: NewWorkStageStatus) => void
 }
 
 // Why: both the full-page TaskPage composer and the Cmd+J modal can be
@@ -337,7 +372,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onRepoIdOverrideChange,
     telemetrySource,
     enableIssueAutomation = true,
-    createGateMode = 'full'
+    createGateMode = 'full',
+    requiredProjectTaskScope
   } = options
 
   // Why: each `useAppStore(s => s.someAction)` registers its own equality
@@ -356,7 +392,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       openSettingsTarget: s.openSettingsTarget,
       prefetchWorkItems: s.prefetchWorkItems,
       fetchSparsePresets: s.fetchSparsePresets,
-      fetchDetectedWorktrees: s.fetchDetectedWorktrees
+      fetchDetectedWorktrees: s.fetchDetectedWorktrees,
+      loadProjectTrackerConfig: s.loadProjectTrackerConfig
     }))
   )
   const {
@@ -370,7 +407,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     openSettingsTarget,
     prefetchWorkItems,
     fetchSparsePresets,
-    fetchDetectedWorktrees
+    fetchDetectedWorktrees,
+    loadProjectTrackerConfig
   } = actions
 
   const repos = useAppStore((s) => s.repos)
@@ -405,6 +443,36 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [internalRepoId, setInternalRepoId] = useState<string>(resolvedInitialRepoId)
   const repoId = repoIdOverride ?? internalRepoId
   const selectedRepo = eligibleRepos.find((repo) => repo.id === repoId)
+  const selectedProjectTrackerConfig = useAppStore(
+    (state) => state.projectTrackerConfigByRepo[repoId]
+  )
+  const selectedProjectTrackerLoadStatus = useAppStore(
+    (state) => state.projectTrackerLoadStatusByRepo[repoId] ?? 'idle'
+  )
+  useEffect(() => {
+    if (!repoId) return
+    void loadProjectTrackerConfig(repoId).catch(() => {
+      // Project tracker surfaces render the actionable load error. Composer
+      // launch behavior simply remains fail-closed until a config is loaded.
+    })
+  }, [loadProjectTrackerConfig, repoId])
+  const selectedTrackerProvider =
+    selectedProjectTrackerLoadStatus === 'loaded'
+      ? (selectedProjectTrackerConfig?.provider ?? null)
+      : null
+  const requiredScopeIsCurrent = useCallback((): boolean => {
+    if (!requiredProjectTaskScope) return true
+    if (!isLiveProjectTaskScopeAuthority(requiredProjectTaskScope)) return false
+    const state = useAppStore.getState()
+    const current = state.repos.find((repo) => repo.id === requiredProjectTaskScope.repoId)
+    const tracker = state.projectTrackerConfigByRepo[requiredProjectTaskScope.repoId]
+    return Boolean(
+      current &&
+      repoId === requiredProjectTaskScope.repoId &&
+      state.projectTrackerLoadStatusByRepo[requiredProjectTaskScope.repoId] === 'loaded' &&
+      projectTaskScopeGuardMatchesTracker(requiredProjectTaskScope, tracker)
+    )
+  }, [repoId, requiredProjectTaskScope])
   const selectedRepoIsGit = selectedRepo ? isGitRepoKind(selectedRepo) : false
   const selectedRepoConnectionId = selectedRepo?.connectionId ?? null
   const selectedRepoSshState = selectedRepoConnectionId
@@ -678,6 +746,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [linkDebouncedQuery, setLinkDebouncedQuery] = useState('')
   const [linkItems, setLinkItems] = useState<GitHubWorkItem[]>([])
   const [linkItemsLoading, setLinkItemsLoading] = useState(false)
+  const [linkItemsError, setLinkItemsError] = useState<string | null>(null)
+  const [linkItemsRefresh, setLinkItemsRefresh] = useState(0)
   const [linkDirectItem, setLinkDirectItem] = useState<GitHubWorkItem | null>(null)
   const [linkDirectLoading, setLinkDirectLoading] = useState(false)
 
@@ -906,9 +976,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         prompt: agentPrompt,
         linkedIssueNumber: parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: linkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       }),
-    [agentPrompt, fallbackCreatureName, linkedPR, name, parsedLinkedIssueNumber]
+    [agentPrompt, fallbackCreatureName, linkedPR, linkedWorkItem, name, parsedLinkedIssueNumber]
   )
   // Why: when the user links an issue/PR but has not typed any prompt text
   // (attachments don't count), swap the generic "Linked work items:" context
@@ -991,6 +1062,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     note,
     name,
     repoId,
+    requiredScopeIsCurrent,
     setNewWorkspaceDraft,
     tuiAgent
   ])
@@ -1127,6 +1199,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   const onConnectSelectedRepo = useCallback(async (): Promise<void> => {
+    if (!requiredScopeIsCurrent()) {
+      toast.error('This project task scope changed. Reopen the workspace action from the current board.')
+      return
+    }
     const targetId = selectedRepoConnectionIdRef.current
     if (!targetId) {
       return
@@ -1148,13 +1224,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // step): it registers the SSH target as a server host, probes it over SSH,
       // and updates sshConnectionStates — which flips this card to "connected".
       const result = await connectSshTargetViaServer(targetId)
+      if (!requiredScopeIsCurrent()) {
+        toast.error('This project task scope changed while connecting.')
+        return
+      }
       if (!result.ok) {
         toast.error(result.message || 'Failed to connect to project.')
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to connect to project.')
     }
-  }, [])
+  }, [requiredScopeIsCurrent])
 
   // Why: warm the Start-from picker's PR cache on composer mount and whenever
   // the selected repo changes so opening the picker paints instantly from
@@ -1209,6 +1289,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
     let cancelled = false
     setLinkItemsLoading(true)
+    setLinkItemsError(null)
 
     const lookupRepoId = selectedRepo.id
     void api.gh
@@ -1236,6 +1317,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
               '[composer/link] issues-side partial failure in @-mention popover:',
               envelope.errors.issues
             )
+            setLinkItemsError(envelope.errors.issues)
           }
           setLinkItems(
             envelope.items.map((it) => ({
@@ -1245,9 +1327,12 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           )
         }
       })
-      .catch(() => {
+      .catch((cause: unknown) => {
         if (!cancelled) {
           setLinkItems([])
+          setLinkItemsError(
+            cause instanceof Error ? cause.message : 'Could not load repository issues.'
+          )
         }
       })
       .finally(() => {
@@ -1259,7 +1344,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     return () => {
       cancelled = true
     }
-  }, [linkPopoverOpen, selectedRepo, selectedRepoIsGit])
+  }, [linkItemsRefresh, linkPopoverOpen, selectedRepo, selectedRepoIsGit])
 
   useEffect(() => {
     if (
@@ -1451,11 +1536,11 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
   }, [name])
 
-  // Spec 004 F3: the affordance only renders when nothing is linked yet and
-  // the selected repo is a *local git* repo — issue creation resolves the slug
-  // from the local origin and runs the local `gh`.
+  // Issue filing always uses the authenticated local `gh`; `repoId` lets the
+  // server resolve an SSH repo's origin on its own host. A remote path is not
+  // a reason to disable the affordance.
   const canCreateGithubIssue = Boolean(
-    !linkedWorkItem && selectedRepo && selectedRepoIsGit && !selectedRepo.connectionId
+    !linkedWorkItem && selectedRepo && selectedRepoIsGit
   )
 
   const handleCreateIssueOpenChange = useCallback(
@@ -1489,7 +1574,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
     let cancelled = false
     setCreateIssueLabelOptions(null)
-    fetchGithubRepoLabels({ workdir: selectedRepoPath })
+    fetchGithubRepoLabels({ workdir: selectedRepoPath, repoId })
       .catch(() => [...STATIC_FALLBACK_LABELS])
       .then((labels) => {
         if (!cancelled) {
@@ -1499,7 +1584,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     return () => {
       cancelled = true
     }
-  }, [createIssueOpen, selectedRepoPath])
+  }, [createIssueOpen, repoId, selectedRepoPath])
 
   const handleToggleCreateIssueLabel = useCallback((label: string): void => {
     setCreateIssueLabels((current) =>
@@ -1507,19 +1592,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     )
   }, [])
 
-  const handleCreateIssueSubmit = useCallback(async (): Promise<void> => {
+  const handleCreateIssueSubmit = useCallback(async (): Promise<LinkedWorkItemSummary | null> => {
     const title = createIssueTitle.trim()
     const repoPath = selectedRepo?.path
     if (createIssueSubmitting) {
-      return
+      return null
     }
     if (!title) {
       setCreateIssueError('Give the issue a title.')
-      return
+      return null
     }
     if (!repoPath) {
       setCreateIssueError('Pick a project first.')
-      return
+      return null
     }
     setCreateIssueSubmitting(true)
     setCreateIssueError(null)
@@ -1536,6 +1621,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         title,
         ...(body ? { body } : {}),
         workdir: repoPath,
+        repoId: selectedRepo.id,
         ...(labels.length ? { labels } : {})
       })
       // Reuse the standard linked-item application (linkedIssue slot, suggested
@@ -1558,9 +1644,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         labels,
         author: created.author ?? null
       }
-      setLinkedWorkItem(
-        body
-          ? {
+      const confirmedSummary: LinkedWorkItemSummary = body
+        ? {
               ...summary,
               linkedContext: {
                 provider: 'github',
@@ -1573,17 +1658,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
                 })
               }
             }
-          : summary
-      )
+        : summary
+      setLinkedWorkItem(confirmedSummary)
       setCreateIssueOpen(false)
       setCreateIssueTitle('')
       setCreateIssueBody('')
       setCreateIssueLabels([])
+      return confirmedSummary
     } catch (error) {
       // Zero state change on failure — the form stays filled for a retry.
       setCreateIssueError(
         error instanceof Error ? error.message : 'Could not create the GitHub issue.'
       )
+      return null
     } finally {
       setCreateIssueSubmitting(false)
     }
@@ -1601,7 +1688,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // posted from here. Failures render inline (`createIssueError`) and leave
   // the form usable; a missing chat credential surfaces the server's
   // "set ANTHROPIC_API_KEY / sign in to Claude" message verbatim.
-  const handleGenerateIssueBody = useCallback(async (): Promise<void> => {
+  const handleGenerateIssueBody = useCallback(async (
+    choice?: DraftLlmChoice,
+    style: DraftIssueStyle = 'sdd'
+  ): Promise<void> => {
     const title = createIssueTitle.trim()
     const repoPath = selectedRepo?.path
     if (createIssueGenerating || createIssueSubmitting) {
@@ -1623,7 +1713,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         title,
         slug: selectedRepoSlug
           ? `${selectedRepoSlug.owner}/${selectedRepoSlug.repo}`
-          : undefined
+          : undefined,
+        agent: choice?.agent,
+        model: choice?.model,
+        style
       })
       setCreateIssueBody(body)
     } catch (error) {
@@ -1642,14 +1735,14 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   // Spec 004 F4 (D5): the toggle only applies to a linked *github.com issue*
-  // targeting a local git repo — the scaffold endpoint writes into the new
-  // worktree's local path.
+  // targeting a git repo. The server resolves the local or SSH workspace from
+  // the submitted worktree identity before it writes the generated spec.
   const linkedGithubIssueLink = useMemo(
     () => (linkedWorkItem?.type === 'issue' ? parseGitHubIssueOrPRLink(linkedWorkItem.url) : null),
     [linkedWorkItem]
   )
   const canScaffoldSpec = Boolean(
-    linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit && !selectedRepo?.connectionId
+    linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit
   )
 
   // Spec 006 F3 (AC 8): fetch whether gated runs use the SDD role loop when
@@ -1939,7 +2032,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setLinkedPR(null)
       setLinkedGitLabIssue(null)
       setLinkedGitLabMR(null)
-      setLinkedWorkItem(null)
+      setLinkedWorkItem(
+        linkedWorkItemAfterRepoChange({
+          currentRepoId: repoId,
+          nextRepoId: value,
+          linkedWorkItem
+        })
+      )
       // Spec 007 (bug 2): the repo switch just wiped the linked issue, so the
       // issue side-effect toggles lose their subject — disarm them instead of
       // leaving armed state behind a hidden checkbox (silent no-op at submit).
@@ -2247,14 +2346,14 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // the freshly created workspace.
   const maybeScaffoldSpecFromIssue = useCallback(
     async (
-      worktree: { path: string },
+      worktree: { id: string; path: string },
       item: LinkedWorkItemSummary | null | undefined
     ): Promise<void> => {
       if (!scaffoldSpec) {
         return
       }
-      // Re-derive the gate from the submitted item: github.com issues only,
-      // local targets only (the endpoint writes to a local path). Spec 007:
+      // Re-derive the gate from the submitted item: github.com issues only.
+      // The endpoint resolves local/SSH execution from worktreeId. Spec 007:
       // an ARMED toggle that skips must say so — the silent return was bug 2.
       const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
       if (gate.eligible === false) {
@@ -2264,15 +2363,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       try {
         await scaffoldSpecFromIssue({
           workdir: worktree.path,
+          worktreeId: worktree.id,
           number: gate.number,
-          slug: `${gate.slug.owner}/${gate.slug.repo}`
+          slug: `${gate.slug.owner}/${gate.slug.repo}`,
+          // Spec 021 (#379): thread the repo's tracker pin so the planned
+          // backlog stamps the right provider ('auto'/absent = GitHub).
+          ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
         })
       } catch (error) {
         console.error('Failed to scaffold a spec from the linked issue', error)
         toast.error('Workspace created, but the spec scaffold failed.')
       }
     },
-    [scaffoldSpec, selectedRepo]
+    [scaffoldSpec, selectedRepo, selectedTrackerProvider]
   )
 
   // Spec 005 F1: with "Start gated run" armed, after createWorktree succeeds
@@ -2283,33 +2386,53 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // selection, written into the run's agent_tool knob post-plan (D2).
   const maybeStartGatedRun = useCallback(
     async (
-      worktree: { path: string },
+      worktree: { id: string; path: string },
       item: LinkedWorkItemSummary | null | undefined,
       agent: TuiAgent | null
-    ): Promise<void> => {
+    ): Promise<boolean> => {
+      // Returns whether the engine actually took ownership of the worktree. The
+      // caller uses this to decide whether to suppress the plain agent delivery:
+      // a run that never started must NOT suppress it, or the worktree strands
+      // on the empty "Start a session" picker with nothing driving it.
       if (!startGatedRun) {
-        return
+        return false
       }
-      // Re-derive the gate from the submitted item: github.com issues only,
-      // local targets only (the start-work route writes to a local path).
+      // Re-derive the gate from the submitted item: github.com issues only;
+      // start-work resolves the authoritative target from worktreeId.
       // Spec 007: an ARMED toggle that skips must say so (bug 2).
       const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
       if (gate.eligible === false) {
         toast.warning(describeIssueSideEffectSkip('start-gated-run', gate.reason))
-        return
+        return false
       }
       try {
         const result = await startGatedWork({
           workdir: worktree.path,
+          worktreeId: worktree.id,
           number: gate.number,
           slug: `${gate.slug.owner}/${gate.slug.repo}`,
-          ...(agent ? { agentTool: agent } : {})
+          ...(agent ? { agentTool: agent } : {}),
+          // Spec 021 (#379): thread the repo's tracker pin so the run's
+          // features + transitions aim at the right provider.
+          ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
         })
+        // Only suppress the plain session when the engine actually took
+        // ownership (a live run, or a fresh one with ≥1 planned feature). A
+        // zero-feature plan has nothing to drive and would strand the worktree.
+        const owns = gatedRunResultOwnsWorktree(result)
         if (result.alreadyRunning) {
           // The friendly state (C5), not an error: a live run already owns
           // this worktree and was left untouched.
           toast.info('A gated run is already driving this workspace.')
-        } else if (result.harnessId) {
+        } else if (!owns) {
+          // The plan produced no features, so the engine has nothing to spawn
+          // and would leave the worktree stranded on the empty "Start a
+          // session" picker with no error. Fall back to a normal agent instead
+          // of a silent empty worktree.
+          toast.warning(
+            'The gated run planned no work from this issue — opening a normal session instead.'
+          )
+        } else {
           // Spec 008 F1 §B.5: the composer navigates to the session view after
           // a successful start, so a drive-phase failure on the harness event
           // bus (init.sh, spawn, the readiness/settle timeouts) would otherwise
@@ -2320,6 +2443,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
             toast.error(`Gated run failed: ${message}`)
           })
         }
+        return owns
       } catch (error) {
         console.error('Failed to start the gated run', error)
         // Spec 008 F1 #5: surface the server's ApiError detail — request()
@@ -2329,15 +2453,19 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         const detail = error instanceof Error ? error.message.trim() : ''
         toast.error(
           detail
-            ? `Workspace created, but the gated run could not start: ${detail}`
-            : 'Workspace created, but the gated run could not start.'
+            ? `Workspace created, but the gated run could not start — opening a normal session instead: ${detail}`
+            : 'Workspace created, but the gated run could not start — opening a normal session instead.'
         )
+        // The engine did NOT take ownership: fall back to a plain agent so the
+        // worktree isn't stranded empty (the "stuck on Start a session" bug).
+        return false
       }
     },
-    [startGatedRun, selectedRepo]
+    [startGatedRun, selectedRepo, selectedTrackerProvider]
   )
 
   const submit = useCallback(async (): Promise<void> => {
+    if (!requiredScopeIsCurrent()) { toast.error('This project task scope changed. Reopen the workspace action from the current board.'); return }
     if (
       !repoId ||
       !workspaceSeedName ||
@@ -2435,6 +2563,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       const setupTrustDecision = selectedRepoIsGit
         ? await ensureHooksConfirmed(useAppStore.getState(), repoId, 'setup')
         : 'skip'
+      if (!requiredScopeIsCurrent()) { toast.error('This project task scope changed while the workspace gate was open.'); return }
       const effectiveSetupDecision: SetupDecision =
         setupTrustDecision === 'skip'
           ? 'skip'
@@ -2455,6 +2584,14 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         workspaceName,
         preserveWorkspaceNameEdits: branchNameOverridePreservesNameEdits
       })
+      // Spec 012: persist the tracker bind so the session-start reactor + PR
+      // poller can drive the linked item's status. GitHub issue → URL; Linear →
+      // identifier; PR/MR-linked or unlinked create binds nothing.
+      const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
+      if (!requiredScopeIsCurrent()) {
+        toast.error('This project task scope changed before the workspace could be created.')
+        return
+      }
       const result = await createWorktree(
         repoId,
         workspaceName,
@@ -2476,7 +2613,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         effectiveBranchNameOverride,
         resolvedInitialWorkspaceStatus,
         linkedGitLabMR ?? undefined,
-        linkedGitLabIssue ?? undefined
+        linkedGitLabIssue ?? undefined,
+        undefined,
+        trackerBind?.trackerProvider,
+        trackerBind?.trackerUrl
       )
       const worktree = result.worktree
 
@@ -2484,13 +2624,17 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // Why: linked source metadata is already included in createWorktree.
       // Re-saving it here can trigger slow post-create PR push-target lookups.
       await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
+      // Track whether the engine actually took ownership. Only a real start
+      // suppresses the plain delivery below — a failed start-work falls back to
+      // a normal session so the worktree isn't stranded on "Start a session".
+      let gatedRunStarted = false
       if (startGatedRun) {
         // Spec 005 F1 (AC 1): the server converge-scaffolds + plans + runs the
         // engine — the D5 scaffold call is skipped when the toggle is armed.
         // Spec 007: routed on the ARMED state (not eligibility) so an
         // ineligible-but-armed run surfaces its skip reason instead of
         // falling into the scaffold branch as a silent no-op (bug 2).
-        await maybeStartGatedRun(worktree, submitLinkedWorkItem, tuiAgent)
+        gatedRunStarted = await maybeStartGatedRun(worktree, submitLinkedWorkItem, tuiAgent)
       } else {
         // Spec 004 F4 (opt-in): write the linked issue's spec into the new
         // worktree before the agent opens, so it can start from the spec.
@@ -2521,7 +2665,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         setup: result.setup,
         defaultTabs: result.defaultTabs,
         issueCommand: submitGatedRun ? undefined : issueCommand,
-        gatedRun: submitGatedRun
+        gatedRun: gatedRunStarted
       })
       setSidebarOpen(true)
       if (persistDraft) {
@@ -2561,6 +2705,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     persistDraft,
     pushTarget,
     repoId,
+    requiredScopeIsCurrent,
     requiresExplicitSetupChoice,
     resolvePendingSmartGitHubSubmit,
     resolvedSetupDecision,
@@ -2584,16 +2729,29 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   ])
 
   const submitQuick = useCallback(
-    async (requestedAgent: TuiAgent | null): Promise<void> => {
+    async (requestedAgent: TuiAgent | null, options?: QuickSubmitOptions): Promise<void> => {
+      if (!requiredScopeIsCurrent()) {
+        toast.error('This project task scope changed. Reopen the workspace action from the current board.')
+        return
+      }
       const agent =
         requestedAgent && isTuiAgentEnabled(requestedAgent, disabledTuiAgents)
           ? requestedAgent
           : null
+      const hasLinkedWorkItemOverride = Boolean(
+        options && Object.prototype.hasOwnProperty.call(options, 'linkedWorkItem')
+      )
+      const requestedLinkedWorkItem = hasLinkedWorkItemOverride
+        ? (options?.linkedWorkItem ?? null)
+        : linkedWorkItem
       const workspaceNameSeed = getWorkspaceSeedName({
         explicitName: name,
         prompt: '',
-        linkedIssueNumber: parsedLinkedIssueNumber,
+        linkedIssueNumber: hasLinkedWorkItemOverride
+          ? (requestedLinkedWorkItem?.number ?? null)
+          : parsedLinkedIssueNumber,
         linkedPR,
+        linkedTitle: requestedLinkedWorkItem?.title ?? null,
         fallbackName: fallbackCreatureName
       })
       if (
@@ -2609,11 +2767,20 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
       setCreateError(null)
       setCreating(true)
+      let activeStage: NewWorkStage = 'worktree'
       try {
-        const smartGitHubResolution = await resolvePendingSmartGitHubSubmit()
-        const submitLinkedWorkItem = smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem
-        const submitLinkedIssueNumber =
-          smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber
+        // An explicit override (including `null` for the wizard's "No issue"
+        // source) owns the decision. Do not let a URL-like workspace name
+        // silently re-link an item behind that choice.
+        const smartGitHubResolution = hasLinkedWorkItemOverride
+          ? null
+          : await resolvePendingSmartGitHubSubmit()
+        const submitLinkedWorkItem = hasLinkedWorkItemOverride
+          ? requestedLinkedWorkItem
+          : (smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem)
+        const submitLinkedIssueNumber = hasLinkedWorkItemOverride
+          ? (requestedLinkedWorkItem?.number ?? null)
+          : (smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber)
         const submitLinkedPR = smartGitHubResolution?.linkedPR ?? effectiveLinkedPR
         const workspaceName = smartGitHubResolution?.workspaceName ?? workspaceNameSeed
         if (!workspaceName) {
@@ -2649,6 +2816,10 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
         const trustDecision = selectedRepoIsGit
           ? await ensureHooksConfirmed(useAppStore.getState(), repoId, 'setup')
           : 'skip'
+        if (!requiredScopeIsCurrent()) {
+          toast.error('This project task scope changed while the workspace gate was open.')
+          return
+        }
         const effectiveSetupDecision: SetupDecision =
           trustDecision === 'skip'
             ? 'skip'
@@ -2661,7 +2832,16 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           workspaceName,
           preserveWorkspaceNameEdits: branchNameOverridePreservesNameEdits
         })
-        const result = await createWorktree(
+        // Spec 021: the wizard's quick create must persist the tracker bind just
+        // like the full submit path — otherwise a wizard-created issue's worktree
+        // shows no status chip in the sidebar (bind dropped on create).
+        const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
+        if (!requiredScopeIsCurrent()) {
+          toast.error('This project task scope changed before the workspace could be created.')
+          return
+        }
+        options?.onProgress?.('worktree', 'active')
+        const result: CreateWorktreeResult = options?.checkpoint?.worktreeResult ?? (await createWorktree(
           repoId,
           workspaceName,
           selectedRepoIsGit ? baseBranch : undefined,
@@ -2682,26 +2862,72 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           effectiveBranchNameOverride,
           resolvedInitialWorkspaceStatus,
           linkedGitLabMR ?? undefined,
-          linkedGitLabIssue ?? undefined
-        )
+          linkedGitLabIssue ?? undefined,
+          undefined,
+          trackerBind?.trackerProvider,
+          trackerBind?.trackerUrl
+        ))
+        if (!options?.checkpoint?.worktreeResult) {
+          options?.onCheckpoint?.({
+            ...options?.checkpoint,
+            ...(submitLinkedWorkItem ? { linkedWorkItem: submitLinkedWorkItem } : {}),
+            worktreeResult: result
+          })
+        }
+        options?.onProgress?.('worktree', 'done')
         const worktree = result.worktree
 
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
-        // Spec 005 F1: armed AND eligible for the submitted item (github.com
-        // issue, local repo) — mirrors the full submit path's derivation
-        // (spec 007: shared pure gate).
-        const submitGatedRun =
-          startGatedRun &&
-          deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo?.connectionId)
-            .eligible
-        if (startGatedRun) {
+        // Spec 005 F1: only a gated run that ACTUALLY started suppresses the
+        // plain session — a failed/ineligible start falls back to a normal
+        // agent so the worktree isn't stranded on "Start a session" with
+        // nothing driving it (spec 007: the pure gate is re-derived inside
+        // maybeStartGatedRun, which returns whether the engine took ownership).
+        let gatedRunStarted = false
+        if (options?.executionMode === 'autopilot') {
+          activeStage = 'spec'
+          options.onProgress?.('spec', 'active')
+          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
+          if (!gate.eligible) throw new Error(describeIssueSideEffectSkip('start-gated-run', gate.reason))
+          activeStage = 'run'
+          const started = await startGatedWork({
+            workdir: worktree.path,
+            worktreeId: worktree.id,
+            number: gate.number,
+            slug: `${gate.slug.owner}/${gate.slug.repo}`,
+            ...(agent ? { agentTool: agent } : {}),
+            ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
+          })
+          gatedRunStarted = gatedRunResultOwnsWorktree(started)
+          if (!gatedRunStarted) {
+            throw new Error('SDD Autopilot planned no work and did not take ownership of this workspace.')
+          }
+          options.onProgress?.('spec', 'done')
+          options.onProgress?.('run', 'done')
+        } else if (options?.executionMode === 'manual') {
+          activeStage = 'spec'
+          options.onProgress?.('spec', 'active')
+          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
+          if (gate.eligible) {
+            await scaffoldSpecFromIssue({
+              workdir: worktree.path,
+              worktreeId: worktree.id,
+              number: gate.number,
+              slug: `${gate.slug.owner}/${gate.slug.repo}`,
+              plan: false,
+              converge: true,
+              ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
+            })
+          }
+          options.onProgress?.('spec', 'done')
+        } else if (startGatedRun) {
           // The server converge-scaffolds + plans + runs the engine; the D5
           // scaffold call is skipped when the toggle is armed (AC 1). Runs
           // before the skip-session branch so the gated run starts either way.
           // Spec 007: routed on the ARMED state so an ineligible-but-armed
           // run warns instead of silently no-oping (bug 2).
-          await maybeStartGatedRun(worktree, submitLinkedWorkItem, agent)
+          gatedRunStarted = await maybeStartGatedRun(worktree, submitLinkedWorkItem, agent)
         } else {
           // Spec 004 F4 (opt-in): shared with the full submit path — runs before
           // the skip-session branch so the spec lands either way.
@@ -2736,16 +2962,22 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           prompt: quickDraftPrompt || quickPrompt,
           setup: result.setup,
           defaultTabs: result.defaultTabs,
-          // Spec 005 D2: a gated run suppresses the plain deliveries — the
-          // engine's sessions are the only agents in the worktree.
-          gatedRun: submitGatedRun
+          // Spec 005 D2: a gated run that took ownership suppresses the plain
+          // deliveries — the engine's sessions are the only agents in the
+          // worktree. A failed start falls through to a normal session.
+          gatedRun: gatedRunStarted
         })
+        if (options?.executionMode === 'manual') options.onProgress?.('run', 'done')
         setSidebarOpen(true)
         if (persistDraft) {
           clearNewWorkspaceDraft()
         }
         onCreated?.()
       } catch (error) {
+        if (options?.executionMode === 'autopilot' && activeStage === 'run') {
+          options.onProgress?.('spec', 'error')
+        }
+        options?.onProgress?.(activeStage, 'error')
         const formattedError = formatWorkspaceCreateError(error)
         setCreateError(formattedError)
         toast.error(getWorkspaceCreateErrorToastMessage(formattedError))
@@ -2777,6 +3009,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       persistDraft,
       pushTarget,
       repoId,
+      requiredScopeIsCurrent,
       requiresExplicitSetupChoice,
       resolvePendingSmartGitHubSubmit,
       resolvedSetupDecision,
@@ -2784,6 +3017,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       selectedRepo,
       selectedRepoIsGit,
       selectedRepoRequiresConnection,
+      selectedTrackerProvider,
       settings?.agentCmdOverrides,
       disabledTuiAgents,
       setSidebarOpen,
@@ -2869,6 +3103,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       setAttachmentPaths((current) => current.filter((currentPath) => currentPath !== pathValue)),
     linkedWorkItem,
     onRemoveLinkedWorkItem: handleRemoveLinkedWorkItem,
+    applyLinkedWorkItem,
     canCreateGithubIssue,
     createIssueOpen,
     onCreateIssueOpenChange: handleCreateIssueOpenChange,
@@ -2876,11 +3111,16 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onCreateIssueTitleChange: setCreateIssueTitle,
     createIssueBody,
     onCreateIssueBodyChange: setCreateIssueBody,
+    onApplyCreateIssueDraft: (draft) => {
+      setCreateIssueTitle(draft.title)
+      setCreateIssueBody(draft.body)
+      setCreateIssueError(null)
+    },
     createIssueSubmitting,
     createIssueError,
-    onCreateIssueSubmit: () => void handleCreateIssueSubmit(),
+    onCreateIssueSubmit: handleCreateIssueSubmit,
     createIssueGenerating,
-    onGenerateIssueBody: () => void handleGenerateIssueBody(),
+    onGenerateIssueBody: (choice, style) => void handleGenerateIssueBody(choice, style),
     createIssueLabels,
     createIssueLabelOptions,
     onToggleCreateIssueLabel: handleToggleCreateIssueLabel,
@@ -2898,6 +3138,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onLinkQueryChange: setLinkQuery,
     filteredLinkItems,
     linkItemsLoading,
+    linkItemsError,
+    onRetryLinkItems: () => setLinkItemsRefresh((value) => value + 1),
     linkDirectLoading,
     normalizedLinkQuery,
     onSelectLinkedItem: handleSelectLinkedItem,

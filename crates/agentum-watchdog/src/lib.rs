@@ -14,7 +14,7 @@
 //! tool can declare its own (Claude has `redacted_thinking`, etc.).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use agentum_core::{Event, LOCAL_HOST_ID, Session, Status};
@@ -25,14 +25,13 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 use uuid::Uuid;
 
-// Two independent background workers built on the same event bus, split into
-// their own modules; each reaches back for the crate's shared `Store`/`Event`/
-// `emit`/error types via `use super::*`. Their `run_*` entry points are the
-// crate's public API (the server's `spawn_background_workers` spawns them).
-mod comment_bridge;
-mod reconciler;
-pub use comment_bridge::run_session_comment_bridge;
-pub use reconciler::run_goal_reconciler;
+/// The "context low" compact trigger, compiled once for the whole process.
+/// Every session-watch task consulted this pattern; compiling it per spawn
+/// (once per running session, re-paid on each reconcile that re-spawns a
+/// watch task) was needless — the pattern is a fixed valid literal. Mirrors
+/// the `LazyLock<Regex>` caches in `agentum-server`'s `usage.rs`.
+static CONTEXT_LOW_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"Context low.*<\s*50%").expect("context-low regex is valid"));
 
 /// How often each session's pane is sampled for activity / crash
 /// signatures. Was 5 s; halved to 1 s so the sidebar dot follows the
@@ -110,12 +109,15 @@ pub enum WatchdogError {
     Tmux(#[from] agentum_tmux::TmuxError),
 }
 
+type RunningSessionsHook = Arc<dyn Fn(&[Session]) + Send + Sync>;
+
 /// Orchestrator. Holds the broadcast bus + a map of in-flight per-session
 /// task handles.
 pub struct Watchdog {
     bus: broadcast::Sender<Event>,
     store: Arc<Store>,
     tasks: Arc<RwLock<HashMap<Uuid, JoinHandle<()>>>>,
+    running_sessions_hook: Option<RunningSessionsHook>,
 }
 
 impl Watchdog {
@@ -124,7 +126,18 @@ impl Watchdog {
             bus,
             store,
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            running_sessions_hook: None,
         }
+    }
+
+    /// Supply server-owned retirement policy without introducing a dependency
+    /// from this lower-level crate back to the server.
+    pub fn with_running_sessions_hook<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&[Session]) + Send + Sync + 'static,
+    {
+        self.running_sessions_hook = Some(Arc::new(hook));
+        self
     }
 
     /// Run forever. Spawn this with `tokio::spawn`.
@@ -133,14 +146,20 @@ impl Watchdog {
         // First tick fires immediately; subsequent fire on cadence.
         loop {
             tick.tick().await;
-            if let Err(e) = self.reconcile().await {
+            if let Err(e) = self.reconcile_once().await {
                 tracing::warn!(error = ?e, "watchdog reconcile failed");
             }
         }
     }
 
-    async fn reconcile(&self) -> Result<(), WatchdogError> {
+    /// Run one authoritative reconciliation pass. The long-running server uses
+    /// [`Self::run`]; this seam keeps callback wiring executable in deterministic
+    /// integration tests without waiting for the five-second interval.
+    pub async fn reconcile_once(&self) -> Result<(), WatchdogError> {
         let running = self.store.list_sessions(Some(Status::Running)).await?;
+        if let Some(hook) = &self.running_sessions_hook {
+            hook(&running);
+        }
         let running_ids: std::collections::HashSet<Uuid> = running.iter().map(|s| s.id).collect();
 
         let mut tasks = self.tasks.write().await;
@@ -245,13 +264,8 @@ async fn watch_session(
     let awaiting_sigs = adapter.awaiting_input_signatures();
     let is_agent = adapter.is_agent();
 
-    let context_low = match Regex::new(r"Context low.*<\s*50%") {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "context-low regex compile failed");
-            return;
-        }
-    };
+    // Compiled once process-wide (see CONTEXT_LOW_RE), not per session spawn.
+    let context_low = &*CONTEXT_LOW_RE;
 
     let _ = emit(
         &bus,
@@ -368,7 +382,9 @@ async fn watch_session(
             return;
         }
 
-        // Context-low → /compact (cooldown 5 min)
+        // Context-low normally compacts. Harness-managed coordinator/worker/
+        // reviewer sessions are checkpoint-and-replace instead: compaction
+        // would erase their bounded role state and violate transcript isolation.
         if let Some(cmd) = compact_cmd {
             if context_low.is_match(&pane) {
                 let now = Instant::now();
@@ -377,15 +393,34 @@ async fn watch_session(
                     .unwrap_or(true);
                 if due {
                     last_compact = Some(now);
-                    if let Err(e) = agentum_tmux::ssh::send_keys(&host, &target, cmd, true).await {
-                        tracing::warn!(error = ?e, "watchdog: send_keys /compact failed");
-                    }
-                    let ev = Event::new("watchdog.compact")
-                        .with_session(sess.id, &sess.name)
-                        .with_payload(serde_json::json!({
-                            "trigger": "context_low",
-                            "command": cmd,
-                        }));
+                    let managed = store
+                        .harness_managed_session(&sess.id.to_string())
+                        .await
+                        .ok()
+                        .flatten()
+                        .filter(|m| m.active == 1);
+                    let ev = if let Some(managed) = managed {
+                        Event::new("harness.context_rotation_requested")
+                            .with_session(sess.id, &sess.name)
+                            .with_payload(serde_json::json!({
+                                "trigger": "context_low",
+                                "run_id": managed.run_id,
+                                "task_id": managed.task_id,
+                                "role": managed.role,
+                            }))
+                    } else {
+                        if let Err(e) =
+                            agentum_tmux::ssh::send_keys(&host, &target, cmd, true).await
+                        {
+                            tracing::warn!(error = ?e, "watchdog: send_keys /compact failed");
+                        }
+                        Event::new("watchdog.compact")
+                            .with_session(sess.id, &sess.name)
+                            .with_payload(serde_json::json!({
+                                "trigger": "context_low",
+                                "command": cmd,
+                            }))
+                    };
                     let _ = emit(&bus, &store, ev).await;
                 }
             }
@@ -692,10 +727,67 @@ async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    // The status-rank helpers moved to `reconciler` with their concern; the
-    // reconciler/bridge tests below drive the public `run_*` workers (re-exported
-    // above) but two tests exercise these pure helpers directly.
-    use super::reconciler::{rank_to_status, status_rank};
+
+    #[tokio::test]
+    async fn reconcile_passes_authoritative_running_slice_to_optional_hook_once() {
+        use agentum_core::NewSession;
+
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            Store::open(&root.path().join("watchdog.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let running = store
+            .create_session(NewSession {
+                name: "hook-running".into(),
+                workdir: root.path().to_string_lossy().into_owned(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_status_and_target(running.id, Status::Running, Some("missing-test-pane"))
+            .await
+            .unwrap();
+        store
+            .create_session(NewSession {
+                name: "hook-idle".into(),
+                workdir: root.path().to_string_lossy().into_owned(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+
+        let observed = Arc::new(std::sync::Mutex::new(Vec::<Vec<Uuid>>::new()));
+        let observed_hook = observed.clone();
+        let (bus, _) = broadcast::channel(16);
+        let watchdog = Watchdog::new(bus, store).with_running_sessions_hook(move |sessions| {
+            observed_hook
+                .lock()
+                .unwrap()
+                .push(sessions.iter().map(|session| session.id).collect());
+        });
+        watchdog.reconcile_once().await.unwrap();
+
+        assert_eq!(*observed.lock().unwrap(), vec![vec![running.id]]);
+        let mut tasks = watchdog.tasks.write().await;
+        for (_, task) in tasks.drain() {
+            task.abort();
+        }
+    }
 
     #[test]
     fn remote_sessions_sample_slower_than_local() {
@@ -743,28 +835,6 @@ mod tests {
             next_sample_delay(&HostKind::Local, ActivityState::Unknown, long_quiet),
             TICK * 2
         );
-    }
-
-    #[test]
-    fn status_rank_orders_todo_doing_done() {
-        assert_eq!(status_rank("todo"), 0);
-        assert_eq!(status_rank("doing"), 1);
-        // `review` ranks with `doing` so a goal stays in-progress (not done)
-        // while a child awaits verification.
-        assert_eq!(status_rank("review"), 1);
-        assert_eq!(status_rank("done"), 2);
-        assert_eq!(status_rank("unknown_future_status"), -1);
-        assert_eq!(status_rank(""), -1);
-    }
-
-    #[test]
-    fn rank_to_status_round_trip() {
-        assert_eq!(rank_to_status(0), Some("todo"));
-        assert_eq!(rank_to_status(1), Some("doing"));
-        assert_eq!(rank_to_status(2), Some("done"));
-        assert_eq!(rank_to_status(-1), None);
-        assert_eq!(rank_to_status(3), None);
-        assert_eq!(rank_to_status(99), None);
     }
 
     #[test]
@@ -1025,854 +1095,5 @@ mod tests {
             classify_activity(bottom, busy, &awaiting, true, Duration::ZERO),
             ActivityState::Working,
         );
-    }
-
-    // ---- goal-status reconciler tests (plan 01-04, Task 2) ----
-
-    async fn tmp_store_for_reconciler() -> Arc<agentum_store::Store> {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("test.sqlite");
-        std::mem::forget(dir);
-        Arc::new(agentum_store::Store::open(&p).await.unwrap())
-    }
-
-    async fn make_goal_item(store: &agentum_store::Store) -> agentum_core::BoardItem {
-        store
-            .create_board_item(agentum_core::NewBoardItem {
-                title: "test goal".into(),
-                body: None,
-                status: None,
-                lbl: Some("goal".into()),
-                tool: None,
-                workdir: None,
-                model: None,
-                session_id: None,
-                priority: None,
-                parent_goal_id: None,
-            })
-            .await
-            .unwrap()
-    }
-
-    fn make_child_item<'a>(
-        store: &'a agentum_store::Store,
-        goal_id: i64,
-        status: Option<&'a str>,
-    ) -> impl std::future::Future<Output = agentum_core::BoardItem> + 'a {
-        let status = status.map(|s| s.to_string());
-        async move {
-            store
-                .create_board_item(agentum_core::NewBoardItem {
-                    title: "child card".into(),
-                    body: None,
-                    status,
-                    lbl: None,
-                    tool: Some("claude".into()),
-                    workdir: Some("/tmp".into()),
-                    model: None,
-                    session_id: None,
-                    priority: None,
-                    parent_goal_id: Some(goal_id),
-                })
-                .await
-                .unwrap()
-        }
-    }
-
-    /// Helper: wait up to `timeout_ms` for an event with the given `kind` on `rx`.
-    /// Returns `Ok(event)` on success, `Err(())` on timeout.
-    async fn try_wait_for_event(
-        mut rx: tokio::sync::broadcast::Receiver<agentum_core::Event>,
-        kind: &'static str,
-        timeout_ms: u64,
-    ) -> Result<agentum_core::Event, ()> {
-        let deadline = std::time::Duration::from_millis(timeout_ms);
-        tokio::time::timeout(deadline, async move {
-            loop {
-                match rx.recv().await {
-                    Ok(ev) if ev.kind == kind => return ev,
-                    Ok(_) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        // Channel closed; will never receive the event.
-                        // Spin forever so the outer timeout fires cleanly.
-                        std::future::pending::<()>().await;
-                        unreachable!()
-                    }
-                }
-            }
-        })
-        .await
-        .map_err(|_| ())
-    }
-
-    /// Like [`try_wait_for_event`] but panics on timeout.
-    async fn wait_for_event(
-        rx: tokio::sync::broadcast::Receiver<agentum_core::Event>,
-        kind: &'static str,
-        timeout_ms: u64,
-    ) -> agentum_core::Event {
-        try_wait_for_event(rx, kind, timeout_ms)
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for event '{kind}'"))
-    }
-
-    #[tokio::test]
-    async fn reconciler_promotes_goal_when_first_child_moves_to_doing() {
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let goal = make_goal_item(&store).await;
-        let child = make_child_item(&store, goal.id, None).await;
-        let observer = bus.subscribe();
-
-        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
-
-        // Simulate child moving to doing via a PATCH + board.updated event.
-        store
-            .patch_board_item(
-                child.id,
-                agentum_core::BoardPatch {
-                    status: Some("doing".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
-            serde_json::json!({
-                "id": child.id,
-                "key": child.key,
-                "status": "doing",
-                "parent_goal_id": goal.id,
-            }),
-        ));
-
-        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
-        assert_eq!(ev.payload["from"], "todo");
-        assert_eq!(ev.payload["to"], "doing");
-        assert_eq!(ev.payload["goal_id"], goal.id);
-
-        // DB must reflect the new status.
-        let updated_goal = store.get_board_item(goal.id).await.unwrap().unwrap();
-        assert_eq!(updated_goal.status, "doing");
-    }
-
-    #[tokio::test]
-    async fn reconciler_demotes_goal_when_last_doing_child_returns_to_todo() {
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let goal = make_goal_item(&store).await;
-        // Child starts at doing; goal set to doing to reflect it.
-        let child = make_child_item(&store, goal.id, Some("doing")).await;
-        store
-            .patch_board_item(
-                goal.id,
-                agentum_core::BoardPatch {
-                    status: Some("doing".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-
-        let observer = bus.subscribe();
-        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
-
-        // Child moves back to todo.
-        store
-            .patch_board_item(
-                child.id,
-                agentum_core::BoardPatch {
-                    status: Some("todo".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
-            serde_json::json!({
-                "id": child.id,
-                "key": child.key,
-                "status": "todo",
-                "parent_goal_id": goal.id,
-            }),
-        ));
-
-        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
-        assert_eq!(ev.payload["from"], "doing");
-        assert_eq!(ev.payload["to"], "todo");
-
-        let updated = store.get_board_item(goal.id).await.unwrap().unwrap();
-        assert_eq!(updated.status, "todo");
-    }
-
-    #[tokio::test]
-    async fn reconciler_promotes_goal_to_done_when_all_children_done() {
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let goal = make_goal_item(&store).await;
-        let child1 = make_child_item(&store, goal.id, Some("done")).await;
-        let child2 = make_child_item(&store, goal.id, Some("done")).await;
-        // Goal currently at todo; both children already done.
-
-        let observer = bus.subscribe();
-        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
-        // Yield so the reconciler task starts and calls bus.subscribe() before
-        // we send the trigger event. Without this yield, the spawn is only
-        // scheduled — the reconciler hasn't entered its receive loop yet and
-        // the broadcast event would be delivered to zero reconciler receivers.
-        tokio::task::yield_now().await;
-
-        // Trigger via board.updated on child2 (both already done).
-        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
-            serde_json::json!({
-                "id": child2.id,
-                "key": child2.key,
-                "status": "done",
-                "parent_goal_id": goal.id,
-            }),
-        ));
-        // Also ensure child1 doesn't change observable.
-        let _ = child1.id; // suppress unused warning
-
-        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
-        assert_eq!(ev.payload["to"], "done");
-
-        let updated = store.get_board_item(goal.id).await.unwrap().unwrap();
-        assert_eq!(updated.status, "done");
-    }
-
-    #[tokio::test]
-    async fn reconciler_ignores_events_without_parent_goal_id() {
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let observer = bus.subscribe();
-        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
-
-        // board.updated with parent_goal_id=null — must be ignored.
-        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
-            serde_json::json!({
-                "id": 99,
-                "key": "AG-99",
-                "status": "doing",
-                "parent_goal_id": null,
-            }),
-        ));
-
-        // Wait 200 ms; no goal.status.changed event should arrive.
-        let result = try_wait_for_event(observer, "goal.status.changed", 200).await;
-        assert!(
-            result.is_err(),
-            "should not emit goal.status.changed for orphan-less card"
-        );
-    }
-
-    #[tokio::test]
-    async fn reconciler_emits_planner_first_child_and_idempotent_for_repeat_creates() {
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let goal = make_goal_item(&store).await;
-
-        // Create a planner session bound to the goal.
-        let planner_sess = store
-            .create_session(agentum_core::NewSession {
-                name: "planner-test".into(),
-                workdir: "/tmp".into(),
-                tool: "claude".into(),
-                model: None,
-                flags: vec![],
-                card_id: Some(goal.id),
-                worktree_path: None,
-                worktree_branch: None,
-                worktree_base_ref: None,
-            })
-            .await
-            .unwrap();
-        // Set its status to Running so the reconciler recognises it.
-        store
-            .update_status_and_target(planner_sess.id, agentum_core::Status::Running, None)
-            .await
-            .unwrap();
-
-        let observer = bus.subscribe();
-        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
-
-        // First child arrives.
-        let child1 = make_child_item(&store, goal.id, None).await;
-        let _ = bus.send(agentum_core::Event::new("board.created").with_payload(
-            serde_json::json!({
-                "id": child1.id,
-                "key": child1.key,
-                "title": "child 1",
-                "parent_goal_id": goal.id,
-            }),
-        ));
-
-        // Must emit goal.planner.first_child before or alongside goal.status.changed.
-        let first_child_ev = wait_for_event(observer, "goal.planner.first_child", 500).await;
-        assert_eq!(first_child_ev.payload["goal_id"], goal.id);
-
-        // Second child arrives — must NOT trigger another goal.planner.first_child.
-        let observer2 = bus.subscribe();
-        let child2 = make_child_item(&store, goal.id, None).await;
-        let _ = bus.send(agentum_core::Event::new("board.created").with_payload(
-            serde_json::json!({
-                "id": child2.id,
-                "key": child2.key,
-                "title": "child 2",
-                "parent_goal_id": goal.id,
-            }),
-        ));
-
-        // Drain observer2 for 200 ms; confirm no second goal.planner.first_child.
-        let second_fire = try_wait_for_event(observer2, "goal.planner.first_child", 200).await;
-        assert!(
-            second_fire.is_err(),
-            "goal.planner.first_child must not fire twice for the same goal"
-        );
-    }
-
-    #[tokio::test]
-    async fn reconciler_skips_recompute_for_goal_with_parent() {
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        // Create a "grandparent" goal (v1 invariant: goals don't have parents,
-        // but if one exists the reconciler must skip it).
-        let grandparent = make_goal_item(&store).await;
-        // Create a "goal" that itself has a parent — this violates v1 depth=1.
-        let invalid_goal = store
-            .create_board_item(agentum_core::NewBoardItem {
-                title: "nested goal (invalid v1)".into(),
-                body: None,
-                status: None,
-                lbl: Some("goal".into()),
-                tool: None,
-                workdir: None,
-                model: None,
-                session_id: None,
-                priority: None,
-                parent_goal_id: Some(grandparent.id),
-            })
-            .await
-            .unwrap();
-        // Create a child under the invalid goal.
-        let child = make_child_item(&store, invalid_goal.id, Some("doing")).await;
-
-        let observer = bus.subscribe();
-        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
-
-        let _ = bus.send(agentum_core::Event::new("board.updated").with_payload(
-            serde_json::json!({
-                "id": child.id,
-                "key": child.key,
-                "status": "doing",
-                "parent_goal_id": invalid_goal.id,
-            }),
-        ));
-
-        // The reconciler warns + skips; no goal.status.changed should fire.
-        let result = try_wait_for_event(observer, "goal.status.changed", 200).await;
-        assert!(
-            result.is_err(),
-            "reconciler must not patch a goal that itself has a parent"
-        );
-        // DB: invalid_goal must still be at todo (no PATCH fired).
-        let still_todo = store
-            .get_board_item(invalid_goal.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(still_todo.status, "todo");
-    }
-
-    // ---- session-comment bridge tests (plan 02-04, Task 1) ----
-
-    async fn make_non_goal_card(store: &agentum_store::Store) -> agentum_core::BoardItem {
-        store
-            .create_board_item(agentum_core::NewBoardItem {
-                title: "task card".into(),
-                body: None,
-                status: None,
-                lbl: None, // not a goal
-                tool: Some("claude".into()),
-                workdir: Some("/tmp".into()),
-                model: None,
-                session_id: None,
-                priority: None,
-                parent_goal_id: None,
-            })
-            .await
-            .unwrap()
-    }
-
-    async fn make_bound_session(
-        store: &agentum_store::Store,
-        card_id: i64,
-    ) -> agentum_core::Session {
-        store
-            .create_session(agentum_core::NewSession {
-                name: format!("sess-{card_id}"),
-                workdir: "/tmp".into(),
-                tool: "claude".into(),
-                model: None,
-                flags: vec![],
-                card_id: Some(card_id),
-                worktree_path: None,
-                worktree_branch: None,
-                worktree_base_ref: None,
-            })
-            .await
-            .unwrap()
-    }
-
-    async fn wait_for_comment(
-        store: &agentum_store::Store,
-        card_id: i64,
-        timeout_ms: u64,
-    ) -> Vec<agentum_core::BoardComment> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-        loop {
-            let comments = store.list_board_comments(card_id).await.unwrap();
-            if !comments.is_empty() {
-                return comments;
-            }
-            if std::time::Instant::now() >= deadline {
-                return comments;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    }
-
-    #[tokio::test]
-    async fn bridge_inserts_awaiting_input_comment_on_bound_non_goal_card() {
-        // Test 1: agent.awaiting_input on a bound non-goal card inserts
-        // author="system", body="[system] agent awaiting input".
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("agent.awaiting_input")
-                .with_session(sess.id, sess.name.clone()),
-        );
-
-        let comments = wait_for_comment(&store, card.id, 500).await;
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].author, "system");
-        assert_eq!(comments[0].body, "[system] agent awaiting input");
-    }
-
-    #[tokio::test]
-    async fn bridge_inserts_finished_comment_on_bound_non_goal_card() {
-        // Test 2: agent.finished → "[system] agent finished"
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
-        );
-
-        let comments = wait_for_comment(&store, card.id, 500).await;
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].author, "system");
-        assert_eq!(comments[0].body, "[system] agent finished");
-    }
-
-    #[tokio::test]
-    async fn bridge_inserts_crashed_comment_with_signature() {
-        // Test 3: session.crashed with payload.signature → "[system] session crashed: SIGSEGV"
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("session.crashed")
-                .with_session(sess.id, sess.name.clone())
-                .with_payload(serde_json::json!({ "signature": "SIGSEGV" })),
-        );
-
-        let comments = wait_for_comment(&store, card.id, 500).await;
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].body, "[system] session crashed: SIGSEGV");
-    }
-
-    #[tokio::test]
-    async fn bridge_inserts_crashed_comment_without_signature_uses_unknown() {
-        // Test 4: session.crashed without signature → "[system] session crashed: unknown"
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("session.crashed")
-                .with_session(sess.id, sess.name.clone())
-                .with_payload(serde_json::json!({})),
-        );
-
-        let comments = wait_for_comment(&store, card.id, 500).await;
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].body, "[system] session crashed: unknown");
-    }
-
-    #[tokio::test]
-    async fn bridge_trims_signature_to_80_chars() {
-        // Test 5: 200-char signature trimmed to ≤80 chars
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let long_sig: String = "X".repeat(200);
-        let _ = bus.send(
-            agentum_core::Event::new("session.crashed")
-                .with_session(sess.id, sess.name.clone())
-                .with_payload(serde_json::json!({ "signature": long_sig })),
-        );
-
-        let comments = wait_for_comment(&store, card.id, 500).await;
-        assert_eq!(comments.len(), 1);
-        let prefix = "[system] session crashed: ";
-        assert!(comments[0].body.starts_with(prefix));
-        let sig_part = &comments[0].body[prefix.len()..];
-        assert_eq!(
-            sig_part.chars().count(),
-            80,
-            "signature must be trimmed to 80 chars"
-        );
-    }
-
-    #[tokio::test]
-    async fn bridge_skips_goal_card_events() {
-        // Test 6: events on sessions bound to goal cards are skipped
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let goal_card = make_goal_item(&store).await; // lbl="goal"
-        let sess = make_bound_session(&store, goal_card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let comments = store.list_board_comments(goal_card.id).await.unwrap();
-        assert!(
-            comments.is_empty(),
-            "goal-card events must not produce comments"
-        );
-    }
-
-    #[tokio::test]
-    async fn bridge_skips_unbound_sessions() {
-        // Test 7: session with no card_id → no comment
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let unbound_sess = store
-            .create_session(agentum_core::NewSession {
-                name: "unbound".into(),
-                workdir: "/tmp".into(),
-                tool: "claude".into(),
-                model: None,
-                flags: vec![],
-                card_id: None, // no binding
-                worktree_path: None,
-                worktree_branch: None,
-                worktree_base_ref: None,
-            })
-            .await
-            .unwrap();
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished")
-                .with_session(unbound_sess.id, unbound_sess.name.clone()),
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        // No card exists for this session, so no comments to check.
-        // Just verifying no panic occurred in the bridge task.
-    }
-
-    #[tokio::test]
-    async fn bridge_dedupes_identical_back_to_back_events() {
-        // Test 8: two back-to-back agent.finished → only ONE comment
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
-        );
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
-        );
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let comments = store.list_board_comments(card.id).await.unwrap();
-        assert_eq!(
-            comments.len(),
-            1,
-            "back-to-back identical events must produce only one comment"
-        );
-    }
-
-    #[tokio::test]
-    async fn bridge_advances_doing_card_to_review_on_finish() {
-        // The user-facing "update each task as it progresses" behaviour: a card
-        // an agent is actively building (`doing`) advances to `review` when the
-        // agent finishes its turn — but NOT on awaiting_input (still building),
-        // and only ever out of `doing`.
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        // A started card sits in `doing`, bound to its agent session.
-        let card = make_non_goal_card(&store).await;
-        store
-            .patch_board_item(
-                card.id,
-                agentum_core::BoardPatch {
-                    status: Some("doing".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        // awaiting_input is mid-task → the card must stay in `doing`.
-        let _ = bus.send(
-            agentum_core::Event::new("agent.awaiting_input")
-                .with_session(sess.id, sess.name.clone()),
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        assert_eq!(
-            store.get_board_item(card.id).await.unwrap().unwrap().status,
-            "doing",
-            "awaiting_input must not advance the card out of Building"
-        );
-
-        // finished → the card advances `doing` → `review`.
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
-        );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        loop {
-            let st = store.get_board_item(card.id).await.unwrap().unwrap().status;
-            if st == "review" || std::time::Instant::now() > deadline {
-                assert_eq!(st, "review", "agent.finished must advance doing → review");
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    }
-
-    #[tokio::test]
-    async fn bridge_dedupe_resets_on_different_kind() {
-        // Test 9: agent.finished then agent.awaiting_input → both comments inserted
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
-        );
-        // Wait for first comment before sending second event to avoid race.
-        let first = wait_for_comment(&store, card.id, 500).await;
-        assert_eq!(first.len(), 1);
-
-        let _ = bus.send(
-            agentum_core::Event::new("agent.awaiting_input")
-                .with_session(sess.id, sess.name.clone()),
-        );
-
-        // Wait for second comment.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        let comments = loop {
-            let c = store.list_board_comments(card.id).await.unwrap();
-            if c.len() >= 2 || std::time::Instant::now() >= deadline {
-                break c;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        };
-        assert_eq!(comments.len(), 2, "different kind must bypass dedupe");
-        assert!(comments.iter().any(|c| c.body == "[system] agent finished"));
-        assert!(
-            comments
-                .iter()
-                .any(|c| c.body == "[system] agent awaiting input")
-        );
-    }
-
-    #[tokio::test]
-    async fn bridge_recovers_from_bus_lag_and_continues() {
-        // Test 10: bus lag does not kill the bridge; a valid event after lag
-        // still inserts a comment.
-        //
-        // Design: use a small-capacity channel so flooding it triggers Lagged
-        // on the bridge's receiver. The bridge must log a warning and continue
-        // processing subsequent events rather than panicking or exiting.
-        let store = tmp_store_for_reconciler().await;
-        // Use channel capacity=4 so we can overflow it easily.
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(4);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        // Yield so the bridge task starts and calls bus.subscribe() before we
-        // send the flood — we need it subscribed before overflow.
-        tokio::task::yield_now().await;
-
-        // Flood the channel with irrelevant events beyond capacity to trigger
-        // Lagged on the bridge's receiver.
-        for _ in 0..20 {
-            let _ = bus.send(agentum_core::Event::new("host.metrics"));
-        }
-
-        // After the flood, send a real event. The bridge should log the lag
-        // warning from RecvError::Lagged then pick up this event.
-        let _ = bus.send(
-            agentum_core::Event::new("agent.finished").with_session(sess.id, sess.name.clone()),
-        );
-
-        let comments = wait_for_comment(&store, card.id, 1000).await;
-        assert_eq!(
-            comments.len(),
-            1,
-            "bridge must continue after bus lag and still handle the real event"
-        );
-    }
-
-    #[tokio::test]
-    async fn bridge_ignores_irrelevant_event_kinds() {
-        // Test 11: board.created and host.metrics are dropped silently
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _keep) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let card = make_non_goal_card(&store).await;
-        let sess = make_bound_session(&store, card.id).await;
-
-        tokio::spawn(run_session_comment_bridge(store.clone(), bus.clone()));
-        tokio::task::yield_now().await;
-
-        let _ = bus.send(
-            agentum_core::Event::new("board.created").with_session(sess.id, sess.name.clone()),
-        );
-        let _ = bus.send(agentum_core::Event::new("host.metrics"));
-
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        let comments = store.list_board_comments(card.id).await.unwrap();
-        assert!(
-            comments.is_empty(),
-            "irrelevant event kinds must not produce comments"
-        );
-    }
-
-    #[tokio::test]
-    async fn reconciler_recomputes_on_child_deletion() {
-        let store = tmp_store_for_reconciler().await;
-        let (bus, _rx_keep_alive) = tokio::sync::broadcast::channel::<agentum_core::Event>(64);
-
-        let goal = make_goal_item(&store).await;
-        let child1 = make_child_item(&store, goal.id, Some("done")).await;
-        let child2 = make_child_item(&store, goal.id, Some("done")).await;
-        // Pre-set goal to done.
-        store
-            .patch_board_item(
-                goal.id,
-                agentum_core::BoardPatch {
-                    status: Some("done".into()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-
-        let observer = bus.subscribe();
-        tokio::spawn(run_goal_reconciler(store.clone(), bus.clone()));
-
-        // Delete child1 from DB, emit board.deleted.
-        store.delete_board_item(child1.id).await.unwrap();
-        let _ = bus.send(agentum_core::Event::new("board.deleted").with_payload(
-            serde_json::json!({
-                "id": child1.id,
-                "parent_goal_id": goal.id,
-            }),
-        ));
-
-        // child2 still done → goal stays done; no goal.status.changed.
-        let no_change = try_wait_for_event(bus.subscribe(), "goal.status.changed", 200).await;
-        assert!(
-            no_change.is_err(),
-            "goal must stay done while at least one done child remains"
-        );
-        let still_done = store.get_board_item(goal.id).await.unwrap().unwrap();
-        assert_eq!(still_done.status, "done");
-
-        // Now delete child2; goal must drop to todo (max-of-empty → todo).
-        store.delete_board_item(child2.id).await.unwrap();
-        let _ = bus.send(agentum_core::Event::new("board.deleted").with_payload(
-            serde_json::json!({
-                "id": child2.id,
-                "parent_goal_id": goal.id,
-            }),
-        ));
-
-        let ev = wait_for_event(observer, "goal.status.changed", 500).await;
-        assert_eq!(ev.payload["from"], "done");
-        assert_eq!(ev.payload["to"], "todo");
-
-        let dropped = store.get_board_item(goal.id).await.unwrap().unwrap();
-        assert_eq!(dropped.status, "todo");
     }
 }

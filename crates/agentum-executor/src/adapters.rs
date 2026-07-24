@@ -170,7 +170,9 @@ impl ToolAdapter for CodexAdapter {
     // Codex has no `--mcp-config`; inject each server with `-c` TOML overrides at
     // launch. Values are quoted so the URL parses as a TOML string. One block per
     // server (agentum, playwright, …); a server with an `auth_token` also gets a
-    // `bearer_token` override so Codex authenticates to it.
+    // `bearer_token_env_var` entry (Codex no longer supports inline `bearer_token`
+    // for streamable HTTP — see openai/codex#5011 / #4904) so the token reaches
+    // Codex via the pane's environment (set by [`mcp_env`]).
     fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
         let mut args = Vec::with_capacity(p.servers.len() * 6);
         for s in &p.servers {
@@ -178,12 +180,28 @@ impl ToolAdapter for CodexAdapter {
             args.push(format!("mcp_servers.{}.type=\"http\"", s.name));
             args.push("-c".to_string());
             args.push(format!("mcp_servers.{}.url=\"{}\"", s.name, s.url));
-            if let Some(token) = &s.auth_token {
+            if s.auth_token.is_some() {
                 args.push("-c".to_string());
-                args.push(format!("mcp_servers.{}.bearer_token=\"{}\"", s.name, token));
+                args.push(format!(
+                    "mcp_servers.{}.bearer_token_env_var=\"AGENTUM_MCP_TOKEN\"",
+                    s.name
+                ));
             }
         }
         args
+    }
+
+    // Codex's `bearer_token_env_var` MCP field references an env var name rather
+    // than accepting the token inline. Export the actual tokens as env vars before
+    // the agent starts so Codex can read them from its environment.
+    fn mcp_env(&self, p: &McpProvision) -> Vec<(String, String)> {
+        let mut env = Vec::new();
+        for s in &p.servers {
+            if let Some(token) = &s.auth_token {
+                env.push(("AGENTUM_MCP_TOKEN".to_string(), token.clone()));
+            }
+        }
+        env
     }
 
     // Codex CLI uses `/compact` too as of late 2025.
@@ -505,7 +523,9 @@ mod tests {
     #[test]
     fn codex_mcp_args_emit_one_block_per_server() {
         // N servers in order; the token-guarded agentum server also gets a
-        // `bearer_token` override, the unauthenticated playwright one doesn't.
+        // `bearer_token_env_var` override (Codex no longer supports inline
+        // `bearer_token` for streamable HTTP), the unauthenticated playwright one
+        // doesn't.
         let args = CodexAdapter.mcp_args(&provision_two());
         assert_eq!(
             args,
@@ -515,13 +535,26 @@ mod tests {
                 "-c".to_string(),
                 "mcp_servers.agentum.url=\"http://127.0.0.1:8822/mcp\"".to_string(),
                 "-c".to_string(),
-                "mcp_servers.agentum.bearer_token=\"secret-tok\"".to_string(),
+                "mcp_servers.agentum.bearer_token_env_var=\"AGENTUM_MCP_TOKEN\"".to_string(),
                 "-c".to_string(),
                 "mcp_servers.playwright.type=\"http\"".to_string(),
                 "-c".to_string(),
                 "mcp_servers.playwright.url=\"http://127.0.0.1:8931/mcp\"".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn codex_mcp_env_exports_tokens_for_authenticated_servers() {
+        // Servers with auth tokens get their token exported as AGENTUM_MCP_TOKEN;
+        // servers without one (playwright) produce no env entry.
+        let env = CodexAdapter.mcp_env(&provision_two());
+        assert_eq!(
+            env,
+            vec![("AGENTUM_MCP_TOKEN".to_string(), "secret-tok".to_string()),]
+        );
+        let no_auth = CodexAdapter.mcp_env(&provision());
+        assert!(no_auth.is_empty());
     }
 
     #[test]
