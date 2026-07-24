@@ -21,8 +21,10 @@ use serde_json::{Map, Value};
 
 use crate::AppState;
 use crate::error::ApiError;
-use crate::host_runtime::{self, git_in_dir};
-use crate::routes::repos::{all_repo_ids, load_host_for_repo, resolve_repo_path};
+use crate::host_runtime::{self, HostCommandOutput, HostRuntimeError, git_in_dir};
+use crate::routes::repos::{
+    all_repo_ids, load_host_for_repo, resolve_repo_host_id, resolve_repo_path,
+};
 
 pub fn router() -> Router<crate::AppState> {
     Router::new()
@@ -170,6 +172,84 @@ fn non_git_create_error_message(
         ))
     } else {
         None
+    }
+}
+
+/// SSH reserves exit status 255 for client/transport failures. A remote `git`
+/// failure (dirty worktree, lock, bad path, …) exits with its own non-zero code
+/// and must keep its original error so the UI can offer the appropriate action.
+fn is_ssh_transport_output(host: &Host, output: &HostCommandOutput) -> bool {
+    matches!(host.kind, HostKind::Ssh { .. })
+        && !output.success
+        && (output.code == Some(255) || output.code.is_none())
+}
+
+/// Errors returned before an SSH child produces an exit status are connection
+/// failures when they are a timeout or an I/O failure (including a missing SSH
+/// executable). Quote/programming errors are not mislabeled as host downtime.
+fn is_ssh_transport_error(host: &Host, error: &HostRuntimeError) -> bool {
+    matches!(host.kind, HostKind::Ssh { .. })
+        && matches!(error, HostRuntimeError::Timeout | HostRuntimeError::Io(_))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoveOutputKind {
+    Removed,
+    Stale,
+    SshUnavailable,
+    Rejected,
+}
+
+/// Decide whether a completed child process removed the tree, proved a stale
+/// registration, failed at the SSH transport, or was rejected by Git. Keeping
+/// this decision pure makes the local/reachable/offline boundary regression-
+/// testable without depending on a live SSH daemon.
+fn classify_remove_output(host: &Host, output: &HostCommandOutput) -> RemoveOutputKind {
+    if output.success {
+        return RemoveOutputKind::Removed;
+    }
+    if is_ssh_transport_output(host, output) {
+        return RemoveOutputKind::SshUnavailable;
+    }
+    if output.stderr.contains("is a main working tree")
+        || output.stderr.contains("is not a working tree")
+        || output.stderr.contains("not a working tree")
+        || output.stderr.contains("No such file or directory")
+    {
+        return RemoveOutputKind::Stale;
+    }
+    RemoveOutputKind::Rejected
+}
+
+/// Consistent user-facing failure for every unavailable-SSH delete path. The
+/// last sentence documents the important recovery invariant: retrying later is
+/// safe because the local registry still points at the remote checkout.
+fn unavailable_ssh_remove_error(host: Option<&Host>, detail: &str) -> ApiError {
+    let location = host
+        .map(host_location)
+        .unwrap_or_else(|| "the configured SSH host".to_string());
+    let detail = detail.trim();
+    let detail = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" Details: {detail}")
+    };
+    ApiError::BadRequest(format!(
+        "Cannot delete this worktree because {location} is unavailable. Reconnect the SSH host and retry. Agentum kept the worktree registered locally so the remote checkout is not orphaned.{detail}"
+    ))
+}
+
+/// Rebuildable process/profile state is independent of the remote checkout and
+/// is safe to remove even when SSH is unavailable. Registry metadata is *not*
+/// handled here: it is retained on a connection failure and removed only after
+/// `git worktree remove` succeeds (or proves the entry stale).
+async fn cleanup_local_worktree_state(worktree_path: &str) {
+    if let Err(error) = crate::cdp_browser::stop_local_cdp_browser_for(worktree_path).await {
+        tracing::warn!(
+            worktree_path,
+            %error,
+            "failed to clean up local browser state during worktree delete"
+        );
     }
 }
 
@@ -402,7 +482,9 @@ struct RemoveBody {
 
 /// `POST /api/worktrees/remove` — `git worktree remove` + deregister. Stale
 /// registry entries (point at a main tree, already gone, …) are deregistered
-/// anyway after a `worktree prune`; real failures (dirty/locked) surface.
+/// anyway after a `worktree prune`; real failures (dirty/locked) surface. An
+/// unavailable SSH host keeps the registry row, cleans rebuildable local state,
+/// and returns an actionable reconnect-and-retry error.
 async fn remove(
     State(state): State<AppState>,
     Json(body): Json<RemoveBody>,
@@ -412,36 +494,57 @@ async fn remove(
     })?;
     reject_dashed("worktree path", worktree_path)?;
     let repo_path = resolve_repo_path(repo_id)?;
-    let host = load_host_for_repo(&state, repo_id).await?;
+    let remote_repo = resolve_repo_host_id(repo_id)?.is_some();
+    let host = match load_host_for_repo(&state, repo_id).await {
+        Ok(host) => host,
+        Err(error) if remote_repo => {
+            // The saved host may have been removed while its repo/worktree
+            // registrations remain. There is no safe remote deletion without
+            // those connection details, but ephemeral local state can go.
+            cleanup_local_worktree_state(worktree_path).await;
+            return Err(unavailable_ssh_remove_error(None, &error.to_string()));
+        }
+        Err(error) => return Err(error),
+    };
 
     let mut args = vec!["worktree", "remove"];
     if body.force.unwrap_or(false) {
         args.push("--force");
     }
     args.push(worktree_path);
-    let output = git_in_dir(&host, &repo_path, &args)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    if !output.success {
-        let stderr = &output.stderr;
-        let is_stale_entry = stderr.contains("is a main working tree")
-            || stderr.contains("is not a working tree")
-            || stderr.contains("not a working tree")
-            || stderr.contains("No such file or directory");
-        if !is_stale_entry {
-            return Err(ApiError::BadRequest(stderr.trim().to_string()));
+    let output = match git_in_dir(&host, &repo_path, &args).await {
+        Ok(output) => output,
+        Err(error) if is_ssh_transport_error(&host, &error) => {
+            cleanup_local_worktree_state(worktree_path).await;
+            return Err(unavailable_ssh_remove_error(
+                Some(&host),
+                &error.to_string(),
+            ));
         }
-        let _ = git_in_dir(&host, &repo_path, &["worktree", "prune"]).await;
+        Err(error) => return Err(ApiError::Internal(error.to_string())),
+    };
+    match classify_remove_output(&host, &output) {
+        RemoveOutputKind::Removed => {}
+        RemoveOutputKind::SshUnavailable => {
+            cleanup_local_worktree_state(worktree_path).await;
+            return Err(unavailable_ssh_remove_error(Some(&host), &output.stderr));
+        }
+        RemoveOutputKind::Rejected => {
+            return Err(ApiError::BadRequest(output.stderr.trim().to_string()));
+        }
+        RemoveOutputKind::Stale => {
+            let _ = git_in_dir(&host, &repo_path, &["worktree", "prune"]).await;
+        }
     }
 
+    // Remote cleanup is now known to be complete or unnecessary. Tear down the
+    // local browser before fallible registry I/O so it cannot leak when a local
+    // bookkeeping write fails. This is also run on the unavailable-SSH paths
+    // above, where the independently important registry row is retained.
+    cleanup_local_worktree_state(worktree_path).await;
     let mut worktrees = read_worktrees()?;
     worktrees.retain(|wt| wt.id != body.worktree_id);
     write_worktrees(&worktrees)?;
-    // Tear down this worktree's per-worktree CDP browser (kill its tmux + drop
-    // its profile) so a deleted worktree doesn't leak an idle headless Chromium.
-    // Best-effort + idempotent: a no-op when isolation is off, the worktree never
-    // opened a browser, or it lived on an SSH host (no local browser to kill).
-    let _ = crate::cdp_browser::stop_local_cdp_browser_for(worktree_path).await;
     Ok(Json(serde_json::json!({})))
 }
 
@@ -821,6 +924,46 @@ async fn resolve_pr_base() -> Json<Value> {
 mod tests {
     use super::*;
 
+    fn test_host(name: &str, kind: HostKind) -> Host {
+        use agentum_core::LOCAL_HOST_ID;
+        use time::OffsetDateTime;
+
+        let now = OffsetDateTime::now_utc();
+        Host {
+            id: LOCAL_HOST_ID,
+            name: name.into(),
+            kind,
+            created_at: now,
+            updated_at: now,
+            last_seen_at: None,
+        }
+    }
+
+    fn local_host() -> Host {
+        test_host("local", HostKind::Local)
+    }
+
+    fn ssh_host() -> Host {
+        test_host(
+            "forge",
+            HostKind::Ssh {
+                user: "malloc".into(),
+                hostname: "forge.lan".into(),
+                port: 22,
+                auth: agentum_core::SshAuth::Agent,
+            },
+        )
+    }
+
+    fn remove_output(success: bool, code: Option<i32>, stderr: &str) -> HostCommandOutput {
+        HostCommandOutput {
+            success,
+            code,
+            stdout: Vec::new(),
+            stderr: stderr.into(),
+        }
+    }
+
     #[test]
     fn non_git_stderr_maps_to_friendly_message() {
         // The FinanzasArgy case: a registered path that isn't a repo on the host.
@@ -855,32 +998,101 @@ mod tests {
 
     #[test]
     fn host_location_describes_local_and_ssh() {
-        use agentum_core::{HostKind, LOCAL_HOST_ID};
-        use time::OffsetDateTime;
-        let now = OffsetDateTime::now_utc();
-        let local = Host {
-            id: LOCAL_HOST_ID,
-            name: "local".into(),
-            kind: HostKind::Local,
-            created_at: now,
-            updated_at: now,
-            last_seen_at: None,
-        };
+        let local = local_host();
         assert_eq!(host_location(&local), "this machine");
-        let ssh = Host {
-            id: LOCAL_HOST_ID,
-            name: "forge".into(),
-            kind: HostKind::Ssh {
-                user: "malloc".into(),
-                hostname: "forge.lan".into(),
-                port: 22,
-                auth: agentum_core::SshAuth::Agent,
-            },
-            created_at: now,
-            updated_at: now,
-            last_seen_at: None,
-        };
+        let ssh = ssh_host();
         assert_eq!(host_location(&ssh), "the remote host forge.lan");
+    }
+
+    #[test]
+    fn worktree_remove_classifies_local_and_reachable_ssh_results() {
+        let removed = remove_output(true, Some(0), "");
+        assert_eq!(
+            classify_remove_output(&local_host(), &removed),
+            RemoveOutputKind::Removed
+        );
+        assert_eq!(
+            classify_remove_output(&ssh_host(), &removed),
+            RemoveOutputKind::Removed
+        );
+
+        // A reachable host passed Git's own dirty-worktree error back through
+        // ssh. This must remain a normal rejection so force-delete stays
+        // available; it is not a connectivity failure.
+        let dirty = remove_output(
+            false,
+            Some(128),
+            "fatal: '/repo/wt' contains modified or untracked files, use --force to delete it",
+        );
+        assert_eq!(
+            classify_remove_output(&ssh_host(), &dirty),
+            RemoveOutputKind::Rejected
+        );
+
+        let stale = remove_output(false, Some(128), "fatal: '/repo/wt' is not a working tree");
+        assert_eq!(
+            classify_remove_output(&local_host(), &stale),
+            RemoveOutputKind::Stale
+        );
+        assert_eq!(
+            classify_remove_output(&ssh_host(), &stale),
+            RemoveOutputKind::Stale
+        );
+    }
+
+    #[test]
+    fn worktree_remove_classifies_unavailable_ssh_transport_only() {
+        let refused = remove_output(
+            false,
+            Some(255),
+            "ssh: connect to host forge.lan port 22: Connection refused",
+        );
+        assert_eq!(
+            classify_remove_output(&ssh_host(), &refused),
+            RemoveOutputKind::SshUnavailable
+        );
+
+        // Exit 255 is SSH-specific. A local child with the same status must not
+        // take the remote recovery path or change local deletion semantics.
+        assert_eq!(
+            classify_remove_output(&local_host(), &refused),
+            RemoveOutputKind::Rejected
+        );
+
+        assert!(is_ssh_transport_error(
+            &ssh_host(),
+            &HostRuntimeError::Timeout
+        ));
+        assert!(!is_ssh_transport_error(
+            &local_host(),
+            &HostRuntimeError::Timeout
+        ));
+        assert!(!is_ssh_transport_error(
+            &ssh_host(),
+            &HostRuntimeError::Quote
+        ));
+    }
+
+    #[test]
+    fn unavailable_ssh_worktree_remove_error_is_actionable_and_safe() {
+        let error = unavailable_ssh_remove_error(
+            Some(&ssh_host()),
+            "ssh: connect to host forge.lan port 22: Connection refused",
+        );
+        let ApiError::BadRequest(message) = error else {
+            panic!("unavailable SSH should be a user-correctable bad request");
+        };
+        assert!(message.contains("remote host forge.lan is unavailable"));
+        assert!(message.contains("Reconnect the SSH host and retry"));
+        assert!(message.contains("kept the worktree registered locally"));
+        assert!(message.contains("Connection refused"));
+
+        let missing_host = unavailable_ssh_remove_error(None, "repo host is missing");
+        let ApiError::BadRequest(message) = missing_host else {
+            panic!("missing configured SSH host should be actionable");
+        };
+        assert!(message.contains("configured SSH host is unavailable"));
+        assert!(message.contains("kept the worktree registered locally"));
     }
 
     #[test]
