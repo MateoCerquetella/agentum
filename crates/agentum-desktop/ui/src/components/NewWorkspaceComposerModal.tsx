@@ -13,6 +13,7 @@ import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { shouldAllowComposerEnterSubmitTarget } from '@/lib/new-workspace-enter-guard'
 import { isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
 import { initialStartGatedRunProp } from '@/lib/composer-modal-props'
+import { cn } from '@/lib/utils'
 import {
   deriveGoalIssueDraft,
   deriveWorkspaceGoalSeed,
@@ -111,7 +112,10 @@ function ComposerModalBody({
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex flex-col sm:max-w-lg"
+        className={cn(
+          'flex max-h-[calc(100vh-2rem)] flex-col overflow-y-auto',
+          phase === 'details' ? 'sm:max-w-4xl' : 'sm:max-w-lg'
+        )}
         onOpenAutoFocus={(event) => {
           // Why: Radix's FocusScope fires this once the dialog has mounted.
           // preventDefault stops it from focusing whatever first-tabbable it
@@ -138,6 +142,7 @@ function ComposerModalBody({
             primaryLabel="Create Workspace"
             onContinue={handleContinue}
             onSkip={handleSkip}
+            onCancel={onClose}
           />
         ) : (
           <QuickTabBody
@@ -327,6 +332,7 @@ function QuickTabBody({
         primaryActionLabel={primaryActionLabel}
         onOpenAgentSettings={() => setAgentSettingsOpen(true)}
         onCreate={() => void handleCreate()}
+        onCancel={onClose}
       />
       <AgentSettingsDialog open={agentSettingsOpen} onOpenChange={setAgentSettingsOpen} />
     </>

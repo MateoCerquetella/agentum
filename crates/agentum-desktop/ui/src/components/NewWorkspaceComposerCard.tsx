@@ -9,9 +9,7 @@ import {
   FolderPlus,
   LoaderCircle,
   PlugZap,
-  Plus,
-  Settings2,
-  Sparkles
+  Settings2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -45,6 +43,7 @@ import SmartWorkspaceNameField, {
 import type { SetupConfig } from '@/lib/new-workspace'
 import type { WorkspaceCreateErrorDisplay } from '@/lib/workspace-create-error-format'
 import type { SshConnectionStatus } from '../../../shared/ssh-types'
+import NewWorkspaceAutomationPanel from '@/components/NewWorkspaceAutomationPanel'
 
 type RepoOption = React.ComponentProps<typeof RepoCombobox>['repos'][number]
 
@@ -120,6 +119,7 @@ type NewWorkspaceComposerCardProps = {
   createDisabled: boolean
   creating: boolean
   onCreate: () => void
+  onCancel: () => void
   note: string
   onNoteChange: (value: string) => void
   /** When true, create the worktree only — no tmux session/agent is launched. */
@@ -315,6 +315,7 @@ export default function NewWorkspaceComposerCard({
   createDisabled,
   creating,
   onCreate,
+  onCancel,
   note,
   onNoteChange,
   skipSession,
@@ -457,7 +458,7 @@ export default function NewWorkspaceComposerCard({
       onDragEnter={dragHandlers.onDragEnter}
       onDragLeave={dragHandlers.onDragLeave}
       className={cn(
-        'grid min-w-0 gap-1 rounded-md transition',
+        'grid min-w-0 gap-1 rounded-md transition md:grid-cols-[minmax(0,1fr)_minmax(17rem,0.78fr)] md:gap-x-5',
         isFileDragOver && 'ring-2 ring-ring/30',
         containerClassName
       )}
@@ -529,9 +530,7 @@ export default function NewWorkspaceComposerCard({
             // Why: when an SSH host is selected, "Add project" must add a project
             // on that host (its connectionId), not browse the local machine.
             addProjectConnectionId={
-              selectedHostKey.startsWith('ssh:')
-                ? selectedHostKey.slice('ssh:'.length)
-                : undefined
+              selectedHostKey.startsWith('ssh:') ? selectedHostKey.slice('ssh:'.length) : undefined
             }
           />
           {selectedRepoRequiresConnection && selectedRepoConnectionId ? (
@@ -597,172 +596,6 @@ export default function NewWorkspaceComposerCard({
               agentTrigger?.focus()
             }}
           />
-
-          {/* Spec 004 F3: issue-first workspaces. Only when nothing is linked
-              yet (linking an existing item replaces this affordance) and the
-              repo is a local git repo — creation runs the local `gh`. */}
-          {canCreateGithubIssue && !createIssueOpen ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => onCreateIssueOpenChange(true)}
-              className="-ml-2 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <Plus className="size-3.5" />
-              Create GitHub issue
-            </Button>
-          ) : null}
-          {canCreateGithubIssue && createIssueOpen ? (
-            <div className="space-y-2 rounded-md border border-border/70 bg-muted/30 p-3">
-              <div className="text-xs font-medium text-foreground">New GitHub issue</div>
-              <input
-                type="text"
-                value={createIssueTitle}
-                onChange={(event) => onCreateIssueTitleChange(event.target.value)}
-                placeholder="Issue title"
-                disabled={createIssueSubmitting}
-                className="w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              />
-              <textarea
-                value={createIssueBody}
-                onChange={(event) => onCreateIssueBodyChange(event.target.value)}
-                placeholder="Body (optional)"
-                rows={3}
-                disabled={createIssueSubmitting || createIssueGenerating}
-                className="w-full min-w-0 resize-none rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              />
-              {/* Spec 007: offer a drafted description while the body is
-                  blank. The result lands in the textarea above so the user
-                  reviews/edits before filing — LLM text is never auto-posted. */}
-              {!createIssueBody.trim() ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={onGenerateIssueBody}
-                  disabled={
-                    createIssueSubmitting || createIssueGenerating || !createIssueTitle.trim()
-                  }
-                  className="-ml-2 text-xs text-muted-foreground hover:text-foreground"
-                >
-                  {createIssueGenerating ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="size-3.5" />
-                  )}
-                  {createIssueGenerating ? 'Generating description…' : 'Generate description'}
-                </Button>
-              ) : null}
-              {/* Spec 006 F1 (AC 2): toggleable label chips seeded from the
-                  repo's label set (static fallback on fetch error). Hidden
-                  while the fetch is in flight — filing never waits on it. */}
-              {createIssueLabelOptions && createIssueLabelOptions.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {createIssueLabelOptions.map((label) => {
-                    const selected = createIssueLabels.includes(label)
-                    return (
-                      <button
-                        key={label}
-                        type="button"
-                        onClick={() => onToggleCreateIssueLabel(label)}
-                        disabled={createIssueSubmitting}
-                        aria-pressed={selected}
-                        className={cn(
-                          'rounded-full border px-2 py-1 text-[11px] leading-none transition',
-                          selected
-                            ? 'border-foreground/60 bg-foreground text-background'
-                            : 'border-border/70 bg-muted/40 text-muted-foreground hover:text-foreground'
-                        )}
-                      >
-                        {label}
-                      </button>
-                    )
-                  })}
-                </div>
-              ) : null}
-              {createIssueError ? (
-                <div role="alert" className="text-xs text-destructive">
-                  {createIssueError}
-                </div>
-              ) : null}
-              <div className="flex items-center justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onCreateIssueOpenChange(false)}
-                  disabled={createIssueSubmitting}
-                  className="text-xs"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={onCreateIssueSubmit}
-                  // Why: also hold filing while a description draft is in
-                  // flight — otherwise the generated body could land after
-                  // the (bodyless) issue was already created.
-                  disabled={
-                    createIssueSubmitting || createIssueGenerating || !createIssueTitle.trim()
-                  }
-                  className="text-xs"
-                >
-                  {createIssueSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
-                  Create issue
-                </Button>
-              </div>
-            </div>
-          ) : null}
-
-          {/* Spec 004 F4 (D5): opt-in spec scaffold for a linked github.com
-              issue on a local repo. Off by default. Hidden while "Start gated
-              run" is armed — the server converge-scaffolds, subsuming it. */}
-          {canScaffoldSpec && !startGatedRun ? (
-            <label className="mt-2 flex cursor-pointer items-start gap-2.5">
-              <input
-                type="checkbox"
-                checked={scaffoldSpec}
-                onChange={(event) => onScaffoldSpecChange(event.target.checked)}
-                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-foreground"
-              />
-              <span className="min-w-0">
-                <span className="block text-xs font-medium text-foreground">
-                  Scaffold spec from issue
-                </span>
-                <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                  Writes the linked issue into the new worktree as a harness spec + backlog.
-                </span>
-              </span>
-            </label>
-          ) : null}
-
-          {/* Spec 005 F1 (D2): "Start gated run" — same eligibility gate as
-              the scaffold toggle. The linked issue becomes the spec and the
-              Harness Engine drives verification-gated agents in the worktree;
-              every plain agent delivery is suppressed. */}
-          {canStartGatedRun ? (
-            <label className="mt-2 flex cursor-pointer items-start gap-2.5">
-              <input
-                type="checkbox"
-                checked={startGatedRun}
-                onChange={(event) => onStartGatedRunChange(event.target.checked)}
-                className="mt-0.5 size-4 shrink-0 cursor-pointer accent-foreground"
-              />
-              <span className="min-w-0">
-                <span className="block text-xs font-medium text-foreground">Start gated run</span>
-                <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                  {startGatedRun
-                    ? sddRolesEnabled
-                      ? // Spec 006 F3 (AC 8): the role loop is on — name it.
-                        "Your typed prompt won't be sent — the linked issue becomes the spec and the SDD role loop (PM gate → Architect → Build → Review gate) drives gated agents in the worktree. The selected agent runs inside the engine."
-                      : "Your typed prompt won't be sent — the linked issue becomes the spec and drives the gated agents. The selected agent runs inside the engine."
-                    : 'Plan the linked issue into a spec and drive it with verification-gated agents.'}
-                </span>
-              </span>
-            </label>
-          ) : null}
         </div>
 
         <div className="space-y-1">
@@ -1002,10 +835,38 @@ export default function NewWorkspaceComposerCard({
         </div>
       </div>
 
+      <NewWorkspaceAutomationPanel
+        primaryActionLabel={primaryActionLabel}
+        selectedRepoIsGit={selectedRepoIsGit}
+        selectedSource={smartNameSelection}
+        canCreateGithubIssue={canCreateGithubIssue}
+        createIssueOpen={createIssueOpen}
+        onCreateIssueOpenChange={onCreateIssueOpenChange}
+        createIssueTitle={createIssueTitle}
+        onCreateIssueTitleChange={onCreateIssueTitleChange}
+        createIssueBody={createIssueBody}
+        onCreateIssueBodyChange={onCreateIssueBodyChange}
+        createIssueSubmitting={createIssueSubmitting}
+        createIssueError={createIssueError}
+        onCreateIssueSubmit={onCreateIssueSubmit}
+        createIssueGenerating={createIssueGenerating}
+        onGenerateIssueBody={onGenerateIssueBody}
+        createIssueLabels={createIssueLabels}
+        createIssueLabelOptions={createIssueLabelOptions}
+        onToggleCreateIssueLabel={onToggleCreateIssueLabel}
+        canScaffoldSpec={canScaffoldSpec}
+        scaffoldSpec={scaffoldSpec}
+        onScaffoldSpecChange={onScaffoldSpecChange}
+        canStartGatedRun={canStartGatedRun}
+        startGatedRun={startGatedRun}
+        onStartGatedRunChange={onStartGatedRunChange}
+        sddRolesEnabled={sddRolesEnabled}
+      />
+
       {createError ? (
         <div
           role="alert"
-          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive md:col-span-2"
         >
           {createError.help ? (
             <div className="space-y-1">
@@ -1019,7 +880,17 @@ export default function NewWorkspaceComposerCard({
         </div>
       ) : null}
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2 md:col-span-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={onCancel}
+          disabled={creating || createIssueSubmitting}
+          size="sm"
+          className="text-xs"
+        >
+          Cancel
+        </Button>
         <Button
           onClick={() => void onCreate()}
           disabled={createDisabled}

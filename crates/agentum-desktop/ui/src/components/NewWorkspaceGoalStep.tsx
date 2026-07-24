@@ -3,11 +3,7 @@ import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import RepoCombobox from '@/components/repo/RepoCombobox'
-import {
-  OPTIONAL_WORKSPACE_STEPS,
-  firstGoalStepBlocker,
-  isGoalStepReady
-} from '@/lib/workspace-goal-step'
+import { firstGoalStepBlocker, isGoalStepReady } from '@/lib/workspace-goal-step'
 import type { Repo } from '../../../shared/types'
 
 // Spec 008 F3 (AC 9–11): the goal-first entry that FRONTS the existing composer
@@ -24,7 +20,8 @@ export default function NewWorkspaceGoalStep({
   initialGoal,
   primaryLabel = 'Create Workspace',
   onContinue,
-  onSkip
+  onSkip,
+  onCancel
 }: {
   /** Eligible workdir targets — the composer's repo list (repos with a path). */
   repos: Repo[]
@@ -37,6 +34,8 @@ export default function NewWorkspaceGoalStep({
   onContinue: (goal: string, repoId: string) => void
   /** "Skip to details" (D3): reveal the mechanics-first composer, no goal seed. */
   onSkip: () => void
+  /** Close the create flow without creating anything. */
+  onCancel: () => void
 }): React.JSX.Element {
   const [goal, setGoal] = useState(initialGoal ?? '')
   const [repoId, setRepoId] = useState(initialRepoId ?? '')
@@ -76,8 +75,7 @@ export default function NewWorkspaceGoalStep({
       <DialogHeader className="gap-1">
         <DialogTitle className="text-base font-semibold">{primaryLabel}</DialogTitle>
         <p className="text-xs text-muted-foreground">
-          Describe what you want to build. You can create the worktree, scaffold a spec, and file a
-          tracker issue next — all optional.
+          Describe what you want to build, then review the issue, worktree, spec, and run together.
         </p>
       </DialogHeader>
 
@@ -113,25 +111,17 @@ export default function NewWorkspaceGoalStep({
             folder/branch as-is.
           </p>
         </div>
-
-        {/* Pre-offer the three optional steps so goal-first makes the pipeline
-            (worktree → spec → tracker) visible before the composer opens. */}
-        <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
-          <p className="text-[11px] font-medium text-muted-foreground">Next, optionally:</p>
-          <ul className="mt-1 space-y-0.5">
-            {OPTIONAL_WORKSPACE_STEPS.map((step) => (
-              <li key={step.id} className="text-[11px] text-muted-foreground">
-                • {step.label}
-              </li>
-            ))}
-          </ul>
-        </div>
       </div>
 
       <div className="mt-1 flex items-center justify-between gap-2">
-        <Button type="button" variant="ghost" size="sm" onClick={onSkip}>
-          Skip to details
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onSkip}>
+            Skip to details
+          </Button>
+        </div>
         <div className="flex items-center gap-2">
           {!ready && blocker ? (
             <span className="text-[11px] text-muted-foreground">{blocker}</span>
