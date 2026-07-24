@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.7] — 2026-07-24
+
+### Fixed
+
+- **Queue now honors the amber unread attention signal.** Completed turns that
+  transition from working to idle without a surviving pane-level done hook move
+  to Needs You as Ready to continue instead of being mixed into Settled.
+
 ## [0.96.6] — 2026-07-24
 
 ### Added
