@@ -904,10 +904,10 @@ pub(super) async fn stream_remote_session(
                 let mut delivered = false;
                 if let Some(si) = stdin.as_mut() {
                     // A paste arrives as ONE frame of arbitrary size; the
-                    // encoder splits it into 4 KiB-of-input lines because each
-                    // line is one remote `tmux send-keys`, capped at ~16 KB of
-                    // marshalled command — past that tmux errors, the remote
-                    // loop swallows it, and the paste vanished silently.
+                    // encoder splits it into tmux-safe input lines because each
+                    // line is one remote `tmux send-keys`; an oversized command
+                    // errors, the remote loop swallows it, and the paste
+                    // vanishes silently.
                     let lines = crate::host_runtime::encode_input_hex_lines(&buf);
                     // Bound the write. A healthy write down the already-open
                     // channel is sub-millisecond; it only blocks when the far
