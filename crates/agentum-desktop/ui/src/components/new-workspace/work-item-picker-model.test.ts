@@ -509,6 +509,18 @@ describe('deriveTrackerBindCoords', () => {
     expect(
       deriveTrackerBindCoords({ type: 'issue', url: 'https://gitlab.com/o/r/-/issues/3' })
     ).toBeNull()
+    expect(
+      deriveTrackerBindCoords({
+        type: 'issue',
+        url: 'https://github.com.attacker.example/o/r/issues/3'
+      })
+    ).toBeNull()
+    expect(
+      deriveTrackerBindCoords({
+        type: 'issue',
+        url: 'https://attacker.example/github.com/o/r/issues/3'
+      })
+    ).toBeNull()
     expect(deriveTrackerBindCoords(null)).toBeNull()
     expect(deriveTrackerBindCoords(undefined)).toBeNull()
   })

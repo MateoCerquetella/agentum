@@ -2194,7 +2194,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
   const smartNameSelection = useMemo<SmartWorkspaceNameSelection | null>(() => {
     if (linkedWorkItem) {
-      const isLinear = linkedWorkItem.number === 0 && !linkedWorkItem.url.includes('github.com')
+      const isLinear = Boolean(linkedWorkItem.linearIdentifier)
       const kind: SmartWorkspaceNameSelection['kind'] = isLinear
         ? 'linear'
         : linkedWorkItem.type === 'pr'

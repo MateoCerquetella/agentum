@@ -21,34 +21,19 @@ function renderPanel(overrides: Partial<ComponentProps<typeof AgentSkillSetupPan
   )
 }
 
-function buttonLabels(html: string): string[] {
-  return Array.from(html.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g), ([, content]) =>
-    content
-      .replace(/<[^>]*>/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-  )
-}
-
-function buttonMarkupByLabel(html: string, label: string): string | undefined {
-  return Array.from(html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g), ([button]) => button).find(
-    (button) => buttonLabels(button).includes(label)
-  )
-}
-
 describe('AgentSkillSetupPanel', () => {
   it('explains that capability setup is automatic', () => {
     const html = renderPanel({ installed: true })
 
     expect(html).toContain('Provided automatically')
     expect(html).toContain('MCP server')
-    expect(buttonLabels(html)).toEqual([])
+    expect(html).not.toContain('<button')
   })
 
   it('does not expose retired install or re-check controls', () => {
     const html = renderPanel({ installed: true, showRecheckWhenInstalled: false })
 
-    expect(buttonLabels(html)).toEqual([])
+    expect(html).not.toContain('<button')
     expect(html).not.toContain('Install')
     expect(html).not.toContain('Re-check')
   })
@@ -57,12 +42,12 @@ describe('AgentSkillSetupPanel', () => {
     const html = renderPanel({ installed: false, showRecheckWhenInstalled: false })
 
     expect(html).toContain('no install needed')
-    expect(buttonLabels(html)).toEqual([])
+    expect(html).not.toContain('<button')
   })
 
   it('does not resurrect an install control when parent setup is disabled', () => {
     const html = renderPanel({ installDisabled: true })
 
-    expect(buttonMarkupByLabel(html, 'Install')).toBeUndefined()
+    expect(html).not.toContain('<button')
   })
 })

@@ -15,6 +15,7 @@ import type {
 } from '@/shared/github-project-types'
 import { groupRowsByField, sortRows } from '@/shared/github-project-group-sort'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
+import { parseGitHubIssueOrPRLink } from '@/lib/github-links'
 
 /** One pickable Project item — an OPEN issue only. The Project item id is kept
  *  for display/debug; the tracker write re-resolves the item from the issue's
@@ -330,7 +331,8 @@ export function deriveTrackerBindCoords(
   if (item.linearIdentifier) {
     return { trackerProvider: 'linear', trackerUrl: item.linearIdentifier }
   }
-  if (item.type === 'issue' && item.url.includes('github.com')) {
+  const githubItem = parseGitHubIssueOrPRLink(item.url)
+  if (item.type === 'issue' && githubItem?.type === 'issue') {
     return { trackerProvider: 'github', trackerUrl: item.url }
   }
   return null
