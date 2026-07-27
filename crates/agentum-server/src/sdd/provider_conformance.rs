@@ -1245,7 +1245,7 @@ mod tests {
             .unwrap();
         });
 
-        let endpoint = format!("http://{address}/api/sdd/v2/runs/provider-probe/commands");
+        let endpoint = format!("http://{address}/api/sdd/runs/provider-probe/commands");
         let client = reqwest::Client::new();
         for command in [
             serde_json::json!({

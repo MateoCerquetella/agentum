@@ -11,7 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Agentum now owns one specification workflow.** New Spec and Run Center use
   stable `SPC-<ULID>` identities, external authoritative worktrees, typed
   artifacts, durable events, revision-bound approvals, and provider-neutral
-  execution contracts under the `/api/sdd/v2` surface.
+  execution contracts under the `/api/sdd` surface.
 - **Repository artifacts have one portable root.** Saved specifications create
   only `.agentum/manifest.json` and a stable directory below `.agentum/specs/`;
   runtime state, credentials, approvals, and delivery state remain in SQLite.
@@ -72,7 +72,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   API now requires a boot-scoped, memory-only bearer available only to the main
   Tauri webview; browser child views and provider sandboxes cannot retrieve it.
   MCP keeps a distinct rotated token, and `--no-auth` no longer exposes any
-  `/api/sdd/v2` HTTP or WebSocket route.
+  `/api/sdd` HTTP or WebSocket route.
 
 ## [0.96.12] — 2026-07-27
 

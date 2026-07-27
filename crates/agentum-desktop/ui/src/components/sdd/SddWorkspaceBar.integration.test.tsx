@@ -8,7 +8,7 @@ import type {
   SddEvent,
   SddSnapshot,
   SddSpec
-} from '@/runtime/sdd-v2-client'
+} from '@/runtime/sdd-client'
 
 ;(
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn()
 }))
 
-vi.mock('@/runtime/sdd-v2-client', () => ({
+vi.mock('@/runtime/sdd-client', () => ({
   command: mocks.command,
   connectJiraApiToken: mocks.connectJiraApiToken,
   createSpec: mocks.createSpec,

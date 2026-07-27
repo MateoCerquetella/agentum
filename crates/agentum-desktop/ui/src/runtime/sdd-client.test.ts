@@ -31,11 +31,11 @@ import {
   selectJiraSite,
   startJiraOauth,
   subscribeSddEvents
-} from './sdd-v2-client'
+} from './sdd-client'
 
 beforeEach(() => vi.clearAllMocks())
 
-describe('Agentum SDD v2 client', () => {
+describe('Agentum SDD client', () => {
   it('keeps repository and run identities in path segments', async () => {
     vi.mocked(getJson).mockResolvedValueOnce({ specs: [] }).mockResolvedValueOnce({ events: [] })
     vi.mocked(postJson).mockResolvedValue({})
@@ -48,9 +48,9 @@ describe('Agentum SDD v2 client', () => {
       expectedRevision: 2
     })
 
-    expect(getJson).toHaveBeenNthCalledWith(1, '/api/sdd/v2/repos/repo%20%2F%20one/specs')
-    expect(getJson).toHaveBeenNthCalledWith(2, '/api/sdd/v2/runs/run%20%2F%20one/events?after=42')
-    expect(postJson).toHaveBeenCalledWith('/api/sdd/v2/runs/run%20%2F%20one/commands', {
+    expect(getJson).toHaveBeenNthCalledWith(1, '/api/sdd/repos/repo%20%2F%20one/specs')
+    expect(getJson).toHaveBeenNthCalledWith(2, '/api/sdd/runs/run%20%2F%20one/events?after=42')
+    expect(postJson).toHaveBeenCalledWith('/api/sdd/runs/run%20%2F%20one/commands', {
       type: 'pause',
       requestId: 'r',
       expectedRevision: 2
@@ -61,7 +61,7 @@ describe('Agentum SDD v2 client', () => {
     vi.mocked(getBlob).mockResolvedValue(new Blob(['png']))
     await getBrowserEvidenceBlob('run / one', 'evidence / one', 'a'.repeat(64))
     expect(getBlob).toHaveBeenCalledWith(
-      `/api/sdd/v2/runs/run%20%2F%20one/evidence/evidence%20%2F%20one/blobs/${'a'.repeat(64)}`
+      `/api/sdd/runs/run%20%2F%20one/evidence/evidence%20%2F%20one/blobs/${'a'.repeat(64)}`
     )
   })
 
@@ -76,7 +76,7 @@ describe('Agentum SDD v2 client', () => {
     await getSddRemoteCapability('repo / one', 'custom:remote provider')
 
     expect(getJson).toHaveBeenCalledWith(
-      '/api/sdd/v2/repos/repo%20%2F%20one/remote-capability?provider=custom%3Aremote+provider&baseRef=HEAD'
+      '/api/sdd/repos/repo%20%2F%20one/remote-capability?provider=custom%3Aremote+provider&baseRef=HEAD'
     )
   })
 
@@ -94,7 +94,7 @@ describe('Agentum SDD v2 client', () => {
       sourceCheckout: 'require_clean' as const
     }
     await createSpec('repo-1', input)
-    expect(postJson).toHaveBeenCalledWith('/api/sdd/v2/repos/repo-1/specs', input)
+    expect(postJson).toHaveBeenCalledWith('/api/sdd/repos/repo-1/specs', input)
   })
 
   it('configures a discovered specification through the closed run contract', async () => {
@@ -109,7 +109,7 @@ describe('Agentum SDD v2 client', () => {
       sourceCheckout: 'snapshot' as const
     }
     await createSpecRun('SPC / one', input)
-    expect(postJson).toHaveBeenCalledWith('/api/sdd/v2/specs/SPC%20%2F%20one/runs', input)
+    expect(postJson).toHaveBeenCalledWith('/api/sdd/specs/SPC%20%2F%20one/runs', input)
   })
 
   it('previews a typed source without exposing caller-authored provenance', async () => {
@@ -118,7 +118,7 @@ describe('Agentum SDD v2 client', () => {
       type: 'openspec',
       path: 'openspec/changes/refresh-sessions'
     })
-    expect(postJson).toHaveBeenCalledWith('/api/sdd/v2/repos/repo%20%2F%20one/sources/preview', {
+    expect(postJson).toHaveBeenCalledWith('/api/sdd/repos/repo%20%2F%20one/sources/preview', {
       title: 'Refresh sessions',
       source: { type: 'openspec', path: 'openspec/changes/refresh-sessions' }
     })
@@ -149,26 +149,26 @@ describe('Agentum SDD v2 client', () => {
       expectedRevision: 0
     })
 
-    expect(postJson).toHaveBeenNthCalledWith(1, '/api/sdd/v2/integrations/jira/oauth/start', {
+    expect(postJson).toHaveBeenNthCalledWith(1, '/api/sdd/integrations/jira/oauth/start', {
       requestId: 'request-start',
       expectedRevision: 0
     })
-    expect(postJson).toHaveBeenNthCalledWith(2, '/api/sdd/v2/integrations/jira/oauth/redeem', {
+    expect(postJson).toHaveBeenNthCalledWith(2, '/api/sdd/integrations/jira/oauth/redeem', {
       requestId: 'request-redeem',
       flowId: 'flow-1',
       expectedRevision: 1
     })
-    expect(getJson).toHaveBeenCalledWith('/api/sdd/v2/integrations/jira/connections')
+    expect(getJson).toHaveBeenCalledWith('/api/sdd/integrations/jira/connections')
     expect(postJson).toHaveBeenNthCalledWith(
       3,
-      '/api/sdd/v2/integrations/jira/connections/jira%20%2F%20one/select-site',
+      '/api/sdd/integrations/jira/connections/jira%20%2F%20one/select-site',
       {
         requestId: 'request-site',
         siteId: 'site-1',
         expectedCredentialRevision: 2
       }
     )
-    expect(postJson).toHaveBeenNthCalledWith(4, '/api/sdd/v2/integrations/jira/api-token/connect', {
+    expect(postJson).toHaveBeenNthCalledWith(4, '/api/sdd/integrations/jira/api-token/connect', {
       requestId: 'request-token',
       email: 'operator@example.com',
       apiToken: 'synthetic-test-token',

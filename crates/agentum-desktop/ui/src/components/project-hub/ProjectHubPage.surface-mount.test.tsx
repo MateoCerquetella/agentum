@@ -8,7 +8,7 @@ import { useAppStore } from '@/store'
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true
 
-vi.mock('@/components/sdd-v2/SddWorkspaceBar', () => ({
+vi.mock('@/components/sdd/SddWorkspaceBar', () => ({
   default: () => <div data-hub-surface="specs">specs surface</div>
 }))
 vi.mock('@/components/wiki/WikiPage', () => ({

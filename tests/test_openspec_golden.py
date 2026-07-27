@@ -113,7 +113,7 @@ class OpenSpecGoldenFixtureTests(unittest.TestCase):
             / "crates"
             / "agentum-server"
             / "src"
-            / "sdd_v2"
+            / "sdd"
             / "sources.rs"
         ).read_text(encoding="utf-8")
         self.assertNotRegex(adapter, r'Command::new\s*\(\s*"openspec"')

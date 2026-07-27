@@ -151,7 +151,7 @@ fn write_owner_only_atomic(state_dir: &Path, name: &str, value: &str) -> bool {
         return false;
     }
     let path = state_dir.join(name);
-    let result = crate::sdd_v2::artifacts::atomic_write(&path, value.as_bytes(), None);
+    let result = crate::sdd::artifacts::atomic_write(&path, value.as_bytes(), None);
     if let Err(error) = result {
         tracing::warn!(path = %path.display(), error = %error, "could not persist MCP credential state");
         false

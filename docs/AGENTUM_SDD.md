@@ -14,7 +14,7 @@ The manifest contains only the format, schema version, and artifact-set identity
 
 Agentum creates authoritative and attempt worktrees below its data directory. Providers run in disposable attempt worktrees through argument-vector `CommandSpec` values with an allowlisted environment, output and time limits, and process-tree cancellation. Providers do not write configuration into customer repositories and cannot directly approve or deliver their own work.
 
-The v2 HTTP contract is under `/api/sdd/v2`. Mutations carry a unique `requestId` and an `expectedRevision`. Artifact writes additionally compare the expected content hash. Approval digests bind the specification revision, artifact hashes, workflow policy, and workspace fingerprint.
+The HTTP contract is under `/api/sdd`. Mutations carry a unique `requestId` and an `expectedRevision`. Artifact writes additionally compare the expected content hash. Approval digests bind the specification revision, artifact hashes, workflow policy, and workspace fingerprint.
 
 ## Release behavior
 
@@ -72,7 +72,7 @@ During verification Agentum issues a one-use `browser_evidence.submit` grant to 
 
 Screenshots and bounded redacted transcripts are stored outside repositories under Agentum's data directory as immutable SHA-256 blobs. SQLite binds each manifest and blob role to the run, attempt, specification revision, check, capability grant, and durable event. Console data from the shared MCP listener is never attributed to an SDD attempt; its evidence coverage is explicitly `none`. Main-document network coverage comes from the exact isolated target. Pause, cancellation, attempt failure, successful submission, verification completion, and restart revoke any live grant.
 
-Independent review receives the typed verification records plus the exact browser evidence manifests. `review.md` metadata records a digest and sorted manifest-hash set, and the Ready transition independently compares it to current evidence. Delivery previews include the same evidence-set digest and become stale if it changes. The Run Center Evidence view shows attribution, redacted target, assertion/AC status, coverage, manifest hashes, and lazily loads authenticated capture blobs from `/api/sdd/v2/runs/{run_id}/evidence/{evidence_id}/blobs/{sha256}`. Local attempts require a supported local Chrome/Chromium runtime. Remote attempts require the version-matched worker to resolve and supervise Chrome/Chromium on the registered SSH host; an unavailable runtime fails verification rather than producing green evidence.
+Independent review receives the typed verification records plus the exact browser evidence manifests. `review.md` metadata records a digest and sorted manifest-hash set, and the Ready transition independently compares it to current evidence. Delivery previews include the same evidence-set digest and become stale if it changes. The Run Center Evidence view shows attribution, redacted target, assertion/AC status, coverage, manifest hashes, and lazily loads authenticated capture blobs from `/api/sdd/runs/{run_id}/evidence/{evidence_id}/blobs/{sha256}`. Local attempts require a supported local Chrome/Chromium runtime. Remote attempts require the version-matched worker to resolve and supervise Chrome/Chromium on the registered SSH host; an unavailable runtime fails verification rather than producing green evidence.
 
 ## New Spec source intake
 
@@ -87,7 +87,7 @@ Source intake uses a closed, versioned request shape. Callers cannot submit arbi
 { type: "openspec", path, expectedSourceRevision? }
 ```
 
-Use `POST /api/sdd/v2/repos/{repo_id}/sources/preview` before creating a reference-backed spec. Preview is read-only and returns normalized Markdown, diagnostics, imported task/design availability, a source revision, and a deterministic digest. Creation re-reads and re-normalizes the source. If `expectedSourceRevision` no longer matches, Agentum returns `409 source_revision_changed` before allocating a spec, worktree, or durable run.
+Use `POST /api/sdd/repos/{repo_id}/sources/preview` before creating a reference-backed spec. Preview is read-only and returns normalized Markdown, diagnostics, imported task/design availability, a source revision, and a deterministic digest. Creation re-reads and re-normalizes the source. If `expectedSourceRevision` no longer matches, Agentum returns `409 source_revision_changed` before allocating a spec, worktree, or durable run.
 
 Markdown and conventional OpenSpec imports are enabled. OpenSpec paths must identify an active or archived change below the repository's `openspec/changes/` tree; traversal, symlinks, unknown files, malformed deltas, unstable reads, and oversized input fail closed. GitHub import is enabled only when Agentum verifies an authenticated `gh` session for `github.com`; the server derives external identity and revision from the provider response. Linear import uses the selected connection from Agentum's secure vault and never reads the retired plaintext token field. Jira import uses the selected, revision-bound Cloud connection and site.
 
@@ -101,7 +101,7 @@ The embedded desktop stores SDD credentials in the operating-system credential v
 
 Jira OAuth requires a credential-free HTTPS `AGENTUM_JIRA_OAUTH_BROKER_URL`. Agentum requests and validates exactly `read:jira-work`, `write:jira-work`, and `offline_access`; binds start and one-time redemption to hashed state and a vault-held Ed25519 device key; requires explicit selection for multi-site grants; and replaces rotating refresh tokens under credential-revision CAS. Jira read and delivery capabilities fail closed unless the encrypted grant and sanitized database metadata agree. The independently deployable `agentum-jira-broker` serves start, callback, one-time redemption, refresh, and health endpoints. It retains codes and tokens only in bounded process memory; its durable database contains only public device keys, refresh-token SHA-256 digests, revisions, and timestamps, never Jira issue data or recoverable tokens. Because the exact scope set omits Atlassian's separate identity scope, its returned account identity is a device-bound local grant identifier and the display label is derived from sanitized Jira sites. Production TLS, Atlassian registration, DNS, and secrets remain operator-owned; the fail-closed container and reverse-proxy deployment is documented in [`deploy/jira-oauth-broker/README.md`](../deploy/jira-oauth-broker/README.md).
 
-Advanced email/API-token authentication is disabled by default. A local desktop or self-hosted operator may explicitly set `AGENTUM_JIRA_ALLOW_API_TOKEN_AUTH=true`; the UI then displays a warning and requires an acknowledgement before `POST /api/sdd/v2/integrations/jira/api-token/connect` accepts a tenant URL, email, and API token. Agentum validates the credential directly against that exact `*.atlassian.net` tenant, stores it only in the secure vault, and never sends it through the OAuth broker. Jira mutations still require a hash-bound Deliver preview and confirmation.
+Advanced email/API-token authentication is disabled by default. A local desktop or self-hosted operator may explicitly set `AGENTUM_JIRA_ALLOW_API_TOKEN_AUTH=true`; the UI then displays a warning and requires an acknowledgement before `POST /api/sdd/integrations/jira/api-token/connect` accepts a tenant URL, email, and API token. Agentum validates the credential directly against that exact `*.atlassian.net` tenant, stores it only in the secure vault, and never sends it through the OAuth broker. Jira mutations still require a hash-bound Deliver preview and confirmation.
 
 At Ready, the Run Center composes a closed delivery intent (`commit`, `push`, `pullRequest`, `trackerComment`, `trackerStatus`, `trackerFieldUpdate`, `release`, or one-shot `openSpecExport`) and sends the exact typed actions in `previewDelivery`. Confirmation can select only action IDs returned by that preview token. No delivery action is inferred from a tracker or run state.
 
@@ -203,7 +203,7 @@ paths, rollback preimages, patch state, and the cross-process lease live in
 `sdd-worker.sqlite` below Agentum's data directory. EOF, timeout, and explicit
 cancellation terminate provider and verification process trees.
 
-`GET /api/sdd/v2/repos/{repo_id}/remote-capability?provider=<id>` performs a
+`GET /api/sdd/repos/{repo_id}/remote-capability?provider=<id>` performs a
 real fixed-subsystem probe and reports the exact worker version, repository
 registration, stable artifact-set identity, and current provider readiness.
 When that exact probe succeeds, New Spec can author remotely and the desktop

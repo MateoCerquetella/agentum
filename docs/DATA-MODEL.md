@@ -2,7 +2,7 @@
 
 Agentum persists operational state in SQLite with WAL enabled. The schema is
 applied in order from `crates/agentum-store/migrations/`; migration
-`0030_agentum_sdd_v2.sql` establishes the authoritative specification-driven
+`0030_agentum_sdd.sql` establishes the authoritative specification-driven
 development model.
 
 Repository artifacts and database rows have separate jobs. The `.agentum/`

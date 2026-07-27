@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { SddEvent, SddSnapshot } from '@/runtime/sdd-v2-client'
+import type { SddEvent, SddSnapshot } from '@/runtime/sdd-client'
 import {
   appendDurableEvent,
   availableRunActions,

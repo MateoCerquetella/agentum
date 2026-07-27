@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use agentum_server::sdd_v2::remote_worker::{RemoteWorkerConfig, serve_stdio};
+use agentum_server::sdd::remote_worker::{RemoteWorkerConfig, serve_stdio};
 
 fn config_argument(arguments: &[String]) -> Result<PathBuf, String> {
     match arguments {
@@ -35,23 +35,23 @@ async fn main() {
                 );
             }),
             Err(error) => Err(
-                agentum_server::sdd_v2::remote_worker::RemoteWorkerError::Config(error),
+                agentum_server::sdd::remote_worker::RemoteWorkerError::Config(error),
             ),
         },
         [command, rest @ ..] if command == "subsystem" => match config_argument(rest) {
             Ok(path) => serve_stdio(&path).await,
             Err(error) => Err(
-                agentum_server::sdd_v2::remote_worker::RemoteWorkerError::Config(error),
+                agentum_server::sdd::remote_worker::RemoteWorkerError::Config(error),
             ),
         },
         [] => match config_argument(&[]) {
             Ok(path) => serve_stdio(&path).await,
             Err(error) => Err(
-                agentum_server::sdd_v2::remote_worker::RemoteWorkerError::Config(error),
+                agentum_server::sdd::remote_worker::RemoteWorkerError::Config(error),
             ),
         },
         _ => Err(
-            agentum_server::sdd_v2::remote_worker::RemoteWorkerError::Config(
+            agentum_server::sdd::remote_worker::RemoteWorkerError::Config(
                 "usage: agentum-sdd-worker [subsystem] [--config <absolute-path>] | --check-config [--config <absolute-path>] | --version".into(),
             ),
         ),
@@ -65,10 +65,8 @@ async fn main() {
     }
 }
 
-fn error_category(
-    error: &agentum_server::sdd_v2::remote_worker::RemoteWorkerError,
-) -> &'static str {
-    use agentum_server::sdd_v2::remote_worker::RemoteWorkerError;
+fn error_category(error: &agentum_server::sdd::remote_worker::RemoteWorkerError) -> &'static str {
+    use agentum_server::sdd::remote_worker::RemoteWorkerError;
     match error {
         RemoteWorkerError::Config(_) => "configuration",
         RemoteWorkerError::Store(_) => "durable-state",

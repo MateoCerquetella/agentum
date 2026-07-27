@@ -28,7 +28,7 @@ for forbidden in \
   fi
 done
 
-# The v2 cutover has no compatibility window. These tracked project-owned
+# The cutover has no compatibility window. These tracked project-owned
 # authoring surfaces must be migrated or archived before a release; normal
 # product docs and contributor-owned .claude settings are intentionally not in
 # this list.

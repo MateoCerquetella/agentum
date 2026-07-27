@@ -350,7 +350,7 @@ GET /api/usage/recent-sessions     # last N sessions with cost + duration
 
 ### 7.1 Server-route auth model
 
-Historical note: the first thin-shell implementation embedded a loopback server with `state.no_auth = true`. That model has been retired. The desktop now mints a boot-scoped, memory-only UI bearer and every non-public embedded route passes through `require_token`; the entire `/api/sdd/v2` HTTP and WebSocket namespace also remains authenticated when a standalone daemon uses `--no-auth`. MCP uses a separate bearer that is never interchangeable with the UI capability. New routes must be wired through the shared router and may not treat loopback origin as identity.
+Historical note: the first thin-shell implementation embedded a loopback server with `state.no_auth = true`. That model has been retired. The desktop now mints a boot-scoped, memory-only UI bearer and every non-public embedded route passes through `require_token`; the entire `/api/sdd` HTTP and WebSocket namespace also remains authenticated when a standalone daemon uses `--no-auth`. MCP uses a separate bearer that is never interchangeable with the UI capability. New routes must be wired through the shared router and may not treat loopback origin as identity.
 
 ### 7.2 Event broadcasting
 

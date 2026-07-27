@@ -22,7 +22,7 @@ import sys
 import tempfile
 
 
-REPORT_PATH = Path("docs/migrations/agentum-sdd-v2-inventory.json")
+REPORT_PATH = Path("docs/migrations/agentum-sdd-inventory.json")
 JOURNAL_PATH = Path(".agentum-migration-journal.json")
 LEGACY_DEMO_DIRECTORY = Path("examples/harness-demo")
 LEGACY_DEMO_FILES = (
@@ -615,7 +615,7 @@ source: legacy-import:{source}@sha256:{source_hash}
 ## Migration provenance
 
 This historical specification was assigned a stable Agentum identity during the
-v2 cutover. Its source is included below and its exact original bytes are also
+cutover. Its source is included below and its exact original bytes are also
 preserved in the external recovery archive and accounted for by SHA-256.
 
 ## Requirements
@@ -879,7 +879,7 @@ def build_inventory(
         counts[disposition] = counts.get(disposition, 0) + 1
     report = {
         "schemaVersion": 1,
-        "migration": "agentum-sdd-v2-hard-cutover",
+        "migration": "agentum-sdd-hard-cutover",
         "archiveId": archive_id,
         "artifactSetId": artifact_set_id,
         "sourceCount": len(entries),
@@ -1108,7 +1108,7 @@ def immutable_checkpoint(report: dict, imported: dict[str, str], pattern_hash: s
     }
     return {
         "schemaVersion": 1,
-        "migration": "agentum-sdd-v2-hard-cutover",
+        "migration": "agentum-sdd-hard-cutover",
         "archiveId": report["archiveId"],
         "artifactSetId": report["artifactSetId"],
         "reportHash": sha256(encoded_json(report)),

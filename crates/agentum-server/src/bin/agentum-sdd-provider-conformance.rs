@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agentum_server::sdd_v2::credentials::{
+use agentum_server::sdd::credentials::{
     OsCredentialVault, SddCredentialVault, headless_vault_or_unavailable,
 };
-use agentum_server::sdd_v2::provider_conformance::{
+use agentum_server::sdd::provider_conformance::{
     publish_report, run_bundled_suite, run_custom_suite, verify_checkpoint_file, verify_report_file,
 };
 
@@ -101,7 +101,7 @@ async fn dispatch(arguments: &[String]) -> Result<(), String> {
             println!(
                 "agentum-sdd-provider-conformance {} suite={}",
                 env!("CARGO_PKG_VERSION"),
-                agentum_server::sdd_v2::providers::CUSTOM_PROVIDER_CONFORMANCE_SUITE
+                agentum_server::sdd::providers::CUSTOM_PROVIDER_CONFORMANCE_SUITE
             );
             Ok(())
         }

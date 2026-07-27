@@ -315,7 +315,7 @@ All HTTP/WS routes live in `crates/agentum-server/src/routes/`:
 | `host.rs`         | `/api/host/metrics`        | CPU+RAM samples; also broadcasts. |
 | `fs.rs`           | `/api/fs/list`             | Workdir picker. |
 | `mcp.rs`          | `/mcp`                     | agentum's own MCP server (see below). |
-| `sdd_v2.rs`       | `/api/sdd/v2/*` + `/events` WS | Sole authoritative specification workflow: specs, runs, typed commands, artifacts, durable events, and delivery previews. |
+| `sdd.rs`       | `/api/sdd/*` + `/events` WS | Sole authoritative specification workflow: specs, runs, typed commands, artifacts, durable events, and delivery previews. |
 | `git.rs`          | `/api/sessions/{id}/git/*` | Per-session git surface. Decomposed by domain into `git/` submodules — `history_routes`, `compare_routes` (commit/branch compare), `conflict_routes` (rebase/abort/discard/upstream), `sync_routes` (branches/log/fetch/pull/push), `write_routes` (stage/commit mutations), `content_routes` (diff/file), `file_links_routes` (remote URL/blob). The root keeps the router, shared git-exec/path-safety plumbing (`run_git`, `host_and_cwd_for`, `ensure_safe_relative`), and the shared status core (`parse_porcelain_z`/`GitStatus`) that `write_routes` reuses; submodules reach it via `use super::*`. |
 | `board.rs`, `notes.rs`, `channels.rs`, `watchdog.rs`, `doctor.rs` | various | Self-explanatory. |
 
@@ -348,7 +348,7 @@ skill files. This supersedes the old "install a skill into
   `agentum_send_message`, `agentum_check_messages` (the `orchestration`
   mailbox). Add a tool by appending to `tool_specs()` + a `call_tool`
   arm. MCP prompts, when exposed, are convenience text only; they never own or
-  mutate SDD state outside the typed `/api/sdd/v2` command contract.
+  mutate SDD state outside the typed `/api/sdd` command contract.
 - **Auth**: `/mcp` is **never public** — embedded and standalone daemons require
   a dedicated MCP bearer even when legacy HTTP automation uses `--no-auth`.
   Launch provisioning injects `Authorization: Bearer …` into Claude's combined
@@ -373,27 +373,27 @@ skill files. This supersedes the old "install a skill into
 
 ---
 
-## Agentum SDD v2
+## Agentum SDD
 
 Agentum has one provider-neutral owner for specification-driven work. Core
 contracts and validation live in `agentum-core/src/sdd.rs`; normalized
-persistence lives in store migration `0030_agentum_sdd_v2.sql` and
+persistence lives in store migration `0030_agentum_sdd.sql` and
 `agentum-store/src/sdd.rs`; the public contract lives in
-`agentum-server/src/routes/sdd_v2.rs`.
+`agentum-server/src/routes/sdd.rs`.
 
 ### Public contract
 
 The authoritative surface is:
 
-- `POST /api/sdd/v2/repos/{repo_id}/specs`
-- `GET /api/sdd/v2/repos/{repo_id}/specs`
-- `GET /api/sdd/v2/specs/{spec_id}`
-- `POST /api/sdd/v2/specs/{spec_id}/runs`
-- `GET /api/sdd/v2/runs/{run_id}`
-- `POST /api/sdd/v2/runs/{run_id}/commands`
-- `GET /api/sdd/v2/runs/{run_id}/artifacts`
-- `GET /api/sdd/v2/runs/{run_id}/events?after=<cursor>`
-- `WS /api/sdd/v2/events?repoId=<id>&after=<cursor>`
+- `POST /api/sdd/repos/{repo_id}/specs`
+- `GET /api/sdd/repos/{repo_id}/specs`
+- `GET /api/sdd/specs/{spec_id}`
+- `POST /api/sdd/specs/{spec_id}/runs`
+- `GET /api/sdd/runs/{run_id}`
+- `POST /api/sdd/runs/{run_id}/commands`
+- `GET /api/sdd/runs/{run_id}/artifacts`
+- `GET /api/sdd/runs/{run_id}/events?after=<cursor>`
+- `WS /api/sdd/events?repoId=<id>&after=<cursor>`
 
 Mutating commands form a closed discriminated union. Every command includes a
 caller-generated `requestId` and `expectedRevision`; duplicate requests

@@ -59,7 +59,7 @@ import {
   type SddSpec,
   type JiraConnection,
   type JiraOauthStart
-} from '@/runtime/sdd-v2-client'
+} from '@/runtime/sdd-client'
 import {
   SOURCE_OPTIONS,
   appendDurableEvent,

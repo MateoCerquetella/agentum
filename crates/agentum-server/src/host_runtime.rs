@@ -212,7 +212,7 @@ pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]
             if let Some(parent) = std::path::Path::new(abs_path).parent() {
                 std::fs::create_dir_all(parent).map_err(map_ssh_io)?;
             }
-            crate::sdd_v2::artifacts::atomic_write(std::path::Path::new(abs_path), content, None)
+            crate::sdd::artifacts::atomic_write(std::path::Path::new(abs_path), content, None)
                 .map_err(|error| HostRuntimeError::Io(std::io::Error::other(error)))?;
             Ok(())
         }

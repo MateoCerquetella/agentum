@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 import { RunViewContent } from './SddWorkspaceBar'
-import type { SddSnapshot } from '@/runtime/sdd-v2-client'
+import type { SddSnapshot } from '@/runtime/sdd-client'
 
 const snapshot: SddSnapshot = {
   browserEvidence: [],

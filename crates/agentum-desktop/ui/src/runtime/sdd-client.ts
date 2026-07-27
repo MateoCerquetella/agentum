@@ -426,13 +426,13 @@ export type SddDeliveryIntent =
 
 export async function listSpecs(repoId: string): Promise<SddSpec[]> {
   const response = await getJson<{ specs: SddSpec[] }>(
-    `/api/sdd/v2/repos/${encodeURIComponent(repoId)}/specs`
+    `/api/sdd/repos/${encodeURIComponent(repoId)}/specs`
   )
   return response.specs
 }
 
 export async function getSddCapabilities(): Promise<SddCapabilities> {
-  return getJson('/api/sdd/v2/capabilities')
+  return getJson('/api/sdd/capabilities')
 }
 
 export async function getSddRemoteCapability(
@@ -442,12 +442,12 @@ export async function getSddRemoteCapability(
 ): Promise<SddRemoteCapability> {
   const query = new URLSearchParams({ provider, baseRef })
   return getJson(
-    `/api/sdd/v2/repos/${encodeURIComponent(repoId)}/remote-capability?${query.toString()}`
+    `/api/sdd/repos/${encodeURIComponent(repoId)}/remote-capability?${query.toString()}`
   )
 }
 
 export async function startJiraOauth(requestId: string): Promise<JiraOauthStart> {
-  return postJson('/api/sdd/v2/integrations/jira/oauth/start', {
+  return postJson('/api/sdd/integrations/jira/oauth/start', {
     requestId,
     expectedRevision: 0
   })
@@ -459,7 +459,7 @@ export async function redeemJiraOauth(
   expectedRevision: number
 ): Promise<JiraConnection> {
   const result = await postJson<{ connection: JiraConnection }>(
-    '/api/sdd/v2/integrations/jira/oauth/redeem',
+    '/api/sdd/integrations/jira/oauth/redeem',
     { requestId, flowId, expectedRevision }
   )
   return result.connection
@@ -467,7 +467,7 @@ export async function redeemJiraOauth(
 
 export async function listJiraConnections(): Promise<JiraConnection[]> {
   const result = await getJson<{ connections: JiraConnection[] }>(
-    '/api/sdd/v2/integrations/jira/connections'
+    '/api/sdd/integrations/jira/connections'
   )
   return result.connections
 }
@@ -481,7 +481,7 @@ export async function selectJiraSite(
   }
 ): Promise<JiraConnection> {
   const result = await postJson<{ connection: JiraConnection }>(
-    `/api/sdd/v2/integrations/jira/connections/${encodeURIComponent(connectionId)}/select-site`,
+    `/api/sdd/integrations/jira/connections/${encodeURIComponent(connectionId)}/select-site`,
     input
   )
   return result.connection
@@ -496,7 +496,7 @@ export async function connectJiraApiToken(input: {
   expectedRevision: number
 }): Promise<JiraConnection> {
   const result = await postJson<{ connection: JiraConnection }>(
-    '/api/sdd/v2/integrations/jira/api-token/connect',
+    '/api/sdd/integrations/jira/api-token/connect',
     input
   )
   return result.connection
@@ -506,7 +506,7 @@ export async function createSpec(
   repoId: string,
   input: CreateSpecInput
 ): Promise<CreateSpecResult> {
-  return postJson(`/api/sdd/v2/repos/${encodeURIComponent(repoId)}/specs`, input)
+  return postJson(`/api/sdd/repos/${encodeURIComponent(repoId)}/specs`, input)
 }
 
 export async function previewSddSource(
@@ -514,7 +514,7 @@ export async function previewSddSource(
   title: string,
   source: SddSourceReference
 ): Promise<SddSourcePreview> {
-  return postJson(`/api/sdd/v2/repos/${encodeURIComponent(repoId)}/sources/preview`, {
+  return postJson(`/api/sdd/repos/${encodeURIComponent(repoId)}/sources/preview`, {
     title,
     source
   })
@@ -523,23 +523,23 @@ export async function previewSddSource(
 export async function getSpec(
   specId: string
 ): Promise<{ spec: SddSpec; run: SddRun | null; runs?: SddRun[] }> {
-  return getJson(`/api/sdd/v2/specs/${encodeURIComponent(specId)}`)
+  return getJson(`/api/sdd/specs/${encodeURIComponent(specId)}`)
 }
 
 export async function createSpecRun(
   specId: string,
   input: CreateSpecRunInput
 ): Promise<CreateSpecRunResult> {
-  return postJson(`/api/sdd/v2/specs/${encodeURIComponent(specId)}/runs`, input)
+  return postJson(`/api/sdd/specs/${encodeURIComponent(specId)}/runs`, input)
 }
 
 export async function getRun(runId: string): Promise<SddSnapshot> {
-  return getJson(`/api/sdd/v2/runs/${encodeURIComponent(runId)}`)
+  return getJson(`/api/sdd/runs/${encodeURIComponent(runId)}`)
 }
 
 export async function getArtifacts(runId: string): Promise<SddArtifact[]> {
   const response = await getJson<{ artifacts: SddArtifact[] }>(
-    `/api/sdd/v2/runs/${encodeURIComponent(runId)}/artifacts`
+    `/api/sdd/runs/${encodeURIComponent(runId)}/artifacts`
   )
   return response.artifacts
 }
@@ -550,19 +550,19 @@ export async function getBrowserEvidenceBlob(
   sha256: string
 ): Promise<Blob> {
   return getBlob(
-    `/api/sdd/v2/runs/${encodeURIComponent(runId)}/evidence/${encodeURIComponent(evidenceId)}/blobs/${encodeURIComponent(sha256)}`
+    `/api/sdd/runs/${encodeURIComponent(runId)}/evidence/${encodeURIComponent(evidenceId)}/blobs/${encodeURIComponent(sha256)}`
   )
 }
 
 export async function getEvents(runId: string, after = 0): Promise<SddEvent[]> {
   const response = await getJson<{ events: SddEvent[] }>(
-    `/api/sdd/v2/runs/${encodeURIComponent(runId)}/events${qs({ after })}`
+    `/api/sdd/runs/${encodeURIComponent(runId)}/events${qs({ after })}`
   )
   return response.events
 }
 
 export async function command<T extends object>(runId: string, body: T): Promise<SddCommandResult> {
-  return postJson(`/api/sdd/v2/runs/${encodeURIComponent(runId)}/commands`, body)
+  return postJson(`/api/sdd/runs/${encodeURIComponent(runId)}/commands`, body)
 }
 
 export type SddEventSubscription = {
@@ -599,7 +599,7 @@ export function subscribeSddEvents(subscription: SddEventSubscription): () => vo
     try {
       const [{ token }, base] = await Promise.all([
         getServerEndpoint(),
-        wsUrl('/api/sdd/v2/events')
+        wsUrl('/api/sdd/events')
       ])
       if (closed) return
       const params = new URLSearchParams({

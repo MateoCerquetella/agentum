@@ -174,7 +174,7 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(archive_root.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(archived.parent.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(archived.stat().st_mode), 0o600)
-        inventory = json.loads((repo / "docs/migrations/agentum-sdd-v2-inventory.json").read_text())
+        inventory = json.loads((repo / "docs/migrations/agentum-sdd-inventory.json").read_text())
         self.assertEqual(inventory["sourceCount"], 12)
         self.assertEqual(
             {entry["path"] for entry in inventory["sources"]},
@@ -276,7 +276,7 @@ class MigrationTests(unittest.TestCase):
             text=True,
             stdout=subprocess.PIPE,
         )
-        inventory = json.loads((repo / "docs/migrations/agentum-sdd-v2-inventory.json").read_text())
+        inventory = json.loads((repo / "docs/migrations/agentum-sdd-inventory.json").read_text())
         demo_entries = [
             entry
             for entry in inventory["sources"]
@@ -348,13 +348,13 @@ class MigrationTests(unittest.TestCase):
                 ) if (repo / ".agentum").is_dir() else None
                 if crash_point == "post_archive":
                     self.assertFalse((repo / ".agentum").exists())
-                    self.assertFalse((repo / "docs/migrations/agentum-sdd-v2-inventory.json").exists())
+                    self.assertFalse((repo / "docs/migrations/agentum-sdd-inventory.json").exists())
                 elif crash_point == "post_publish":
                     self.assertTrue((repo / ".agentum").is_dir())
-                    self.assertFalse((repo / "docs/migrations/agentum-sdd-v2-inventory.json").exists())
+                    self.assertFalse((repo / "docs/migrations/agentum-sdd-inventory.json").exists())
                 else:
                     self.assertTrue((repo / ".agentum").is_dir())
-                    self.assertTrue((repo / "docs/migrations/agentum-sdd-v2-inventory.json").is_file())
+                    self.assertTrue((repo / "docs/migrations/agentum-sdd-inventory.json").is_file())
 
                 subprocess.run(
                     migration_command(
@@ -374,7 +374,7 @@ class MigrationTests(unittest.TestCase):
                 self.assertFalse((repo / "ai").exists())
                 self.assertFalse((repo / "examples/harness-demo").exists())
                 inventory = json.loads(
-                    (repo / "docs/migrations/agentum-sdd-v2-inventory.json").read_text()
+                    (repo / "docs/migrations/agentum-sdd-inventory.json").read_text()
                 )
                 self.assertEqual(inventory["sourceCount"], 12)
                 archived_demo_files = [

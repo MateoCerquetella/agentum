@@ -16,7 +16,7 @@ import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { ProjectSessionsList } from './ProjectSessionsList'
 import { ProjectTasksPage } from './ProjectTasksPage'
-import SddWorkspaceBar from '@/components/sdd-v2/SddWorkspaceBar'
+import SddWorkspaceBar from '@/components/sdd/SddWorkspaceBar'
 
 // Lazy like App.tsx's page mounts: the hub chunk stays small and each surface
 // loads on first tab visit (Wiki/TaskPage are already split chunks).

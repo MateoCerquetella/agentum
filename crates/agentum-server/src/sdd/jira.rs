@@ -24,13 +24,13 @@ use agentum_store::sdd_integrations::{
 };
 
 use crate::AppState;
-use crate::sdd_v2::credentials::{
+use crate::sdd::credentials::{
     JiraApiTokenCredential, JiraCredential, JiraSite, delete_jira_api_token_credential,
     delete_jira_flow_secret, get_jira_api_token_credential, get_jira_credential,
     get_jira_device_private_key, get_jira_flow_secret, put_jira_api_token_credential,
     put_jira_credential, put_jira_device_private_key, put_jira_flow_secret,
 };
-use crate::sdd_v2::sha256;
+use crate::sdd::sha256;
 
 const BROKER_ENV: &str = "AGENTUM_JIRA_OAUTH_BROKER_URL";
 const API_TOKEN_FALLBACK_ENV: &str = "AGENTUM_JIRA_ALLOW_API_TOKEN_AUTH";
@@ -299,13 +299,13 @@ pub async fn connect_api_token(
         let previous =
             get_jira_api_token_credential(vault.as_ref(), Some(connection_for_vault.as_str()))?;
         let credential: JiraApiTokenCredential = serde_json::from_slice(&credential_bytes)
-            .map_err(|_| crate::sdd_v2::credentials::VaultError::Unsafe)?;
+            .map_err(|_| crate::sdd::credentials::VaultError::Unsafe)?;
         put_jira_api_token_credential(vault.as_ref(), &credential, false)?;
         previous
             .as_ref()
             .map(serde_json::to_vec)
             .transpose()
-            .map_err(|_| crate::sdd_v2::credentials::VaultError::Unsafe)
+            .map_err(|_| crate::sdd::credentials::VaultError::Unsafe)
     })
     .await
     .map_err(|_| JiraError::Vault)?
@@ -331,7 +331,7 @@ pub async fn connect_api_token(
         let _ = tokio::task::spawn_blocking(move || {
             if let Some(previous) = previous {
                 let previous: JiraApiTokenCredential = serde_json::from_slice(&previous)
-                    .map_err(|_| crate::sdd_v2::credentials::VaultError::Unsafe)?;
+                    .map_err(|_| crate::sdd::credentials::VaultError::Unsafe)?;
                 put_jira_api_token_credential(vault.as_ref(), &previous, false)
             } else {
                 delete_jira_api_token_credential(vault.as_ref(), &connection)
@@ -345,7 +345,7 @@ pub async fn connect_api_token(
         serde_json::to_vec(&credential).map_err(|_| JiraError::ApiTokenRejected)?;
     tokio::task::spawn_blocking(move || {
         let credential: JiraApiTokenCredential = serde_json::from_slice(&selected_bytes)
-            .map_err(|_| crate::sdd_v2::credentials::VaultError::Unsafe)?;
+            .map_err(|_| crate::sdd::credentials::VaultError::Unsafe)?;
         put_jira_api_token_credential(vault.as_ref(), &credential, true)
     })
     .await
@@ -582,7 +582,7 @@ async fn finish_redemption(
     let selected_for_vault = selected;
     tokio::task::spawn_blocking(move || {
         let credential: JiraCredential = serde_json::from_slice(&credential_for_vault)
-            .map_err(|_| crate::sdd_v2::credentials::VaultError::Unsafe)?;
+            .map_err(|_| crate::sdd::credentials::VaultError::Unsafe)?;
         put_jira_credential(vault.as_ref(), &credential, selected_for_vault)
     })
     .await
@@ -639,7 +639,7 @@ pub async fn select_site(
     let credential_for_vault = credential_to_bytes(&credential)?;
     tokio::task::spawn_blocking(move || {
         let credential: JiraCredential = serde_json::from_slice(&credential_for_vault)
-            .map_err(|_| crate::sdd_v2::credentials::VaultError::Unsafe)?;
+            .map_err(|_| crate::sdd::credentials::VaultError::Unsafe)?;
         put_jira_credential(vault.as_ref(), &credential, true)
     })
     .await
@@ -971,7 +971,7 @@ pub(crate) async fn ensure_fresh_credential(
     let bytes = credential_to_bytes(&replacement)?;
     tokio::task::spawn_blocking(move || {
         let replacement: JiraCredential = serde_json::from_slice(&bytes)
-            .map_err(|_| crate::sdd_v2::credentials::VaultError::Unsafe)?;
+            .map_err(|_| crate::sdd::credentials::VaultError::Unsafe)?;
         put_jira_credential(vault.as_ref(), &replacement, true)
     })
     .await

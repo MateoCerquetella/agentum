@@ -1,6 +1,6 @@
 # SDD demo shop
 
-This tiny repository fixture is the release-gate project for Agentum SDD v2.
+This tiny repository fixture is the release-gate project for Agentum SDD.
 It models active customer sessions and refresh-token rotation with Node's
 built-in test runner.
 

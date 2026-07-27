@@ -382,7 +382,7 @@ async fn watch_session(
             return;
         }
 
-        // Context-low interactive sessions compact after the cooldown. SDD v2
+        // Context-low interactive sessions compact after the cooldown. SDD
         // attempts use isolated provider processes instead of this terminal path.
         if let Some(cmd) = compact_cmd {
             if context_low.is_match(&pane) {

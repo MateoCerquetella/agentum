@@ -29,7 +29,7 @@ pub mod profiles;
 pub mod project_trackers;
 pub mod provision;
 pub mod repos;
-pub mod sdd_v2;
+pub mod sdd;
 pub mod sessions;
 pub mod uploads;
 pub mod usage;

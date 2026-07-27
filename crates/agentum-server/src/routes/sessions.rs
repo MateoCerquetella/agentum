@@ -1331,7 +1331,7 @@ mod tests {
                 desktop_bridge: None,
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 sdd_credentials: std::sync::Arc::new(
-                    crate::sdd_v2::credentials::MemoryCredentialVault::default(),
+                    crate::sdd::credentials::MemoryCredentialVault::default(),
                 ),
             }
         }
@@ -1481,7 +1481,7 @@ mod tests {
                 desktop_bridge: None,
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 sdd_credentials: std::sync::Arc::new(
-                    crate::sdd_v2::credentials::MemoryCredentialVault::default(),
+                    crate::sdd::credentials::MemoryCredentialVault::default(),
                 ),
             }
         }

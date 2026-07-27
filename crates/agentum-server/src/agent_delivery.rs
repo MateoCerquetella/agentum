@@ -1,6 +1,6 @@
 //! Shared delivery primitives for interactive terminal agents.
 //!
-//! These helpers belong to the general session runtime. SDD v2 providers use
+//! These helpers belong to the general session runtime. SDD providers use
 //! isolated process adapters and never depend on an interactive terminal.
 
 use std::time::{Duration, Instant};

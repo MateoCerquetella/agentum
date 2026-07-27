@@ -49,7 +49,7 @@ mod port_wait;
 pub mod provision;
 pub mod ratelimit;
 mod routes;
-pub mod sdd_v2;
+pub mod sdd;
 pub mod task_sink;
 pub mod tls;
 pub mod tracker_attention;
@@ -221,7 +221,7 @@ pub struct AppState {
     /// SDD integrations never read legacy plaintext credential files. Desktop
     /// builds replace this with the OS credential store; standalone servers
     /// receive an encrypted vault only when an external master key is present.
-    pub sdd_credentials: Arc<dyn sdd_v2::credentials::SddCredentialVault>,
+    pub sdd_credentials: Arc<dyn sdd::credentials::SddCredentialVault>,
 }
 
 impl AppState {
@@ -265,7 +265,7 @@ impl AppState {
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
             events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            sdd_credentials: sdd_v2::credentials::headless_vault_or_unavailable(),
+            sdd_credentials: sdd::credentials::headless_vault_or_unavailable(),
         }
     }
 }
@@ -335,7 +335,7 @@ pub fn router(state: AppState) -> Router {
         // Spec 010 F3: workspace provisioning (repo-from-template + the ensure).
         .merge(routes::provision::router())
         .merge(routes::usage::router())
-        .merge(routes::sdd_v2::router())
+        .merge(routes::sdd::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::require_token,
@@ -460,7 +460,7 @@ async fn spawn_background_workers(
     // revived after the hard cutover.
     for saga in state.store.sdd_claim_interrupted_creates().await? {
         if saga.authoritative_path.starts_with("agentum+ssh://") {
-            match routes::sdd_v2::recover_remote_create(state, &saga).await {
+            match routes::sdd::recover_remote_create(state, &saga).await {
                 Ok(()) => tracing::info!(
                     run_id = %saga.run_id,
                     "recovered interrupted remote SDD create through its durable typed intent"
@@ -476,18 +476,14 @@ async fn spawn_background_workers(
         let repository = std::path::Path::new(&saga.repository_path);
         let authoritative = std::path::Path::new(&saga.authoritative_path);
         let recovery = async {
-            sdd_v2::workspace::recover_interrupted_attempt(
+            sdd::workspace::recover_interrupted_attempt(
                 repository,
                 authoritative,
                 std::path::Path::new(&saga.attempt_path),
             )
             .await?;
-            sdd_v2::workspace::recover_interrupted_create(
-                repository,
-                authoritative,
-                &saga.branch_name,
-            )
-            .await
+            sdd::workspace::recover_interrupted_create(repository, authoritative, &saga.branch_name)
+                .await
         }
         .await;
         match recovery {
@@ -515,18 +511,14 @@ async fn spawn_background_workers(
         let repository = std::path::Path::new(&saga.repository_path);
         let authoritative = std::path::Path::new(&saga.authoritative_path);
         let recovery = async {
-            sdd_v2::workspace::recover_interrupted_attempt(
+            sdd::workspace::recover_interrupted_attempt(
                 repository,
                 authoritative,
                 std::path::Path::new(&saga.attempt_path),
             )
             .await?;
-            sdd_v2::workspace::recover_interrupted_create(
-                repository,
-                authoritative,
-                &saga.branch_name,
-            )
-            .await
+            sdd::workspace::recover_interrupted_create(repository, authoritative, &saga.branch_name)
+                .await
         }
         .await;
         match recovery {
@@ -557,7 +549,7 @@ async fn spawn_background_workers(
             "paused interrupted SDD runs during recovery"
         );
     }
-    let recovered_delivery = sdd_v2::delivery::recover_interrupted(state).await?;
+    let recovered_delivery = sdd::delivery::recover_interrupted(state).await?;
     if recovered_delivery > 0 {
         tracing::warn!(
             actions = recovered_delivery,
@@ -764,7 +756,7 @@ fn embedded_app_state(store: Store, addr: SocketAddr) -> (AppState, broadcast::S
     state.no_auth = false;
     state.embedded_ui_token = Some(Arc::new(auth::new_token()));
     state.api_base_url = Some(format!("http://{addr}"));
-    state.sdd_credentials = Arc::new(sdd_v2::credentials::OsCredentialVault::new());
+    state.sdd_credentials = Arc::new(sdd::credentials::OsCredentialVault::new());
     (state, bus)
 }
 

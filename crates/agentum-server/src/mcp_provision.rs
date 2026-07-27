@@ -238,7 +238,7 @@ fn write_combined_config_in(state_dir: &Path, servers: &[McpServer]) -> Result<P
     std::fs::create_dir_all(state_dir)
         .with_context(|| format!("create state dir {}", state_dir.display()))?;
     let path = state_dir.join("mcp.json");
-    crate::sdd_v2::artifacts::atomic_write(&path, config_json(servers).as_bytes(), None)
+    crate::sdd::artifacts::atomic_write(&path, config_json(servers).as_bytes(), None)
         .map_err(anyhow::Error::new)
         .with_context(|| format!("securely publish {}", path.display()))?;
     Ok(path)

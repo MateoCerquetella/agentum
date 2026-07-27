@@ -63,7 +63,7 @@ import {
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { appendUniqueOpenFileIds } from './terminal/unsaved-close-queue'
 import CodexRestartChip from './CodexRestartChip'
-import SddWorkspaceBar from './sdd-v2/SddWorkspaceBar'
+import SddWorkspaceBar from './sdd/SddWorkspaceBar'
 import {
   findActivityTerminalPortal,
   useActivityTerminalPortals,

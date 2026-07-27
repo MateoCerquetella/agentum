@@ -1,4 +1,4 @@
-import type { SddSourceKind } from '@/runtime/sdd-v2-client'
+import type { SddSourceKind } from '@/runtime/sdd-client'
 import { useAppStore } from '@/store'
 
 const NEW_SPEC_REQUESTED_EVENT = 'agentum:new-spec-requested'

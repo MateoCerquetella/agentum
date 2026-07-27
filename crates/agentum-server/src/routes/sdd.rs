@@ -1,4 +1,4 @@
-//! `/api/sdd/v2` — the sole authoritative specification workflow contract.
+//! `/api/sdd` — the sole authoritative specification workflow contract.
 
 use std::path::{Path as FsPath, PathBuf};
 use std::time::Duration;
@@ -29,81 +29,81 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::auth::AuthActor;
 use crate::error::ApiError;
-use crate::sdd_v2::artifacts::{
+use crate::sdd::artifacts::{
     self, ArtifactError, MISSING_HASH, atomic_remove, atomic_write, content_hash,
     discover_manifest, discover_specs, initialize, read_bytes, read_text, render_spec,
     validate_existing_root,
 };
-use crate::sdd_v2::delivery::{
+use crate::sdd::delivery::{
     DeliveryActionRequest, DeliveryArtifactHash, DeliveryPreviewEnvelope, PreparedDeliveryAction,
     bind_openspec_exports, bind_tracker_mutations, prepare_actions, preview_digest, preview_token,
     validate_openspec_exports, validate_preview_token, validate_tracker_mutations,
     workspace_state_hash,
 };
-use crate::sdd_v2::jira::JiraError;
-use crate::sdd_v2::providers::{
+use crate::sdd::jira::JiraError;
+use crate::sdd::providers::{
     BUNDLED_IDS, BundledProvider, ProviderAdapter, authoring_prompt, probe_custom_provider,
     probe_provider, provider_isolation_capability, resolve_provider, run_authoring,
 };
-use crate::sdd_v2::remote::{
+use crate::sdd::remote::{
     REMOTE_SDD_SCHEMA_VERSION, RemoteAuthoringRequest, RemoteAuthoringResult,
     RemoteDeliverySnapshotRequest, RemoteDeliverySnapshotResult, RemoteLifecycleCheckpoint,
     RemoteLifecyclePlan, RemotePhaseStatus, RemoteSddAuthoringTransport, RemoteSddProbeTransport,
     RemoteSddTransport,
 };
-use crate::sdd_v2::sha256;
-use crate::sdd_v2::sources::{
+use crate::sdd::sha256;
+use crate::sdd::sources::{
     NormalizedSource, SourceError, WorkItemSource, import_openspec, normalize_markdown_intake,
     normalize_work_item,
 };
-use crate::sdd_v2::workspace::{self, WorkspaceError};
+use crate::sdd::workspace::{self, WorkspaceError};
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/sdd/v2/capabilities", get(capabilities))
+        .route("/api/sdd/capabilities", get(capabilities))
         .route(
-            "/api/sdd/v2/repos/{repo_id}/remote-capability",
+            "/api/sdd/repos/{repo_id}/remote-capability",
             get(remote_capability),
         )
         .route(
-            "/api/sdd/v2/integrations/jira/oauth/start",
+            "/api/sdd/integrations/jira/oauth/start",
             post(start_jira_oauth),
         )
         .route(
-            "/api/sdd/v2/integrations/jira/oauth/redeem",
+            "/api/sdd/integrations/jira/oauth/redeem",
             post(redeem_jira_oauth),
         )
         .route(
-            "/api/sdd/v2/integrations/jira/api-token/connect",
+            "/api/sdd/integrations/jira/api-token/connect",
             post(connect_jira_api_token),
         )
         .route(
-            "/api/sdd/v2/integrations/jira/connections",
+            "/api/sdd/integrations/jira/connections",
             get(jira_connections),
         )
         .route(
-            "/api/sdd/v2/integrations/jira/connections/{connection_id}/select-site",
+            "/api/sdd/integrations/jira/connections/{connection_id}/select-site",
             post(select_jira_site),
         )
         .route(
-            "/api/sdd/v2/repos/{repo_id}/specs",
+            "/api/sdd/repos/{repo_id}/specs",
             get(list_specs).post(create_spec),
         )
         .route(
-            "/api/sdd/v2/repos/{repo_id}/sources/preview",
+            "/api/sdd/repos/{repo_id}/sources/preview",
             post(preview_source),
         )
-        .route("/api/sdd/v2/specs/{spec_id}", get(get_spec))
-        .route("/api/sdd/v2/specs/{spec_id}/runs", post(create_run))
-        .route("/api/sdd/v2/runs/{run_id}", get(get_run))
-        .route("/api/sdd/v2/runs/{run_id}/commands", post(command))
-        .route("/api/sdd/v2/runs/{run_id}/artifacts", get(get_artifacts))
+        .route("/api/sdd/specs/{spec_id}", get(get_spec))
+        .route("/api/sdd/specs/{spec_id}/runs", post(create_run))
+        .route("/api/sdd/runs/{run_id}", get(get_run))
+        .route("/api/sdd/runs/{run_id}/commands", post(command))
+        .route("/api/sdd/runs/{run_id}/artifacts", get(get_artifacts))
         .route(
-            "/api/sdd/v2/runs/{run_id}/evidence/{evidence_id}/blobs/{sha256}",
+            "/api/sdd/runs/{run_id}/evidence/{evidence_id}/blobs/{sha256}",
             get(get_evidence_blob),
         )
-        .route("/api/sdd/v2/runs/{run_id}/events", get(get_events))
-        .route("/api/sdd/v2/events", get(events_socket))
+        .route("/api/sdd/runs/{run_id}/events", get(get_events))
+        .route("/api/sdd/events", get(events_socket))
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,7 +160,7 @@ async fn remote_capability(
         .get_host(host_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("host not found: {host_id}")))?;
-    let transport = crate::sdd_v2::remote_lifecycle::client_for_host(host)
+    let transport = crate::sdd::remote_lifecycle::client_for_host(host)
         .map_err(|_| ApiError::BadRequest("remote SDD host is not a valid SSH host".into()))?;
     let probe = match RemoteSddProbeTransport::probe(
         transport.as_ref(),
@@ -233,18 +233,18 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
         Ok(connection_id) => (true, Some(connection_id), None),
         Err(reason) => (false, None, Some(reason)),
     };
-    let jira_selected = match crate::sdd_v2::jira::selected_connection(&state).await {
+    let jira_selected = match crate::sdd::jira::selected_connection(&state).await {
         Ok(Some(mut connection)) => {
             connection.delivery_write_authorized =
-                crate::sdd_v2::jira::delivery_write_authorized(&state, &connection.connection_id)
+                crate::sdd::jira::delivery_write_authorized(&state, &connection.connection_id)
                     .await
                     .unwrap_or(false);
             Ok(Some(connection))
         }
         other => other,
     };
-    let jira_broker = crate::sdd_v2::jira::broker_configured();
-    let jira_api_token_fallback = crate::sdd_v2::jira::api_token_fallback_enabled();
+    let jira_broker = crate::sdd::jira::broker_configured();
+    let jira_api_token_fallback = crate::sdd::jira::api_token_fallback_enabled();
     let (jira_available, jira_connection, jira_reason) = match jira_selected {
         Ok(Some(connection)) if !connection.selected_site_id.is_empty() => {
             (true, Some(connection), None)
@@ -338,7 +338,7 @@ async fn start_jira_oauth(
     if body.expected_revision != 0 {
         return Err(stale(0, body.expected_revision));
     }
-    let started = crate::sdd_v2::jira::start_oauth(&state, &body.request_id)
+    let started = crate::sdd::jira::start_oauth(&state, &body.request_id)
         .await
         .map_err(jira_error)?;
     Ok(Json(
@@ -359,10 +359,9 @@ async fn redeem_jira_oauth(
     Json(body): Json<RedeemJiraOauthBody>,
 ) -> Result<Json<Value>, ApiError> {
     validate_request_id(&body.request_id)?;
-    let connection =
-        crate::sdd_v2::jira::redeem_oauth(&state, &body.flow_id, body.expected_revision)
-            .await
-            .map_err(jira_error)?;
+    let connection = crate::sdd::jira::redeem_oauth(&state, &body.flow_id, body.expected_revision)
+        .await
+        .map_err(jira_error)?;
     Ok(Json(json!({ "connection": connection })))
 }
 
@@ -383,7 +382,7 @@ async fn connect_jira_api_token(
     Json(body): Json<ConnectJiraApiTokenBody>,
 ) -> Result<Json<Value>, ApiError> {
     validate_request_id(&body.request_id)?;
-    let connection = crate::sdd_v2::jira::connect_api_token(
+    let connection = crate::sdd::jira::connect_api_token(
         &state,
         &body.email,
         &body.api_token,
@@ -397,7 +396,7 @@ async fn connect_jira_api_token(
 }
 
 async fn jira_connections(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let connections = crate::sdd_v2::jira::connections(&state)
+    let connections = crate::sdd::jira::connections(&state)
         .await
         .map_err(jira_error)?;
     Ok(Json(json!({ "connections": connections })))
@@ -417,7 +416,7 @@ async fn select_jira_site(
     Json(body): Json<SelectJiraSiteBody>,
 ) -> Result<Json<Value>, ApiError> {
     validate_request_id(&body.request_id)?;
-    let connection = crate::sdd_v2::jira::select_site(
+    let connection = crate::sdd::jira::select_site(
         &state,
         &connection_id,
         &body.site_id,
@@ -474,7 +473,7 @@ fn jira_error(error: JiraError) -> ApiError {
 async fn probe_linear_source(state: &AppState) -> Result<String, String> {
     let vault = state.sdd_credentials.clone();
     tokio::task::spawn_blocking(move || {
-        crate::sdd_v2::credentials::get_linear_credential(vault.as_ref(), None)
+        crate::sdd::credentials::get_linear_credential(vault.as_ref(), None)
     })
     .await
     .map_err(|_| "Linear credential-vault probe failed".to_owned())?
@@ -810,7 +809,7 @@ async fn prepare_source(
             let requested_connection = connection_id.clone();
             let vault = state.sdd_credentials.clone();
             let credential = tokio::task::spawn_blocking(move || {
-                crate::sdd_v2::credentials::get_linear_credential(
+                crate::sdd::credentials::get_linear_credential(
                     vault.as_ref(),
                     requested_connection.as_deref(),
                 )
@@ -866,7 +865,7 @@ async fn prepare_source(
             key,
             expected_source_revision,
         } => {
-            let fetched = crate::sdd_v2::jira::fetch_issue(state, connection_id, site_id, key)
+            let fetched = crate::sdd::jira::fetch_issue(state, connection_id, site_id, key)
                 .await
                 .map_err(jira_error)?;
             let normalized = normalize_work_item(WorkItemSource {
@@ -1633,7 +1632,7 @@ async fn create_remote_spec(
         .get_host(host_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("host not found: {host_id}")))?;
-    let client = crate::sdd_v2::remote_lifecycle::client_for_host(host)
+    let client = crate::sdd::remote_lifecycle::client_for_host(host)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let probe = RemoteSddProbeTransport::probe(
         client.as_ref(),
@@ -2217,7 +2216,7 @@ pub(crate) async fn recover_remote_create(
         .get_host(host_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("host not found: {host_id}")))?;
-    let client = crate::sdd_v2::remote_lifecycle::client_for_host(host)
+    let client = crate::sdd::remote_lifecycle::client_for_host(host)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let probe = RemoteSddProbeTransport::probe(
         client.as_ref(),
@@ -3271,7 +3270,7 @@ async fn get_evidence_blob(
         .sdd_browser_evidence_blob(&run_id, &evidence_id, &sha256)
         .await?
         .ok_or_else(|| ApiError::NotFound(format!("{evidence_id}/{sha256}")))?;
-    let bytes = crate::sdd_v2::evidence::read_blob(&metadata.storage_relative_path, &sha256)
+    let bytes = crate::sdd::evidence::read_blob(&metadata.storage_relative_path, &sha256)
         .map_err(|error| ApiError::Internal(error.to_string()))?;
     if bytes.len() as i64 != metadata.byte_length {
         return Err(ApiError::Internal(
@@ -3612,7 +3611,7 @@ async fn command(
                 "sdd.run.paused",
             )
             .await?;
-            crate::sdd_v2::providers::cancel_run(&run.run_id);
+            crate::sdd::providers::cancel_run(&run.run_id);
             cancel_run_execution(&state, &run.run_id).await;
             Ok(response)
         }
@@ -3739,7 +3738,7 @@ async fn command(
                 "sdd.run.canceled",
             )
             .await?;
-            crate::sdd_v2::providers::cancel_run(&run.run_id);
+            crate::sdd::providers::cancel_run(&run.run_id);
             cancel_run_execution(&state, &run.run_id).await;
             Ok(response)
         }
@@ -4219,7 +4218,7 @@ async fn command(
                     response_json: &response.to_string(),
                 })
                 .await?;
-            crate::sdd_v2::delivery::spawn(state.clone(), preview.preview_id);
+            crate::sdd::delivery::spawn(state.clone(), preview.preview_id);
             Ok(Json(response))
         }
     }
@@ -4227,9 +4226,9 @@ async fn command(
 
 async fn spawn_run_execution(state: &AppState, run_id: &str) -> Result<(), ApiError> {
     if state.store.sdd_remote_run(run_id).await?.is_some() {
-        crate::sdd_v2::remote_lifecycle::spawn(state.clone(), run_id.to_owned());
+        crate::sdd::remote_lifecycle::spawn(state.clone(), run_id.to_owned());
     } else {
-        crate::sdd_v2::lifecycle::spawn(state.clone(), run_id.to_owned());
+        crate::sdd::lifecycle::spawn(state.clone(), run_id.to_owned());
     }
     Ok(())
 }
@@ -4243,9 +4242,9 @@ async fn cancel_run_execution(state: &AppState, run_id: &str) {
         .flatten()
         .is_some()
     {
-        let _ = crate::sdd_v2::remote_lifecycle::cancel_run(state, run_id).await;
+        let _ = crate::sdd::remote_lifecycle::cancel_run(state, run_id).await;
     } else {
-        crate::sdd_v2::lifecycle::cancel_run(run_id);
+        crate::sdd::lifecycle::cancel_run(run_id);
     }
 }
 
@@ -4293,7 +4292,7 @@ async fn inspect_remote_delivery_state(
         .get_host(host_id)
         .await?
         .ok_or_else(|| ApiError::NotFound(projection.host_id.clone()))?;
-    let client = crate::sdd_v2::remote_lifecycle::client_for_host(host).map_err(|error| {
+    let client = crate::sdd::remote_lifecycle::client_for_host(host).map_err(|error| {
         ApiError::Custom(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({
@@ -4351,8 +4350,8 @@ async fn inspect_remote_delivery_state(
             }),
         )
     })?;
-    crate::sdd_v2::remote::validate_delivery_snapshot_result(&validation_request, &result)
-        .map_err(|error| {
+    crate::sdd::remote::validate_delivery_snapshot_result(&validation_request, &result).map_err(
+        |error| {
             ApiError::Custom(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 json!({
@@ -4361,7 +4360,8 @@ async fn inspect_remote_delivery_state(
                     "localFallback": false
                 }),
             )
-        })?;
+        },
+    )?;
     if result.branch_name != run.branch_name {
         return Err(ApiError::Conflict(
             "remote delivery branch changed after Ready".into(),
@@ -4375,16 +4375,16 @@ async fn inspect_remote_delivery_state(
     Ok(Some(result))
 }
 
-fn delivery_error(error: crate::sdd_v2::delivery::DeliveryError) -> ApiError {
+fn delivery_error(error: crate::sdd::delivery::DeliveryError) -> ApiError {
     match error {
-        crate::sdd_v2::delivery::DeliveryError::Invalid(message) => ApiError::BadRequest(message),
-        crate::sdd_v2::delivery::DeliveryError::Command(message) => ApiError::Conflict(message),
-        crate::sdd_v2::delivery::DeliveryError::Conflict(message) => ApiError::Conflict(message),
-        crate::sdd_v2::delivery::DeliveryError::Precondition(message) => ApiError::Custom(
+        crate::sdd::delivery::DeliveryError::Invalid(message) => ApiError::BadRequest(message),
+        crate::sdd::delivery::DeliveryError::Command(message) => ApiError::Conflict(message),
+        crate::sdd::delivery::DeliveryError::Conflict(message) => ApiError::Conflict(message),
+        crate::sdd::delivery::DeliveryError::Precondition(message) => ApiError::Custom(
             StatusCode::PRECONDITION_FAILED,
             json!({ "error": "delivery_precondition_failed", "message": message }),
         ),
-        crate::sdd_v2::delivery::DeliveryError::TransitionChoiceRequired {
+        crate::sdd::delivery::DeliveryError::TransitionChoiceRequired {
             provider,
             target,
             choices,
@@ -4397,7 +4397,7 @@ fn delivery_error(error: crate::sdd_v2::delivery::DeliveryError) -> ApiError {
                 "choices": choices
             }),
         ),
-        crate::sdd_v2::delivery::DeliveryError::Store(error) => error.into(),
+        crate::sdd::delivery::DeliveryError::Store(error) => error.into(),
         other => ApiError::Internal(other.to_string()),
     }
 }
@@ -4977,8 +4977,8 @@ async fn reconcile_external_spec(state: &AppState, run_id: &str) -> Result<(), A
     // this exact validated revision and content hash against freshly loaded
     // aggregate revisions. This gives a user edit priority without weakening
     // the revision/hash binding or overwriting their file.
-    crate::sdd_v2::providers::cancel_run(run_id);
-    crate::sdd_v2::lifecycle::cancel_run(run_id);
+    crate::sdd::providers::cancel_run(run_id);
+    crate::sdd::lifecycle::cancel_run(run_id);
     let mut expected_run_revision = run.aggregate_revision;
     for _ in 0..16 {
         match state
@@ -5206,7 +5206,7 @@ fn request_digest(value: &impl Serialize) -> Result<String, ApiError> {
 }
 
 fn validate_plan(content: &str, spec_id: &SpecId, spec_revision: i64) -> Result<(), ApiError> {
-    crate::sdd_v2::lifecycle::validate_plan(content, spec_id, spec_revision)
+    crate::sdd::lifecycle::validate_plan(content, spec_id, spec_revision)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let plan: PlanArtifact = serde_json::from_str(content)
         .map_err(|error| ApiError::BadRequest(format!("invalid plan.json: {error}")))?;
@@ -5422,11 +5422,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use crate::sdd_v2::evidence::{
+    use crate::sdd::evidence::{
         BrowserAssertion, BrowserAssertionStatus, BrowserConsoleSummary, BrowserDiagnosticCoverage,
         BrowserNetworkSummary, BrowserRuntime, BrowserTarget,
     };
-    use crate::sdd_v2::remote::{
+    use crate::sdd::remote::{
         RemoteArtifactPayload, RemoteBrowserBlob, RemoteBrowserCheckResult,
         RemoteDeliveryActionRequest, RemoteDeliveryActionResult, RemoteDeliveryActionStatus,
         RemoteDeliverySnapshotRequest, RemoteDeliverySnapshotResult, RemoteImplementationEvidence,
@@ -5807,7 +5807,7 @@ mod tests {
         }
     }
 
-    impl crate::sdd_v2::remote::RemoteSddProbeTransport for TestRemoteClient {
+    impl crate::sdd::remote::RemoteSddProbeTransport for TestRemoteClient {
         fn probe(
             &self,
             repository_identity_sha256: &str,
@@ -5818,7 +5818,7 @@ mod tests {
                 dyn Future<
                         Output = Result<
                             RemoteProbeResult,
-                            crate::sdd_v2::remote::RemoteLifecycleError,
+                            crate::sdd::remote::RemoteLifecycleError,
                         >,
                     > + Send
                     + '_,
@@ -5829,7 +5829,7 @@ mod tests {
         }
     }
 
-    impl crate::sdd_v2::remote::RemoteSddAuthoringTransport for TestRemoteClient {
+    impl crate::sdd::remote::RemoteSddAuthoringTransport for TestRemoteClient {
         fn author(
             &self,
             request: RemoteAuthoringRequest,
@@ -5838,7 +5838,7 @@ mod tests {
                 dyn Future<
                         Output = Result<
                             RemoteAuthoringResult,
-                            crate::sdd_v2::remote::RemoteLifecycleError,
+                            crate::sdd::remote::RemoteLifecycleError,
                         >,
                     > + Send
                     + '_,
@@ -5853,7 +5853,7 @@ mod tests {
                 let spec_id: SpecId = request
                     .spec_id
                     .parse()
-                    .map_err(|_| crate::sdd_v2::remote::RemoteLifecycleError::InvalidResult)?;
+                    .map_err(|_| crate::sdd::remote::RemoteLifecycleError::InvalidResult)?;
                 *self
                     .spec_slug
                     .lock()
@@ -5866,7 +5866,7 @@ mod tests {
                     None,
                     "## Requirements\n\n- RQ-001 Preserve active sessions.\n\n## Acceptance criteria\n\n- AC-001 Active sessions remain usable.",
                 )
-                .map_err(|_| crate::sdd_v2::remote::RemoteLifecycleError::InvalidResult)?;
+                .map_err(|_| crate::sdd::remote::RemoteLifecycleError::InvalidResult)?;
                 Ok(RemoteAuthoringResult {
                     schema_version: REMOTE_SDD_SCHEMA_VERSION,
                     request_id: request.request_id,
@@ -5876,7 +5876,7 @@ mod tests {
                     status: RemotePhaseStatus::Succeeded,
                     workspace_state_sha256: sha256(b"remote-workspace-state"),
                     artifact_set_sha256: sha256(b"remote-artifact-set-state"),
-                    spec: Some(crate::sdd_v2::remote::RemoteArtifactPayload {
+                    spec: Some(crate::sdd::remote::RemoteArtifactPayload {
                         kind: "specification".into(),
                         relative_path: format!(
                             ".agentum/specs/{}/spec.md",
@@ -5897,16 +5897,16 @@ mod tests {
         }
     }
 
-    impl crate::sdd_v2::remote::RemoteSddTransport for TestRemoteClient {
+    impl crate::sdd::remote::RemoteSddTransport for TestRemoteClient {
         fn execute(
             &self,
-            request: crate::sdd_v2::remote::RemotePhaseRequest,
+            request: crate::sdd::remote::RemotePhaseRequest,
         ) -> Pin<
             Box<
                 dyn Future<
                         Output = Result<
-                            crate::sdd_v2::remote::RemotePhaseResult,
-                            crate::sdd_v2::remote::RemoteLifecycleError,
+                            crate::sdd::remote::RemotePhaseResult,
+                            crate::sdd::remote::RemoteLifecycleError,
                         >,
                     > + Send
                     + '_,
@@ -6088,7 +6088,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/sdd/v2/runs/missing/commands")
+                    .uri("/api/sdd/runs/missing/commands")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
@@ -6237,7 +6237,7 @@ mod tests {
                 .clone()
                 .oneshot(json_request(
                     "POST",
-                    "/api/sdd/v2/runs/run-autopilot/commands",
+                    "/api/sdd/runs/run-autopilot/commands",
                     &json!({
                         "type": "decideApproval",
                         "requestId": request_id,
@@ -6268,7 +6268,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-autopilot/commands",
+                "/api/sdd/runs/run-autopilot/commands",
                 &start,
             ))
             .await
@@ -6297,7 +6297,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-autopilot/commands",
+                "/api/sdd/runs/run-autopilot/commands",
                 &start,
             ))
             .await
@@ -6314,7 +6314,7 @@ mod tests {
                 .clone()
                 .oneshot(json_request(
                     "POST",
-                    &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                    &format!("/api/sdd/runs/{run_id}/commands"),
                     &json!({
                         "type": "startRun",
                         "requestId": request_id,
@@ -6381,11 +6381,11 @@ mod tests {
             host.id,
         );
         let client = Arc::new(TestRemoteClient::new(host.id));
-        crate::sdd_v2::remote_lifecycle::register_test_remote_client(host.id, client.clone());
+        crate::sdd::remote_lifecycle::register_test_remote_client(host.id, client.clone());
         let response = test_app(store.clone())
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/repos/repo-remote-projected/specs",
+                "/api/sdd/repos/repo-remote-projected/specs",
                 &json!({
                     "requestId": "remote-create-projected",
                     "expectedRevision": 0,
@@ -6453,7 +6453,7 @@ mod tests {
         );
         let client = Arc::new(TestRemoteClient::new(host.id));
         client.block_author.store(true, Ordering::SeqCst);
-        crate::sdd_v2::remote_lifecycle::register_test_remote_client(host.id, client.clone());
+        crate::sdd::remote_lifecycle::register_test_remote_client(host.id, client.clone());
         let (bus, _) = broadcast::channel::<Event>(32);
         let mut state = AppState::new(store.clone(), bus);
         state.no_auth = true;
@@ -6462,7 +6462,7 @@ mod tests {
         let create = tokio::spawn(async move {
             app.oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/repos/repo-remote-recovery/specs",
+                "/api/sdd/repos/repo-remote-recovery/specs",
                 &json!({
                     "requestId": "remote-create-interrupted",
                     "expectedRevision": 0,
@@ -6541,13 +6541,13 @@ mod tests {
             host.id,
         );
         let client = Arc::new(TestRemoteClient::new(host.id));
-        crate::sdd_v2::remote_lifecycle::register_test_remote_client(host.id, client.clone());
+        crate::sdd::remote_lifecycle::register_test_remote_client(host.id, client.clone());
 
         let app = test_app(store.clone());
         let created = app
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/repos/repo-remote-lifecycle/specs",
+                "/api/sdd/repos/repo-remote-lifecycle/specs",
                 &json!({
                     "requestId": "remote-full-projection-create",
                     "expectedRevision": 0,
@@ -6582,7 +6582,7 @@ mod tests {
         let restarted = test_app(store.clone());
         let restored = restarted
             .clone()
-            .oneshot(get_request(format!("/api/sdd/v2/runs/{run_id}")))
+            .oneshot(get_request(format!("/api/sdd/runs/{run_id}")))
             .await
             .unwrap();
         assert_eq!(restored.status(), StatusCode::OK);
@@ -6599,7 +6599,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "decideApproval",
                     "requestId": "remote-full-projection-approve",
@@ -6640,7 +6640,7 @@ mod tests {
         let (duplicate_bus, _) = broadcast::channel::<Event>(8);
         let duplicate_state = AppState::new(store.clone(), duplicate_bus);
         for _ in 0..32 {
-            crate::sdd_v2::remote_lifecycle::spawn(duplicate_state.clone(), run_id.clone());
+            crate::sdd::remote_lifecycle::spawn(duplicate_state.clone(), run_id.clone());
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
         assert_eq!(
@@ -6649,7 +6649,7 @@ mod tests {
             "rapid duplicate spawn requests must retain one transport owner"
         );
         assert_eq!(store.sdd_recover_interrupted_runs().await.unwrap(), 1);
-        assert!(crate::sdd_v2::remote::RemoteSddTransport::cancel(
+        assert!(crate::sdd::remote::RemoteSddTransport::cancel(
             client.as_ref(),
             &active_request
         ));
@@ -6680,7 +6680,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "resume",
                     "requestId": "remote-full-projection-resume",
@@ -6775,7 +6775,7 @@ mod tests {
 
         let artifacts = recovered_app
             .clone()
-            .oneshot(get_request(format!("/api/sdd/v2/runs/{run_id}/artifacts")))
+            .oneshot(get_request(format!("/api/sdd/runs/{run_id}/artifacts")))
             .await
             .unwrap();
         assert_eq!(artifacts.status(), StatusCode::OK);
@@ -6792,7 +6792,7 @@ mod tests {
         );
         let final_run = recovered_app
             .clone()
-            .oneshot(get_request(format!("/api/sdd/v2/runs/{run_id}")))
+            .oneshot(get_request(format!("/api/sdd/runs/{run_id}")))
             .await
             .unwrap();
         let final_run = response_json(final_run).await;
@@ -6811,7 +6811,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "previewDelivery",
                     "requestId": "remote-delivery-preview",
@@ -6860,7 +6860,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "confirmDelivery",
                     "requestId": "remote-delivery-confirm",
@@ -6927,7 +6927,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "confirmDelivery",
                     "requestId": "remote-delivery-retry",
@@ -7059,7 +7059,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/repos/repo-openspec-preview/sources/preview",
+                "/api/sdd/repos/repo-openspec-preview/sources/preview",
                 &preview_body,
             ))
             .await
@@ -7086,7 +7086,7 @@ mod tests {
         let conflict = app
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/repos/repo-openspec-preview/sources/preview",
+                "/api/sdd/repos/repo-openspec-preview/sources/preview",
                 &json!({
                     "title": "Refresh sessions",
                     "source": {
@@ -7224,7 +7224,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-delivery/commands",
+                "/api/sdd/runs/run-delivery/commands",
                 &preview_request,
             ))
             .await
@@ -7240,7 +7240,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-delivery/commands",
+                "/api/sdd/runs/run-delivery/commands",
                 &preview_request,
             ))
             .await
@@ -7257,7 +7257,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-delivery/commands",
+                "/api/sdd/runs/run-delivery/commands",
                 &json!({
                     "type": "confirmDelivery",
                     "requestId": "confirm-stale-preview",
@@ -7274,7 +7274,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-delivery/commands",
+                "/api/sdd/runs/run-delivery/commands",
                 &json!({
                     "type": "previewDelivery",
                     "requestId": "preview-delivery-2",
@@ -7293,7 +7293,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-delivery/commands",
+                "/api/sdd/runs/run-delivery/commands",
                 &json!({
                     "type": "confirmDelivery",
                     "requestId": "confirm-delivery-2",
@@ -7336,7 +7336,7 @@ mod tests {
 
         let restored = app
             .clone()
-            .oneshot(get_request("/api/sdd/v2/runs/run-delivery"))
+            .oneshot(get_request("/api/sdd/runs/run-delivery"))
             .await
             .unwrap();
         let restored = response_json(restored).await;
@@ -7350,7 +7350,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-delivery/commands",
+                "/api/sdd/runs/run-delivery/commands",
                 &json!({
                     "type": "previewDelivery",
                     "requestId": "preview-openspec-export",
@@ -7383,7 +7383,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/runs/run-delivery/commands",
+                "/api/sdd/runs/run-delivery/commands",
                 &json!({
                     "type": "confirmDelivery",
                     "requestId": "confirm-openspec-conflict",
@@ -7406,7 +7406,7 @@ mod tests {
             "preserve\n"
         );
         let events = app
-            .oneshot(get_request("/api/sdd/v2/runs/run-delivery/events?after=0"))
+            .oneshot(get_request("/api/sdd/runs/run-delivery/events?after=0"))
             .await
             .unwrap();
         let events = response_json(events).await.to_string();
@@ -7468,7 +7468,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/repos/repo-fixture/specs",
+                "/api/sdd/repos/repo-fixture/specs",
                 &create_body,
             ))
             .await
@@ -7507,7 +7507,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                "/api/sdd/v2/repos/repo-fixture/specs",
+                "/api/sdd/repos/repo-fixture/specs",
                 &create_body,
             ))
             .await
@@ -7519,7 +7519,7 @@ mod tests {
         let restarted = test_app(store);
         let restored = restarted
             .clone()
-            .oneshot(get_request(format!("/api/sdd/v2/runs/{run_id}")))
+            .oneshot(get_request(format!("/api/sdd/runs/{run_id}")))
             .await
             .unwrap();
         assert_eq!(restored.status(), StatusCode::OK);
@@ -7531,7 +7531,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "resume",
                     "requestId": "cannot-resume-waiting",
@@ -7545,7 +7545,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "submitArtifact",
                     "requestId": "cannot-skip-to-review",
@@ -7569,7 +7569,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/runs/{run_id}/commands"),
+                &format!("/api/sdd/runs/{run_id}/commands"),
                 &json!({
                     "type": "decideApproval",
                     "requestId": "approve-demo-spec",
@@ -7603,7 +7603,7 @@ mod tests {
         std::fs::write(&spec_path, &edited).unwrap();
         let imported = restarted
             .clone()
-            .oneshot(get_request(format!("/api/sdd/v2/runs/{run_id}")))
+            .oneshot(get_request(format!("/api/sdd/runs/{run_id}")))
             .await
             .unwrap();
         assert_eq!(imported.status(), StatusCode::OK);
@@ -7618,7 +7618,7 @@ mod tests {
         );
         std::fs::write(&spec_path, &invalid).unwrap();
         let blocked = restarted
-            .oneshot(get_request(format!("/api/sdd/v2/runs/{run_id}")))
+            .oneshot(get_request(format!("/api/sdd/runs/{run_id}")))
             .await
             .unwrap();
         assert_eq!(blocked.status(), StatusCode::OK);
@@ -7731,7 +7731,7 @@ mod tests {
 
         let listed = app
             .clone()
-            .oneshot(get_request("/api/sdd/v2/repos/repo-discovered-specs/specs"))
+            .oneshot(get_request("/api/sdd/repos/repo-discovered-specs/specs"))
             .await
             .unwrap();
         let listed_status = listed.status();
@@ -7767,7 +7767,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/specs/{}/runs", expected_ids[0]),
+                &format!("/api/sdd/specs/{}/runs", expected_ids[0]),
                 &create_run_body,
             ))
             .await
@@ -7868,7 +7868,7 @@ mod tests {
         .unwrap();
         let restored = app
             .clone()
-            .oneshot(get_request(format!("/api/sdd/v2/runs/{run_id}")))
+            .oneshot(get_request(format!("/api/sdd/runs/{run_id}")))
             .await
             .unwrap();
         assert_eq!(restored.status(), StatusCode::OK);
@@ -7883,7 +7883,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/specs/{}/runs", expected_ids[0]),
+                &format!("/api/sdd/specs/{}/runs", expected_ids[0]),
                 &create_run_body,
             ))
             .await
@@ -7895,7 +7895,7 @@ mod tests {
             .clone()
             .oneshot(json_request(
                 "POST",
-                &format!("/api/sdd/v2/specs/{}/runs", expected_ids[0]),
+                &format!("/api/sdd/specs/{}/runs", expected_ids[0]),
                 &json!({
                     "requestId": "start-discovered-again",
                     "expectedRevision": 2,
@@ -7919,7 +7919,7 @@ mod tests {
         );
         std::fs::write(&spec_paths[1], edited).unwrap();
         let rejected = app
-            .oneshot(get_request("/api/sdd/v2/repos/repo-discovered-specs/specs"))
+            .oneshot(get_request("/api/sdd/repos/repo-discovered-specs/specs"))
             .await
             .unwrap();
         assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);

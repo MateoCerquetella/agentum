@@ -2,7 +2,7 @@
 //!
 //! One idempotent ensure creates the canonical `status/*` labels and links or
 //! creates a Projects v2 board. SDD artifacts are created only by the native
-//! SDD v2 save workflow and are deliberately outside this module.
+//! SDD save workflow and are deliberately outside this module.
 //!
 //! Domain logic lives here at crate root (the `linear.rs` /
 //! `github_projects.rs` precedent); `routes/provision.rs` stays a thin wire

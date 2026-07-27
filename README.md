@@ -191,7 +191,7 @@ also authenticated: each boot mints a high-entropy, memory-only bearer exposed
 only to the trusted main Tauri webview. Provider and agent processes never
 receive it. The MCP endpoint uses a distinct, explicitly rotated bearer.
 `agentum serve --no-auth` remains available for non-SDD local automation, but
-the complete `/api/sdd/v2` HTTP/WebSocket namespace still requires an
+the complete `/api/sdd` HTTP/WebSocket namespace still requires an
 authenticated human session. TLS uses a self-signed rustls certificate with a
 plain-HTTP cert endpoint on `:8823` for trust-on-first-use. **Don't expose
 `:8822` to the internet without a real reverse proxy + cert.** Release, signing,

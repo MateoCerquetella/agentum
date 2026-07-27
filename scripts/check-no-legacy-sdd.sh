@@ -71,7 +71,7 @@ matches="$(git grep --full-name --files-with-matches --extended-regexp \
   -- \
   crates \
   README.md CLAUDE.md docs examples/sdd-demo .github/labels.sh \
-  ':(exclude,glob)**/routes/sdd_v2.rs' \
+  ':(exclude,glob)**/routes/sdd.rs' \
   ':(exclude,glob)**/migrations/**' \
   ':(exclude,glob)docs/migrations/**' 2>/dev/null)"
 scan_status=$?

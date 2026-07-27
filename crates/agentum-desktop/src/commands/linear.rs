@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use agentum_server::sdd_v2::credentials::{
+use agentum_server::sdd::credentials::{
     clear_selected_linear_credential, delete_linear_credential, get_linear_credential,
     put_linear_credential, select_linear_credential, LinearCredential, OsCredentialVault,
 };

@@ -5,7 +5,7 @@ import type {
   SddPhase,
   SddSnapshot,
   SddSourceKind
-} from '@/runtime/sdd-v2-client'
+} from '@/runtime/sdd-client'
 
 export type RunAction =
   | 'startAuthoring'

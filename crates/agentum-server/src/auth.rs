@@ -139,8 +139,8 @@ fn is_public(path: &str) -> bool {
     path.starts_with("/api/sessions/") && path.ends_with("/hook")
 }
 
-fn is_sdd_v2(path: &str) -> bool {
-    path == "/api/sdd/v2" || path.starts_with("/api/sdd/v2/")
+fn is_sdd(path: &str) -> bool {
+    path == "/api/sdd" || path.starts_with("/api/sdd/")
 }
 
 fn extract_token(req: &Request<Body>) -> Option<String> {
@@ -211,7 +211,7 @@ fn hex_val(b: u8) -> Option<u8> {
 ///
 /// When `state.no_auth` is set (via `agentum serve --no-auth`), requests still
 /// receive an explicitly untrusted local identity for non-SDD routes. The
-/// entire SDD v2 HTTP/WS namespace still requires a human bearer, so
+/// entire SDD HTTP/WS namespace still requires a human bearer, so
 /// `--no-auth` cannot expose spec state or turn a provider into a human
 /// approver or delivery actor.
 pub async fn require_token(
@@ -251,11 +251,11 @@ pub async fn require_token(
                 ));
                 return next.run(req).await;
             }
-            Ok(None) if !state.no_auth || is_sdd_v2(path) => {
+            Ok(None) if !state.no_auth || is_sdd(path) => {
                 return unauthorized("invalid or expired bearer token");
             }
             Ok(None) => {}
-            Err(e) if !state.no_auth || is_sdd_v2(path) => {
+            Err(e) if !state.no_auth || is_sdd(path) => {
                 tracing::warn!(error = %e, "auth lookup failed");
                 return unauthorized("auth lookup failed");
             }
@@ -264,8 +264,8 @@ pub async fn require_token(
     }
 
     if state.no_auth {
-        if is_sdd_v2(path) {
-            return unauthorized("SDD v2 requires an authenticated human capability");
+        if is_sdd(path) {
+            return unauthorized("SDD requires an authenticated human capability");
         }
         req.extensions_mut()
             .insert(AuthActor::unauthenticated_local());
@@ -340,7 +340,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_auth_never_exposes_sdd_v2_without_a_human_capability() {
+    async fn no_auth_never_exposes_sdd_without_a_human_capability() {
         const UI_TOKEN: &str = "test-only-boot-scoped-ui-capability";
         const DB_TOKEN: &str = "test-only-database-human-session";
         let directory = tempfile::tempdir().unwrap();
@@ -365,31 +365,31 @@ mod tests {
         // approval, and both delivery authorization commands. Invalid bodies
         // are deliberate: authentication must run before route parsing.
         let cases = [
-            ("GET", "/api/sdd/v2/repos/missing/specs", ""),
-            ("GET", "/api/sdd/v2/runs/missing", ""),
-            ("GET", "/api/sdd/v2/runs/missing/events?after=0", ""),
-            ("GET", "/api/sdd/v2/events?repoId=missing&after=0", ""),
-            ("POST", "/api/sdd/v2/repos/missing/specs", "{}"),
+            ("GET", "/api/sdd/repos/missing/specs", ""),
+            ("GET", "/api/sdd/runs/missing", ""),
+            ("GET", "/api/sdd/runs/missing/events?after=0", ""),
+            ("GET", "/api/sdd/events?repoId=missing&after=0", ""),
+            ("POST", "/api/sdd/repos/missing/specs", "{}"),
             (
                 "POST",
-                "/api/sdd/v2/specs/SPC-00000000000000000000000000/runs",
+                "/api/sdd/specs/SPC-00000000000000000000000000/runs",
                 "{}",
             ),
-            ("POST", "/api/sdd/v2/repos/missing/sources/preview", "{}"),
-            ("POST", "/api/sdd/v2/integrations/jira/oauth/start", "{}"),
+            ("POST", "/api/sdd/repos/missing/sources/preview", "{}"),
+            ("POST", "/api/sdd/integrations/jira/oauth/start", "{}"),
             (
                 "POST",
-                "/api/sdd/v2/runs/missing/commands",
+                "/api/sdd/runs/missing/commands",
                 r#"{"type":"decideApproval","requestId":"probe-approval","expectedRevision":0,"approvalId":"missing","digest":"missing","decision":"approve"}"#,
             ),
             (
                 "POST",
-                "/api/sdd/v2/runs/missing/commands",
+                "/api/sdd/runs/missing/commands",
                 r#"{"type":"previewDelivery","requestId":"probe-preview","expectedRevision":0,"actions":[{"type":"commit","message":"probe"}]}"#,
             ),
             (
                 "POST",
-                "/api/sdd/v2/runs/missing/commands",
+                "/api/sdd/runs/missing/commands",
                 r#"{"type":"confirmDelivery","requestId":"probe-confirm","expectedRevision":0,"previewToken":"missing","actions":["missing"]}"#,
             ),
         ];
@@ -438,7 +438,7 @@ mod tests {
             assert_ne!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
         }
 
-        let database_human = Request::get("/api/sdd/v2/runs/missing")
+        let database_human = Request::get("/api/sdd/runs/missing")
             .header("authorization", format!("Bearer {DB_TOKEN}"))
             .body(Body::empty())
             .unwrap();

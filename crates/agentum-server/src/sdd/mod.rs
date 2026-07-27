@@ -1,5 +1,5 @@
 //! Agentum-native SDD service: safe artifact publication and isolated
-//! authoritative worktrees. HTTP orchestration lives in `routes::sdd_v2`.
+//! authoritative worktrees. HTTP orchestration lives in `routes::sdd`.
 
 pub mod artifacts;
 pub mod credentials;

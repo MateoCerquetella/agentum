@@ -32,7 +32,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::routes::sdd_v2::submit_artifact;
+use crate::routes::sdd::submit_artifact;
 
 use super::artifacts::{
     MISSING_HASH, atomic_remove, atomic_write, content_hash, read_bytes, read_text,

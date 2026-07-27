@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "migration": "agentum-sdd-v2-hard-cutover",
+  "migration": "agentum-sdd-hard-cutover",
   "archiveId": "524cf79e452f8bfddec48cc4f316f3c86eacb81909f9291211d1be77d10e62af",
   "artifactSetId": "1HJQBNYNY1AB8NS20D93Q6YEBF",
   "sourceCount": 407,
