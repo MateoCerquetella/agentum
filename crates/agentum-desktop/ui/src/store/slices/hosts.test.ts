@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createStore } from 'zustand/vanilla'
-import { createHostsSlice, unameDetail, type HostsSlice } from './hosts'
+import { createHostsSlice, sshOsDetail, unameDetail, type HostsSlice } from './hosts'
 
 function makeStore() {
   return createStore<HostsSlice>()((...a) => ({ ...createHostsSlice(...(a as Parameters<typeof createHostsSlice>)) }))
@@ -31,5 +31,19 @@ describe('unameDetail (host OS line — spec 003)', () => {
   it('degrades to just the transport prefix when the uname is unknown', () => {
     expect(unameDetail('localhost', null)).toBe('localhost')
     expect(unameDetail('ssh', null)).toBe('ssh')
+  })
+})
+
+describe('sshOsDetail', () => {
+  it('reduces remote uname output to a friendly OS family', () => {
+    expect(sshOsDetail('Linux 6.12.1-arch1-1')).toBe('Linux')
+    expect(sshOsDetail('Darwin 24.5.0')).toBe('macOS')
+    expect(sshOsDetail('FreeBSD 14.1-RELEASE')).toBe('FreeBSD')
+    expect(sshOsDetail('MINGW64_NT-10.0 3.5.4')).toBe('Windows')
+  })
+
+  it('uses a simple SSH fallback when uname is unavailable', () => {
+    expect(sshOsDetail(null)).toBe('SSH')
+    expect(sshOsDetail('  ')).toBe('SSH')
   })
 })

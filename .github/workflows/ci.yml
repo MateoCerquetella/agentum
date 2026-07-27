@@ -20,18 +20,18 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # Pin the toolchain (not @stable) so CI's rustfmt + clippy match the
       # repo's rust-toolchain.toml and what developers run locally. @stable
       # set RUSTUP_TOOLCHAIN=stable, which overrides rust-toolchain.toml and
       # floated CI to newer, stricter tooling — turning ci red on tags the
       # author had verified green (v0.8.12 clippy, v0.8.13 fmt). Keep this in
       # lockstep with rust-toolchain.toml's channel when bumping.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master (pinned 2026-07-27)
         with:
           toolchain: 1.94.1
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       # agentum-desktop (a workspace member) embeds crates/agentum-desktop/ui/dist
       # via generate_context! and links webkit2gtk on Linux at build time, so
@@ -51,10 +51,10 @@ jobs:
       # gcc.
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
       - name: Install nasm (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
       - name: Use MSVC compiler instead of the gcc pin (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -99,7 +99,7 @@ jobs:
             dirs="$(dirname "$so"):$dirs"
           done
           echo "LD_LIBRARY_PATH=$dirs:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
       - name: Build desktop UI bundle (embedded via generate_context!)
