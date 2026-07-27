@@ -83,7 +83,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let current: Option<(String, i64)> = sqlx::query_as(
             "SELECT provider, credential_revision FROM sdd_integration_connections
              WHERE connection_id = ?",
@@ -210,7 +210,7 @@ impl Store {
         expected_revision: i64,
     ) -> Result<SddOauthFlowRecord> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let flow: SddOauthFlowRecord =
             sqlx::query_as("SELECT * FROM sdd_oauth_flows WHERE flow_id = ?")
                 .bind(flow_id)
@@ -300,7 +300,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let changed = sqlx::query(
             "UPDATE sdd_oauth_flows SET status = 'redeemed', revision = revision + 1,
              connection_id = ?, updated_at = ?, redeemed_at = ?

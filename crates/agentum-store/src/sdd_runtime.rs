@@ -242,7 +242,7 @@ impl Store {
 
     pub async fn sdd_begin_attempt(&self, input: BeginAttemptMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, String, i64, i64)> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.phase, r.status, r.aggregate_revision,
                     s.current_revision
@@ -342,7 +342,7 @@ impl Store {
 
     pub async fn sdd_activate_attempt(&self, input: ActivateAttemptMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, aggregate_revision FROM sdd_runs WHERE run_id = ?",
         )
@@ -444,7 +444,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, Option<String>, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, status, blocker, aggregate_revision
              FROM sdd_runs WHERE run_id = ?",
@@ -584,7 +584,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, String, i64, i64)> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.phase, r.status, r.aggregate_revision,
                     s.current_revision
@@ -707,7 +707,7 @@ impl Store {
 
     pub async fn sdd_complete_patch(&self, input: CompletePatchMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, aggregate_revision FROM sdd_runs WHERE run_id = ?",
         )
@@ -837,7 +837,7 @@ impl Store {
 
     pub async fn sdd_fail_patch(&self, input: FailPatchMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, aggregate_revision FROM sdd_runs WHERE run_id = ?",
         )
@@ -964,7 +964,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, String, i64, i64)> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.phase, r.status, r.aggregate_revision,
                     s.current_revision
@@ -1169,7 +1169,7 @@ impl Store {
     /// be resumed through ordinary lifecycle commands.
     pub async fn sdd_quarantine_run(&self, input: QuarantineRunMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, i64, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, status, quarantined, aggregate_revision
              FROM sdd_runs WHERE run_id = ?",

@@ -109,6 +109,17 @@ impl Store {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Start a write transaction with SQLite's writer reservation already
+    /// held. SDD mutations read aggregate revisions before publishing their
+    /// CAS update; a deferred transaction can otherwise observe a snapshot,
+    /// lose a concurrent writer race, and fail its read-to-write promotion as
+    /// `SQLITE_BUSY_SNAPSHOT` instead of returning the domain's typed stale
+    /// revision result. `BEGIN IMMEDIATE` serializes writers through SQLite's
+    /// configured busy timeout while still allowing WAL readers to proceed.
+    pub(crate) async fn begin_write(&self) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>> {
+        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
+    }
 }
 
 /// Best-effort 0600 on the SQLite file and its WAL/SHM sidecars. Logs a
@@ -183,6 +194,28 @@ mod tests {
         // Leak the tempdir handle to keep it alive for the test duration.
         std::mem::forget(dir);
         Store::open(&p).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn write_transactions_reserve_the_writer_before_reading_cas_state() {
+        let store = tmp_store().await;
+        let first = store.begin_write().await.unwrap();
+        let contender_store = store.clone();
+        let contender = tokio::spawn(async move {
+            let transaction = contender_store.begin_write().await.unwrap();
+            transaction.rollback().await.unwrap();
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert!(
+            !contender.is_finished(),
+            "a second writer must wait instead of reading a promotable snapshot"
+        );
+        first.rollback().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), contender)
+            .await
+            .expect("waiting writer should acquire the reservation")
+            .unwrap();
     }
 
     #[tokio::test]

@@ -462,7 +462,7 @@ impl Store {
     /// Commit the create intent before any worktree/provider side effect.
     pub async fn sdd_reserve_create(&self, input: NewSddCreateSaga<'_>) -> Result<String> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query(
             "INSERT INTO sdd_repo_artifact_sets (repo_id, artifact_set_id, created_at)
              VALUES (?, ?, ?)
@@ -587,7 +587,7 @@ impl Store {
     /// targets. Completed/failed/canceled records are immutable history.
     pub async fn sdd_claim_interrupted_creates(&self) -> Result<Vec<SddCreateSagaRecord>> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query(
             "UPDATE sdd_create_sagas SET stage = 'recovery_required',
              error_summary = 'server stopped before create publication completed', updated_at = ?
@@ -632,7 +632,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let spec: Option<(String, i64, i64, String)> = sqlx::query_as(
             "SELECT repo_id, current_revision, aggregate_revision, provider
              FROM sdd_specs WHERE spec_id = ?",
@@ -782,7 +782,7 @@ impl Store {
 
     pub async fn sdd_claim_interrupted_run_creates(&self) -> Result<Vec<SddRunCreateSagaRecord>> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query(
             "UPDATE sdd_run_create_sagas SET stage = 'recovery_required',
              error_summary = 'server stopped before discovered-run publication completed',
@@ -828,7 +828,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let saga: Option<(String, String, i64, String, i64, String)> = sqlx::query_as(
             "SELECT repo_id, run_id, expected_spec_revision, expected_spec_hash,
                     expected_aggregate_revision, stage
@@ -1023,7 +1023,7 @@ impl Store {
     /// leases expire, and an in-flight patch quarantines its run.
     pub async fn sdd_recover_interrupted_runs(&self) -> Result<usize> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let runs: Vec<(String, String, String, i64, String, String)> = sqlx::query_as(
             "SELECT repo_id, spec_id, run_id, aggregate_revision, phase, status
              FROM sdd_runs WHERE status IN ('running', 'pausing', 'canceling')",
@@ -1179,7 +1179,7 @@ impl Store {
 
     pub async fn sdd_create_aggregate(&self, input: NewSddAggregate<'_>) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let saga: Option<(String, String, String, String)> = sqlx::query_as(
             "SELECT request_hash, spec_id, run_id, stage FROM sdd_create_sagas
              WHERE repo_id = ? AND request_id = ?",
@@ -1444,7 +1444,7 @@ impl Store {
         input: ReconcileDiscoveredSpecs<'_>,
     ) -> Result<ReconcileDiscoveredResult> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let mut batch_ids = std::collections::HashSet::new();
         if input.repo_id.is_empty()
             || input.artifact_set_id.is_empty()
@@ -1849,7 +1849,7 @@ impl Store {
     /// CAS a lifecycle command and its event/outbox/idempotency record.
     pub async fn sdd_transition(&self, input: TransitionMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, aggregate_revision FROM sdd_runs WHERE run_id = ?",
         )
@@ -2043,7 +2043,7 @@ impl Store {
     /// SQLite commit.
     pub async fn sdd_submit_artifact(&self, input: ArtifactMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, String, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, phase, status, aggregate_revision
              FROM sdd_runs WHERE run_id = ?",
@@ -2422,7 +2422,7 @@ impl Store {
     /// No filesystem write occurs here: the user's bytes remain untouched.
     pub async fn sdd_import_external_spec(&self, input: ExternalSpecMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, i64)> = sqlx::query_as(
             "SELECT repo_id, spec_id, aggregate_revision FROM sdd_runs WHERE run_id = ?",
         )
@@ -2591,7 +2591,7 @@ impl Store {
 
     pub async fn sdd_decide_approval(&self, input: ApprovalDecisionMutation<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, i64, String, String)> = sqlx::query_as(
             "SELECT repo_id, spec_id, aggregate_revision, phase, status
              FROM sdd_runs WHERE run_id = ?",

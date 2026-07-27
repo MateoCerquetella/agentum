@@ -385,7 +385,7 @@ impl Store {
         serde_json::from_str::<serde_json::Value>(author_request_json)?;
         serde_json::from_str::<serde_json::Value>(publication_intent_json)?;
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let inserted = sqlx::query(
             "INSERT INTO sdd_remote_create_intents
              (repo_id, request_id, host_id, author_request_json, publication_intent_json,
@@ -448,7 +448,7 @@ impl Store {
     ) -> Result<()> {
         serde_json::from_str::<serde_json::Value>(author_result_json)?;
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let existing: Option<(String, Option<String>)> = sqlx::query_as(
             "SELECT status, author_result_json FROM sdd_remote_create_intents
              WHERE repo_id = ? AND request_id = ?",
@@ -540,7 +540,7 @@ impl Store {
         request_id: &str,
     ) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT status FROM sdd_remote_create_intents
              WHERE repo_id = ? AND request_id = ?",
@@ -623,7 +623,7 @@ impl Store {
         let typed_request: StoredRemotePhaseRequest = serde_json::from_str(input.request_json)?;
         validate_phase_request(&typed_request, &input)?;
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let replay: Option<(String, String, Option<String>)> = sqlx::query_as(
             "SELECT request_sha256, status, response_json FROM sdd_remote_requests
              WHERE request_id = ?",
@@ -865,7 +865,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let row: Option<RemotePublicationStateRow> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.phase AS run_phase, r.status AS run_status,
                         r.aggregate_revision, s.current_revision AS spec_revision,
@@ -1279,7 +1279,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let row: Option<(String, String, String, String, i64, String, String)> = sqlx::query_as(
             "SELECT q.attempt_id, q.status, r.repo_id, r.spec_id, r.aggregate_revision,
                     r.status, a.status

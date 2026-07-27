@@ -94,7 +94,7 @@ impl Store {
     /// have happened; an authenticated confirm retry performs reconciliation.
     pub async fn sdd_recover_interrupted_delivery(&self) -> Result<u64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let actions: Vec<InterruptedDeliveryRow> = sqlx::query_as(
             "SELECT a.preview_id, a.action_id, a.action_type, r.repo_id, r.spec_id,
                     r.run_id, r.aggregate_revision
@@ -175,7 +175,7 @@ impl Store {
     /// authorization by itself: confirmation is also bound to `actor_id`.
     pub async fn sdd_create_delivery_preview(&self, input: NewDeliveryPreview<'_>) -> Result<i64> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, String, i64, i64)> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.phase, r.status, r.aggregate_revision, r.quarantined
              FROM sdd_runs r WHERE r.run_id = ?",
@@ -363,7 +363,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let preview: Option<SddDeliveryPreviewRecord> =
             sqlx::query_as("SELECT * FROM sdd_delivery_previews WHERE token_hash = ?")
                 .bind(input.token_hash)
@@ -581,7 +581,7 @@ impl Store {
         action_id: &str,
     ) -> Result<Option<SddDeliveryActionRecord>> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let row: Option<DeliveryClaimRow> = sqlx::query_as(
             "SELECT a.preview_id, a.action_id, a.action_type, a.intent_json, a.status,
                         a.result_json, a.attempts, a.updated_at,
@@ -703,7 +703,7 @@ impl Store {
             ));
         }
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let row: Option<(String, String, String, i64, String)> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.run_id, r.aggregate_revision, a.action_type
              FROM sdd_delivery_actions a

@@ -241,7 +241,7 @@ impl Store {
         }
 
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, String, String, i64, i64)> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.phase, r.status, r.workspace_fingerprint,
                     r.aggregate_revision, s.current_revision
@@ -459,7 +459,7 @@ impl Store {
         }
 
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let run: Option<(String, String, String, String, String, i64, i64)> = sqlx::query_as(
             "SELECT r.repo_id, r.spec_id, r.phase, r.status, r.workspace_fingerprint,
                     r.aggregate_revision, s.current_revision

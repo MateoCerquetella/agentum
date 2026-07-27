@@ -183,7 +183,7 @@ impl Store {
             ));
         }
         let expires_at = requested.format(&Rfc3339)?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         sqlx::query(
             "DELETE FROM sdd_remote_worker_lease
              WHERE singleton = 1 AND julianday(expires_at) <= julianday(?)",
@@ -231,7 +231,7 @@ impl Store {
         preimages_json: &str,
     ) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let request: Option<(String, String)> = sqlx::query_as(
             "SELECT run_id, stage FROM sdd_remote_worker_requests WHERE request_id = ?",
         )
@@ -273,7 +273,7 @@ impl Store {
 
     pub async fn sdd_remote_worker_complete_patch(&self, patch_id: &str) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let request_id: Option<String> = sqlx::query_scalar(
             "SELECT request_id FROM sdd_remote_worker_patch_journal
              WHERE patch_id = ? AND status = 'reserved'",
@@ -348,7 +348,7 @@ impl Store {
         input: ReserveRemoteAuthoring<'_>,
     ) -> Result<RemoteWorkerReservation> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         if let Some(existing) = remote_request(&mut tx, input.request_id).await? {
             let reservation = replay_or_recover(existing, input.request_sha256, input.run_id)?;
             tx.commit().await?;
@@ -452,7 +452,7 @@ impl Store {
         input: ReserveRemotePhase<'_>,
     ) -> Result<RemoteWorkerReservation> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         if let Some(existing) = remote_request(&mut tx, input.request_id).await? {
             let reservation = replay_or_recover(existing, input.request_sha256, input.run_id)?;
             tx.commit().await?;
@@ -536,7 +536,7 @@ impl Store {
         input: ReserveRemoteDelivery<'_>,
     ) -> Result<RemoteWorkerReservation> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         if let Some(existing) = remote_request(&mut tx, input.request_id).await? {
             let reservation = replay_or_recover(existing, input.request_sha256, input.run_id)?;
             tx.commit().await?;
@@ -664,7 +664,7 @@ impl Store {
         response_json: &str,
     ) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         complete_request(&mut tx, request_id, request_sha256, response_json, &at).await?;
         let updated = sqlx::query(
             "UPDATE sdd_remote_worker_runs SET spec_revision = 2,
@@ -699,7 +699,7 @@ impl Store {
         response_json: &str,
     ) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         complete_request(&mut tx, request_id, request_sha256, response_json, &at).await?;
         let updated = sqlx::query(
             "UPDATE sdd_remote_worker_runs SET next_phase = ?, completed_phases = ?,
@@ -733,7 +733,7 @@ impl Store {
         response_json: &str,
     ) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         complete_request(&mut tx, request_id, request_sha256, response_json, &at).await?;
         sqlx::query(
             "UPDATE sdd_remote_worker_runs SET status = 'blocked', blocker = ?, updated_at = ?
@@ -757,7 +757,7 @@ impl Store {
         response_json: &str,
     ) -> Result<()> {
         let at = now()?;
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         complete_request(&mut tx, request_id, request_sha256, response_json, &at).await?;
         let updated = sqlx::query(
             "UPDATE sdd_remote_worker_runs SET workspace_state_sha256 = ?, updated_at = ?
