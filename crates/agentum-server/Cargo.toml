@@ -81,8 +81,10 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], default-featur
 # Apply a protected, owner-only DACL to credential-bearing temporary files
 # before they are atomically published.
 windows-sys = { version = "0.61", features = [
+    "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_IO",
 ] }

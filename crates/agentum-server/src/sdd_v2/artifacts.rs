@@ -1581,8 +1581,11 @@ fn atomic_write_windows_in(
 }
 
 /// Rename an already-open Windows file relative to an already-open directory.
-/// `SetFileInformationByHandle` avoids converting either handle back into an
-/// ambient path, which would reintroduce a junction-swap race.
+/// `NtSetInformationFile` supports an actual root-directory handle for a
+/// relative target. This avoids converting either handle back into an ambient
+/// path, which would reintroduce a junction-swap race. The Win32
+/// `SetFileInformationByHandle` wrapper rejects this documented native form
+/// with `ERROR_INVALID_PARAMETER` on current Windows runners.
 #[cfg(windows)]
 pub(crate) fn rename_file_handle(
     file: &File,
@@ -1592,9 +1595,11 @@ pub(crate) fn rename_file_handle(
 ) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_RENAME_INFO, FileRenameInfo, SetFileInformationByHandle,
+    use windows_sys::Wdk::Storage::FileSystem::{
+        FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
     };
+    use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
     let wide: Vec<u16> = name.as_os_str().encode_wide().collect();
     if wide.is_empty() || wide.contains(&0) {
@@ -1612,10 +1617,10 @@ pub(crate) fn rename_file_handle(
                 "artifact name is too long",
             )
         })?;
-    // Windows requires at least sizeof(FILE_RENAME_INFO) plus the complete
+    // Windows requires at least sizeof(FILE_RENAME_INFORMATION) plus the complete
     // variable filename. Using only offset_of(FileName) produced an undersized
     // buffer and ERROR_INVALID_PARAMETER on real Windows runners.
-    let byte_len = std::mem::size_of::<FILE_RENAME_INFO>()
+    let byte_len = std::mem::size_of::<FILE_RENAME_INFORMATION>()
         .checked_add(file_name_bytes)
         .ok_or_else(|| {
             std::io::Error::new(
@@ -1625,7 +1630,7 @@ pub(crate) fn rename_file_handle(
         })?;
     let word = std::mem::size_of::<usize>();
     let mut storage = vec![0usize; byte_len.div_ceil(word)];
-    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
     let file_name_length = u32::try_from(file_name_bytes).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1652,16 +1657,23 @@ pub(crate) fn rename_file_handle(
     }
     // SAFETY: both handles remain live and `storage` remains allocated for the
     // duration of the synchronous Windows call.
-    let renamed = unsafe {
-        SetFileInformationByHandle(
+    let mut io_status = IO_STATUS_BLOCK::default();
+    let status = unsafe {
+        NtSetInformationFile(
             file.as_raw_handle(),
-            FileRenameInfo,
-            info.cast(),
+            &raw mut io_status,
+            info.cast_const().cast(),
             buffer_length,
+            FileRenameInformation,
         )
     };
-    if renamed == 0 {
-        Err(std::io::Error::last_os_error())
+    if status < 0 {
+        // SAFETY: conversion has no preconditions and maps an NTSTATUS returned
+        // by the immediately preceding native call to its Win32 error code.
+        let code = unsafe { RtlNtStatusToDosError(status) };
+        Err(std::io::Error::from_raw_os_error(
+            i32::try_from(code).unwrap_or(i32::MAX),
+        ))
     } else {
         Ok(())
     }
@@ -2372,6 +2384,25 @@ mod tests {
         let new_hash = atomic_write(&path, b"new", Some(&old_hash)).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), "new");
         assert_eq!(new_hash, sha256(b"new"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn openspec_windows_atomic_publication_is_handle_relative() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("artifact.md");
+
+        let initial_hash = atomic_write(&path, b"initial", Some(MISSING_HASH)).unwrap();
+        assert_eq!(initial_hash, sha256(b"initial"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"initial");
+
+        let replacement_hash = atomic_write(&path, b"replacement", Some(&initial_hash)).unwrap();
+        assert_eq!(replacement_hash, sha256(b"replacement"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+
+        let error = atomic_write(&path, b"must-not-win", Some(MISSING_HASH)).unwrap_err();
+        assert!(matches!(error, ArtifactError::ContentChanged { .. }));
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
     }
 
     #[cfg(unix)]
