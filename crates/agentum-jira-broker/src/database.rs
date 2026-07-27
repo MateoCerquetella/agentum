@@ -331,6 +331,7 @@ fn acquire_instance_lock(_file: &File) -> Result<(), DatabaseError> {
 pub(crate) enum DatabaseError {
     #[error("broker database path is unsafe")]
     UnsafePath,
+    #[cfg(unix)]
     #[error("another broker process already owns this database")]
     AlreadyRunning,
     #[error("broker database is unavailable")]

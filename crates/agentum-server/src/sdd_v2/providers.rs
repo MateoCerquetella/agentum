@@ -203,6 +203,7 @@ pub const BUNDLED_IDS: &[&str] = &[
 const CURSOR_EXECUTABLE_CANDIDATES: [&str; 2] = ["agent", "cursor-agent"];
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 struct ProviderProjectInputPolicy {
     directories: &'static [&'static str],
     root_files: &'static [&'static str],
@@ -213,6 +214,7 @@ struct ProviderProjectInputPolicy {
 /// prompt. These are hidden from an attempt, while ordinary repository source
 /// remains readable. User-level configuration is separately hidden by the
 /// sandbox HOME and only the provider's credential leaf is mounted back.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn provider_project_input_policy(provider_id: &str) -> ProviderProjectInputPolicy {
     match provider_id {
         "claude" => ProviderProjectInputPolicy {

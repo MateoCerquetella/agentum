@@ -555,7 +555,7 @@ impl OpenSshRemoteSddTransport {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fn with_test_program(
         host: Host,
         program: PathBuf,
@@ -818,7 +818,6 @@ impl OpenSshRemoteSddTransport {
         command.process_group(0);
         #[cfg(windows)]
         {
-            use std::os::windows::process::CommandExt as _;
             command.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
         }
         let mut child = command.spawn().map_err(|_| {

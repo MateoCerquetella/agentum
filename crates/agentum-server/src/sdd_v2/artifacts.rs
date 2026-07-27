@@ -94,6 +94,7 @@ pub(crate) struct AnchoredEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) struct AnchoredNamedDescendant {
     pub relative_path: PathBuf,
     pub kind: AnchoredEntryKind,
@@ -162,6 +163,7 @@ impl AnchoredDirectory {
         directory_entries(&self.directory, &self.display_path)
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn child_kind_optional(
         &self,
         name: &str,
@@ -204,6 +206,7 @@ impl AnchoredDirectory {
     /// the directory through an ambient path. A link with a reserved name is a
     /// hard error: treating it as either a file or directory would let its
     /// target change between policy construction and sandbox launch.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn find_named_descendants(
         &self,
         directory_names: &[&str],
@@ -1107,11 +1110,11 @@ fn create_child_directory_exclusive(
             Path::new(name),
             &cap_primitives::fs::DirOptions::new(),
         ) {
-            Ok(()) => return open_child_directory(parent, name, display_path),
+            Ok(()) => open_child_directory(parent, name, display_path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(ArtifactError::Collision(display_path.display().to_string()));
+                Err(ArtifactError::Collision(display_path.display().to_string()))
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => Err(error.into()),
         }
     }
     #[cfg(all(not(unix), not(windows)))]
@@ -1469,7 +1472,7 @@ pub fn atomic_remove(path: &Path, expected_hash: &str) -> Result<(), ArtifactErr
     #[cfg(windows)]
     {
         cap_primitives::fs::remove_file(&directory, Path::new(name))?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(all(not(unix), not(windows)))]
     {
@@ -1594,7 +1597,7 @@ fn rename_file_handle(
     };
 
     let wide: Vec<u16> = name.as_os_str().encode_wide().collect();
-    if wide.is_empty() || wide.iter().any(|value| *value == 0) {
+    if wide.is_empty() || wide.contains(&0) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "artifact name is empty or contains NUL",

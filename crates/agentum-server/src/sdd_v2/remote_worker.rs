@@ -7,6 +7,7 @@
 //! evidence across worker process restarts.
 
 use std::collections::{HashMap, HashSet};
+#[cfg(unix)]
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -58,6 +59,7 @@ use super::remote::{
 use super::workspace::{self, AttemptWorkspace, AuthoritativeWorkspace, SourceCheckoutMode};
 use super::{lifecycle, sha256};
 
+#[cfg(unix)]
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
