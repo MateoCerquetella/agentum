@@ -1,1 +1,1 @@
-{"passed": true, "summary": "Spec 437 is one testable gated-run topbar persistence slice grounded in the existing desktop UI and harness event flow."}
+{"passed": true, "summary": "Spec 446 is one testable Workspace board card-move slice that makes linked GitHub or Linear status authoritative without restoring the retired internal task board."}

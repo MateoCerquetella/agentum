@@ -334,3 +334,16 @@
 - phase: entered review (from executing)
 - review gate PASS (attempt 1): focused Vitest checks, reconnect/worktree QA, and the desktop UI production build pass; the existing single `GatedRunBar` production mount and component markup remain unchanged.
 - phase: entered done (from review)
+- phase: entered authoring (from done)
+- authoring gate BLOCKED after 4 attempts: Spec 446 duplicates the completed and shipped Spec 027, so it has no distinct shippable increment.
+- phase: entered blocked (from authoring)
+- phase: entered authoring (from blocked)
+- authoring gate PASS (attempt 2): Spec 446 is one testable Workspace board card-move slice that makes linked GitHub or Linear status authoritative without restoring the retired internal task board.
+- phase: entered architecture (from authoring)
+- architecture gate PASS (attempt 1): Grounded two-task plan reuses confirmed GitHub/Linear read and transition seams, makes Workspace board moves pessimistic and tracker-authoritative, and maps all six criteria to named tests.
+- phase: entered decompose (from architecture)
+- phase: entered executing (from decompose)
+- developer implementation complete (2026-07-27): added strict worktree-owned GitHub/Linear transition and reconciliation routes, fixed tracker lanes including Unlinked, generation-safe provider refreshes, pessimistic one-card moves, settings-linked failures, and focused regressions without writing workspaceStatus.
+- phase: entered review (from executing)
+- review gate PASS (attempt 1): all 750 runnable agentum-server library tests, 50 focused Workspace board/provider regressions, the exact 12-test UI gate, and the desktop production build pass; review confirms skipped/unmapped/transport failures preserve local phase and rank.
+- phase: entered done (from review)

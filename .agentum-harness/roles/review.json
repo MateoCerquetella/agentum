@@ -1,1 +1,1 @@
-{"passed": true, "summary": "Spec 437 is complete: workdir-scoped snapshot continuity preserves the single gated-run topbar through reconnects, ordered gate refreshes, and workspace switching; 17 focused regressions, QA, and the production UI build pass."}
+{"passed": true, "summary": "Spec 446 is complete: GitHub Project and Linear reads and writes are tracker-authoritative, moves are pessimistic, unlinked and rejected moves remain non-writing, and the full server suite, 50 focused UI regressions, and production build pass."}

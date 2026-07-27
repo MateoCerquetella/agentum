@@ -3,6 +3,17 @@
 // `agentum-server/src/routes/worktrees.rs`; this is the typed boundary the UI
 // calls. Worktree ids contain `/`, so id-bearing ops are POST-with-body.
 import { getJson, postJson, qs } from './server-http'
+import type { TrackerPhaseWire } from '@/lib/tracker-phase'
+
+export type WorktreeTrackerReconcileResult = {
+  reconciled: boolean
+  phase: TrackerPhaseWire | null
+}
+
+export type WorktreeTrackerTransitionResult = {
+  applied: true
+  phase: TrackerPhaseWire
+}
 
 export function worktreesDetected(repoId: string): Promise<unknown> {
   return getJson(`/api/worktrees/detected${qs({ repoId })}`)
@@ -26,10 +37,30 @@ export function worktreesUpdateMeta(
 export function worktreesReconcileGithubStatus(
   worktreeId: string,
   statusOptionId: string
-): Promise<unknown> {
-  return postJson('/api/worktrees/reconcile-github-status', {
+): Promise<WorktreeTrackerReconcileResult> {
+  return postJson<WorktreeTrackerReconcileResult>('/api/worktrees/reconcile-github-status', {
     worktreeId,
     statusOptionId
+  })
+}
+
+export function worktreesReconcileLinearStatus(
+  worktreeId: string,
+  stateName: string
+): Promise<WorktreeTrackerReconcileResult> {
+  return postJson<WorktreeTrackerReconcileResult>('/api/worktrees/reconcile-linear-status', {
+    worktreeId,
+    stateName
+  })
+}
+
+export function worktreesTransitionTracker(
+  worktreeId: string,
+  targetPhase: TrackerPhaseWire
+): Promise<WorktreeTrackerTransitionResult> {
+  return postJson<WorktreeTrackerTransitionResult>('/api/worktrees/transition-tracker', {
+    worktreeId,
+    targetPhase
   })
 }
 

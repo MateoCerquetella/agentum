@@ -174,7 +174,11 @@ pub(crate) fn session_start_decision(
 /// ignores it (it parses `owner/repo` + number from the URL), so the URL doubles
 /// as an inert id; the Linear arm uses the item identifier, which the worktree
 /// persists as `linked_linear_issue` (falling back to the URL string).
-fn tracker_id_for(provider: &str, url: &str, linked_linear_issue: Option<&str>) -> String {
+pub(crate) fn tracker_id_for(
+    provider: &str,
+    url: &str,
+    linked_linear_issue: Option<&str>,
+) -> String {
     match provider {
         "linear" => linked_linear_issue
             .map(str::to_string)

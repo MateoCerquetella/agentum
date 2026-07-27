@@ -1,22 +1,26 @@
 /* eslint-disable max-lines -- Why: the board drawer owns shared board state, drag/drop, and settings callbacks that need one coordinated surface. */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
+import { PROJECT_INTEGRATIONS_SECTION_ID } from '@/components/settings/ProjectIntegrationsSection'
+import { linearGetIssue } from '@/runtime/runtime-linear-client'
+import {
+  worktreesReconcileGithubStatus,
+  worktreesReconcileLinearStatus,
+  worktreesTransitionTracker
+} from '@/runtime/server-worktree-client'
+import type { TrackerPhaseWire } from '@/lib/tracker-phase'
 import WorkspaceKanbanAreaSelectionOverlay from './WorkspaceKanbanAreaSelectionOverlay'
 import WorkspaceKanbanDrawerHeader from './WorkspaceKanbanDrawerHeader'
 import WorkspaceKanbanLaneGrid from './WorkspaceKanbanLaneGrid'
 import WorkspaceKanbanPinDropTarget from './WorkspaceKanbanPinDropTarget'
-import {
-  getWorkspaceStatus,
-  hasWorkspaceDragData,
-  readWorkspaceDragDataIds
-} from './workspace-status'
+import { hasWorkspaceDragData, readWorkspaceDragDataIds } from './workspace-status'
 import { useWorkspaceStatusDocumentDrop } from './use-workspace-status-drop'
 import { useWorkspaceKanbanAreaSelection } from './use-workspace-kanban-area-selection'
 import { useWorkspaceKanbanCardPointerDrag } from './use-workspace-kanban-card-pointer-drag'
 import { useWorkspaceKanbanColumnResize } from './use-workspace-kanban-column-resize'
-import { useWorkspaceKanbanCreateWorktree } from './use-workspace-kanban-create-worktree'
 import { useWorkspaceKanbanSelection } from './use-workspace-kanban-selection'
 import { useWorkspaceKanbanShiftWheelScroll } from './use-workspace-kanban-shift-wheel-scroll'
 import {
@@ -24,17 +28,27 @@ import {
   useWorkspaceKanbanOutsideDismiss
 } from './use-workspace-kanban-outside-dismiss'
 import { useVisibleWorkspaceKanbanWorktreeIds } from './use-visible-workspace-kanban-worktree-ids'
-import { groupWorkspaceKanbanWorktrees } from './workspace-kanban-worktree-groups'
+import { resolveIssueProjectStatusForBoard } from './IssueProjectStatusChip'
+import {
+  WORKSPACE_KANBAN_TRACKER_LANES,
+  getWorkspaceKanbanTrackerLane,
+  groupWorkspaceKanbanWorktrees
+} from './workspace-kanban-worktree-groups'
+import {
+  commitWorkspaceKanbanTrackerMove,
+  hasWorkspaceKanbanTrackerLink,
+  isWorkspaceKanbanLifecycleLane,
+  refreshWorkspaceKanbanTrackerPhases
+} from './workspace-kanban-tracker-board'
 import {
   buildManualOrderUpdatesForGroupDrop,
   shouldWriteManualOrderForGroupDrop,
   type WorktreeDragGroup
 } from './worktree-manual-order'
-import type { WorkspaceStatus, WorktreeMeta } from '../../../../shared/types'
+import type { WorkspaceStatus, Worktree } from '../../../../shared/types'
 import {
   WORKSPACE_BOARD_COLUMN_GAP,
-  fitWorkspaceBoardColumnWidth,
-  makeWorkspaceStatusId
+  fitWorkspaceBoardColumnWidth
 } from '../../../../shared/workspace-statuses'
 
 type WorkspaceKanbanDrawerProps = {
@@ -55,8 +69,7 @@ export default function WorkspaceKanbanDrawer({
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
   const updateWorktreesMeta = useAppStore((s) => s.updateWorktreesMeta)
-  const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
-  const setWorkspaceStatuses = useAppStore((s) => s.setWorkspaceStatuses)
+  const settings = useAppStore((s) => s.settings)
   const workspaceBoardColumnLayout = useAppStore((s) => s.workspaceBoardColumnLayout)
   const setWorkspaceBoardColumnLayout = useAppStore((s) => s.setWorkspaceBoardColumnLayout)
   const workspaceBoardColumnWidth = useAppStore((s) => s.workspaceBoardColumnWidth)
@@ -71,7 +84,10 @@ export default function WorkspaceKanbanDrawer({
   const [dragOverStatus, setDragOverStatus] = useState<WorkspaceStatus | null>(null)
   const [pinDragOver, setPinDragOver] = useState(false)
   const [laneScrollerWidth, setLaneScrollerWidth] = useState(0)
-  const { canCreateWorktree, createWorktreeForStatus } = useWorkspaceKanbanCreateWorktree()
+  const [confirmedPhases, setConfirmedPhases] = useState<ReadonlyMap<string, TrackerPhaseWire>>(
+    () => new Map()
+  )
+  const refreshGenerationRef = useRef(0)
   const visibleWorktreeIdSet = useVisibleWorkspaceKanbanWorktreeIds({
     allWorktrees,
     repoMap
@@ -80,25 +96,26 @@ export default function WorkspaceKanbanDrawer({
     return groupWorkspaceKanbanWorktrees({
       worktrees: allWorktrees,
       visibleWorktreeIds: visibleWorktreeIdSet,
-      workspaceStatuses,
+      confirmedPhases,
       sortBy
     })
-  }, [allWorktrees, sortBy, visibleWorktreeIdSet, workspaceStatuses])
+  }, [allWorktrees, confirmedPhases, sortBy, visibleWorktreeIdSet])
   const worktreeById = useMemo(
     () => new Map(allWorktrees.map((worktree) => [worktree.id, worktree])),
     [allWorktrees]
   )
   const boardWorktrees = useMemo(
-    () => workspaceStatuses.flatMap((status) => worktreesByStatus.get(status.id) ?? []),
-    [worktreesByStatus, workspaceStatuses]
+    () =>
+      WORKSPACE_KANBAN_TRACKER_LANES.flatMap((status) => worktreesByStatus.get(status.id) ?? []),
+    [worktreesByStatus]
   )
   const boardDragGroups = useMemo<WorktreeDragGroup[]>(
     () =>
-      workspaceStatuses.map((status) => ({
+      WORKSPACE_KANBAN_TRACKER_LANES.map((status) => ({
         key: status.id,
         worktreeIds: (worktreesByStatus.get(status.id) ?? []).map((worktree) => worktree.id)
       })),
-    [worktreesByStatus, workspaceStatuses]
+    [worktreesByStatus]
   )
   const {
     selectedWorktreeIds,
@@ -140,30 +157,99 @@ export default function WorkspaceKanbanDrawer({
       workspaceBoardColumnLayout === 'fit'
         ? fitWorkspaceBoardColumnWidth({
             containerWidth: laneScrollerWidth,
-            columnCount: workspaceStatuses.length,
+            columnCount: WORKSPACE_KANBAN_TRACKER_LANES.length,
             capWidth: columnWidth
           })
         : columnWidth,
-    [columnWidth, laneScrollerWidth, workspaceBoardColumnLayout, workspaceStatuses.length]
+    [columnWidth, laneScrollerWidth, workspaceBoardColumnLayout]
   )
-  const moveWorktreeToStatus = useCallback(
-    (worktreeId: string, status: WorkspaceStatus) => {
-      const current = worktreeById.get(worktreeId)
-      if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
-        return
+  const visibleLinkedWorktrees = useMemo(
+    () =>
+      allWorktrees.filter(
+        (worktree) =>
+          visibleWorktreeIdSet.has(worktree.id) && hasWorkspaceKanbanTrackerLink(worktree)
+      ),
+    [allWorktrees, visibleWorktreeIdSet]
+  )
+  const resolveProviderPhase = useCallback(
+    async (worktree: Worktree): Promise<TrackerPhaseWire | null> => {
+      if (worktree.trackerProvider === 'github') {
+        const result = await resolveIssueProjectStatusForBoard({
+          issueUrl: worktree.trackerUrl!,
+          workdir: worktree.path,
+          repoId: worktree.repoId
+        })
+        if (result.warning) {
+          throw new Error(result.warning)
+        }
+        if (!result.statusOptionId) {
+          return null
+        }
+        const reconciled = await worktreesReconcileGithubStatus(worktree.id, result.statusOptionId)
+        return reconciled.phase
       }
-      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-      void updateWorktreeMeta(worktreeId, { workspaceStatus: status })
+
+      const issueId = worktree.linkedLinearIssue?.trim() || worktree.trackerUrl?.trim()
+      if (!issueId) {
+        return null
+      }
+      const issue = await linearGetIssue(settings, issueId)
+      if (!issue) {
+        throw new Error(`Linear issue not found: ${issueId}`)
+      }
+      const reconciled = await worktreesReconcileLinearStatus(worktree.id, issue.state.name)
+      return reconciled.phase
     },
-    [updateWorktreeMeta, workspaceStatuses, worktreeById]
+    [settings]
   )
+
+  useEffect(() => {
+    if (!open) {
+      refreshGenerationRef.current += 1
+      return
+    }
+    const refresh = (): void => {
+      const generation = ++refreshGenerationRef.current
+      void refreshWorkspaceKanbanTrackerPhases({
+        worktrees: visibleLinkedWorktrees,
+        resolvePhase: resolveProviderPhase,
+        isCurrent: () => generation === refreshGenerationRef.current
+      }).then((next) => {
+        if (!next) {
+          return
+        }
+        setConfirmedPhases((current) => {
+          const merged = new Map(current)
+          for (const [worktreeId, phase] of next) {
+            merged.set(worktreeId, phase)
+          }
+          return merged
+        })
+      })
+    }
+    const refreshWhenVisible = (): void => {
+      if (document.visibilityState === 'visible') {
+        refresh()
+      }
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      refreshGenerationRef.current += 1
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [open, resolveProviderPhase, visibleLinkedWorktrees])
+
   const getSourceStatusKeys = useCallback(
     (worktreeIds: readonly string[]): WorkspaceStatus[] =>
       worktreeIds.flatMap((worktreeId) => {
         const worktree = worktreeById.get(worktreeId)
-        return worktree ? [getWorkspaceStatus(worktree, workspaceStatuses)] : []
+        const lane = worktree ? getWorkspaceKanbanTrackerLane(worktree, confirmedPhases) : null
+        return lane ? [lane] : []
       }),
-    [workspaceStatuses, worktreeById]
+    [confirmedPhases, worktreeById]
   )
   const shouldWriteDropManualOrder = useCallback(
     (worktreeIds: readonly string[], status: WorkspaceStatus): boolean =>
@@ -174,6 +260,54 @@ export default function WorkspaceKanbanDrawer({
       }),
     [getSourceStatusKeys, sortBy]
   )
+  const commitManualOrderForDrop = useCallback(
+    (args: {
+      worktreeIds: readonly string[]
+      status: WorkspaceStatus
+      dropIndex: number
+      writeManualOrder: boolean
+    }) => {
+      if (!args.writeManualOrder) {
+        return
+      }
+      const rankByWorktreeId = (() => {
+        const ranks = new Map<string, number>()
+        for (const group of boardDragGroups) {
+          for (const worktreeId of group.worktreeIds) {
+            const worktree = worktreeById.get(worktreeId)
+            if (worktree) {
+              ranks.set(worktreeId, worktree.manualOrder ?? worktree.sortOrder)
+            }
+          }
+        }
+        return ranks
+      })()
+      const order = buildManualOrderUpdatesForGroupDrop({
+        groups: boardDragGroups,
+        targetGroupKey: args.status,
+        draggedIds: args.worktreeIds,
+        dropIndex: args.dropIndex,
+        now: Date.now(),
+        rankByWorktreeId
+      })
+      if (!order.changed || order.updates.size === 0) {
+        return
+      }
+      setSortBy('manual')
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
+      void updateWorktreesMeta(order.updates)
+    },
+    [boardDragGroups, setSortBy, updateWorktreesMeta, worktreeById]
+  )
+  const openTrackerSettings = useCallback((worktree: Worktree) => {
+    const store = useAppStore.getState()
+    store.openSettingsTarget({
+      pane: 'repo',
+      repoId: worktree.repoId,
+      sectionId: PROJECT_INTEGRATIONS_SECTION_ID
+    })
+    store.openSettingsPage()
+  }, [])
   const dropWorktreesInStatus = useCallback(
     (args: {
       worktreeIds: readonly string[]
@@ -181,78 +315,75 @@ export default function WorkspaceKanbanDrawer({
       dropIndex: number
       writeManualOrder?: boolean
     }) => {
-      const updates = new Map<string, Partial<WorktreeMeta>>()
-      const writeManualOrder =
-        args.writeManualOrder ?? shouldWriteDropManualOrder(args.worktreeIds, args.status)
-      const rankByWorktreeId = writeManualOrder
-        ? (() => {
-            const ranks = new Map<string, number>()
-            for (const group of boardDragGroups) {
-              for (const worktreeId of group.worktreeIds) {
-                const worktree = worktreeById.get(worktreeId)
-                if (worktree) {
-                  ranks.set(worktreeId, worktree.manualOrder ?? worktree.sortOrder)
-                }
-              }
-            }
-            return ranks
-          })()
-        : undefined
-      const order = writeManualOrder
-        ? buildManualOrderUpdatesForGroupDrop({
-            groups: boardDragGroups,
-            targetGroupKey: args.status,
-            draggedIds: args.worktreeIds,
-            dropIndex: args.dropIndex,
-            now: Date.now(),
-            rankByWorktreeId
-          })
-        : { changed: false, updates: new Map<string, { manualOrder: number }>() }
-
-      for (const worktreeId of args.worktreeIds) {
-        const current = worktreeById.get(worktreeId)
-        if (!current) {
-          continue
-        }
-        const next = updates.get(worktreeId) ?? {}
-        if (getWorkspaceStatus(current, workspaceStatuses) !== args.status) {
-          next.workspaceStatus = args.status
-        }
-        updates.set(worktreeId, next)
-      }
-
-      if (writeManualOrder) {
-        for (const [worktreeId, manualOrder] of order.updates) {
-          const currentUpdate = updates.get(worktreeId)
-          updates.set(
-            worktreeId,
-            currentUpdate ? { ...currentUpdate, ...manualOrder } : manualOrder
-          )
-        }
-      }
-
-      for (const [worktreeId, update] of Array.from(updates)) {
-        if (Object.keys(update).length === 0) {
-          updates.delete(worktreeId)
-        }
-      }
-      if (updates.size === 0) {
+      const sourceStatusKeys = getSourceStatusKeys(args.worktreeIds)
+      if (sourceStatusKeys.length !== args.worktreeIds.length) {
         return
       }
-      // Why: cross-lane drops in a derived sort are usually just status moves.
-      // Only explicit rank gestures should fork the board/sidebar into Manual.
-      if (writeManualOrder && order.changed) {
-        setSortBy('manual')
+      const isSameLane = sourceStatusKeys.every((sourceStatus) => sourceStatus === args.status)
+      const writeManualOrder =
+        args.writeManualOrder ?? shouldWriteDropManualOrder(args.worktreeIds, args.status)
+      if (isSameLane) {
+        commitManualOrderForDrop({ ...args, writeManualOrder })
+        return
       }
-      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-      void updateWorktreesMeta(updates)
+      if (args.worktreeIds.length !== 1) {
+        toast.error('Move one workspace at a time', {
+          description: 'Tracker lifecycle moves do not support multiple selected cards.'
+        })
+        return
+      }
+      const worktree = worktreeById.get(args.worktreeIds[0]!)
+      if (!worktree || !hasWorkspaceKanbanTrackerLink(worktree)) {
+        if (worktree) {
+          toast.error('Link a tracker before moving this workspace', {
+            description: 'Choose GitHub or Linear in Project Integrations.',
+            action: {
+              label: 'Link tracker',
+              onClick: () => openTrackerSettings(worktree)
+            }
+          })
+        }
+        return
+      }
+      if (!isWorkspaceKanbanLifecycleLane(args.status)) {
+        toast.error('The Unlinked lane is assigned automatically', {
+          description: 'Remove or change the tracker link from Project Integrations.'
+        })
+        return
+      }
+
+      void commitWorkspaceKanbanTrackerMove({
+        worktreeId: worktree.id,
+        targetPhase: args.status,
+        transition: worktreesTransitionTracker,
+        commitPhase: (phase) => {
+          setConfirmedPhases((current) => {
+            const next = new Map(current)
+            next.set(worktree.id, phase)
+            return next
+          })
+        },
+        commitManualOrder: () =>
+          commitManualOrderForDrop({
+            ...args,
+            writeManualOrder
+          })
+      }).then(
+        () => {
+          useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
+        },
+        (error) => {
+          toast.error('Could not move workspace in its tracker', {
+            description: error instanceof Error ? error.message : String(error)
+          })
+        }
+      )
     },
     [
-      boardDragGroups,
-      setSortBy,
+      commitManualOrderForDrop,
+      getSourceStatusKeys,
+      openTrackerSettings,
       shouldWriteDropManualOrder,
-      updateWorktreesMeta,
-      workspaceStatuses,
       worktreeById
     ]
   )
@@ -346,6 +477,13 @@ export default function WorkspaceKanbanDrawer({
     [dropWorktreesInStatus, sortBy, worktreesByStatus]
   )
 
+  const moveWorktreeToStatus = useCallback(
+    (worktreeId: string, status: WorkspaceStatus) => {
+      dropWorktreesAtEndOfStatus([worktreeId], status)
+    },
+    [dropWorktreesAtEndOfStatus]
+  )
+
   const handleDrop = useCallback(
     (event: React.DragEvent, status: WorkspaceStatus) => {
       const worktreeIds = readWorkspaceDragDataIds(event.dataTransfer)
@@ -378,89 +516,6 @@ export default function WorkspaceKanbanDrawer({
     [onOpenChange]
   )
 
-  const handleRenameStatus = useCallback(
-    (statusId: string, label: string) => {
-      const trimmed = label.trim()
-      if (!trimmed) {
-        return
-      }
-      setWorkspaceStatuses(
-        workspaceStatuses.map((status) =>
-          status.id === statusId ? { ...status, label: trimmed } : status
-        )
-      )
-      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-    },
-    [setWorkspaceStatuses, workspaceStatuses]
-  )
-
-  const handleChangeStatusColor = useCallback(
-    (statusId: string, color: string) => {
-      setWorkspaceStatuses(
-        workspaceStatuses.map((status) => (status.id === statusId ? { ...status, color } : status))
-      )
-      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-    },
-    [setWorkspaceStatuses, workspaceStatuses]
-  )
-
-  const handleChangeStatusIcon = useCallback(
-    (statusId: string, icon: string) => {
-      setWorkspaceStatuses(
-        workspaceStatuses.map((status) => (status.id === statusId ? { ...status, icon } : status))
-      )
-      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-    },
-    [setWorkspaceStatuses, workspaceStatuses]
-  )
-
-  const handleMoveStatus = useCallback(
-    (statusId: string, direction: -1 | 1) => {
-      const index = workspaceStatuses.findIndex((status) => status.id === statusId)
-      const nextIndex = index + direction
-      if (index === -1 || nextIndex < 0 || nextIndex >= workspaceStatuses.length) {
-        return
-      }
-      const next = [...workspaceStatuses]
-      const [moved] = next.splice(index, 1)
-      next.splice(nextIndex, 0, moved)
-      setWorkspaceStatuses(next)
-      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-    },
-    [setWorkspaceStatuses, workspaceStatuses]
-  )
-
-  const handleAddStatus = useCallback(() => {
-    const label = `Status ${workspaceStatuses.length + 1}`
-    setWorkspaceStatuses([
-      ...workspaceStatuses,
-      { id: makeWorkspaceStatusId(label, workspaceStatuses), label }
-    ])
-    useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-  }, [setWorkspaceStatuses, workspaceStatuses])
-
-  const handleRemoveStatus = useCallback(
-    (statusId: string) => {
-      if (workspaceStatuses.length <= 1) {
-        return
-      }
-      const index = workspaceStatuses.findIndex((status) => status.id === statusId)
-      if (index === -1) {
-        return
-      }
-      const next = workspaceStatuses.filter((status) => status.id !== statusId)
-      const fallbackStatus = next[Math.min(index, next.length - 1)]?.id ?? next[0]!.id
-      setWorkspaceStatuses(next)
-      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
-      for (const worktree of allWorktrees) {
-        if (getWorkspaceStatus(worktree, workspaceStatuses) === statusId) {
-          void updateWorktreeMeta(worktree.id, { workspaceStatus: fallbackStatus })
-        }
-      }
-    },
-    [allWorktrees, setWorkspaceStatuses, updateWorktreeMeta, workspaceStatuses]
-  )
-
   useWorkspaceStatusDocumentDrop(
     boardRef,
     moveWorktreeToStatus,
@@ -474,7 +529,12 @@ export default function WorkspaceKanbanDrawer({
   )
 
   useWorkspaceKanbanShiftWheelScroll(boardRef, laneScrollerRef, open, isPointerDragActiveRef)
-  useWorkspaceKanbanOutsideDismiss({ open, boardRef, preserveOpenForMenu, onOpenChange })
+  useWorkspaceKanbanOutsideDismiss({
+    open,
+    boardRef,
+    preserveOpenForMenu,
+    onOpenChange
+  })
 
   useEffect(() => {
     if (!open || selectedWorktreeIds.size === 0) {
@@ -507,8 +567,8 @@ export default function WorkspaceKanbanDrawer({
   // Why: full-width mode keeps user-sized columns and expands the companion
   // board over adjacent panes; fit mode preserves the older fixed panel.
   const boardContentWidth =
-    workspaceStatuses.length * columnWidth +
-    Math.max(0, workspaceStatuses.length - 1) * WORKSPACE_BOARD_COLUMN_GAP +
+    WORKSPACE_KANBAN_TRACKER_LANES.length * columnWidth +
+    Math.max(0, WORKSPACE_KANBAN_TRACKER_LANES.length - 1) * WORKSPACE_BOARD_COLUMN_GAP +
     24
   const fullBoardWidthCss = `min(calc(100vw - ${drawerLeftCss}), ${Math.max(
     boardContentWidth,
@@ -592,17 +652,10 @@ export default function WorkspaceKanbanDrawer({
         <WorkspaceKanbanDrawerHeader
           selectedCount={selectedWorktrees.length}
           columnLayout={workspaceBoardColumnLayout}
-          workspaceStatuses={workspaceStatuses}
           onColumnLayoutChange={(layout) => {
             useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
             setWorkspaceBoardColumnLayout(layout)
           }}
-          onRenameStatus={handleRenameStatus}
-          onChangeStatusColor={handleChangeStatusColor}
-          onChangeStatusIcon={handleChangeStatusIcon}
-          onMoveStatus={handleMoveStatus}
-          onRemoveStatus={handleRemoveStatus}
-          onAddStatus={handleAddStatus}
           onFilterMenuOpenChange={onMenuOpenChange}
           onClose={handleHeaderClose}
         />
@@ -624,7 +677,7 @@ export default function WorkspaceKanbanDrawer({
             className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden scrollbar-sleek"
           >
             <WorkspaceKanbanLaneGrid
-              statuses={workspaceStatuses}
+              statuses={WORKSPACE_KANBAN_TRACKER_LANES}
               worktreesByStatus={worktreesByStatus}
               repoMap={repoMap}
               activeWorktreeId={activeWorktreeId}
@@ -632,7 +685,6 @@ export default function WorkspaceKanbanDrawer({
               renderColumnWidth={renderColumnWidth}
               isResizingColumn={isResizingColumn}
               dragOverStatus={dragOverStatus}
-              canCreateWorktree={canCreateWorktree}
               selectedWorktreeIds={selectedWorktreeIds}
               selectedWorktrees={selectedWorktrees}
               onDragOver={handleDragOver}
@@ -641,7 +693,6 @@ export default function WorkspaceKanbanDrawer({
               onActivate={handleWorktreeActivate}
               onSelectionGesture={updateSelectionForGesture}
               onContextMenuSelect={selectForContextMenu}
-              onCreateWorktree={createWorktreeForStatus}
               onColumnResizeStart={onColumnResizeStart}
               onColumnResizeKeyDown={onColumnResizeKeyDown}
             />

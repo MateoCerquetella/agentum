@@ -1,127 +1,258 @@
 {
   "version": 1,
-  "goal": "Keep the existing gated-run progress topbar continuously scoped to the active owning worktree across harness gate updates and worktree switches without remounting the desktop shell.",
+  "goal": "Make the sidebar Workspace board render and move single linked workspaces through their confirmed GitHub Project or Linear workflow phase without using workspaceStatus as lifecycle truth.",
   "acceptance_criteria": [
     {
       "id": "AC1",
-      "outcome": "The active terminal workspace renders exactly one element labelled Gated run progress for its matching registered run, including verifying, ready_to_test, done, and blocked feature states."
+      "outcome": "Opening the Workspace board renders Todo, In Progress, In Review, Ready to Test, and Done and places linked cards from externally confirmed tracker phase without reading workspaceStatus as lifecycle truth."
     },
     {
       "id": "AC2",
-      "outcome": "A harness event for the matched run updates the displayed status while the existing progress bar remains selected throughout the asynchronous refresh."
+      "outcome": "A single GitHub-linked card move updates the mapped GitHub Project status and persists the confirmed canonical phase on the workspace."
     },
     {
       "id": "AC3",
-      "outcome": "Switching away and back immediately restores the owning worktree's retained latest status, while a worktree with no matching run renders no progress bar."
+      "outcome": "A single Linear-linked card move updates the mapped Linear workflow state and persists the confirmed canonical phase on the workspace."
     },
     {
       "id": "AC4",
-      "outcome": "The focused Vitest regression command exits successfully."
+      "outcome": "Refreshing the Workspace board after an external GitHub or Linear status change places the card in the newly reported lane."
     },
     {
       "id": "AC5",
-      "outcome": "The desktop UI production build command exits successfully."
+      "outcome": "An unlinked workspace appears in an explicit Unlinked state and a lane move is blocked with a Link tracker action without persisting workspaceStatus."
+    },
+    {
+      "id": "AC6",
+      "outcome": "Rejected, unavailable, and unmapped tracker moves render an error and preserve the prior lane, trackerPhase, workspaceStatus, and cross-lane rank."
     }
   ],
   "tasks": [
     {
       "id": "T1",
-      "objective": "Make useWorktreeHarnessRun retain and select confirmed snapshots by normalized workdir, reject stale asynchronous responses, and add focused state-sequence and progress-markup regressions.",
+      "objective": "Add a worktree-owned single-card tracker transition route and Linear external-state reconciliation, reusing the existing provider transition, event, mapping, tracker-id, and registry persistence seams so only Applied outcomes persist canonical phase.",
       "acceptance_checks": [
-        "AC1",
         "AC2",
         "AC3"
       ],
       "writable_files": [
-        "crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.ts",
-        "crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.test.ts",
-        "crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.test.tsx"
+        "crates/agentum-server/src/routes/worktrees.rs",
+        "crates/agentum-server/src/linear.rs",
+        "crates/agentum-server/src/tracker_sync.rs"
       ],
       "allowed_create_dirs": [],
       "read_only": [
         {
-          "path": "crates/agentum-desktop/ui/src/components/Terminal.tsx",
+          "path": "crates/agentum-server/src/task_sink.rs",
           "symbols": [
-            "Terminal"
+            "TrackerPhase",
+            "parse_tracker_phase",
+            "TrackerEmit",
+            "TransitionResult",
+            "apply_tracker_transition",
+            "tests::pinned_provider_dispatches_to_matching_tracker_arm",
+            "tests::github_transition_with_board_bound_strips_label_no_add",
+            "tests::github_transition_with_board_board_failure_falls_back_to_label"
           ]
         },
         {
-          "path": "crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.tsx",
+          "path": "crates/agentum-server/src/github_projects.rs",
           "symbols": [
-            "GatedRunBar",
-            "GatedRunBarView"
+            "StatusMapping::tracker_phase_for_option_id",
+            "binding_for_slug"
           ]
         },
         {
-          "path": "crates/agentum-desktop/ui/src/lib/harness-run.ts",
+          "path": "crates/agentum-server/src/lib.rs",
           "symbols": [
-            "findHarnessRunForWorkdir",
-            "gatedRunHeadline"
+            "AppState",
+            "AppState::bus"
           ]
         },
         {
-          "path": "crates/agentum-desktop/ui/src/runtime/harness-client.ts",
+          "path": "crates/agentum-server/src/error.rs",
           "symbols": [
-            "HarnessStatus",
-            "HarnessEvent",
-            "HarnessEventStream",
-            "listHarnesses",
-            "getHarnessStatus",
-            "subscribeHarnessEvents"
-          ]
-        },
-        {
-          "path": "crates/agentum-desktop/ui/src/store/slices/worktrees.ts",
-          "symbols": [
-            "setActiveWorktree"
-          ]
-        },
-        {
-          "path": "crates/agentum-desktop/ui/src/App.tsx",
-          "symbols": [
-            "App"
-          ]
-        },
-        {
-          "path": "crates/agentum-desktop/ui/src/components/error-boundaries/RecoverableRenderErrorBoundary.tsx",
-          "symbols": [
-            "RecoverableRenderErrorBoundary"
+            "ApiError",
+            "ApiError::into_response"
           ]
         }
       ],
       "dependencies": [],
       "contracts": [
-        "Preserve useWorktreeHarnessRun(workdir) returning { run, refresh } and preserve GatedRunBar/GatedRunBarView props.",
-        "Reuse findHarnessRunForWorkdir for normalized ownership; never expose a cached run to a different requested workdir.",
-        "Keep the last confirmed matching run selected while an event-triggered refresh is pending, but evict it when an authoritative list has no match.",
-        "Ignore stale list/status completions so an older response cannot replace a newer confirmed snapshot.",
-        "Retain one subscribeHarnessEvents stream for the mounted hook and the existing event-driven reads; add no polling, store slice, or test dependency."
+        "Register POST /api/worktrees/transition-tracker with camelCase { worktreeId, targetPhase }; accept exactly todo, in_progress, in_review, ready_to_test, or done.",
+        "Reload and validate the registered github or linear binding before dispatch; reuse tracker_sync::resolve_binding and expose the existing tracker_id_for as pub(crate) without changing its behavior.",
+        "For GitHub, require a Project binding and require its requested option id to map uniquely back to targetPhase before dispatch, so the task sink's unbound-label path and legacy InReview fallback cannot count as a Workspace board move.",
+        "For Linear, require the configured target state name to map uniquely back to targetPhase before dispatch; let the existing provider seam report a team that lacks that state as Skipped.",
+        "Call task_sink::apply_tracker_transition with AppState.bus and Some(worktree_id); never duplicate or modify provider transition logic.",
+        "Persist TrackerPhase::wire_str through the existing registry path only for TransitionResult::Applied, and return success only after that persistence succeeds.",
+        "Map invalid or unlinked input, Skipped, transport failure, and persistence failure to non-success responses; none may alter tracker_phase or any workspaceStatus field.",
+        "Register POST /api/worktrees/reconcile-linear-status with camelCase { worktreeId, stateName }; uniquely map the configured trimmed case-insensitive state name or return { reconciled: false, phase: null } without writing.",
+        "Preserve the existing reconcile-github-status request, response, option-id validation, and backward reconciliation behavior.",
+        "Name new focused tests with workspace_board_tracker so one cargo filter runs the route persistence/failure and Linear inverse-mapping coverage."
       ],
       "non_goals": [
-        "Do not edit App, Terminal, GatedRunBar production markup, RecoverableRenderErrorBoundary, or worktree navigation/store behavior.",
-        "Do not change harness routes, event types, gate semantics, backend state, session attachment, retry, or unlink behavior.",
-        "Do not show or duplicate the progress bar on non-terminal pages or non-owning worktrees.",
-        "Do not redesign the topbar or perform broad render-performance refactors."
+        "Do not edit task_sink provider behavior, GitHub Project bindings, tracker credentials, status mappings, event payloads, or retry semantics.",
+        "Do not change automated session-start, PR/merge, harness, MCP, or tracker-attention transition decisions; tracker_sync changes only the visibility of tracker_id_for.",
+        "Do not restore /api/board, board_items, a board mirror, a bulk endpoint, a provider registry, or another provider.",
+        "Do not write, delete, migrate, or reinterpret legacy workspaceStatus metadata."
       ],
       "targeted_gate": {
-        "command": "cd crates/agentum-desktop/ui && npm exec vitest run src/hooks/useWorktreeHarnessRun.test.ts src/components/gated-run/GatedRunBar.test.tsx",
+        "command": "cargo test -p agentum-server --lib workspace_board_tracker",
         "acceptance_checks": []
       },
       "integration_task": false
+    },
+    {
+      "id": "T2",
+      "objective": "Replace the drawer's configurable workspaceStatus lifecycle with fixed tracker lanes, generation-safe GitHub and Linear refreshes, pessimistic single-card moves, explicit Unlinked/error handling, and focused UI regressions while preserving unrelated board mechanics.",
+      "acceptance_checks": [
+        "AC1",
+        "AC4",
+        "AC5",
+        "AC6"
+      ],
+      "writable_files": [
+        "crates/agentum-desktop/ui/src/components/sidebar/IssueProjectStatusChip.tsx",
+        "crates/agentum-desktop/ui/src/runtime/server-worktree-client.ts",
+        "crates/agentum-desktop/ui/src/components/sidebar/workspace-kanban-tracker-board.ts",
+        "crates/agentum-desktop/ui/src/components/sidebar/workspace-kanban-tracker-board.test.ts",
+        "crates/agentum-desktop/ui/src/components/sidebar/workspace-kanban-worktree-groups.ts",
+        "crates/agentum-desktop/ui/src/components/sidebar/workspace-kanban-worktree-groups.test.ts",
+        "crates/agentum-desktop/ui/src/components/sidebar/WorkspaceKanbanDrawer.tsx",
+        "crates/agentum-desktop/ui/src/components/sidebar/WorkspaceKanbanDrawerHeader.tsx",
+        "crates/agentum-desktop/ui/src/components/sidebar/WorkspaceKanbanDrawerHeader.test.tsx",
+        "crates/agentum-desktop/ui/src/components/sidebar/WorkspaceKanbanSettingsMenu.tsx",
+        "crates/agentum-desktop/ui/src/components/sidebar/WorkspaceKanbanLaneGrid.tsx",
+        "crates/agentum-desktop/ui/src/components/sidebar/WorkspaceKanbanStatusLane.tsx"
+      ],
+      "allowed_create_dirs": [],
+      "read_only": [
+        {
+          "path": "crates/agentum-desktop/ui/src/shared/types.ts",
+          "symbols": [
+            "Worktree",
+            "Worktree::trackerProvider",
+            "Worktree::trackerUrl",
+            "Worktree::trackerPhase",
+            "Worktree::workspaceStatus",
+            "WorkspaceStatusDefinition"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/lib/tracker-phase.ts",
+          "symbols": [
+            "TrackerPhaseWire",
+            "parseTrackerPhaseWire",
+            "deriveTrackerChip"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/lib/issue-project-status.ts",
+          "symbols": [
+            "parseIssueRef",
+            "resolveIssueProjectStatus",
+            "IssueProjectStatusResult"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/runtime/runtime-linear-client.ts",
+          "symbols": [
+            "linearGetIssue"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/components/sidebar/WorktreeCard.tsx",
+          "symbols": [
+            "WorktreeCard",
+            "fetchLinearIssue refresh effect"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/store/slices/worktrees.ts",
+          "symbols": [
+            "updateWorktreeMeta",
+            "updateWorktreesMeta"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/components/project-hub/ProjectTasksPage.tsx",
+          "symbols": [
+            "ProjectTasksPage openSettings"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/components/settings/ProjectIntegrationsSection.tsx",
+          "symbols": [
+            "PROJECT_INTEGRATIONS_SECTION_ID"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/components/sidebar/use-workspace-status-drop.ts",
+          "symbols": [
+            "useWorkspaceStatusDocumentDrop"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/components/sidebar/use-workspace-kanban-card-pointer-drag.ts",
+          "symbols": [
+            "useWorkspaceKanbanCardPointerDrag"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/components/sidebar/worktree-manual-order.ts",
+          "symbols": [
+            "buildManualOrderUpdatesForGroupDrop",
+            "shouldWriteManualOrderForGroupDrop"
+          ]
+        },
+        {
+          "path": "crates/agentum-desktop/ui/src/shared/workspace-statuses.ts",
+          "symbols": [
+            "DEFAULT_WORKSPACE_STATUSES",
+            "getWorkspaceStatus"
+          ]
+        }
+      ],
+      "dependencies": [
+        "T1"
+      ],
+      "contracts": [
+        "Render a fixed ordered list of Todo, In Progress, In Review, Ready to Test, Done, and non-lifecycle Unlinked; workspaceStatus and saved workspaceStatuses are not lane inputs.",
+        "A supported linked card uses the latest reconciled provider phase, falling back only to confirmed trackerPhase and the existing no-phase Todo baseline while refresh is pending.",
+        "Export an imperative GitHub Project status resolver over IssueProjectStatusChip's existing caches/fetchers and keep the existing hook behavior; reuse uncached linearGetIssue for explicit board refresh.",
+        "Refresh visible linked cards on drawer open and window focus/visibility, reconcile provider evidence through the typed worktree clients, and discard stale generations.",
+        "Allow exactly one linked worktree per lifecycle drop; perform no optimistic lane or cross-lane rank change, and commit the returned canonical phase only after the transition client resolves successfully.",
+        "On a same-lane manual reorder, preserve manualOrder behavior without an external call; after a successful cross-lane move, persist only manualOrder changes and never workspaceStatus.",
+        "Unlinked moves perform no client or metadata write and show an error toast with a Link tracker action opening that repo's existing Project Integrations settings target.",
+        "Rejected, unavailable, skipped, or unmapped moves report the error and preserve prior phase, workspaceStatus, and cross-lane rank.",
+        "Reject multi-card lifecycle drops before any transition call while retaining existing multi-selection and bulk pin behavior.",
+        "Remove arbitrary lifecycle status editing and lane-local create-in-status controls from this drawer while retaining layout, filter, close, resize, selection, pin, card activation, sorting, and drag mechanics."
+      ],
+      "non_goals": [
+        "Do not change the shared workspaceStatus schema, persistence, default definitions, sidebar grouping, context-menu organization, or sidebar drop behavior outside the drawer.",
+        "Do not add a tracker setup or existing-workspace binding wizard; route the action to existing repo Project Integrations settings.",
+        "Do not add polling, a store slice, a second event subscription, bulk transitions, provider mapping logic in TypeScript, or providers beyond GitHub and Linear.",
+        "Do not alter WorktreeCard issue/Linear presentation, board pinning, filters, area selection, outside-dismiss, column resizing, or manual-order helper semantics."
+      ],
+      "targeted_gate": {
+        "command": "cd crates/agentum-desktop/ui && npm exec vitest run src/components/sidebar/workspace-kanban-worktree-groups.test.ts src/components/sidebar/workspace-kanban-tracker-board.test.ts src/components/sidebar/WorkspaceKanbanDrawerHeader.test.tsx",
+        "acceptance_checks": []
+      },
+      "integration_task": true
     }
   ],
   "final_gates": [
     {
-      "command": "cd crates/agentum-desktop/ui && npm exec vitest run src/hooks/useWorktreeHarnessRun.test.ts src/components/gated-run/GatedRunBar.test.tsx",
-      "acceptance_checks": [
-        "AC4"
-      ]
+      "command": "cargo test -p agentum-server --lib",
+      "acceptance_checks": []
+    },
+    {
+      "command": "cd crates/agentum-desktop/ui && npm exec vitest run src/components/sidebar/workspace-kanban-worktree-groups.test.ts src/components/sidebar/workspace-kanban-tracker-board.test.ts src/components/sidebar/WorkspaceKanbanDrawerHeader.test.tsx",
+      "acceptance_checks": []
     },
     {
       "command": "npm run build --prefix crates/agentum-desktop/ui",
-      "acceptance_checks": [
-        "AC5"
-      ]
+      "acceptance_checks": []
     }
   ]
 }

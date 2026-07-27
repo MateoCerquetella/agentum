@@ -1,201 +1,372 @@
-# Spec 437 — Architecture
+# Spec 446 — Architecture
 
-- **Spec:** `437-topbar-is-dissapearing-on-harness-gates`
+- **Spec:** `446-remove-internal-workspace`
 - **Phase:** Architect
-- **Date:** 2026-07-23
-- **Verdict:** ready for developer
+- **Date:** 2026-07-27
+- **Base:** `ce6213f5`
+- **Verdict:** ready for decomposition
 
-Every existing seam cited below was read in this worktree. The issue's original
-`components/harness/HarnessEngine.tsx` path does not exist here; the PM-refined
-spec correctly identifies the current implementation under `components/gated-run`
-and `hooks`.
+Every production seam cited below was read at the base above. Test names in
+backticks are planned additions to the cited existing or new test module.
 
 ## Components
 
-### 1. Worktree-owned harness snapshot continuity
+### 1. Confirmed workspace tracker transition and reconciliation API
 
-Modify
-`crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.ts::useWorktreeHarnessRun`.
-Keep its public `{ run, refresh }` return contract, its mount-time
-`listHarnesses` read, and its single `subscribeHarnessEvents` subscription. Add
-only the state needed to retain confirmed `HarnessStatus` snapshots by the
-normalized requested workdir and to order overlapping asynchronous refreshes.
+Change `crates/agentum-server/src/routes/worktrees.rs`, whose `router` already
+owns the worktree metadata endpoints and the existing GitHub reconciliation
+route (`:29-48`), and whose registry row already stores `tracker_provider`,
+`tracker_url`, and `tracker_phase` (`:50-81`). Add one narrow manual-write route:
 
-The hook must make these decisions synchronously from its retained snapshots:
+- `POST /api/worktrees/transition-tracker` accepts a registered `worktreeId`
+  and one canonical `targetPhase`.
+- The handler reads the registered row; rejects a missing/unsupported provider,
+  missing URL, unknown worktree, or invalid phase before any write; derives the
+  existing provider-specific tracker id; and calls
+  `task_sink.rs::apply_tracker_transition` with `AppState.bus` and the worktree
+  id.
+- Before dispatch, the manual route proves the target is mapped for this board.
+  GitHub must have a real Project binding, and the target option id must map
+  uniquely back to the requested phase through
+  `StatusMapping::tracker_phase_for_option_id`; this prevents the shared
+  task-sink's intentional unbound-label path or legacy InReview fallback from
+  masquerading as a Project move. Linear's configured target name must likewise
+  map uniquely back to the requested phase; team-level absence is then reported
+  by the existing transition seam as `Skipped`.
+- Only `TransitionResult::Applied` may call the existing
+  `worktrees.rs::persist_tracker_progress` (`:293-314`). `Skipped` becomes a
+  non-2xx response carrying its reason; a transport error remains a non-2xx
+  response. Neither branch passes through `update_meta`, and no branch reads or
+  writes `workspaceStatus`.
+- A success response is returned only after the canonical phase has been
+  persisted. Backward manual moves are allowed: the monotonic guard in
+  `tracker_sync.rs::next_phase_write` is automation policy, not manual board
+  policy.
 
-- A requested workdir may expose only a run whose normalized `run.workdir`
-  matches it. A snapshot from the previously selected worktree must never leak
-  into the newly selected worktree.
-- Returning to a previously visited owning worktree reuses its last confirmed
-  snapshot while the authoritative refresh is in flight, so the existing bar
-  does not render a transient `null` frame.
-- An event refresh for the active matched harness keeps the last confirmed run
-  visible until a newer successful status/list response replaces it. A slow
-  older response cannot overwrite a newer response.
-- An authoritative list response with no match clears the requested workdir's
-  retained snapshot. This preserves the existing behavior for a deleted run or
-  a worktree that never owned one.
+Reuse, do not edit, `crates/agentum-server/src/task_sink.rs::TrackerPhase`,
+`parse_tracker_phase`, `TrackerEmit`, `TransitionResult`, and
+`apply_tracker_transition` (`:175-230`, `:836-926`). That seam already maps
+GitHub to its bound Project option and Linear to its workflow state and emits
+`tracker.phase_changed` only for `Applied`; `Skipped`/errors emit
+`tracker.sync_pending`. Reuse `tracker_sync.rs::resolve_binding` and promote
+the already-tested private `tracker_id_for` (`:135-190`) to `pub(crate)` rather
+than duplicating its Linear-identifier/GitHub-URL rule. No automated reactor or
+poller behavior changes.
 
-Reuse
-`crates/agentum-desktop/ui/src/lib/harness-run.ts::findHarnessRunForWorkdir`
-and its existing `normalizeWorkdir` behavior. Reuse
-`crates/agentum-desktop/ui/src/runtime/harness-client.ts::{listHarnesses,
-getHarnessStatus,subscribeHarnessEvents}` and the existing `HarnessStatus`,
-`HarnessEvent`, and `HarnessEventStream` wire types. Do not introduce a Zustand
-slice, a second status model, polling, or another WebSocket.
+Provider reads also need to translate live evidence back to a canonical phase:
 
-For focused coverage, create
-`crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.test.ts`. Factor the
-small snapshot-selection/ordering transition used by the hook into IO-free,
-colocated logic so Vitest can drive gate-event and worktree-switch sequences in
-the repository's default Node test environment. Named cases:
+- Keep `POST /api/worktrees/reconcile-github-status` and its existing option-id
+  validation through
+  `github_projects.rs::StatusMapping::tracker_phase_for_option_id`
+  (`worktrees.rs:334-384`; `github_projects.rs:75-120`). Type its client result,
+  but do not change its wire shape.
+- Add sibling `POST /api/worktrees/reconcile-linear-status`, accepting
+  `worktreeId` and the live Linear `stateName`. Add
+  `linear.rs::LinearStateMap::tracker_phase_for_name` beside `name_for`
+  (`linear.rs:185-274`), using the same trimmed, case-insensitive matching rule
+  as `match_state_by_name`. Zero or multiple configured phase-name matches are
+  unmapped and return `{ "reconciled": false, "phase": null }` without a
+  registry write. A unique match reuses
+  `apply_confirmed_tracker_phase`, including legitimate backward refreshes.
 
-- `keeps the matched snapshot selected while gate refreshes resolve in order`
-- `selects the owning snapshot when switching away and back and clears an unmatched worktree`
-- `rejects a stale response and a snapshot owned by another normalized workdir`
+Focused server coverage lives in the existing `worktrees.rs::tests` and
+`linear.rs::tests`: `workspace_board_tracker_rejects_invalid_or_unlinked_rows`,
+`workspace_board_tracker_rejects_missing_or_ambiguous_mappings`,
+`workspace_board_tracker_persists_only_applied_results`,
+`workspace_board_tracker_keeps_failed_results_non_mutating`, and
+`workspace_board_tracker_linear_state_name_maps_uniquely`. Retain the existing
+`task_sink.rs::tests::pinned_provider_dispatches_to_matching_tracker_arm`,
+`github_transition_with_board_bound_strips_label_no_add`, and
+`github_transition_with_board_board_failure_falls_back_to_label` as the
+provider-dispatch and GitHub Project-write proofs.
 
-Boundary: do not change harness routes, event payloads, gate semantics, session
-attachment, run retry/unlink behavior, or the worktree store. In particular,
-`crates/agentum-desktop/ui/src/store/slices/worktrees.ts::setActiveWorktree`
-continues to restore the active workspace data in one Zustand update; harness
-status remains derived by workdir in the hook.
+### 2. Reusable external-status reads for board refresh
 
-### 2. Existing progress-strip render contract
+Change
+`crates/agentum-desktop/ui/src/components/sidebar/IssueProjectStatusChip.tsx`.
+Its `fetchBinding`, `fetchStatus`, app-session caches, and
+`resolveIssueProjectStatus` call are the actual GitHub Project Status read
+(`:35-86`, `:92-181`). Export one imperative resolver over those same caches
+and fetchers, and have `useIssueProjectStatus` delegate to it. The new board
+consumer requests a forced refresh on board open/focus; the existing chip keeps
+its stale-while-revalidate behavior and event subscription unchanged.
 
-Keep the production mount and view components unchanged:
+For Linear, reuse
+`crates/agentum-desktop/ui/src/runtime/runtime-linear-client.ts::linearGetIssue`
+(`:190-204`), the uncached primitive beneath the existing
+`WorktreeCard.tsx` refresh effect (`WorktreeCard.tsx:373-391`). A board refresh
+must not be suppressed by the ordinary card cache, because reopening the board
+is the acceptance-level refresh action.
 
-- `crates/agentum-desktop/ui/src/components/Terminal.tsx::Terminal` already
-  renders one `GatedRunBar` as a root `shrink-0` strip above all workspace
-  surfaces whenever the terminal view has an active worktree.
-- `crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.tsx::GatedRunBar`
-  already resolves `worktreeId` to `worktree.path`, consumes
-  `useWorktreeHarnessRun`, and returns `null` only when there is neither a run
-  nor the existing pending-start state.
-- `GatedRunBarView` already owns the single
-  `aria-label="Gated run progress"` section, calls
-  `gatedRunHeadline(run)`, and renders the existing feature-state labels for
-  `verifying`, `ready_to_test`, `done`, and `blocked`.
+Add
+`crates/agentum-desktop/ui/src/components/sidebar/workspace-kanban-tracker-board.ts`
+as a board-specific, IO-injected orchestration module. It has only the two
+operations this spec needs:
 
-Extend
-`crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.test.tsx` with a
-table-driven regression named
-`renders exactly one progress region across verifying, ready_to_test, done, and blocked`.
-For each status, render the existing view/host with
-`renderToStaticMarkup`, assert exactly one progress-region label, and assert the
-state's expected headline or feature label. Keep the current no-run assertion
-to pin that an unmatched worktree renders no bar.
+1. Refresh each visible, supported linked worktree through the existing GitHub
+   or Linear read, then send the returned option id/state name to the matching
+   worktree reconciliation endpoint. It returns canonical phases and per-card
+   warnings; a generation token prevents an older open/focus request from
+   overwriting a newer result.
+2. Commit one requested canonical move through the new transition endpoint.
+   It returns a new phase only for a confirmed success. Unlinked, unsupported,
+   multi-card, unmapped-target, skipped, and rejected outcomes retain the input
+   phase and return an actionable error descriptor.
 
-`crates/agentum-desktop/ui/src/App.tsx::App` and
-`crates/agentum-desktop/ui/src/components/error-boundaries/RecoverableRenderErrorBoundary.tsx::RecoverableRenderErrorBoundary`
-were also read. `App` keeps the terminal workbench mounted under the same
-`Suspense` and error-boundary instances; changing the boundary's `resetKey`
-clears boundary error state but does not key/remount its children. No shell,
-sidebar, titlebar, worktree-pane, or error-boundary edit is needed.
+The typed client functions and `{ reconciled, phase }` /
+`{ applied, phase }` response types belong beside the existing worktree calls
+in `runtime/server-worktree-client.ts` (`:19-34`). No new store slice, event
+socket, polling loop, provider registry, or generic tracker client is added.
 
-Boundary: the bar remains exclusive to the active terminal workspace. Do not
-show it on full-page views, duplicate it inside a pane, redesign its markup or
-styles, or key/remount `Terminal`/`GatedRunBar` per status or worktree.
+### 3. Fixed tracker-authoritative Workspace board
+
+Change
+`crates/agentum-desktop/ui/src/components/sidebar/workspace-kanban-worktree-groups.ts`.
+Replace its call to `getWorkspaceStatus` (`:16-41`) with a board-only lane
+resolver. Export a fixed ordered lane definition for the five existing
+`TrackerPhaseWire` values—`Todo`, `In Progress`, `In Review`, `Ready to Test`,
+and `Done`—plus one non-lifecycle `Unlinked` lane. A worktree is unlinked when
+its provider is not `github`/`linear` or its tracker target is empty. A linked
+worktree uses the freshly reconciled phase when present, otherwise its last
+confirmed `trackerPhase`; a newly created linked row with no written phase uses
+the server's existing Todo baseline (`worktrees.rs::create` records `None` as
+Todo until the first transition). `workspaceStatus` is not an input. Existing
+pinned/recent/manual ordering within the resolved lanes stays intact.
+
+Change `WorkspaceKanbanDrawer.tsx`, the current owner of grouping and all drag
+commit callbacks (`:47-258`, `:464-473`, `:592-647`):
+
+- use the fixed tracker lanes and refresh orchestration while the drawer is
+  open and when the window becomes visible/focused;
+- seed with confirmed `trackerPhase`, then replace it only with current
+  provider-read/reconciliation results;
+- make every cross-lane drop pessimistic: do not change the local lane or
+  manual rank until `transition-tracker` confirms success;
+- after success, update the board's confirmed-phase map and then apply any
+  existing manual-order update, never a `workspaceStatus` update;
+- for a same-lane reorder, preserve the existing `manualOrder` behavior without
+  making an external transition;
+- reject selected batches with “Move one workspace at a time,” preserving
+  pinning and selection but performing no bulk tracker writes;
+- for an unlinked source, show an error toast with a **Link tracker** action
+  that reuses the existing repo-scoped Project Integrations navigation pattern
+  from `ProjectTasksPage.tsx:167-175`; and
+- for skipped, unavailable, or unmapped moves, show the returned error and keep
+  the prior phase/rank. Do not call the optimistic
+  `store/slices/worktrees.ts::updateWorktreeMeta` lifecycle path
+  (`:1484-1623`).
+
+The current arbitrary status editor (`WorkspaceKanbanDrawer.tsx:381-461` and
+`WorkspaceKanbanSettingsMenu.tsx:108-182`) cannot describe external mappings.
+Reduce `WorkspaceKanbanSettingsMenu.tsx` and
+`WorkspaceKanbanDrawerHeader.tsx` to the existing column-layout setting plus
+filter/close controls. Preserve the legacy configured statuses elsewhere.
+Likewise, remove the lane-local “new workspace in status” controls from
+`WorkspaceKanbanLaneGrid.tsx` and `WorkspaceKanbanStatusLane.tsx`; that flow
+only stamps `initialWorkspaceStatus` and would falsely imply an external phase.
+The ordinary New Workspace surfaces remain available outside the lanes.
+
+Keep the existing selection, area selection, resize, pointer/native document
+drop, drag preview, pin target, outside-dismiss, card, and manual-rank helpers.
+Their callbacks remain the mechanics; only the lifecycle commit supplied by
+the drawer changes.
+
+### 4. Explicit boundaries
+
+The following stay untouched:
+
+- `crates/agentum-desktop/ui/src/shared/workspace-statuses.ts`, the persisted
+  `workspaceStatuses` UI preference, `WorktreeList` grouping,
+  `WorktreeContextMenu`, `workspace-kanban-sidebar-drop.ts`, and the legacy
+  `workspaceStatus` field. They remain private organization metadata outside
+  this Workspace board and are not deleted or migrated.
+- `crates/agentum-server/src/task_sink.rs` transition/mapping behavior,
+  `github_projects.rs` bindings, Linear/GitHub setup, credentials, and status
+  mappings.
+- Harness/session-driven transitions, `tracker_sync` rank/worker behavior,
+  tracker attention, and event contracts. The only `tracker_sync.rs` change is
+  visibility of the existing id helper.
+- The retired `/api/board*` routes and `board_items`; no route, table, mirror,
+  provider, bulk move, or background poller is restored.
+- Pin/unpin, selection, card activation, filtering, column sizing, and sorting.
 
 ## APIs
 
-No server, HTTP, WebSocket, store, or component-prop API changes are required.
+### `POST /api/worktrees/transition-tracker` (new)
 
-- Preserve `useWorktreeHarnessRun(workdir: string | undefined):
-  WorktreeHarnessRun` and `WorktreeHarnessRun = { run: HarnessStatus |
-  undefined; refresh: () => void }`.
-- Preserve `GET /api/harness`, `GET /api/harness/{id}`, and
-  `WS /api/harness/events` usage through the existing client functions.
-- Preserve `GatedRunBar({ worktreeId })` and `GatedRunBarView` props.
-- Reuse `HarnessStatus` as the only run snapshot and
-  `findHarnessRunForWorkdir` as the ownership rule.
+Request:
 
-Any IO-free transition exported solely for the new focused test is an
-implementation detail of `useWorktreeHarnessRun.ts`; it must not become a new
-application service or public store contract.
+```json
+{"worktreeId":"repo::/path","targetPhase":"in_review"}
+```
+
+Success, only after external `Applied` and local persistence:
+
+```json
+{"applied":true,"phase":"in_review"}
+```
+
+The target accepts exactly `todo | in_progress | in_review | ready_to_test |
+done`. Invalid/unlinked input is a bad request; `Skipped` is a conflict with
+its existing reason; transport or persistence failures are server errors. All
+non-success responses use the existing `{ "error": "..." }` envelope. There
+is no optimistic or pending success response.
+
+### `POST /api/worktrees/reconcile-linear-status` (new)
+
+Request:
+
+```json
+{"worktreeId":"repo::/path","stateName":"In Review"}
+```
+
+Response mirrors the existing GitHub reconciliation contract:
+
+```json
+{"reconciled":true,"phase":"in_review"}
+```
+
+An unknown or ambiguous configured state name returns
+`{"reconciled":false,"phase":null}` and performs no write. Wrong-provider,
+unregistered, or missing-link input is rejected.
+
+### `POST /api/worktrees/reconcile-github-status` (preserved)
+
+The existing `{ worktreeId, statusOptionId }` request and
+`{ reconciled, phase }` response stay unchanged. The desktop client gains a
+type for the response; mapping still uses stored option ids, never option-name
+guessing.
 
 ## Data Flow
 
-1. `setActiveWorktree` updates `activeWorktreeId` and the worktree's restored
-   session/tab data; the long-lived `Terminal` receives the new id.
-2. `GatedRunBar` resolves that id against `worktreesByRepo` and calls
-   `useWorktreeHarnessRun(worktree.path)`.
-3. The hook normalizes the requested workdir, synchronously selects only that
-   workdir's retained confirmed snapshot, and starts/restarts the existing
-   authoritative list plus event subscription effect.
-4. `listHarnesses` establishes ownership through
-   `findHarnessRunForWorkdir`. Events for the matched `harness_id` trigger the
-   existing single-status read; lagged or not-yet-matched events trigger the
-   existing list reconciliation.
-5. Ordered successful responses replace the requested workdir's retained
-   snapshot. While an event response is pending, the prior matching snapshot
-   remains selected, so React updates the contents of the same
-   `GatedRunBarView` section instead of removing and recreating it.
-6. Switching to an unmatched worktree selects no snapshot and therefore no
-   bar. Switching back selects the owning worktree's retained snapshot
-   immediately, then reconciles it with the latest server status.
+### Board open / external refresh
+
+1. The drawer renders the five fixed canonical lanes and `Unlinked`; no saved
+   workspace-status definition controls this list.
+2. Unsupported/missing bind coordinates resolve directly to `Unlinked` and do
+   no provider read.
+3. Linked cards render from the last confirmed `trackerPhase` cold cache while
+   one generation-scoped refresh runs for visible cards. A missing phase is the
+   existing linked-workspace Todo baseline, not a `workspaceStatus` fallback.
+4. GitHub reuses the Project binding/status resolver and returns a Status option
+   id; Linear reuses `linearGetIssue` and returns a workflow-state name.
+5. The server validates that provider evidence against the existing configured
+   mapping, persists a uniquely confirmed canonical phase, and returns it.
+6. Only the current refresh generation replaces the card's lane. A warning
+   keeps the last confirmed lane and exposes the read/reconciliation error.
+
+### Single-card lane move
+
+1. The drawer resolves the source from its confirmed phase map and validates a
+   single linked worktree plus a canonical target.
+2. The server reloads the registered binding, parses the target, derives the
+   existing tracker id, proves that the requested GitHub Project option or
+   Linear configured state is uniquely mapped, and invokes
+   `apply_tracker_transition` with the shared event bus.
+3. GitHub Projects or Linear acknowledges the provider write. Only `Applied`
+   persists `TrackerPhase::wire_str()` on the registry row.
+4. The success response advances the board-local phase and then applies any
+   manual rank change. The emitted event continues to update existing tracker
+   chips.
+5. A validation failure, `Skipped`, transport error, or unmapped target returns
+   an error. The drawer never changed its source phase, `trackerPhase`,
+   `workspaceStatus`, or cross-lane manual rank, so the card stays put.
 
 ## Important Decisions
 
-### D1 — Fix the data hook, not the shell mount
+### D1 — Fixed canonical lanes over configurable workspace-status columns
 
-Choose workdir-keyed snapshot continuity in `useWorktreeHarnessRun` over moving
-or duplicating `GatedRunBar`. `Terminal` already provides the correct single,
-root-level flex strip and `App` does not key-remount the workbench; the unstable
-boundary is the hook's one unkeyed React state value while its `workdir` input
-changes and asynchronous reads overlap.
+Choose the existing five `TrackerPhase` values plus `Unlinked` over adapting
+user-authored workspace statuses. External mappings are defined only for those
+five phases; allowing rename/add/remove/reorder as lifecycle semantics would
+reintroduce unmapped or ambiguous local truth. Legacy status configuration is
+retained for the other sidebar organization surfaces.
 
-### D2 — Retain the last confirmed matching snapshot during refresh
+### D2 — Reuse client provider reads; validate mappings on the server
 
-Choose stale-while-revalidate for the already confirmed owning run over
-clearing it before each list/status request. Harness events are hints to fetch
-the new authoritative snapshot, not evidence that ownership disappeared.
-Keeping the matching snapshot prevents the visible collapse; an authoritative
-list with no match remains the explicit eviction signal.
+Choose the existing GitHub Project Status resolver and Linear issue read over a
+new aggregate server read API. Those paths already handle the desktop/runtime
+credential locations and remote-runtime selection. Send only provider evidence
+(option id/state name) to the server, where the authoritative configured
+mapping and registry already live; do not duplicate mapping configuration in
+TypeScript.
 
-### D3 — Use a small instance-local cache, not global application state
+### D3 — Pessimistic moves over optimistic rollback
 
-Choose a cache scoped to the mounted hook plus a monotonic response order over
-a new Zustand harness slice or process-wide subscription manager. This is
-enough to survive active-worktree switches in the existing long-lived
-`Terminal`, avoids broad store subscriptions and shell renders, and disappears
-on unmount. A global cache/provider would be a speculative abstraction for
-this regression.
+Keep the card in its source lane until the server confirms `Applied` and local
+persistence. This costs one visible transition round trip, but it directly
+enforces the invariant that a failed external write never invents progress and
+avoids brittle rollback across pointer drag, native drag, and event refreshes.
 
-### D4 — Test transitions as pure state plus existing SSR markup
+### D4 — One thin worktree route over a new tracker service abstraction
 
-Choose a colocated IO-free transition test and the existing
-`renderToStaticMarkup` component pattern over adding jsdom/testing-library.
-The UI package currently has neither DOM test dependency. This combination
-directly pins response ordering, workdir ownership, return-switch continuity,
-exactly-one markup, and all named feature states without adding dependencies.
+The server already has a closed provider dispatch in
+`apply_tracker_transition`. A worktree-owned handler plus one inverse Linear
+mapping method is sufficient. A provider trait, registry, queue, bulk endpoint,
+or `/api/board` replacement would be speculative and is deliberately absent.
 
-## Acceptance Criteria Mapping
+### D5 — Reuse existing settings navigation for the unlinked action
 
-| ID | Acceptance criterion | Named plan part | Named test / verification |
-| --- | --- | --- | --- |
-| AC1 | The active terminal workspace has exactly one labelled progress bar for its registered run, including `verifying`, `ready_to_test`, `done`, and `blocked` | Components 1–2 | `GatedRunBar.test.tsx` — `renders exactly one progress region across verifying, ready_to_test, done, and blocked`; existing `renders nothing when no run owns the worktree` |
-| AC2 | A matched harness event updates the headline without an absent intermediate frame | Component 1, Data Flow steps 4–5 | `useWorktreeHarnessRun.test.ts` — `keeps the matched snapshot selected while gate refreshes resolve in order`; the table-driven bar test asserts the resulting copy |
-| AC3 | Switching away and back restores the owning worktree's latest status while an unmatched worktree has no bar | Component 1, Data Flow steps 1–3 and 6 | `useWorktreeHarnessRun.test.ts` — `selects the owning snapshot when switching away and back and clears an unmatched worktree` and `rejects a stale response and a snapshot owned by another normalized workdir`; existing no-run bar test |
-| AC4 | Focused Vitest regression checks exit 0 | Components 1–2 | `(cd crates/agentum-desktop/ui && npm exec vitest run src/hooks/useWorktreeHarnessRun.test.ts src/components/gated-run/GatedRunBar.test.tsx)` |
-| AC5 | Desktop UI production build exits 0 | Components 1–2 and unchanged API boundary | `npm run build --prefix crates/agentum-desktop/ui` |
+Choose the repo-scoped Project Integrations target already used by
+`ProjectTasksPage` instead of adding an existing-workspace binding wizard in
+this slice. The action is truthful and actionable while respecting the
+non-goal of redesigning tracker setup; the card remains `Unlinked` until valid
+bind coordinates are present.
+
+## Acceptance Criteria → Plan and Tests
+
+| Criterion | Named plan part | Named verification |
+| --- | --- | --- |
+| AC1 — five external-phase lanes; no `workspaceStatus` lifecycle read | Component 3 fixed tracker-authoritative board | `workspace-kanban-worktree-groups.test.ts::renders_the_five_canonical_tracker_lanes_in_order`; `::tracker_phase_overrides_contradictory_workspace_status` |
+| AC2 — GitHub card move updates Project and persists confirmed phase | Components 1 and 3 single-card move | `worktrees.rs::tests::workspace_board_tracker_persists_only_applied_results`; existing `task_sink.rs::tests::github_transition_with_board_bound_strips_label_no_add`; `workspace-kanban-tracker-board.test.ts::confirmed_github_move_commits_phase_without_workspace_status` |
+| AC3 — Linear card move updates workflow and persists confirmed phase | Components 1 and 3 single-card move | `linear.rs::tests::workspace_board_tracker_linear_state_name_maps_uniquely`; existing `task_sink.rs::tests::pinned_provider_dispatches_to_matching_tracker_arm`; `workspace-kanban-tracker-board.test.ts::confirmed_linear_move_commits_phase_without_workspace_status` |
+| AC4 — refreshed external changes replace the lane | Component 2 provider refresh and Component 3 generation-scoped phase map | `workspace-kanban-tracker-board.test.ts::refresh_reconciles_github_and_linear_external_phases`; `::stale_refresh_cannot_replace_a_newer_phase` |
+| AC5 — explicit Unlinked state and blocked move with action | Component 3 `Unlinked` lane and D5 settings action | `workspace-kanban-worktree-groups.test.ts::unlinked_worktree_ignores_legacy_workspace_status`; `workspace-kanban-tracker-board.test.ts::unlinked_drop_opens_tracker_settings_without_any_write` |
+| AC6 — rejected/unavailable/unmapped leaves all lifecycle fields unchanged | Components 1 and 3 pessimistic failure flow | `worktrees.rs::tests::workspace_board_tracker_keeps_failed_results_non_mutating`; `workspace-kanban-tracker-board.test.ts::failed_or_unmapped_move_reports_error_and_keeps_prior_phase_and_rank` |
 
 ## Risks
 
-- **An older event response overwrites a newer gate state.** Mitigation: assign
-  a monotonic order to asynchronous list/status requests and apply a response
-  only if it is still current for the active effect/workdir.
-- **React retains the prior worktree's run when `workdir` changes.** Mitigation:
-  select snapshots by the same normalized workdir ownership rule used by
-  `findHarnessRunForWorkdir`; the new test explicitly presents a foreign run
-  and expects no selection.
-- **Snapshot retention hides actual run removal.** Mitigation: an authoritative
-  list response with no matching run evicts that workdir; the existing 404
-  fallback still re-lists, and `refresh()` still forces the same reconciliation.
-- **The fix increases backend/UI churn.** Mitigation: retain one event stream,
-  the existing mount/list and matched-status read rules, and an instance-local
-  cache; add no polling, new store subscription, duplicated bar, or shell key.
-- **Node-only tests miss browser layout behavior.** Mitigation: the production
-  layout is intentionally untouched and already pins `shrink-0`/`z-30` in the
-  existing markup test. The new tests cover the changed state logic and exact
-  region count; the production build is a final gate. Residual live-webview
-  paint timing is accepted because no layout or mount boundary changes.
+- **Provider refresh fan-out can consume rate limit or delay a large board.**
+  Mitigation: refresh only visible linked worktrees, reuse the GitHub binding
+  and status caches, use one uncached Linear read per visible Linear card only
+  on open/focus, and add no interval poller.
+- **An older asynchronous refresh can move a card after a newer refresh or
+  manual transition.** Mitigation: generation-token every refresh and discard
+  stale completions; a confirmed manual move increments/invalidates that
+  generation before committing its phase.
+- **A configured mapping can be ambiguous or missing.** Mitigation: GitHub
+  retains its existing unique option-id check and the manual route requires a
+  Project binding plus an exact round trip for the requested phase; Linear uses
+  the same unique inverse rule before a move. Ambiguous/unmapped evidence
+  returns null/error and never writes a phase.
+- **The current drag system can carry multiple selected worktrees.**
+  Mitigation: validate `worktreeIds.length === 1` before any external call,
+  show the single-card message, and retain bulk pinning only.
+- **External success and local registry persistence are not transactional.**
+  Mitigation: persist immediately after `Applied`, return success only after
+  persistence, keep the emitted `tracker.phase_changed` evidence, and force the
+  next provider refresh to reconcile the external truth. This residual split
+  is accepted because GitHub/Linear plus a local JSON registry cannot share an
+  atomic transaction; writing the local phase first would violate the stronger
+  external-truth invariant.
+- **Removing arbitrary lane editing could be mistaken for deleting the legacy
+  organization feature.** Mitigation: limit the removal to this drawer's
+  settings/create controls; preserve the preference, metadata, sidebar groups,
+  context menu, migrations, and all non-board consumers unchanged.
+- **The Link tracker action does not create a second binding workflow.**
+  Accepted because tracker setup/linking changes are an explicit non-goal; the
+  action reuses the existing repo-specific Project Integrations surface and the
+  board remains honestly `Unlinked` until that existing workflow supplies bind
+  coordinates.
+
+## Targeted Verification
+
+```sh
+cargo test -p agentum-server --lib workspace_board_tracker
+cd crates/agentum-desktop/ui && npm exec vitest run \
+  src/components/sidebar/workspace-kanban-worktree-groups.test.ts \
+  src/components/sidebar/workspace-kanban-tracker-board.test.ts \
+  src/components/sidebar/WorkspaceKanbanDrawerHeader.test.tsx
+cargo test -p agentum-server --lib
+npm run build --prefix crates/agentum-desktop/ui
+```

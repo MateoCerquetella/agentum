@@ -16,7 +16,6 @@ type WorkspaceKanbanLaneGridProps = {
   renderColumnWidth: number
   isResizingColumn: boolean
   dragOverStatus: WorkspaceStatus | null
-  canCreateWorktree: boolean
   selectedWorktreeIds: ReadonlySet<string>
   selectedWorktrees: readonly Worktree[]
   onDragOver: (event: React.DragEvent, statusId: string) => void
@@ -28,7 +27,6 @@ type WorkspaceKanbanLaneGridProps = {
     event: React.MouseEvent<HTMLElement>,
     worktree: Worktree
   ) => readonly Worktree[]
-  onCreateWorktree: (statusId: string) => void
   onColumnResizeStart: (event: React.PointerEvent<HTMLElement>) => void
   onColumnResizeKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void
 }
@@ -42,7 +40,6 @@ export default function WorkspaceKanbanLaneGrid({
   renderColumnWidth,
   isResizingColumn,
   dragOverStatus,
-  canCreateWorktree,
   selectedWorktreeIds,
   selectedWorktrees,
   onDragOver,
@@ -51,7 +48,6 @@ export default function WorkspaceKanbanLaneGrid({
   onActivate,
   onSelectionGesture,
   onContextMenuSelect,
-  onCreateWorktree,
   onColumnResizeStart,
   onColumnResizeKeyDown
 }: WorkspaceKanbanLaneGridProps): React.JSX.Element {
@@ -72,7 +68,6 @@ export default function WorkspaceKanbanLaneGrid({
           columnWidth={columnWidth}
           isResizingColumn={isResizingColumn}
           isDragTarget={dragOverStatus === status.id}
-          canCreateWorktree={canCreateWorktree}
           selectedWorktreeIds={selectedWorktreeIds}
           selectedWorktrees={selectedWorktrees}
           nativeDragEnabled={false}
@@ -82,7 +77,6 @@ export default function WorkspaceKanbanLaneGrid({
           onActivate={onActivate}
           onSelectionGesture={onSelectionGesture}
           onContextMenuSelect={onContextMenuSelect}
-          onCreateWorktree={onCreateWorktree}
           onColumnResizeStart={onColumnResizeStart}
           onColumnResizeKeyDown={onColumnResizeKeyDown}
         />

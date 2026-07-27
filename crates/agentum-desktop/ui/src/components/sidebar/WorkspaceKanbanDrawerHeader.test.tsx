@@ -1,9 +1,6 @@
 import React, { isValidElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type {
-  WorkspaceBoardColumnLayout,
-  WorkspaceStatusDefinition
-} from '../../../../shared/types'
+import type { WorkspaceBoardColumnLayout } from '../../../../shared/types'
 import WorkspaceKanbanDrawerHeader from './WorkspaceKanbanDrawerHeader'
 
 type InspectableProps = {
@@ -11,8 +8,6 @@ type InspectableProps = {
   'aria-label'?: string
   onClick?: () => void
 }
-
-const statuses: WorkspaceStatusDefinition[] = [{ id: 'todo', label: 'Todo' }]
 
 function findElement(
   node: React.ReactNode,
@@ -38,14 +33,7 @@ function renderHeader(onClose: () => void): React.ReactElement {
   return WorkspaceKanbanDrawerHeader({
     selectedCount: 0,
     columnLayout: 'fit' satisfies WorkspaceBoardColumnLayout,
-    workspaceStatuses: statuses,
     onColumnLayoutChange: vi.fn(),
-    onRenameStatus: vi.fn(),
-    onChangeStatusColor: vi.fn(),
-    onChangeStatusIcon: vi.fn(),
-    onMoveStatus: vi.fn(),
-    onRemoveStatus: vi.fn(),
-    onAddStatus: vi.fn(),
     onFilterMenuOpenChange: vi.fn(),
     onClose
   })

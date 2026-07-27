@@ -269,6 +269,33 @@ impl LinearStateMap {
             Done => &self.done,
         }
     }
+
+    /// Convert an externally reported workflow-state name into the canonical
+    /// Workspace-board phase. Matching is trimmed and case-insensitive, like
+    /// transition-time state lookup. Duplicate configured names are
+    /// deliberately ambiguous and return `None` rather than inventing a lane.
+    pub(crate) fn tracker_phase_for_state_name(
+        &self,
+        state_name: &str,
+    ) -> Option<crate::task_sink::TrackerPhase> {
+        use crate::task_sink::TrackerPhase;
+        let wanted = state_name.trim();
+        if wanted.is_empty() {
+            return None;
+        }
+        let candidates = [
+            (&self.todo, TrackerPhase::Todo),
+            (&self.in_progress, TrackerPhase::InProgress),
+            (&self.in_review, TrackerPhase::InReview),
+            (&self.ready_to_test, TrackerPhase::ReadyToTest),
+            (&self.done, TrackerPhase::Done),
+        ];
+        let mut matches = candidates
+            .into_iter()
+            .filter(|(name, _)| name.trim().eq_ignore_ascii_case(wanted));
+        let (_, phase) = matches.next()?;
+        matches.next().is_none().then_some(phase)
+    }
 }
 
 /// Outcome of a transition attempt. `Skipped` carries why so the harness log can
@@ -356,6 +383,29 @@ pub async fn transition_issue(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn workspace_board_tracker_linear_state_names_map_uniquely() {
+        use crate::task_sink::TrackerPhase;
+
+        let map = LinearStateMap::default();
+        assert_eq!(
+            map.tracker_phase_for_state_name("  in progress "),
+            Some(TrackerPhase::InProgress)
+        );
+        assert_eq!(
+            map.tracker_phase_for_state_name("READY TO TEST"),
+            Some(TrackerPhase::ReadyToTest)
+        );
+        assert_eq!(map.tracker_phase_for_state_name("Blocked"), None);
+
+        let ambiguous = LinearStateMap {
+            in_review: "Doing".into(),
+            in_progress: " doing ".into(),
+            ..LinearStateMap::default()
+        };
+        assert_eq!(ambiguous.tracker_phase_for_state_name("Doing"), None);
+    }
 
     #[test]
     fn pick_token_prefers_selected_then_first() {

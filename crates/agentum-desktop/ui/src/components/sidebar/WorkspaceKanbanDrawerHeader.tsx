@@ -2,24 +2,14 @@ import React from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import type {
-  WorkspaceBoardColumnLayout,
-  WorkspaceStatusDefinition
-} from '../../../../shared/types'
+import type { WorkspaceBoardColumnLayout } from '../../../../shared/types'
 import SidebarFilter from './SidebarFilter'
 import WorkspaceKanbanSettingsMenu from './WorkspaceKanbanSettingsMenu'
 
 type WorkspaceKanbanDrawerHeaderProps = {
   selectedCount: number
   columnLayout: WorkspaceBoardColumnLayout
-  workspaceStatuses: readonly WorkspaceStatusDefinition[]
   onColumnLayoutChange: (layout: WorkspaceBoardColumnLayout) => void
-  onRenameStatus: (statusId: string, label: string) => void
-  onChangeStatusColor: (statusId: string, color: string) => void
-  onChangeStatusIcon: (statusId: string, icon: string) => void
-  onMoveStatus: (statusId: string, direction: -1 | 1) => void
-  onRemoveStatus: (statusId: string) => void
-  onAddStatus: () => void
   onFilterMenuOpenChange: (open: boolean) => void
   onClose: () => void
 }
@@ -27,14 +17,7 @@ type WorkspaceKanbanDrawerHeaderProps = {
 export default function WorkspaceKanbanDrawerHeader({
   selectedCount,
   columnLayout,
-  workspaceStatuses,
   onColumnLayoutChange,
-  onRenameStatus,
-  onChangeStatusColor,
-  onChangeStatusIcon,
-  onMoveStatus,
-  onRemoveStatus,
-  onAddStatus,
   onFilterMenuOpenChange,
   onClose
 }: WorkspaceKanbanDrawerHeaderProps): React.JSX.Element {
@@ -63,14 +46,7 @@ export default function WorkspaceKanbanDrawerHeader({
         />
         <WorkspaceKanbanSettingsMenu
           columnLayout={columnLayout}
-          workspaceStatuses={workspaceStatuses}
           onColumnLayoutChange={onColumnLayoutChange}
-          onRenameStatus={onRenameStatus}
-          onChangeStatusColor={onChangeStatusColor}
-          onChangeStatusIcon={onChangeStatusIcon}
-          onMoveStatus={onMoveStatus}
-          onRemoveStatus={onRemoveStatus}
-          onAddStatus={onAddStatus}
         />
         <Button variant="ghost" size="icon-xs" aria-label="Close" onClick={onClose}>
           <X className="size-3.5" />

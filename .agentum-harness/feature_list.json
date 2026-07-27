@@ -2,18 +2,73 @@
   "features": [
     {
       "id": "F1",
-      "name": "- Starting the app is taking too long and is showing me a The workspace list hit an error. The active page remains open. Retry the list or switch views. can we put like.The rest of the app is still running. Retry this surface or switch away and come back. also when starting command + shift + p opeenen dsomehtine in the bototm bar and i cannot close it This part of Agentum hit an error. - We need to add a way to put it YOLO mode for the agents - The tmux persist is not working when opnieing a new terminal on my VPS please fix is all blank - somew ortrees arre reapearring again after i even delte them WTF",
+      "name": "Opening the Workspace board renders `Todo`, `In Progress`, `In Review`, `Ready to Test`, and `Done` lanes and places each linked card in the lane reported by its GitHub or Linear item, without reading `workspaceStatus` as lifecycle truth.",
       "description": "",
-      "state": "pending",
+      "state": "done",
       "attempts": 0,
       "last_error": null,
       "prompt": null,
       "tracker_provider": "github",
-      "tracker_url": "https://github.com/MateoCerquetella/agentum/issues/442"
+      "tracker_url": "https://github.com/MateoCerquetella/agentum/issues/446"
+    },
+    {
+      "id": "F2",
+      "name": "Dragging one GitHub-linked card to another mapped lane moves the linked GitHub Project item to that status and persists the confirmed canonical phase on the workspace.",
+      "description": "",
+      "state": "done",
+      "attempts": 0,
+      "last_error": null,
+      "prompt": null,
+      "tracker_provider": "github",
+      "tracker_url": "https://github.com/MateoCerquetella/agentum/issues/446"
+    },
+    {
+      "id": "F3",
+      "name": "Dragging one Linear-linked card to another mapped lane moves the linked Linear issue to that workflow status and persists the confirmed canonical phase on the workspace.",
+      "description": "",
+      "state": "done",
+      "attempts": 0,
+      "last_error": null,
+      "prompt": null,
+      "tracker_provider": "github",
+      "tracker_url": "https://github.com/MateoCerquetella/agentum/issues/446"
+    },
+    {
+      "id": "F4",
+      "name": "Refreshing the Workspace board after an external GitHub or Linear status change renders the card in the externally reported lane.",
+      "description": "",
+      "state": "done",
+      "attempts": 0,
+      "last_error": null,
+      "prompt": null,
+      "tracker_provider": "github",
+      "tracker_url": "https://github.com/MateoCerquetella/agentum/issues/446"
+    },
+    {
+      "id": "F5",
+      "name": "An unlinked workspace renders in an explicit `Unlinked` state, and a lane move is blocked with a link-to-tracker action without persisting `workspaceStatus`.",
+      "description": "",
+      "state": "done",
+      "attempts": 0,
+      "last_error": null,
+      "prompt": null,
+      "tracker_provider": "github",
+      "tracker_url": "https://github.com/MateoCerquetella/agentum/issues/446"
+    },
+    {
+      "id": "F6",
+      "name": "A rejected, unavailable, or unmapped tracker transition renders an error, leaves the card in its prior lane, and leaves both `trackerPhase` and `workspaceStatus` unchanged.",
+      "description": "",
+      "state": "done",
+      "attempts": 0,
+      "last_error": null,
+      "prompt": null,
+      "tracker_provider": "github",
+      "tracker_url": "https://github.com/MateoCerquetella/agentum/issues/446"
     }
   ],
   "max_retries": 3,
-  "agent_tool": "claude",
+  "agent_tool": "codex",
   "agent_model": null,
   "settle_grace_secs": 8,
   "settle_timeout_secs": 1800,
@@ -21,7 +76,7 @@
   "hitl_at_qa": false,
   "qa_mode": "auto",
   "qa_agent_tool": null,
-  "spec_id": "442-starting-the-app-is-taking-too-long-and",
+  "spec_id": "446-remove-internal-workspace",
   "roles": true,
   "hitl_on_block": false,
   "execution_mode": "sequential",

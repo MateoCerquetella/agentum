@@ -1,13 +1,10 @@
 import React from 'react'
-import { Plus } from 'lucide-react'
 import type { Repo, WorkspaceStatusDefinition, Worktree } from '../../../../shared/types'
 import {
   WORKSPACE_BOARD_COLUMN_WIDTH_MAX,
   WORKSPACE_BOARD_COLUMN_WIDTH_MIN
 } from '../../../../shared/workspace-statuses'
 import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import WorkspaceKanbanCard from './WorkspaceKanbanCard'
 import { getWorkspaceStatusVisualMeta } from './workspace-status'
 
@@ -19,7 +16,6 @@ type WorkspaceKanbanStatusLaneProps = {
   columnWidth: number
   isResizingColumn: boolean
   isDragTarget: boolean
-  canCreateWorktree: boolean
   nativeDragEnabled?: boolean
   selectedWorktreeIds: ReadonlySet<string>
   selectedWorktrees: readonly Worktree[]
@@ -32,7 +28,6 @@ type WorkspaceKanbanStatusLaneProps = {
     event: React.MouseEvent<HTMLElement>,
     worktree: Worktree
   ) => readonly Worktree[]
-  onCreateWorktree: (statusId: string) => void
   onColumnResizeStart: (event: React.PointerEvent<HTMLElement>) => void
   onColumnResizeKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void
 }
@@ -45,7 +40,6 @@ export default function WorkspaceKanbanStatusLane({
   columnWidth,
   isResizingColumn,
   isDragTarget,
-  canCreateWorktree,
   nativeDragEnabled = true,
   selectedWorktreeIds,
   selectedWorktrees,
@@ -55,27 +49,10 @@ export default function WorkspaceKanbanStatusLane({
   onActivate,
   onSelectionGesture,
   onContextMenuSelect,
-  onCreateWorktree,
   onColumnResizeStart,
   onColumnResizeKeyDown
 }: WorkspaceKanbanStatusLaneProps): React.JSX.Element {
   const meta = getWorkspaceStatusVisualMeta(status)
-  const createTooltip = canCreateWorktree
-    ? `New workspace in ${status.label}`
-    : 'Add a project to create workspaces'
-  const createButton = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-xs"
-      className="size-6 text-muted-foreground"
-      aria-label={createTooltip}
-      disabled={!canCreateWorktree}
-      onClick={() => onCreateWorktree(status.id)}
-    >
-      <Plus className="size-3.5" />
-    </Button>
-  )
 
   return (
     <section
@@ -129,12 +106,6 @@ export default function WorkspaceKanbanStatusLane({
             {items.length}
           </div>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>{createButton}</TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            {createTooltip}
-          </TooltipContent>
-        </Tooltip>
       </div>
 
       <div
@@ -168,27 +139,6 @@ export default function WorkspaceKanbanStatusLane({
             Empty
           </div>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="secondary"
-              size="xs"
-              className={cn(
-                'mt-2 h-7 w-full opacity-0 transition-opacity',
-                'group-hover/lane:opacity-100 group-focus-within/lane:opacity-100'
-              )}
-              aria-label={createTooltip}
-              disabled={!canCreateWorktree}
-              onClick={() => onCreateWorktree(status.id)}
-            >
-              <Plus className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top" sideOffset={6}>
-            {createTooltip}
-          </TooltipContent>
-        </Tooltip>
       </div>
     </section>
   )

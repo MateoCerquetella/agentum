@@ -1,1 +1,1 @@
-{"passed": true, "summary": "Grounded minimal plan preserves the existing single root topbar and fixes workdir-scoped snapshot continuity with ordered event refreshes and focused regressions."}
+{"passed": true, "summary": "Grounded two-task plan reuses confirmed GitHub/Linear read and transition seams, makes Workspace board moves pessimistic and tracker-authoritative, and maps all six criteria to named tests."}

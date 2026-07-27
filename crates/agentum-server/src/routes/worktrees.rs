@@ -36,6 +36,14 @@ pub fn router() -> Router<crate::AppState> {
             "/api/worktrees/reconcile-github-status",
             post(reconcile_github_status),
         )
+        .route(
+            "/api/worktrees/reconcile-linear-status",
+            post(reconcile_linear_status),
+        )
+        .route(
+            "/api/worktrees/transition-tracker",
+            post(transition_tracker),
+        )
         .route("/api/worktrees/create", post(create))
         .route("/api/worktrees/remove", post(remove))
         .route("/api/worktrees/prune", post(prune))
@@ -381,6 +389,168 @@ async fn reconcile_github_status(
     Ok(Json(serde_json::json!({
         "reconciled": changed,
         "phase": wire,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReconcileLinearStatusBody {
+    worktree_id: String,
+    state_name: String,
+}
+
+/// Persist Linear's externally reported workflow state as the canonical local
+/// cache phase. Unknown and ambiguous names are truthful no-ops: the board can
+/// keep its prior confirmed lane without guessing from Linear's custom names.
+async fn reconcile_linear_status(
+    Json(body): Json<ReconcileLinearStatusBody>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = read_worktrees()?;
+    let wt = rows
+        .iter()
+        .find(|wt| wt.id == body.worktree_id)
+        .ok_or_else(|| ApiError::BadRequest("worktree is not registered".into()))?;
+    if crate::tracker_sync::resolve_binding(
+        wt.tracker_provider.as_deref(),
+        wt.tracker_url.as_deref(),
+    )
+    .filter(|(provider, _)| provider == "linear")
+    .is_none()
+    {
+        return Err(ApiError::BadRequest(
+            "worktree is not linked to Linear".into(),
+        ));
+    }
+    let map = crate::linear::LinearStateMap::from_env();
+    let Some(phase) = map.tracker_phase_for_state_name(&body.state_name) else {
+        return Ok(Json(serde_json::json!({
+            "reconciled": false,
+            "phase": null,
+        })));
+    };
+    let wire = phase.wire_str();
+    let mut rows = rows;
+    let changed = apply_confirmed_tracker_phase(&mut rows, &body.worktree_id, wire);
+    if changed {
+        write_worktrees(&rows)?;
+    }
+    Ok(Json(serde_json::json!({
+        "reconciled": changed,
+        "phase": wire,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransitionTrackerBody {
+    worktree_id: String,
+    target_phase: String,
+}
+
+fn validate_workspace_board_tracker_mapping(
+    wt: &Worktree,
+    target: crate::task_sink::TrackerPhase,
+) -> Result<(String, String, String), ApiError> {
+    let (provider, url) = crate::tracker_sync::resolve_binding(
+        wt.tracker_provider.as_deref(),
+        wt.tracker_url.as_deref(),
+    )
+    .ok_or_else(|| ApiError::BadRequest("worktree is not linked to a supported tracker".into()))?;
+
+    match provider.as_str() {
+        "github" => {
+            let (slug, _) = crate::task_sink::github_slug_and_number_from_issue_url(&url)
+                .ok_or_else(|| {
+                    ApiError::BadRequest("worktree has an invalid GitHub issue URL".into())
+                })?;
+            let binding = crate::github_projects::binding_for_slug(&slug).ok_or_else(|| {
+                ApiError::BadRequest("repository has no GitHub Project binding".into())
+            })?;
+            let option_id = binding.status_mapping.option_id(target.into());
+            if binding
+                .status_mapping
+                .tracker_phase_for_option_id(option_id)
+                != Some(target)
+            {
+                return Err(ApiError::BadRequest(
+                    "target phase is not uniquely mapped in the GitHub Project".into(),
+                ));
+            }
+        }
+        "linear" => {
+            let map = crate::linear::LinearStateMap::from_env();
+            if map.tracker_phase_for_state_name(map.name_for(target)) != Some(target) {
+                return Err(ApiError::BadRequest(
+                    "target phase is not uniquely mapped in Linear".into(),
+                ));
+            }
+        }
+        _ => unreachable!("resolve_binding only returns supported providers"),
+    }
+
+    let tracker_id =
+        crate::tracker_sync::tracker_id_for(&provider, &url, wt.linked_linear_issue.as_deref());
+    Ok((provider, url, tracker_id))
+}
+
+fn acknowledged_workspace_board_tracker_phase(
+    result: anyhow::Result<crate::task_sink::TransitionResult>,
+    target: crate::task_sink::TrackerPhase,
+) -> Result<&'static str, ApiError> {
+    match result {
+        Ok(crate::task_sink::TransitionResult::Applied) => Ok(target.wire_str()),
+        Ok(crate::task_sink::TransitionResult::Skipped(reason)) => Err(ApiError::Conflict(reason)),
+        Err(error) => Err(ApiError::Internal(format!(
+            "tracker transition failed: {error}"
+        ))),
+    }
+}
+
+fn persist_workspace_board_tracker_phase(worktree_id: &str, phase: &str) -> Result<(), ApiError> {
+    let mut rows = read_worktrees()?;
+    if !rows.iter().any(|row| row.id == worktree_id) {
+        return Err(ApiError::NotFound(format!(
+            "worktree was removed before tracker acknowledgement: {worktree_id}"
+        )));
+    }
+    if apply_confirmed_tracker_phase(&mut rows, worktree_id, phase) {
+        write_worktrees(&rows)?;
+    }
+    Ok(())
+}
+
+/// Move one registered workspace through its linked tracker. The external
+/// provider remains authoritative: only an acknowledged `Applied` result is
+/// persisted, while skipped/failed transitions return a non-success response.
+async fn transition_tracker(
+    State(state): State<AppState>,
+    Json(body): Json<TransitionTrackerBody>,
+) -> Result<Json<Value>, ApiError> {
+    let target = crate::task_sink::parse_tracker_phase(&body.target_phase)
+        .ok_or_else(|| ApiError::BadRequest("invalid targetPhase".into()))?;
+    let rows = read_worktrees()?;
+    let wt = rows
+        .iter()
+        .find(|wt| wt.id == body.worktree_id)
+        .ok_or_else(|| ApiError::BadRequest("worktree is not registered".into()))?;
+    let (provider, url, tracker_id) = validate_workspace_board_tracker_mapping(wt, target)?;
+    let emit = crate::task_sink::TrackerEmit {
+        bus: &state.bus,
+        worktree_id: Some(&body.worktree_id),
+    };
+    let result = crate::task_sink::apply_tracker_transition(
+        &provider,
+        &tracker_id,
+        Some(&url),
+        target,
+        emit,
+    )
+    .await;
+    let phase = acknowledged_workspace_board_tracker_phase(result, target)?;
+    persist_workspace_board_tracker_phase(&body.worktree_id, phase)?;
+    Ok(Json(serde_json::json!({
+        "applied": true,
+        "phase": phase,
     })))
 }
 
@@ -1777,6 +1947,52 @@ prunable gitdir file points to non-existent location
         }];
         assert!(apply_confirmed_tracker_phase(&mut rows, "r1::/p", "todo"));
         assert_eq!(rows[0].tracker_phase.as_deref(), Some("todo"));
+    }
+
+    #[test]
+    fn workspace_board_tracker_applied_phase_preserves_legacy_workspace_status() {
+        let mut wt = registered_worktree("r1::/p", "r1");
+        wt.tracker_phase = Some("todo".into());
+        wt.extra.insert(
+            "workspaceStatus".into(),
+            Value::String("private-review".into()),
+        );
+        let mut rows = vec![wt];
+
+        assert!(apply_confirmed_tracker_phase(&mut rows, "r1::/p", "done"));
+        assert_eq!(rows[0].tracker_phase.as_deref(), Some("done"));
+        assert_eq!(
+            rows[0].extra.get("workspaceStatus").and_then(Value::as_str),
+            Some("private-review")
+        );
+    }
+
+    #[test]
+    fn workspace_board_tracker_persists_only_applied_outcomes() {
+        use crate::task_sink::{TrackerPhase, TransitionResult};
+
+        assert_eq!(
+            acknowledged_workspace_board_tracker_phase(
+                Ok(TransitionResult::Applied),
+                TrackerPhase::ReadyToTest
+            )
+            .unwrap(),
+            "ready_to_test"
+        );
+        assert!(matches!(
+            acknowledged_workspace_board_tracker_phase(
+                Ok(TransitionResult::Skipped("unmapped".into())),
+                TrackerPhase::Done
+            ),
+            Err(ApiError::Conflict(_))
+        ));
+        assert!(matches!(
+            acknowledged_workspace_board_tracker_phase(
+                Err(anyhow::anyhow!("offline")),
+                TrackerPhase::Done
+            ),
+            Err(ApiError::Internal(_))
+        ));
     }
 
     /// Spec 014 F2 (AC 4): a `detected` row for a BOUND worktree carries the

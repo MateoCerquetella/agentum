@@ -85,6 +85,39 @@ async function fetchStatus(
   )
 }
 
+/** Imperative counterpart to the hover hook for surfaces such as the
+ * Workspace board that refresh many visible cards as one generation. It uses
+ * the exact same caches and provider fetchers while forcing a live status read.
+ */
+export async function resolveIssueProjectStatusForBoard(input: {
+  issueUrl: string
+  workdir: string
+  repoId?: string
+}): Promise<{
+  status: string | null
+  statusOptionId: string | null
+  warning: string | null
+}> {
+  const ref = parseIssueRef(input.issueUrl)
+  if (!ref) {
+    return {
+      status: null,
+      statusOptionId: null,
+      warning: 'The workspace does not have a valid GitHub issue URL.'
+    }
+  }
+  return resolveIssueProjectStatus(
+    ref,
+    {
+      bindingCache,
+      statusCache,
+      getBinding: (issueRef) => fetchBinding(issueRef, input.workdir, input.repoId),
+      getStatus: fetchStatus
+    },
+    { forceRefresh: true }
+  )
+}
+
 /** Resolve the issue's Project Status while `open`. Returns GitHub's option
  *  name plus any sync warning. Tracker events invalidate and refetch this
  *  issue; `sync_pending` preserves the warning until an acknowledged
@@ -134,7 +167,10 @@ export function useIssueProjectStatus(input: {
       ).then((next) => {
         firstResolve = false
         if (!cancelled) {
-          setResult({ status: next.status, warning: next.warning ?? pendingWarning })
+          setResult({
+            status: next.status,
+            warning: next.warning ?? pendingWarning
+          })
         }
         if (worktreeId && next.statusOptionId) {
           void worktreesReconcileGithubStatus(worktreeId, next.statusOptionId).catch((error) => {
