@@ -8,7 +8,6 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
-  GripHorizontal,
   Laptop,
   Loader2,
   PlugZap,
@@ -497,10 +496,13 @@ export default function CreateWorkspaceWizard({
         ref={dialogContentRef}
         showCloseButton={false}
         onKeyDown={handleKeyDown}
-        style={{ translate: `${dialogOffset.x}px ${dialogOffset.y}px` }}
+        style={{
+          left: `calc(50% + ${dialogOffset.x}px)`,
+          top: `calc(50% + ${dialogOffset.y}px)`
+        }}
         className={cn(
           'flex max-h-[min(680px,calc(100dvh-4rem))] w-full flex-col gap-0 overflow-hidden p-0',
-          step === 3 ? 'sm:max-w-[880px]' : 'sm:max-w-[640px]'
+          step === 3 ? 'sm:max-w-[720px]' : 'sm:max-w-[640px]'
         )}
       >
         <DialogTitle className="sr-only">New workspace</DialogTitle>
@@ -509,61 +511,48 @@ export default function CreateWorkspaceWizard({
           then its name and agent.
         </DialogDescription>
 
-        {/* Header: title, step chip, recap, close */}
-        <div className="flex flex-none flex-col gap-3 px-[18px] pt-4">
-          <div
-            data-dialog-drag-handle
-            onPointerDown={handleDialogDragStart}
-            onPointerMove={handleDialogDragMove}
-            onPointerUp={finishDialogDrag}
-            onPointerCancel={finishDialogDrag}
-            onLostPointerCapture={finishDialogDrag}
-            className={cn(
-              'flex touch-none select-none items-center gap-2.5',
-              dialogDragging ? 'cursor-grabbing' : 'cursor-grab'
-            )}
-          >
-            <GripHorizontal
-              className="size-3.5 flex-none text-muted-foreground/65"
-              aria-hidden
-            />
-            <span className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
-              New workspace
+        {/* Native-style title bar: the whole non-interactive top surface moves the dialog. */}
+        <div
+          data-dialog-drag-handle
+          onPointerDown={handleDialogDragStart}
+          onPointerMove={handleDialogDragMove}
+          onPointerUp={finishDialogDrag}
+          onPointerCancel={finishDialogDrag}
+          onLostPointerCapture={finishDialogDrag}
+          className={cn(
+            'flex h-10 flex-none touch-none select-none items-center gap-2.5 border-b border-border bg-muted/30 px-[14px]',
+            dialogDragging ? 'cursor-grabbing' : 'cursor-grab'
+          )}
+        >
+          <span className="text-[14px] font-semibold tracking-[-0.01em] text-foreground">
+            New workspace
+          </span>
+          <span className="font-mono text-[11px] text-muted-foreground">step {step} / 3</span>
+          <span className="flex-1" />
+          {recap ? (
+            <span className="max-w-[320px] truncate font-mono text-[11px] text-muted-foreground">
+              {recap}
             </span>
-            <span className="font-mono text-[11px] text-muted-foreground">step {step} / 3</span>
-            <span className="flex-1" />
-            {recap ? (
-              <span className="max-w-[260px] truncate font-mono text-[11px] text-muted-foreground">
-                {recap}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              disabled={launchBusy}
-              onClick={onClose}
-              aria-label="Close"
-              className="inline-flex size-6 flex-none cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
+          ) : null}
+          <button
+            type="button"
+            disabled={launchBusy}
+            onClick={onClose}
+            aria-label="Close"
+            className="inline-flex size-7 flex-none cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+
+        {/* Wizard navigation */}
+        <div className="flex flex-none flex-col gap-3 border-b border-border px-[18px] py-3">
           <StepDots step={step} locked={launchScopeLocked} onJump={(target) => setStep(target)} />
-          <div className="h-px bg-border" />
         </div>
 
         {/* Body */}
-        <div
-          className={cn(
-            'min-h-0 flex-1 overflow-y-auto',
-            step === 3 && 'md:flex md:overflow-hidden'
-          )}
-        >
-          <div
-            className={cn(
-              'px-[18px] py-4',
-              step === 3 && 'md:min-h-0 md:min-w-0 md:flex-1 md:overflow-y-auto'
-            )}
-          >
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="px-[18px] py-4">
             {step === 1 ? (
               <HostStep
                 hosts={eligibleHosts}
@@ -622,17 +611,17 @@ export default function CreateWorkspaceWizard({
               </fieldset>
             ) : null}
           </div>
-
-          {step === 3 ? (
-            <NewWorkProgressRail
-              progress={launchProgress}
-              workSource={workSource}
-              selectedRepoIsGit={selectedRepoIsGit}
-              busy={launchBusy}
-              onCancel={onClose}
-            />
-          ) : null}
         </div>
+
+        {step === 3 ? (
+          <NewWorkProgressPanel
+            progress={launchProgress}
+            workSource={workSource}
+            selectedRepoIsGit={selectedRepoIsGit}
+            busy={launchBusy}
+            onCancel={onClose}
+          />
+        ) : null}
 
         {/* Footer */}
         <div
@@ -726,7 +715,7 @@ function StepDots({
   )
 }
 
-function NewWorkProgressRail({
+function NewWorkProgressPanel({
   progress,
   workSource,
   selectedRepoIsGit,
@@ -750,103 +739,98 @@ function NewWorkProgressRail({
   } satisfies Record<(typeof NEW_WORK_STAGES)[number], string>
 
   return (
-    <aside
+    <section
       aria-label="Workspace creation progress"
       aria-live="polite"
-      className="flex flex-none flex-col border-t border-border bg-muted/20 px-4 py-4 md:w-[238px] md:border-t-0 md:border-l"
+      className="flex flex-none flex-col border-t border-border bg-muted/20 px-[18px] py-3"
     >
-      <div>
-        <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
-          Creation flow
-        </span>
-        <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
-          These stages stay visible while your workspace is prepared.
-        </p>
-
-        <ol className="mt-4 flex flex-col">
-          {NEW_WORK_STAGES.map((stage, index) => {
-            const status = progress[stage]
-            const done = status === 'done'
-            const active = status === 'active'
-            const error = status === 'error'
-            const statusLabel = done
-              ? 'Complete'
-              : active
-                ? 'In progress'
-                : error
-                  ? 'Needs attention'
-                  : 'Waiting'
-            return (
-              <li
-                key={stage}
-                aria-current={active ? 'step' : undefined}
-                className="relative flex min-h-[62px] gap-3 last:min-h-0"
-              >
-                {index < NEW_WORK_STAGES.length - 1 ? (
-                  <span
-                    className={cn(
-                      'absolute top-6 bottom-0 left-[11px] w-px',
-                      done ? 'bg-emerald-500/45' : 'bg-border'
-                    )}
-                  />
-                ) : null}
-                <span
-                  className={cn(
-                    'relative z-10 inline-flex size-6 flex-none items-center justify-center rounded-full border bg-background font-mono text-[10px] font-semibold',
-                    done && 'border-emerald-500/45 bg-emerald-500/10 text-emerald-500',
-                    active && 'border-primary/60 bg-primary/10 text-primary',
-                    error && 'border-destructive/55 bg-destructive/10 text-destructive',
-                    status === 'pending' && 'border-border text-muted-foreground'
-                  )}
-                >
-                  {done ? (
-                    <Check className="size-3" strokeWidth={3} />
-                  ) : active ? (
-                    <Loader2 className="size-3 animate-spin" />
-                  ) : error ? (
-                    <X className="size-3" strokeWidth={2.5} />
-                  ) : (
-                    index + 1
-                  )}
-                </span>
-                <span className="min-w-0 pb-3">
-                  <span
-                    className={cn(
-                      'block text-[12.5px] font-medium capitalize',
-                      active || done ? 'text-foreground' : 'text-muted-foreground',
-                      error && 'text-destructive'
-                    )}
-                  >
-                    {stage === 'issue' ? 'tracker source' : stage}
-                  </span>
-                  <span className="block text-[10.5px] leading-4 text-muted-foreground">
-                    {statusLabel} · {stageDetails[stage]}
-                  </span>
-                </span>
-              </li>
-            )
-          })}
-        </ol>
-      </div>
-
-      <div className="mt-5 border-t border-border pt-3 md:mt-auto">
+      <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+            Creation flow
+          </span>
+          <span className="ml-2 hidden text-[11px] text-muted-foreground sm:inline">
+            These stages stay visible while your workspace is prepared.
+          </span>
+        </div>
         <button
           type="button"
           disabled={busy}
           onClick={onCancel}
           title={busy ? 'The current stage must finish before this window can close' : undefined}
-          className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex flex-none items-center justify-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <X className="size-3.5" />
+          <X className="size-3" />
           Cancel
         </button>
-        {busy ? (
-          <p className="mt-2 text-center text-[10px] leading-4 text-muted-foreground">
-            Finish the current stage before closing.
-          </p>
-        ) : null}
       </div>
-    </aside>
+
+      <ol className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {NEW_WORK_STAGES.map((stage, index) => {
+          const status = progress[stage]
+          const done = status === 'done'
+          const active = status === 'active'
+          const error = status === 'error'
+          const statusLabel = done
+            ? 'Complete'
+            : active
+              ? 'In progress'
+              : error
+                ? 'Needs attention'
+                : 'Waiting'
+          return (
+            <li
+              key={stage}
+              aria-current={active ? 'step' : undefined}
+              className={cn(
+                'relative flex min-w-0 gap-2 rounded-md border border-border/70 bg-background/55 p-2',
+                active && 'border-primary/45 bg-primary/5',
+                error && 'border-destructive/45 bg-destructive/5'
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-flex size-5 flex-none items-center justify-center rounded-full border bg-background font-mono text-[9.5px] font-semibold',
+                  done && 'border-emerald-500/45 bg-emerald-500/10 text-emerald-500',
+                  active && 'border-primary/60 bg-primary/10 text-primary',
+                  error && 'border-destructive/55 bg-destructive/10 text-destructive',
+                  status === 'pending' && 'border-border text-muted-foreground'
+                )}
+              >
+                {done ? (
+                  <Check className="size-2.5" strokeWidth={3} />
+                ) : active ? (
+                  <Loader2 className="size-2.5 animate-spin" />
+                ) : error ? (
+                  <X className="size-2.5" strokeWidth={2.5} />
+                ) : (
+                  index + 1
+                )}
+              </span>
+              <span className="min-w-0">
+                <span
+                  className={cn(
+                    'block text-[11.5px] font-medium capitalize',
+                    active || done ? 'text-foreground' : 'text-muted-foreground',
+                    error && 'text-destructive'
+                  )}
+                >
+                  {stage}
+                </span>
+                <span className="mt-0.5 block text-[9.5px] leading-3.5 text-muted-foreground">
+                  {statusLabel} · {stageDetails[stage]}
+                </span>
+              </span>
+            </li>
+          )
+        })}
+      </ol>
+      {busy ? (
+        <p className="mt-2 text-right text-[10px] leading-4 text-muted-foreground">
+          Finish the current stage before closing.
+        </p>
+      ) : null}
+    </section>
   )
 }
 

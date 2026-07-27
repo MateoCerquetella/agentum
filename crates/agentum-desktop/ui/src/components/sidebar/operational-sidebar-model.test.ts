@@ -118,6 +118,69 @@ describe('buildOperationalSidebarRows', () => {
     })
   })
 
+  it('promotes the durable unread attention signal to Ready to continue', () => {
+    const rows = build(
+      [
+        worktree('unread-idle', { isUnread: true, lastActivityAt: 880_000 }),
+        worktree('unread-working', { isUnread: true, lastActivityAt: 700_000 }),
+        worktree('read-idle', { isUnread: false, lastActivityAt: 600_000 })
+      ],
+      {
+        'unread-idle': { status: 'inactive', agentLabel: 'Codex' },
+        'unread-working': {
+          status: 'working',
+          agentLabel: 'Claude',
+          stateTimestamp: 900_000
+        },
+        'read-idle': { status: 'inactive' }
+      }
+    )
+    const headers = rows.filter((row) => row.type === 'header')
+    const items = rows.filter((row) => row.type === 'item')
+
+    expect(headers.map((row) => [row.label, row.count])).toEqual([
+      ['Needs You', 2],
+      ['Active', 0],
+      ['Settled', 1]
+    ])
+    expect(
+      items.find((row) => row.worktree.id === 'unread-idle')?.operationalMeta
+    ).toMatchObject({
+      section: 'needs-you',
+      statusLabel: 'Ready to continue',
+      agentLabel: 'Codex',
+      stateTimestamp: 880_000
+    })
+    expect(
+      items.find((row) => row.worktree.id === 'unread-working')?.operationalMeta
+    ).toMatchObject({
+      section: 'needs-you',
+      statusLabel: 'Ready to continue',
+      agentLabel: 'Claude',
+      stateTimestamp: 900_000
+    })
+  })
+
+  it('keeps explicit input ahead of unread continuation state', () => {
+    const rows = build(
+      [worktree('blocked-unread', { isUnread: true, lastActivityAt: 980_000 })],
+      {
+        'blocked-unread': {
+          status: 'permission',
+          agentLabel: 'Claude',
+          stateTimestamp: 950_000
+        }
+      }
+    )
+    const item = rows.find((row) => row.type === 'item')
+
+    expect(item?.operationalMeta).toMatchObject({
+      section: 'needs-you',
+      statusLabel: 'Needs input',
+      stateTimestamp: 950_000
+    })
+  })
+
   it('treats generic open-surface liveness as settled, not active work', () => {
     const rows = build([worktree('open')], { open: { status: 'active' } })
     const item = rows.find((row) => row.type === 'item')

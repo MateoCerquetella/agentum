@@ -15,6 +15,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Repository artifacts have one portable root.** Saved specifications create
   only `.agentum/manifest.json` and a stable directory below `.agentum/specs/`;
   runtime state, credentials, approvals, and delivery state remain in SQLite.
+- **The complete lifecycle works locally and over SSH.** Specification, design,
+  planning, isolated implementation, typed verification, browser evidence, and
+  independent review recover across restarts and advance to Ready without
+  falling back from a remote repository to the desktop filesystem.
+- **External systems are explicit adapters.** GitHub and Linear normalize work
+  item sources, Jira Cloud uses brokered OAuth or an advanced local token flow,
+  and OpenSpec supports previewed one-shot import/export with provenance and
+  changed-on-both-sides conflict detection.
 - **Cutover is recoverable and fully accounted.** The migration previews and
   SHA-256 inventories every retired specification source and demo fixture,
   requires an external recovery archive and restricted-content policy before
@@ -26,11 +34,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The competing SDD and harness surfaces have been retired.** New work enters
   through New Spec and is observed through Run Center without ambient provider
   configuration in customer repositories.
+- **Provider execution is isolated and conformant.** Claude, Codex,
+  Cursor/Agent, Gemini, Hermes, OpenCode, Aider, and custom adapters share typed
+  result, cancellation, timeout, output-limit, and project-config isolation
+  contracts; a missing or unauthenticated bundled provider blocks publication.
+- **Delivery is a separate, hash-bound action.** Ready never implies a commit,
+  push, pull request, tracker mutation, or release. Users preview and confirm
+  exact delivery actions, and partial or ambiguous failures remain retryable
+  without losing Ready state.
 - **Releases are fail-closed.** CI type-checks and tests the complete desktop UI,
   validates all Rust targets and dependency policy, scans restricted content,
   and publishes only from a verified signed annotated tag whose commit is
-  exactly the `main` tip. Updater payloads are checked against the key embedded in Agentum
-  before a draft is created.
+  exactly the `main` tip. Updater payloads are checked against the key embedded
+  in Agentum before a draft is created.
 
 ### Fixed
 
@@ -46,12 +62,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   silently ignored.
 - **Desktop web content has an explicit security boundary.** The Tauri window
   uses a restrictive CSP, macOS transport policy is limited to local networking,
-  and release bundles opt into hardened runtime and modern signing algorithms.
+  microphone access is declared explicitly, and release bundles require the
+  hardened runtime, validated entitlements, and modern signing algorithms.
 - **Providers cannot impersonate the desktop user over loopback.** The embedded
   API now requires a boot-scoped, memory-only bearer available only to the main
   Tauri webview; browser child views and provider sandboxes cannot retrieve it.
   MCP keeps a distinct rotated token, and `--no-auth` no longer exposes any
   `/api/sdd/v2` HTTP or WebSocket route.
+
+## [0.96.11] — 2026-07-27
+
+### Fixed
+
+- **The sidebar is compact and queue-focused again.** The live hierarchy study
+  has been removed in favor of the previous production sidebar layout.
+- **SSH host headers are quieter.** Remote rows no longer show a drag-grip icon,
+  and their secondary line now uses only a friendly OS name such as Linux or
+  macOS instead of repeating transport, hostname, and kernel-version details.
+
+## [0.96.10] — 2026-07-27
+
+### Added
+
+- **The sidebar now uses the live host hierarchy from the approved UI study.**
+  Real hosts, projects, workspaces, and active sessions render as a compact tree
+  with persistent cross-level search, working/idle totals, collapse controls,
+  and reconnect actions for unavailable SSH hosts.
+
+### Fixed
+
+- **Deleting a worktree no longer loses its registration when SSH is down.**
+  Agentum cleans safe local runtime state, keeps the remote workspace registered,
+  and asks the user to reconnect and retry instead of orphaning the checkout.
+- **Release workflows comply with the repository's hardened Actions policy.**
+  Every external action is pinned to an immutable commit and the allowlist is
+  restricted to those exact revisions.
+
+## [0.96.9] — 2026-07-27
+
+### Added
+
+- **The sidebar now uses the live host hierarchy from the approved UI study.**
+  Real hosts, projects, workspaces, and active sessions render as a compact tree
+  with persistent cross-level search, working/idle totals, collapse controls,
+  and reconnect actions for unavailable SSH hosts.
+
+### Fixed
+
+- **Deleting a worktree no longer loses its registration when SSH is down.**
+  Agentum cleans safe local runtime state, keeps the remote workspace registered,
+  and asks the user to reconnect and retry instead of orphaning the checkout.
 
 ## [0.96.8] — 2026-07-24
 
@@ -84,7 +144,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Gated runs deliver agent prompts reliably.** Agent startup waits for the
+- **Gated runs deliver agent prompts reliably.** Codex startup waits for the
   real idle composer after MCP initialization, and role-sized prompts are split
   below tmux's command-message limit instead of disappearing as oversized
   `send-keys` calls.
