@@ -1133,6 +1133,116 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn worktree_file_access_rejects_traversal_before_touching_the_host() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let host = local_host();
+        for relative in ["", "../secret", "src/../../secret", "/etc/passwd", "./file"] {
+            assert!(matches!(
+                read_file_bytes_beneath(&host, &dir.path().to_string_lossy(), relative).await,
+                Err(HostRuntimeError::UnsafePath(_))
+            ));
+            assert!(matches!(
+                path_exists_beneath(&host, &dir.path().to_string_lossy(), relative).await,
+                Err(HostRuntimeError::UnsafePath(_))
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_file_access_never_follows_final_or_ancestor_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret"), b"outside").unwrap();
+        symlink(
+            outside.path().join("secret"),
+            root.path().join("final-link"),
+        )
+        .unwrap();
+        symlink(outside.path(), root.path().join("ancestor-link")).unwrap();
+        let host = local_host();
+        let root = root.path().to_string_lossy();
+
+        // Git may report a final symlink as an existing worktree entry, but
+        // the content reader never dereferences it.
+        assert!(
+            path_exists_beneath(&host, &root, "final-link")
+                .await
+                .unwrap()
+        );
+        assert!(
+            read_file_bytes_beneath(&host, &root, "final-link")
+                .await
+                .is_err()
+        );
+        assert!(
+            read_file_bytes_beneath(&host, &root, "ancestor-link/secret")
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn remote_worktree_access_quotes_root_and_relative_and_rejects_escape_components() {
+        let script = remote_beneath_script(
+            "/srv/repo with spaces",
+            "src/file with spaces.rs",
+            RemoteBeneathOperation::Read,
+        )
+        .unwrap();
+        assert!(script.starts_with("sh -c "));
+        assert!(script.contains("repo with spaces"));
+        assert!(script.contains("file with spaces.rs"));
+        assert!(script.contains("exec 3<"));
+        assert!(script.contains("cat <&3"));
+        assert!(script.contains("/proc/$$/fd/3"));
+        assert!(validate_beneath_relative("src/file.rs").is_ok());
+        assert!(validate_beneath_relative("src/../secret").is_err());
+        assert!(validate_beneath_relative("/etc/passwd").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_read_script_opens_once_and_rejects_symlink_escape_before_reading() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/good"), b"inside").unwrap();
+        std::fs::write(outside.path().join("secret"), b"outside-secret").unwrap();
+        symlink(
+            outside.path().join("secret"),
+            root.path().join("src/escape"),
+        )
+        .unwrap();
+        symlink(outside.path(), root.path().join("ancestor-escape")).unwrap();
+
+        let run = |relative: &str| {
+            let script = remote_beneath_script(
+                &root.path().to_string_lossy(),
+                relative,
+                RemoteBeneathOperation::Read,
+            )
+            .unwrap();
+            std::process::Command::new("sh")
+                .args(["-c", &script])
+                .output()
+                .unwrap()
+        };
+
+        let good = run("src/good");
+        assert!(good.status.success());
+        assert_eq!(good.stdout, b"inside");
+        for escape in [run("src/escape"), run("ancestor-escape/secret")] {
+            assert_eq!(escape.status.code(), Some(65));
+            assert!(!String::from_utf8_lossy(&escape.stdout).contains("outside-secret"));
+        }
+    }
+
     // ── CDP forward-tunnel port selection ─────────────────────────────────
     // The forward (-L) tunnel binds a Mac loopback port; these pure helpers are
     // the moving parts of `ensure_forward_tunnel`'s scan. A live host validates

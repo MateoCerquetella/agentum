@@ -3053,6 +3053,8 @@ fn isolate_verification_command(
         PathBuf::from("/bin"),
         PathBuf::from("/sbin"),
         PathBuf::from("/Library"),
+        PathBuf::from("/private/etc"),
+        PathBuf::from("/private/var/db/timezone"),
         PathBuf::from("/opt/homebrew"),
         PathBuf::from("/usr/local"),
         attempt.clone(),
@@ -3064,12 +3066,64 @@ fn isolate_verification_command(
         readable.push(git_dir);
         readable.push(common_dir);
     }
+    let mut executable_mappable = vec![
+        PathBuf::from("/System"),
+        PathBuf::from("/usr/lib"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/usr/libexec"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/sbin"),
+        PathBuf::from("/Library/Apple"),
+        PathBuf::from("/opt/homebrew"),
+        PathBuf::from("/usr/local"),
+        executable.clone(),
+    ];
+    executable_mappable.retain(|path| path.exists());
+    executable_mappable.sort();
+    executable_mappable.dedup();
     let mut profile = String::from(
-        "(version 1)\n(deny default)\n(allow process-exec)\n(allow process-fork)\n(allow signal (target same-sandbox))\n(allow sysctl-read)\n(allow mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\") (global-name \"com.apple.cfprefsd.agent\"))\n(allow file-read-metadata)\n",
+        "(version 1)\n\
+         (deny default)\n\
+         (allow process-exec)\n\
+         (allow process-fork)\n\
+         (allow signal (target same-sandbox))\n\
+         (allow sysctl-read)\n\
+         (allow system-mac-syscall (mac-policy-name \"vnguard\"))\n\
+         (allow system-mac-syscall (require-all (mac-policy-name \"Sandbox\") (mac-syscall-number 67)))\n\
+         (allow iokit-open (iokit-registry-entry-class \"RootDomainUserClient\"))\n\
+         (allow ipc-posix-shm-read* (ipc-posix-name \"apple.shm.notification_center\"))\n\
+         (allow mach-lookup\n\
+           (global-name \"com.apple.analyticsd\")\n\
+           (global-name \"com.apple.bsd.dirhelper\")\n\
+           (global-name \"com.apple.cfprefsd.agent\")\n\
+           (global-name \"com.apple.cfprefsd.daemon\")\n\
+           (global-name \"com.apple.logd\")\n\
+           (global-name \"com.apple.logd.events\")\n\
+           (global-name \"com.apple.secinitd\")\n\
+           (global-name \"com.apple.system.DirectoryService.libinfo_v1\")\n\
+           (global-name \"com.apple.system.logger\")\n\
+           (global-name \"com.apple.system.opendirectoryd.libinfo\")\n\
+           (global-name \"com.apple.system.opendirectoryd.membership\")\n\
+           (global-name \"com.apple.trustd\")\n\
+           (global-name \"com.apple.trustd.agent\"))\n\
+         (allow file-read-metadata file-test-existence)\n\
+         (allow file-read* file-test-existence (literal \"/\"))\n\
+         (allow file-read* file-test-existence file-write-data\n\
+           (literal \"/dev/null\") (literal \"/dev/zero\"))\n\
+         (allow file-read-data file-test-existence file-write-data (subpath \"/dev/fd\"))\n",
     );
     for path in readable.into_iter().filter(|path| path.exists()) {
+        let filter = if path.is_file() { "literal" } else { "subpath" };
         profile.push_str(&format!(
-            "(allow file-read-data (subpath {}))\n",
+            "(allow file-read-data file-test-existence ({filter} {}))\n",
+            verification_seatbelt_literal(&path)?
+        ));
+    }
+    for path in executable_mappable {
+        let filter = if path.is_file() { "literal" } else { "subpath" };
+        profile.push_str(&format!(
+            "(allow file-map-executable ({filter} {}))\n",
             verification_seatbelt_literal(&path)?
         ));
     }
@@ -3077,8 +3131,6 @@ fn isolate_verification_command(
         "(allow file-write* (subpath {}))\n",
         verification_seatbelt_literal(&attempt)?
     ));
-    profile.push_str("(allow file-write-data (literal \"/dev/null\"))\n");
-
     let mut args = vec![
         "-p".into(),
         profile,
@@ -3443,7 +3495,7 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
     async fn verification_runs_directly_in_the_os_sandbox() {
         if which::which("bwrap").is_err() || which::which("git").is_err() {

@@ -8,9 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-#[cfg(unix)]
 use std::fs::File;
-use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -839,6 +837,8 @@ struct VaultEnvelope {
 /// accepted only from the process environment and is never written to disk.
 pub struct HeadlessEncryptedVault {
     path: PathBuf,
+    directory: File,
+    leaf: String,
     master_key: Mutex<[u8; 32]>,
     io_lock: Mutex<()>,
 }
@@ -877,19 +877,40 @@ impl HeadlessEncryptedVault {
         let path = agentum_store::paths::data_dir()
             .map_err(|error| VaultError::Unavailable(error.to_string()))?
             .join("sdd-credentials.vault");
-        Ok(Self::new(path, master_key))
+        Self::new(path, master_key)
     }
 
-    pub fn new(path: PathBuf, master_key: [u8; 32]) -> Self {
-        Self {
+    pub fn new(path: PathBuf, master_key: [u8; 32]) -> Result<Self, VaultError> {
+        let parent = path.parent().ok_or(VaultError::Unsafe)?;
+        let leaf = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| valid_vault_leaf(value))
+            .ok_or(VaultError::Unsafe)?
+            .to_owned();
+        if !path.is_absolute() {
+            return Err(VaultError::Unsafe);
+        }
+        super::workspace::ensure_directory_chain_nofollow(parent)
+            .map_err(|_| VaultError::Unsafe)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
+        let directory = crate::host_runtime::open_local_directory_chain_nofollow(parent)
+            .map_err(|_| VaultError::Unsafe)?;
+        Ok(Self {
             path,
+            directory,
+            leaf,
             master_key: Mutex::new(master_key),
             io_lock: Mutex::new(()),
-        }
+        })
     }
 
     fn read_entries(&self) -> Result<BTreeMap<String, String>, VaultError> {
-        let Some(bytes) = read_vault_file(&self.path)? else {
+        let Some(bytes) = read_vault_file(&self.directory, &self.leaf)? else {
             return Ok(BTreeMap::new());
         };
         let envelope: VaultEnvelope =
@@ -947,7 +968,7 @@ impl HeadlessEncryptedVault {
         };
         plaintext.zeroize();
         let published = serde_json::to_vec(&envelope).map_err(|_| VaultError::Unsafe)?;
-        atomic_write_vault(&self.path, &published)
+        atomic_write_vault(&self.directory, &self.leaf, &self.path, &published)
     }
 }
 
@@ -1006,12 +1027,28 @@ pub fn headless_vault_or_unavailable() -> Arc<dyn SddCredentialVault> {
     }
 }
 
-fn read_vault_file(path: &Path) -> Result<Option<Vec<u8>>, VaultError> {
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
+fn valid_vault_leaf(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value != "."
+        && value != ".."
+        && !value.contains(['\0', '/', '\\'])
+}
+
+fn read_vault_file(directory: &File, leaf: &str) -> Result<Option<Vec<u8>>, VaultError> {
+    let mut options = cap_primitives::fs::OpenOptions::new();
+    options
+        .read(true)
+        ._cap_fs_ext_follow(cap_primitives::fs::FollowSymlinks::No);
+    let file = match cap_primitives::fs::open(directory, Path::new(leaf), &options) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+        Err(_) => return Err(VaultError::Unsafe),
     };
+    // Validate the opened handle, not earlier ambient-path metadata. This
+    // closes the regular-file/permissions swap window and the held parent
+    // descriptor closes all ancestor replacement races.
+    let metadata = file.metadata()?;
     if unsafe_vault_file(&metadata) || metadata.len() > MAX_VAULT_BYTES {
         return Err(VaultError::Unsafe);
     }
@@ -1022,14 +1059,6 @@ fn read_vault_file(path: &Path) -> Result<Option<Vec<u8>>, VaultError> {
             return Err(VaultError::Unsafe);
         }
     }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    let file = options.open(path)?;
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_VAULT_BYTES + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_VAULT_BYTES {
@@ -1038,85 +1067,95 @@ fn read_vault_file(path: &Path) -> Result<Option<Vec<u8>>, VaultError> {
     Ok(Some(bytes))
 }
 
-fn atomic_write_vault(path: &Path, bytes: &[u8]) -> Result<(), VaultError> {
-    let parent = path.parent().ok_or(VaultError::Unsafe)?;
-    super::workspace::ensure_directory_chain_nofollow(parent).map_err(|_| VaultError::Unsafe)?;
-    if std::fs::symlink_metadata(parent)
-        .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
-        .unwrap_or(true)
-    {
-        return Err(VaultError::Unsafe);
+fn atomic_write_vault(
+    directory: &File,
+    leaf: &str,
+    display_path: &Path,
+    bytes: &[u8],
+) -> Result<(), VaultError> {
+    match cap_primitives::fs::stat(
+        directory,
+        Path::new(leaf),
+        cap_primitives::fs::FollowSymlinks::No,
+    ) {
+        Ok(metadata) if metadata.is_symlink() || !metadata.is_file() => {
+            return Err(VaultError::Unsafe);
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
+    let temporary = format!(".sdd-credentials-{}.tmp", uuid::Uuid::new_v4());
+    let mut options = cap_primitives::fs::OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        ._cap_fs_ext_follow(cap_primitives::fs::FollowSymlinks::No);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        use cap_primitives::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    if std::fs::symlink_metadata(path)
-        .map(|metadata| unsafe_vault_file(&metadata))
-        .unwrap_or(false)
+    #[cfg(windows)]
     {
-        return Err(VaultError::Unsafe);
+        use cap_primitives::fs::OpenOptionsExt;
+        use windows_sys::Win32::Foundation::GENERIC_WRITE;
+        use windows_sys::Win32::Storage::FileSystem::{DELETE, READ_CONTROL, WRITE_DAC};
+        // The temporary handle itself performs publication, so it must retain
+        // delete/rename authority without reopening an ambient path.
+        options.access_mode(GENERIC_WRITE | DELETE | READ_CONTROL | WRITE_DAC);
     }
-    let temporary = parent.join(format!(".sdd-credentials-{}.tmp", uuid::Uuid::new_v4()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    let mut file = options.open(&temporary)?;
+    let mut file = cap_primitives::fs::open(directory, Path::new(&temporary), &options)?;
     let publication = (|| -> Result<(), VaultError> {
         file.write_all(bytes)?;
         file.sync_all()?;
-        drop(file);
-        atomic_replace(&temporary, path)?;
-        sync_directory(parent)?;
+        atomic_replace(directory, &file, &temporary, leaf, display_path)?;
+        #[cfg(unix)]
+        directory.sync_all()?;
+        #[cfg(windows)]
+        // Windows directory handles cannot reliably be flushed. Syncing the
+        // still-open, now-renamed file handle preserves the prior write-through
+        // durability intent without reconstructing an ambient directory path.
+        file.sync_all()?;
+        #[cfg(not(any(unix, windows)))]
+        return Err(VaultError::Unsafe);
         Ok(())
     })();
     if publication.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        let _ = cap_primitives::fs::remove_file(directory, Path::new(&temporary));
     }
     publication
 }
 
 #[cfg(not(windows))]
-fn atomic_replace(source: &Path, destination: &Path) -> Result<(), VaultError> {
-    std::fs::rename(source, destination)?;
+fn atomic_replace(
+    directory: &File,
+    _file: &File,
+    source: &str,
+    destination: &str,
+    _display_path: &Path,
+) -> Result<(), VaultError> {
+    cap_primitives::fs::rename(
+        directory,
+        Path::new(source),
+        directory,
+        Path::new(destination),
+    )?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn atomic_replace(source: &Path, destination: &Path) -> Result<(), VaultError> {
-    use std::iter;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-    };
-
-    let source: Vec<u16> = source
-        .as_os_str()
-        .encode_wide()
-        .chain(iter::once(0))
-        .collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(iter::once(0))
-        .collect();
-    // SAFETY: both vectors are live NUL-terminated UTF-16 paths. MoveFileExW
-    // provides replacement semantics that std::fs::rename lacks on Windows.
-    if unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error().into());
-    }
+fn atomic_replace(
+    directory: &File,
+    file: &File,
+    _source: &str,
+    destination: &str,
+    _display_path: &Path,
+) -> Result<(), VaultError> {
+    // Both the source and destination remain relative to live handles. This
+    // cannot be redirected if the ambient vault parent is renamed and replaced
+    // with a junction between vault construction and publication.
+    super::artifacts::rename_file_handle(file, directory, Path::new(destination), true)?;
     Ok(())
 }
 
@@ -1133,17 +1172,6 @@ fn unsafe_vault_file(metadata: &std::fs::Metadata) -> bool {
         }
     }
     false
-}
-
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), VaultError> {
-    File::open(path)?.sync_all()?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), VaultError> {
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1207,7 +1235,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("vault.json");
         let key = CredentialKey::new("linear", "api-token", "selected").unwrap();
-        let vault = HeadlessEncryptedVault::new(path.clone(), [7; 32]);
+        let vault = HeadlessEncryptedVault::new(path.clone(), [7; 32]).unwrap();
         vault
             .put(&key, &SecretValue::new(b"linear-secret".to_vec()).unwrap())
             .unwrap();
@@ -1215,7 +1243,7 @@ mod tests {
         assert!(!published.contains("linear-secret"));
         assert_eq!(vault.get(&key).unwrap().unwrap().expose(), b"linear-secret");
 
-        let wrong = HeadlessEncryptedVault::new(path.clone(), [8; 32]);
+        let wrong = HeadlessEncryptedVault::new(path.clone(), [8; 32]).unwrap();
         assert!(matches!(wrong.get(&key), Err(VaultError::Unsafe)));
 
         #[cfg(unix)]
@@ -1232,7 +1260,7 @@ mod tests {
     fn headless_delete_reencrypts_without_the_secret() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("vault.json");
-        let vault = HeadlessEncryptedVault::new(path, [4; 32]);
+        let vault = HeadlessEncryptedVault::new(path, [4; 32]).unwrap();
         let key = CredentialKey::new("jira", "oauth", "selected").unwrap();
         vault
             .put(&key, &SecretValue::new(b"oauth-secret".to_vec()).unwrap())
@@ -1267,11 +1295,32 @@ mod tests {
         symlink(&real, &linked).unwrap();
         let path = linked.join("nested").join("vault.json");
         let vault = HeadlessEncryptedVault::new(path, [9; 32]);
-        let key = CredentialKey::new("linear", "api-token", "selected").unwrap();
-        assert!(matches!(
-            vault.put(&key, &SecretValue::new(b"secret".to_vec()).unwrap()),
-            Err(VaultError::Unsafe)
-        ));
+        assert!(matches!(vault, Err(VaultError::Unsafe)));
         assert!(!real.join("nested").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn headless_vault_parent_descriptor_defeats_ancestor_swap_races() {
+        use std::os::unix::fs::symlink;
+
+        let container = tempfile::tempdir().unwrap();
+        let original = container.path().join("vault-parent");
+        let moved = container.path().join("vault-parent-pinned");
+        let outside = container.path().join("outside");
+        std::fs::create_dir(&original).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let vault = HeadlessEncryptedVault::new(original.join("vault.json"), [11; 32]).unwrap();
+        std::fs::rename(&original, &moved).unwrap();
+        symlink(&outside, &original).unwrap();
+
+        let key = CredentialKey::new("jira", "oauth", "race").unwrap();
+        vault
+            .put(&key, &SecretValue::new(b"pinned-secret".to_vec()).unwrap())
+            .unwrap();
+
+        assert!(moved.join("vault.json").is_file());
+        assert!(!outside.join("vault.json").exists());
+        assert_eq!(vault.get(&key).unwrap().unwrap().expose(), b"pinned-secret");
     }
 }

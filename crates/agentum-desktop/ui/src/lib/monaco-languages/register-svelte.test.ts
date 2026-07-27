@@ -238,6 +238,12 @@ describe('svelte tokenizer regressions', () => {
       nextEmbedded: '@pop'
     })
   })
+
+  it('closes HTML comments on both standard and legacy end tags', () => {
+    for (const endTag of ['-->', '--!>']) {
+      expect(findRuleAction('comment', endTag)).toMatchObject({ switchTo: '@markupReenter' })
+    }
+  })
 })
 
 describe('svelte embedded language attributes', () => {

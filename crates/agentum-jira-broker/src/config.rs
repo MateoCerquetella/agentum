@@ -36,9 +36,14 @@ pub struct BrokerConfig {
     pub(crate) callback_url: Url,
     pub(crate) client_id: String,
     pub(crate) client_secret: ClientSecret,
+    /// Test-only upstream injection. Production request targets are compiled
+    /// from exact Atlassian constants in `atlassian.rs` and cannot be changed
+    /// by environment, broker input, or persisted state.
+    #[cfg(test)]
     pub(crate) endpoints: AtlassianEndpoints,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct AtlassianEndpoints {
     pub authorization: Url,
@@ -46,6 +51,7 @@ pub(crate) struct AtlassianEndpoints {
     pub accessible_resources: Url,
 }
 
+#[cfg(test)]
 impl Default for AtlassianEndpoints {
     fn default() -> Self {
         Self {
@@ -104,6 +110,7 @@ impl BrokerConfig {
             callback_url,
             client_id,
             client_secret: ClientSecret(Zeroizing::new(secret)),
+            #[cfg(test)]
             endpoints: AtlassianEndpoints::default(),
         })
     }

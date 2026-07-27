@@ -2981,61 +2981,56 @@ done
 test -n "$staging"
 case "$prompt" in
   *"operation: authoring."*)
-    cat > "$staging" <<'AGENTUM_PROVIDER_EOF'
-AGENTUM_SPEC_BEGIN
-# Refresh Access Tokens
-
-## Requirements
-
-- RQ-001: Refresh an access token without ending the active session.
-
-## Acceptance criteria
-
-- AC-001: The refreshed token is stored while the session remains active.
-AGENTUM_SPEC_END
-AGENTUM_PROVIDER_EOF
+    printf '%s\n' \
+      'AGENTUM_SPEC_BEGIN' \
+      '# Refresh Access Tokens' \
+      '' \
+      '## Requirements' \
+      '' \
+      '- RQ-001: Refresh an access token without ending the active session.' \
+      '' \
+      '## Acceptance criteria' \
+      '' \
+      '- AC-001: The refreshed token is stored while the session remains active.' \
+      'AGENTUM_SPEC_END' > "$staging"
     ;;
   *"operation: design."*)
-    cat > "$staging" <<'AGENTUM_PROVIDER_EOF'
-AGENTUM_DESIGN_BEGIN
-# Design
-
-Update the session record in place for RQ-001 and preserve its active flag.
-Verify the resulting source change against AC-001.
-AGENTUM_DESIGN_END
-AGENTUM_PROVIDER_EOF
+    printf '%s\n' \
+      'AGENTUM_DESIGN_BEGIN' \
+      '# Design' \
+      '' \
+      'Update the session record in place for RQ-001 and preserve its active flag.' \
+      'Verify the resulting source change against AC-001.' \
+      'AGENTUM_DESIGN_END' > "$staging"
     ;;
   *"operation: planning."*)
-    cat > "$staging" <<'AGENTUM_PROVIDER_EOF'
-AGENTUM_PLAN_BEGIN
-{"schemaVersion":1,"specId":"__SPEC_ID__","specRevision":2,"tasks":[{"id":"TSK-001","objective":"Refresh the access token without ending the session","dependencies":[],"readScopes":["src/session-store.js"],"writeScopes":["src/session-store.js"],"acceptanceCriteria":["AC-001"],"verification":[{"program":"git","args":["diff","--check"],"cwd":".","envAllowlist":["PATH"],"timeoutMs":60000,"outputLimit":262144}],"browserChecks":[],"risk":"low","parallelSafe":true}]}
-AGENTUM_PLAN_END
-AGENTUM_PROVIDER_EOF
+    printf '%s\n' \
+      'AGENTUM_PLAN_BEGIN' \
+      '{"schemaVersion":1,"specId":"__SPEC_ID__","specRevision":2,"tasks":[{"id":"TSK-001","objective":"Refresh the access token without ending the session","dependencies":[],"readScopes":["src/session-store.js"],"writeScopes":["src/session-store.js"],"acceptanceCriteria":["AC-001"],"verification":[{"program":"git","args":["diff","--check"],"cwd":".","envAllowlist":["PATH"],"timeoutMs":60000,"outputLimit":262144}],"browserChecks":[],"risk":"low","parallelSafe":true}]}' \
+      'AGENTUM_PLAN_END' > "$staging"
     ;;
   *"operation: implementation_diff."*)
-    cat > "$staging" <<'AGENTUM_PROVIDER_EOF'
-AGENTUM_DIFF_BEGIN
-diff --git a/src/session-store.js b/src/session-store.js
---- a/src/session-store.js
-+++ b/src/session-store.js
-@@ -1,3 +1,3 @@
- export function refreshAccessToken(session, token) {
--  throw new Error("not implemented");
-+  return { ...session, accessToken: token };
- }
-AGENTUM_DIFF_END
-AGENTUM_PROVIDER_EOF
+    printf '%s\n' \
+      'AGENTUM_DIFF_BEGIN' \
+      'diff --git a/src/session-store.js b/src/session-store.js' \
+      '--- a/src/session-store.js' \
+      '+++ b/src/session-store.js' \
+      '@@ -1,3 +1,3 @@' \
+      ' export function refreshAccessToken(session, token) {' \
+      '-  throw new Error("not implemented");' \
+      '+  return { ...session, accessToken: token };' \
+      ' }' \
+      'AGENTUM_DIFF_END' > "$staging"
     ;;
   *"operation: independent_review."*)
-    cat > "$staging" <<'AGENTUM_PROVIDER_EOF'
-AGENTUM_REVIEW_BEGIN
-# Independent review
-
-AC-001 is satisfied by the bounded source change and successful verification evidence.
-
-Verdict: PASS
-AGENTUM_REVIEW_END
-AGENTUM_PROVIDER_EOF
+    printf '%s\n' \
+      'AGENTUM_REVIEW_BEGIN' \
+      '# Independent review' \
+      '' \
+      'AC-001 is satisfied by the bounded source change and successful verification evidence.' \
+      '' \
+      'Verdict: PASS' \
+      'AGENTUM_REVIEW_END' > "$staging"
     ;;
   *) exit 9 ;;
 esac

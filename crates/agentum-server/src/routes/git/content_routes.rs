@@ -66,10 +66,9 @@ pub(crate) async fn diff(
     // synthesises a diff against an empty baseline so the UI shows the
     // new content. `--no-index` exits 1 when a diff exists; we ignore
     // status and just read stdout.
-    let worktree_file = format!("{}/{}", cwd.trim_end_matches('/'), q.path);
     if body.is_empty()
         && !q.staged
-        && host_runtime::path_exists(&host, &worktree_file)
+        && host_runtime::path_exists_beneath(&host, &cwd, &q.path)
             .await
             .unwrap_or(false)
     {
@@ -134,8 +133,7 @@ pub(crate) async fn file(
         "worktree" => {
             // Read the on-disk file from the session's host; a missing file
             // (deleted in the worktree) is empty content, matching head/index.
-            let abs = format!("{}/{}", cwd.trim_end_matches('/'), q.path);
-            host_runtime::read_file_bytes(&host, &abs)
+            host_runtime::read_file_bytes_beneath(&host, &cwd, &q.path)
                 .await
                 .map_err(|e| ApiError::Internal(format!("read file: {e}")))?
                 .unwrap_or_default()

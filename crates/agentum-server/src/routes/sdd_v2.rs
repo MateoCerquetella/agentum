@@ -7941,6 +7941,7 @@ mod tests {
         crate::router(state)
     }
 
+    #[cfg(unix)]
     fn spec_dir_path(authoritative: &FsPath) -> PathBuf {
         std::fs::read_dir(authoritative.join(".agentum/specs"))
             .unwrap()

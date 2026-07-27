@@ -1,4 +1,5 @@
-import { lstat, readFile } from 'fs/promises'
+import { constants } from 'fs'
+import { lstat, open } from 'fs/promises'
 import * as path from 'path'
 import { isBinaryBuffer } from './binary-buffer'
 import { decodeGitCQuotedPath } from './git-cquoted-path'
@@ -14,7 +15,30 @@ export const MAX_UNTRACKED_LINE_COUNT_BYTES = 2 * 1024 * 1024
 const UNTRACKED_STATS_CACHE_MAX_ENTRIES = 2048
 const NEWLINE_BYTE = 0x0a
 
+type NoFollowOpenConstants = {
+  O_RDONLY: number
+  O_NOFOLLOW?: number
+  O_NONBLOCK?: number
+}
+
+// Node does not expose O_NOFOLLOW/O_NONBLOCK on every supported platform. Do
+// not silently degrade to a following or potentially blocking open when either
+// guarantee is unavailable; line counts are optional UI metadata.
+export function untrackedNoFollowReadFlags(
+  fsConstants: NoFollowOpenConstants = constants
+): number | null {
+  if (
+    typeof fsConstants.O_NOFOLLOW !== 'number' ||
+    typeof fsConstants.O_NONBLOCK !== 'number'
+  ) {
+    return null
+  }
+  return fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK
+}
+
 type CachedUntrackedStats = {
+  dev: number
+  ino: number
   size: number
   mtimeMs: number
   ctimeMs: number
@@ -22,6 +46,29 @@ type CachedUntrackedStats = {
 }
 
 const untrackedStatsCache = new Map<string, CachedUntrackedStats>()
+
+type FileSnapshot = {
+  dev: number
+  ino: number
+  size: number
+  mtimeMs: number
+  ctimeMs: number
+  isFile(): boolean
+  isSymbolicLink(): boolean
+}
+
+function isSameFile(left: FileSnapshot, right: FileSnapshot): boolean {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
+function isSameSnapshot(left: FileSnapshot, right: FileSnapshot): boolean {
+  return (
+    isSameFile(left, right) &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  )
+}
 
 function parseNumstatCount(value: string): number | undefined {
   // git reports binary files as '-' in the numstat columns.
@@ -98,29 +145,75 @@ function parseNulDelimitedNumstat(stdout: string): Map<string, GitLineStats> {
 }
 
 async function countFileAdditions(absolutePath: string): Promise<GitLineStats> {
+  const openFlags = untrackedNoFollowReadFlags()
+  if (openFlags === null) {
+    try {
+      const pathStat = await lstat(absolutePath)
+      return pathStat.isSymbolicLink()
+        ? rememberUntrackedStats(absolutePath, pathStat, { added: 1 })
+        : {}
+    } catch {
+      return {}
+    }
+  }
+
+  let handle: Awaited<ReturnType<typeof open>>
   try {
-    const fileStat = await lstat(absolutePath)
+    // Open the final path without following links, then bind every check and
+    // read to that descriptor. Opening before lstat means a later path swap
+    // cannot redirect the read; identity comparison only decides whether the
+    // already-open descriptor still represents the reported path.
+    handle = await open(absolutePath, openFlags)
+  } catch {
+    try {
+      const pathStat = await lstat(absolutePath)
+      return pathStat.isSymbolicLink()
+        ? rememberUntrackedStats(absolutePath, pathStat, { added: 1 })
+        : {}
+    } catch {
+      return {}
+    }
+  }
+
+  try {
+    const openedStat = await handle.stat()
+    if (!openedStat.isFile() || openedStat.size > MAX_UNTRACKED_LINE_COUNT_BYTES) {
+      return {}
+    }
+    const pathStat = await lstat(absolutePath)
+    if (pathStat.isSymbolicLink()) {
+      return rememberUntrackedStats(absolutePath, pathStat, { added: 1 })
+    }
+    if (!isSameFile(pathStat, openedStat)) {
+      return {}
+    }
     const cached = untrackedStatsCache.get(absolutePath)
     if (
       cached &&
-      cached.size === fileStat.size &&
-      cached.mtimeMs === fileStat.mtimeMs &&
-      cached.ctimeMs === fileStat.ctimeMs
+      cached.dev === openedStat.dev &&
+      cached.ino === openedStat.ino &&
+      cached.size === openedStat.size &&
+      cached.mtimeMs === openedStat.mtimeMs &&
+      cached.ctimeMs === openedStat.ctimeMs
     ) {
       return cached.stats
     }
-    if (fileStat.isSymbolicLink()) {
-      return rememberUntrackedStats(absolutePath, fileStat, { added: 1 })
+    const buffer = await handle.readFile()
+    const completedStat = await handle.stat()
+    const completedPathStat = await lstat(absolutePath)
+    if (
+      completedPathStat.isSymbolicLink() ||
+      !isSameSnapshot(openedStat, completedStat) ||
+      !isSameSnapshot(completedPathStat, completedStat) ||
+      buffer.length !== completedStat.size
+    ) {
+      return {}
     }
-    if (!fileStat.isFile() || fileStat.size > MAX_UNTRACKED_LINE_COUNT_BYTES) {
-      return rememberUntrackedStats(absolutePath, fileStat, {})
-    }
-    const buffer = await readFile(absolutePath)
     if (isBinaryBuffer(buffer)) {
-      return rememberUntrackedStats(absolutePath, fileStat, {})
+      return rememberUntrackedStats(absolutePath, completedStat, {})
     }
     if (buffer.length === 0) {
-      return rememberUntrackedStats(absolutePath, fileStat, { added: 0 })
+      return rememberUntrackedStats(absolutePath, completedStat, { added: 0 })
     }
     let newlineCount = 0
     for (let i = 0; i < buffer.length; i += 1) {
@@ -131,20 +224,24 @@ async function countFileAdditions(absolutePath: string): Promise<GitLineStats> {
     // A trailing newline marks the final line as complete; without one the last
     // partial line still counts as an added line (matching git's numstat).
     const endsWithNewline = buffer.at(-1) === NEWLINE_BYTE
-    return rememberUntrackedStats(absolutePath, fileStat, {
+    return rememberUntrackedStats(absolutePath, completedStat, {
       added: endsWithNewline ? newlineCount : newlineCount + 1
     })
   } catch {
     return {}
+  } finally {
+    await handle.close().catch(() => undefined)
   }
 }
 
 function rememberUntrackedStats(
   absolutePath: string,
-  fileStat: { size: number; mtimeMs: number; ctimeMs: number },
+  fileStat: FileSnapshot,
   stats: GitLineStats
 ): GitLineStats {
   untrackedStatsCache.set(absolutePath, {
+    dev: fileStat.dev,
+    ino: fileStat.ino,
     size: fileStat.size,
     mtimeMs: fileStat.mtimeMs,
     ctimeMs: fileStat.ctimeMs,

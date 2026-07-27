@@ -1584,7 +1584,7 @@ fn atomic_write_windows_in(
 /// `SetFileInformationByHandle` avoids converting either handle back into an
 /// ambient path, which would reintroduce a junction-swap race.
 #[cfg(windows)]
-fn rename_file_handle(
+pub(crate) fn rename_file_handle(
     file: &File,
     directory: &File,
     name: &Path,

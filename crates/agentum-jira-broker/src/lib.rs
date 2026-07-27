@@ -61,7 +61,11 @@ struct BrokerInner {
 impl Broker {
     pub fn new(config: BrokerConfig) -> Result<Self, StartupError> {
         let database = Database::open(&config.database_path)?;
-        let atlassian = AtlassianClient::new(
+        #[cfg(not(test))]
+        let atlassian =
+            AtlassianClient::new(config.client_id, config.client_secret, config.callback_url)?;
+        #[cfg(test)]
+        let atlassian = AtlassianClient::new_for_test(
             config.client_id,
             config.client_secret,
             config.callback_url,

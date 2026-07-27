@@ -56,8 +56,8 @@ fn restore_live_claude(blob: &str, oauth_account: &Value) -> Result<(), String> 
 
     // 2) macOS keychain (primary on macOS) — best-effort; a keychain failure
     //    shouldn't strand the file write we already made.
-    if let Err(e) = keychain_write_password(CLAUDE_KEYCHAIN_SERVICE, blob) {
-        eprintln!("[accounts] claude keychain restore failed ({e}); file credential still updated");
+    if keychain_write_password(CLAUDE_KEYCHAIN_SERVICE, blob).is_err() {
+        eprintln!("[accounts] claude keychain restore failed; file credential still updated");
     }
 
     // 3) patch ~/.claude.json oauthAccount so /status + usage show this account.
@@ -274,7 +274,7 @@ pub(super) fn claude_capture_account(
         Some(i) => accounts[i] = account,
         None => accounts.push(account),
     }
-    write_setting(conn, "claudeManagedAccounts", &Value::Array(accounts))?;
+    write_account_metadata(conn, "claudeManagedAccounts", accounts)?;
     set_active(
         conn,
         "activeClaudeManagedAccountId",
@@ -316,13 +316,16 @@ pub(super) fn claude_select(conn: &Connection, account_id: Option<&str>) -> Resu
 
 pub(super) fn claude_remove(conn: &Connection, account_id: &str) -> Result<Value, String> {
     let mut accounts = read_accounts_array(conn, "claudeManagedAccounts");
-    if let Some(i) = find_index_by(&accounts, "id", account_id) {
-        if let Some(path) = string_field(&accounts[i], "managedAuthPath") {
+    if let Some(account) = accounts
+        .iter()
+        .find(|account| string_field(account, "id") == Some(account_id))
+    {
+        if let Some(path) = string_field(account, "managedAuthPath") {
             let _ = std::fs::remove_file(path);
         }
-        accounts.remove(i);
     }
-    write_setting(conn, "claudeManagedAccounts", &Value::Array(accounts))?;
+    accounts.retain(|account| string_field(account, "id") != Some(account_id));
+    write_account_metadata(conn, "claudeManagedAccounts", accounts)?;
     if read_setting(conn, "activeClaudeManagedAccountId").as_str() == Some(account_id) {
         set_active(
             conn,
@@ -365,7 +368,7 @@ pub(super) fn claude_reauthenticate(conn: &Connection, account_id: &str) -> Resu
                 .unwrap_or(Value::Null),
         );
     }
-    write_setting(conn, "claudeManagedAccounts", &Value::Array(accounts))?;
+    write_account_metadata(conn, "claudeManagedAccounts", accounts)?;
     set_active(
         conn,
         "activeClaudeManagedAccountId",

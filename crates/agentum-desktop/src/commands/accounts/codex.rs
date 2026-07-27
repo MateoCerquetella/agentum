@@ -106,7 +106,10 @@ pub(super) fn codex_add(conn: &Connection) -> Result<Value, String> {
 
 /// Upsert the live Codex `blob` as a managed account keyed by email and make it
 /// active. Returns `(id, email)`. Mirrors `claude_capture_account`.
-fn codex_capture_account(conn: &Connection, blob: &str) -> Result<(String, String), String> {
+pub(super) fn codex_capture_account(
+    conn: &Connection,
+    blob: &str,
+) -> Result<(String, String), String> {
     let email = codex_email_from_blob(blob).unwrap_or_else(|| "Codex account".to_string());
     let provider_account_id = codex_account_id_from_blob(blob);
 
@@ -142,7 +145,7 @@ fn codex_capture_account(conn: &Connection, blob: &str) -> Result<(String, Strin
         Some(i) => accounts[i] = account,
         None => accounts.push(account),
     }
-    write_setting(conn, "codexManagedAccounts", &Value::Array(accounts))?;
+    write_account_metadata(conn, "codexManagedAccounts", accounts)?;
     set_active(
         conn,
         "activeCodexManagedAccountId",
@@ -228,13 +231,16 @@ pub(super) fn codex_select(conn: &Connection, account_id: Option<&str>) -> Resul
 
 pub(super) fn codex_remove(conn: &Connection, account_id: &str) -> Result<Value, String> {
     let mut accounts = read_accounts_array(conn, "codexManagedAccounts");
-    if let Some(i) = find_index_by(&accounts, "id", account_id) {
-        if let Some(path) = string_field(&accounts[i], "managedHomePath") {
+    if let Some(account) = accounts
+        .iter()
+        .find(|account| string_field(account, "id") == Some(account_id))
+    {
+        if let Some(path) = string_field(account, "managedHomePath") {
             let _ = std::fs::remove_file(path);
         }
-        accounts.remove(i);
     }
-    write_setting(conn, "codexManagedAccounts", &Value::Array(accounts))?;
+    accounts.retain(|account| string_field(account, "id") != Some(account_id));
+    write_account_metadata(conn, "codexManagedAccounts", accounts)?;
     if read_setting(conn, "activeCodexManagedAccountId").as_str() == Some(account_id) {
         set_active(
             conn,
@@ -267,7 +273,7 @@ pub(super) fn codex_reauthenticate(conn: &Connection, account_id: &str) -> Resul
                 .unwrap_or(Value::Null),
         );
     }
-    write_setting(conn, "codexManagedAccounts", &Value::Array(accounts))?;
+    write_account_metadata(conn, "codexManagedAccounts", accounts)?;
     set_active(
         conn,
         "activeCodexManagedAccountId",

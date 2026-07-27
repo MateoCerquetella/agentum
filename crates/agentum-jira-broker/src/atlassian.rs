@@ -6,9 +6,17 @@ use reqwest::{Client, Response, StatusCode, Url, redirect};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize as _;
 
-use crate::config::{AtlassianEndpoints, ClientSecret};
+#[cfg(test)]
+use crate::config::AtlassianEndpoints;
+use crate::config::ClientSecret;
 
 const MAX_UPSTREAM_RESPONSE: usize = 512 * 1024;
+const AUTHORIZATION_ENDPOINT: &str = "https://auth.atlassian.com/authorize";
+#[cfg(not(test))]
+const TOKEN_ENDPOINT: &str = "https://auth.atlassian.com/oauth/token";
+#[cfg(not(test))]
+const ACCESSIBLE_RESOURCES_ENDPOINT: &str =
+    "https://api.atlassian.com/oauth/token/accessible-resources";
 
 #[derive(Clone)]
 pub(crate) struct AtlassianClient {
@@ -16,6 +24,7 @@ pub(crate) struct AtlassianClient {
     client_id: Arc<str>,
     client_secret: Arc<ClientSecret>,
     callback_url: Url,
+    #[cfg(test)]
     endpoints: AtlassianEndpoints,
 }
 
@@ -24,7 +33,6 @@ impl AtlassianClient {
         client_id: String,
         client_secret: ClientSecret,
         callback_url: Url,
-        endpoints: AtlassianEndpoints,
     ) -> Result<Self, AtlassianError> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -38,12 +46,56 @@ impl AtlassianClient {
             client_id: Arc::from(client_id),
             client_secret: Arc::new(client_secret),
             callback_url,
-            endpoints,
+            #[cfg(test)]
+            endpoints: AtlassianEndpoints::default(),
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        client_id: String,
+        client_secret: ClientSecret,
+        callback_url: Url,
+        endpoints: AtlassianEndpoints,
+    ) -> Result<Self, AtlassianError> {
+        validate_test_endpoints(&endpoints)?;
+        let mut client = Self::new(client_id, client_secret, callback_url)?;
+        client.endpoints = endpoints;
+        Ok(client)
+    }
+
+    #[cfg(not(test))]
+    fn authorization_endpoint(&self) -> Url {
+        exact_atlassian_url(AUTHORIZATION_ENDPOINT)
+    }
+
+    #[cfg(test)]
+    fn authorization_endpoint(&self) -> Url {
+        self.endpoints.authorization.clone()
+    }
+
+    #[cfg(not(test))]
+    fn token_endpoint(&self) -> Url {
+        exact_atlassian_url(TOKEN_ENDPOINT)
+    }
+
+    #[cfg(test)]
+    fn token_endpoint(&self) -> Url {
+        self.endpoints.token.clone()
+    }
+
+    #[cfg(not(test))]
+    fn accessible_resources_endpoint(&self) -> Url {
+        exact_atlassian_url(ACCESSIBLE_RESOURCES_ENDPOINT)
+    }
+
+    #[cfg(test)]
+    fn accessible_resources_endpoint(&self) -> Url {
+        self.endpoints.accessible_resources.clone()
+    }
+
     pub(crate) fn authorization_url(&self, state: &str, scopes: &[&str]) -> Url {
-        let mut url = self.endpoints.authorization.clone();
+        let mut url = self.authorization_endpoint();
         url.query_pairs_mut()
             .append_pair("audience", "api.atlassian.com")
             .append_pair("client_id", &self.client_id)
@@ -82,7 +134,7 @@ impl AtlassianClient {
     ) -> Result<TokenGrant, AtlassianError> {
         let response = self
             .http
-            .post(self.endpoints.token.clone())
+            .post(self.token_endpoint())
             .header("Accept", "application/json")
             .json(request)
             .send()
@@ -118,7 +170,7 @@ impl AtlassianClient {
     ) -> Result<Vec<AtlassianResource>, AtlassianError> {
         let response = self
             .http
-            .get(self.endpoints.accessible_resources.clone())
+            .get(self.accessible_resources_endpoint())
             .bearer_auth(access_token)
             .header("Accept", "application/json")
             .send()
@@ -128,6 +180,103 @@ impl AtlassianClient {
             return Err(AtlassianError::Rejected);
         }
         limited_json(response).await
+    }
+}
+
+#[cfg(not(test))]
+fn exact_atlassian_url(raw: &'static str) -> Url {
+    let url = Url::parse(raw).expect("compiled Atlassian endpoint is valid");
+    debug_assert!(
+        (url.scheme() == "https")
+            && url.port_or_known_default() == Some(443)
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    );
+    url
+}
+
+#[cfg(test)]
+fn validate_test_endpoints(endpoints: &AtlassianEndpoints) -> Result<(), AtlassianError> {
+    if endpoints.authorization.as_str() != AUTHORIZATION_ENDPOINT
+        || !is_loopback_test_endpoint(&endpoints.token, "/oauth/token")
+        || !is_loopback_test_endpoint(&endpoints.accessible_resources, "/resources")
+        || endpoints.token.origin() != endpoints.accessible_resources.origin()
+    {
+        return Err(AtlassianError::Malformed);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn is_loopback_test_endpoint(url: &Url, expected_path: &str) -> bool {
+    url.scheme() == "http"
+        && url
+            .host_str()
+            .and_then(|host| {
+                host.trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+            })
+            .is_some_and(|address| address.is_loopback())
+        && url.port().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == expected_path
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    fn endpoints() -> AtlassianEndpoints {
+        AtlassianEndpoints {
+            authorization: Url::parse(AUTHORIZATION_ENDPOINT).unwrap(),
+            token: Url::parse("http://127.0.0.1:40123/oauth/token").unwrap(),
+            accessible_resources: Url::parse("http://127.0.0.1:40123/resources").unwrap(),
+        }
+    }
+
+    #[test]
+    fn accepts_only_same_origin_loopback_test_upstreams() {
+        assert!(validate_test_endpoints(&endpoints()).is_ok());
+
+        let mut value = endpoints();
+        value.token = Url::parse("http://[::1]:40123/oauth/token").unwrap();
+        value.accessible_resources = Url::parse("http://[::1]:40123/resources").unwrap();
+        assert!(validate_test_endpoints(&value).is_ok());
+    }
+
+    #[test]
+    fn rejects_non_loopback_or_malformed_test_upstreams() {
+        let hostile_values = [
+            "https://auth.atlassian.com.evil.example/oauth/token",
+            "http://example.com:40123/oauth/token",
+            "http://user@127.0.0.1:40123/oauth/token",
+            "http://127.0.0.1/oauth/token",
+            "http://127.0.0.1:40123/wrong",
+            "http://127.0.0.1:40123/oauth/token?redirect=evil",
+        ];
+        for hostile in hostile_values {
+            let mut value = endpoints();
+            value.token = Url::parse(hostile).unwrap();
+            assert!(
+                validate_test_endpoints(&value).is_err(),
+                "unexpectedly accepted {hostile}"
+            );
+        }
+
+        let mut split_origin = endpoints();
+        split_origin.accessible_resources = Url::parse("http://127.0.0.1:40124/resources").unwrap();
+        assert!(validate_test_endpoints(&split_origin).is_err());
+
+        let mut authorization = endpoints();
+        authorization.authorization =
+            Url::parse("https://auth.atlassian.com.evil.example/authorize").unwrap();
+        assert!(validate_test_endpoints(&authorization).is_err());
     }
 }
 

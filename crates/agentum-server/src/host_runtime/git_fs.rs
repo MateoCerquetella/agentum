@@ -236,6 +236,37 @@ pub async fn read_file_bytes(host: &Host, abs_path: &str) -> Result<Option<Vec<u
     }
 }
 
+/// Read one worktree-relative regular file without letting the relative path,
+/// or a symlink placed in the worktree, escape `root`. This is deliberately a
+/// separate API from [`read_file_bytes`]: the latter is the authenticated file
+/// editor's exact-path capability, while this function enforces repository
+/// containment for Git routes.
+pub async fn read_file_bytes_beneath(
+    host: &Host,
+    root: &str,
+    relative: &str,
+) -> Result<Option<Vec<u8>>> {
+    validate_beneath_relative(relative)?;
+    match &host.kind {
+        HostKind::Local => read_local_file_beneath(Path::new(root), Path::new(relative)),
+        HostKind::Ssh { .. } => {
+            let script = remote_beneath_script(root, relative, RemoteBeneathOperation::Read)?;
+            let out = ssh_output(host, &script, GIT_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            match out.status.code() {
+                Some(0) => Ok(Some(out.stdout)),
+                Some(66) => Ok(None),
+                Some(44 | 65 | 69) => Err(HostRuntimeError::UnsafePath(relative.into())),
+                status => Err(HostRuntimeError::NonZero {
+                    status,
+                    stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+                }),
+            }
+        }
+    }
+}
+
 /// Whether `abs_path` exists on `host` (`test -e` over SSH). Used by the
 /// diff route to decide whether an empty `git diff` means "untracked file"
 /// (so it can synthesise a diff) versus "no change".
@@ -249,6 +280,251 @@ pub async fn path_exists(host: &Host, abs_path: &str) -> Result<bool> {
                 .map_err(map_ssh_io)?;
             Ok(out.status.success())
         }
+    }
+}
+
+/// Test one worktree-relative entry without following a symlink outside the
+/// registered checkout. The final entry itself may be a symlink (Git models
+/// symlinks as entries), but no parent link is traversed.
+pub async fn path_exists_beneath(host: &Host, root: &str, relative: &str) -> Result<bool> {
+    validate_beneath_relative(relative)?;
+    match &host.kind {
+        HostKind::Local => path_exists_local_beneath(Path::new(root), Path::new(relative)),
+        HostKind::Ssh { .. } => {
+            let script = remote_beneath_script(root, relative, RemoteBeneathOperation::Exists)?;
+            let out = ssh_output(host, &script, SSH_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            match out.status.code() {
+                Some(0) => Ok(true),
+                Some(66) => Ok(false),
+                Some(44 | 65 | 69) => Err(HostRuntimeError::UnsafePath(relative.into())),
+                status => Err(HostRuntimeError::NonZero {
+                    status,
+                    stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+                }),
+            }
+        }
+    }
+}
+
+pub(crate) fn validate_beneath_relative(relative: &str) -> Result<()> {
+    let path = Path::new(relative);
+    if relative.is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(HostRuntimeError::UnsafePath(relative.into()));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RemoteBeneathOperation {
+    Read,
+    Exists,
+}
+
+/// Build the fixed remote operation used for repository-scoped file access.
+///
+/// POSIX shell cannot express `openat(O_NOFOLLOW)`. Instead, each parent is
+/// entered and then checked using its descriptor-backed working directory. A
+/// read opens the final file exactly once, verifies the resulting descriptor's
+/// procfs target is still beneath the pinned physical root, and reads that same
+/// descriptor. Hosts without `/proc/<pid>/fd` fail closed with exit 69. The
+/// existence operation uses one `ls -d`/`lstat`-style lookup of the final entry
+/// and therefore never dereferences it.
+pub(crate) fn remote_beneath_script(
+    root: &str,
+    relative: &str,
+    operation: RemoteBeneathOperation,
+) -> Result<String> {
+    validate_beneath_relative(relative)?;
+    let mut components = Path::new(relative).components().peekable();
+    let mut parents = Vec::new();
+    let leaf = loop {
+        let Some(std::path::Component::Normal(component)) = components.next() else {
+            return Err(HostRuntimeError::UnsafePath(relative.into()));
+        };
+        if components.peek().is_none() {
+            break component
+                .to_str()
+                .ok_or_else(|| HostRuntimeError::UnsafePath(relative.into()))?;
+        }
+        parents.push(
+            component
+                .to_str()
+                .ok_or_else(|| HostRuntimeError::UnsafePath(relative.into()))?,
+        );
+    };
+
+    let mut inner = format!(
+        "root=$(cd -- {} 2>/dev/null && pwd -P) || exit 44\ncd -- \"$root\" || exit 44\n",
+        q(root)?
+    );
+    for parent in parents {
+        inner.push_str(&format!(
+            "cd -- {} 2>/dev/null || exit 66\n\
+             physical=$(pwd -P) || exit 65\n\
+             if [ \"$root\" != / ]; then\n\
+               case \"$physical\" in \"$root\"|\"$root\"/*) ;; *) exit 65 ;; esac\n\
+             fi\n",
+            q(parent)?
+        ));
+    }
+    inner.push_str(&format!("leaf={}\n", q(leaf)?));
+    match operation {
+        RemoteBeneathOperation::Exists => {
+            // `-d` asks ls to inspect the directory entry itself. In
+            // particular, a final symlink is reported without following it.
+            inner.push_str("ls -d -- \"$leaf\" >/dev/null 2>&1 || exit 66\n");
+        }
+        RemoteBeneathOperation::Read => {
+            inner.push_str(
+                "exec 3< \"$leaf\" 2>/dev/null || exit 66\n\
+                 fd_path=/proc/$$/fd/3\n\
+                 resolved=$(readlink -- \"$fd_path\" 2>/dev/null) || exit 69\n\
+                 if [ \"$root\" != / ]; then\n\
+                   case \"$resolved\" in \"$root\"|\"$root\"/*) ;; *) exit 65 ;; esac\n\
+                 fi\n\
+                 [ -f \"$fd_path\" ] || exit 65\n\
+                 cat <&3\n",
+            );
+        }
+    }
+    Ok(format!("sh -c {}", q(&inner)?))
+}
+
+#[cfg(unix)]
+pub(crate) fn open_local_directory_chain_nofollow(path: &Path) -> Result<std::fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    if !path.is_absolute() {
+        return Err(HostRuntimeError::UnsafePath(path.display().to_string()));
+    }
+    let mut directory = std::fs::File::open(Path::new(std::path::MAIN_SEPARATOR_STR))?;
+    for component in path.components() {
+        let std::path::Component::Normal(component) = component else {
+            if matches!(component, std::path::Component::RootDir) {
+                continue;
+            }
+            return Err(HostRuntimeError::UnsafePath(path.display().to_string()));
+        };
+        let component = CString::new(component.as_encoded_bytes())
+            .map_err(|_| HostRuntimeError::UnsafePath(path.display().to_string()))?;
+        // SAFETY: both arguments remain live. O_DIRECTORY and O_NOFOLLOW
+        // reject every linked/non-directory ancestor in the pinned chain.
+        let raw = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                component.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if raw < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: openat returned a fresh owned descriptor.
+        directory = unsafe { std::fs::File::from_raw_fd(raw) };
+    }
+    Ok(directory)
+}
+
+#[cfg(windows)]
+pub(crate) fn open_local_directory_chain_nofollow(path: &Path) -> Result<std::fs::File> {
+    use cap_primitives::ambient_authority;
+
+    if !path.is_absolute() {
+        return Err(HostRuntimeError::UnsafePath(path.display().to_string()));
+    }
+    let mut anchor = std::path::PathBuf::new();
+    let mut children = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(prefix) if children.is_empty() => {
+                anchor.push(prefix.as_os_str());
+            }
+            std::path::Component::RootDir if children.is_empty() => {
+                anchor.push(Path::new(std::path::MAIN_SEPARATOR_STR));
+            }
+            std::path::Component::Normal(child) => children.push(child.to_owned()),
+            _ => return Err(HostRuntimeError::UnsafePath(path.display().to_string())),
+        }
+    }
+    let mut directory = cap_primitives::fs::open_ambient_dir(&anchor, ambient_authority())?;
+    for child in children {
+        directory = cap_primitives::fs::open_dir_nofollow(&directory, Path::new(&child))?;
+    }
+    Ok(directory)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn open_local_directory_chain_nofollow(path: &Path) -> Result<std::fs::File> {
+    Err(HostRuntimeError::UnsafePath(format!(
+        "safe local file access is unsupported: {}",
+        path.display()
+    )))
+}
+
+fn open_local_parent_beneath(
+    root: &Path,
+    relative: &Path,
+) -> Result<(std::fs::File, std::ffi::OsString)> {
+    let canonical_root = root.canonicalize()?;
+    let mut directory = open_local_directory_chain_nofollow(&canonical_root)?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(HostRuntimeError::UnsafePath(relative.display().to_string()));
+        };
+        if components.peek().is_none() {
+            return Ok((directory, name.to_owned()));
+        }
+        directory = cap_primitives::fs::open_dir_nofollow(&directory, Path::new(name))?;
+    }
+    Err(HostRuntimeError::UnsafePath(relative.display().to_string()))
+}
+
+fn read_local_file_beneath(root: &Path, relative: &Path) -> Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+
+    let (directory, name) = open_local_parent_beneath(root, relative)?;
+    let mut options = cap_primitives::fs::OpenOptions::new();
+    options
+        .read(true)
+        ._cap_fs_ext_follow(cap_primitives::fs::FollowSymlinks::No);
+    let mut file = match cap_primitives::fs::open(&directory, Path::new(&name), &options) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !file.metadata()?.is_file() {
+        return Err(HostRuntimeError::UnsafePath(relative.display().to_string()));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
+fn path_exists_local_beneath(root: &Path, relative: &Path) -> Result<bool> {
+    let (directory, name) = match open_local_parent_beneath(root, relative) {
+        Ok(value) => value,
+        Err(HostRuntimeError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    match cap_primitives::fs::stat(
+        &directory,
+        Path::new(&name),
+        cap_primitives::fs::FollowSymlinks::No,
+    ) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
     }
 }
 

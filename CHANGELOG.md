@@ -50,6 +50,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **External and filesystem boundaries fail closed.** Jira and public-forge
+  requests stay on exact credential-bound HTTPS origins with redirects
+  disabled; repository reads, repository creation, and the headless credential
+  vault use no-follow, descriptor-bound operations across supported platforms.
 - **Desktop installation now matches the published asset contract.** The
   installer accepts only strict stable-version metadata, resolves exact
   OS/architecture assets, requires a unique SHA-256 entry, and verifies macOS

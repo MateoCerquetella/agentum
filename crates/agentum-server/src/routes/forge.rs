@@ -29,6 +29,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -66,25 +67,110 @@ impl ForgeKind {
     }
 }
 
-/// A parsed `origin` remote: which forge, its REST base URL, the project
-/// identifier (`owner/repo`), and the host (for self-hosted instances).
+/// A parsed public-cloud `origin` remote. Forge credentials are currently
+/// global per provider, so only the exact public origins they are issued for
+/// are accepted. Self-hosted support requires origin-bound credentials and is
+/// deliberately fail-closed until that storage model exists.
 #[derive(Debug, Clone)]
 pub(crate) struct Remote {
     kind: ForgeKind,
-    /// REST API base, no trailing slash. github.com → `https://api.github.com`;
-    /// GHE → `https://HOST/api/v3`; GitLab (cloud or self-hosted) →
-    /// `https://HOST/api/v4`.
-    pub(crate) api_base: String,
     /// `owner/repo` (GitHub) or full project path incl. nested groups (GitLab).
     pub(crate) project: String,
 }
 
 impl Remote {
-    /// True when this remote points at GitHub (github.com or GHE). The `kind`
+    /// True when this remote points at GitHub. The `kind`
     /// field is private; Chat's slug resolver (spec 019) only needs "is this a
     /// GitHub target?", so expose that question rather than the whole enum.
     pub(crate) fn is_github(&self) -> bool {
         matches!(self.kind, ForgeKind::Github)
+    }
+
+    /// Build a project-scoped API URL from a compile-time trusted origin.
+    /// Every dynamic value is added as a URL path segment or query pair, so it
+    /// can never affect the destination scheme, authority, or port.
+    fn project_api_url(
+        &self,
+        resource: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<TrustedForgeUrl, ApiError> {
+        let base = match self.kind {
+            ForgeKind::Github => "https://api.github.com/",
+            ForgeKind::Gitlab => "https://gitlab.com/api/v4/",
+        };
+        let mut url = Url::parse(base).expect("compiled forge API origin is valid");
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|()| ApiError::Internal("invalid forge API base".into()))?;
+            segments.pop_if_empty();
+            match self.kind {
+                ForgeKind::Github => {
+                    let mut project = self.project.split('/');
+                    let owner = project.next().ok_or_else(|| {
+                        ApiError::BadRequest("invalid GitHub project path".into())
+                    })?;
+                    let repository = project.next().ok_or_else(|| {
+                        ApiError::BadRequest("invalid GitHub project path".into())
+                    })?;
+                    if project.next().is_some() {
+                        return Err(ApiError::BadRequest("invalid GitHub project path".into()));
+                    }
+                    segments.push("repos").push(owner).push(repository);
+                }
+                ForgeKind::Gitlab => {
+                    // Pushing the complete project as one segment produces the
+                    // `%2F` encoding required by GitLab's project API.
+                    segments.push("projects").push(&self.project);
+                }
+            }
+            for segment in resource {
+                segments.push(segment);
+            }
+        }
+        if !query.is_empty() {
+            let mut pairs = url.query_pairs_mut();
+            for (key, value) in query {
+                pairs.append_pair(key, value);
+            }
+        }
+        TrustedForgeUrl::new(self.kind, url)
+    }
+}
+
+/// A URL whose scheme, host, port, and API path prefix have been checked
+/// against the selected forge. Its constructor is private so request helpers
+/// cannot accidentally accept route input or an arbitrary string.
+#[derive(Debug, Clone)]
+struct TrustedForgeUrl(Url);
+
+impl TrustedForgeUrl {
+    fn new(kind: ForgeKind, url: Url) -> Result<Self, ApiError> {
+        let trusted = url.scheme() == "https"
+            && url.port_or_known_default() == Some(443)
+            && url.port().is_none()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+            && match kind {
+                ForgeKind::Github => {
+                    url.host_str() == Some("api.github.com") && url.path().starts_with("/repos/")
+                }
+                ForgeKind::Gitlab => {
+                    url.host_str() == Some("gitlab.com")
+                        && url.path().starts_with("/api/v4/projects/")
+                }
+            };
+        if !trusted {
+            return Err(ApiError::Internal(
+                "refused untrusted forge request target".into(),
+            ));
+        }
+        Ok(Self(url))
+    }
+
+    fn as_url(&self) -> &Url {
+        &self.0
     }
 }
 
@@ -95,55 +181,82 @@ impl Remote {
 /// path (`group/sub/repo`); the `.git` suffix and a trailing slash are
 /// stripped.
 pub(crate) fn parse_remote_url(url: &str) -> Option<(String, String)> {
-    let url = url.trim();
-    let (host, path) = if let Some(rest) = url.strip_prefix("git@") {
+    let raw = url.trim();
+    let (host, path) = if let Some(rest) = raw.strip_prefix("git@") {
         // scp-like: git@host:owner/repo
         let (host, path) = rest.split_once(':')?;
-        (host.to_string(), path.to_string())
-    } else if let Some(rest) = url
-        .strip_prefix("ssh://")
-        .or_else(|| url.strip_prefix("https://"))
-        .or_else(|| url.strip_prefix("http://"))
-    {
-        // ssh://git@host/owner/repo  or  https://host/owner/repo
-        let rest = rest.strip_prefix("git@").unwrap_or(rest);
-        let (host, path) = rest.split_once('/')?;
-        // A userinfo/port like host:22 — keep just the host for matching.
-        let host = host.split('@').next_back().unwrap_or(host);
+        if !valid_remote_host(host) {
+            return None;
+        }
         (host.to_string(), path.to_string())
     } else {
-        return None;
+        let parsed = Url::parse(raw).ok()?;
+        if !matches!(parsed.scheme(), "https" | "ssh")
+            || parsed.password().is_some()
+            || parsed.port().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || (parsed.scheme() == "https" && !parsed.username().is_empty())
+            || (parsed.scheme() == "ssh"
+                && !parsed.username().is_empty()
+                && parsed.username() != "git")
+        {
+            return None;
+        }
+        let host = parsed.host_str()?;
+        if !valid_remote_host(host) {
+            return None;
+        }
+        (
+            host.to_string(),
+            parsed.path().trim_start_matches('/').to_string(),
+        )
     };
 
     let project = path
         .trim_end_matches('/')
         .trim_end_matches(".git")
         .to_string();
-    if project.is_empty() || !project.contains('/') {
+    if !valid_project_path(&project) {
         return None;
     }
     Some((host, project))
 }
 
+fn valid_remote_host(host: &str) -> bool {
+    !host.is_empty()
+        && !host.contains(['@', ':', '/', '\\'])
+        && !host.chars().any(char::is_whitespace)
+}
+
+fn valid_project_path(project: &str) -> bool {
+    let mut count = 0usize;
+    for segment in project.split('/') {
+        if segment.is_empty()
+            || matches!(segment, "." | "..")
+            || segment.contains(['\\', '%', '?', '#'])
+            || segment.chars().any(char::is_control)
+        {
+            return false;
+        }
+        count += 1;
+    }
+    count >= 2
+}
+
 pub(crate) fn classify_remote(host: &str, project: String) -> Option<Remote> {
     let h = host.to_ascii_lowercase();
-    if h == "github.com" || h == "www.github.com" {
+    if !valid_remote_host(host) || !valid_project_path(&project) {
+        return None;
+    }
+    if (h == "github.com" || h == "www.github.com") && project.split('/').count() == 2 {
         Some(Remote {
             kind: ForgeKind::Github,
-            api_base: "https://api.github.com".into(),
             project,
         })
-    } else if h == "gitlab.com" || h.contains("gitlab") {
+    } else if h == "gitlab.com" {
         Some(Remote {
             kind: ForgeKind::Gitlab,
-            api_base: format!("https://{host}/api/v4"),
-            project,
-        })
-    } else if h.contains("github") {
-        // GitHub Enterprise.
-        Some(Remote {
-            kind: ForgeKind::Github,
-            api_base: format!("https://{host}/api/v3"),
             project,
         })
     } else {
@@ -190,7 +303,7 @@ async fn remote_for(state: &AppState, id: Uuid) -> Result<(PathBuf, Remote), Api
         .await
         .ok_or_else(|| ApiError::BadRequest("no git 'origin' remote for this session".into()))?;
     let (host, project) = parse_remote_url(&url)
-        .ok_or_else(|| ApiError::BadRequest(format!("could not parse origin remote: {url}")))?;
+        .ok_or_else(|| ApiError::BadRequest("could not parse origin remote".into()))?;
     let remote = classify_remote(&host, project)
         .ok_or_else(|| ApiError::BadRequest(format!("unsupported forge host: {host}")))?;
     Ok((cwd, remote))
@@ -242,9 +355,20 @@ pub(crate) fn token_for(kind: ForgeKind) -> Result<String, ApiError> {
 
 /// One reqwest GET to the forge, returning parsed JSON. Adds the right auth
 /// header per forge and a `User-Agent` (GitHub rejects requests without one).
-pub(crate) async fn forge_get(remote: &Remote, token: &str, url: &str) -> Result<Value, ApiError> {
-    let client = reqwest::Client::new();
-    let mut req = client.get(url).header("User-Agent", "agentum");
+fn forge_client() -> Result<reqwest::Client, ApiError> {
+    reqwest::Client::builder()
+        // Never forward forge credentials through an upstream redirect. Each
+        // request must terminate at the exact origin bound by TrustedForgeUrl.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| ApiError::Internal("could not initialize forge client".into()))
+}
+
+async fn forge_get(remote: &Remote, token: &str, url: &TrustedForgeUrl) -> Result<Value, ApiError> {
+    let client = forge_client()?;
+    let mut req = client
+        .get(url.as_url().clone())
+        .header("User-Agent", "agentum");
     req = match remote.kind {
         ForgeKind::Github => req
             .header("Authorization", format!("Bearer {token}"))
@@ -260,15 +384,10 @@ pub(crate) async fn forge_get(remote: &Remote, token: &str, url: &str) -> Result
     if !status.is_success() {
         return Err(ApiError::Custom(
             axum::http::StatusCode::BAD_GATEWAY,
-            json!({ "error": format!("forge returned {status}"), "detail": body }),
+            json!({ "error": format!("forge returned {status}") }),
         ));
     }
     serde_json::from_str(&body).map_err(|e| ApiError::Internal(format!("forge JSON parse: {e}")))
-}
-
-/// URL-encode a GitLab project path (`owner/repo` → `owner%2Frepo`).
-fn gl_project(project: &str) -> String {
-    project.replace('/', "%2F")
 }
 
 fn str_field(v: &Value, key: &str) -> Option<String> {
@@ -341,10 +460,8 @@ async fn prs(
 
     let rows = match remote.kind {
         ForgeKind::Github => {
-            let url = format!(
-                "{}/repos/{}/pulls?state=open&per_page=50",
-                remote.api_base, remote.project
-            );
+            let url =
+                remote.project_api_url(&["pulls"], &[("state", "open"), ("per_page", "50")])?;
             let arr = forge_get(&remote, &token, &url).await?;
             arr.as_array()
                 .map(|items| {
@@ -364,11 +481,10 @@ async fn prs(
                 .unwrap_or_default()
         }
         ForgeKind::Gitlab => {
-            let url = format!(
-                "{}/projects/{}/merge_requests?state=opened&per_page=50",
-                remote.api_base,
-                gl_project(&remote.project)
-            );
+            let url = remote.project_api_url(
+                &["merge_requests"],
+                &[("state", "opened"), ("per_page", "50")],
+            )?;
             let arr = forge_get(&remote, &token, &url).await?;
             arr.as_array()
                 .map(|items| {
@@ -410,10 +526,8 @@ async fn issues(
 
     let rows = match remote.kind {
         ForgeKind::Github => {
-            let url = format!(
-                "{}/repos/{}/issues?state=open&per_page=50",
-                remote.api_base, remote.project
-            );
+            let url =
+                remote.project_api_url(&["issues"], &[("state", "open"), ("per_page", "50")])?;
             let arr = forge_get(&remote, &token, &url).await?;
             arr.as_array()
                 .map(|items| {
@@ -435,11 +549,8 @@ async fn issues(
                 .unwrap_or_default()
         }
         ForgeKind::Gitlab => {
-            let url = format!(
-                "{}/projects/{}/issues?state=opened&per_page=50",
-                remote.api_base,
-                gl_project(&remote.project)
-            );
+            let url =
+                remote.project_api_url(&["issues"], &[("state", "opened"), ("per_page", "50")])?;
             let arr = forge_get(&remote, &token, &url).await?;
             arr.as_array()
                 .map(|items| {
@@ -493,10 +604,7 @@ async fn checks(
 
     let rows = match remote.kind {
         ForgeKind::Github => {
-            let url = format!(
-                "{}/repos/{}/commits/{}/check-runs",
-                remote.api_base, remote.project, git_ref
-            );
+            let url = remote.project_api_url(&["commits", &git_ref, "check-runs"], &[])?;
             let body = forge_get(&remote, &token, &url).await?;
             body.get("check_runs")
                 .and_then(|c| c.as_array())
@@ -526,12 +634,10 @@ async fn checks(
                 .unwrap_or_default()
         }
         ForgeKind::Gitlab => {
-            let url = format!(
-                "{}/projects/{}/pipelines?ref={}&per_page=20",
-                remote.api_base,
-                gl_project(&remote.project),
-                git_ref
-            );
+            let url = remote.project_api_url(
+                &["pipelines"],
+                &[("ref", git_ref.as_str()), ("per_page", "20")],
+            )?;
             let arr = forge_get(&remote, &token, &url).await?;
             arr.as_array()
                 .map(|items| {
@@ -589,19 +695,15 @@ async fn create_pr(
         .await
         .ok_or_else(|| ApiError::BadRequest("session is not on a named branch".into()))?;
 
-    let client = reqwest::Client::new();
+    let client = forge_client()?;
     let (url, payload, auth_header) = match remote.kind {
         ForgeKind::Github => (
-            format!("{}/repos/{}/pulls", remote.api_base, remote.project),
+            remote.project_api_url(&["pulls"], &[])?,
             json!({ "title": input.title, "head": head, "base": input.base, "body": input.body }),
             ("Authorization", format!("Bearer {token}")),
         ),
         ForgeKind::Gitlab => (
-            format!(
-                "{}/projects/{}/merge_requests",
-                remote.api_base,
-                gl_project(&remote.project)
-            ),
+            remote.project_api_url(&["merge_requests"], &[])?,
             json!({
                 "source_branch": head,
                 "target_branch": input.base,
@@ -613,7 +715,7 @@ async fn create_pr(
     };
 
     let mut req = client
-        .post(&url)
+        .post(url.as_url().clone())
         .header("User-Agent", "agentum")
         .header(auth_header.0, auth_header.1)
         .json(&payload);
@@ -629,7 +731,7 @@ async fn create_pr(
     if !status.is_success() {
         return Err(ApiError::Custom(
             axum::http::StatusCode::BAD_GATEWAY,
-            json!({ "error": format!("forge returned {status}"), "detail": text }),
+            json!({ "error": format!("forge returned {status}") }),
         ));
     }
     let created: Value = serde_json::from_str(&text).unwrap_or(json!({}));
@@ -708,10 +810,15 @@ mod tests {
     fn rejects_non_repo_urls() {
         assert!(parse_remote_url("https://github.com/owner").is_none());
         assert!(parse_remote_url("not a url").is_none());
+        assert!(parse_remote_url("http://github.com/owner/repo").is_none());
+        assert!(parse_remote_url("https://github.com:444/owner/repo").is_none());
+        assert!(parse_remote_url("https://github.com@evil.example/owner/repo").is_none());
+        assert!(parse_remote_url("ssh://root@github.com/owner/repo").is_none());
+        assert!(parse_remote_url("git@github.com@evil.example:owner/repo").is_none());
     }
 
     #[test]
-    fn classifies_hosts() {
+    fn classifies_only_exact_public_hosts() {
         assert_eq!(
             classify_remote("github.com", "o/r".into()).unwrap().kind,
             ForgeKind::Github
@@ -720,16 +827,57 @@ mod tests {
             classify_remote("gitlab.com", "o/r".into()).unwrap().kind,
             ForgeKind::Gitlab
         );
-        // Self-hosted GitLab → api/v4 on the host.
-        let ghe = classify_remote("git.example.com", "o/r".into());
-        assert!(ghe.is_none(), "unknown host should not classify");
-        let gl = classify_remote("gitlab.internal.corp", "o/r".into()).unwrap();
-        assert_eq!(gl.kind, ForgeKind::Gitlab);
-        assert_eq!(gl.api_base, "https://gitlab.internal.corp/api/v4");
+        for hostile in [
+            "github.evil",
+            "evilgithub.com",
+            "github.com.evil.example",
+            "gitlab.internal.corp",
+            "gitlab.com.evil.example",
+            "evilgitlab.com",
+        ] {
+            assert!(
+                classify_remote(hostile, "o/r".into()).is_none(),
+                "unexpected classification for {hostile}"
+            );
+        }
     }
 
     #[test]
-    fn gitlab_project_is_url_encoded() {
-        assert_eq!(gl_project("group/sub/repo"), "group%2Fsub%2Frepo");
+    fn api_urls_keep_dynamic_values_out_of_the_authority() {
+        let github = classify_remote("github.com", "owner/repo".into()).unwrap();
+        let github_url = github
+            .project_api_url(
+                &["commits", "feature/x?redirect=https://evil", "check-runs"],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(github_url.as_url().scheme(), "https");
+        assert_eq!(github_url.as_url().host_str(), Some("api.github.com"));
+        assert_eq!(
+            github_url.as_url().path(),
+            "/repos/owner/repo/commits/feature%2Fx%3Fredirect=https:%2F%2Fevil/check-runs"
+        );
+
+        let gitlab = classify_remote("gitlab.com", "group/sub/repo".into()).unwrap();
+        let gitlab_url = gitlab
+            .project_api_url(&["pipelines"], &[("ref", "feature/x&owned=true")])
+            .unwrap();
+        assert_eq!(gitlab_url.as_url().scheme(), "https");
+        assert_eq!(gitlab_url.as_url().host_str(), Some("gitlab.com"));
+        assert_eq!(
+            gitlab_url.as_url().path(),
+            "/api/v4/projects/group%2Fsub%2Frepo/pipelines"
+        );
+        assert_eq!(
+            gitlab_url.as_url().query(),
+            Some("ref=feature%2Fx%26owned%3Dtrue")
+        );
+    }
+
+    #[test]
+    fn github_rejects_nested_or_ambiguous_project_paths() {
+        assert!(classify_remote("github.com", "group/sub/repo".into()).is_none());
+        assert!(classify_remote("github.com", "owner/../repo".into()).is_none());
+        assert!(classify_remote("github.com", "owner/%2e%2e".into()).is_none());
     }
 }
