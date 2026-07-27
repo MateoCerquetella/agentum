@@ -56,10 +56,10 @@ curl \
   "https://github.com/BurntSushi/ripgrep/releases/download/${version}/${archive}"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  actual_sha256="$(sha256sum "$archive_path")"
+  actual_sha256="$(sha256sum < "$archive_path")"
   actual_sha256="${actual_sha256%% *}"
 elif command -v shasum >/dev/null 2>&1; then
-  actual_sha256="$(shasum --algorithm 256 "$archive_path")"
+  actual_sha256="$(shasum --algorithm 256 < "$archive_path")"
   actual_sha256="${actual_sha256%% *}"
 else
   echo "sha256sum or shasum is required" >&2
