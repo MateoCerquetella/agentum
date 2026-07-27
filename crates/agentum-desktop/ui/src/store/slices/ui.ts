@@ -229,7 +229,17 @@ export function normalizePersistedGroupBy(persisted: unknown): UISlice['groupBy'
   }
   return VALID_WORKTREE_GROUPS.has(persisted as UISlice['groupBy'])
     ? (persisted as UISlice['groupBy'])
-    : 'operational'
+    : 'host'
+}
+
+/** Move profiles that still carry the previous operational default onto the
+ * approved hierarchy exactly once. Other explicit grouping choices survive. */
+export function migrateSidebarHierarchyGroupBy(
+  persisted: unknown,
+  alreadyMigrated: boolean | undefined
+): UISlice['groupBy'] {
+  const normalized = normalizePersistedGroupBy(persisted)
+  return alreadyMigrated === true || normalized !== 'operational' ? normalized : 'host'
 }
 
 const VALID_TASK_PRESETS = new Set<TaskViewPresetId>([
@@ -1360,7 +1370,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       return { setupScriptPromptDismissedRepoIds: next }
     }),
 
-  groupBy: 'operational',
+  groupBy: 'host',
   // Why: group keys are mode-specific (e.g. repo id vs PR status), so
   // collapsed state from one mode is meaningless in another. Clearing
   // also prevents unbounded accumulation of stale keys across mode switches.
@@ -1594,6 +1604,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
       //     flag — not here — so that users who intentionally select the new
       //     'recent' sort keep it across restarts.
       const sortBy = ui.sortBy
+      const groupBy = migrateSidebarHierarchyGroupBy(
+        ui.groupBy,
+        ui._sidebarHierarchyMigrated
+      )
       const migratedStatusBarItems = migrateStatusBarItems(ui.statusBarItems)
       const portsAdded = ui._portsStatusBarDefaultAdded || migratedStatusBarItems.includes('ports')
       const withPorts = portsAdded
@@ -1610,6 +1624,11 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
             _portsStatusBarDefaultAdded: true,
             _ioStatusBarDefaultAdded: true
           })
+          .catch(console.error)
+      }
+      if (ui._sidebarHierarchyMigrated !== true && typeof window !== 'undefined') {
+        api.ui
+          .set({ groupBy, _sidebarHierarchyMigrated: true })
           .catch(console.error)
       }
       // Why: force-write cleared customPets and DEFAULT_PET_ID back to disk so
@@ -1640,9 +1659,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         ),
         rightSidebarOpen: typeof ui.rightSidebarOpen === 'boolean' ? ui.rightSidebarOpen : true,
         rightSidebarTab: normalizePersistedRightSidebarTab(ui.rightSidebarTab),
-        // Operational is the default only for absent/corrupt state. Explicit
-        // choices remain stable across upgrades; legacy parent means host.
-        groupBy: normalizePersistedGroupBy(ui.groupBy),
+        groupBy,
         sortBy,
         // Why: Active-only was retired. Force the old persisted flag off so an
         // old profile cannot invisibly keep narrowing the workspace list.

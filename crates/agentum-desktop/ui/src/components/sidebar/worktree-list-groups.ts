@@ -973,7 +973,8 @@ export function groupRowsByHost(
   repoRows: Row[],
   hostForKey: (hostKey: string) => SidebarHost,
   collapsedGroups: Set<string>,
-  hostOrder?: readonly string[]
+  hostOrder?: readonly string[],
+  includedHostKeys?: readonly string[]
 ): Row[] {
   const result: Row[] = []
   const pinnedBlock: Row[] = []
@@ -1015,21 +1016,43 @@ export function groupRowsByHost(
     }
     byHost.get(block.hostKey)!.push(block)
   }
+  // The hierarchy prototype includes configured hosts even when they currently
+  // have no visible project rows. Keep that behavior in the live tree so an
+  // offline host remains reconnectable and a newly-added host does not vanish
+  // until its first project is attached. When supplied, this list also acts as
+  // the host-level search result set.
+  if (includedHostKeys) {
+    for (const hostKey of includedHostKeys) {
+      if (!byHost.has(hostKey)) {
+        byHost.set(hostKey, [])
+        order.push(hostKey)
+      }
+    }
+    for (const hostKey of [...order]) {
+      if (!includedHostKeys.includes(hostKey)) {
+        byHost.delete(hostKey)
+      }
+    }
+  }
   // Local first, then the persisted SSH order (stale ids dropped, newly-added
   // hosts appended). Empty `hostOrder` reproduces the prior local-first sort.
   const orderedHostKeys = applyPersistedHostOrder(order, hostOrder ?? [])
 
   result.push(...pinnedBlock)
   for (const hostKey of orderedHostKeys) {
-    const hostBlocks = byHost.get(hostKey)!
+    const hostBlocks = byHost.get(hostKey)
+    if (!hostBlocks) continue
+    const host = hostForKey(hostKey)
     const headerKey = getHostHeaderKey(hostKey)
     result.push({
       type: 'host-header',
       key: headerKey,
-      host: hostForKey(hostKey),
+      host,
       count: hostBlocks.reduce((sum, block) => sum + block.headerCount, 0)
     })
-    if (!collapsedGroups.has(headerKey)) {
+    // Match the approved study: disconnected hosts stay visible as a compact
+    // reconnect row, while their stale project/workspace body remains hidden.
+    if (!collapsedGroups.has(headerKey) && host.status !== 'down') {
       for (const block of hostBlocks) {
         result.push(...block.rows)
       }
@@ -1047,6 +1070,12 @@ export function getGroupKeysForWorktree(
   settings?: AppState['settings'],
   projectGroups: readonly ProjectGroup[] = []
 ): string[] {
+  if (groupBy === 'host') {
+    return [
+      getHostHeaderKey(hostKeyForRepo(repoMap.get(worktree.repoId))),
+      `repo:${worktree.repoId}`
+    ]
+  }
   const groupKey = getGroupKeyForWorktree(
     groupBy,
     worktree,

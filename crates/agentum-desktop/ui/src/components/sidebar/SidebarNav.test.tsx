@@ -89,6 +89,7 @@ describe('navIconClass', () => {
 describe('SidebarNav', () => {
   beforeEach(() => {
     sidebarState.activeView = 'activity'
+    sidebarState.groupBy = 'repository'
     activityState.unreadCount = 3
   })
 
@@ -122,6 +123,11 @@ describe('SidebarNav', () => {
     expect(missionControl).not.toBeNull()
     missionControl?.props.onClick()
     expect(sidebarState.openActivityPage).toHaveBeenCalledOnce()
+  })
+
+  it('lets the persistent hierarchy search replace the duplicate nav search row', () => {
+    sidebarState.groupBy = 'host'
+    expect(renderToStaticMarkup(<SidebarNav />)).not.toContain('Search worktrees and browser tabs')
   })
 
   it('does not retain a Chat item or selected state when Chat is opened elsewhere', () => {

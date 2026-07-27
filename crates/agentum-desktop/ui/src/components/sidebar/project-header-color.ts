@@ -21,7 +21,10 @@ export function resolveProjectGroupHeaderColor(args: {
 }): string | undefined {
   // Why: pinned headers can appear while grouped by repo, but only repo:* headers
   // represent a repo folder whose user-authored badge color should be shown.
-  if (args.groupBy !== 'repo' || !args.headerKey.startsWith(PROJECT_GROUP_HEADER_KEY_PREFIX)) {
+  if (
+    (args.groupBy !== 'repo' && args.groupBy !== 'host') ||
+    !args.headerKey.startsWith(PROJECT_GROUP_HEADER_KEY_PREFIX)
+  ) {
     return undefined
   }
   return resolveRepoHeaderColor(args.badgeColor)

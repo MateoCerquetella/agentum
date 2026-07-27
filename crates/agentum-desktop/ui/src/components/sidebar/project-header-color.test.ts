@@ -39,6 +39,16 @@ describe('resolveProjectGroupHeaderColor', () => {
     ).toBe(REPO_COLORS[5])
   })
 
+  it('keeps the repo color in the host-first hierarchy', () => {
+    expect(
+      resolveProjectGroupHeaderColor({
+        groupBy: 'host',
+        headerKey: 'repo:repo-1',
+        badgeColor: REPO_COLORS[2]
+      })
+    ).toBe(REPO_COLORS[2])
+  })
+
   it.each([
     ['missing', undefined],
     ['null', null],

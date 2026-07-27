@@ -84,6 +84,8 @@ type WorktreeCardProps = {
   ) => void
   onCardDragEnd?: (event: React.DragEvent<HTMLDivElement>) => void
   nativeDragEnabled?: boolean
+  /** Compact live hierarchy presentation from the approved sidebar study. */
+  hierarchyMode?: boolean
   operationalMeta?: {
     presentation: 'operational-rich' | 'operational-settled'
     projectName?: string
@@ -119,6 +121,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
   onCardDragStart,
   onCardDragEnd,
   nativeDragEnabled = true,
+  hierarchyMode = false,
   hideRepoBadge,
   contentIndent = 0,
   flushSurface = false,
@@ -136,9 +139,11 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const fetchIssue = useAppStore((s) => s.fetchIssue)
   const fetchLinearIssue = useAppStore((s) => s.fetchLinearIssue)
   const cardProps = useAppStore((s) => s.worktreeCardProperties)
-  const compactCards = operationalMeta
-    ? operationalMeta.presentation === 'operational-settled'
-    : settings?.experimentalCompactWorktreeCards === true
+  const compactCards =
+    hierarchyMode ||
+    (operationalMeta
+      ? operationalMeta.presentation === 'operational-settled'
+      : settings?.experimentalCompactWorktreeCards === true)
   const handleEditIssue = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation()
@@ -643,7 +648,10 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const cardBody = (
     <div
       className={cn(
-        'group relative flex items-start gap-1.5 px-1.5 pt-1.5 pb-1 cursor-pointer transition-[background-color,border-color,opacity,box-shadow] duration-200 outline-none select-none',
+        'group relative flex items-start cursor-pointer transition-[background-color,border-color,opacity,box-shadow] duration-200 outline-none select-none',
+        hierarchyMode
+          ? 'min-h-7 gap-1.5 rounded-md px-1.5 py-1'
+          : 'gap-1.5 px-1.5 pt-1.5 pb-1',
         flushSurface ? 'ml-1 w-[calc(100%-0.25rem)]' : 'ml-1',
         isMultiSelected ? 'rounded-sm' : 'rounded-lg',
         isActiveSurface
@@ -719,7 +727,12 @@ const WorktreeCard = React.memo(function WorktreeCard({
       ) : null}
 
       {/* Content area */}
-      <div className="flex-1 min-w-0 overflow-hidden flex flex-col gap-1.5">
+      <div
+        className={cn(
+          'flex-1 min-w-0 overflow-hidden flex flex-col',
+          hierarchyMode ? 'gap-0.5' : 'gap-1.5'
+        )}
+      >
         {operationalMeta?.presentation === 'operational-rich' ? (
           <div className="flex min-w-0 items-center justify-between gap-2 px-0.5 text-[10px] leading-none">
             <span className="truncate font-medium text-muted-foreground">
@@ -774,7 +787,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
               displayName={worktree.displayName}
               disabled={isDeleting}
               showUnreadEmphasis={showUnreadEmphasis}
-              className="text-[12px]"
+              className={hierarchyMode ? 'text-[11px]' : 'text-[12px]'}
               editingClassName="flex-1"
               titleWrapper={titleDetailsWrapper}
               onEditingChange={setTitleRenaming}
@@ -952,11 +965,17 @@ const WorktreeCard = React.memo(function WorktreeCard({
              follow the title, counterbalance the card stack gap so both rows
              read as one compact header group. */}
         {operationalMeta == null &&
-          showDetailedCardProperties &&
-          cardProps.includes('inline-agents') && (
+          ((hierarchyMode && isActiveSurface) ||
+            (showDetailedCardProperties && cardProps.includes('inline-agents'))) && (
             <WorktreeCardAgents
               worktreeId={worktree.id}
-              className={hasMetaRow || remoteBranchConflict ? 'mt-0' : '-mt-1'}
+              className={
+                hierarchyMode
+                  ? 'mt-0 max-h-24 overflow-y-auto rounded-md border border-sidebar-border/70 bg-background/35 p-0.5'
+                  : hasMetaRow || remoteBranchConflict
+                    ? 'mt-0'
+                    : '-mt-1'
+              }
             />
           )}
 

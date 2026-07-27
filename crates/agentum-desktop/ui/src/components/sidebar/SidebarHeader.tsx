@@ -7,13 +7,14 @@ import SidebarWorkspaceOptionsMenu from './SidebarWorkspaceOptionsMenu'
 import WorkspaceKanbanDrawer from './WorkspaceKanbanDrawer'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { OperationalSidebarControls } from './OperationalSidebarControls'
+import { HierarchySidebarControls } from './HierarchySidebarControls'
 
 const SidebarHeader = React.memo(function SidebarHeader({
-  operationalQuery,
-  onOperationalQueryChange
+  workspaceQuery,
+  onWorkspaceQueryChange
 }: {
-  operationalQuery: string
-  onOperationalQueryChange: (query: string) => void
+  workspaceQuery: string
+  onWorkspaceQueryChange: (query: string) => void
 }) {
   const newWorktreeShortcutLabel = useShortcutLabel('workspace.create')
   const [workspaceBoardOpen, setWorkspaceBoardOpen] = useState(false)
@@ -99,10 +100,29 @@ const SidebarHeader = React.memo(function SidebarHeader({
 
   return (
     <>
-      {groupBy === 'operational' ? (
+      {groupBy === 'host' ? (
+        <HierarchySidebarControls
+          query={workspaceQuery}
+          onQueryChange={onWorkspaceQueryChange}
+          onOptionsMenuOpenChange={setWorkspaceBoardMenuOpen}
+          boardControl={
+            <Button
+              variant={workspaceBoardOpen ? 'secondary' : 'ghost'}
+              size="icon-xs"
+              className="text-muted-foreground"
+              aria-label="Workspace board"
+              aria-pressed={workspaceBoardOpen}
+              data-workspace-board-trigger=""
+              onClick={handleWorkspaceBoardToggle}
+            >
+              <Kanban className="size-3.5" strokeWidth={2.25} />
+            </Button>
+          }
+        />
+      ) : groupBy === 'operational' ? (
         <OperationalSidebarControls
-          query={operationalQuery}
-          onQueryChange={onOperationalQueryChange}
+          query={workspaceQuery}
+          onQueryChange={onWorkspaceQueryChange}
           boardControl={
             <Button
               variant={workspaceBoardOpen ? 'secondary' : 'ghost'}

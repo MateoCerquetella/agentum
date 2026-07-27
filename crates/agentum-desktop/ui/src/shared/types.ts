@@ -2523,6 +2523,8 @@ export type PersistedUIState = {
   rightSidebarTab: RightSidebarTab
   rightSidebarWidth: number
   groupBy: 'operational' | 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'host'
+  /** One-shot rollout marker for the live host → project → workspace sidebar. */
+  _sidebarHierarchyMigrated?: boolean
   sortBy: 'name' | 'smart' | 'recent' | 'repo' | 'manual'
   /** Deprecated; the Active only filter is retired and ignored on hydration. */
   showActiveOnly: boolean

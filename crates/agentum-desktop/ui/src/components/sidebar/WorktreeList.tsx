@@ -220,6 +220,7 @@ import {
 } from './worktree-agent-row-selectors'
 import { useNow } from '@/components/dashboard/useNow'
 import { runWorktreeBatchDelete } from './delete-worktree-flow'
+import { matchesSidebarHierarchySearch } from './sidebar-hierarchy-search'
 
 export {
   getScrollTopToRevealBounds,
@@ -429,7 +430,7 @@ const PROJECT_GROUP_HEADER_INDENT = 10
 // Why: in host-first grouping the host header is the top-level parent, so every
 // row beneath it (repo sub-headers + their worktrees) shifts right to make the
 // host → project → worktree nesting read clearly.
-const HOST_CHILD_INDENT = 40
+const HOST_CHILD_INDENT = 24
 const SIDEBAR_POINTER_DRAG_THRESHOLD_PX = 4
 
 type VirtualizedWorktreeViewportProps = {
@@ -596,6 +597,32 @@ function SectionMetricsBadge({
           </TooltipContent>
         </Tooltip>
       ) : null}
+    </span>
+  )
+}
+
+function HierarchyStateTotals({
+  count,
+  runningCount
+}: {
+  count: number
+  runningCount: number
+}): React.JSX.Element {
+  const working = Math.min(count, runningCount)
+  const idle = Math.max(0, count - working)
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1.5 pr-0.5 text-[8.5px] tabular-nums text-muted-foreground"
+      aria-label={`${working} working, ${idle} idle`}
+    >
+      <span className="inline-flex items-center gap-1">
+        <span className="size-1.5 rounded-full bg-emerald-500" />
+        {working}
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="size-1.5 rounded-full bg-muted-foreground/45" />
+        {idle}
+      </span>
     </span>
   )
 }
@@ -999,6 +1026,29 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   const prVisibleRefreshGeneration = useAppStore((s) => s.prVisibleRefreshGeneration)
   const settings = useAppStore((s) => s.settings)
 
+  const hierarchyActivityByHostKey = useMemo(() => {
+    const repoIdsByHostKey = new Map<string, Set<string>>()
+    for (const worktree of worktrees) {
+      const hostKey = hostKeyForRepo(repoMap.get(worktree.repoId))
+      const repoIds = repoIdsByHostKey.get(hostKey) ?? new Set<string>()
+      repoIds.add(worktree.repoId)
+      repoIdsByHostKey.set(hostKey, repoIds)
+    }
+
+    const result = new Map<string, WorktreeSectionActivitySummary>()
+    for (const [hostKey, repoIds] of repoIdsByHostKey) {
+      let runningCount = 0
+      let unreadCount = 0
+      for (const repoId of repoIds) {
+        const summary = sectionActivityByGroupKey.get(`repo:${repoId}`)
+        runningCount += summary?.runningCount ?? 0
+        unreadCount += summary?.unreadCount ?? 0
+      }
+      result.set(hostKey, { runningCount, unreadCount })
+    }
+    return result
+  }, [repoMap, sectionActivityByGroupKey, worktrees])
+
   useEffect(
     () =>
       installWorktreeVisibleRefreshVisibilityListener(() => {
@@ -1169,7 +1219,10 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   )
   const firstHeaderIndexRef = useRef(firstHeaderIndex)
   firstHeaderIndexRef.current = firstHeaderIndex
-  const stickyHeaderIndexes = useMemo(() => getStickyHeaderIndexes(renderRows), [renderRows])
+  const stickyHeaderIndexes = useMemo(
+    () => (groupBy === 'host' ? [] : getStickyHeaderIndexes(renderRows)),
+    [groupBy, renderRows]
+  )
   const stickyHeaderIndexesRef = useRef(stickyHeaderIndexes)
   stickyHeaderIndexesRef.current = stickyHeaderIndexes
   const activeStickyHeaderIndexRef = useRef<number | null>(null)
@@ -1321,7 +1374,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
       [stickyHeaderIndexes]
     ),
     overscan: 10,
-    gap: 6,
+    gap: groupBy === 'host' ? 2 : 6,
     // Why: the active sticky group header is rendered inside the virtual list,
     // so TanStack's scroll math needs the same top inset as the exact DOM reveal.
     scrollPaddingStart: WORKTREE_SIDEBAR_REVEAL_TOP_INSET,
@@ -2932,6 +2985,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
             if (row.type === 'host-header') {
               const hostConnectionId =
                 row.host.kind === 'ssh' ? row.host.connectionId : undefined
+              const hostActivity = hierarchyActivityByHostKey.get(row.host.key)
               return (
                 <div
                   key={vItem.key}
@@ -2952,7 +3006,12 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   <HostGroupHeader
                     host={row.host}
                     count={row.count}
-                    collapsed={collapsedGroups.has(row.key)}
+                    runningCount={
+                      showSectionStatus
+                        ? Math.min(row.count, hostActivity?.runningCount ?? 0)
+                        : undefined
+                    }
+                    collapsed={collapsedGroups.has(row.key) || row.host.status === 'down'}
                     onToggle={() => toggleGroupWithScrollAnchor(row.key)}
                     onOpenTmuxSessions={() =>
                       setTmuxModalHost({
@@ -2996,7 +3055,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                 index: vItem.index,
                 firstHeaderIndex
               })
-              const isRepoHeader = groupBy === 'repo' && row.repo !== undefined
+              const isRepoHeader =
+                (groupBy === 'repo' || groupBy === 'host') && row.repo !== undefined
               const isProjectGroupHeader = groupBy === 'repo' && row.projectGroup !== undefined
               const projectIdForHeader = isRepoHeader ? row.repo!.id : undefined
               const isProjectSelected =
@@ -3064,6 +3124,9 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                     className={cn(
                       'group flex h-7 w-full items-center gap-1.5 pr-1 text-left text-sidebar-foreground transition-all',
                       'cursor-pointer',
+                      groupBy === 'host' &&
+                        row.repo &&
+                        'rounded-md text-muted-foreground hover:bg-sidebar-foreground/[0.035]',
                       // Hub-open indicator: the project currently shown as the
                       // hub view reads as active, mirroring worktree cards.
                       row.repo !== undefined &&
@@ -3180,6 +3243,25 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                       />
                     ) : null}
 
+                    {groupBy === 'host' && row.repo ? (
+                      <button
+                        type="button"
+                        aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${row.label}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          toggleGroupWithScrollAnchor(row.key)
+                        }}
+                        className="grid size-[18px] shrink-0 place-items-center text-muted-foreground"
+                      >
+                        <ChevronDown
+                          className={cn(
+                            'size-3.5 transition-transform',
+                            isCollapsed && '-rotate-90'
+                          )}
+                        />
+                      </button>
+                    ) : null}
+
                     {row.icon ? (
                       <div
                         onPointerDown={
@@ -3214,18 +3296,30 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
 
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 items-center gap-1.5">
-                        <div className="min-w-0 truncate text-[13px] font-semibold leading-none">
+                        <div
+                          className={cn(
+                            'min-w-0 truncate font-semibold leading-none',
+                            groupBy === 'host' ? 'text-[11.5px] text-foreground/90' : 'text-[13px]'
+                          )}
+                        >
                           {row.label}
                         </div>
-                        <SectionMetricsBadge
-                          count={row.count}
-                          summary={sectionActivity}
-                          showStatus={showSectionStatus}
-                        />
+                        {groupBy === 'host' && row.repo ? (
+                          <HierarchyStateTotals
+                            count={row.count}
+                            runningCount={showSectionStatus ? sectionActivity.runningCount : 0}
+                          />
+                        ) : (
+                          <SectionMetricsBadge
+                            count={row.count}
+                            summary={sectionActivity}
+                            showStatus={showSectionStatus}
+                          />
+                        )}
                       </div>
                     </div>
 
-                    <div
+                    {groupBy !== 'host' ? <div
                       role={row.repo ? 'button' : undefined}
                       aria-label={
                         row.repo
@@ -3250,7 +3344,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                           isCollapsed && '-rotate-90'
                         )}
                       />
-                    </div>
+                    </div> : null}
 
                     {isProjectGroupHeader && !row.repo && row.projectGroup?.id ? (
                       <DropdownMenu modal={false}>
@@ -3469,6 +3563,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                         revealHighlightTone={revealHighlightTone}
                         selectedWorktrees={selectedWorktrees}
                         nativeDragEnabled={false}
+                        hierarchyMode={groupBy === 'host'}
                         contentIndent={nested ? 0 : paddingLeft}
                         flushSurface={!nested}
                         onSelectionGesture={onSelectionGesture}
@@ -3595,7 +3690,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                               {child.worktree.comment}
                             </div>
                           ) : null}
-                          {showInlineAgentCards ? (
+                          {showInlineAgentCards && (groupBy !== 'host' || isActive) ? (
                             // Why: nested lineage children use this lightweight
                             // renderer instead of WorktreeCard, so their inline
                             // agent rows must be mounted here explicitly.
@@ -3796,7 +3891,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                 }
               >
                 {renderWorktreeRow(row, false)}
-                {row.worktree.id === activeWorktreeId ? (
+                {row.worktree.id === activeWorktreeId && groupBy !== 'host' ? (
                   <SessionActivityCard worktreeId={row.worktree.id} />
                 ) : null}
               </div>
@@ -3838,7 +3933,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
 type WorktreeListProps = {
   scrollOffsetRef: React.MutableRefObject<number>
   scrollAnchorRef: React.MutableRefObject<VirtualizedScrollAnchor>
-  operationalQuery: string
+  workspaceQuery: string
   settledExpanded: boolean
   onSettledExpandedChange: (expanded: boolean) => void
 }
@@ -3851,7 +3946,7 @@ export function installWorktreeVisibleRefreshVisibilityListener(onChange: () => 
 const WorktreeList = React.memo(function WorktreeList({
   scrollOffsetRef,
   scrollAnchorRef,
-  operationalQuery,
+  workspaceQuery,
   settledExpanded,
   onSettledExpandedChange
 }: WorktreeListProps) {
@@ -4484,6 +4579,79 @@ const WorktreeList = React.memo(function WorktreeList({
     [hostMetaByKey, hostsWithTmux, sshConnectionStates, sshTargetLabels]
   )
 
+  const hierarchy = useMemo(() => {
+    if (groupBy !== 'host') {
+      return { worktrees, hostKeys: undefined as string[] | undefined }
+    }
+
+    const allHostKeys = new Set<string>(['local'])
+    for (const hostKey of Object.keys(hostMetaByKey)) allHostKeys.add(hostKey)
+    for (const connectionId of sshTargetLabels.keys()) allHostKeys.add(`ssh:${connectionId}`)
+    for (const connectionId of sshConnectionStates.keys()) allHostKeys.add(`ssh:${connectionId}`)
+
+    const query = workspaceQuery.trim()
+    if (!query) {
+      return { worktrees, hostKeys: [...allHostKeys] }
+    }
+
+    const hostMatches = new Set<string>()
+    for (const hostKey of allHostKeys) {
+      const host = hostForKey(hostKey)
+      if (matchesSidebarHierarchySearch(query, [host.label, host.detail])) {
+        hostMatches.add(hostKey)
+      }
+    }
+
+    const matchedHostKeys = new Set(hostMatches)
+    const matchedWorktrees = worktrees.filter((worktree) => {
+      const repo = repoMap.get(worktree.repoId)
+      const hostKey = hostKeyForRepo(repo)
+      const host = hostForKey(hostKey)
+      if (hostMatches.has(hostKey)) {
+        matchedHostKeys.add(hostKey)
+        return true
+      }
+
+      const terminalTabs = sectionActivityTabsByWorktree[worktree.id] ?? []
+      const browserTabs = sectionActivityBrowserTabsByWorktree[worktree.id] ?? []
+      const runtimeTitles = terminalTabs.flatMap((tab) => [
+        tab.title,
+        tab.customTitle,
+        tab.generatedTitle,
+        tab.defaultTitle,
+        tab.launchAgent,
+        ...Object.values(sectionActivityRuntimePaneTitlesByTabId[tab.id] ?? {})
+      ])
+      const matches = matchesSidebarHierarchySearch(query, [
+        host.label,
+        host.detail,
+        repo?.displayName,
+        repo?.path,
+        worktree.displayName,
+        worktree.branch,
+        worktree.comment,
+        ...runtimeTitles,
+        ...browserTabs.flatMap((browser) => [browser.label, browser.title, browser.url])
+      ])
+      if (matches) matchedHostKeys.add(hostKey)
+      return matches
+    })
+
+    return { worktrees: matchedWorktrees, hostKeys: [...matchedHostKeys] }
+  }, [
+    groupBy,
+    hostForKey,
+    hostMetaByKey,
+    repoMap,
+    sectionActivityBrowserTabsByWorktree,
+    sectionActivityRuntimePaneTitlesByTabId,
+    sectionActivityTabsByWorktree,
+    sshConnectionStates,
+    sshTargetLabels,
+    workspaceQuery,
+    worktrees
+  ])
+
   const operationalFactsByWorktreeId = useMemo(() => {
     const current = useAppStore.getState()
     const now = Date.now()
@@ -4519,14 +4687,15 @@ const WorktreeList = React.memo(function WorktreeList({
         worktrees,
         repoMap,
         factsByWorktreeId: operationalFactsByWorktreeId,
-        query: operationalQuery,
+        query: workspaceQuery,
         settledExpanded,
         now: operationalNow
       })
     }
+    const rowsWorktrees = groupBy === 'host' ? hierarchy.worktrees : worktrees
     const built = buildRows(
       effectiveGroupBy,
-      worktrees,
+      rowsWorktrees,
       repoMap,
       prCache,
       effectiveCollapsedGroups,
@@ -4541,17 +4710,25 @@ const WorktreeList = React.memo(function WorktreeList({
       // mode so blocks are flat repo groups the host post-processor can bucket.
       groupBy === 'host' ? [] : projectGroups,
       placeholderRepoIds,
-      importedWorktreesByRepo
+      groupBy === 'host' && workspaceQuery.trim()
+        ? new Map()
+        : importedWorktreesByRepo
     )
     return groupBy === 'host'
-      ? groupRowsByHost(built, hostForKey, effectiveCollapsedGroups, hostOrder)
+      ? groupRowsByHost(
+          built,
+          hostForKey,
+          effectiveCollapsedGroups,
+          hostOrder,
+          hierarchy.hostKeys
+        )
       : built
   }, [
     effectiveGroupBy,
     groupBy,
     operationalFactsByWorktreeId,
     operationalNow,
-    operationalQuery,
+    workspaceQuery,
     settledExpanded,
     worktrees,
     repoMap,
@@ -4567,7 +4744,8 @@ const WorktreeList = React.memo(function WorktreeList({
     placeholderRepoIds,
     importedWorktreesByRepo,
     hostForKey,
-    hostOrder
+    hostOrder,
+    hierarchy
   ])
   // Why: header/mode changes can shift entire groups, so remount the
   // virtualizer for those broad structure changes. Do not key on rows.length:
@@ -4599,7 +4777,7 @@ const WorktreeList = React.memo(function WorktreeList({
   )
   const renderedProjects = useMemo(
     () =>
-      groupBy === 'repo'
+      groupBy === 'repo' || groupBy === 'host'
         ? rows
             .filter((row): row is GroupHeaderRow => row.type === 'header' && row.repo != null)
             .map((row) => row.repo!)
@@ -5207,6 +5385,8 @@ const WorktreeList = React.memo(function WorktreeList({
     worktrees.length === 0 &&
     placeholderRepoIds.size === 0 &&
     importedWorktreesByRepo.size === 0
+  const hierarchySearchHasNoMatches =
+    groupBy === 'host' && workspaceQuery.trim().length > 0 && rows.length === 0
   // Why: Project Group headers can render before workspace rows load, but when
   // active filters hide everything the Clear Filters empty state must win.
   if (rows.length === 0 || (groupBy !== 'operational' && filtersHideAllRows)) {
@@ -5217,7 +5397,9 @@ const WorktreeList = React.memo(function WorktreeList({
             <span>
               {defaultBranchHideIsOnlyFilter
                 ? 'The default-branch workspace is hidden'
-                : 'No workspaces found'}
+                : hierarchySearchHasNoMatches
+                  ? 'No matches'
+                  : 'No workspaces found'}
             </span>
             {hasFilters &&
               (defaultBranchHideIsOnlyFilter ? (

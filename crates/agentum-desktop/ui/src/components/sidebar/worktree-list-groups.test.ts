@@ -1232,6 +1232,13 @@ describe('project groups', () => {
   it('returns only the repo key for ungrouped repo reveals', () => {
     expect(getGroupKeysForWorktree('repo', worktree, repoMap, null)).toEqual(['repo:repo-1'])
   })
+
+  it('returns the host and project keys for hierarchy reveals', () => {
+    expect(getGroupKeysForWorktree('host', worktree, repoMap, null)).toEqual([
+      'host:local',
+      'repo:repo-1'
+    ])
+  })
 })
 
 describe('buildRows workspace lineage nesting', () => {
@@ -1507,6 +1514,30 @@ describe('groupRowsByHost', () => {
     expect(out.map((r) => r.type)).toEqual(['host-header'])
   })
 
+  it('keeps configured hosts visible when they have no project rows', () => {
+    const out = groupRowsByHost([], hostForKey, new Set(), [], ['local', 'ssh:empty'])
+
+    expect(out.map((row) => row.type)).toEqual(['host-header', 'host-header'])
+    expect(
+      out.map((row) => (row.type === 'host-header' ? [row.host.key, row.count] : null))
+    ).toEqual([
+      ['local', 0],
+      ['ssh:empty', 0]
+    ])
+  })
+
+  it('keeps an offline host row but hides its stale project body', () => {
+    const rows: Row[] = [repoHeader('remote', 'conn-1', 1), item('w1', 'conn-1')]
+    const out = groupRowsByHost(
+      rows,
+      (key) => ({ ...hostForKey(key), status: key === 'ssh:conn-1' ? 'down' : 'reachable' }),
+      new Set()
+    )
+
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ type: 'host-header', count: 1 })
+  })
+
   it('keeps a leading Pinned section above all hosts', () => {
     const rows: Row[] = [
       { type: 'header', key: PINNED_GROUP_KEY, label: 'Pinned', count: 1, tone: '' } as Row,
@@ -1571,8 +1602,9 @@ describe('WorktreeList header styles', () => {
     expect(source).toMatch(
       /isProjectSelected\s*&&\s*'rounded-md bg-sidebar-accent ring-1 ring-sidebar-ring\/35'/
     )
+    expect(source).toContain("'min-w-0 truncate font-semibold leading-none'")
     expect(source).toContain(
-      'min-w-0 truncate text-[13px] font-semibold leading-none'
+      "groupBy === 'host' ? 'text-[11.5px] text-foreground/90' : 'text-[13px]'"
     )
   })
 

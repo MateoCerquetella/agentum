@@ -47,6 +47,26 @@ describe('HostGroupHeader', () => {
     expect(markup).toContain('3')
   })
 
+  it('renders live working and idle totals for the hierarchy', () => {
+    const host: SidebarHost = {
+      key: 'local',
+      kind: 'local',
+      label: 'studio',
+      status: 'reachable'
+    }
+    const markup = renderToStaticMarkup(
+      React.createElement(HostGroupHeader, {
+        host,
+        count: 5,
+        runningCount: 2,
+        collapsed: false,
+        onToggle: () => {}
+      })
+    )
+
+    expect(markup).toContain('aria-label="2 working, 3 idle"')
+  })
+
   it('fires onToggle on click', () => {
     const onToggle = vi.fn()
     const host: SidebarHost = { key: 'local', kind: 'local', label: 'studio' }

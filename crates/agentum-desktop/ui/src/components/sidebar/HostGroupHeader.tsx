@@ -61,6 +61,7 @@ function hasRedactedIp(text: string): boolean {
 export function HostGroupHeader({
   host,
   count,
+  runningCount,
   collapsed,
   onToggle,
   onOpenTmuxSessions,
@@ -71,6 +72,9 @@ export function HostGroupHeader({
 }: {
   host: SidebarHost
   count: number
+  /** Live working workspaces on this host. When present, the hierarchy header
+   *  shows the approved working/idle pair instead of the legacy total pill. */
+  runningCount?: number
   collapsed: boolean
   onToggle: () => void
   /** Open the tmux sessions modal for this host. Always shown for SSH hosts;
@@ -94,6 +98,7 @@ export function HostGroupHeader({
   const isSshConnecting = host.kind === 'ssh' && status === 'connecting'
   const downTone =
     host.sshStatus === 'disconnected' ? 'text-muted-foreground' : 'text-red-400'
+  const idleCount = Math.max(0, count - (runningCount ?? 0))
 
   const handleReconnectClick = (e: React.MouseEvent): void => {
     // Reconnect must never toggle the section collapse. No local busy flag:
@@ -122,7 +127,7 @@ export function HostGroupHeader({
       // a one-line height clipped the two-line content and bled it onto the row
       // below. min-h keeps single-line hosts at 32px while letting SSH headers grow.
       className={cn(
-        'group flex min-h-8 w-full items-center gap-1.5 px-1 py-0.5 text-left',
+        'group flex min-h-9 w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-sidebar-foreground/[0.035]',
         // A draggable (SSH, 2+) host gets the grab cursor so hovering signals it
         // can be reordered; the local / single host stays a plain pointer.
         dragId ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
@@ -262,17 +267,36 @@ export function HostGroupHeader({
           </TooltipContent>
         </Tooltip>
       ) : null}
-      <span
-        className={cn(
-          'inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground',
-          // Push the count to the right edge only when the tmux button isn't
-          // there to claim `ml-auto` itself.
-          onOpenTmuxSessions ? 'ml-1' : 'ml-auto'
-        )}
-      >
-        <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
-        {count}
-      </span>
+      {runningCount !== undefined && status === 'reachable' ? (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 text-[9px] tabular-nums text-muted-foreground',
+            onOpenTmuxSessions ? 'ml-1' : 'ml-auto'
+          )}
+          aria-label={`${runningCount} working, ${idleCount} idle`}
+        >
+          <span className="inline-flex items-center gap-1">
+            <span className="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_0_2px_color-mix(in_srgb,#10b981_9%,transparent)]" />
+            {runningCount}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="size-1.5 rounded-full bg-muted-foreground/45" />
+            {idleCount}
+          </span>
+        </span>
+      ) : (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1 rounded-full bg-sidebar-accent px-1.5 py-0.5 text-[11px] text-muted-foreground',
+            // Push the count to the right edge only when the tmux button isn't
+            // there to claim `ml-auto` itself.
+            onOpenTmuxSessions ? 'ml-1' : 'ml-auto'
+          )}
+        >
+          <span className={cn('size-1.5 rounded-full', STATUS_DOT[status])} />
+          {count}
+        </span>
+      )}
     </div>
   )
 }
