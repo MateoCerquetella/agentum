@@ -4,6 +4,16 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.11] — 2026-07-27
+
+### Fixed
+
+- **The sidebar is compact and queue-focused again.** The live hierarchy study
+  has been removed in favor of the previous production sidebar layout.
+- **SSH host headers are quieter.** Remote rows no longer show a drag-grip icon,
+  and their secondary line now uses only a friendly OS name such as Linux or
+  macOS instead of repeating transport, hostname, and kernel-version details.
+
 ## [0.96.10] — 2026-07-27
 
 ### Added
