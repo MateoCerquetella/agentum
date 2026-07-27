@@ -54,7 +54,7 @@ fn write_codex_secret(id: &str, blob: &str) -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
-fn load_codex_secret(path: &str) -> Result<String, String> {
+pub(super) fn load_codex_secret(path: &str) -> Result<String, String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|_| "saved Codex credential is missing — re-add the account".to_string())?;
     let v: Value = serde_json::from_str(&raw).map_err(err)?;
