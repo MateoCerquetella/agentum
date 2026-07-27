@@ -1559,13 +1559,18 @@ mod tests {
         let openspec = repository.path().join("openspec");
         let original = repository.path().join("openspec-original");
         std::fs::rename(&openspec, &original).unwrap();
-        if symlink_dir(outside.path(), &openspec).is_err() {
+        let directory_link = symlink_dir(outside.path(), &openspec).is_ok();
+        if !directory_link {
             std::fs::write(&openspec, "unsafe replacement").unwrap();
         }
         assert!(
             import_openspec(repository.path(), "openspec/changes/add-session-refresh").is_err()
         );
-        std::fs::remove_file(&openspec).unwrap();
+        if directory_link {
+            std::fs::remove_dir(&openspec).unwrap();
+        } else {
+            std::fs::remove_file(&openspec).unwrap();
+        }
         std::fs::rename(&original, &openspec).unwrap();
     }
 
@@ -1582,6 +1587,7 @@ mod tests {
         let original = repository.path().join("openspec-original");
         let swapped = Cell::new(false);
         let swap_denied = Cell::new(false);
+        let directory_link = Cell::new(false);
         let result = import_openspec_with_hook(
             repository.path(),
             "openspec/changes/add-session-refresh",
@@ -1594,14 +1600,20 @@ mod tests {
                     return;
                 }
                 swapped.set(true);
-                if symlink_dir(outside.path(), &openspec).is_err() {
+                if symlink_dir(outside.path(), &openspec).is_ok() {
+                    directory_link.set(true);
+                } else {
                     std::fs::write(&openspec, "unsafe replacement").unwrap();
                 }
             },
         );
         assert!(swap_denied.get() || (swapped.get() && result.is_err()));
         if swapped.get() {
-            std::fs::remove_file(&openspec).unwrap();
+            if directory_link.get() {
+                std::fs::remove_dir(&openspec).unwrap();
+            } else {
+                std::fs::remove_file(&openspec).unwrap();
+            }
             std::fs::rename(&original, &openspec).unwrap();
         }
     }

@@ -1603,9 +1603,20 @@ pub(crate) fn rename_file_handle(
             "artifact name is empty or contains NUL",
         ));
     }
-    let header = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let byte_len = header
-        .checked_add(wide.len() * std::mem::size_of::<u16>())
+    let file_name_bytes = wide
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "artifact name is too long",
+            )
+        })?;
+    // Windows requires at least sizeof(FILE_RENAME_INFO) plus the complete
+    // variable filename. Using only offset_of(FileName) produced an undersized
+    // buffer and ERROR_INVALID_PARAMETER on real Windows runners.
+    let byte_len = std::mem::size_of::<FILE_RENAME_INFO>()
+        .checked_add(file_name_bytes)
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1615,12 +1626,24 @@ pub(crate) fn rename_file_handle(
     let word = std::mem::size_of::<usize>();
     let mut storage = vec![0usize; byte_len.div_ceil(word)];
     let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let file_name_length = u32::try_from(file_name_bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "artifact name is too long",
+        )
+    })?;
+    let buffer_length = u32::try_from(byte_len).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "artifact rename buffer is too large",
+        )
+    })?;
     // SAFETY: `storage` is pointer-aligned and sized for the fixed header plus
     // every UTF-16 code unit copied into its trailing filename buffer.
     unsafe {
         (*info).Anonymous.ReplaceIfExists = replace_existing;
         (*info).RootDirectory = directory.as_raw_handle();
-        (*info).FileNameLength = (wide.len() * std::mem::size_of::<u16>()) as u32;
+        (*info).FileNameLength = file_name_length;
         std::ptr::copy_nonoverlapping(
             wide.as_ptr(),
             std::ptr::addr_of_mut!((*info).FileName).cast::<u16>(),
@@ -1634,7 +1657,7 @@ pub(crate) fn rename_file_handle(
             file.as_raw_handle(),
             FileRenameInfo,
             info.cast(),
-            byte_len as u32,
+            buffer_length,
         )
     };
     if renamed == 0 {

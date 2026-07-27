@@ -4174,7 +4174,8 @@ mod tests {
         let openspec = worktree.path().join("openspec");
         let original = worktree.path().join("openspec-original");
         std::fs::rename(&openspec, &original).unwrap();
-        if symlink_dir(outside.path(), &openspec).is_err() {
+        let directory_link = symlink_dir(outside.path(), &openspec).is_ok();
+        if !directory_link {
             std::fs::write(&openspec, "unsafe replacement").unwrap();
         }
         assert!(publish_openspec_export(worktree.path(), &export_preview()).is_err());
@@ -4184,7 +4185,11 @@ mod tests {
                 .next()
                 .is_none()
         );
-        std::fs::remove_file(&openspec).unwrap();
+        if directory_link {
+            std::fs::remove_dir(&openspec).unwrap();
+        } else {
+            std::fs::remove_file(&openspec).unwrap();
+        }
         std::fs::rename(&original, &openspec).unwrap();
     }
 
@@ -4202,6 +4207,7 @@ mod tests {
         let original = worktree.path().join("openspec-original");
         let swapped = Cell::new(false);
         let swap_denied = Cell::new(false);
+        let directory_link = Cell::new(false);
 
         let result = publish_openspec_export_with_hook(worktree.path(), &export_preview(), || {
             if std::fs::rename(&openspec, &original).is_err() {
@@ -4211,7 +4217,9 @@ mod tests {
                 return;
             }
             swapped.set(true);
-            if symlink_dir(outside.path(), &openspec).is_err() {
+            if symlink_dir(outside.path(), &openspec).is_ok() {
+                directory_link.set(true);
+            } else {
                 std::fs::write(&openspec, "unsafe replacement").unwrap();
             }
         });
@@ -4232,7 +4240,11 @@ mod tests {
                         .to_string_lossy()
                         .starts_with(".agentum-export-"))
             );
-            std::fs::remove_file(&openspec).unwrap();
+            if directory_link.get() {
+                std::fs::remove_dir(&openspec).unwrap();
+            } else {
+                std::fs::remove_file(&openspec).unwrap();
+            }
             std::fs::rename(&original, &openspec).unwrap();
         }
     }
