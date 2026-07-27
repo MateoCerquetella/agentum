@@ -7444,7 +7444,7 @@ mod tests {
         for legacy_path in ["/api/sdd/playbooks", "/api/harness"] {
             let retired = app
                 .clone()
-                .oneshot(Request::get(legacy_path).body(Body::empty()).unwrap())
+                .oneshot(get_request(legacy_path))
                 .await
                 .unwrap();
             assert_eq!(retired.status(), StatusCode::NOT_FOUND, "{legacy_path}");
