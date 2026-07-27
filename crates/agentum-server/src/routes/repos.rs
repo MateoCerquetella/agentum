@@ -321,7 +321,6 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
         return Err(ApiError::BadRequest("kind must be git or folder".into()));
     }
     #[cfg(not(unix))]
-    #[cfg(unix)]
     if body.kind == "git" {
         return Err(ApiError::BadRequest(
             "secure descriptor-bound git initialization is unsupported on this operating system"
@@ -329,7 +328,7 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
         ));
     }
     validate_repository_child_name(&body.name)?;
-    let (target, directory_guard) =
+    let (target, _directory_guard) =
         match create_local_repository_directory(&body.parent_path, &body.name) {
             Ok(created) => created,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -340,8 +339,9 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
             }
             Err(error) => return Err(ApiError::BadRequest(error.to_string())),
         };
+    #[cfg(unix)]
     if body.kind == "git" {
-        let status = git_init_directory(&directory_guard)
+        let status = git_init_directory(&_directory_guard)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         if !status.success() {
