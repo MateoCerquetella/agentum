@@ -4,6 +4,24 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.96.10] — 2026-07-27
+
+### Added
+
+- **The sidebar now uses the live host hierarchy from the approved UI study.**
+  Real hosts, projects, workspaces, and active sessions render as a compact tree
+  with persistent cross-level search, working/idle totals, collapse controls,
+  and reconnect actions for unavailable SSH hosts.
+
+### Fixed
+
+- **Deleting a worktree no longer loses its registration when SSH is down.**
+  Agentum cleans safe local runtime state, keeps the remote workspace registered,
+  and asks the user to reconnect and retry instead of orphaning the checkout.
+- **Release workflows comply with the repository's hardened Actions policy.**
+  Every external action is pinned to an immutable commit and the allowlist is
+  restricted to those exact revisions.
+
 ## [0.96.9] — 2026-07-27
 
 ### Added
