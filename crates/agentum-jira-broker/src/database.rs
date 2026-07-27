@@ -25,6 +25,7 @@ impl Database {
         validate_database_location(path)?;
         let lock_path = lock_path(path)?;
         let instance_lock = secure_open(&lock_path)?;
+        validate_private_file(&instance_lock)?;
         acquire_instance_lock(&instance_lock)?;
         let database_file = secure_open(path)?;
         validate_private_file(&database_file)?;
@@ -230,16 +231,18 @@ impl Database {
 
 fn validate_database_location(path: &Path) -> Result<(), DatabaseError> {
     if !path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::CurDir | Component::Prefix(_)
-            )
-        })
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
     {
         return Err(DatabaseError::UnsafePath);
     }
     let parent = path.parent().ok_or(DatabaseError::UnsafePath)?;
+    validate_database_parent(parent)
+}
+
+#[cfg(not(windows))]
+fn validate_database_parent(parent: &Path) -> Result<(), DatabaseError> {
     let canonical = parent
         .canonicalize()
         .map_err(|_| DatabaseError::UnsafePath)?;
@@ -251,6 +254,42 @@ fn validate_database_location(path: &Path) -> Result<(), DatabaseError> {
         return Err(DatabaseError::UnsafePath);
     }
     validate_private_parent(&metadata)
+}
+
+#[cfg(windows)]
+fn validate_database_parent(parent: &Path) -> Result<(), DatabaseError> {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    // A Windows absolute path necessarily begins with a Prefix component (for
+    // example `C:` or a UNC share). Validate each component with no-follow
+    // metadata instead of rejecting every valid prefixed path or comparing the
+    // lexical path with Windows' `\\?\` canonical form.
+    let mut current = PathBuf::new();
+    for component in parent.components() {
+        match component {
+            Component::Prefix(prefix) if current.as_os_str().is_empty() => {
+                current.push(prefix.as_os_str());
+            }
+            Component::RootDir | Component::Normal(_) => {
+                current.push(component.as_os_str());
+                let metadata =
+                    std::fs::symlink_metadata(&current).map_err(|_| DatabaseError::UnsafePath)?;
+                if !metadata.is_dir()
+                    || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                {
+                    return Err(DatabaseError::UnsafePath);
+                }
+            }
+            Component::Prefix(_) | Component::ParentDir | Component::CurDir => {
+                return Err(DatabaseError::UnsafePath);
+            }
+        }
+    }
+    if current != parent {
+        return Err(DatabaseError::UnsafePath);
+    }
+    Ok(())
 }
 
 fn lock_path(path: &Path) -> Result<PathBuf, DatabaseError> {
@@ -275,6 +314,13 @@ fn secure_open(path: &Path) -> Result<File, DatabaseError> {
         options
             .mode(0o600)
             .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     options.open(path).map_err(|_| DatabaseError::UnsafePath)
 }
@@ -305,8 +351,20 @@ fn validate_private_file(file: &File) -> Result<(), DatabaseError> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 fn validate_private_file(_file: &File) -> Result<(), DatabaseError> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_private_file(file: &File) -> Result<(), DatabaseError> {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let metadata = file.metadata().map_err(|_| DatabaseError::UnsafePath)?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(DatabaseError::UnsafePath);
+    }
     Ok(())
 }
 
