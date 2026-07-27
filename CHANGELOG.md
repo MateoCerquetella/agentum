@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.0] — 2026-07-27
+
+### Changed
+
+- **Dropped the "v2" suffix from SDD.** The specification workflow is now
+  simply Agentum SDD. All module paths, API routes (/api/sdd), file names,
+  and documentation use the clean `sdd` naming.
+
 ## [0.97.0] — 2026-07-27
 
 ### Added
