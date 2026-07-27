@@ -1,7 +1,6 @@
 import type React from 'react'
 import {
   ChevronDown,
-  GripVertical,
   Loader2,
   Monitor,
   Server,
@@ -129,15 +128,6 @@ export function HostGroupHeader({
         isDragging && 'opacity-60'
       )}
     >
-      {/* The recognised drag-handle affordance (spec 383 AC1): a grip that fades
-          in on hover for reorderable hosts. The whole header is the drag target
-          (bigger hit area); this just makes the capability discoverable. */}
-      {dragId ? (
-        <GripVertical
-          className="-mr-0.5 size-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground"
-          aria-hidden
-        />
-      ) : null}
       <ChevronDown
         className={cn(
           'size-3.5 shrink-0 text-muted-foreground transition-transform',
