@@ -8,11 +8,7 @@ import type {
   Worktree,
   WorktreeCardProperty
 } from '../../../../shared/types'
-import {
-  createUISlice,
-  migrateSidebarHierarchyGroupBy,
-  normalizePersistedGroupBy
-} from './ui'
+import { createUISlice, normalizePersistedGroupBy } from './ui'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createSettingsSearchState } from './settings-search-state'
 import type { AppState } from '../types'
@@ -465,11 +461,11 @@ describe('createUISlice agent send target mode', () => {
 })
 
 describe('createUISlice hydratePersistedUI', () => {
-  it('defaults fresh and absent grouping to the host hierarchy without overwriting explicit choices', () => {
-    expect(getDefaultUIState().groupBy).toBe('host')
-    expect(createUIStore().getState().groupBy).toBe('host')
-    expect(normalizePersistedGroupBy(undefined)).toBe('host')
-    expect(normalizePersistedGroupBy('corrupt')).toBe('host')
+  it('defaults fresh and absent grouping to operational without overwriting explicit choices', () => {
+    expect(getDefaultUIState().groupBy).toBe('operational')
+    expect(createUIStore().getState().groupBy).toBe('operational')
+    expect(normalizePersistedGroupBy(undefined)).toBe('operational')
+    expect(normalizePersistedGroupBy('corrupt')).toBe('operational')
     expect(normalizePersistedGroupBy('parent')).toBe('host')
     for (const explicit of [
       'operational',
@@ -481,12 +477,6 @@ describe('createUISlice hydratePersistedUI', () => {
     ] as const) {
       expect(normalizePersistedGroupBy(explicit)).toBe(explicit)
     }
-  })
-
-  it('moves the previous Queue default to hierarchy once and then preserves it', () => {
-    expect(migrateSidebarHierarchyGroupBy('operational', undefined)).toBe('host')
-    expect(migrateSidebarHierarchyGroupBy('operational', true)).toBe('operational')
-    expect(migrateSidebarHierarchyGroupBy('repo', undefined)).toBe('repo')
   })
 
   it('defaults persisted right sidebar visibility to open', () => {

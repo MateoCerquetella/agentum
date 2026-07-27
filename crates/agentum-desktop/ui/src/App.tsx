@@ -1201,10 +1201,7 @@ function App(): React.JSX.Element {
         e.preventDefault()
         notifyTerminalCapture('worktree.palette')
         const store = useAppStore.getState()
-        if (
-          store.sidebarOpen &&
-          (store.groupBy === 'operational' || store.groupBy === 'host')
-        ) {
+        if (store.sidebarOpen && store.groupBy === 'operational') {
           requestOperationalSidebarSearchFocus()
           return
         }

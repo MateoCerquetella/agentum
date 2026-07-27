@@ -45,12 +45,12 @@ function Sidebar({
   const sshConnectedGeneration = useAppStore((s) => s.sshConnectedGeneration)
   const groupBy = useAppStore((s) => s.groupBy)
   const filterRepoIds = useAppStore((s) => s.filterRepoIds)
-  const [workspaceQuery, setWorkspaceQuery] = useState('')
+  const [operationalQuery, setOperationalQuery] = useState('')
   const [settledExpanded, setSettledExpanded] = useState(false)
 
   useEffect(() => {
     setSettledExpanded(false)
-  }, [workspaceQuery, filterRepoIds])
+  }, [operationalQuery, filterRepoIds])
 
   useEffect(() => {
     if (groupBy !== 'operational') setSettledExpanded(false)
@@ -91,7 +91,6 @@ function Sidebar({
       <div
         ref={containerRef}
         data-native-file-drop-target={sidebarOpen ? nativeDropTarget : undefined}
-        data-sidebar-hierarchy={groupBy === 'host' ? '' : undefined}
         className="relative min-h-0 flex-shrink-0 bg-sidebar flex flex-col overflow-hidden scrollbar-sleek-parent"
         {...dropHandlers}
       >
@@ -100,14 +99,14 @@ function Sidebar({
             {/* Fixed controls */}
             <SidebarNav />
             <SidebarHeader
-              workspaceQuery={workspaceQuery}
-              onWorkspaceQueryChange={setWorkspaceQuery}
+              operationalQuery={operationalQuery}
+              onOperationalQueryChange={setOperationalQuery}
             />
 
             <WorktreeList
               scrollOffsetRef={worktreeScrollOffsetRef}
               scrollAnchorRef={worktreeScrollAnchorRef}
-              workspaceQuery={workspaceQuery}
+              operationalQuery={operationalQuery}
               settledExpanded={settledExpanded}
               onSettledExpandedChange={setSettledExpanded}
             />

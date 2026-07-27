@@ -53,14 +53,14 @@ function PrimaryNavItem({
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'flex h-8 w-full items-center gap-2.5 rounded-md px-2 text-left transition-colors',
+        'flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
         active
           ? 'bg-sidebar-accent text-sidebar-accent-foreground'
           : 'text-sidebar-foreground/70 hover:bg-sidebar-foreground/8'
       )}
     >
       <Icon
-        className={cn('size-4 shrink-0', navIconClass(active))}
+        className={cn('mt-0.5 size-4 shrink-0', navIconClass(active))}
         strokeWidth={active ? 2.25 : 1.75}
       />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -99,7 +99,7 @@ export function SidebarNav(): React.JSX.Element {
   const activityUnreadCount = useActivityUnreadCount(true, 'sidebar-badge')
 
   return (
-    <div className="flex flex-col gap-0.5 px-2 pb-2 pt-2">
+    <div className="flex flex-col gap-0.5 px-2 pt-2 pb-1">
       {/* Primary workflow rail (Phase 1 nav shell, #48): Mission Control →
           Projects. Settings lives in the bottom toolbar. The Board is
           no longer a rail entry (spec 016): it lives inside each project's
@@ -123,7 +123,7 @@ export function SidebarNav(): React.JSX.Element {
       />
 
       {/* Secondary utility: fuzzy search. */}
-      {groupBy !== 'host' ? <button
+      <button
         type="button"
         onClick={() => {
           if (groupBy === 'operational') {
@@ -142,7 +142,7 @@ export function SidebarNav(): React.JSX.Element {
         <kbd className="hidden rounded border border-border/60 bg-background/40 px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground group-hover:inline-flex items-center">
           {worktreePaletteShortcut}
         </kbd>
-      </button> : null}
+      </button>
     </div>
   )
 }
