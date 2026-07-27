@@ -47,6 +47,18 @@ describe('CreateWorkspaceWizard canonical tracker layout', () => {
     expect(closeModal).toBeGreaterThan(openSettings)
   })
 
+  it('switches an added project before hydration and blocks navigation while it is pending', () => {
+    expect(source).toContain('selectionPending: addingRepo || remoteAddOpen')
+
+    const addFlow = source.indexOf('await selectAddedRepoBeforeHydration({')
+    const selectedRepo = source.indexOf('selectRepo: onRepoChange', addFlow)
+    const hydration = source.indexOf('hydrateRepo: fetchWorktrees', addFlow)
+
+    expect(addFlow).toBeGreaterThan(-1)
+    expect(selectedRepo).toBeGreaterThan(addFlow)
+    expect(hydration).toBeGreaterThan(selectedRepo)
+  })
+
   it('locks the staged launch owner and all mutable step-three controls while busy', () => {
     expect(source).toContain('<Dialog open onOpenChange={handleDialogOpenChange}>')
     expect(source).toContain('if (!open && launchBusy) return')

@@ -30,8 +30,28 @@ export const WIZARD_FALLBACK_AGENT_IDS: TuiAgent[] = ['claude', 'codex', 'gemini
 export function canLeaveRepoStep(input: {
   repoId: string
   requiresConnection: boolean
+  /** A folder/remote-project selection is still being registered or hydrated.
+   *  The previously selected repo must not remain an actionable escape hatch
+   *  while that asynchronous replacement is in flight. */
+  selectionPending?: boolean
 }): boolean {
-  return Boolean(input.repoId) && !input.requiresConnection
+  return Boolean(input.repoId) && !input.requiresConnection && !input.selectionPending
+}
+
+/**
+ * Adopt a project returned by the Add project flow before doing any slower
+ * follow-up work for it. The ordering is the safety property: tracker lookup
+ * and workspace creation are keyed by the selected repo id, so leaving the old
+ * repo selected while `fetchWorktrees` runs can send both operations to the
+ * previous project.
+ */
+export async function selectAddedRepoBeforeHydration(input: {
+  repoId: string
+  selectRepo: (repoId: string) => void
+  hydrateRepo?: (repoId: string) => Promise<unknown>
+}): Promise<void> {
+  input.selectRepo(input.repoId)
+  await input.hydrateRepo?.(input.repoId)
 }
 
 /**

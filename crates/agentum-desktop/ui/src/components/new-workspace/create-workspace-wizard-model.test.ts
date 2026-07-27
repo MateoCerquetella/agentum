@@ -10,6 +10,7 @@ import {
   filterRepoList,
   REPO_LIST_COLLAPSED_CAP,
   resolveWizardAgentOptions,
+  selectAddedRepoBeforeHydration,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
   WIZARD_FALLBACK_AGENT_IDS
@@ -54,6 +55,38 @@ describe('canLeaveRepoStep', () => {
   })
   it('blocks a remote repo that still needs an SSH connection', () => {
     expect(canLeaveRepoStep({ repoId: 'r1', requiresConnection: true })).toBe(false)
+  })
+  it('blocks the prior repo while an added project is still being selected', () => {
+    expect(
+      canLeaveRepoStep({
+        repoId: 'previous-project',
+        requiresConnection: false,
+        selectionPending: true
+      })
+    ).toBe(false)
+  })
+})
+
+describe('selectAddedRepoBeforeHydration', () => {
+  it('switches project authority before awaiting worktree hydration', async () => {
+    const events: string[] = []
+    let finishHydration: (() => void) | undefined
+    const hydration = new Promise<void>((resolve) => {
+      finishHydration = resolve
+    })
+
+    const pending = selectAddedRepoBeforeHydration({
+      repoId: 'new-project',
+      selectRepo: (repoId) => events.push(`selected:${repoId}`),
+      hydrateRepo: async (repoId) => {
+        events.push(`hydrating:${repoId}`)
+        await hydration
+      }
+    })
+
+    expect(events).toEqual(['selected:new-project', 'hydrating:new-project'])
+    finishHydration?.()
+    await pending
   })
 })
 
