@@ -53,12 +53,7 @@ for retired in "${retired_paths[@]}"; do
 done
 
 set +e
-matches="$(rg --files-with-matches --line-number --hidden \
-  --glob '!**/routes/sdd_v2.rs' \
-  --glob '!**/migrations/**' \
-  --glob '!docs/migrations/**' \
-  --glob '!**/node_modules/**' \
-  --glob '!**/target/**' \
+matches="$(git grep --full-name --files-with-matches --extended-regexp \
   -e '/api/harness' \
   -e '/api/sdd/playbooks' \
   -e 'agentum_sdd_loop' \
@@ -75,7 +70,10 @@ matches="$(rg --files-with-matches --line-number --hidden \
   -e 'harness-client' \
   -- \
   crates \
-  README.md CLAUDE.md docs examples/sdd-demo .github/labels.sh 2>/dev/null)"
+  README.md CLAUDE.md docs examples/sdd-demo .github/labels.sh \
+  ':(exclude,glob)**/routes/sdd_v2.rs' \
+  ':(exclude,glob)**/migrations/**' \
+  ':(exclude,glob)docs/migrations/**' 2>/dev/null)"
 scan_status=$?
 set -e
 
