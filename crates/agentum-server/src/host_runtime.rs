@@ -592,16 +592,13 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(
-                base64::engine::general_purpose::STANDARD
-                    .encode(content)
-                    .as_bytes(),
-            )
-            .unwrap();
+        // Rejection can close stdin before the payload is consumed. That
+        // expected broken pipe must not hide the child's security diagnostic.
+        let _ = child.stdin.take().unwrap().write_all(
+            base64::engine::general_purpose::STANDARD
+                .encode(content)
+                .as_bytes(),
+        );
         child.wait_with_output().unwrap()
     }
 

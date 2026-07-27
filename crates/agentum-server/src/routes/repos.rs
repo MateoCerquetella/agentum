@@ -24,7 +24,6 @@ use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-#[cfg(unix)]
 use tokio::process::Command;
 use uuid::Uuid;
 
