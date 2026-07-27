@@ -55,6 +55,7 @@ import {
   deriveWizardComposerSeed,
   filterRepoList,
   resolveWizardAgentOptions,
+  selectAddedRepoBeforeHydration,
   wizardBaseBranchTriggerLabel,
   wizardPrimaryLabel,
   type CreateWorkspaceWizardData,
@@ -321,7 +322,10 @@ export default function CreateWorkspaceWizard({
 
   const canLeaveRepoStep = canLeaveRepoStepModel({
     repoId,
-    requiresConnection: selectedRepoRequiresConnection
+    requiresConnection: selectedRepoRequiresConnection,
+    // Keep the old selection from acting as a valid Continue target while a
+    // replacement project is being picked/registered.
+    selectionPending: addingRepo || remoteAddOpen
   })
 
   const goNext = useCallback(() => {
@@ -358,12 +362,15 @@ export default function CreateWorkspaceWizard({
       if (!repo) {
         return
       }
-      // Populate worktrees for git repos so the worktree/base-branch fields have
-      // data the moment the row is selected (matches RepoCombobox's add flow).
-      if (isGitRepoKind(repo)) {
-        await fetchWorktrees(repo.id)
-      }
-      onRepoChange(repo.id)
+      // Select first. Previously Agentum (or whichever project opened the
+      // wizard) stayed selected until this worktree scan completed, while the
+      // Continue button remained actionable. Advancing in that window loaded
+      // the old project's tracker and ultimately created the worktree there.
+      await selectAddedRepoBeforeHydration({
+        repoId: repo.id,
+        selectRepo: onRepoChange,
+        ...(isGitRepoKind(repo) ? { hydrateRepo: fetchWorktrees } : {})
+      })
     } finally {
       setAddingRepo(false)
     }

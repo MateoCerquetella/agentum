@@ -70,6 +70,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   MCP keeps a distinct rotated token, and `--no-auth` no longer exposes any
   `/api/sdd/v2` HTTP or WebSocket route.
 
+## [0.96.12] — 2026-07-27
+
+### Fixed
+
+- **New Workspace keeps newly added projects isolated.** A folder selected from
+  the Add project flow becomes authoritative before worktree discovery begins,
+  and navigation stays locked while that selection is pending. A new project
+  can no longer inherit the previous project's tracker or create its worktree
+  inside the previous repository.
+
 ## [0.96.11] — 2026-07-27
 
 ### Fixed
