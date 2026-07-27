@@ -39,6 +39,13 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             ci,
         )
 
+    def test_workflows_pin_the_current_node24_checkout_action(self) -> None:
+        workflows = [CI, RELEASE, ROOT / ".github/workflows/codeql.yml"]
+        pin = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+        combined = "\n".join(path.read_text(encoding="utf-8") for path in workflows)
+        self.assertEqual(combined.count(pin), 9)
+        self.assertNotIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", combined)
+
     def test_sdd_boundary_normalizes_windows_scan_paths_before_allowlisting(self) -> None:
         boundary = SDD_BOUNDARY.read_text(encoding="utf-8")
         scan = boundary.index('direct_workspace_callers="$({')
