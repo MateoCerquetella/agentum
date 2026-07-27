@@ -39,9 +39,10 @@ jobs:
       - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
           tool: cargo-deny@0.20.2
-      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
-        with:
-          tool: gitleaks@8.30.1
+      - name: Install pinned Gitleaks
+        run: |
+          scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks-bin"
+          printf '%s\n' "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
       - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
           tool: shellcheck@0.11.0
