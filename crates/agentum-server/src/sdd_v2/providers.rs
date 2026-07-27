@@ -833,9 +833,18 @@ pub fn validate_custom_provider_manifest(
 /// It verifies the complete Standard + Guarded operation surface and the
 /// direct-argv, bounded execution contract without contacting a model.
 pub fn validate_provider_contract(adapter: &dyn SddProviderAdapter) -> Result<(), ProviderError> {
+    #[cfg(not(windows))]
     const CWD: &str = "/agentum/conformance/authoritative";
+    #[cfg(windows)]
+    const CWD: &str = r"C:\agentum\conformance\authoritative";
+    #[cfg(not(windows))]
     const STAGING: &str = "/agentum/conformance/authoritative/.agentum/staging/result";
+    #[cfg(windows)]
+    const STAGING: &str = r"C:\agentum\conformance\authoritative\.agentum\staging\result";
+    #[cfg(not(windows))]
     const SANDBOX: &str = "/agentum/conformance/provider";
+    #[cfg(windows)]
+    const SANDBOX: &str = r"C:\agentum\conformance\provider";
     const PROMPT_SENTINEL: &str = "AGENTUM_CONFORMANCE_PROMPT_7d8f7a";
     let descriptor = adapter.descriptor();
     if descriptor.id.trim().is_empty()

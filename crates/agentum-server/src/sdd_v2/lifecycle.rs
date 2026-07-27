@@ -3260,10 +3260,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(changed, ["session.txt"]);
+        let content = std::fs::read_to_string(repository.path().join("session.txt")).unwrap();
         assert_eq!(
-            std::fs::read_to_string(repository.path().join("session.txt")).unwrap(),
-            "active\nnew-token\nstill-active\n"
+            content.lines().collect::<Vec<_>>(),
+            ["active", "new-token", "still-active"]
         );
+        assert!(content.ends_with('\n'));
     }
 
     fn run_at(phase: &str, status: &str) -> SddRunRecord {

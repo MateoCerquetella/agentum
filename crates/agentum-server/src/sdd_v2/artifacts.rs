@@ -922,8 +922,25 @@ pub fn remove_file_nofollow(path: &Path) -> Result<(), ArtifactError> {
         Err(error) => return Err(error),
     }
     cap_primitives::fs::remove_file(&directory, Path::new(name))?;
-    directory.sync_all()?;
-    Ok(())
+    #[cfg(unix)]
+    {
+        directory.sync_all()?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        // Windows refuses FlushFileBuffers on directory handles. The unlink
+        // has already completed relative to the held no-follow parent handle;
+        // this matches `atomic_remove`'s Windows durability boundary.
+        Ok(())
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        Err(ArtifactError::UnsafeRoot(format!(
+            "safe artifact removal is unsupported on this operating system: {}",
+            path.display()
+        )))
+    }
 }
 
 #[cfg(unix)]
