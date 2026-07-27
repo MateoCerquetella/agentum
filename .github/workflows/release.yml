@@ -207,6 +207,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install pinned Ripgrep
+        shell: bash
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep-bin"
+          printf '%s\n' "$RUNNER_TEMP/ripgrep-bin" >> "$GITHUB_PATH"
+
       # Desktop targets build the Tauri UI (crates/agentum-desktop/ui), which is
       # embedded into the binary via generate_context!. The old standalone
       # dashboard/ was removed in the thin-shell refactor (v0.10.11), so the
@@ -794,6 +800,12 @@ jobs:
         run: |
           scripts/install-gitleaks.sh "$RUNNER_TEMP/gitleaks-bin"
           printf '%s\n' "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned Ripgrep
+        shell: bash
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep-bin"
+          printf '%s\n' "$RUNNER_TEMP/ripgrep-bin" >> "$GITHUB_PATH"
 
       - name: Verify every updater signature against the embedded key
         shell: bash

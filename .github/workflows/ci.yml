@@ -50,6 +50,11 @@ jobs:
         run: |
           scripts/install-actionlint.sh "$RUNNER_TEMP/actionlint-bin"
           printf '%s\n' "$RUNNER_TEMP/actionlint-bin" >> "$GITHUB_PATH"
+      - name: Install pinned Ripgrep
+        shell: bash
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep-bin"
+          printf '%s\n' "$RUNNER_TEMP/ripgrep-bin" >> "$GITHUB_PATH"
       - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
           tool: zizmor@1.28.0
@@ -94,6 +99,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: Install pinned Ripgrep
+        shell: bash
+        run: |
+          scripts/install-ripgrep.sh "$RUNNER_TEMP/ripgrep-bin"
+          printf '%s\n' "$RUNNER_TEMP/ripgrep-bin" >> "$GITHUB_PATH"
       # Pin the toolchain (not @stable) so CI's rustfmt + clippy match the
       # repo's rust-toolchain.toml and what developers run locally. @stable
       # set RUSTUP_TOOLCHAIN=stable, which overrides rust-toolchain.toml and
