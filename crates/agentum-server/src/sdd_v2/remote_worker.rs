@@ -3160,7 +3160,18 @@ esac
         let RemoteServerFrame::AuthoringResult(authored) = authored else {
             panic!("worker returned the wrong framed authoring response")
         };
-        assert_eq!(authored.status, RemotePhaseStatus::Succeeded);
+        let authoring_blocker = store
+            .sdd_remote_worker_run(&run_id)
+            .await
+            .unwrap()
+            .and_then(|run| run.blocker);
+        assert_eq!(
+            authored.status,
+            RemotePhaseStatus::Succeeded,
+            "authoring failed with {:?}: {:?}",
+            authored.error_code,
+            authoring_blocker
+        );
         assert_eq!(authored.spec_revision, 2);
         assert!(authored.spec.as_ref().unwrap().content.contains("AC-001"));
         let replay = transport

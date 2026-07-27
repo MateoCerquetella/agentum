@@ -755,18 +755,31 @@ mod tests {
     const TODO_A: &str = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"t1","name":"TodoWrite","input":{"todos":[{"content":"a","status":"pending"}]}}]}}"#;
     const TODO_B: &str = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"t2","name":"TodoWrite","input":{"todos":[{"content":"b","status":"pending"}]}}]}}"#;
 
-    fn fixture() -> (tempfile::TempDir, PathBuf, Uuid, PathBuf) {
+    fn fixture() -> (
+        tempfile::TempDir,
+        PathBuf,
+        Uuid,
+        PathBuf,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        // Transcript path resolution reads HOME. Hold the same crate-wide
+        // guard used by tests that temporarily replace HOME so the path cannot
+        // change between fixture creation and a later store refresh.
+        let environment_lock = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let root = tempfile::tempdir().unwrap();
         let workdir = root.path().join("workspace");
         std::fs::create_dir_all(&workdir).unwrap();
         let id = Uuid::new_v4();
         let path = transcript::transcript_path_for(&workdir, id).unwrap();
-        (root, workdir, id, path)
+        (root, workdir, id, path, environment_lock)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::await_holding_lock)] // stabilizes process-wide HOME path resolution
     async fn repeated_and_concurrent_live_reads_create_exactly_one_observer() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let project_dir = path.parent().unwrap();
         let (bus, mut rx) = broadcast::channel(16);
         let (store, counts) = TranscriptStore::with_counting_factory(bus);
@@ -824,8 +837,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // stabilizes process-wide HOME path resolution
     async fn notify_bursts_coalesce_and_retirement_finishes_consumers_without_stale_updates() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let project_dir = path.parent().unwrap().to_path_buf();
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
@@ -914,6 +928,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::await_holding_lock)] // stabilizes process-wide HOME path resolution
     async fn already_received_wakes_are_rejected_by_every_retirement_boundary() {
         #[derive(Clone, Copy, Debug)]
         enum Retirement {
@@ -929,7 +944,7 @@ mod tests {
             Retirement::RetainObservers,
             Retirement::Forget,
         ] {
-            let (_root, workdir, id, path) = fixture();
+            let (_root, workdir, id, path, _environment_lock) = fixture();
             let project_dir = path.parent().unwrap().to_path_buf();
             std::fs::create_dir_all(&project_dir).unwrap();
             std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
@@ -1001,8 +1016,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // stabilizes process-wide HOME path resolution
     async fn real_notify_observer_emits_for_append_then_retirement_stays_silent() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let project_dir = path.parent().unwrap().to_path_buf();
         std::fs::create_dir_all(&project_dir).unwrap();
         let (bus, mut rx) = broadcast::channel(16);
@@ -1040,7 +1056,7 @@ mod tests {
 
     #[test]
     fn historical_reads_refresh_appended_complete_lines_without_observation() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let project_dir = path.parent().unwrap().to_path_buf();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
@@ -1064,7 +1080,7 @@ mod tests {
 
     #[test]
     fn reset_before_first_read_never_resurrects_pre_reset_tasks() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let project_dir = path.parent().unwrap().to_path_buf();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, format!("{TODO_A}\n")).unwrap();
@@ -1087,7 +1103,7 @@ mod tests {
 
     #[test]
     fn pinned_transcript_promotes_over_legacy_fallback() {
-        let (_root, workdir, id, pinned) = fixture();
+        let (_root, workdir, id, pinned, _environment_lock) = fixture();
         let project_dir = pinned.parent().unwrap();
         std::fs::create_dir_all(project_dir).unwrap();
         let legacy = project_dir.join(format!("{}.jsonl", Uuid::new_v4()));
@@ -1104,8 +1120,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // stabilizes process-wide HOME path resolution
     async fn lifecycle_operations_drop_without_starting_observers() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let project_dir = path.parent().unwrap().to_path_buf();
         let (bus, _) = broadcast::channel(16);
         let (store, counts) = TranscriptStore::with_counting_factory(bus);
@@ -1144,8 +1161,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // stabilizes process-wide HOME path resolution
     async fn non_claude_read_forgets_prior_claude_cache_and_observer() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let project_dir = path.parent().unwrap().to_path_buf();
         let (bus, _) = broadcast::channel(16);
         let (store, counts) = TranscriptStore::with_counting_factory(bus);
@@ -1163,7 +1181,7 @@ mod tests {
 
     #[test]
     fn non_claude_read_and_reset_create_nothing() {
-        let (_root, workdir, id, path) = fixture();
+        let (_root, workdir, id, path, _environment_lock) = fixture();
         let (bus, _) = broadcast::channel(16);
         let (store, counts) = TranscriptStore::with_counting_factory(bus);
         assert!(

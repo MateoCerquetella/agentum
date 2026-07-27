@@ -5414,7 +5414,10 @@ fn workspace_error(error: WorkspaceError) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use std::future::Future;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt as _;
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -5440,6 +5443,80 @@ mod tests {
     use tower::ServiceExt;
 
     const TEST_UI_TOKEN: &str = "test-only-embedded-ui-capability";
+
+    struct TestEnvironmentFixture(Vec<(&'static str, Option<OsString>)>);
+
+    impl TestEnvironmentFixture {
+        fn set(values: Vec<(&'static str, OsString)>) -> Self {
+            let previous = values
+                .iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect();
+            for (name, value) in values {
+                // SAFETY: every caller holds TEST_ENV_LOCK for the complete
+                // fixture lifetime, including all awaited work.
+                unsafe { std::env::set_var(name, value) };
+            }
+            Self(previous)
+        }
+    }
+
+    impl Drop for TestEnvironmentFixture {
+        fn drop(&mut self) {
+            for (name, value) in self.0.drain(..).rev() {
+                // SAFETY: the owning test still holds TEST_ENV_LOCK.
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    /// A deterministic installed/authenticated provider probe for local route
+    /// tests. Production still performs the real executable, version, and
+    /// authentication checks; the clean CI runner deliberately has no model
+    /// credentials or provider installation.
+    #[cfg(unix)]
+    struct CodexProbeFixture {
+        _environment: TestEnvironmentFixture,
+        _directory: tempfile::TempDir,
+    }
+
+    #[cfg(unix)]
+    impl CodexProbeFixture {
+        fn install(agentum_home: &FsPath) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let executable = directory.path().join("codex");
+            std::fs::write(
+                &executable,
+                "#!/bin/sh\nprintf '%s\\n' 'codex-cli 0.145.0'\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+            let original_path = std::env::var_os("PATH");
+            let mut paths = vec![directory.path().to_path_buf()];
+            if let Some(existing) = original_path.as_ref() {
+                paths.extend(std::env::split_paths(existing));
+            }
+            let fixture_path = std::env::join_paths(paths).unwrap();
+            let environment = TestEnvironmentFixture::set(vec![
+                ("AGENTUM_HOME", agentum_home.as_os_str().to_os_string()),
+                ("PATH", fixture_path),
+                (
+                    "OPENAI_API_KEY",
+                    OsString::from("agentum-test-provider-key"),
+                ),
+            ]);
+            Self {
+                _environment: environment,
+                _directory: directory,
+            }
+        }
+    }
 
     struct TestRemoteClient {
         host_id: Uuid,
@@ -7037,7 +7114,16 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)] // isolates Agentum's delivery temp root
     async fn delivery_and_openspec_preview_confirmation_are_hash_bound_and_durable() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let agentum_home = tempfile::tempdir().unwrap();
+        let _environment = TestEnvironmentFixture::set(vec![(
+            "AGENTUM_HOME",
+            agentum_home.path().as_os_str().to_os_string(),
+        )]);
         let authoritative = tempfile::tempdir().unwrap();
         let _repository_registration = crate::routes::repos::register_test_repo(
             "repo-delivery",
@@ -7327,13 +7413,13 @@ mod tests {
         assert!(!events.contains(&preview_token));
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // serializes the task-specific AGENTUM_HOME seam
     async fn vertical_slice_is_durable_idempotent_and_does_not_dirty_source_checkout() {
         let _guard = crate::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let old_agentum_home = std::env::var_os("AGENTUM_HOME");
         let repository = tempfile::tempdir().unwrap();
         let agentum_home = tempfile::tempdir().unwrap();
         git(repository.path(), &["init", "-q"]);
@@ -7346,9 +7432,7 @@ mod tests {
         git(repository.path(), &["add", "README.md"]);
         git(repository.path(), &["commit", "-qm", "fixture"]);
 
-        unsafe {
-            std::env::set_var("AGENTUM_HOME", agentum_home.path());
-        }
+        let _provider_probe = CodexProbeFixture::install(agentum_home.path());
         let _repository_registration = crate::routes::repos::register_test_repo(
             "repo-fixture",
             repository.path().to_string_lossy(),
@@ -7547,22 +7631,15 @@ mod tests {
                 .contains("canonical id")
         );
         assert_eq!(std::fs::read_to_string(&spec_path).unwrap(), invalid);
-
-        unsafe {
-            match old_agentum_home {
-                Some(value) => std::env::set_var("AGENTUM_HOME", value),
-                None => std::env::remove_var("AGENTUM_HOME"),
-            }
-        }
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::await_holding_lock)] // serializes the task-specific AGENTUM_HOME seam
     async fn list_specs_discovers_and_starts_a_durable_first_run() {
         let _guard = crate::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let old_agentum_home = std::env::var_os("AGENTUM_HOME");
         let repository = tempfile::tempdir().unwrap();
         let agentum_home = tempfile::tempdir().unwrap();
         git(repository.path(), &["init", "-q"]);
@@ -7574,9 +7651,7 @@ mod tests {
         std::fs::write(repository.path().join("README.md"), "fixture\n").unwrap();
         git(repository.path(), &["add", "README.md"]);
         git(repository.path(), &["commit", "-qm", "fixture"]);
-        unsafe {
-            std::env::set_var("AGENTUM_HOME", agentum_home.path());
-        }
+        let _provider_probe = CodexProbeFixture::install(agentum_home.path());
 
         let artifact_set_id = ulid::Ulid::new();
         let mut spec_paths = Vec::new();
@@ -7659,8 +7734,9 @@ mod tests {
             .oneshot(get_request("/api/sdd/v2/repos/repo-discovered-specs/specs"))
             .await
             .unwrap();
-        assert_eq!(listed.status(), StatusCode::OK);
+        let listed_status = listed.status();
         let listed = response_json(listed).await;
+        assert_eq!(listed_status, StatusCode::OK, "{listed}");
         let specs = listed["specs"].as_array().unwrap();
         assert_eq!(specs.len(), expected_ids.len());
         assert!(
@@ -7677,7 +7753,6 @@ mod tests {
                 .len(),
             3
         );
-
         let source_status = git_output(repository.path(), &["status", "--porcelain"]);
         let create_run_body = json!({
             "requestId": "start-discovered",
@@ -7697,8 +7772,9 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(created.status(), StatusCode::OK);
+        let created_status = created.status();
         let created = response_json(created).await;
+        assert_eq!(created_status, StatusCode::OK, "{created}");
         assert_eq!(created["phase"], "specification");
         assert_eq!(created["status"], "waiting");
         assert_eq!(created["nextAction"], "Spec approval required");
@@ -7855,13 +7931,6 @@ mod tests {
                 .len(),
             3
         );
-
-        unsafe {
-            match old_agentum_home {
-                Some(value) => std::env::set_var("AGENTUM_HOME", value),
-                None => std::env::remove_var("AGENTUM_HOME"),
-            }
-        }
     }
 
     fn test_app(store: agentum_store::Store) -> Router {
