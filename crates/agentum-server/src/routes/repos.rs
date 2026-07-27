@@ -24,6 +24,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, patch, post};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+#[cfg(unix)]
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -320,6 +321,7 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
         return Err(ApiError::BadRequest("kind must be git or folder".into()));
     }
     #[cfg(not(unix))]
+    #[cfg(unix)]
     if body.kind == "git" {
         return Err(ApiError::BadRequest(
             "secure descriptor-bound git initialization is unsupported on this operating system"

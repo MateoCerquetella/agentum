@@ -1204,7 +1204,7 @@ mod tests {
         assert!(validate_beneath_relative("/etc/passwd").is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn remote_read_script_opens_once_and_rejects_symlink_escape_before_reading() {
         use std::os::unix::fs::symlink;
@@ -1241,6 +1241,27 @@ mod tests {
             assert_eq!(escape.status.code(), Some(65));
             assert!(!String::from_utf8_lossy(&escape.stdout).contains("outside-secret"));
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn remote_read_script_fails_closed_without_procfs_descriptor_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("good"), b"inside").unwrap();
+        let script = remote_beneath_script(
+            &root.path().to_string_lossy(),
+            "good",
+            RemoteBeneathOperation::Read,
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(69));
+        assert!(output.stdout.is_empty());
     }
 
     // ── CDP forward-tunnel port selection ─────────────────────────────────
