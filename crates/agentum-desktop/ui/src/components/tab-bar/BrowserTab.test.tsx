@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BrowserTab as BrowserTabState } from '../../../../shared/types'
+import type { BrowserTab as BrowserTabState } from '@/shared/types'
 
 const reactHookRuntime = vi.hoisted(() => ({
   states: [] as unknown[],
@@ -34,6 +34,19 @@ vi.mock('@dnd-kit/sortable', () => ({
     listeners: { onPointerDown: vi.fn() },
     setNodeRef: vi.fn()
   })
+}))
+
+vi.mock('@/store', () => ({
+  useAppStore: (selector: (state: { moveBrowserTabToWorktree: () => void }) => unknown) =>
+    selector({ moveBrowserTabToWorktree: vi.fn() })
+}))
+
+vi.mock('@/store/selectors', () => ({
+  useAllWorktrees: () => []
+}))
+
+vi.mock('@/tauri', () => ({
+  api: { shell: { openUrl: vi.fn() } }
 }))
 
 vi.mock('lucide-react', () => ({

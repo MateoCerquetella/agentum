@@ -17,10 +17,10 @@ import {
   resolveServerHostIdForConnection
 } from '@/runtime/server-host-client'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import type { AddRepoExistingWorkspaceSource } from '../../../../shared/telemetry-events'
-import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
-import type { SshTarget, SshConnectionState } from '../../../../shared/ssh-types'
-import { createNestedRepoTelemetryAttemptId } from '../../../../shared/nested-repo-telemetry'
+import type { AddRepoExistingWorkspaceSource } from '@/shared/telemetry-events'
+import type { NestedRepoScanResult, Repo } from '@/shared/types'
+import type { SshTarget, SshConnectionState } from '@/shared/ssh-types'
+import { createNestedRepoTelemetryAttemptId } from '@/shared/nested-repo-telemetry'
 
 // ── Remote project hook ─────────────────────────────────────────────
 
@@ -153,6 +153,9 @@ export function useRemoteRepo(
         throw new Error(result.error)
       }
       const repo = result.repo
+      if (!repo) {
+        throw new Error('The server did not return the added remote project.')
+      }
 
       const state = useAppStore.getState()
       const existingIdx = state.repos.findIndex((r) => r.id === repo.id)

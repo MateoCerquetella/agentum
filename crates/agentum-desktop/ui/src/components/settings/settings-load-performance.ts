@@ -1,4 +1,4 @@
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 const EAGER_SECTION_IDS = new Set(['general'])
 

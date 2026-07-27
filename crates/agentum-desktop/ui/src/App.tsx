@@ -116,15 +116,17 @@ import {
   canGoForwardWorktreeHistory
 } from '@/store/slices/worktree-nav-history'
 import type { VirtualizedScrollAnchor } from './hooks/useVirtualizedScrollAnchor'
-import type { RemoteWorkspacePatchResult } from '../../shared/remote-workspace-types'
-import type { OnboardingState } from '../../shared/types'
+import type { RemoteWorkspacePatchResult } from '@/shared/remote-workspace-types'
+import type { OnboardingState } from '@/shared/types'
+import type { SshTarget } from '@/shared/ssh-types'
+import type { AppState } from '@/store/types'
 import { getFeatureTipsAppOpenDecision } from './components/feature-tips/feature-tip-startup-gate'
 import {
   keybindingMatchesAction,
   type KeybindingActionId,
   type KeybindingContext
-} from '../../shared/keybindings'
-import { isGitRepoKind } from '../../shared/repo-kind'
+} from '@/shared/keybindings'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import { showTerminalShortcutCaptureNotification } from '@/lib/terminal-shortcut-capture-notification'
 import { resolveMountedLazyModalIds, type LazyModalId } from './lazy-modal-mount-state'
 import { requestOperationalSidebarSearchFocus } from './lib/operational-sidebar-search-focus'
@@ -225,16 +227,15 @@ function WindowControls(): React.JSX.Element {
 const Terminal = lazy(() => import('./components/Terminal'))
 // The "Board" sidebar entry IS the Tasks view (the GitHub/Linear issue list) —
 // Tasks was renamed to Board (#48 redo). The standalone Kanban (BoardPage) was
-// removed; Chat creates GitHub issues that show up here.
+// removed; issue drafting creates GitHub issues that show up here.
 const TaskPage = lazy(() => import('./components/TaskPage'))
 const MissionControlPage = lazy(() => import('./components/mission-control/MissionControlPage'))
-// Project Hub (ADE redesign): per-project Chat / Wiki / Tasks / Sessions tabs,
+// Project Hub: per-project Specs / Wiki / Tasks / Sessions tabs,
 // opened by clicking a project header in the sidebar. The Wiki lives ONLY here
 // now (spec 009 D1) — the standalone wiki view was deleted.
 const ProjectHubPage = lazy(() => import('./components/project-hub/ProjectHubPage'))
 const ProjectsPage = lazy(() => import('./components/projects/ProjectsPage'))
 const Settings = lazy(() => import('./components/settings/Settings'))
-const ChatPage = lazy(() => import('./components/harness/ChatPage'))
 const QuickOpen = lazy(() => import('./components/QuickOpen'))
 const WorktreeJumpPalette = lazy(() => import('./components/WorktreeJumpPalette'))
 const CommandPalette = lazy(() => import('./components/CommandPalette'))
@@ -252,6 +253,35 @@ const PetOverlay = lazy(() => import('./components/pet/PetOverlay'))
 // past first-launch. The gate `shouldShowOnboarding` lives in its own tiny
 // module so no eager import path pulls OnboardingFlow into the main chunk.
 const OnboardingFlow = lazy(() => import('./components/onboarding/OnboardingFlow'))
+
+/** Exhaustive top-level page router. Keeping the union switch in one component
+ * makes a newly added view fail TypeScript until it has an actual surface. */
+export function AppPageSurface({
+  activeView,
+  activeWorktreeId
+}: {
+  activeView: AppState['activeView']
+  activeWorktreeId: string | null
+}): React.JSX.Element | null {
+  switch (activeView) {
+    case 'settings':
+      return <Settings />
+    case 'tasks':
+      return <TaskPage />
+    case 'activity':
+      return <MissionControlPage />
+    case 'project':
+      return <ProjectHubPage />
+    case 'projects':
+      return <ProjectsPage />
+    case 'terminal':
+      return activeWorktreeId ? null : <MissionControlPage />
+    default: {
+      const unreachable: never = activeView
+      return unreachable
+    }
+  }
+}
 
 function applyRemoteWorkspacePatchStatus(
   targetId: string,
@@ -564,7 +594,7 @@ function App(): React.JSX.Element {
           if (connectionIds.length > 0) {
             try {
               const SSH_RECONNECT_TIMEOUT_MS = 15_000
-              const allTargets = await api.ssh.listTargets()
+              const allTargets = (await api.ssh.listTargets()) as SshTarget[]
               const targetMap = new Map(allTargets.map((t) => [t.id, t]))
               const targets = connectionIds.map((targetId) => ({
                 targetId,
@@ -1023,7 +1053,7 @@ function App(): React.JSX.Element {
     effectiveActiveTabExpanded
   // Why (Phase 1 nav shell, #48): the left rail renders on most views so the
   // app can never trap the user in a full-page takeover — it previously hid the
-  // rail for settings/activity/skills/harness/goals, stranding the user with no
+  // rail for settings/activity/skills/goals, stranding the user with no
   // visible navigation (the only escape was a secret Cmd+B).
   //
   // Settings is the deliberate exception: it's a self-contained full-page view
@@ -1754,19 +1784,10 @@ function App(): React.JSX.Element {
                           title="This page hit an error."
                           description="Retry the page or navigate to another agentum surface."
                         >
-                          {activeView === 'settings' ? <Settings /> : null}
-                          {/* The "Board" sidebar entry renders the Tasks view (GitHub/Linear
-                              issues) — Tasks renamed to Board (#48 redo). The standalone
-                              Kanban 'board' view was removed. */}
-                          {activeView === 'tasks' ? <TaskPage /> : null}
-                          {activeView === 'activity' ? <MissionControlPage /> : null}
-                          {activeView === 'harness' ? <ChatPage /> : null}
-                          {activeView === 'project' ? <ProjectHubPage /> : null}
-                          {activeView === 'projects' ? <ProjectsPage /> : null}
-                          {/* No workspace selected on the terminal view → fall back to
-                              Mission Control (Landing.tsx removed; the dashboard needs no
-                              workspace) so the user is never stranded on a blank pane. */}
-                          {activeView === 'terminal' && !activeWorktreeId ? <MissionControlPage /> : null}
+                          <AppPageSurface
+                            activeView={activeView}
+                            activeWorktreeId={activeWorktreeId}
+                          />
                         </RecoverableRenderErrorBoundary>
                       </Suspense>
                     </div>
@@ -1776,7 +1797,7 @@ function App(): React.JSX.Element {
               {/* Why: keep RightSidebar mounted even when closed so that its
               child components (FileExplorer, SourceControl, etc.) and their
               filesystem watchers + cached directory trees survive across
-              open/close toggles. Unmount on the full-page views (tasks, Chat,
+              open/close toggles. Unmount on the full-page views (tasks,
               settings, …) since those surfaces are intentionally
               distraction-free — see canShowRightSidebarForView. */}
               {showRightSidebarControls ? (

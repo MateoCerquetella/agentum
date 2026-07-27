@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
-import type { RateLimitRuntimeTarget, RateLimitState } from '../../../../shared/rate-limit-types'
+import type { RateLimitRuntimeTarget, RateLimitState } from '@/shared/rate-limit-types'
 import type { AppState } from '../types'
 
 export type RateLimitSlice = {

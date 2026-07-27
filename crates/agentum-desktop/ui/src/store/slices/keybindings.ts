@@ -5,7 +5,7 @@ import type {
   KeybindingActionId,
   KeybindingFileSnapshot,
   KeybindingOverrides
-} from '../../../../shared/keybindings'
+} from '@/shared/keybindings'
 
 const EMPTY_KEYBINDINGS: KeybindingOverrides = {}
 

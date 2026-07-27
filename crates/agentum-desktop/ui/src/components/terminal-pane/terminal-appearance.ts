@@ -2,10 +2,10 @@ import type { IDisposable, IParser, ITheme } from '@xterm/xterm'
 import { hexToRgba } from '@/lib/color'
 export { hexToRgba }
 import type { PaneManager } from '@/lib/pane-manager/pane-manager'
-import type { GlobalSettings } from '../../../../shared/types'
-import { mode2031SequenceFor } from '../../../../shared/terminal-color-scheme-protocol'
-import { resolveTerminalFontWeights } from '../../../../shared/terminal-fonts'
-import { resolveTerminalLigaturesEnabled } from '../../../../shared/terminal-ligatures'
+import type { GlobalSettings } from '@/shared/types'
+import { mode2031SequenceFor } from '@/shared/terminal-color-scheme-protocol'
+import { resolveTerminalFontWeights } from '@/shared/terminal-fonts'
+import { resolveTerminalLigaturesEnabled } from '@/shared/terminal-ligatures'
 import {
   getBuiltinTheme,
   resolvePaneStyleOptions,
@@ -16,7 +16,7 @@ import { captureScrollState, restoreScrollState, safeFit } from '@/lib/pane-mana
 import { resolveTerminalCursorInactiveStyle } from '@/lib/pane-manager/pane-terminal-options'
 import type { PtyTransport } from './pty-transport'
 import type { EffectiveMacOptionAsAlt } from '@/lib/keyboard-layout/detect-option-as-alt'
-import { HEX_COLOR_RE } from '../../../../shared/color-validation'
+import { HEX_COLOR_RE } from '@/shared/color-validation'
 
 export { mode2031SequenceFor }
 

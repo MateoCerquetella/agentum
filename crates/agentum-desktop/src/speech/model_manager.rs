@@ -1,4 +1,4 @@
-//! On-device speech model lifecycle — port of orca's `model-manager.ts`.
+//! On-device speech model lifecycle for Agentum.
 //!
 //! Owns the models directory and a small state machine per model
 //! (not-downloaded → downloading → extracting → ready | error). Downloads stream

@@ -5,7 +5,7 @@ import type { AppState } from '../types'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import {
   WORKSPACE_CLEANUP_CLASSIFIER_VERSION,
   applyWorkspaceCleanupPolicy,
@@ -18,7 +18,7 @@ import {
   type WorkspaceCleanupDismissal,
   type WorkspaceCleanupScanArgs,
   type WorkspaceCleanupScanResult
-} from '../../../../shared/workspace-cleanup'
+} from '@/shared/workspace-cleanup'
 import { detectAgentStatusFromTitle, isExplicitAgentStatusFresh } from '@/lib/agent-status'
 
 type WorkspaceCleanupFailure = {
@@ -102,6 +102,7 @@ export const createWorkspaceCleanupSlice: StateCreator<AppState, [], [], Workspa
   workspaceCleanupViewedCandidates: {},
 
   scanWorkspaceCleanup: async (args) => {
+    get().recordFeatureInteraction?.('workspace-cleanup')
     set({ workspaceCleanupLoading: true, workspaceCleanupError: null })
     try {
       const scanArgs =

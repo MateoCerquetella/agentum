@@ -4,7 +4,7 @@ import type {
   GitStatusResult,
   GitUpstreamStatus,
   GlobalSettings
-} from '../../../../shared/types'
+} from '@/shared/types'
 
 export type GitStatusRefreshDeps = {
   setGitStatus: (worktreeId: string, status: GitStatusResult) => void

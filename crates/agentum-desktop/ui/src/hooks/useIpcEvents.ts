@@ -6,7 +6,7 @@ import { useAppStore } from '../store'
 import { findSplitPathForGroup } from '@/store/slices/tabs'
 import { formatBrowserAnnotationsAsMarkdown } from '../components/browser-pane/browser-annotation-output'
 import { getWorktreeMapFromState, getRepoMapFromState } from '@/store/selectors'
-import { applyUIZoom } from '@/lib/ui-zoom'
+import { applyUIZoom, getCurrentUIZoomLevel } from '@/lib/ui-zoom'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { resolveOpenTabWorktreeId } from '@/lib/open-tab-worktree'
 import { runWorktreeDelete } from '@/components/sidebar/delete-worktree-flow'
@@ -25,14 +25,14 @@ import type {
   TerminalPaneLayoutNode,
   UpdateStatus,
   WorkspaceSessionState
-} from '../../../shared/types'
+} from '@/shared/types'
 import type {
   RemoteWorkspacePatchResult,
   RemoteWorkspaceSnapshot
-} from '../../../shared/remote-workspace-types'
-import type { RateLimitState } from '../../../shared/rate-limit-types'
-import type { SshConnectionState } from '../../../shared/ssh-types'
-import { importRemoteWorkspaceSession } from '../../../shared/remote-workspace-session-projection'
+} from '@/shared/remote-workspace-types'
+import type { RateLimitState } from '@/shared/rate-limit-types'
+import type { SshConnectionState } from '@/shared/ssh-types'
+import { importRemoteWorkspaceSession } from '@/shared/remote-workspace-session-projection'
 import { zoomLevelToPercent, ZOOM_MIN, ZOOM_MAX } from '@/components/settings/SettingsConstants'
 import { dispatchZoomLevelChanged } from '@/lib/zoom-events'
 import { canShowRightSidebarForView } from '@/lib/right-sidebar-visibility'
@@ -47,12 +47,12 @@ import {
   normalizeAgentStatusPayload,
   type AgentStatusIpcPayload,
   type ParsedAgentStatusPayload
-} from '../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import {
   resolveAgentStatusIdentity,
   shouldSuppressInheritedTerminalStatus
-} from '../../../shared/agent-status-identity'
-import { isGitRepoKind } from '../../../shared/repo-kind'
+} from '@/shared/agent-status-identity'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import { openBoardSurface } from '@/lib/board-route'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { activateTabAndFocusPane } from '@/lib/activate-tab-and-focus-pane'
@@ -62,7 +62,7 @@ import {
   acquireBrowserAutomationVisibility,
   releaseBrowserAutomationVisibility
 } from '@/components/browser-pane/browser-automation-visibility'
-import { parsePaneKey } from '../../../shared/stable-pane-id'
+import { parsePaneKey } from '@/shared/stable-pane-id'
 import { collectLeafIdsInOrder } from '@/components/terminal-pane/layout-serialization'
 import { track } from '@/lib/telemetry'
 import { singlePaneLayoutSnapshot } from '@/store/slices/terminal-helpers'
@@ -1515,7 +1515,7 @@ export function useIpcEvents(): void {
               store.groupsByWorktree[worktreeId]?.[0]?.id
             if (agentGroupId) {
               splitGroupId = store.createEmptySplitGroup(worktreeId, agentGroupId, split)
-              targetGroupId = splitGroupId
+              targetGroupId = splitGroupId ?? undefined
             }
           }
           if (!targetGroupId) {
@@ -1629,6 +1629,7 @@ export function useIpcEvents(): void {
       api.ui.onRequestBrowserAnnotations((data) => {
         try {
           const store = useAppStore.getState()
+          store.recordFeatureInteraction('agent-browser-use')
           const resolvePageId = (): string | null => {
             const tab = typeof data?.tab === 'string' ? data.tab.trim() : ''
             if (tab) {
@@ -1689,6 +1690,7 @@ export function useIpcEvents(): void {
       api.ui.onRequestBrowserAnnotate((data) => {
         try {
           const store = useAppStore.getState()
+          store.recordFeatureInteraction('agent-browser-use')
           const tab = typeof data?.tab === 'string' ? data.tab.trim() : ''
           let pageId: string | null = null
           if (tab) {
@@ -2212,7 +2214,7 @@ export function useIpcEvents(): void {
           return id
         })
         .catch(() => null)
-      return remoteWorkspaceClientIdPromise
+      return remoteWorkspaceClientIdPromise ?? Promise.resolve(null)
     }
     if (api.remoteWorkspace) {
       void getRemoteWorkspaceClientId()
@@ -2265,7 +2267,7 @@ export function useIpcEvents(): void {
           return
         }
 
-        const current = api.ui.getZoomLevel()
+        const current = getCurrentUIZoomLevel()
         const rawNext =
           direction === 'in' ? current + ZOOM_STEP : direction === 'out' ? current - ZOOM_STEP : 0
         const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, rawNext))

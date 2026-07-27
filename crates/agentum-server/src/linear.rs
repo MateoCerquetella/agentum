@@ -7,7 +7,9 @@
 //! (011d follow-up) — we never guess which team a feature belongs to.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -20,6 +22,8 @@ const ISSUE_CREATE_MUTATION: &str = "mutation($teamId: String!, $title: String!,
 const ISSUE_STATES_QUERY: &str =
     "query($id: String!) { issue(id: $id) { id team { states { nodes { id name } } } } }";
 const ISSUE_UPDATE_STATE_MUTATION: &str = "mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }";
+const ISSUE_SOURCE_QUERY: &str =
+    "query($id: String!) { issue(id: $id) { id identifier title description url updatedAt } }";
 
 #[derive(Debug, Deserialize)]
 struct StoredWorkspace {
@@ -77,14 +81,18 @@ fn read_creds() -> LinearCreds {
 /// Token for the selected workspace, else the first. Pure for testability;
 /// mirrors the desktop's `pick_token` (selected → first).
 fn pick_token(creds: &LinearCreds) -> Option<String> {
+    pick_workspace(creds).map(|workspace| workspace.token.clone())
+}
+
+fn pick_workspace(creds: &LinearCreds) -> Option<&StoredWorkspace> {
     if let Some(sel) = creds.selected_workspace_id.as_deref() {
         if sel != "all" {
             if let Some(w) = creds.workspaces.iter().find(|w| w.id == sel) {
-                return Some(w.token.clone());
+                return Some(w);
             }
         }
     }
-    creds.workspaces.first().map(|w| w.token.clone())
+    creds.workspaces.first()
 }
 
 /// Is Linear usable as a sink? True when a token is on disk.
@@ -92,15 +100,110 @@ pub fn available() -> bool {
     pick_token(&read_creds()).is_some()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchedLinearIssue {
+    pub id: String,
+    pub identifier: String,
+    pub title: String,
+    pub description: String,
+    pub url: String,
+    pub updated_at: String,
+    pub connection_id: String,
+}
+
+/// Read one Linear issue and bind the selected workspace identity plus the
+/// provider's `updatedAt` revision. This adapter has no mutation path; comments
+/// and state changes remain explicit Deliver actions.
+pub async fn fetch_issue_source(identifier: &str) -> anyhow::Result<FetchedLinearIssue> {
+    let identifier = identifier.trim();
+    if identifier.is_empty() || identifier.len() > 256 || identifier.chars().any(char::is_control) {
+        anyhow::bail!("Linear issue identifier must contain 1..=256 printable characters");
+    }
+    let creds = read_creds();
+    let workspace = pick_workspace(&creds).ok_or_else(|| {
+        anyhow::anyhow!("no Linear token configured (connect Linear in settings)")
+    })?;
+    fetch_issue_source_with_token(identifier, &workspace.id, &workspace.token).await
+}
+
+/// SDD-only Linear read. The caller supplies a token obtained from the secure
+/// credential vault; this function never consults the legacy plaintext store.
+pub async fn fetch_issue_source_with_token(
+    identifier: &str,
+    connection_id: &str,
+    token: &str,
+) -> anyhow::Result<FetchedLinearIssue> {
+    let identifier = identifier.trim();
+    if identifier.is_empty() || identifier.len() > 256 || identifier.chars().any(char::is_control) {
+        anyhow::bail!("Linear issue identifier must contain 1..=256 printable characters");
+    }
+    if connection_id.is_empty()
+        || connection_id.len() > 256
+        || connection_id.chars().any(char::is_control)
+        || token.trim().is_empty()
+        || token.len() > 16 * 1024
+    {
+        anyhow::bail!("Linear secure credential is malformed");
+    }
+    let response = graphql(token, ISSUE_SOURCE_QUERY, json!({ "id": identifier })).await?;
+    parse_issue_source(&response, connection_id)
+}
+
+fn parse_issue_source(response: &Value, connection_id: &str) -> anyhow::Result<FetchedLinearIssue> {
+    let issue = response
+        .pointer("/data/issue")
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| anyhow::anyhow!("Linear issue was not found"))?;
+    let required = |name: &str| {
+        issue
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("Linear issue response has no {name}"))
+    };
+    Ok(FetchedLinearIssue {
+        id: required("id")?,
+        identifier: required("identifier")?,
+        title: required("title")?,
+        description: issue
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        url: required("url")?,
+        updated_at: required("updatedAt")?,
+        connection_id: connection_id.to_owned(),
+    })
+}
+
 async fn graphql(token: &str, query: &str, variables: Value) -> anyhow::Result<Value> {
-    let resp = reqwest::Client::new()
+    const MAX_LINEAR_RESPONSE: usize = 2 * 1024 * 1024;
+    let resp = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?
         .post(LINEAR_GRAPHQL)
         .header("Authorization", token)
         .json(&json!({ "query": query, "variables": variables }))
         .send()
         .await?;
     let status = resp.status();
-    let body: Value = resp.json().await?;
+    if resp
+        .content_length()
+        .is_some_and(|length| length > MAX_LINEAR_RESPONSE as u64)
+    {
+        anyhow::bail!("Linear response exceeded the 2 MiB limit");
+    }
+    let mut bytes = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_LINEAR_RESPONSE {
+            anyhow::bail!("Linear response exceeded the 2 MiB limit");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let body: Value = serde_json::from_slice(&bytes)?;
     // Linear returns 200 with a top-level `errors` array on failure.
     if let Some(errors) = body.get("errors") {
         anyhow::bail!("Linear GraphQL error ({status}): {errors}");
@@ -271,7 +374,7 @@ impl LinearStateMap {
     }
 }
 
-/// Outcome of a transition attempt. `Skipped` carries why so the harness log can
+/// Outcome of a transition attempt. `Skipped` carries why so the activity log can
 /// say *which* state was missing without surfacing it as a hard error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransitionOutcome {
@@ -317,7 +420,7 @@ fn match_state_by_name(states: &[(String, String)], wanted: &str) -> Option<Stri
 
 /// Move a Linear issue (by identifier or UUID) into the workflow state named for
 /// `phase`. Best-effort by contract: a missing token, unresolved issue, or absent
-/// target state returns `Skipped`/`Err` for the caller to log — the harness must
+/// target state returns `Skipped`/`Err` for the caller to log — local work must
 /// never halt because the tracker side-channel hiccuped.
 pub async fn transition_issue(
     identifier: &str,
@@ -415,6 +518,33 @@ mod tests {
         let (id, url) = parse_issue_create(&resp).unwrap();
         assert_eq!(id, "ENG-42");
         assert_eq!(url.as_deref(), Some("https://linear.app/acme/issue/ENG-42"));
+    }
+
+    #[test]
+    fn parse_issue_source_binds_revision_and_workspace() {
+        let response = json!({"data": {"issue": {
+            "id": "issue-uuid",
+            "identifier": "ENG-42",
+            "title": "Refresh active sessions",
+            "description": "Keep sessions online.",
+            "url": "https://linear.app/example/issue/ENG-42",
+            "updatedAt": "2026-07-26T14:00:00.000Z"
+        }}});
+        let issue = parse_issue_source(&response, "workspace-1").unwrap();
+        assert_eq!(issue.identifier, "ENG-42");
+        assert_eq!(issue.connection_id, "workspace-1");
+        assert_eq!(issue.updated_at, "2026-07-26T14:00:00.000Z");
+    }
+
+    #[test]
+    fn parse_issue_source_rejects_missing_authoritative_revision() {
+        let response = json!({"data": {"issue": {
+            "id": "issue-uuid",
+            "identifier": "ENG-42",
+            "title": "Issue",
+            "url": "https://linear.app/example/issue/ENG-42"
+        }}});
+        assert!(parse_issue_source(&response, "workspace-1").is_err());
     }
 
     #[test]

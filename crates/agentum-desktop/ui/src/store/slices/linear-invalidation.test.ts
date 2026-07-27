@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { create } from 'zustand'
 import type { AppState } from '../types'
-import type { LinearConnectionStatus, LinearIssue, LinearTeam } from '../../../../shared/types'
+import type { LinearConnectionStatus, LinearIssue, LinearTeam } from '@/shared/types'
 import { createLinearSlice } from './linear'
 
 const linearStatus = vi.fn()

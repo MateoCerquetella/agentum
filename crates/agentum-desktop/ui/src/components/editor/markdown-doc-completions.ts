@@ -1,4 +1,4 @@
-import type { MarkdownDocument } from '../../../../shared/types'
+import type { MarkdownDocument } from '@/shared/types'
 
 export type MarkdownDocCompletionContext = {
   partial: string

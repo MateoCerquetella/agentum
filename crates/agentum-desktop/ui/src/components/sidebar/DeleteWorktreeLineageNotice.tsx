@@ -1,6 +1,6 @@
 import { Workflow } from 'lucide-react'
 import type { JSX } from 'react'
-import type { Worktree } from '../../../../shared/types'
+import type { Worktree } from '@/shared/types'
 
 type DeleteWorktreeLineageNoticeProps = {
   descendants: readonly Worktree[]

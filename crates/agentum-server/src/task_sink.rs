@@ -29,9 +29,7 @@ pub struct NewFeature {
 }
 
 /// Where a created feature landed. `id` is the external provider's stable
-/// handle (a GitHub issue number or Linear identifier) — the
-/// chat-to-features pipeline reuses it as the harness feature id so
-/// `$HARNESS_FEATURE_ID` in `verify.sh` points back at the real tracker item.
+/// handle (a GitHub issue number or Linear identifier).
 ///
 /// `Serialize` so creation routes can return it verbatim; `provider`/`id`/`url`
 /// are the wire contract.
@@ -50,9 +48,7 @@ pub struct SinkCtx<'a> {
     /// Explicit GitHub `owner/repo` target (spec 019). When `Some`, the GitHub
     /// arm files via `gh issue create --repo <slug>` run from `$HOME` — so a
     /// non-existent project `workdir` is never used as cwd (the Chat-from-
-    /// anywhere fix). When `None`, the legacy cwd-relative argv runs inside
-    /// `workdir` (harness/`plan_goal_harness` compatibility — byte-for-byte
-    /// unchanged).
+    /// anywhere fix). When `None`, the cwd-relative argv runs inside `workdir`.
     pub slug: Option<&'a str>,
 }
 
@@ -136,9 +132,8 @@ impl TaskSink {
                         ))
                         .current_dir(neutral_cwd());
                     }
-                    // Legacy harness path: resolve the repo from `workdir`'s
-                    // origin (cwd-relative). Unchanged behavior for callers
-                    // (e.g. `plan_goal_harness`) that pass no slug.
+                    // Resolve the repository from `workdir`'s origin for callers
+                    // that do not provide an explicit slug.
                     None => {
                         cmd.args(gh_create_argv(&feature.title, &body, &feature.labels))
                             .current_dir(ctx.workdir);
@@ -173,15 +168,15 @@ impl TaskSink {
 }
 
 /// A pipeline phase, mapped onto whatever the backing tracker calls it. The
-/// harness drives these as a feature moves Pending → Coding → green unit gate →
-/// green QA gate (spec 012).
+/// The task pipeline drives these as a feature moves from queued work through
+/// implementation and verification (spec 012).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackerPhase {
     Todo,
     InProgress,
     /// Spec 012 F3: a PR is open on the workspace's branch. Sits between
     /// InProgress and ReadyToTest in the canonical order (`tracker_sync`), so a
-    /// plain session walks InProgress → InReview → Done while a gated run's
+    /// plain session walks InProgress → InReview → Done while an SDD run's
     /// ReadyToTest (unit-green) never regresses when a PR opens.
     InReview,
     ReadyToTest,
@@ -219,7 +214,7 @@ pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
     }
 }
 
-/// Outcome of a transition, for the harness log. Transitions are a side-channel:
+/// Outcome of a tracker transition. Transitions are a side-channel:
 /// a tracker hiccup must never halt the run, so even failures come back as a
 /// value the caller logs rather than an error that propagates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,7 +228,7 @@ pub enum TransitionResult {
     Skipped(String),
 }
 
-/// Canonical, harness-owned status labels with fixed colors (spec 004 D3).
+/// Canonical Agentum-owned status labels with fixed colors (spec 004 D3).
 /// NOT `.github/labels.sh`'s `status/qa*` set — that is the human-QA lifecycle
 /// (architecture C4); the transition never touches foreign `status/*` labels.
 const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 5] = [
@@ -562,7 +557,7 @@ fn blocked_comment_body(
     format!(
         "⛔ **Blocked** — `{feature_name}` failed the {gate_label} after {attempts} attempt(s).\n\n\
          <details><summary>Gate output (tail)</summary>\n\n```\n{gate_tail}\n```\n</details>\n\n\
-         _Posted by the agentum Harness Engine._"
+         _Posted by Agentum._"
     )
 }
 
@@ -840,18 +835,18 @@ async fn github_mark_blocked_with_board(
 pub struct TrackerEmit<'a> {
     pub bus: &'a tokio::sync::broadcast::Sender<agentum_core::Event>,
     /// The bound workspace, when the caller knows it (reactor / poller /
-    /// attention worker). `None` for tracker-coord-only callers (harness,
-    /// MCP, planning) — consumers then join on `tracker_url`.
+    /// attention worker). `None` for tracker-coordinate-only callers —
+    /// consumers then join on `tracker_url`.
     pub worktree_id: Option<&'a str>,
 }
 
 /// Drive a created feature's tracker item to `phase`, dispatching on the provider
 /// recorded when the feature was created. **Best-effort by contract**: returns
 /// `Ok(Skipped)` for providers/states that don't apply and only `Err` for a real
-/// transport failure the caller should log — never a reason to halt the harness.
+/// transport failure the caller should log — never a reason to halt local work.
 ///
 /// `tracker_id` is the provider's stable handle (Linear identifier or GitHub
-/// issue number) — the same value stored as the harness feature id.
+/// issue number).
 /// `tracker_url` is the ticket's URL when known (`Feature.tracker_url`); the
 /// GitHub arm parses `owner/repo` AND the issue number from it (spec 004 — a
 /// spec-from-issue backlog derives N features from ONE issue, so `tracker_id`
@@ -986,7 +981,7 @@ async fn transition_inner(
 ///
 /// Spec 014 F4: `with_comment: false` suppresses only the explanatory comment
 /// (crash-loop cooldown); the label edit and Projects Blocked-column write are
-/// unchanged. The harness retries-exhausted caller passes `true`.
+/// unchanged. A retries-exhausted caller passes `true`.
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_blocked_transition(
     provider: &str,
@@ -1171,7 +1166,7 @@ pub(crate) async fn output_with_etxtbsy_retry(
 }
 
 /// Parse the issue URL `gh issue create` prints to stdout into a [`FeatureRef`].
-/// The number (after `/issues/`) becomes the harness feature id; the full URL is
+/// The number (after `/issues/`) becomes the stable feature id; the full URL is
 /// surfaced to the user.
 pub(crate) fn parse_gh_issue_url(stdout: &str) -> anyhow::Result<FeatureRef> {
     let url = stdout
@@ -2081,8 +2076,8 @@ mod tests {
     // ---- Spec 021 F4: per-project pin → provider dispatch at the seam --------
 
     /// Spec 021 F4: the per-project pin — stamped onto each planned
-    /// `Feature.tracker_provider` (F3) and passed verbatim by the harness's
-    /// `transition_tracker` — selects the matching arm at THIS public seam.
+    /// `Feature.tracker_provider` (F3) and passed verbatim to this transition
+    /// seam — selects the matching arm at THIS public seam.
     /// No live credentials: a `"github"` feature drives the `gh issue edit`
     /// transition (fake `gh` records the argv), a `"linear"` feature enters
     /// `linear::transition_issue`, proven by its token-gate error — a message
@@ -2470,7 +2465,7 @@ mod tests {
     }
 
     /// Linear has no blocked state and legacy board metadata is unsupported;
-    /// both remain best-effort skips rather than harness failures.
+    /// both remain best-effort skips rather than task failures.
     #[tokio::test]
     async fn apply_blocked_transition_board_and_linear_are_skipped() {
         let bus = test_bus();

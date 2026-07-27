@@ -34,11 +34,15 @@ base64         = "0.22"
 argon2         = "0.5"
 password-hash  = { version = "0.5", features = ["getrandom"] }
 sha2           = "0.10"
+ulid           = { workspace = true }
+libc           = "0.2"
+tempfile       = "3"
 rustls         = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 notify         = "8"
 sysinfo        = { version = "0.32", default-features = false, features = ["system"] }
 which          = "7"
 shlex          = "1"
+cap-primitives = "4.0.2"
 # CDP-over-WebSocket client for the in-agentum screencast bridge (009c-3): connect
 # to the headless CDP-Chromium, drive Page.startScreencast, dispatch Input.*/Page.*.
 # Same version + features agentum-tui already pins (ws:// to loopback CDP; the TLS
@@ -66,6 +70,19 @@ toml           = { workspace = true }
 # for the server-side Linear task sink (spec 011c). Same crate + version the
 # desktop already pins, so the lockfile carries no new transitive deps.
 dirs           = "6"
+keyring        = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
+ring           = "0.17"
+zeroize        = "1"
 
 [dev-dependencies]
-tempfile       = "3"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+# Apply a protected, owner-only DACL to credential-bearing temporary files
+# before they are atomically published.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+] }

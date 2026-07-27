@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Worktree } from '../../../shared/types'
+import type { Worktree } from '@/shared/types'
 import { getAllWorktreesFromState, getWorktreeMapFromState } from './selectors'
 
 function makeWorktree(args: { id: string; repoId: string; displayName: string }): Worktree {

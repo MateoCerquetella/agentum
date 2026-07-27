@@ -1,1 +1,0 @@
-{"passed": true, "summary": "Grounded minimal plan preserves the existing single root topbar and fixes workdir-scoped snapshot continuity with ordered event refreshes and focused regressions."}

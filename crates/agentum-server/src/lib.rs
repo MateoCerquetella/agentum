@@ -24,6 +24,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
+mod agent_delivery;
 pub mod auth;
 pub mod bridge;
 pub mod cdp_browser;
@@ -34,7 +35,6 @@ pub mod endpoint;
 mod error;
 pub mod git;
 pub mod github_projects;
-pub mod harness;
 mod headers;
 pub mod host_install_hints;
 pub mod host_runtime;
@@ -49,7 +49,7 @@ mod port_wait;
 pub mod provision;
 pub mod ratelimit;
 mod routes;
-pub mod sdd;
+pub mod sdd_v2;
 pub mod task_sink;
 pub mod tls;
 pub mod tracker_attention;
@@ -153,9 +153,15 @@ pub struct AppState {
     /// `omarchy`, `mateo-mac`) instead of a generic placeholder. Cut
     /// at the first `.` so `omarchy.local` reads as `omarchy`.
     pub hostname: String,
-    /// When `true`, the auth middleware is bypassed and all API routes are
-    /// accessible without a bearer token. Set via `agentum serve --no-auth`.
+    /// When `true`, the auth middleware admits requests as an explicitly
+    /// untrusted local principal. Set via `agentum serve --no-auth`. SDD
+    /// mutation handlers still require an authenticated human capability.
     pub no_auth: bool,
+    /// Boot-scoped bearer capability for the embedded desktop webview. Minted
+    /// in memory, returned only across the Tauri command boundary, and never
+    /// persisted, logged, mounted into a provider sandbox, or injected into an
+    /// agent process. `None` for standalone daemons.
+    pub(crate) embedded_ui_token: Option<Arc<String>>,
     /// Pending clipboard requests, keyed by request_id. Inserted by
     /// `POST /api/clipboard/request`, removed by either the timeout
     /// path, the uploads route (on a matching
@@ -189,7 +195,7 @@ pub struct AppState {
     /// Secret bearer token guarding the agentum MCP server (`/mcp`). Minted once
     /// at boot. Every agentum-launched agent gets it baked into its MCP config
     /// (`Authorization: Bearer …`), and the `/mcp` handler rejects any request
-    /// without it — *even on the no-auth embedded server*. This is what makes the
+    /// without it — independently of normal API authentication. This makes the
     /// MCP safe to expose to a remote host over the reverse SSH tunnel: the port
     /// is loopback-bound on the host AND the tool surface needs this token, so
     /// another user/process on the host can't drive agentum.
@@ -205,15 +211,6 @@ pub struct AppState {
     /// webview automation, macOS computer-use). `None` for the standalone
     /// daemon — `/api/browser/*` and `/api/computer/*` then return 501.
     pub desktop_bridge: Option<std::sync::Arc<dyn crate::bridge::DesktopBridge>>,
-    /// The Harness Engine: drives agents one feature at a time behind a
-    /// verification gate. Shared (`Arc`) so the `/api/harness/*` routes and the
-    /// background [`harness::drive`] task operate on the same in-memory runs +
-    /// event bus. Cheap to construct; always present.
-    pub harness: Arc<harness::HarnessEngine>,
-    /// Live per-session SDD loops (issue #313). Server-owned so the desktop's
-    /// Loop toggle renders one truth across clients/reloads; workers remove
-    /// their own entry when they end and announce it as `sdd.loop.stopped`.
-    pub sdd_loops: routes::sdd::SddLoops,
     /// Live `/api/events` WebSocket client count. The host-metrics ticker
     /// gates its sysinfo sampling on THIS, not `bus.receiver_count()`: the
     /// goal reconciler and comment bridge hold permanent bus subscriptions,
@@ -221,6 +218,10 @@ pub struct AppState {
     /// don't sample" guard was dead code — the daemon paid an all-cores CPU
     /// refresh every 2 s forever. Only the events route touches this.
     pub events_ws_clients: Arc<std::sync::atomic::AtomicUsize>,
+    /// SDD integrations never read legacy plaintext credential files. Desktop
+    /// builds replace this with the OS credential store; standalone servers
+    /// receive an encrypted vault only when an external master key is present.
+    pub sdd_credentials: Arc<dyn sdd_v2::credentials::SddCredentialVault>,
 }
 
 impl AppState {
@@ -252,6 +253,7 @@ impl AppState {
             wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: detect_short_hostname(),
             no_auth: false,
+            embedded_ui_token: None,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -262,9 +264,8 @@ impl AppState {
             api_base_url: None,
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
-            harness: Arc::new(harness::HarnessEngine::new()),
-            sdd_loops: Default::default(),
             events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sdd_credentials: sdd_v2::credentials::headless_vault_or_unavailable(),
         }
     }
 }
@@ -334,8 +335,7 @@ pub fn router(state: AppState) -> Router {
         // Spec 010 F3: workspace provisioning (repo-from-template + the ensure).
         .merge(routes::provision::router())
         .merge(routes::usage::router())
-        .merge(routes::harness::router())
-        .merge(routes::sdd::router())
+        .merge(routes::sdd_v2::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
             auth::require_token,
@@ -456,161 +456,122 @@ async fn spawn_background_workers(
     state: &AppState,
     bus: &broadcast::Sender<Event>,
 ) -> anyhow::Result<()> {
-    // Recovery is a boot gate: reconcile journals and leases before managed
-    // panes revive or a scheduler loop ticks. External edits are preserved.
-    harness::orchestrated::recover_orchestrated_runs(state).await?;
-
-    // Managed-worker liveness: a quiet worker gets one bounded nudge every
-    // five minutes; thirty minutes of genuine session inactivity is the hard
-    // stall ceiling. Blocking one task never stops unrelated ready work.
+    // Agentum-native create recovery is a boot gate. Retired v1 workers are not
+    // revived after the hard cutover.
+    for saga in state.store.sdd_claim_interrupted_creates().await? {
+        if saga.authoritative_path.starts_with("agentum+ssh://") {
+            match routes::sdd_v2::recover_remote_create(state, &saga).await {
+                Ok(()) => tracing::info!(
+                    run_id = %saga.run_id,
+                    "recovered interrupted remote SDD create through its durable typed intent"
+                ),
+                Err(error) => tracing::error!(
+                    run_id = %saga.run_id,
+                    error = %error,
+                    "remote SDD create recovery remains required; no local filesystem fallback was attempted"
+                ),
+            }
+            continue;
+        }
+        let repository = std::path::Path::new(&saga.repository_path);
+        let authoritative = std::path::Path::new(&saga.authoritative_path);
+        let recovery = async {
+            sdd_v2::workspace::recover_interrupted_attempt(
+                repository,
+                authoritative,
+                std::path::Path::new(&saga.attempt_path),
+            )
+            .await?;
+            sdd_v2::workspace::recover_interrupted_create(
+                repository,
+                authoritative,
+                &saga.branch_name,
+            )
+            .await
+        }
+        .await;
+        match recovery {
+            Ok(()) => {
+                let _ = state
+                    .store
+                    .sdd_update_create_stage(
+                        &saga.repo_id,
+                        &saga.request_id,
+                        &saga.request_hash,
+                        &["recovery_required"],
+                        "failed",
+                        Some("interrupted creation was safely rolled back"),
+                    )
+                    .await;
+            }
+            Err(error) => tracing::error!(
+                run_id = %saga.run_id,
+                %error,
+                "SDD create recovery requires operator attention"
+            ),
+        }
+    }
+    for saga in state.store.sdd_claim_interrupted_run_creates().await? {
+        let repository = std::path::Path::new(&saga.repository_path);
+        let authoritative = std::path::Path::new(&saga.authoritative_path);
+        let recovery = async {
+            sdd_v2::workspace::recover_interrupted_attempt(
+                repository,
+                authoritative,
+                std::path::Path::new(&saga.attempt_path),
+            )
+            .await?;
+            sdd_v2::workspace::recover_interrupted_create(
+                repository,
+                authoritative,
+                &saga.branch_name,
+            )
+            .await
+        }
+        .await;
+        match recovery {
+            Ok(()) => {
+                let _ = state
+                    .store
+                    .sdd_update_run_create_stage(
+                        &saga.spec_id,
+                        &saga.request_id,
+                        &saga.request_hash,
+                        &["recovery_required"],
+                        "failed",
+                        Some("interrupted first-run creation was safely rolled back"),
+                    )
+                    .await;
+            }
+            Err(error) => tracing::error!(
+                run_id = %saga.run_id,
+                %error,
+                "SDD discovered-run recovery requires operator attention"
+            ),
+        }
+    }
+    let recovered = state.store.sdd_recover_interrupted_runs().await?;
+    if recovered > 0 {
+        tracing::warn!(
+            runs = recovered,
+            "paused interrupted SDD runs during recovery"
+        );
+    }
+    let recovered_delivery = sdd_v2::delivery::recover_interrupted(state).await?;
+    if recovered_delivery > 0 {
+        tracing::warn!(
+            actions = recovered_delivery,
+            "marked interrupted SDD delivery actions sync-pending"
+        );
+    }
     {
-        let state = state.clone();
+        let store = state.store.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
             loop {
                 tick.tick().await;
-                let now = time::OffsetDateTime::now_utc();
-                for run in state
-                    .store
-                    .harness_orchestrated_runs()
-                    .await
-                    .unwrap_or_default()
-                {
-                    if !harness::orchestrated::run_status_allows_managed_activity(&run.status) {
-                        continue;
-                    }
-                    for task in state
-                        .store
-                        .harness_tasks(&run.run_id)
-                        .await
-                        .unwrap_or_default()
-                    {
-                        if !matches!(
-                            task.status.as_str(),
-                            "dispatched" | "working" | "patch_pending"
-                        ) {
-                            continue;
-                        }
-                        let Some(raw_session) = task.worker_session.as_deref() else {
-                            continue;
-                        };
-                        let Ok(session_id) = uuid::Uuid::parse_str(raw_session) else {
-                            continue;
-                        };
-                        let Some(session) = state
-                            .store
-                            .get_session_by_id(session_id)
-                            .await
-                            .ok()
-                            .flatten()
-                        else {
-                            continue;
-                        };
-                        let last_activity = session.last_activity_at.unwrap_or(session.updated_at);
-                        let inactive_secs = (now - last_activity).whole_seconds().max(0);
-                        if inactive_secs >= 30 * 60 {
-                            let _ = state
-                                .store
-                                .harness_update_task(
-                                    &run.run_id,
-                                    &task.task_id,
-                                    "blocked",
-                                    None,
-                                    None,
-                                    Some("worker exceeded the 30-minute hard inactivity ceiling"),
-                                )
-                                .await;
-                            continue;
-                        }
-                        let last_nudge = time::OffsetDateTime::parse(
-                            &task.updated_at,
-                            &time::format_description::well_known::Rfc3339,
-                        )
-                        .unwrap_or(last_activity);
-                        if inactive_secs >= 5 * 60 && (now - last_nudge).whole_seconds() >= 5 * 60 {
-                            let prompt = "Agentum liveness check: this task has shown no activity for five minutes. Continue from your immutable packet, call request_verify if finished, or report a concrete blocker.";
-                            let _ = harness::inject_prompt(&state, &session, prompt).await;
-                            let _ = state
-                                .store
-                                .harness_update_task(
-                                    &run.run_id,
-                                    &task.task_id,
-                                    &task.status,
-                                    None,
-                                    None,
-                                    None,
-                                )
-                                .await;
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    // Managed sessions rotate at their first exact context-low signal (the
-    // fallback for CLIs that cannot report a numeric 10% remaining value).
-    {
-        let state = state.clone();
-        let mut events = bus.subscribe();
-        tokio::spawn(async move {
-            while let Ok(event) = events.recv().await {
-                if event.kind != "harness.context_rotation_requested" {
-                    continue;
-                }
-                let Some(session_id) = event.session_id else {
-                    continue;
-                };
-                if let Err(error) =
-                    harness::orchestrated::rotate_managed_session(&state, session_id).await
-                {
-                    tracing::warn!(%session_id, %error, "managed harness rotation failed");
-                }
-            }
-        });
-    }
-
-    // CLIs that report an exact remaining percentage rotate at <=10%, before
-    // any compaction signal. The claim in rotate_managed_session deduplicates
-    // this ticker against the watchdog event path.
-    {
-        let state = state.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
-            loop {
-                tick.tick().await;
-                for run in state
-                    .store
-                    .harness_orchestrated_runs()
-                    .await
-                    .unwrap_or_default()
-                {
-                    if !harness::orchestrated::run_status_allows_managed_activity(&run.status) {
-                        continue;
-                    }
-                    for managed in state
-                        .store
-                        .harness_active_sessions(&run.run_id)
-                        .await
-                        .unwrap_or_default()
-                    {
-                        let Ok(session_id) = uuid::Uuid::parse_str(&managed.session_id) else {
-                            continue;
-                        };
-                        let context_low = state
-                            .store
-                            .get_session_by_id(session_id)
-                            .await
-                            .ok()
-                            .flatten()
-                            .and_then(|session| session.ctx)
-                            .is_some_and(|remaining| remaining <= 10);
-                        if context_low {
-                            let _ =
-                                harness::orchestrated::rotate_managed_session(&state, session_id)
-                                    .await;
-                        }
-                    }
+                if let Err(error) = store.sdd_ack_realtime_outbox(500).await {
+                    tracing::warn!(%error, "SDD realtime outbox acknowledgement failed");
                 }
             }
         });
@@ -770,26 +731,40 @@ async fn spawn_background_workers(
     Ok(())
 }
 
-/// Boot the API server in-process on an ephemeral loopback port with auth
-/// disabled (loopback bind → only this machine can reach it). Spawns the same
-/// background workers as [`serve`] and serves on the current Tokio runtime,
-/// returning the bound `127.0.0.1:<port>` address. The desktop shell embeds the
-/// server this way so the webview drives the exact same core as the TUI.
-pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<SocketAddr> {
-    let (addr, _state) = serve_embedded_loopback_state(store).await?;
-    Ok(addr)
+/// Address and boot-scoped UI capability for an embedded server. This type
+/// intentionally does not implement `Debug`: the bearer must not enter logs.
+pub struct EmbeddedLoopbackEndpoint {
+    pub addr: SocketAddr,
+    pub ui_token: String,
 }
 
-/// Build the embedded-server `AppState` for a given bound address: no-auth, with
-/// `api_base_url` set so the session-start handler can inject `AGENTUM_API_URL`
-/// into panes and anchor the hook URL. Pure (no spawning / no serving) so the
-/// construction can be unit-tested without standing up the full server. Returns
-/// the bus alongside so the caller can wire background workers.
+/// Boot the API server in-process on a stable loopback port with a high-entropy
+/// in-memory UI bearer. Spawns the same background workers as [`serve`] and
+/// serves on the current Tokio runtime. The desktop shell embeds the server so
+/// the webview drives the exact same core as the TUI.
+pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<EmbeddedLoopbackEndpoint> {
+    let (addr, state) = serve_embedded_loopback_state(store).await?;
+    let ui_token = state
+        .embedded_ui_token
+        .as_deref()
+        .expect("embedded state always carries a UI capability")
+        .clone();
+    Ok(EmbeddedLoopbackEndpoint { addr, ui_token })
+}
+
+/// Build the embedded-server `AppState` for a given bound address, with a
+/// boot-scoped UI capability and `api_base_url` set so the session-start handler
+/// can inject `AGENTUM_API_URL` into panes and anchor the hook URL. The URL is
+/// intentionally injected into agents; the UI capability is not. Pure (no
+/// spawning / no serving) so construction can be unit-tested without standing
+/// up the full server. Returns the bus alongside for background workers.
 fn embedded_app_state(store: Store, addr: SocketAddr) -> (AppState, broadcast::Sender<Event>) {
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let mut state = AppState::with_fingerprint(store, bus.clone(), String::new());
-    state.no_auth = true;
+    state.no_auth = false;
+    state.embedded_ui_token = Some(Arc::new(auth::new_token()));
     state.api_base_url = Some(format!("http://{addr}"));
+    state.sdd_credentials = Arc::new(sdd_v2::credentials::OsCredentialVault::new());
     (state, bus)
 }
 
@@ -799,15 +774,24 @@ fn embedded_app_state(store: Store, addr: SocketAddr) -> (AppState, broadcast::S
 pub async fn serve_embedded_loopback_with_bridge(
     store: Store,
     bridge: Arc<dyn bridge::DesktopBridge>,
-) -> anyhow::Result<SocketAddr> {
+) -> anyhow::Result<EmbeddedLoopbackEndpoint> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     // Prefer the persisted/stable port so a restart doesn't invalidate live
     // sessions' baked-in MCP config (R2); reuse the persisted /mcp token (R1).
     let listener = endpoint::bind_stable_loopback().await?;
     let addr = listener.local_addr()?;
     let (mut state, bus) = embedded_app_state(store, addr);
-    state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
+    let token = endpoint::load_or_rotate_mcp_token();
+    state.mcp_token = Arc::new(token.token);
+    if token.rotated {
+        tracing::warn!("MCP bearer rotated; live sessions will be marked for reconnect");
+    }
     state.desktop_bridge = Some(bridge);
+    let ui_token = state
+        .embedded_ui_token
+        .as_deref()
+        .expect("embedded state always carries a UI capability")
+        .clone();
     spawn_background_workers(&state, &bus).await?;
     let app = router(state);
     tracing::info!(%addr, "agentum-server listening (embedded loopback, desktop bridge)");
@@ -821,7 +805,7 @@ pub async fn serve_embedded_loopback_with_bridge(
             tracing::error!("embedded agentum-server exited: {e}");
         }
     });
-    Ok(addr)
+    Ok(EmbeddedLoopbackEndpoint { addr, ui_token })
 }
 
 /// As [`serve_embedded_loopback`], but also returns the `AppState` the router was
@@ -838,12 +822,16 @@ pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(Sock
     let addr = listener.local_addr()?;
 
     let (mut state, bus) = embedded_app_state(store, addr);
-    state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
+    let token = endpoint::load_or_rotate_mcp_token();
+    state.mcp_token = Arc::new(token.token);
+    if token.rotated {
+        tracing::warn!("MCP bearer rotated; live sessions will be marked for reconnect");
+    }
 
     spawn_background_workers(&state, &bus).await?;
 
     let app = router(state.clone());
-    tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");
+    tracing::info!(%addr, "agentum-server listening (embedded loopback, UI bearer required)");
     tokio::spawn(async move {
         if let Err(e) = axum::serve(
             listener,
@@ -900,6 +888,7 @@ mod tests {
         let store = Store::open(&dir.path().join("t.db")).await.unwrap();
         let addr: SocketAddr = "127.0.0.1:5544".parse().unwrap();
         let (state, _bus) = embedded_app_state(store, addr);
+        let ui_token = state.embedded_ui_token.as_deref().unwrap().clone();
         let app = router(state);
 
         for path in [
@@ -916,7 +905,12 @@ mod tests {
         ] {
             let response = app
                 .clone()
-                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .oneshot(
+                    Request::get(path)
+                        .header("authorization", format!("Bearer {ui_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
                 .await
                 .unwrap();
             assert_eq!(
@@ -928,7 +922,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_app_state_carries_its_url_and_is_no_auth() {
+    async fn embedded_app_state_carries_its_url_and_boot_scoped_ui_capability() {
         // Use the pure builder, NOT serve_embedded_loopback_state — the latter
         // spawns the server + background workers, which would keep the test
         // process alive and hang the suite.
@@ -936,10 +930,13 @@ mod tests {
         let store = Store::open(&dir.path().join("t.db")).await.unwrap();
         let addr: SocketAddr = "127.0.0.1:5544".parse().unwrap();
         let (state, _bus) = embedded_app_state(store, addr);
-        // The embedded state must carry its own URL (so panes get AGENTUM_API_URL)
-        // and be no-auth (loopback bind).
+        // Panes receive only the URL. The webview receives a separate
+        // boot-scoped capability through Tauri; provider processes do not.
         assert_eq!(state.api_base_url.as_deref(), Some("http://127.0.0.1:5544"));
-        assert!(state.no_auth);
+        assert!(!state.no_auth);
+        let token = state.embedded_ui_token.as_deref().unwrap();
+        assert_eq!(token.len(), 43);
+        assert_ne!(token.as_str(), state.mcp_token.as_str());
     }
 
     #[tokio::test]

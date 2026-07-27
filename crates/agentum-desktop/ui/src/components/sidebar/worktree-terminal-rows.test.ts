@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 import { buildWorktreeTerminalRows } from './worktree-terminal-rows'
 
 function makeTab(overrides: Partial<TerminalTab> & { id: string }): TerminalTab {

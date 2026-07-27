@@ -1,5 +1,4 @@
-//! Stable MCP endpoint persistence: keep the embedded loopback **port** and the
-//! `/mcp` bearer **token** the same across desktop/server restarts.
+//! Stable MCP endpoint persistence with explicit one-time bearer rotations.
 //!
 //! An agent session bakes its agentum MCP connection (`--mcp-config` URL +
 //! `Authorization: Bearer …`, and the `AGENTUM_API_URL` env) **once at spawn**
@@ -32,6 +31,16 @@ const DEFAULT_MCP_PORT: u16 = 8822;
 const PORT_FILE: &str = "server_port";
 /// Persisted `/mcp` bearer token, `0600`.
 const TOKEN_FILE: &str = "mcp_token";
+const TOKEN_EPOCH_FILE: &str = "mcp_token_epoch";
+/// Bumping this value is an intentional credential incident migration. Existing
+/// installs rotate once; later boots reuse the replacement token.
+const CURRENT_TOKEN_EPOCH: &str = "agentum-sdd-boundary-v1";
+
+#[derive(Debug)]
+pub struct McpTokenLoad {
+    pub token: String,
+    pub rotated: bool,
+}
 
 /// Bind a loopback [`TcpListener`], preferring the last port we successfully
 /// bound (or [`DEFAULT_MCP_PORT`] on first run). If that port is taken — a
@@ -66,22 +75,51 @@ pub async fn bind_stable_loopback() -> anyhow::Result<TcpListener> {
 /// token so boot still succeeds — that one session just reverts to the old
 /// "doesn't survive a restart" behavior instead of crashing the server.
 pub fn load_or_create_mcp_token() -> String {
+    load_or_rotate_mcp_token().token
+}
+
+pub fn load_or_rotate_mcp_token() -> McpTokenLoad {
     match agentum_store::paths::state_dir() {
-        Ok(dir) => load_or_create_mcp_token_in(&dir),
+        Ok(dir) => load_or_rotate_mcp_token_in(&dir),
         Err(e) => {
             tracing::warn!(error = %e, "no state dir; MCP token will not persist this boot");
-            crate::auth::new_token()
+            McpTokenLoad {
+                token: crate::auth::new_token(),
+                rotated: true,
+            }
         }
     }
 }
 
+#[cfg(test)]
 fn load_or_create_mcp_token_in(state_dir: &Path) -> String {
-    if let Some(tok) = read_token_in(state_dir) {
-        return tok;
+    load_or_rotate_mcp_token_in(state_dir).token
+}
+
+fn load_or_rotate_mcp_token_in(state_dir: &Path) -> McpTokenLoad {
+    let epoch_is_current = std::fs::read_to_string(state_dir.join(TOKEN_EPOCH_FILE))
+        .ok()
+        .is_some_and(|value| value.trim() == CURRENT_TOKEN_EPOCH);
+    if epoch_is_current && let Some(token) = read_token_in(state_dir) {
+        return McpTokenLoad {
+            token,
+            rotated: false,
+        };
     }
-    let tok = crate::auth::new_token();
-    write_token_in(state_dir, &tok);
-    tok
+    let token = crate::auth::new_token();
+    // Token first, epoch second. A crash between them rotates once more on the
+    // next boot; it can never mark an old/exposed token as migrated.
+    if write_owner_only_atomic(state_dir, TOKEN_FILE, &token)
+        && write_owner_only_atomic(state_dir, TOKEN_EPOCH_FILE, CURRENT_TOKEN_EPOCH)
+    {
+        tracing::info!("MCP bearer rotation epoch applied");
+    } else {
+        tracing::warn!("MCP bearer rotation could not be persisted; using an in-memory token");
+    }
+    McpTokenLoad {
+        token,
+        rotated: true,
+    }
 }
 
 fn read_saved_port_in(state_dir: &Path) -> Option<u16> {
@@ -107,27 +145,20 @@ fn read_token_in(state_dir: &Path) -> Option<String> {
     (!tok.is_empty()).then_some(tok)
 }
 
-fn write_token_in(state_dir: &Path, token: &str) {
-    let _ = std::fs::create_dir_all(state_dir);
-    let path = state_dir.join(TOKEN_FILE);
-    if let Err(e) = std::fs::write(&path, token) {
-        tracing::warn!(path = %path.display(), error = %e, "could not persist MCP token");
-        return;
+fn write_owner_only_atomic(state_dir: &Path, name: &str, value: &str) -> bool {
+    if let Err(error) = std::fs::create_dir_all(state_dir) {
+        tracing::warn!(error = %error, "could not create MCP state directory");
+        return false;
     }
-    // The token guards the /mcp tool surface — keep it owner-only at rest.
-    set_owner_only(&path);
-}
-
-#[cfg(unix)]
-fn set_owner_only(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
-        tracing::warn!(path = %path.display(), error = %e, "could not chmod 0600 MCP token");
+    let path = state_dir.join(name);
+    let result = crate::sdd_v2::artifacts::atomic_write(&path, value.as_bytes(), None);
+    if let Err(error) = result {
+        tracing::warn!(path = %path.display(), error = %error, "could not persist MCP credential state");
+        false
+    } else {
+        true
     }
 }
-
-#[cfg(not(unix))]
-fn set_owner_only(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -158,6 +189,25 @@ mod tests {
         assert_eq!(first.len(), 43, "fresh token has new_token() shape");
         let second = load_or_create_mcp_token_in(dir.path());
         assert_eq!(first, second, "second boot reuses the persisted token");
+    }
+
+    #[test]
+    fn legacy_persisted_token_rotates_once_and_records_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let exposed = "x".repeat(43);
+        std::fs::write(dir.path().join(TOKEN_FILE), &exposed).unwrap();
+
+        let first = load_or_rotate_mcp_token_in(dir.path());
+        assert!(first.rotated);
+        assert_ne!(first.token, exposed);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(TOKEN_EPOCH_FILE)).unwrap(),
+            CURRENT_TOKEN_EPOCH
+        );
+
+        let second = load_or_rotate_mcp_token_in(dir.path());
+        assert!(!second.rotated);
+        assert_eq!(second.token, first.token);
     }
 
     #[test]

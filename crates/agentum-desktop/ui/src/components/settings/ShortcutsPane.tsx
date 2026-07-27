@@ -15,7 +15,7 @@ import {
   type KeybindingInput,
   type KeybindingOverrides,
   type TerminalShortcutPolicy
-} from '../../../../shared/keybindings'
+} from '@/shared/keybindings'
 import { useAppStore } from '../../store'
 import { KeybindingsFileActions } from './KeybindingsFileActions'
 import { SettingsSubsectionHeader } from './SettingsFormControls'

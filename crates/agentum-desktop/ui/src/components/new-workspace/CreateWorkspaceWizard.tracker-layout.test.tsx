@@ -1,31 +1,27 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-describe('CreateWorkspaceWizard canonical tracker layout', () => {
+describe('CreateWorkspaceWizard hard cutover', () => {
   const source = readFileSync(new URL('./CreateWorkspaceWizard.tsx', import.meta.url), 'utf8')
 
-  it('renders one tracker control immediately before downstream work fields', () => {
-    const heading = source.indexOf("What&apos;s the work — and who drives it?")
-    const tracker = source.indexOf('<CanonicalTrackerSection', heading)
+  it('keeps manual workspace creation tracker-neutral', () => {
+    const heading = source.indexOf('Name the workspace — and choose its agent')
     const worktreeName = source.indexOf("{selectedRepoIsGit ? 'Worktree name'", heading)
 
     expect(heading).toBeGreaterThan(-1)
-    expect(tracker).toBeGreaterThan(heading)
-    expect(tracker).toBeLessThan(worktreeName)
-    expect(source.match(/<CanonicalTrackerSection/g)).toHaveLength(1)
-    expect(source).not.toContain('function TrackerSection(')
-    expect(source).not.toContain('function CreateIssuePanel(')
-    expect(source).not.toContain('resolveCreateIssueProvider')
+    expect(worktreeName).toBeGreaterThan(heading)
+    expect(source).toContain('initialLinkedWorkItem: null')
+    expect(source).toContain('enableIssueAutomation: false')
+    expect(source).toContain("const workSource: WorkSource = 'none'")
+    expect(source).not.toContain('CanonicalTrackerSection')
+    expect(source).not.toContain('onCreateIssueSubmit')
   })
 
-  it('keeps provider choice canonical and avoids a duplicate repository picker', () => {
-    expect(source).toContain('projectTrackerConfigByRepo[repoId]')
-    expect(source.match(/aria-label="Search repository issues"/g)).toHaveLength(1)
-    expect(source).toContain("provider === 'github'")
-    expect(source).toContain("provider === 'linear'")
-    expect(source).toContain('No issue')
-    expect(source).toContain('aria-label="Refresh repository issues"')
-    expect(source).toContain("repoIssuePicker.error ?? 'No matching open repository issues.'")
+  it('points tracker-originated work to New Spec without exposing a fallback', () => {
+    expect(source).toContain('Use New Spec for GitHub, Linear, Jira, or imported work.')
+    expect(source).not.toContain('Search repository issues')
+    expect(source).not.toContain('Create issue')
+    expect(source).not.toContain('Start workspace from')
   })
 
   it('uses responsive execution controls and a staged mobile footer', () => {
@@ -37,14 +33,9 @@ describe('CreateWorkspaceWizard canonical tracker layout', () => {
     expect(source).toContain('w-full items-center justify-center')
   })
 
-  it('keeps setup-policy ask repos actionable and closes before opening Settings', () => {
+  it('keeps setup-policy ask repos actionable', () => {
     expect(source).toContain('onSetupDecisionChange={onSetupDecisionChange}')
     expect(source).toContain("decision === 'run' ? 'Run setup' : 'Skip setup'")
-
-    const openSettings = source.indexOf('const openTrackerSettings')
-    const closeModal = source.indexOf('store.closeModal()', openSettings)
-    expect(openSettings).toBeGreaterThan(-1)
-    expect(closeModal).toBeGreaterThan(openSettings)
   })
 
   it('locks the staged launch owner and all mutable step-three controls while busy', () => {

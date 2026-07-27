@@ -2,7 +2,7 @@ import {
   detectAgentStatusFromTitle,
   isGeminiTerminalTitle,
   isPiTerminalTitle
-} from '../../../../shared/agent-detection'
+} from '@/shared/agent-detection'
 
 const TITLE_AGENT_TOKEN_RE =
   /(?<![\w./\\-])(claude|openclaude|codex|gemini|antigravity|agy|opencode|openclaw|aider|copilot|cursor-agent|cursor|droid|hermes|grok|pi)(?![\w./\\-])/i

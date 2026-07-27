@@ -1,10 +1,10 @@
 import { Check, Github, Gitlab } from 'lucide-react'
-import type { ChatAgentId, GlobalSettings, TaskProvider } from '../../../../shared/types'
+import type { ChatAgentId, GlobalSettings, TaskProvider } from '@/shared/types'
 import {
   TASK_PROVIDERS,
   normalizeVisibleTaskProviders,
   resolveVisibleTaskProvider
-} from '../../../../shared/task-providers'
+} from '@/shared/task-providers'
 import { cn } from '@/lib/utils'
 import { LinearIcon } from '@/components/icons/LinearIcon'
 import { Label } from '../ui/label'
@@ -71,14 +71,14 @@ export function TasksPane({ settings, updateSettings }: TasksPaneProps): React.J
     <div className="space-y-6">
       <section className="space-y-3">
         <SettingsSubsectionHeader
-          title="Chat Agent"
-          description="Choose the installed agent that powers Chat interviews and issue-plan previews."
+          title="Issue drafting agent"
+          description="Choose the installed agent used to draft optional tracker issue descriptions."
         />
 
         <SearchableSetting
-          title="Chat agent"
+          title="Drafting agent"
           description="The selected agent is saved globally and uses its existing sign-in or API key."
-          keywords={['chat', 'agent', 'claude', 'codex', 'issues', 'preview']}
+          keywords={['draft', 'agent', 'claude', 'codex', 'issues']}
           className="flex flex-wrap gap-2 py-2"
         >
           {installedChatAgents.map((agent) => {

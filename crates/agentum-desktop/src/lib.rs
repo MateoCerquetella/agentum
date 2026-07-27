@@ -108,7 +108,7 @@ pub fn run() {
             app.manage(managed_grab_registry.clone());
 
             let bridge = std::sync::Arc::new(bridge::TauriBridge::new(app.handle().clone()));
-            let addr = tauri::async_runtime::block_on(async {
+            let endpoint = tauri::async_runtime::block_on(async {
                 let (store, _db_path) = agentum_store::open_default()
                     .await
                     .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -117,8 +117,8 @@ pub fn run() {
                     .map_err(|e| std::io::Error::other(e.to_string()))
             })?;
             app.manage(server::ServerEndpoint {
-                url: format!("http://{addr}"),
-                token: None,
+                url: format!("http://{}", endpoint.addr),
+                token: Some(endpoint.ui_token),
             });
 
             // Reap any Chromium left over from a previous run. Our per-worktree
@@ -154,7 +154,7 @@ pub fn run() {
             // check → download → install commands the bottom-right UpdateCard drives.
             app.manage(commands::updater::UpdaterRuntime::default());
             // Silent check on launch AND on a recurring interval so the card
-            // surfaces a new release on its own (orca-style), without the user
+            // surfaces a new release on its own, without the user
             // opening Settings — and crucially without a relaunch: a long-running
             // instance re-checks periodically. Background (userInitiated=false) →
             // a "you're up to date" result stays silent.

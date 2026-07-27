@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BrowserPage, BrowserWorkspace } from '../../../../shared/types'
+import type { BrowserPage, BrowserWorkspace } from '@/shared/types'
 
 vi.mock('../../components/browser-pane/webview-registry', () => ({
   destroyPersistentWebview: vi.fn()

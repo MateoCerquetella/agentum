@@ -1,21 +1,21 @@
 import { detectAgentStatusFromTitle, isExplicitAgentStatusFresh } from '@/lib/agent-status'
 import { migrationUnsupportedToAgentStatusEntry } from '@/lib/migration-unsupported-agent-entry'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
-import type { AgentStatus } from '../../../../shared/agent-detection'
+import type { AgentStatus } from '@/shared/agent-detection'
 import type {
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
   TerminalTab,
   Worktree
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStateHistoryEntry,
   type AgentStatusEntry,
   type MigrationUnsupportedPtyEntry
-} from '../../../../shared/agent-status-types'
-import { isTerminalLeafId, parsePaneKey } from '../../../../shared/stable-pane-id'
-import { FIRST_PANE_ID } from '../../../../shared/pane-key'
+} from '@/shared/agent-status-types'
+import { isTerminalLeafId, parsePaneKey } from '@/shared/stable-pane-id'
+import { FIRST_PANE_ID } from '@/shared/pane-key'
 
 /**
  * Ordinal class for the "Smart" sort. Lower number = more attention-demanding.

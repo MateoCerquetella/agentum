@@ -7,8 +7,8 @@ import {
   encodeTerminalStreamFrame,
   encodeTerminalStreamJson,
   encodeTerminalStreamText
-} from '../../../../shared/terminal-stream-protocol'
-import { createTerminalSessionStateSaveFailureMessage } from '../../../../shared/terminal-session-state-save-failure'
+} from '@/shared/terminal-stream-protocol'
+import { createTerminalSessionStateSaveFailureMessage } from '@/shared/terminal-session-state-save-failure'
 
 describe('createIpcPtyTransport', () => {
   const originalWindow = (globalThis as { window?: typeof window }).window

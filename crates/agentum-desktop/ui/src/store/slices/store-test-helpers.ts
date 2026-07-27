@@ -6,7 +6,7 @@ import type {
   TerminalLayoutSnapshot,
   Tab,
   TabGroup
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type { OpenFile } from './editor'
 import { createRepoSlice } from './repos'
 import { createSparsePresetsSlice } from './sparse-presets'
@@ -34,6 +34,10 @@ import { createDetectedAgentsSlice } from './detected-agents'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createDictationSlice } from './dictation'
 import { createWorkspaceCleanupSlice } from './workspace-cleanup'
+import { createHostsSlice } from './hosts'
+import { createServerWorktreeActivitySlice } from './server-worktree-activity'
+import { createTrackerPhaseSlice } from './tracker-phase'
+import { createProjectTrackersSlice } from './project-trackers'
 
 export const TEST_REPO = {
   id: 'repo1',
@@ -70,7 +74,11 @@ export function createTestStore() {
     ...createDetectedAgentsSlice(...a),
     ...createWorktreeNavHistorySlice(...a),
     ...createDictationSlice(...a),
-    ...createWorkspaceCleanupSlice(...a)
+    ...createWorkspaceCleanupSlice(...a),
+    ...createHostsSlice(...a),
+    ...createServerWorktreeActivitySlice(...a),
+    ...createTrackerPhaseSlice(...a),
+    ...createProjectTrackersSlice(...a)
   }))
 }
 

@@ -1,8 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { ArrowRight, CircleDot } from 'lucide-react'
-import { AgentStateDot } from '@/components/AgentStateDot'
-import { ClaudeIcon } from '../status-bar/icons'
 import { FeatureWallClickRing } from './FeatureWallClickRing'
 
 type Issue = {
@@ -20,7 +18,7 @@ type Phase =
   | { kind: 'idle' }
   | { kind: 'hover'; issueIdx: number }
   | { kind: 'pressing'; issueIdx: number }
-  | { kind: 'creating'; issueIdx: number }
+  | { kind: 'authoring'; issueIdx: number }
   | { kind: 'ready'; issueIdx: number }
 
 // Beat timings (ms). Match the HTML mock's runCycle so the React port reads
@@ -28,7 +26,7 @@ type Phase =
 const HOVER_SETTLE_MS = 700
 const HOVER_TO_BUTTON_MS = 700
 const PRESS_MS = 360
-const CREATING_MS = 2000
+const AUTHORING_MS = 2000
 const READY_MS = 2400
 const RESET_MS = 500
 
@@ -149,7 +147,7 @@ export function TasksAnimatedVisual(props: { reducedMotion: boolean }): JSX.Elem
         setCursorTarget({ kind: 'row', issueIdx, settle: true })
       }, 50)
 
-      // 2. Activate the row — Start workspace button slides in.
+      // 2. Activate the row — the New Spec action slides in.
       schedule(() => {
         setPhase({ kind: 'hover', issueIdx })
       }, 50 + HOVER_SETTLE_MS)
@@ -167,15 +165,15 @@ export function TasksAnimatedVisual(props: { reducedMotion: boolean }): JSX.Elem
         setRippleKey((k) => k + 1)
       }, pressStart)
 
-      // 4. Workspace card materializes below with a running agent.
-      const creatingStart = pressStart + PRESS_MS
+      // 4. Agentum opens the project-owned authoring flow.
+      const authoringStart = pressStart + PRESS_MS
       schedule(() => {
-        setPhase({ kind: 'creating', issueIdx })
+        setPhase({ kind: 'authoring', issueIdx })
         setCursorTarget({ kind: 'hidden' })
-      }, creatingStart)
+      }, authoringStart)
 
-      // 5. Agent finishes — flip the spinner to a check.
-      const readyStart = creatingStart + CREATING_MS
+      // 5. The authored spec reaches its guarded approval stop.
+      const readyStart = authoringStart + AUTHORING_MS
       schedule(() => {
         setPhase({ kind: 'ready', issueIdx })
       }, readyStart)
@@ -201,17 +199,15 @@ export function TasksAnimatedVisual(props: { reducedMotion: boolean }): JSX.Elem
   const activeIdx =
     phase.kind === 'hover' ||
     phase.kind === 'pressing' ||
-    phase.kind === 'creating' ||
+    phase.kind === 'authoring' ||
     phase.kind === 'ready'
       ? phase.issueIdx
       : -1
-  // Why: the dropdown appears as soon as the workspace starts being created so
-  // the user sees a "Creating workspace" beat, but the workspace card itself
-  // only materialises once the workspace is ready — at which point the Claude
-  // agent inside it is already working.
-  const showDropdown = phase.kind === 'creating' || phase.kind === 'ready'
-  const workspaceCreating = phase.kind === 'creating'
-  const workspaceIssue = phase.kind === 'ready' ? ISSUES[phase.issueIdx] : null
+  // Why: show authoring first, then the guarded approval stop promised by the
+  // New Spec flow. The feature tile must not imply implementation has begun.
+  const showDropdown = phase.kind === 'authoring' || phase.kind === 'ready'
+  const specAuthoring = phase.kind === 'authoring'
+  const specIssue = phase.kind === 'ready' ? ISSUES[phase.issueIdx] : null
 
   return (
     <div
@@ -260,7 +256,7 @@ export function TasksAnimatedVisual(props: { reducedMotion: boolean }): JSX.Elem
                       isPressing ? 'scale-[0.94] brightness-[1.4]' : 'scale-100'
                     }`}
                   >
-                    Start workspace
+                    New Spec
                     <ArrowRight className="size-2.5" aria-hidden />
                   </button>
                 )}
@@ -278,34 +274,31 @@ export function TasksAnimatedVisual(props: { reducedMotion: boolean }): JSX.Elem
         }`}
       >
         <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-          {workspaceCreating ? (
+          {specAuthoring ? (
             <span className="inline-block size-[9px] animate-spin rounded-full border-[1.5px] border-yellow-500 border-t-transparent" />
           ) : (
             <span className="inline-block size-[9px] rounded-full bg-emerald-500" />
           )}
-          <span>{workspaceCreating ? 'Creating workspace' : 'Workspace ready'}</span>
+          <span>{specAuthoring ? 'Authoring spec' : 'Spec approval required'}</span>
         </div>
-        {workspaceIssue ? (
+        {specIssue ? (
           <div
-            key={workspaceIssue.number}
-            className="animate-[tasks-workspace-in_320ms_cubic-bezier(.2,.8,.2,1)_both] rounded-[10px] bg-foreground/[0.05] px-2 py-2.5 shadow-[inset_0_0_0_1px_rgba(24,24,27,0.06)]"
+            key={specIssue.number}
+            className="animate-[tasks-spec-in_320ms_cubic-bezier(.2,.8,.2,1)_both] rounded-[10px] bg-foreground/[0.05] px-2 py-2.5 shadow-[inset_0_0_0_1px_rgba(24,24,27,0.06)]"
           >
             <div className="grid grid-cols-[14px_minmax(0,1fr)] items-center gap-3 px-1.5">
               <span className="inline-block size-[9px] rounded-full bg-emerald-500" />
               <div className="min-w-0">
                 <div className="truncate text-[15px] font-semibold leading-[1.2] text-foreground">
-                  {workspaceIssue.title}
+                  {specIssue.title}
                 </div>
               </div>
             </div>
             <div className="flex flex-col gap-2.5 pl-[30px] pr-2 pt-2.5 pb-0.5">
-              <div className="grid grid-cols-[16px_16px_minmax(0,1fr)] items-center gap-2.5">
-                <span className="inline-flex size-4 items-center justify-center">
-                  <AgentStateDot state="working" size="md" />
-                </span>
-                <ClaudeIcon size={14} />
+              <div className="grid grid-cols-[16px_minmax(0,1fr)] items-center gap-2.5">
+                <span className="inline-block size-[9px] rounded-full bg-amber-500" />
                 <span className="truncate font-mono text-[11px] leading-[1.2] text-muted-foreground">
-                  Reading issue #{workspaceIssue.number}…
+                  RQ and AC drafted from issue #{specIssue.number}
                 </span>
               </div>
             </div>

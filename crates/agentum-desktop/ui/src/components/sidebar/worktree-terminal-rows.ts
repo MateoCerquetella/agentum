@@ -1,5 +1,5 @@
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 
 /** A plain-terminal entry rendered under a worktree card, beside the agent
  *  rows. Plain = a terminal tab that is NOT already surfaced as an agent row. */

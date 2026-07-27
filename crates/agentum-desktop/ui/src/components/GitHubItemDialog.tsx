@@ -36,7 +36,7 @@ import { useAllWorktrees } from '@/store/selectors'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { findGithubIssueWorkspaceAttachment, getGithubWorkItemWorkspaceAttachmentLabel } from '@/lib/github-work-item-workspace-attachment'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import type { GitHubPRFileViewedState, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, PRCheckDetail, PRComment } from '../../../shared/types'
+import type { GitHubPRFileViewedState, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, PRCheckDetail, PRComment } from '@/shared/types'
 
 const IS_MAC = navigator.userAgent.includes('Mac')
 
@@ -60,7 +60,7 @@ type GitHubItemDialogProps = {
   initialTab?: ItemDialogTab
   variant?: 'sheet' | 'page'
   backLabel?: string
-  /** Called when the user clicks the primary CTA to start work from this item. */
+  /** Called when the user asks to author a spec from this item. */
   onUse: (item: GitHubWorkItem) => void
   onReviewRequestsChange?: (
     itemKey: { id: string; repoId: string },
@@ -866,7 +866,7 @@ export default function GitHubItemDialog({
                         <Button
                           type="button"
                           size="icon-sm"
-                          aria-label="More issue workspace actions"
+                          aria-label="More issue actions"
                         >
                           <ChevronDown className="size-3.5" />
                         </Button>
@@ -875,7 +875,7 @@ export default function GitHubItemDialog({
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onSelect={() => onUse(workItem)}>
                         <Plus className="size-4" />
-                        Start new workspace
+                        Author another spec
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => openItemUrl(workItem.url)}>
                         <ExternalLink className="size-4" />
@@ -889,9 +889,9 @@ export default function GitHubItemDialog({
                     size="sm"
                     onClick={() => onUse(workItem)}
                     className="gap-1.5 whitespace-nowrap"
-                    aria-label="Start workspace from issue"
+                    aria-label="Author spec from issue"
                   >
-                    Start workspace from issue
+                    New Spec
                     <ArrowRight className="size-3.5" />
                   </Button>
                 )}
@@ -987,9 +987,9 @@ export default function GitHubItemDialog({
                   size="sm"
                   onClick={() => onUse(workItem)}
                   className="gap-1.5 whitespace-nowrap"
-                  aria-label="Start workspace from PR"
+                  aria-label="Author spec from PR"
                 >
-                  Start workspace from PR
+                  New Spec
                   <ArrowRight className="size-3.5" />
                 </Button>
               )}
@@ -1340,7 +1340,7 @@ export default function GitHubItemDialog({
         }
         onOpenAutoFocus={(event) => {
           // Why: focusing the first actionable element inside the drawer
-          // causes the "Start workspace" action to receive focus and
+          // causes the primary New Spec action to receive focus and
           // get visually highlighted on open. Preventing auto-focus keeps the
           // drawer feeling like a passive preview until the user acts.
           event.preventDefault()

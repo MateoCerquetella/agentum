@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 import { classifyStartWorkRepoMatches } from './start-work-repo-match'
 
 function makeRepo(overrides: Partial<Repo> & Pick<Repo, 'id'>): Repo {

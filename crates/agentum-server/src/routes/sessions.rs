@@ -33,9 +33,8 @@ mod streaming;
 use streaming::{stream_remote_session, stream_session};
 
 // Pane env + MCP/endpoint provisioning + the shared spawn-into-pane launch path.
-// `spawn_agent_into_pane` + `boot_drift_rescan` are re-exported at crate scope to
-// preserve `routes::sessions::…` references from harness::drive, board_goals, and
-// lib.rs; the rest are used internally by the create/start handlers.
+// `spawn_agent_into_pane` + boot recovery are shared by non-interactive server
+// workers and the normal create/start handlers.
 mod provision;
 use super::util::parse_uuid;
 use provision::{Reprovision, reprovision_session};
@@ -614,8 +613,8 @@ async fn start(
     };
 
     // All launch conventions (YOLO translation, loopback env, Claude hook, MCP
-    // wiring, pipe-pane, status flip) live in the shared spawn helper so the
-    // harness-engine driver goes through the exact same path.
+    // wiring, pipe-pane, status flip) live in the shared spawn helper so every
+    // interactive terminal launch goes through the exact same path.
     if let Err(e) = spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await {
         // Lost a spawn race: the boot revival sweep (or a concurrent /start)
         // can create this pane between the has_session probe above and our
@@ -896,8 +895,8 @@ struct SubmitBody {
 
 /// `POST /api/sessions/{id}/submit` — deliver a prompt to a RUNNING agent the robust
 /// way and submit it. Unlike `/send` (a single `send-keys`, which a modern REPL
-/// collapses into a swallowed "[Pasted text]" block for multi-line input), this reuses
-/// the harness's `inject_prompt`: wait for the REPL to be idle, type the body, then
+/// collapses into a swallowed "[Pasted text]" block for multi-line input), this waits
+/// for the REPL to be idle, types the body, then
 /// send a SEPARATE Enter after a settle delay so the turn actually executes.
 ///
 /// This is what the browser-annotation "Send to an agent" uses so it reaches ANY
@@ -950,7 +949,7 @@ pub(crate) async fn submit_prompt_core(
     // Robust two-step delivery (see the `/submit` doc comment).
     let state = state.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::harness::inject_prompt(&state, &session, &text).await {
+        if let Err(e) = crate::agent_delivery::inject_prompt(&state, &session, &text).await {
             tracing::warn!(target: "agentum::sessions::submit", error = %e, "submit delivery failed");
         }
     });
@@ -1321,6 +1320,7 @@ mod tests {
                 wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 hostname: "test".to_string(),
                 no_auth: true,
+                embedded_ui_token: None,
                 clipboard_pending: Arc::new(
                     std::sync::Mutex::new(std::collections::HashMap::new()),
                 ),
@@ -1329,9 +1329,10 @@ mod tests {
                 mcp_token: Arc::new(String::from("test-mcp-token")),
                 api_base_url: None,
                 desktop_bridge: None,
-                harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
-                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                sdd_credentials: std::sync::Arc::new(
+                    crate::sdd_v2::credentials::MemoryCredentialVault::default(),
+                ),
             }
         }
 
@@ -1469,6 +1470,7 @@ mod tests {
                 wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 hostname: "test".to_string(),
                 no_auth: true,
+                embedded_ui_token: None,
                 clipboard_pending: Arc::new(
                     std::sync::Mutex::new(std::collections::HashMap::new()),
                 ),
@@ -1477,9 +1479,10 @@ mod tests {
                 mcp_token: Arc::new(String::from("test-mcp-token")),
                 api_base_url: None,
                 desktop_bridge: None,
-                harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
-                sdd_loops: Default::default(),
                 events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                sdd_credentials: std::sync::Arc::new(
+                    crate::sdd_v2::credentials::MemoryCredentialVault::default(),
+                ),
             }
         }
 

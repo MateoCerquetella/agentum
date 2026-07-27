@@ -15,14 +15,14 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import { useAppStore } from '@/store'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { track } from '@/lib/telemetry'
-import type { Repo } from '../../../../shared/types'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import type { Repo } from '@/shared/types'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import { getProjectAddedPrimaryBranchName, SetupStep } from './AddRepoSetupStep'
 import { finalizeImportedRepoAfterSkip } from './add-repo-skip-finalization'
 import {
   effectiveExternalWorktreeVisibility,
   isLegacyRepoForExternalWorktreeVisibility
-} from '../../../../shared/worktree-ownership'
+} from '@/shared/worktree-ownership'
 
 const NON_GIT_REPO_ERROR = 'Not a valid git repository'
 
@@ -117,6 +117,9 @@ const AddProjectFromFolderDialog = React.memo(function AddProjectFromFolderDialo
           throw new Error(result.error)
         }
         repo = result.repo
+        if (!repo) {
+          throw new Error('The server did not return the added remote project.')
+        }
         const state = useAppStore.getState()
         const existingIdx = state.repos.findIndex((r) => r.id === repo?.id)
         if (existingIdx !== -1) {

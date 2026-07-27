@@ -41,6 +41,7 @@
     "@tiptap/starter-kit": "^3.22.5",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/react-test-renderer": "^19.1.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "@xterm/addon-fit": "^0.12.0-beta.220",
@@ -54,8 +55,9 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "dompurify": "^3.4.2",
+    "dompurify": "^3.4.12",
     "emoji-picker-react": "^4.19.1",
+    "happy-dom": "20.8.9",
     "html-to-image": "^1.11.13",
     "katex": "^0.16.45",
     "lowlight": "^3.3.0",
@@ -68,6 +70,7 @@
     "react-colorful": "^5.7.0",
     "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
+    "react-test-renderer": "19.2.7",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "rehype-raw": "^7.0.0",
@@ -87,5 +90,10 @@
     "vite": "^7.3.2",
     "vitest": "^4.1.5",
     "zustand": "^5.0.13"
+  },
+  "overrides": {
+    "dompurify": "3.4.12",
+    "esbuild": "0.28.1",
+    "postcss": "8.5.23"
   }
 }

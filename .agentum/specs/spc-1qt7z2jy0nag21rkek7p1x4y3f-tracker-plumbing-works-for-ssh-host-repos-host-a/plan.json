@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-1QT7Z2JY0NAG21RKEK7P1X4Y3F",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "Carry out the migrated plan section: F1 \u2014 host-aware-slug-family (server) \u2014 BUILT \u2705 (2026-07-13)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "Carry out the migrated plan section: F2 \u2014 slug-index-ssh (route + renderer) \u2014 BUILT \u2705 (2026-07-13)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "Carry out the migrated plan section: F3 \u2014 intake-ssh-honest (UI + one server flag) \u2014 BUILT \u2705 (2026-07-13)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import type { GitHubAssignableUser, GitHubWorkItem } from '../../../shared/types'
+import type { GitHubAssignableUser, GitHubWorkItem } from '@/shared/types'
 
 type ReviewDisplayItem = Pick<GitHubWorkItem, 'reviewDecision' | 'reviewRequests' | 'latestReviews'>
 export type GitHubPRPrimaryReviewer = Pick<GitHubAssignableUser, 'login' | 'avatarUrl'> & {

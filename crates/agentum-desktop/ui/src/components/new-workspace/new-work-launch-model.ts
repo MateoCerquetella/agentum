@@ -1,9 +1,8 @@
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace';
-import type { CreateWorktreeResult } from '../../../../shared/types';
+import type { CreateWorktreeResult } from '@/shared/types';
 
 export type WorkSource = 'new' | 'existing' | 'none';
-export type ExecutionMode = 'autopilot' | 'manual';
-export type NewWorkStage = 'issue' | 'worktree' | 'spec' | 'run';
+export type NewWorkStage = 'issue' | 'worktree';
 export type NewWorkStageStatus = 'pending' | 'active' | 'done' | 'error';
 
 export type NewWorkProgress = Record<NewWorkStage, NewWorkStageStatus>;
@@ -13,33 +12,17 @@ export type NewWorkCheckpoint = {
   worktreeResult?: CreateWorktreeResult;
 };
 
-export type NewWorkEligibility =
-  | { eligible: true }
-  | {
-      eligible: false;
-      reason:
-        | 'non-git'
-        | 'non-github-issue'
-        | 'agent-unavailable'
-        | 'setup-blocked';
-      message: string;
-    };
-
 export const NEW_WORK_STAGES: readonly NewWorkStage[] = [
   'issue',
-  'worktree',
-  'spec',
-  'run'
+  'worktree'
 ];
 
 /** Stable footer copy for each durable launch checkpoint. Keeping these labels
  * in the model prevents the CTA from bouncing between incidental hook flags
- * while issue creation hands off to worktree/spec/run orchestration. */
+ * while issue creation hands off to worktree creation. */
 export const NEW_WORK_STAGE_ACTIVE_LABELS: Readonly<Record<NewWorkStage, string>> = {
   issue: 'Preparing issue…',
-  worktree: 'Creating worktree…',
-  spec: 'Preparing spec…',
-  run: 'Starting run…'
+  worktree: 'Creating worktree…'
 };
 
 export function activeNewWorkStage(progress: NewWorkProgress): NewWorkStage | null {
@@ -78,9 +61,7 @@ export function initialNewWorkProgress(
 ): NewWorkProgress {
   return {
     issue: source === 'none' || checkpoint.linkedWorkItem ? 'done' : 'pending',
-    worktree: checkpoint.worktreeResult ? 'done' : 'pending',
-    spec: 'pending',
-    run: 'pending'
+    worktree: checkpoint.worktreeResult ? 'done' : 'pending'
   };
 }
 
@@ -97,45 +78,12 @@ export function newWorkPrimaryLabel(
   retrying = false
 ): string {
   if (retrying) return 'Retry from incomplete step';
-  if (source === 'new') return 'Create issue & start work';
-  return source === 'none' ? 'Create workspace & start work' : 'Create worktree & start work';
-}
-
-export function deriveDefaultExecutionMode(
-  eligibility: NewWorkEligibility
-): ExecutionMode {
-  return eligibility.eligible ? 'autopilot' : 'manual';
-}
-
-function isGitHubIssue(item: LinkedWorkItemSummary | null | undefined): boolean {
-  return Boolean(
-    item &&
-      item.type === 'issue' &&
-      item.url.toLowerCase().includes('github.com/')
-  );
-}
-
-/** Whether a source is structurally incompatible with Autopilot. Transient
- * states (tracker loading, no existing issue selected yet, agent/setup probes)
- * deliberately do not demote the operator's execution-mode choice. */
-export function shouldDefaultNewWorkToManual(input: {
-  isGit: boolean;
-  source: WorkSource;
-  trackerConfigLoaded: boolean;
-  newIssueProvider?: 'github' | 'linear' | null;
-  linkedWorkItem?: LinkedWorkItemSummary | null;
-}): boolean {
-  if (!input.isGit || input.source === 'none') return true;
-  if (input.source === 'new') {
-    return input.trackerConfigLoaded && input.newIssueProvider !== 'github';
-  }
-  return Boolean(input.linkedWorkItem && !isGitHubIssue(input.linkedWorkItem));
+  if (source === 'new') return 'Create issue';
+  return source === 'none' ? 'Create workspace' : 'Create worktree';
 }
 
 export function canLaunchNewWork(input: {
   source: WorkSource;
-  executionMode: ExecutionMode;
-  eligibility: NewWorkEligibility;
   hasSelectedAgent: boolean;
   canStageNewIssue: boolean;
   hasNewIssueTitle: boolean;
@@ -143,13 +91,6 @@ export function canLaunchNewWork(input: {
   hasIssueCheckpoint: boolean;
 }): boolean {
   if (!input.hasSelectedAgent) return false;
-  if (
-    'reason' in input.eligibility &&
-    (input.eligibility.reason === 'agent-unavailable' ||
-      input.eligibility.reason === 'setup-blocked')
-  ) {
-    return false;
-  }
   if (
     input.source === 'new' &&
     !input.hasIssueCheckpoint &&
@@ -164,72 +105,7 @@ export function canLaunchNewWork(input: {
   ) {
     return false;
   }
-  return input.executionMode === 'manual' || input.eligibility.eligible;
-}
-
-export function deriveNewWorkEligibility(input: {
-  isGit: boolean;
-  source: WorkSource;
-  /** Canonical provider used when `source` creates a new issue. `undefined`
-   * means the repo-scoped config is still loading; `null` means it loaded
-   * without a tracker. */
-  newIssueProvider?: 'github' | 'linear' | null;
-  linkedWorkItem?: LinkedWorkItemSummary | null;
-  selectedAgentInstalled: boolean;
-  setupBlocked?: boolean;
-}): NewWorkEligibility {
-  if (!input.isGit) {
-    return {
-      eligible: false,
-      reason: 'non-git',
-      message: 'SDD Autopilot requires a Git project.'
-    };
-  }
-  if (!input.selectedAgentInstalled) {
-    return {
-      eligible: false,
-      reason: 'agent-unavailable',
-      message: 'Choose an installed agent before starting work.'
-    };
-  }
-  if (input.setupBlocked) {
-    return {
-      eligible: false,
-      reason: 'setup-blocked',
-      message: 'Resolve the project setup requirement before starting work.'
-    };
-  }
-  if (input.source === 'none') {
-    return {
-      eligible: false,
-      reason: 'non-github-issue',
-      message: 'SDD Autopilot needs a GitHub issue. Choose Open manually to work without one.'
-    };
-  }
-  if (
-    input.source === 'new' &&
-    input.newIssueProvider !== undefined &&
-    input.newIssueProvider !== 'github'
-  ) {
-    return {
-      eligible: false,
-      reason: 'non-github-issue',
-      message: input.newIssueProvider === 'linear'
-        ? 'SDD Autopilot requires a GitHub issue. Linear issues open manually.'
-        : 'SDD Autopilot needs a configured GitHub issue tracker.'
-    };
-  }
-  if (
-    input.source === 'existing' &&
-    !isGitHubIssue(input.linkedWorkItem)
-  ) {
-    return {
-      eligible: false,
-      reason: 'non-github-issue',
-      message: 'SDD Autopilot requires a GitHub issue from this project.'
-    };
-  }
-  return { eligible: true };
+  return true;
 }
 
 export function firstIncompleteNewWorkStage(

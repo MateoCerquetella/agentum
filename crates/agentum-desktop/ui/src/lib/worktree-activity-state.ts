@@ -1,5 +1,5 @@
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
-import type { TerminalTab } from '../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 
 type TerminalLikeTab = Pick<TerminalTab, 'id'>
 type BrowserLikeTab = { id: string }

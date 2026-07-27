@@ -2,8 +2,8 @@ import {
   filesystemPathHrefToFileUri,
   filesystemPathToFileUri,
   fileUriToFilesystemPath
-} from '../../../../shared/file-uri-path'
-import { isWindowsAbsolutePathLike } from '../../../../shared/cross-platform-path'
+} from '@/shared/file-uri-path'
+import { isWindowsAbsolutePathLike } from '@/shared/cross-platform-path'
 
 // Pure classifier for markdown link targets. Called by the link-activation
 // dispatcher (activateMarkdownLink slice action) from three call sites —

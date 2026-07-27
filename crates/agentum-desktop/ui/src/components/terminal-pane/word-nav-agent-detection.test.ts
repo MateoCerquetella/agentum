@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { paneRunsAgentForWordNav } from './word-nav-agent-detection'
-import { AGENT_STATUS_STALE_AFTER_MS } from '../../../../shared/agent-status-types'
+import { AGENT_STATUS_STALE_AFTER_MS } from '@/shared/agent-status-types'
 
 const NOW = 1_000_000_000
 

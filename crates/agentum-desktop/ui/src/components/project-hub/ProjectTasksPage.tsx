@@ -98,6 +98,7 @@ export function ProjectTasksPage({ repo }: { repo: Repo }): React.JSX.Element {
         revokeAuthority?.()
       }
     }
+    const projectScope = target.scope
 
     void (async () => {
       try {
@@ -120,7 +121,7 @@ export function ProjectTasksPage({ repo }: { repo: Repo }): React.JSX.Element {
         }
         const project = await linearGetProject(
           settings,
-          target.scope.id,
+          projectScope.id,
           target.workspaceId
         )
         if (!project) {
@@ -128,7 +129,7 @@ export function ProjectTasksPage({ repo }: { repo: Repo }): React.JSX.Element {
             status: 'unavailable',
             provider: 'linear',
             reason: 'not-found',
-            message: `The configured Linear project ${target.scope.id} is unavailable.`,
+            message: `The configured Linear project ${projectScope.id} is unavailable.`,
             repoId: repo.id,
             repoName: repo.displayName,
             generation

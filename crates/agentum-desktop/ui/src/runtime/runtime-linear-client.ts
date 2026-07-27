@@ -19,7 +19,7 @@ import type {
   LinearViewer,
   LinearWorkspaceSelection,
   LinearWorkflowState
-} from '../../../shared/types'
+} from '@/shared/types'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
 
 export type RuntimeLinearSettings =

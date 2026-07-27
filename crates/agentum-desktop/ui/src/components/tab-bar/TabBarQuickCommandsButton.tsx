@@ -23,11 +23,11 @@ import {
   getTerminalQuickCommandScope,
   isTerminalAgentQuickCommand,
   isTerminalQuickCommandComplete
-} from '../../../../shared/terminal-quick-commands'
-import { getRepoIdFromWorktreeId } from '../../../../shared/worktree-id'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+} from '@/shared/terminal-quick-commands'
+import { getRepoIdFromWorktreeId } from '@/shared/worktree-id'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 import { runQuickCommandInNewTab } from '@/lib/run-quick-command-in-new-tab'
-import type { TerminalQuickCommand } from '../../../../shared/types'
+import type { TerminalQuickCommand } from '@/shared/types'
 import { cn } from '@/lib/utils'
 import { useConfirmationDialog } from '@/components/confirmation-dialog'
 import { AgentIcon, getAgentLabel } from '@/lib/agent-catalog'

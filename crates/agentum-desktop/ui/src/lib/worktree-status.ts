@@ -1,7 +1,7 @@
 import { detectAgentStatusFromTitle } from '@/lib/agent-status'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import type { ServerWorktreeLiveActivity } from '@/lib/server-worktree-activity-map'
-import type { TerminalTab } from '../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 
 export type WorktreeStatus = 'active' | 'working' | 'permission' | 'done' | 'inactive'
 

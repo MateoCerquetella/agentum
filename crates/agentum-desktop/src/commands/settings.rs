@@ -31,8 +31,8 @@ fn read_all_settings(connection: &rusqlite::Connection) -> Result<Value, String>
     Ok(Value::Object(object))
 }
 
-// The renderer uses the orca bulk convention: `settings.get()` (no key) returns the
-// whole settings object; `settings.get(key)` returns a single value. The old port
+// The renderer's bulk convention is: `settings.get()` (no key) returns the whole
+// settings object; `settings.get(key)` returns a single value. The old port
 // took a required `key` and broke the no-arg call ("missing required key key").
 #[tauri::command]
 pub async fn settings_get(

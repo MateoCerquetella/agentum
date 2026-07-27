@@ -4,7 +4,7 @@ import { Check, ExternalLink } from 'lucide-react'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
 import { cn } from '@/lib/utils'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import type { TuiAgent } from '../../../../shared/types'
+import type { TuiAgent } from '@/shared/types'
 
 type AgentStepProps = {
   selectedAgent: TuiAgent | null

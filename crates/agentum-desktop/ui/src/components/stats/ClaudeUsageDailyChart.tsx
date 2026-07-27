@@ -1,6 +1,6 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { formatTokens } from '@/lib/stats-format'
-import type { ClaudeUsageDailyPoint } from '../../../../shared/claude-usage-types'
+import type { ClaudeUsageDailyPoint } from '@/shared/claude-usage-types'
 
 function getDailyTotal(entry: ClaudeUsageDailyPoint): number {
   return entry.inputTokens + entry.outputTokens + entry.cacheReadTokens + entry.cacheWriteTokens

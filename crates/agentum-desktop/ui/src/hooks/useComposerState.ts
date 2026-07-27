@@ -14,9 +14,8 @@ import {
   normalizeGitHubLinkQuery
 } from '@/lib/github-links'
 import { openCreatedWorkspace } from '@/lib/open-created-workspace'
-import { gatedRunResultOwnsWorktree } from '@/lib/gated-run-ownership'
-import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../shared/tui-agent-selection'
-import { isGitRepoKind } from '../../../shared/repo-kind'
+import { filterEnabledTuiAgents, isTuiAgentEnabled } from '@/shared/tui-agent-selection'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import type {
@@ -34,8 +33,8 @@ import type {
   WorktreeMeta,
   WorkspaceStatus,
   WorkspaceCreateTelemetrySource
-} from '../../../shared/types'
-import { isWorkspaceStatusId } from '../../../shared/workspace-statuses'
+} from '@/shared/types'
+import { isWorkspaceStatusId } from '@/shared/workspace-statuses'
 import {
   DEFAULT_ISSUE_COMMAND_TEMPLATE,
   buildAgentPromptWithContext,
@@ -59,21 +58,10 @@ import {
   createGithubIssue,
   draftGithubIssueBody,
   fetchGithubRepoLabels,
-  scaffoldSpecFromIssue,
   type DraftIssueStyle,
   type DraftLlmChoice
 } from '@/runtime/github-issue-client'
-import {
-  deriveIssueSideEffectGate,
-  describeIssueSideEffectSkip
-} from '@/lib/issue-side-effect-gate'
-import { firstStartGatedRunBlocker } from '@/lib/start-gated-run-precondition'
 import { linkedWorkItemAfterRepoChange } from '@/components/new-workspace/create-workspace-wizard-model'
-import {
-  getHarnessSettings,
-  startGatedWork,
-  subscribeHarnessRunErrors
-} from '@/runtime/harness-client'
 import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
   getFullComposerCreateDisabled,
@@ -97,7 +85,6 @@ import { ensureHooksConfirmed } from '@/lib/ensure-hooks-confirmed'
 import { normalizeSparseDirectoryLines, sparseDirectoriesMatch } from '@/lib/sparse-paths'
 import { joinPath } from '@/lib/path'
 import type {
-  ExecutionMode,
   NewWorkCheckpoint,
   NewWorkStage,
   NewWorkStageStatus
@@ -115,7 +102,7 @@ import {
   getWorkspaceCreateErrorToastMessage,
   type WorkspaceCreateErrorDisplay
 } from '@/lib/workspace-create-error-format'
-import type { SshConnectionStatus } from '../../../shared/ssh-types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
 import {
   resolveComposerBranchNameOverrideForCreate,
   resolveComposerBranchSelection
@@ -135,9 +122,6 @@ export type UseComposerStateOptions = {
   initialPrompt?: string
   initialLinkedWorkItem?: LinkedWorkItemSummary | null
   initialWorkspaceStatus?: WorkspaceStatus
-  /** Spec 005 F1 (AC 3): open with the "Start gated run" toggle armed — the
-   *  Tasks page row action pre-fills the composer this way. */
-  initialStartGatedRun?: boolean
   /** Seed the Start-from selection when the composer opens. Used by the
    *  Create-from → Quick fallback path so a PR pick that needs a setup
    *  decision still lands with the resolved PR head as the base branch. */
@@ -240,24 +224,6 @@ type ComposerCardProps = {
    *  fallback set when the fetch errored. */
   createIssueLabelOptions: string[] | null
   onToggleCreateIssueLabel: (label: string) => void
-  /** True when the "Scaffold spec" toggle applies: a github.com issue is
-   *  linked and the target is a local git repo (spec 004 F4, D5). */
-  canScaffoldSpec: boolean
-  /** Opt-in, off by default (D5): after the worktree is created, write
-   *  `.agentum-harness/specs/<n>-<slug>/spec.md` from the linked issue. */
-  scaffoldSpec: boolean
-  onScaffoldSpecChange: (value: boolean) => void
-  /** Spec 005 F1: "Start gated run" — same eligibility gate as the scaffold
-   *  toggle (linked github.com issue + local repo). When armed the linked
-   *  issue becomes the spec and the Harness Engine drives the worktree; the
-   *  scaffold toggle hides (subsumed — the server converge-scaffolds). */
-  canStartGatedRun: boolean
-  startGatedRun: boolean
-  onStartGatedRunChange: (value: boolean) => void
-  /** Spec 006 F3 (AC 8): whether gated runs use the SDD role loop — read from
-   *  the harness settings when the toggle becomes available; optimistic `true`
-   *  on failure (the server default is ON). Drives the armed copy only. */
-  sddRolesEnabled: boolean
   linkPopoverOpen: boolean
   onLinkPopoverOpenChange: (open: boolean) => void
   linkQuery: string
@@ -332,7 +298,6 @@ export type UseComposerStateResult = {
   onComposerNodeChange: (node: HTMLDivElement | null) => void
   promptTextareaRef: React.RefObject<HTMLTextAreaElement | null>
   nameInputRef: React.RefObject<HTMLInputElement | null>
-  submit: () => Promise<void>
   submitQuick: (agent: TuiAgent | null, options?: QuickSubmitOptions) => Promise<void>
   /** Invoked by the Enter handler to re-check whether submission should fire. */
   createDisabled: boolean
@@ -341,7 +306,6 @@ export type UseComposerStateResult = {
 export type QuickSubmitOptions = {
   /** `null` explicitly suppresses an item already held by the composer. */
   linkedWorkItem?: LinkedWorkItemSummary | null
-  executionMode?: ExecutionMode
   checkpoint?: NewWorkCheckpoint
   onCheckpoint?: (next: NewWorkCheckpoint) => void
   onProgress?: (stage: NewWorkStage, status: NewWorkStageStatus) => void
@@ -364,7 +328,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     initialPrompt = '',
     initialLinkedWorkItem = null,
     initialWorkspaceStatus,
-    initialStartGatedRun,
     initialBaseBranch,
     persistDraft,
     onCreated,
@@ -443,12 +406,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const [internalRepoId, setInternalRepoId] = useState<string>(resolvedInitialRepoId)
   const repoId = repoIdOverride ?? internalRepoId
   const selectedRepo = eligibleRepos.find((repo) => repo.id === repoId)
-  const selectedProjectTrackerConfig = useAppStore(
-    (state) => state.projectTrackerConfigByRepo[repoId]
-  )
-  const selectedProjectTrackerLoadStatus = useAppStore(
-    (state) => state.projectTrackerLoadStatusByRepo[repoId] ?? 'idle'
-  )
   useEffect(() => {
     if (!repoId) return
     void loadProjectTrackerConfig(repoId).catch(() => {
@@ -456,10 +413,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       // launch behavior simply remains fail-closed until a config is loaded.
     })
   }, [loadProjectTrackerConfig, repoId])
-  const selectedTrackerProvider =
-    selectedProjectTrackerLoadStatus === 'loaded'
-      ? (selectedProjectTrackerConfig?.provider ?? null)
-      : null
   const requiredScopeIsCurrent = useCallback((): boolean => {
     if (!requiredProjectTaskScope) return true
     if (!isLiveProjectTaskScopeAuthority(requiredProjectTaskScope)) return false
@@ -654,13 +607,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   // fall back to the static `type/*`+`priority/*` set when the fetch errors.
   const [createIssueLabels, setCreateIssueLabels] = useState<string[]>([])
   const [createIssueLabelOptions, setCreateIssueLabelOptions] = useState<string[] | null>(null)
-  // Spec 004 F4 (D5): opt-in, off by default. Not draft-persisted — trust in
-  // the deterministic transform is earned per creation, not remembered.
-  const [scaffoldSpec, setScaffoldSpec] = useState(false)
-  // Spec 005 F1: "Start gated run" — the linked issue becomes the spec and the
-  // Harness Engine drives gated agents in the new worktree. Armed up front by
-  // the Tasks page row action (AC 3); like scaffoldSpec, never draft-persisted.
-  const [startGatedRun, setStartGatedRun] = useState(Boolean(initialStartGatedRun))
   const [baseBranch, setBaseBranch] = useState<string | undefined>(
     persistDraft ? newWorkspaceDraft?.baseBranch : initialBaseBranch
   )
@@ -1526,11 +1472,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     setLinkedWorkItem(null)
     setLinkedIssue('')
     setLinkedPR(null)
-    // Spec 007 (bug 2): the issue side-effect toggles are gated on the linked
-    // issue; armed state must not outlive its (now hidden) checkbox, or the
-    // submit-time gate silently no-ops.
-    setScaffoldSpec(false)
-    setStartGatedRun(false)
     if (name === lastAutoNameRef.current) {
       lastAutoNameRef.current = ''
     }
@@ -1733,43 +1674,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     selectedRepo,
     selectedRepoSlug
   ])
-
-  // Spec 004 F4 (D5): the toggle only applies to a linked *github.com issue*
-  // targeting a git repo. The server resolves the local or SSH workspace from
-  // the submitted worktree identity before it writes the generated spec.
-  const linkedGithubIssueLink = useMemo(
-    () => (linkedWorkItem?.type === 'issue' ? parseGitHubIssueOrPRLink(linkedWorkItem.url) : null),
-    [linkedWorkItem]
-  )
-  const canScaffoldSpec = Boolean(
-    linkedGithubIssueLink?.type === 'issue' && selectedRepoIsGit
-  )
-
-  // Spec 006 F3 (AC 8): fetch whether gated runs use the SDD role loop when
-  // the gated-run toggle becomes available. Best-effort with an optimistic
-  // `true` on failure — honest, since the server default is ON. Cancellation
-  // guard so a stale response can't land after the toggle re-hid.
-  const [sddRolesEnabled, setSddRolesEnabled] = useState(true)
-  useEffect(() => {
-    if (!canScaffoldSpec) {
-      return
-    }
-    let cancelled = false
-    void getHarnessSettings()
-      .then((settings) => {
-        if (!cancelled) {
-          setSddRolesEnabled(settings.sddRolesEnabled)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSddRolesEnabled(true)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [canScaffoldSpec])
 
   const handleNameValueChange = useCallback(
     (nextName: string): void => {
@@ -2039,11 +1943,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           linkedWorkItem
         })
       )
-      // Spec 007 (bug 2): the repo switch just wiped the linked issue, so the
-      // issue side-effect toggles lose their subject — disarm them instead of
-      // leaving armed state behind a hidden checkbox (silent no-op at submit).
-      setScaffoldSpec(false)
-      setStartGatedRun(false)
       setSparseEnabled(false)
       setSparseDirectories('')
       // Why: presets are repo-scoped, so a stale selection from the prior
@@ -2340,394 +2239,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     [updateWorktreeMeta]
   )
 
-  // Spec 004 F4: after createWorktree succeeds (both submit paths), write the
-  // linked issue's spec into the new worktree when the user opted in (D5).
-  // Non-fatal by contract: a scaffold failure must never roll back or block
-  // the freshly created workspace.
-  const maybeScaffoldSpecFromIssue = useCallback(
-    async (
-      worktree: { id: string; path: string },
-      item: LinkedWorkItemSummary | null | undefined
-    ): Promise<void> => {
-      if (!scaffoldSpec) {
-        return
-      }
-      // Re-derive the gate from the submitted item: github.com issues only.
-      // The endpoint resolves local/SSH execution from worktreeId. Spec 007:
-      // an ARMED toggle that skips must say so — the silent return was bug 2.
-      const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
-      if (gate.eligible === false) {
-        toast.warning(describeIssueSideEffectSkip('scaffold-spec', gate.reason))
-        return
-      }
-      try {
-        await scaffoldSpecFromIssue({
-          workdir: worktree.path,
-          worktreeId: worktree.id,
-          number: gate.number,
-          slug: `${gate.slug.owner}/${gate.slug.repo}`,
-          // Spec 021 (#379): thread the repo's tracker pin so the planned
-          // backlog stamps the right provider ('auto'/absent = GitHub).
-          ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
-        })
-      } catch (error) {
-        console.error('Failed to scaffold a spec from the linked issue', error)
-        toast.error('Workspace created, but the spec scaffold failed.')
-      }
-    },
-    [scaffoldSpec, selectedRepo, selectedTrackerProvider]
-  )
-
-  // Spec 005 F1: with "Start gated run" armed, after createWorktree succeeds
-  // (both submit paths) drive the server-side orchestration — converge-scaffold
-  // + plan + Todo + register + run — against the new worktree. Mirrors
-  // maybeScaffoldSpecFromIssue's non-fatal contract (AC 5): a failure toasts
-  // but never rolls back the created workspace. `agent` is the composer's
-  // selection, written into the run's agent_tool knob post-plan (D2).
-  const maybeStartGatedRun = useCallback(
-    async (
-      worktree: { id: string; path: string },
-      item: LinkedWorkItemSummary | null | undefined,
-      agent: TuiAgent | null
-    ): Promise<boolean> => {
-      // Returns whether the engine actually took ownership of the worktree. The
-      // caller uses this to decide whether to suppress the plain agent delivery:
-      // a run that never started must NOT suppress it, or the worktree strands
-      // on the empty "Start a session" picker with nothing driving it.
-      if (!startGatedRun) {
-        return false
-      }
-      // Re-derive the gate from the submitted item: github.com issues only;
-      // start-work resolves the authoritative target from worktreeId.
-      // Spec 007: an ARMED toggle that skips must say so (bug 2).
-      const gate = deriveIssueSideEffectGate(item ?? null, selectedRepo?.connectionId)
-      if (gate.eligible === false) {
-        toast.warning(describeIssueSideEffectSkip('start-gated-run', gate.reason))
-        return false
-      }
-      try {
-        const result = await startGatedWork({
-          workdir: worktree.path,
-          worktreeId: worktree.id,
-          number: gate.number,
-          slug: `${gate.slug.owner}/${gate.slug.repo}`,
-          ...(agent ? { agentTool: agent } : {}),
-          // Spec 021 (#379): thread the repo's tracker pin so the run's
-          // features + transitions aim at the right provider.
-          ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
-        })
-        // Only suppress the plain session when the engine actually took
-        // ownership (a live run, or a fresh one with ≥1 planned feature). A
-        // zero-feature plan has nothing to drive and would strand the worktree.
-        const owns = gatedRunResultOwnsWorktree(result)
-        if (result.alreadyRunning) {
-          // The friendly state (C5), not an error: a live run already owns
-          // this worktree and was left untouched.
-          toast.info('A gated run is already driving this workspace.')
-        } else if (!owns) {
-          // The plan produced no features, so the engine has nothing to spawn
-          // and would leave the worktree stranded on the empty "Start a
-          // session" picker with no error. Fall back to a normal agent instead
-          // of a silent empty worktree.
-          toast.warning(
-            'The gated run planned no work from this issue — opening a normal session instead.'
-          )
-        } else {
-          // Spec 008 F1 §B.5: the composer navigates to the session view after
-          // a successful start, so a drive-phase failure on the harness event
-          // bus (init.sh, spawn, the readiness/settle timeouts) would otherwise
-          // go unseen. Subscribe filtered by this run and toast the FIRST early
-          // error. Best-effort: self-closes on the first error or a bounded
-          // window, so a healthy run never holds the socket open.
-          void subscribeHarnessRunErrors(result.harnessId, (message) => {
-            toast.error(`Gated run failed: ${message}`)
-          })
-        }
-        return owns
-      } catch (error) {
-        console.error('Failed to start the gated run', error)
-        // Spec 008 F1 #5: surface the server's ApiError detail — request()
-        // already appends `— {detail}` (e.g. "workdir does not exist", "could
-        // not plan from the spec"), which is actionable; the generic string hid
-        // it.
-        const detail = error instanceof Error ? error.message.trim() : ''
-        toast.error(
-          detail
-            ? `Workspace created, but the gated run could not start — opening a normal session instead: ${detail}`
-            : 'Workspace created, but the gated run could not start — opening a normal session instead.'
-        )
-        // The engine did NOT take ownership: fall back to a plain agent so the
-        // worktree isn't stranded empty (the "stuck on Start a session" bug).
-        return false
-      }
-    },
-    [startGatedRun, selectedRepo, selectedTrackerProvider]
-  )
-
-  const submit = useCallback(async (): Promise<void> => {
-    if (!requiredScopeIsCurrent()) { toast.error('This project task scope changed. Reopen the workspace action from the current board.'); return }
-    if (
-      !repoId ||
-      !workspaceSeedName ||
-      !selectedRepo ||
-      selectedRepoRequiresConnection ||
-      shouldWaitForSetupCheck ||
-      shouldWaitForIssueAutomationCheck ||
-      (requiresExplicitSetupChoice && !setupDecision) ||
-      sparseError !== null
-    ) {
-      // Spec 008 F1 #2: an ARMED gated run that trips a precondition must say
-      // WHY (the #226 chat-origin `repoId: ''` edge) — a bare return was silent.
-      if (startGatedRun) {
-        const blocker = firstStartGatedRunBlocker({
-          repoId,
-          workspaceSeedName,
-          hasSelectedRepo: Boolean(selectedRepo),
-          selectedRepoRequiresConnection,
-          shouldWaitForSetupCheck,
-          shouldWaitForIssueAutomationCheck,
-          requiresExplicitSetupChoice,
-          hasSetupDecision: Boolean(setupDecision),
-          sparseError
-        })
-        if (blocker) {
-          toast.error(blocker)
-        }
-      }
-      return
-    }
-    if (!isTuiAgentEnabled(tuiAgent, disabledTuiAgents)) {
-      setTuiAgent(fallbackDefaultAgent)
-      toast.error('Selected agent is disabled. Choose an enabled agent before creating.')
-      return
-    }
-
-    setCreateError(null)
-    setCreating(true)
-    try {
-      const smartGitHubResolution = await resolvePendingSmartGitHubSubmit()
-      const submitLinkedWorkItem = smartGitHubResolution?.linkedWorkItem ?? linkedWorkItem
-      const submitLinkedIssueNumber =
-        smartGitHubResolution?.linkedIssueNumber ?? parsedLinkedIssueNumber
-      const submitLinkedPR = smartGitHubResolution?.linkedPR ?? effectiveLinkedPR
-      const workspaceName = smartGitHubResolution?.workspaceName ?? workspaceSeedName
-      if (!workspaceName) {
-        return
-      }
-      const submitShouldApplyLinkedOnlyTemplate =
-        enableIssueAutomation &&
-        !agentPrompt.trim() &&
-        Boolean(submitLinkedWorkItem) &&
-        hasLoadedIssueCommand
-      const submitLinkedOnlyTemplatePrompt =
-        submitShouldApplyLinkedOnlyTemplate && submitLinkedWorkItem
-          ? renderIssueCommandTemplate(
-              issueCommandTemplate.trim() || DEFAULT_ISSUE_COMMAND_TEMPLATE,
-              {
-                issueNumber:
-                  submitLinkedWorkItem.type === 'issue' ? submitLinkedWorkItem.number : null,
-                artifactUrl: submitLinkedWorkItem.url
-              }
-            )
-          : ''
-      const linkedPromptContext = getLinkedWorkItemPromptContext(submitLinkedWorkItem)
-      const submitStartupPrompt = submitShouldApplyLinkedOnlyTemplate
-        ? buildAgentPromptWithContext(
-            submitLinkedOnlyTemplatePrompt,
-            attachmentPaths,
-            [],
-            linkedPromptContext.linkedContextBlocks
-          )
-        : buildAgentPromptWithContext(
-            agentPrompt,
-            attachmentPaths,
-            linkedPromptContext.linkedUrls,
-            linkedPromptContext.linkedContextBlocks
-          )
-      // Spec 005 F1: armed AND eligible for the submitted item (github.com
-      // issue, local repo). Suppresses the issueCommand automation at its
-      // source (one of D2's three skips) and routes the post-create side
-      // effect to the gated-run orchestration instead of the D5 scaffold.
-      // Spec 007: the same pure gate the post-create callbacks re-derive.
-      const submitGatedRun =
-        startGatedRun &&
-        deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo?.connectionId)
-          .eligible
-      const submitShouldRunIssueAutomation =
-        !submitGatedRun &&
-        enableIssueAutomation &&
-        submitLinkedIssueNumber !== null &&
-        issueCommandTemplate.length > 0 &&
-        !submitShouldApplyLinkedOnlyTemplate
-
-      const setupTrustDecision = selectedRepoIsGit
-        ? await ensureHooksConfirmed(useAppStore.getState(), repoId, 'setup')
-        : 'skip'
-      if (!requiredScopeIsCurrent()) { toast.error('This project task scope changed while the workspace gate was open.'); return }
-      const effectiveSetupDecision: SetupDecision =
-        setupTrustDecision === 'skip'
-          ? 'skip'
-          : ((resolvedSetupDecision ?? 'inherit') as SetupDecision)
-
-      let issueCommandTrustDecision: 'run' | 'skip' = 'run'
-      if (selectedRepoIsGit && submitShouldRunIssueAutomation) {
-        issueCommandTrustDecision =
-          setupTrustDecision === 'skip'
-            ? 'skip'
-            : await ensureHooksConfirmed(useAppStore.getState(), repoId, 'issueCommand')
-      }
-
-      const linkedLinearIssue = submitLinkedWorkItem?.linearIdentifier
-      const effectiveBranchNameOverride = resolveComposerBranchNameOverrideForCreate({
-        branchNameOverride,
-        branchAutoName: branchAutoNameRef.current,
-        workspaceName,
-        preserveWorkspaceNameEdits: branchNameOverridePreservesNameEdits
-      })
-      // Spec 012: persist the tracker bind so the session-start reactor + PR
-      // poller can drive the linked item's status. GitHub issue → URL; Linear →
-      // identifier; PR/MR-linked or unlinked create binds nothing.
-      const trackerBind = deriveTrackerBindCoords(submitLinkedWorkItem)
-      if (!requiredScopeIsCurrent()) {
-        toast.error('This project task scope changed before the workspace could be created.')
-        return
-      }
-      const result = await createWorktree(
-        repoId,
-        workspaceName,
-        selectedRepoIsGit ? baseBranch : undefined,
-        effectiveSetupDecision,
-        selectedRepoIsGit && sparseEnabled
-          ? {
-              directories: normalizedSparseDirectories,
-              ...(effectivePresetId ? { presetId: effectivePresetId } : {})
-            }
-          : undefined,
-        telemetrySource,
-        smartGitHubResolution?.displayName ?? submitLinkedWorkItem?.title,
-        submitLinkedIssueNumber ?? undefined,
-        submitLinkedPR ?? undefined,
-        pushTarget,
-        tuiAgent,
-        linkedLinearIssue,
-        effectiveBranchNameOverride,
-        resolvedInitialWorkspaceStatus,
-        linkedGitLabMR ?? undefined,
-        linkedGitLabIssue ?? undefined,
-        undefined,
-        trackerBind?.trackerProvider,
-        trackerBind?.trackerUrl
-      )
-      const worktree = result.worktree
-
-      const trimmedNote = note.trim()
-      // Why: linked source metadata is already included in createWorktree.
-      // Re-saving it here can trigger slow post-create PR push-target lookups.
-      await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
-      // Track whether the engine actually took ownership. Only a real start
-      // suppresses the plain delivery below — a failed start-work falls back to
-      // a normal session so the worktree isn't stranded on "Start a session".
-      let gatedRunStarted = false
-      if (startGatedRun) {
-        // Spec 005 F1 (AC 1): the server converge-scaffolds + plans + runs the
-        // engine — the D5 scaffold call is skipped when the toggle is armed.
-        // Spec 007: routed on the ARMED state (not eligibility) so an
-        // ineligible-but-armed run surfaces its skip reason instead of
-        // falling into the scaffold branch as a silent no-op (bug 2).
-        gatedRunStarted = await maybeStartGatedRun(worktree, submitLinkedWorkItem, tuiAgent)
-      } else {
-        // Spec 004 F4 (opt-in): write the linked issue's spec into the new
-        // worktree before the agent opens, so it can start from the spec.
-        await maybeScaffoldSpecFromIssue(worktree, submitLinkedWorkItem)
-      }
-
-      const issueCommand =
-        submitShouldRunIssueAutomation && issueCommandTrustDecision === 'run'
-          ? {
-              command: renderIssueCommandTemplate(issueCommandTemplate, {
-                issueNumber: submitLinkedIssueNumber,
-                artifactUrl: submitLinkedWorkItem?.url ?? null
-              })
-            }
-          : undefined
-      // Why: the composer already let the user pick the agent — open it directly
-      // instead of bouncing them to the "Start a session" picker to pick again.
-      // openCreatedWorkspace launches the selected agent (delivering the typed
-      // prompt as an editable draft) and only falls back to the picker when no
-      // agent was chosen. Repo `setup`/`defaultTabs`/`issueCommand` still apply —
-      // those are project config, not the agent. With a gated run armed (spec
-      // 005 D2) every plain delivery is suppressed — the engine's sessions are
-      // the only agents in the worktree.
-      openCreatedWorkspace({
-        worktreeId: worktree.id,
-        agent: tuiAgent,
-        prompt: submitStartupPrompt,
-        setup: result.setup,
-        defaultTabs: result.defaultTabs,
-        issueCommand: submitGatedRun ? undefined : issueCommand,
-        gatedRun: gatedRunStarted
-      })
-      setSidebarOpen(true)
-      if (persistDraft) {
-        clearNewWorkspaceDraft()
-      }
-      onCreated?.()
-    } catch (error) {
-      const formattedError = formatWorkspaceCreateError(error)
-      setCreateError(formattedError)
-      toast.error(getWorkspaceCreateErrorToastMessage(formattedError))
-    } finally {
-      setCreating(false)
-    }
-  }, [
-    agentPrompt,
-    attachmentPaths,
-    baseBranch,
-    branchNameOverride,
-    branchNameOverridePreservesNameEdits,
-    clearNewWorkspaceDraft,
-    createWorktree,
-    applyWorktreeMeta,
-    maybeScaffoldSpecFromIssue,
-    maybeStartGatedRun,
-    startGatedRun,
-    enableIssueAutomation,
-    issueCommandTemplate,
-    effectiveLinkedPR,
-    hasLoadedIssueCommand,
-    linkedGitLabIssue,
-    linkedGitLabMR,
-    linkedWorkItem,
-    normalizedSparseDirectories,
-    note,
-    onCreated,
-    parsedLinkedIssueNumber,
-    persistDraft,
-    pushTarget,
-    repoId,
-    requiredScopeIsCurrent,
-    requiresExplicitSetupChoice,
-    resolvePendingSmartGitHubSubmit,
-    resolvedSetupDecision,
-    resolvedInitialWorkspaceStatus,
-    selectedRepo,
-    selectedRepoIsGit,
-    selectedRepoRequiresConnection,
-    settings?.agentCmdOverrides,
-    setSidebarOpen,
-    setupDecision,
-    sparseEnabled,
-    sparseError,
-    effectivePresetId,
-    telemetrySource,
-    fallbackDefaultAgent,
-    disabledTuiAgents,
-    tuiAgent,
-    shouldWaitForIssueAutomationCheck,
-    shouldWaitForSetupCheck,
-    workspaceSeedName
-  ])
-
   const submitQuick = useCallback(
     async (requestedAgent: TuiAgent | null, options?: QuickSubmitOptions): Promise<void> => {
       if (!requiredScopeIsCurrent()) {
@@ -2767,7 +2278,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
       setCreateError(null)
       setCreating(true)
-      let activeStage: NewWorkStage = 'worktree'
       try {
         // An explicit override (including `null` for the wizard's "No issue"
         // source) owns the decision. Do not let a URL-like workspace name
@@ -2879,60 +2389,8 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
 
         const trimmedNote = note.trim()
         await applyWorktreeMeta(worktree.id, trimmedNote ? { comment: trimmedNote } : {})
-        // Spec 005 F1: only a gated run that ACTUALLY started suppresses the
-        // plain session — a failed/ineligible start falls back to a normal
-        // agent so the worktree isn't stranded on "Start a session" with
-        // nothing driving it (spec 007: the pure gate is re-derived inside
-        // maybeStartGatedRun, which returns whether the engine took ownership).
-        let gatedRunStarted = false
-        if (options?.executionMode === 'autopilot') {
-          activeStage = 'spec'
-          options.onProgress?.('spec', 'active')
-          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
-          if (!gate.eligible) throw new Error(describeIssueSideEffectSkip('start-gated-run', gate.reason))
-          activeStage = 'run'
-          const started = await startGatedWork({
-            workdir: worktree.path,
-            worktreeId: worktree.id,
-            number: gate.number,
-            slug: `${gate.slug.owner}/${gate.slug.repo}`,
-            ...(agent ? { agentTool: agent } : {}),
-            ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
-          })
-          gatedRunStarted = gatedRunResultOwnsWorktree(started)
-          if (!gatedRunStarted) {
-            throw new Error('SDD Autopilot planned no work and did not take ownership of this workspace.')
-          }
-          options.onProgress?.('spec', 'done')
-          options.onProgress?.('run', 'done')
-        } else if (options?.executionMode === 'manual') {
-          activeStage = 'spec'
-          options.onProgress?.('spec', 'active')
-          const gate = deriveIssueSideEffectGate(submitLinkedWorkItem ?? null, selectedRepo.connectionId)
-          if (gate.eligible) {
-            await scaffoldSpecFromIssue({
-              workdir: worktree.path,
-              worktreeId: worktree.id,
-              number: gate.number,
-              slug: `${gate.slug.owner}/${gate.slug.repo}`,
-              plan: false,
-              converge: true,
-              ...(selectedTrackerProvider ? { tracker: selectedTrackerProvider } : {})
-            })
-          }
-          options.onProgress?.('spec', 'done')
-        } else if (startGatedRun) {
-          // The server converge-scaffolds + plans + runs the engine; the D5
-          // scaffold call is skipped when the toggle is armed (AC 1). Runs
-          // before the skip-session branch so the gated run starts either way.
-          // Spec 007: routed on the ARMED state so an ineligible-but-armed
-          // run warns instead of silently no-oping (bug 2).
-          gatedRunStarted = await maybeStartGatedRun(worktree, submitLinkedWorkItem, agent)
-        } else {
-          // Spec 004 F4 (opt-in): shared with the full submit path — runs before
-          // the skip-session branch so the spec lands either way.
-          await maybeScaffoldSpecFromIssue(worktree, submitLinkedWorkItem)
-        }
+        // Workspace creation has no specification side effect. The user starts
+        // Agentum-native authoring explicitly from Run Center after opening it.
 
         // Why: "Don't start a session" — the worktree is created (and remembers
         // its agent via createdWithAgent) but no tmux session/agent is launched
@@ -2961,23 +2419,15 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
           agent,
           prompt: quickDraftPrompt || quickPrompt,
           setup: result.setup,
-          defaultTabs: result.defaultTabs,
-          // Spec 005 D2: a gated run that took ownership suppresses the plain
-          // deliveries — the engine's sessions are the only agents in the
-          // worktree. A failed start falls through to a normal session.
-          gatedRun: gatedRunStarted
+          defaultTabs: result.defaultTabs
         })
-        if (options?.executionMode === 'manual') options.onProgress?.('run', 'done')
         setSidebarOpen(true)
         if (persistDraft) {
           clearNewWorkspaceDraft()
         }
         onCreated?.()
       } catch (error) {
-        if (options?.executionMode === 'autopilot' && activeStage === 'run') {
-          options.onProgress?.('spec', 'error')
-        }
-        options?.onProgress?.(activeStage, 'error')
+        options?.onProgress?.('worktree', 'error')
         const formattedError = formatWorkspaceCreateError(error)
         setCreateError(formattedError)
         toast.error(getWorkspaceCreateErrorToastMessage(formattedError))
@@ -2987,9 +2437,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     },
     [
       applyWorktreeMeta,
-      maybeScaffoldSpecFromIssue,
-      maybeStartGatedRun,
-      startGatedRun,
       baseBranch,
       branchNameOverride,
       branchNameOverridePreservesNameEdits,
@@ -3017,7 +2464,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
       selectedRepo,
       selectedRepoIsGit,
       selectedRepoRequiresConnection,
-      selectedTrackerProvider,
       settings?.agentCmdOverrides,
       disabledTuiAgents,
       setSidebarOpen,
@@ -3124,14 +2570,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     createIssueLabels,
     createIssueLabelOptions,
     onToggleCreateIssueLabel: handleToggleCreateIssueLabel,
-    canScaffoldSpec,
-    scaffoldSpec,
-    onScaffoldSpecChange: setScaffoldSpec,
-    // Spec 005 F1: identical eligibility derivation to the D5 scaffold toggle.
-    canStartGatedRun: canScaffoldSpec,
-    startGatedRun,
-    onStartGatedRunChange: setStartGatedRun,
-    sddRolesEnabled,
     linkPopoverOpen,
     onLinkPopoverOpenChange: handleLinkPopoverChange,
     linkQuery,
@@ -3151,7 +2589,7 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onToggleAdvanced: () => setAdvancedOpen((current) => !current),
     createDisabled,
     creating,
-    onCreate: () => void submit(),
+    onCreate: () => void submitQuick(tuiAgent),
     baseBranch,
     onBaseBranchChange: handleBaseBranchChange,
     onBaseBranchPrSelect: handleBaseBranchPrSelect,
@@ -3189,7 +2627,6 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     onComposerNodeChange: handleComposerNodeChange,
     promptTextareaRef,
     nameInputRef,
-    submit,
     submitQuick,
     createDisabled
   }

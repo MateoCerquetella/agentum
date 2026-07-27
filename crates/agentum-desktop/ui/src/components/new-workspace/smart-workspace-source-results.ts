@@ -3,7 +3,7 @@ import type {
   GitHubWorkItem,
   GitLabWorkItem,
   LinearIssue
-} from '../../../../shared/types'
+} from '@/shared/types'
 
 export type SmartNameMode = 'smart' | 'github' | 'gitlab' | 'branches' | 'linear' | 'text'
 

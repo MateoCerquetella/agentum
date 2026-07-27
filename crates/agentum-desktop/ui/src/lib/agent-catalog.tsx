@@ -3,9 +3,9 @@
    status-surface icons do not drift. */
 import React from 'react'
 import { ClaudeIcon, DroidIcon, OpenAIIcon } from '@/components/status-bar/icons'
-import openClaudeLogoUrl from '../../resources/openclaude-logo.png?url'
-import type { TuiAgent } from '../../../shared/types'
-import { filterEnabledTuiAgents } from '../../../shared/tui-agent-selection'
+import openClaudeLogoUrl from '@resources/openclaude-logo.png?url'
+import type { TuiAgent } from '@/shared/types'
+import { filterEnabledTuiAgents } from '@/shared/tui-agent-selection'
 
 export type AgentCatalogEntry = {
   id: TuiAgent

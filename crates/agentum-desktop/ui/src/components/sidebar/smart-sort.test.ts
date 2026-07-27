@@ -1,6 +1,6 @@
 /* eslint-disable max-lines */
 import { describe, expect, it } from 'vitest'
-import type { Repo, TerminalTab, Worktree } from '../../../../shared/types'
+import type { Repo, TerminalTab, Worktree } from '@/shared/types'
 import {
   buildWorktreeComparator,
   CREATE_GRACE_MS,
@@ -12,8 +12,8 @@ import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStateHistoryEntry,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+} from '@/shared/agent-status-types'
+import { makePaneKey } from '@/shared/stable-pane-id'
 
 const NOW = new Date('2026-03-27T12:00:00.000Z').getTime()
 const LEAF_ID_1 = '11111111-1111-4111-8111-111111111111'

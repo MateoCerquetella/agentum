@@ -1,7 +1,7 @@
 import { Copy, Image, MessageSquarePlus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import type { BrowserGrabPayload } from '../../../../shared/browser-grab-types'
+import type { BrowserGrabPayload } from '@/shared/browser-grab-types'
 
 // ---------------------------------------------------------------------------
 // Grab payload → human-readable prompt context

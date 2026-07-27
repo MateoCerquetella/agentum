@@ -1,4 +1,4 @@
-import type { GitStagingArea } from '../../../../shared/types'
+import type { GitStagingArea } from '@/shared/types'
 
 export type SourceControlAction = 'discard' | 'stage' | 'unstage'
 

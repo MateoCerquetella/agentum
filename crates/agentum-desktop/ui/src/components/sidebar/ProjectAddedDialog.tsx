@@ -2,13 +2,13 @@ import React, { useCallback, useEffect } from 'react'
 import { useAppStore } from '@/store'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { getProjectAddedPrimaryBranchName, ProjectAddedContent } from './AddRepoSetupStep'
-import type { WorkspaceCreateTelemetrySource } from '../../../../shared/types'
-import { isFolderRepo } from '../../../../shared/repo-kind'
+import type { WorkspaceCreateTelemetrySource } from '@/shared/types'
+import { isFolderRepo } from '@/shared/repo-kind'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import {
   effectiveExternalWorktreeVisibility,
   isLegacyRepoForExternalWorktreeVisibility
-} from '../../../../shared/worktree-ownership'
+} from '@/shared/worktree-ownership'
 
 type ProjectAddedModalData = {
   repoId?: string

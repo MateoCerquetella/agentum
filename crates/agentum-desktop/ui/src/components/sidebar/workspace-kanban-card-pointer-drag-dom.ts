@@ -1,4 +1,4 @@
-import type { WorkspaceStatus } from '../../../../shared/types'
+import type { WorkspaceStatus } from '@/shared/types'
 
 export const CARD_SELECTOR = '[data-workspace-board-card-id]'
 export const STATUS_DROP_TARGET = '[data-workspace-status-drop-target]'

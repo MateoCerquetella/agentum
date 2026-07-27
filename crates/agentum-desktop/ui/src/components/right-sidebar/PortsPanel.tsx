@@ -53,8 +53,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
-import type { PortForwardEntry, EnrichedDetectedPort } from '../../../../shared/ssh-types'
-import type { WorkspacePort } from '../../../../shared/workspace-ports'
+import type { PortForwardEntry, EnrichedDetectedPort } from '@/shared/ssh-types'
+import type { WorkspacePort } from '@/shared/workspace-ports'
 
 
 

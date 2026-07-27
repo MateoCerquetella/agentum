@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
 import { useAppStore } from '@/store'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
-import type { GetRateLimitResult, GitHubRateLimitSnapshot } from '../../../../shared/types'
+import type { GetRateLimitResult, GitHubRateLimitSnapshot } from '@/shared/types'
 
 const REFRESH_INTERVAL_MS = 60_000
 

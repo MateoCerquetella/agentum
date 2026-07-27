@@ -3,9 +3,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   BrowserGrabPayload,
   BrowserGrabScreenshot
-} from '../../../../shared/browser-grab-types'
+} from '@/shared/browser-grab-types'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { isEditableKeyboardTarget } from './browser-keyboard'
+import { useAppStore } from '@/store'
 
 // ---------------------------------------------------------------------------
 // Grab mode state machine
@@ -148,6 +149,7 @@ export function useGrabMode(browserPageId: string): GrabModeHook {
 
   const toggle = useCallback(() => {
     if (state === 'idle' || state === 'error') {
+      useAppStore.getState().recordFeatureInteraction('browser-grab')
       setError(null)
       setPayload(null)
       setContextMenu(false)

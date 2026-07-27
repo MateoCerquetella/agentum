@@ -3,7 +3,7 @@ import { AlertTriangle, RotateCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { reportReactErrorBoundaryCrash } from '@/lib/react-error-boundary-reporting'
-import type { ReactErrorBoundaryReportArgs } from '../../../../shared/crash-reporting'
+import type { ReactErrorBoundaryReportArgs } from '@/shared/crash-reporting'
 
 type BoundaryFallbackArgs = {
   error: Error | null

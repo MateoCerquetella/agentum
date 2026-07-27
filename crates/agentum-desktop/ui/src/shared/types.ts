@@ -22,7 +22,7 @@ import type {
 } from './source-control-ai-types'
 
 // Re-exported for backward compat with renderer call sites that import
-// `WorkspaceCreateTelemetrySource` from '../../../shared/types'.
+// `WorkspaceCreateTelemetrySource` from '@/shared/types'.
 export type { WorkspaceSource as WorkspaceCreateTelemetrySource } from './workspace-source'
 export type { TaskProvider } from './task-providers'
 export type {
@@ -75,7 +75,7 @@ type RepoKind = 'git' | 'folder'
 export type IssueSourcePreference = 'upstream' | 'origin' | 'auto'
 
 /**
- * Per-repo choice of which tracker harness runs drive ticket transitions
+ * Per-repo choice of which tracker workflow runs drive ticket transitions
  * against. `undefined` is treated identically to `'auto'` (detect) — the same
  * forward-compat convention as `issueSourcePreference`, so persisted records
  * that predate the field keep today's detection behavior.
@@ -112,7 +112,7 @@ export type Repo = {
    *  identically to `'auto'`; writers leave it undefined on creation so
    *  existing persisted records stay forward-compatible. */
   issueSourcePreference?: IssueSourcePreference
-  /** Tracker the harness drives ticket transitions against for this repo.
+  /** Tracker workflows drive ticket transitions against for this repo.
    *  `undefined` is treated identically to `'auto'`; writers leave it
    *  undefined until the user picks in settings. */
   trackerProvider?: TrackerProviderPreference
@@ -513,7 +513,7 @@ export type TerminalTab = {
    *  PTY and tab icon stay stable even if the default shell setting changes
    *  later. Older persisted tabs may omit this field. */
   shellOverride?: string
-  /** Why: the coding-harness agent Agentum launched in this tab. Lets the tab bar
+  /** Why: the coding agent Agentum launched in this tab. Lets the tab bar
    *  show the provider icon immediately, before the agent emits its first hook
    *  event (a freshly-launched, idle agent reports no live status yet). Live
    *  hook status overrides this once the agent does anything. Plain terminals

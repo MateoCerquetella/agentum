@@ -152,11 +152,13 @@ describe('dispatcher → transport → onTitleChange for Pi spinner', () => {
     dispatcherCallback?.({ id: 'pty-pi', data: idleTitle() })
     await flushPtySideEffects()
 
-    const seenTitles = onTitleChange.mock.calls.map((c) => c[0])
-    const workingIdx = seenTitles.findIndex((t) => t === '⠋ Pi')
-    const finalIdleIdx = seenTitles.lastIndexOf('Pi')
-    expect(workingIdx).toBeGreaterThanOrEqual(0)
-    expect(finalIdleIdx).toBeGreaterThan(workingIdx)
+    await vi.waitFor(() => {
+      const seenTitles = onTitleChange.mock.calls.map((c) => c[0])
+      const workingIdx = seenTitles.findIndex((t) => t === '⠋ Pi')
+      const finalIdleIdx = seenTitles.lastIndexOf('Pi')
+      expect(workingIdx).toBeGreaterThanOrEqual(0)
+      expect(finalIdleIdx).toBeGreaterThan(workingIdx)
+    })
 
     transport.disconnect()
   })

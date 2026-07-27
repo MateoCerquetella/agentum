@@ -7,7 +7,7 @@ import type {
   Repo,
   Worktree,
   WorktreeCardProperty
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type WorktreeCardComponent from './WorktreeCard'
 import type * as WorkspaceDeleteQuickAction from './workspace-delete-quick-action'
 

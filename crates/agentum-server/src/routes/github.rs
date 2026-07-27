@@ -88,9 +88,15 @@ fn is_numeric_issue_id(s: &str) -> bool {
 pub(crate) struct FetchedIssue {
     pub title: String,
     pub body: String,
+    #[allow(dead_code)] // consumed only by the read-only legacy migration path
     pub url: String,
     #[allow(dead_code)]
     pub slug: String,
+    /// Provider-owned immutable revision input for SDD import previews. This is
+    /// fetched in the same read as the body so a later preview/commit can bind
+    /// the exact work-item version without trusting a client timestamp.
+    #[allow(dead_code)] // consumed by the v2 source adapter integration
+    pub updated_at: String,
 }
 
 /// Fetch a single issue's title + body + URL via `gh` from a neutral cwd
@@ -148,17 +154,25 @@ pub(crate) async fn fetch_github_issue(
             "--repo",
             slug.as_str(),
             "--json",
-            "title,body,url",
+            "title,body,url,updatedAt",
         ],
     )
     .await
     .map_err(|e| ApiError::Internal(format!("could not run `gh`: {e}")))?;
 
+    const MAX_ISSUE_SOURCE_OUTPUT: usize = 2 * 1024 * 1024;
+    if out.stdout.len().saturating_add(out.stderr.len()) > MAX_ISSUE_SOURCE_OUTPUT {
+        return Err(ApiError::BadRequest(
+            "`gh issue view` returned more than 2 MiB; refusing an unbounded work-item source"
+                .into(),
+        ));
+    }
+
     if !out.success {
-        // `gh` owns its own auth, so its stderr carries no agentum-held secret;
-        // still, log it server-side and return a generic message — the desktop
-        // falls back to the title+URL prompt on any error (never breaks "Use").
-        tracing::warn!(stderr = %out.stderr, slug = %slug, number = %number, "gh issue view failed");
+        // Keep external command output out of logs: provider stderr may include
+        // account, host, or work-item details. The typed client error remains
+        // intentionally generic.
+        tracing::warn!(slug = %slug, number = %number, "gh issue view failed");
         return Err(ApiError::BadRequest("`gh issue view` failed".into()));
     }
 
@@ -169,6 +183,7 @@ pub(crate) async fn fetch_github_issue(
         body: v["body"].as_str().unwrap_or_default().to_string(),
         url: v["url"].as_str().unwrap_or_default().to_string(),
         slug,
+        updated_at: v["updatedAt"].as_str().unwrap_or_default().to_string(),
     })
 }
 

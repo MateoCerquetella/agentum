@@ -52,11 +52,11 @@ import type {
   WorktreeLineage,
   WorkspaceStatus,
   WorkspaceStatusDefinition
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   DEFAULT_SHOW_SLEEPING_WORKSPACES,
   DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
-} from '../../../../shared/constants'
+} from '@/shared/constants'
 import { buildWorktreeComparator } from './smart-sort'
 import {
   buildAttentionByWorktree,
@@ -183,14 +183,14 @@ import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-cl
 import { getRepoHeaderCreateState } from './repo-header-create-state'
 import type { PendingSidebarWorktreeReveal } from '@/store/slices/ui'
 import { getRepositoryIconSectionId } from '@/components/settings/repository-settings-targets'
-import { keybindingMatchesAction } from '../../../../shared/keybindings'
+import { keybindingMatchesAction } from '@/shared/keybindings'
 import { ProjectGroupNameDialog } from './ProjectGroupNameDialog'
 import { ProjectGroupDeleteDialog } from './ProjectGroupDeleteDialog'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   effectiveExternalWorktreeVisibility,
   isLegacyRepoForExternalWorktreeVisibility
-} from '../../../../shared/worktree-ownership'
+} from '@/shared/worktree-ownership'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import ImportedWorktreesVisibilityLine from './ImportedWorktreesVisibilityLine'

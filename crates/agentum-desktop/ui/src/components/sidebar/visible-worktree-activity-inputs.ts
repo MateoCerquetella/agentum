@@ -1,4 +1,4 @@
-import type { BrowserWorkspace, TerminalTab } from '../../../../shared/types'
+import type { BrowserWorkspace, TerminalTab } from '@/shared/types'
 
 type TerminalActivityTab = Pick<TerminalTab, 'id'>
 type BrowserActivityTab = Pick<BrowserWorkspace, 'id'>

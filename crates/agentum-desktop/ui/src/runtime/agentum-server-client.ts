@@ -49,6 +49,8 @@ export type CreateSessionInput = {
   tool: string
   model?: string
   flags?: string[]
+  /** Server host identity for an SSH-backed session. */
+  host_id?: string
   /** Ask the server to `git worktree add` a dedicated branch for this session. */
   worktree?: boolean
 }

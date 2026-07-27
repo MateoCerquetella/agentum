@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createIssuePayload,
   draftIssueBodyPayload,
-  extractServerErrorMessage,
-  scaffoldSpecFromIssue
+  extractServerErrorMessage
 } from './github-issue-client'
 
 vi.mock('./server-endpoint', () => ({
@@ -118,44 +117,5 @@ describe('draftIssueBodyPayload', () => {
     expect(
       draftIssueBodyPayload({ title: 'Draft it', workdir: '/repo', style: 'concise' })
     ).toEqual({ title: 'Draft it', workdir: '/repo', style: 'concise' })
-  })
-})
-
-describe('scaffoldSpecFromIssue', () => {
-  it('sends the authoritative worktree identity with the remote path', async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify({
-            specId: '42-add-widget',
-            specExisted: false,
-            specPath: '.agentum-harness/specs/42-add-widget/spec.md',
-            written: []
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        )
-      )
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    vi.stubGlobal('window', {
-      setTimeout: globalThis.setTimeout.bind(globalThis),
-      clearTimeout: globalThis.clearTimeout.bind(globalThis)
-    })
-
-    await scaffoldSpecFromIssue({
-      workdir: '/srv/project feature',
-      worktreeId: 'repo-1::/srv/project feature',
-      number: 42,
-      slug: 'acme/widgets'
-    })
-
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toBe('/api/harness/spec-from-issue')
-    expect(JSON.parse(String(init.body))).toMatchObject({
-      workdir: '/srv/project feature',
-      worktreeId: 'repo-1::/srv/project feature',
-      number: '42',
-      slug: 'acme/widgets'
-    })
   })
 })

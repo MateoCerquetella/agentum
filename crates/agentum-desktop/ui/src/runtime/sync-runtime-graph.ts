@@ -22,17 +22,17 @@ import type {
   RuntimeMobileTerminalTheme,
   RuntimeMobileSessionTabsSnapshot,
   RuntimeSyncWindowGraph
-} from '../../../shared/runtime-types'
-import { isTerminalLeafId, makePaneKey } from '../../../shared/stable-pane-id'
-import { isWebTerminalSurfaceTabId } from '../../../shared/terminal-surface-id'
+} from '@/shared/runtime-types'
+import { isTerminalLeafId, makePaneKey } from '@/shared/stable-pane-id'
+import { isWebTerminalSurfaceTabId } from '@/shared/terminal-surface-id'
 import type {
   TabGroup,
   TabGroupLayoutNode,
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
   TerminalTab
-} from '../../../shared/types'
-import { resolveTerminalTabTitle } from '../../../shared/tab-title-resolution'
+} from '@/shared/types'
+import { resolveTerminalTabTitle } from '@/shared/tab-title-resolution'
 import {
   getActiveTabNavOrder,
   getGroupVisibleTabOrder,

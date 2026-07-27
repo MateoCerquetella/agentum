@@ -9,7 +9,7 @@ import {
   markHostConnectedFromHostKey,
   markHostReconnectingFromHostKey
 } from './server-host-client'
-import { extractAllOscTitles } from '../../../shared/agent-detection'
+import { extractAllOscTitles } from '@/shared/agent-detection'
 import {
   writeTerminalOutput,
   flushTerminalOutput,

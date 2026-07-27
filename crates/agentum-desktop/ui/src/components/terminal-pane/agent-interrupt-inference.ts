@@ -1,12 +1,12 @@
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import {
   AGENT_INTERRUPT_SETTLE_MS,
   type AgentInterruptInferenceRequest,
   type AgentInterruptInputIntent
-} from '../../../../shared/agent-interrupt-intent'
+} from '@/shared/agent-interrupt-intent'
 import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
 
 export type AgentInterruptInference = {

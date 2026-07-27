@@ -12,7 +12,7 @@ import { CommentReactions, PRViewedCheckbox } from './github-item-display'
 import { formatRelativeTime } from '@/lib/relative-time'
 import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { editor } from 'monaco-editor'
+import type { editor as monacoEditor } from 'monaco-editor'
 import { ArrowDown, ArrowUp, Braces, Check, ExternalLink, LoaderCircle, MessageSquare, MessageSquarePlus, PanelLeftOpen, Pencil, UndoDot, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -35,7 +35,7 @@ import { resolveCommentReplyTarget } from '@/components/comment-reply-target-sta
 import { useAppStore } from '@/store'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { GitHubMarkdownComposer } from '@/components/github/GitHubMarkdownComposer'
-import type { GitHubOwnerRepo, GitHubPRFile, GitHubPRFileContents, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, GitBranchChangeEntry, GitDiffResult, PRCheckDetail, PRComment } from '../../../shared/types'
+import type { GitHubOwnerRepo, GitHubPRFile, GitHubPRFileContents, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, GitBranchChangeEntry, GitDiffResult, PRCheckDetail, PRComment } from '@/shared/types'
 
 const MonacoCodeExcerpt = lazy(() => import('@/components/editor/MonacoCodeExcerpt'))
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { computeAutoAckTargets } from './useAutoAckViewedAgent'
 import { createTestStore, makeTab } from '../store/slices/store-test-helpers'
 import type { RetainedAgentEntry } from '../store/slices/agent-status'
-import { makePaneKey } from '../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 
 const CODEX_LEAF_ID = '11111111-1111-4111-8111-111111111111'
 const OTHER_LEAF_ID = '22222222-2222-4222-8222-222222222222'

@@ -9,7 +9,7 @@
 // in the worktree (the same active-agent/new-agent menu diff-notes uses).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageSquarePlus, Send, SquareTerminal, Trash2, X } from 'lucide-react'
-import type { BrowserScreencastFrameMetadata } from '../../../../shared/browser-screencast-protocol'
+import type { BrowserScreencastFrameMetadata } from '@/shared/browser-screencast-protocol'
 import { cdpNodeAtPoint, type CdpNodeClip } from '../../runtime/cdp-screencast-client'
 import { clipToOverlayRect, pointToDevice, type ElementClip } from './agent-browser-picker'
 import {

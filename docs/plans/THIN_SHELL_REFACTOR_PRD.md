@@ -350,7 +350,7 @@ GET /api/usage/recent-sessions     # last N sessions with cost + duration
 
 ### 7.1 Server-route auth model
 
-The desktop embeds the server with `state.no_auth = true` (loopback bind, no bearer token). Server routes added in this PRD therefore do **not** require token validation when called from the embedded instance. If a route is later exposed to remote clients (Phase 2 of the v2 PRD — agentless SSH), the `require_token` middleware applies automatically via `is_public` / `routes::router` wiring. No per-route decisions needed.
+Historical note: the first thin-shell implementation embedded a loopback server with `state.no_auth = true`. That model has been retired. The desktop now mints a boot-scoped, memory-only UI bearer and every non-public embedded route passes through `require_token`; the entire `/api/sdd/v2` HTTP and WebSocket namespace also remains authenticated when a standalone daemon uses `--no-auth`. MCP uses a separate bearer that is never interchangeable with the UI capability. New routes must be wired through the shared router and may not treat loopback origin as identity.
 
 ### 7.2 Event broadcasting
 

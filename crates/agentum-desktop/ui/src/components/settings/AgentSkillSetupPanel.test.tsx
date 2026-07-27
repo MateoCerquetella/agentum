@@ -8,7 +8,7 @@ function renderPanel(overrides: Partial<ComponentProps<typeof AgentSkillSetupPan
     <AgentSkillSetupPanel
       title="CLI skill"
       description="Enables agents to use Agentum workflows."
-      command="npx skills add https://github.com/mateocerquetella/agentum --skill agentum-cli --global"
+      command="agentum capabilities"
       terminalTitle="CLI skill setup"
       terminalAriaLabel="CLI skill install terminal"
       terminalWorktreeId="settings-cli-skill-terminal"
@@ -37,32 +37,32 @@ function buttonMarkupByLabel(html: string, label: string): string | undefined {
 }
 
 describe('AgentSkillSetupPanel', () => {
-  it('keeps the install action visible after the skill is detected', () => {
+  it('explains that capability setup is automatic', () => {
     const html = renderPanel({ installed: true })
 
-    expect(html).toContain('Installed')
-    expect(buttonLabels(html)).toContain('Install')
-    expect(buttonLabels(html)).toContain('Re-check')
+    expect(html).toContain('Provided automatically')
+    expect(html).toContain('MCP server')
+    expect(buttonLabels(html)).toEqual([])
   })
 
-  it('hides only re-check when installed re-checks are disabled', () => {
+  it('does not expose retired install or re-check controls', () => {
     const html = renderPanel({ installed: true, showRecheckWhenInstalled: false })
 
-    expect(html).toContain('Installed')
-    expect(buttonLabels(html)).toContain('Install')
-    expect(buttonLabels(html)).not.toContain('Re-check')
+    expect(buttonLabels(html)).toEqual([])
+    expect(html).not.toContain('Install')
+    expect(html).not.toContain('Re-check')
   })
 
-  it('keeps re-check visible before install when installed re-checks are disabled', () => {
+  it('keeps the automatic setup message before capability detection', () => {
     const html = renderPanel({ installed: false, showRecheckWhenInstalled: false })
 
-    expect(buttonLabels(html)).toContain('Install')
-    expect(buttonLabels(html)).toContain('Re-check')
+    expect(html).toContain('no install needed')
+    expect(buttonLabels(html)).toEqual([])
   })
 
-  it('keeps install visible but disabled when parent setup is disabled', () => {
+  it('does not resurrect an install control when parent setup is disabled', () => {
     const html = renderPanel({ installDisabled: true })
 
-    expect(buttonMarkupByLabel(html, 'Install')).toContain('disabled=""')
+    expect(buttonMarkupByLabel(html, 'Install')).toBeUndefined()
   })
 })

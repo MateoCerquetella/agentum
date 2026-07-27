@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { BrowserHistoryEntry } from '../../../shared/types'
-import { MAX_BROWSER_HISTORY_ENTRIES } from '../../../shared/workspace-session-browser-history'
+import type { BrowserHistoryEntry } from '@/shared/types'
+import { MAX_BROWSER_HISTORY_ENTRIES } from '@/shared/workspace-session-browser-history'
 import { buildWorkspaceSessionPayload, type WorkspaceSessionSnapshot } from './workspace-session'
 
 function createSnapshot(browserUrlHistory: BrowserHistoryEntry[]): WorkspaceSessionSnapshot {

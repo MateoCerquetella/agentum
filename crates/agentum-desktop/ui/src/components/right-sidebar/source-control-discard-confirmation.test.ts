@@ -3,7 +3,7 @@ import {
   getDiscardAreaConfirmationCopy,
   getDiscardEntryConfirmationCopy
 } from './source-control-discard-confirmation'
-import type { GitStatusEntry } from '../../../../shared/types'
+import type { GitStatusEntry } from '@/shared/types'
 
 function entry(partial: Partial<GitStatusEntry> & { path: string }): GitStatusEntry {
   return {

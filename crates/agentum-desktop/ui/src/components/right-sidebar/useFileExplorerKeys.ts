@@ -13,7 +13,7 @@ import {
   redoFileExplorer,
   undoFileExplorer
 } from './fileExplorerUndoRedo'
-import { keybindingMatchesAction } from '../../../../shared/keybindings'
+import { keybindingMatchesAction } from '@/shared/keybindings'
 
 /**
  * Keyboard shortcuts for the file explorer.

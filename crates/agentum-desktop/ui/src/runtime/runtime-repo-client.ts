@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
-import type { BaseRefSearchResult, GlobalSettings } from '../../../shared/types'
-import { legacyBaseRefSearchResult } from '../../../shared/base-ref-search-result'
+import type { BaseRefSearchResult, GlobalSettings } from '@/shared/types'
+import { legacyBaseRefSearchResult } from '@/shared/base-ref-search-result'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
 import {
   getServerRepoBaseRefDefault,

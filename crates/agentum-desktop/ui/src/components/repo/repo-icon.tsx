@@ -22,7 +22,7 @@ import {
   Wrench,
   type LucideIcon
 } from 'lucide-react'
-import type { RepoIcon } from '../../../../shared/repo-icon'
+import type { RepoIcon } from '@/shared/repo-icon'
 import { cn } from '@/lib/utils'
 
 export type RepoLucideIconOption = {

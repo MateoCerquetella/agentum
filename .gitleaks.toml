@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+# The release scan is built from tracked source files, so .git and unrelated
+# workspace files never enter it. Only generated build/dependency trees are
+# excluded if a future packaging step deliberately adds them to an archive.
+[[allowlists]]
+description = "Generated dependency and compiler output"
+paths = [
+  '''(^|/)target/''',
+  '''(^|/)node_modules/''',
+]

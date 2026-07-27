@@ -19,6 +19,51 @@ use rand::RngCore;
 
 use crate::AppState;
 
+/// Identity established by the API authentication boundary. SDD approval
+/// handlers consume this extension and never trust a caller-supplied actor id.
+#[derive(Debug, Clone)]
+pub struct AuthActor {
+    pub id: String,
+    pub display_name: String,
+    trust: AuthTrust,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthTrust {
+    /// A database-backed user session or the desktop webview's boot-scoped
+    /// capability. Only this trust class may drive SDD mutations.
+    Human,
+    /// A request admitted solely because a standalone daemon was launched with
+    /// `--no-auth`. It remains useful for legacy/non-SDD local automation, but
+    /// it must never be promoted into a human approval identity.
+    UnauthenticatedLocal,
+}
+
+impl AuthActor {
+    fn human(id: String, display_name: String) -> Self {
+        Self {
+            id,
+            display_name,
+            trust: AuthTrust::Human,
+        }
+    }
+
+    pub(crate) fn unauthenticated_local() -> Self {
+        Self {
+            id: "unauthenticated:local".into(),
+            display_name: "Unauthenticated local caller".into(),
+            trust: AuthTrust::UnauthenticatedLocal,
+        }
+    }
+
+    /// SDD run-control and authorization commands are human interfaces. A
+    /// provider process may share loopback networking with Agentum, so
+    /// loopback origin alone is deliberately insufficient here.
+    pub fn can_mutate_sdd(&self) -> bool {
+        self.trust == AuthTrust::Human
+    }
+}
+
 /// How long a freshly minted bearer token stays valid. Refreshed on every
 /// authenticated request (sliding expiry), so an active session stays live
 /// indefinitely while idle ones get reaped.
@@ -83,18 +128,19 @@ fn is_public(path: &str) -> bool {
     ) {
         return true;
     }
-    // NOTE: `/mcp` (the agentum MCP server) is deliberately NOT public. It
-    // exposes app control tools (sessions, and soon worktrees/terminal/
-    // orchestration), so it must require auth on a networked daemon. It stays
-    // reachable on the embedded loopback server because that server runs with
-    // `no_auth = true` (loopback-bound by construction — see
-    // serve_embedded_loopback_state). For an authed `agentum serve`, the agent
-    // launch wiring injects the bearer token into the agent's MCP config as an
-    // `Authorization` header, so the agent authenticates like any other client.
+    // NOTE: `/mcp` (the Agentum MCP server) is deliberately NOT public. It
+    // exposes app-control tools, so both a network daemon and the embedded
+    // loopback server require the separate MCP bearer. Agent launch wiring
+    // injects that bearer into the agent's config as an `Authorization` header;
+    // the desktop UI bearer is never shared with an agent process.
     //
     // Hook endpoints use per-session ephemeral tokens, not bearer auth.
     // Agent CLIs don't know the user's bearer token.
     path.starts_with("/api/sessions/") && path.ends_with("/hook")
+}
+
+fn is_sdd_v2(path: &str) -> bool {
+    path == "/api/sdd/v2" || path.starts_with("/api/sdd/v2/")
 }
 
 fn extract_token(req: &Request<Body>) -> Option<String> {
@@ -159,38 +205,89 @@ fn hex_val(b: u8) -> Option<u8> {
 /// axum middleware. Looks up the bearer token in `auth_sessions`. If the
 /// token resolves to a user, the request continues; otherwise 401.
 /// Sliding expiry: each touch extends the row's `expires_at` by `SESSION_TTL`.
-/// When `state.no_auth` is set (via `agentum serve --no-auth`), all requests
-/// are passed through without any token check.
+/// The desktop's embedded server presents a boot-scoped capability minted in
+/// memory and returned only through the Tauri command boundary. It is checked
+/// before database sessions and is never persisted or injected into agents.
+///
+/// When `state.no_auth` is set (via `agentum serve --no-auth`), requests still
+/// receive an explicitly untrusted local identity for non-SDD routes. The
+/// entire SDD v2 HTTP/WS namespace still requires a human bearer, so
+/// `--no-auth` cannot expose spec state or turn a provider into a human
+/// approver or delivery actor.
 pub async fn require_token(
     axum::extract::State(state): axum::extract::State<AppState>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
-    if state.no_auth {
-        return next.run(req).await;
-    }
-
     let path = req.uri().path();
     if !path.starts_with("/api/") || is_public(path) {
         return next.run(req).await;
     }
 
-    let Some(token) = extract_token(&req) else {
-        return unauthorized("missing bearer token");
-    };
-
-    match state
-        .store
-        .touch_auth_session(&token, Some(SESSION_TTL))
-        .await
+    let presented = extract_token(&req);
+    if state
+        .embedded_ui_token
+        .as_deref()
+        .zip(presented.as_deref())
+        .is_some_and(|(expected, actual)| constant_time_eq(expected, actual))
     {
-        Ok(Some(_user)) => next.run(req).await,
-        Ok(None) => unauthorized("invalid or expired bearer token"),
-        Err(e) => {
-            tracing::warn!(error = %e, "auth lookup failed");
-            unauthorized("auth lookup failed")
+        req.extensions_mut().insert(AuthActor::human(
+            "human:local-desktop".into(),
+            "Local desktop user".into(),
+        ));
+        return next.run(req).await;
+    }
+
+    if let Some(token) = presented {
+        match state
+            .store
+            .touch_auth_session(&token, Some(SESSION_TTL))
+            .await
+        {
+            Ok(Some(user)) => {
+                req.extensions_mut().insert(AuthActor::human(
+                    format!("human:user:{}", user.id),
+                    user.username,
+                ));
+                return next.run(req).await;
+            }
+            Ok(None) if !state.no_auth || is_sdd_v2(path) => {
+                return unauthorized("invalid or expired bearer token");
+            }
+            Ok(None) => {}
+            Err(e) if !state.no_auth || is_sdd_v2(path) => {
+                tracing::warn!(error = %e, "auth lookup failed");
+                return unauthorized("auth lookup failed");
+            }
+            Err(e) => tracing::warn!(error = %e, "auth lookup failed on no-auth server"),
         }
     }
+
+    if state.no_auth {
+        if is_sdd_v2(path) {
+            return unauthorized("SDD v2 requires an authenticated human capability");
+        }
+        req.extensions_mut()
+            .insert(AuthActor::unauthenticated_local());
+        return next.run(req).await;
+    }
+
+    unauthorized("missing bearer token")
+}
+
+/// Length-checked constant-time comparison. Token length is not secret, while
+/// avoiding an early byte mismatch keeps the boot-scoped capability from
+/// becoming a useful loopback timing oracle.
+fn constant_time_eq(expected: &str, actual: &str) -> bool {
+    let (expected, actual) = (expected.as_bytes(), actual.as_bytes());
+    if expected.len() != actual.len() {
+        return false;
+    }
+    let mut difference = 0_u8;
+    for (left, right) in expected.iter().zip(actual) {
+        difference |= left ^ right;
+    }
+    difference == 0
 }
 
 fn unauthorized(msg: &'static str) -> Response {
@@ -208,6 +305,11 @@ fn unauthorized(msg: &'static str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentum_core::Event;
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
+    use tower::ServiceExt;
 
     #[test]
     fn token_format() {
@@ -235,5 +337,112 @@ mod tests {
         assert_eq!(urldecode("abc"), "abc");
         assert_eq!(urldecode("abc%20def"), "abc def");
         assert_eq!(urldecode("a+b"), "a b");
+    }
+
+    #[tokio::test]
+    async fn no_auth_never_exposes_sdd_v2_without_a_human_capability() {
+        const UI_TOKEN: &str = "test-only-boot-scoped-ui-capability";
+        const DB_TOKEN: &str = "test-only-database-human-session";
+        let directory = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&directory.path().join("auth.sqlite"))
+            .await
+            .unwrap();
+        let user = store
+            .create_user("test-human", "unused-test-hash")
+            .await
+            .unwrap();
+        store
+            .create_auth_session(user.id, DB_TOKEN, SESSION_TTL)
+            .await
+            .unwrap();
+        let (bus, _) = broadcast::channel::<Event>(16);
+        let mut state = AppState::new(store, bus);
+        state.no_auth = true;
+        state.embedded_ui_token = Some(Arc::new(UI_TOKEN.into()));
+        let app = crate::router(state);
+
+        // Read/list/durable-events + WS upgrade path, creation/import/Jira,
+        // approval, and both delivery authorization commands. Invalid bodies
+        // are deliberate: authentication must run before route parsing.
+        let cases = [
+            ("GET", "/api/sdd/v2/repos/missing/specs", ""),
+            ("GET", "/api/sdd/v2/runs/missing", ""),
+            ("GET", "/api/sdd/v2/runs/missing/events?after=0", ""),
+            ("GET", "/api/sdd/v2/events?repoId=missing&after=0", ""),
+            ("POST", "/api/sdd/v2/repos/missing/specs", "{}"),
+            (
+                "POST",
+                "/api/sdd/v2/specs/SPC-00000000000000000000000000/runs",
+                "{}",
+            ),
+            ("POST", "/api/sdd/v2/repos/missing/sources/preview", "{}"),
+            ("POST", "/api/sdd/v2/integrations/jira/oauth/start", "{}"),
+            (
+                "POST",
+                "/api/sdd/v2/runs/missing/commands",
+                r#"{"type":"decideApproval","requestId":"probe-approval","expectedRevision":0,"approvalId":"missing","digest":"missing","decision":"approve"}"#,
+            ),
+            (
+                "POST",
+                "/api/sdd/v2/runs/missing/commands",
+                r#"{"type":"previewDelivery","requestId":"probe-preview","expectedRevision":0,"actions":[{"type":"commit","message":"probe"}]}"#,
+            ),
+            (
+                "POST",
+                "/api/sdd/v2/runs/missing/commands",
+                r#"{"type":"confirmDelivery","requestId":"probe-confirm","expectedRevision":0,"previewToken":"missing","actions":["missing"]}"#,
+            ),
+        ];
+
+        for (method, path, body) in cases {
+            let unauthenticated = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            let response = app.clone().oneshot(unauthenticated).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {path}"
+            );
+
+            let provider_guess = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer provider-does-not-know-ui-token")
+                .body(Body::from(body))
+                .unwrap();
+            let response = app.clone().oneshot(provider_guess).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {path}"
+            );
+
+            let ui = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {UI_TOKEN}"))
+                .body(Body::from(body))
+                .unwrap();
+            let response = app.clone().oneshot(ui).await.unwrap();
+            assert_ne!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {path}"
+            );
+            assert_ne!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+        }
+
+        let database_human = Request::get("/api/sdd/v2/runs/missing")
+            .header("authorization", format!("Bearer {DB_TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(database_human).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

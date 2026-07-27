@@ -1,5 +1,5 @@
-import type { GitHubWorkItem } from '../../../shared/types'
-import { getLinkedWorkItemSuggestedName } from '../../../shared/workspace-name'
+import type { GitHubWorkItem } from '@/shared/types'
+import { getLinkedWorkItemSuggestedName } from '@/shared/workspace-name'
 import type { LinkedWorkItemSummary } from './new-workspace'
 import { parseGitHubIssueOrPRLink } from './github-links'
 

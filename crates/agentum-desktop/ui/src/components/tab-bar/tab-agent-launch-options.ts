@@ -1,5 +1,5 @@
 import { AGENT_CATALOG } from '@/lib/agent-catalog'
-import type { TuiAgent } from '../../../../shared/types'
+import type { TuiAgent } from '@/shared/types'
 
 export type TabAgentLaunchOption = {
   agent: TuiAgent

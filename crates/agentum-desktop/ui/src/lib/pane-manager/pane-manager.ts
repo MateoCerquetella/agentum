@@ -33,10 +33,10 @@ import {
   suspendPaneRendering,
   trimHiddenPaneScrollback
 } from './pane-rendering-control'
-import type { TerminalLeafId } from '../../../../shared/stable-pane-id'
+import type { TerminalLeafId } from '@/shared/stable-pane-id'
 import { PaneIdentityRegistry } from './pane-identity-registry'
 import { closeManagedPane, splitManagedPane } from './pane-split-close'
-import { FIRST_PANE_ID } from '../../../../shared/pane-key'
+import { FIRST_PANE_ID } from '@/shared/pane-key'
 import { splitPaneAroundMountedSubtree } from './pane-subtree-split'
 
 export type { PaneManagerOptions, PaneStyleOptions, ManagedPane, DropZone }

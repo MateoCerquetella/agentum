@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { formatGrabPayloadAsText } from './GrabConfirmationSheet'
-import type { BrowserGrabPayload } from '../../../../shared/browser-grab-types'
+import type { BrowserGrabPayload } from '@/shared/browser-grab-types'
 
 function makeTestPayload(overrides?: Partial<BrowserGrabPayload>): BrowserGrabPayload {
   return {

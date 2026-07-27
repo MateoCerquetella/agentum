@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-1MY50VWCZD6TKKWHZT48X065T8",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "Carry out the migrated plan section: Slice 1 \u2014 Correct repository identity and pure issue organization \u2014 COMPLETE",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "Carry out the migrated plan section: Slice 2 \u2014 Cached-first, race-safe TrackerSection UI \u2014 COMPLETE",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "Carry out the migrated plan section: Slice 3 \u2014 Shared drafting preference and contextual controls \u2014 COMPLETE",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "Carry out the migrated plan section: Slice 4 \u2014 Carry agent/model through the existing draft endpoint \u2014 COMPLETE",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "Carry out the migrated plan section: Final gate \u2014 COMPLETE",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

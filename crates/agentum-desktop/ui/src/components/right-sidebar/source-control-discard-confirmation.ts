@@ -1,5 +1,5 @@
 import { basename } from '@/lib/path'
-import type { GitStatusEntry } from '../../../../shared/types'
+import type { GitStatusEntry } from '@/shared/types'
 import type { DiscardAllArea } from './discard-all-sequence'
 
 export type DiscardConfirmationCopy = {

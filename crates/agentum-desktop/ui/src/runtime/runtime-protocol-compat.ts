@@ -1,9 +1,9 @@
-import { describeRuntimeCompatBlock, evaluateRuntimeCompat } from '../../../shared/protocol-compat'
+import { describeRuntimeCompatBlock, evaluateRuntimeCompat } from '@/shared/protocol-compat'
 import {
   MIN_COMPATIBLE_RUNTIME_SERVER_VERSION,
   RUNTIME_PROTOCOL_VERSION
-} from '../../../shared/protocol-version'
-import type { RuntimeStatus } from '../../../shared/runtime-types'
+} from '@/shared/protocol-version'
+import type { RuntimeStatus } from '@/shared/runtime-types'
 
 export function assertRuntimeStatusCompatible(status: RuntimeStatus): void {
   const verdict = evaluateRuntimeCompat({

@@ -1,4 +1,4 @@
-import type { TaskProvider } from '../../../shared/types'
+import type { TaskProvider } from '@/shared/types'
 
 export type LinkedWorkItemContext = {
   provider: TaskProvider

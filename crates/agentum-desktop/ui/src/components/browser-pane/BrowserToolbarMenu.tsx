@@ -27,13 +27,13 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import { BROWSER_FAMILY_LABELS } from '../../../../shared/constants'
-import type { BrowserViewportPresetId } from '../../../../shared/types'
+import { BROWSER_FAMILY_LABELS } from '@/shared/constants'
+import type { BrowserViewportPresetId } from '@/shared/types'
 import {
   BROWSER_VIEWPORT_PRESETS,
   browserViewportPresetToOverride,
   getBrowserViewportPreset
-} from '../../../../shared/browser-viewport-presets'
+} from '@/shared/browser-viewport-presets'
 
 type BrowserToolbarMenuProps = {
   currentProfileId: string | null

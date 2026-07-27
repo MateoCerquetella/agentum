@@ -4,7 +4,7 @@ import {
   getDiffSectionEstimatedHeight,
   isIntrinsicHeightImageDiff
 } from './diff-section-layout'
-import type { GitDiffResult } from '../../../../shared/types'
+import type { GitDiffResult } from '@/shared/types'
 
 describe('diff section layout', () => {
   it('uses Monaco measured content height for text diffs', () => {

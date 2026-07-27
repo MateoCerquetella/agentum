@@ -4,9 +4,9 @@ import { useAppStore } from '@/store'
 import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
 import { playDesktopNotificationSound } from '@/lib/desktop-notification-sound'
 import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
-import { AGENT_STATUS_STALE_AFTER_MS } from '../../../../shared/agent-status-types'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
-import type { TerminalPaneLayoutNode } from '../../../../shared/types'
+import { AGENT_STATUS_STALE_AFTER_MS } from '@/shared/agent-status-types'
+import { parsePaneKey } from '@/shared/stable-pane-id'
+import type { TerminalPaneLayoutNode } from '@/shared/types'
 
 const AGENT_NOTIFICATION_SNAPSHOT_MAX_AGE_MS = 10_000
 

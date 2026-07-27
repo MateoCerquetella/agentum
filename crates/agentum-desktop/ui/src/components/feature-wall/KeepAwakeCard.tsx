@@ -1,7 +1,7 @@
 import type { JSX } from 'react'
 import { cn } from '@/lib/utils'
 import { AGENT_AWAKE_TITLE, getAgentAwakeDescription } from '../settings/agent-awake-copy'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 export function KeepAwakeCard(props: {
   settings: GlobalSettings

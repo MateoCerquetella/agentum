@@ -52,23 +52,23 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { useAppStore } from '@/store'
-import { AGENTUM_BROWSER_BLANK_URL, AGENTUM_BROWSER_PARTITION } from '../../../../shared/constants'
+import { AGENTUM_BROWSER_BLANK_URL, AGENTUM_BROWSER_PARTITION } from '@/shared/constants'
 import type {
   BrowserLoadError,
   BrowserPage as BrowserPageState,
   BrowserWorkspace as BrowserWorkspaceState
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   normalizeBrowserNavigationUrl,
   normalizeExternalBrowserUrl,
   redactKagiSessionToken
-} from '../../../../shared/browser-url'
-import { keybindingMatchesAction } from '../../../../shared/keybindings'
+} from '@/shared/browser-url'
+import { keybindingMatchesAction } from '@/shared/keybindings'
 import { getScreenSubmitModifierLabel, isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
 import {
   browserViewportPresetToOverride,
   getBrowserViewportPreset
-} from '../../../../shared/browser-viewport-presets'
+} from '@/shared/browser-viewport-presets'
 import {
   consumeEvictedBrowserTab,
   markEvictedBrowserTab,
@@ -89,7 +89,7 @@ import type {
   BrowserDownloadRequestedEvent,
   BrowserDownloadProgressEvent,
   BrowserDownloadFinishedEvent
-} from '../../../../shared/browser-guest-events'
+} from '@/shared/browser-guest-events'
 import {
   GRAB_BUDGET,
   type BrowserAnnotationIntent,
@@ -99,8 +99,8 @@ import {
   type BrowserGrabRect,
   type BrowserGrabScreenshot,
   type BrowserPageAnnotation
-} from '../../../../shared/browser-grab-types'
-import { BROWSER_ANNOTATION_VIEWPORT_MESSAGE_PREFIX } from '../../../../shared/browser-annotation-viewport-bridge'
+} from '@/shared/browser-grab-types'
+import { BROWSER_ANNOTATION_VIEWPORT_MESSAGE_PREFIX } from '@/shared/browser-annotation-viewport-bridge'
 import { useGrabMode } from './useGrabMode'
 import { formatGrabPayloadAsText } from './GrabConfirmationSheet'
 import { formatBrowserAnnotationsAsMarkdown } from './browser-annotation-output'
@@ -137,12 +137,12 @@ import type {
   BrowserScreencastResult,
   BrowserTabInfo,
   RuntimeStatus
-} from '../../../../shared/runtime-types'
+} from '@/shared/runtime-types'
 import {
   decodeBrowserScreencastFrame,
   type BrowserScreencastFrameMetadata
-} from '../../../../shared/browser-screencast-protocol'
-import { withBrowserPaneUiRuntimeRpcSource } from '../../../../shared/runtime-rpc-feature-interaction-source'
+} from '@/shared/browser-screencast-protocol'
+import { withBrowserPaneUiRuntimeRpcSource } from '@/shared/runtime-rpc-feature-interaction-source'
 import {
   formatByteCount,
   formatDownloadFinishedNotice,

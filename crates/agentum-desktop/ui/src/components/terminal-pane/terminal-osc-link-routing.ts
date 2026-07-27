@@ -1,6 +1,6 @@
 import { resolveTerminalFileLinkText } from '@/lib/terminal-links'
 import { openHttpLink } from '@/lib/http-link-routing'
-import { isWindowsAbsolutePathLike } from '../../../../shared/cross-platform-path'
+import { isWindowsAbsolutePathLike } from '@/shared/cross-platform-path'
 import type { LinkHandlerDeps } from './terminal-link-handlers'
 import { isTerminalLinkActivation } from './terminal-link-handlers'
 import { resolveTerminalFileUrlTarget } from './terminal-file-url-target'

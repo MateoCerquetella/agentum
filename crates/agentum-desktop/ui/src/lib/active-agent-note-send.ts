@@ -2,7 +2,7 @@ import type {
   RuntimeTerminalListResult,
   RuntimeTerminalSend,
   RuntimeTerminalWait
-} from '../../../shared/runtime-types'
+} from '@/shared/runtime-types'
 import type { AppState } from '@/store/types'
 import { useAppStore } from '@/store'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'

@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   AgentStatusEntry,
   MigrationUnsupportedPtyEntry
-} from '../../../../shared/agent-status-types'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
-import type { TerminalTab } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import { makePaneKey } from '@/shared/stable-pane-id'
+import type { TerminalTab } from '@/shared/types'
 import {
   getFocusedAgentPaneKeyForWorktree,
   type FocusedAgentRowHighlightState

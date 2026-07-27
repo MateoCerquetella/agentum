@@ -1,4 +1,4 @@
-import type { GitDiffResult } from '../../../../shared/types'
+import type { GitDiffResult } from '@/shared/types'
 
 const DIFF_LINE_HEIGHT = 19
 const DIFF_SECTION_PADDING_HEIGHT = 19

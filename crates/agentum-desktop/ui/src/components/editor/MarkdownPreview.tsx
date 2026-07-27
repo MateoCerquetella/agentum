@@ -41,7 +41,7 @@ import { computeEditorFontSize } from '@/lib/editor-font-zoom'
 import { getConnectionId } from '@/lib/connection-context'
 import { scrollTopCache, setWithLRU } from '@/lib/scroll-cache'
 import { detectLanguage } from '@/lib/language-detect'
-import type { DiffComment, MarkdownDocument, Worktree } from '../../../../shared/types'
+import type { DiffComment, MarkdownDocument, Worktree } from '@/shared/types'
 import {
   fileUrlToAbsolutePath,
   getMarkdownPreviewLinkTarget,
@@ -88,7 +88,7 @@ import { copyMarkdownReviewNotesForAgent } from '@/lib/markdown-review-note-copy
 import { NotesSendMenu, type NotesSendMenuScope } from './NotesSendMenu'
 import { findWorktreeById } from '@/store/slices/worktree-helpers'
 import { dirname } from '@/lib/path'
-import { relativePathInsideRoot } from '../../../../shared/cross-platform-path'
+import { relativePathInsideRoot } from '@/shared/cross-platform-path'
 
 type MarkdownPreviewProps = {
   content: string

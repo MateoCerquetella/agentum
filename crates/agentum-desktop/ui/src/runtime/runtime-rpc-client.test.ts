@@ -9,11 +9,11 @@ import {
 import {
   MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION,
   RUNTIME_PROTOCOL_VERSION
-} from '../../../shared/protocol-version'
+} from '@/shared/protocol-version'
 import {
   AGENTUM_RUNTIME_RPC_BROWSER_UI_SOURCE,
   AGENTUM_RUNTIME_RPC_FEATURE_INTERACTION_SOURCE_KEY
-} from '../../../shared/runtime-rpc-feature-interaction-source'
+} from '@/shared/runtime-rpc-feature-interaction-source'
 
 const runtimeCall = vi.fn()
 const runtimeEnvironmentCall = vi.fn()

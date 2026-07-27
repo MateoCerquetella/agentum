@@ -3,10 +3,10 @@ import { useCallback } from 'react'
 import { toast } from 'sonner'
 import { track } from '@/lib/telemetry'
 import { useAppStore } from '@/store'
-import { ONBOARDING_FINAL_STEP } from '../../../../shared/constants'
-import type { FeatureInteractionId } from '../../../../shared/feature-interactions'
-import type { EventProps } from '../../../../shared/telemetry-events'
-import type { GlobalSettings, OnboardingState, TuiAgent } from '../../../../shared/types'
+import { ONBOARDING_FINAL_STEP } from '@/shared/constants'
+import type { FeatureInteractionId } from '@/shared/feature-interactions'
+import type { EventProps } from '@/shared/telemetry-events'
+import type { GlobalSettings, OnboardingState, TuiAgent } from '@/shared/types'
 import {
   hasSelectedOnboardingFeatureSetup,
   onboardingFeatureSetupRunTelemetry,

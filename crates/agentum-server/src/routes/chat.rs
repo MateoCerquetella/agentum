@@ -274,17 +274,15 @@ struct IssueSpecDraft {
     risks: Vec<String>,
 }
 
-/// Total budget (chars) for the repo+harness snapshot inlined into the system
+/// Total budget (chars) for the repository snapshot inlined into the system
 /// prompt. Generous on purpose — the spec must fit the ACTUAL repo, so we want
 /// (near-)full context: the whole guide + the whole file tree for normal repos.
 /// The cap (~22k tokens) only clips a pathological monorepo so it can't blow the
 /// 200k window. ~90k chars.
 const CONTEXT_BUDGET: usize = 90_000;
 /// Per-section caps inside [`CONTEXT_BUDGET`] — sized to hold a full CLAUDE.md /
-/// AGENTS.md guide, the full harness contract, and the root manifests.
+/// AGENTS.md guide and the root manifests.
 const GUIDE_BUDGET: usize = 40_000;
-const HARNESS_AGENTS_BUDGET: usize = 20_000;
-const FEATURE_LIST_BUDGET: usize = 12_000;
 const MANIFEST_BUDGET: usize = 8_000;
 /// Cap on the git-tracked file tree (lines). High enough to be the full tree for
 /// a normal repo; bounds a huge monorepo.
@@ -359,8 +357,6 @@ fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
 struct RepoContextParts {
     /// `(filename, body)` of the first guide candidate found.
     guide: Option<(String, String)>,
-    harness_agents: Option<String>,
-    feature_list: Option<String>,
     /// `(filename, body)` in [`MANIFEST_NAMES`] order.
     manifests: Vec<(String, String)>,
     /// Raw `git ls-files` output; capped here, not at the collectors.
@@ -378,23 +374,6 @@ fn assemble_repo_context(parts: RepoContextParts) -> Option<String> {
         let body = truncate_chars(body.trim(), GUIDE_BUDGET);
         if !body.is_empty() {
             out.push_str(&format!("## Repo guide ({name})\n{body}\n\n"));
-        }
-    }
-
-    // The harness contract — so the breakdown fits the verification-gated
-    // pipeline: the harness AGENTS.md + the current feature backlog.
-    if let Some(body) = parts.harness_agents {
-        let body = truncate_chars(body.trim(), HARNESS_AGENTS_BUDGET);
-        if !body.is_empty() {
-            out.push_str(&format!("## .harness/AGENTS.md\n{body}\n\n"));
-        }
-    }
-    if let Some(body) = parts.feature_list {
-        let body = truncate_chars(body.trim(), FEATURE_LIST_BUDGET);
-        if !body.is_empty() {
-            out.push_str(&format!(
-                "## .harness/feature_list.json (current backlog)\n{body}\n\n"
-            ));
         }
     }
 
@@ -440,11 +419,11 @@ fn capped_tree(text: &str) -> Option<String> {
 }
 
 /// Read a real snapshot of the selected workspace so the interviewer grounds its
-/// questions and the task breakdown in the ACTUAL repo + harness — not blind
+/// questions and the task breakdown in the ACTUAL repository — not blind
 /// Q&A. This is agentum's whole point: agents work with repo context. Reads
 /// (best-effort, all LOCAL — Chat never SSHes): the repo guide
-/// (CLAUDE.md/AGENTS.md), the `.harness/` contract (AGENTS.md + the feature
-/// backlog), and a git-tracked file tree. A missing/remote/empty workdir → None.
+/// (CLAUDE.md/AGENTS.md), root build manifests, and a git-tracked file tree. A
+/// missing/remote/empty workdir → None.
 pub(crate) fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     local_repo_context(workdir, home.as_deref())
@@ -464,19 +443,8 @@ fn local_repo_context(workdir: Option<&str>, home: Option<&std::path::Path>) -> 
     }
     let root = root.as_path();
 
-    // `.harness/*` reads stay gated on the dir existing — a repo with a FILE
-    // named `.harness` must not surface it as the contract.
-    let harness = root.join(".harness").is_dir();
     let parts = RepoContextParts {
         guide: read_first_file(root, &GUIDE_CANDIDATES),
-        harness_agents: harness
-            .then(|| read_first_file(root, &[".harness/AGENTS.md"]))
-            .flatten()
-            .map(|(_, body)| body),
-        feature_list: harness
-            .then(|| read_first_file(root, &[".harness/feature_list.json"]))
-            .flatten()
-            .map(|(_, body)| body),
         manifests: MANIFEST_NAMES
             .iter()
             .filter_map(|name| read_first_file(root, &[name]))
@@ -509,8 +477,6 @@ fn remote_context_script(workdir: &str) -> Option<String> {
 for f in {guides}; do
   if [ -f "$f" ]; then printf '===AGENTUM-CTX guide %s===\n' "$f"; head -c 80000 "$f"; printf '\n'; break; fi
 done
-if [ -f .harness/AGENTS.md ]; then printf '===AGENTUM-CTX harness-agents===\n'; head -c 40000 .harness/AGENTS.md; printf '\n'; fi
-if [ -f .harness/feature_list.json ]; then printf '===AGENTUM-CTX feature-list===\n'; head -c 24000 .harness/feature_list.json; printf '\n'; fi
 for f in {manifests}; do
   if [ -f "$f" ]; then printf '===AGENTUM-CTX manifest %s===\n' "$f"; head -c 16000 "$f"; printf '\n'; fi
 done
@@ -529,10 +495,6 @@ fn parse_remote_context_output(out: &str) -> RepoContextParts {
             if parts.guide.is_none() {
                 parts.guide = Some((name.to_string(), body));
             }
-        } else if header == "harness-agents" {
-            parts.harness_agents = Some(body);
-        } else if header == "feature-list" {
-            parts.feature_list = Some(body);
         } else if let Some(name) = header.strip_prefix("manifest ") {
             parts.manifests.push((name.to_string(), body));
         } else if header == "tree" {
@@ -542,8 +504,6 @@ fn parse_remote_context_output(out: &str) -> RepoContextParts {
 
     let mut parts = RepoContextParts {
         guide: None,
-        harness_agents: None,
-        feature_list: None,
         manifests: Vec::new(),
         tree: None,
     };
@@ -665,7 +625,7 @@ fn log_repo_context_outcome(
 }
 
 /// The grounding blocks BOTH intake modes prepend (spec 008 F2): the
-/// slug/workdir context line, the repo+harness snapshot block with its matching
+/// slug/workdir context line, the repository snapshot block with its matching
 /// access rule, and the semantically-retrieved wiki block. Extracted VERBATIM
 /// from `interviewer_instructions` so Fast and every Socratic pass ground
 /// identically — the block strings are byte-for-byte the same in both, which is
@@ -685,17 +645,17 @@ fn intake_grounding_blocks(
         ctx.push_str(&format!("\nThe project lives at `{wd}`."));
     }
 
-    // The repo + harness snapshot (when a local workspace is selected) plus the
+    // The repository snapshot (when a local workspace is selected) plus the
     // matching access rule — grounded when present, honest-blind when not.
     let (repo_block, access_rule) = match repo_context {
         Some(c) => (
             format!(
-                "\n\n=== REPO & HARNESS CONTEXT (a real snapshot of the user's project — USE IT) ===\n\
+                "\n\n=== REPOSITORY CONTEXT (a real snapshot of the user's project — USE IT) ===\n\
 {c}\n=== END CONTEXT ===\n"
             ),
-            "- You HAVE the repo + harness snapshot above (the guide, the .harness/ contract, and the \
-file tree). GROUND every question and the final breakdown in it: reference real files, modules, and \
-existing patterns; fit the project's architecture and (if present) its harness pipeline. Don't ask \
+            "- You HAVE the repository snapshot above (the guide, root manifests, and the file tree). \
+GROUND every question and the final breakdown in it: reference real files, modules, and existing \
+patterns; fit the project's architecture. Don't ask \
 about anything the snapshot already answers. It is a STATIC snapshot — you can't run commands or read \
 files beyond it, so never claim to have executed anything.",
         ),
@@ -2024,13 +1984,13 @@ async fn extract_plan(
         .collect();
     messages.push(json!({ "role": "user", "content": EXTRACT_USER_PROMPT }));
 
-    // Lead the system with the strict-JSON instruction, then the SAME repo +
-    // harness snapshot the interview used — so each task names the real files.
+    // Lead the system with the strict-JSON instruction, then the SAME repository
+    // snapshot the interview used — so each task names the real files.
     let extract_system = match gather_repo_context(workdir) {
         Some(c) => format!(
             "{EXTRACT_INSTRUCTIONS}\n\nGround every task in this real project snapshot — \
 name the actual files/modules each task touches:\n\
-=== REPO & HARNESS CONTEXT ===\n{c}\n=== END CONTEXT ==="
+=== REPOSITORY CONTEXT ===\n{c}\n=== END CONTEXT ==="
         ),
         None => EXTRACT_INSTRUCTIONS.to_string(),
     };
@@ -2082,7 +2042,7 @@ async fn chat_issue_preview(
     }
     if let Some(context) = repo_context.as_deref() {
         instructions.push_str(&format!(
-            "\n\n=== REPO & HARNESS CONTEXT ===\n{context}\n=== END CONTEXT ==="
+            "\n\n=== REPOSITORY CONTEXT ===\n{context}\n=== END CONTEXT ==="
         ));
     }
     if let Some(wiki) = wiki_context.as_deref() {
@@ -2992,62 +2952,6 @@ mod tests {
         assert_eq!(new.goal.as_deref(), Some("G"));
     }
 
-    /// Spec 006 AC 5: an SDD-shaped issue body round-trips through the harness
-    /// bridge — `spec_md_from_issue` keeps the `- [ ]` lines parseable and
-    /// `derive_backlog_from_spec` yields one feature per task (no fallback).
-    #[test]
-    fn sdd_issue_body_round_trips_through_spec_md_to_backlog() {
-        let plan = FeaturePlan {
-            title: "T".into(),
-            summary: "Sum.".into(),
-            problem: Some("Pain.".into()),
-            goal: Some("Outcome.".into()),
-            tasks: vec![
-                SubTask {
-                    title: "First task".into(),
-                    detail: "d1".into(),
-                    priority: Some("high".into()),
-                },
-                SubTask {
-                    title: "Second task".into(),
-                    detail: String::new(),
-                    priority: None,
-                },
-                SubTask {
-                    title: "Third task".into(),
-                    detail: "d3".into(),
-                    priority: Some("low".into()),
-                },
-            ],
-        };
-        let body = compose_issue_body(&plan);
-        let spec = crate::harness::spec_md_from_issue(
-            "42",
-            "T",
-            &body,
-            "https://github.com/o/r/issues/42",
-        );
-        // The checkboxes were found, so the safety-net `- [ ] T` line (appended
-        // only when the body has none) must be absent.
-        assert!(
-            !spec.contains("- [ ] T\n"),
-            "no fallback checkbox — the composed lines parsed: {spec}"
-        );
-        let backlog = crate::harness::derive_backlog_from_spec(&spec);
-        assert_eq!(backlog.features.len(), 3, "one feature per task: {spec}");
-        for (f, title) in backlog
-            .features
-            .iter()
-            .zip(["First task", "Second task", "Third task"])
-        {
-            assert!(
-                f.name.contains(title),
-                "feature {} carries the task title {title}",
-                f.name
-            );
-        }
-    }
-
     /// Guard a prompt regression without pinning prose: the extraction prompt
     /// must name both SDD fields (AC 4).
     #[test]
@@ -3066,7 +2970,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     // The awaited create must observe AGENTUM_GH_BIN, so the guard spans the
-    // await — the same accepted pattern as routes::harness's env-locked test.
+    // await — guarded by the process-wide environment lock.
     #[allow(clippy::await_holding_lock)]
     async fn chat_plan_body_reaches_gh_create_argv_non_empty() {
         use std::os::unix::fs::PermissionsExt;
@@ -3162,7 +3066,7 @@ mod tests {
         assert!(!slug_matches("owner/"));
     }
 
-    // --- repo + harness grounding (the interviewer's context) ---
+    // --- repository grounding (the interviewer's context) ---
 
     #[test]
     fn interviewer_grounds_when_context_present() {
@@ -3172,16 +3076,13 @@ mod tests {
             Some("## Repo guide (CLAUDE.md)\nThis project uses axum."),
             Some("### Watchdog\nThe watchdog tails panes and emits AgentCrashed."),
         );
-        assert!(
-            with.contains("REPO & HARNESS CONTEXT"),
-            "context block present"
-        );
+        assert!(with.contains("REPOSITORY CONTEXT"), "context block present");
         assert!(
             with.contains("This project uses axum."),
             "context body inlined"
         );
         assert!(
-            with.contains("You HAVE the repo + harness snapshot"),
+            with.contains("You HAVE the repository snapshot"),
             "grounded access rule"
         );
         assert!(
@@ -3198,7 +3099,7 @@ mod tests {
     fn interviewer_is_honest_blind_when_no_context() {
         let without = interviewer_instructions(Some("/tmp/proj"), None, None, None);
         assert!(
-            !without.contains("REPO & HARNESS CONTEXT"),
+            !without.contains("REPOSITORY CONTEXT"),
             "no context block when absent"
         );
         assert!(
@@ -3384,11 +3285,11 @@ mod tests {
             Some("### Watchdog\nTails panes."),
         );
         assert!(
-            grounded.contains("REPO & HARNESS CONTEXT"),
+            grounded.contains("REPOSITORY CONTEXT"),
             "repo block present"
         );
         assert!(
-            grounded.contains("You HAVE the repo + harness snapshot"),
+            grounded.contains("You HAVE the repository snapshot"),
             "grounded access rule"
         );
         assert!(grounded.contains("Uses axum."), "context body inlined");
@@ -3397,7 +3298,7 @@ mod tests {
 
         let blind = socratic_stage_instructions(2, None, None, None, None);
         assert!(
-            !blind.contains("REPO & HARNESS CONTEXT"),
+            !blind.contains("REPOSITORY CONTEXT"),
             "no context block when absent"
         );
         assert!(

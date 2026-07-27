@@ -27,11 +27,11 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { shouldIgnoreTerminalMenuPointerDownOutside } from './terminal-context-menu-dismiss'
-import type { TerminalQuickCommand } from '../../../../shared/types'
-import { isTerminalAgentQuickCommand } from '../../../../shared/terminal-quick-commands'
+import type { TerminalQuickCommand } from '@/shared/types'
+import { isTerminalAgentQuickCommand } from '@/shared/terminal-quick-commands'
 import { formatShortcutLabel } from '@/hooks/useShortcutLabel'
 import { AgentIcon } from '@/lib/agent-catalog'
-import type { KeybindingOverrides } from '../../../../shared/keybindings'
+import type { KeybindingOverrides } from '@/shared/keybindings'
 
 type TerminalContextMenuProps = {
   open: boolean

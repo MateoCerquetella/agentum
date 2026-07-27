@@ -3,30 +3,30 @@
    tiny subcontrols would make the settings write flow harder to audit. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import type {
   SourceControlAiModelChoice,
   SourceControlAiSettingsPatch,
   SourceControlAiSettings
-} from '../../../../shared/source-control-ai-types'
-import { buildBranchNamePrompt } from '../../../../shared/branch-name-from-work'
+} from '@/shared/source-control-ai-types'
+import { buildBranchNamePrompt } from '@/shared/branch-name-from-work'
 import {
   clearSourceControlAiModelChoiceForHost,
   normalizeSourceControlAiSettings,
   readSourceControlAiModelChoiceForHost,
   selectSourceControlAiModelChoiceForHost
-} from '../../../../shared/source-control-ai'
+} from '@/shared/source-control-ai'
 import {
   getCommitMessageAgentCapability,
   isCustomAgentId,
   resolveCommitMessageAgentChoice,
   type CommitMessageAgentCapability,
   type CommitMessageModelCapability
-} from '../../../../shared/commit-message-agent-spec'
+} from '@/shared/commit-message-agent-spec'
 import {
   getCommitMessageModelDiscoveryHostKeyForScope,
   LOCAL_COMMIT_MESSAGE_HOST_KEY
-} from '../../../../shared/commit-message-host-key'
+} from '@/shared/commit-message-host-key'
 import { getConnectionId } from '@/lib/connection-context'
 import { cn } from '@/lib/utils'
 import { getRuntimeGitScope } from '../../runtime/runtime-git-client'

@@ -2,7 +2,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { ProjectGroup, Repo, Worktree, WorktreeLineage } from '../../../../shared/types'
+import type { ProjectGroup, Repo, Worktree, WorktreeLineage } from '@/shared/types'
 
 const mockStore = vi.hoisted(() => ({
   state: {} as Record<string, unknown>
@@ -343,7 +343,10 @@ async function renderWorktreeListMarkup(): Promise<string> {
   return renderToStaticMarkup(
     React.createElement(WorktreeList, {
       scrollOffsetRef: { current: 0 },
-      scrollAnchorRef: { current: null }
+      scrollAnchorRef: { current: null },
+      operationalQuery: '',
+      settledExpanded: false,
+      onSettledExpandedChange: vi.fn()
     })
   )
 }

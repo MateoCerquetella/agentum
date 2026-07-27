@@ -25,9 +25,9 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
-import GitHubItemDialog, { type GitHubItemDialogProjectOrigin } from '@/components/GitHubItemDialog'
+import GitHubItemDialog from '@/components/GitHubItemDialog'
+import type { GitHubItemDialogProjectOrigin } from '@/components/github-item-types'
 import { GhAuthErrorHelp } from '@/components/github-project/GhAuthErrorHelp'
-import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
 import {
   clearBoardPick,
   resolveBoardProject,
@@ -37,11 +37,9 @@ import {
 import type { GithubProjectTaskScope } from '@/lib/project-task-scope'
 import { captureProjectTaskScopeGuard } from '@/lib/project-task-scope-guard'
 import { isLiveProjectTaskScopeAuthority, runGuardedProjectTaskAction } from '@/lib/project-task-scope-authority'
-import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
-import { getLinkedWorkItemSuggestedName, type LinkedWorkItemSummary } from '@/lib/new-workspace'
+import { requestNewSpecFromWorkItem } from '@/lib/sdd-new-spec-entry'
 import { useRepoSlugIndex } from '@/lib/repo-slug-index'
 import { cn } from '@/lib/utils'
-import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
 import { useMountedRef } from '@/hooks/useMountedRef'
@@ -55,8 +53,8 @@ import type {
   GitHubProjectViewError,
   GitHubProjectViewSummary,
   ListProjectViewsResult
-} from '../../../../shared/github-project-types'
-import type { GitHubWorkItem, Repo } from '../../../../shared/types'
+} from '@/shared/github-project-types'
+import type { GitHubWorkItem } from '@/shared/types'
 import ProjectPicker, { type ResolvedProjectSelection } from './ProjectPicker'
 import ProjectViewList from './ProjectViewList'
 import ProjectBoardView from './ProjectBoardView'
@@ -437,7 +435,7 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
   // ── Row action state ────────────────────────────────────────────────
   // Why: when a row matches a registered repo, we open the full
   // `GitHubItemDialog` in repo-backed mode; when it doesn't, we open the
-  // simplified slug-mode dialog. `repoNotInAgentum` drives the fallback modal
+  // simplified slug-mode dialog. `repoNotInAgentum` drives the registration prompt
   // from the design doc's `repo-not-in-agentum` interaction state.
   const [dialogRepoItem, setDialogRepoItem] = useState<{
     workItem: GitHubWorkItem
@@ -447,8 +445,8 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
   } | null>(null)
   // Why: the slug dialog is only opened for rows whose repo isn't registered
   // in Agentum (matched repos go through the full GitHubItemDialog above), so
-  // there's no `matchedRepo` to track here. The repo-not-in-agentum modal —
-  // owned by this parent, not the slug dialog — handles "Start work".
+  // there's no `matchedRepo` to track here. The repo-not-in-agentum modal is
+  // owned by this parent, not the slug dialog.
   const [slugDialog, setSlugDialog] = useState<{
     origin: GitHubItemDialogProjectOrigin
   } | null>(null)
@@ -545,67 +543,14 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
     if (!lockedScope) return true
     if (!guardCurrent() || !repoId || !row.content.repository || table?.project.id !== lockedScope.projectId) return false
     const match = classifyStartWorkRepoMatches(lookupSlug(row.content.repository))
-    return match.kind === 'direct' ? match.repo.id === repoId : match.kind === 'multiple' ? match.repos.some((candidate) => candidate.id === repoId) : false
+    return match.kind === 'direct' ? match.repo.id === repoId : match.kind === 'choose' ? match.repos.some((candidate) => candidate.id === repoId) : false
   }, [guardCurrent, lockedScope, lookupSlug, repoId, table?.project.id])
 
-  // Spec 015 F2: hop a multi-host work item into the new-workspace composer
-  // seeded on a host that actually holds the repo. Mirrors TaskPage's
-  // `openComposerForItem`: snapshot the issue body into `linkedContext` so the
-  // spawned agent gets the spec, not just the URL — best-effort, a fetch
-  // failure must never block the hop. Deliberately NO `startGatedRun` (board
-  // Start-work is an ungated direct launch) and NO `initialBaseBranch` (the
-  // wizard owns its own PR-head resolution).
-  const openComposerForChoice = useCallback(
-    async (
-      item: GitHubWorkItem,
-      match: { repos: Repo[]; seedRepoId: string },
-      origin: { owner: string; repo: string }
-    ): Promise<void> => {
-      if (!guardCurrent()) return
-      let linkedWorkItem: LinkedWorkItemSummary = {
-        type: item.type,
-        number: item.number,
-        title: item.title,
-        url: item.url
-      }
-      const seedRepo = match.repos.find((repo) => repo.id === match.seedRepoId)
-      // Why: the body fetch runs `gh` against a local checkout, so only a
-      // local seed's path is a usable workdir; a remote-only match set keeps
-      // the title+URL fallback.
-      const workdir = seedRepo && seedRepo.connectionId == null ? seedRepo.path : null
-      if (item.type === 'issue' && workdir) {
-        try {
-          const fetched = await fetchGithubIssueBody({
-            number: item.number,
-            workdir,
-            slug: `${origin.owner}/${origin.repo}`
-          })
-          linkedWorkItem = buildGithubIssueLinkedWorkItem(item, fetched)
-        } catch (err) {
-          // Best-effort: keep the title+URL fallback so the composer still opens.
-          console.warn('[project-view] could not load GitHub issue body for Start work:', err)
-        }
-      }
-      if (!guardCurrent()) return
-      useAppStore.getState().openModal('new-workspace-composer', {
-        linkedWorkItem,
-        prefilledName: getLinkedWorkItemSuggestedName(item),
-        initialRepoId: match.seedRepoId,
-        telemetrySource: 'sidebar',
-        ...(lockedGuard ? { requiredProjectTaskScope: lockedGuard } : {})
-      })
-    },
-    [guardCurrent, lockedGuard]
-  )
-
-  // Spec 015 F2: the single classification point for both board start
-  // gestures (row "Start work" and the item dialog's "Use") — a repo
-  // registered on several hosts asks where via the wizard instead of
-  // silently assuming local or falsely claiming it isn't in Agentum.
-  const startWorkForItem = useCallback(
+  // Tracker actions only author a project-owned spec. Worktree and agent
+  // creation remain unavailable until the SDD run reaches implementation.
+  const authorSpecForItem = useCallback(
     (args: {
-      /** Build the launchable item for the classified repo id; null aborts
-       *  (redacted/draft rows can't launch). */
+      /** Build the source item for the classified repo id; null aborts. */
       buildItem: (repoId: string) => GitHubWorkItem | null
       origin: { owner: string; repo: string }
       url: string | null
@@ -617,41 +562,22 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
         setRepoNotInAgentum({ owner: origin.owner, repo: origin.repo, url })
         return
       }
-      if (match.kind === 'direct') {
-        const workItem = buildItem(match.repo.id)
-        if (!workItem) {
-          return
-        }
-        if (lockedGuard) {
-          void openComposerForChoice(workItem, { repos: [match.repo], seedRepoId: match.repo.id }, origin)
-          return
-        }
-        void launchWorkItemDirect({
-          item: workItem,
-          repoId: match.repo.id,
-          launchSource: 'task_page',
-          telemetrySource: 'sidebar',
-          openModalFallback: () => {
-            // Why: when `launchWorkItemDirect` wants user input
-            // (setupRunPolicy:'ask' or agent detection fails), fall back to
-            // opening the URL so the user keeps a path forward. The composer
-            // modal is app-mounted and reachable (the multi-host arm below
-            // hops to it), but the single-match gesture stays byte-equivalent
-            // to the pre-015 direct launch (AC 6).
-            if (url) {
-              void api.shell.openUrl(url)
-            }
-          }
-        })
-        return
-      }
-      const workItem = buildItem(match.seedRepoId)
-      if (!workItem) {
-        return
-      }
-      void openComposerForChoice(workItem, match, origin)
+      const selectedRepo =
+        match.kind === 'direct'
+          ? match.repo
+          : (repoId ? match.repos.find((candidate) => candidate.id === repoId) : undefined) ??
+            match.repos.find((candidate) => candidate.id === match.seedRepoId) ??
+            match.repos[0]
+      const workItem = selectedRepo ? buildItem(selectedRepo.id) : null
+      if (!workItem || !selectedRepo) return
+      requestNewSpecFromWorkItem({
+        repoId: selectedRepo.id,
+        title: workItem.title,
+        provider: 'github',
+        reference: workItem.url
+      })
     },
-    [guardCurrent, lockedGuard, lookupSlug, openComposerForChoice]
+    [guardCurrent, lookupSlug, repoId]
   )
 
   const handleOpenDialog = useCallback(
@@ -694,7 +620,7 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
     [currentCacheKey, table, buildOrigin, guardCurrent, lookupSlug, buildWorkItem, isLockedRowActionable]
   )
 
-  const handleStartWork = useCallback(
+  const handleAuthorSpec = useCallback(
     (row: GitHubProjectRow) => {
       if (!guardCurrent() || !currentCacheKey || !table || !isLockedRowActionable(row)) {
         return
@@ -703,13 +629,13 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
       if (!origin) {
         return
       }
-      startWorkForItem({
+      authorSpecForItem({
         buildItem: (repoId) => buildWorkItem(row, repoId),
         origin,
         url: row.content.url ?? null
       })
     },
-    [currentCacheKey, table, buildOrigin, buildWorkItem, guardCurrent, startWorkForItem, isLockedRowActionable]
+    [currentCacheKey, table, buildOrigin, buildWorkItem, guardCurrent, authorSpecForItem, isLockedRowActionable]
   )
 
   const handleEditAssignees = useCallback(
@@ -970,7 +896,7 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
                 void api.shell.openUrl(row.content.url)
               }
             }}
-            onStartWork={handleStartWork}
+            onAuthorSpec={handleAuthorSpec}
           />
         ) : (
           <ProjectViewList
@@ -985,7 +911,7 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
                 void api.shell.openUrl(row.content.url)
               }
             }}
-            onStartWork={handleStartWork}
+            onAuthorSpec={handleAuthorSpec}
           />
         )
       ) : null}
@@ -1005,10 +931,9 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
           if (!current) {
             return
           }
-          // Spec 015 F2: "Use" re-classifies against the slug index so a
-          // multi-host repo routes through the same wizard hop as the row's
-          // Start work — the dialog's repoId was only the seed candidate.
-          startWorkForItem({
+          // Re-classify against the slug index because the dialog repo id is
+          // only a seed when the same repository exists on multiple hosts.
+          authorSpecForItem({
             buildItem: (repoId) => ({ ...item, repoId }),
             origin: { owner: current.origin.owner, repo: current.origin.repo },
             url: item.url ?? null
@@ -1018,8 +943,8 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
       />
 
       {/* Slug-only simplified dialog for rows whose repo isn't added to Agentum.
-          Why: no Start-work affordance lives inside the slug dialog — the
-          parent's `handleStartWork`/`repoNotInAgentum` modal owns that flow, so
+          Why: no New Spec affordance lives inside the slug dialog — the
+          parent's `handleAuthorSpec`/`repoNotInAgentum` modal owns that flow, so
           having a duplicate (always-disabled or always-routing-to-fallback)
           button here would only confuse the user. */}
       <ProjectItemSlugDialog
@@ -1037,7 +962,7 @@ export default function ProjectViewWrapper({ repoId = null, lockedScope }: Props
             <DialogTitle>Repository not in Agentum</DialogTitle>
             <DialogDescription>
               {resolvedMissingRepoDialogs.repoNotInAgentum
-                ? `${resolvedMissingRepoDialogs.repoNotInAgentum.owner}/${resolvedMissingRepoDialogs.repoNotInAgentum.repo} isn't added to Agentum. Add it to start work, or open in GitHub.`
+                ? `${resolvedMissingRepoDialogs.repoNotInAgentum.owner}/${resolvedMissingRepoDialogs.repoNotInAgentum.repo} isn't added to Agentum. Add it to author a spec, or open in GitHub.`
                 : null}
             </DialogDescription>
           </DialogHeader>

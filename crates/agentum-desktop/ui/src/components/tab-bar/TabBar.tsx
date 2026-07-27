@@ -13,8 +13,8 @@ import type {
   TerminalTab,
   TuiAgent,
   WorkspaceVisibleTabType
-} from '../../../../shared/types'
-import { resolveTerminalTabTitle } from '../../../../shared/tab-title-resolution'
+} from '@/shared/types'
+import { resolveTerminalTabTitle } from '@/shared/tab-title-resolution'
 import { useAppStore } from '../../store'
 import { buildStatusMap } from '../right-sidebar/status-display'
 import type { OpenFile } from '../../store/slices/editor'
@@ -41,7 +41,7 @@ import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import {
   type BuiltInWindowsTerminalShell,
   WINDOWS_GIT_BASH_SHELL
-} from '../../../../shared/windows-terminal-shell'
+} from '@/shared/windows-terminal-shell'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,

@@ -5,7 +5,7 @@ import { SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet
 import type {
   WorkspaceBoardColumnLayout,
   WorkspaceStatusDefinition
-} from '../../../../shared/types'
+} from '@/shared/types'
 import SidebarFilter from './SidebarFilter'
 import WorkspaceKanbanSettingsMenu from './WorkspaceKanbanSettingsMenu'
 

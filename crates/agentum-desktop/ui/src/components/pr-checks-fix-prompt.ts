@@ -1,4 +1,4 @@
-import type { PRCheckDetail } from '../../../shared/types'
+import type { PRCheckDetail } from '@/shared/types'
 import { getCheckConclusion, getCheckStatusLabel } from '@/lib/pr-check-format'
 
 export function getBrokenChecks(checks: PRCheckDetail[]): PRCheckDetail[] {

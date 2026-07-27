@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { cn } from '@/lib/utils'
-import type { AgentsStepId } from '../../../../shared/agents-orchestration-steps'
+import type { AgentsStepId } from '@/shared/agents-orchestration-steps'
 import { StatusesPage } from './agents-orchestration/StatusesPage'
 import { UsagePage } from './agents-orchestration/UsagePage'
 import { OrchestrationPage } from './agents-orchestration/OrchestrationPage'

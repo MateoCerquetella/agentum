@@ -1,6 +1,6 @@
 import { Import, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { BrowserCookieImportSummary, BrowserSessionProfile } from '../../../../shared/types'
+import type { BrowserCookieImportSummary, BrowserSessionProfile } from '@/shared/types'
 import { Button } from '../ui/button'
 import {
   DropdownMenu,
@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger
 } from '../ui/dropdown-menu'
 import { useAppStore } from '../../store'
-import { BROWSER_FAMILY_LABELS } from '../../../../shared/constants'
+import { BROWSER_FAMILY_LABELS } from '@/shared/constants'
 
 type DetectedBrowser = {
   family: string

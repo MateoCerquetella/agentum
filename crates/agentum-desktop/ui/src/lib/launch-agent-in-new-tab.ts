@@ -10,10 +10,10 @@ import { CLIENT_PLATFORM } from '@/lib/new-workspace'
 import { reconcileTabOrder } from '@/components/tab-bar/reconcile-order'
 import { track, tuiAgentToAgentKind } from '@/lib/telemetry'
 import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
-import { TUI_AGENT_CONFIG } from '../../../shared/tui-agent-config'
-import { makePaneKey } from '../../../shared/stable-pane-id'
-import type { TuiAgent } from '../../../shared/types'
-import type { LaunchSource } from '../../../shared/telemetry-events'
+import { TUI_AGENT_CONFIG } from '@/shared/tui-agent-config'
+import { makePaneKey } from '@/shared/stable-pane-id'
+import type { TuiAgent } from '@/shared/types'
+import type { LaunchSource } from '@/shared/telemetry-events'
 
 const WIN32_INLINE_DRAFT_LIMIT_CHARS = 24_000
 

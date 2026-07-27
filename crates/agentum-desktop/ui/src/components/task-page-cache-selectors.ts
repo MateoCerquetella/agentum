@@ -4,7 +4,7 @@ import {
   type WorkItemsCacheError,
   type WorkItemsCacheSources
 } from '@/store/slices/github'
-import type { GitHubWorkItem, LinearIssue } from '../../../shared/types'
+import type { GitHubWorkItem, LinearIssue } from '@/shared/types'
 
 export type TaskPageRepoCacheInput = {
   id: string

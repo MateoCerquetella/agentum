@@ -9,6 +9,13 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 
 pub mod orchestration;
 pub mod paths;
+pub mod sdd;
+pub mod sdd_browser_evidence;
+pub mod sdd_delivery;
+pub mod sdd_integrations;
+pub mod sdd_remote_projection;
+pub mod sdd_remote_worker;
+pub mod sdd_runtime;
 
 // Domain method blocks split out of this file for cohesion. Each adds an
 // `impl Store` block (and its private row types) for one table/concern; Rust
@@ -16,7 +23,6 @@ pub mod paths;
 // reach the crate-root `Store`'s private `pool` field.
 mod channels;
 mod events;
-pub mod harness_orchestration;
 mod hosts;
 mod messages;
 mod notes;
@@ -48,6 +54,18 @@ pub enum StoreError {
     NotFound(String),
     #[error("session already exists: {0}")]
     AlreadyExists(String),
+    #[error("stale aggregate revision: expected {expected}, current {current}")]
+    StaleRevision { expected: i64, current: i64 },
+    #[error("approval is no longer pending or its digest does not match")]
+    ApprovalInvalid,
+    #[error("an artifact author cannot approve their own work")]
+    SelfApproval,
+    #[error("invalid command: {0}")]
+    InvalidCommand(String),
+    #[error("idempotency key was already used for a different request in scope {0}")]
+    IdempotencyConflict(String),
+    #[error("repository artifact manifest conflicts with its registered identity: {0}")]
+    ArtifactSetConflict(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }

@@ -1,7 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import { findWorktreeById } from './worktree-helpers'
-import type { GitHubWorkItem, LinearIssue } from '../../../../shared/types'
+import type { GitHubWorkItem, LinearIssue } from '@/shared/types'
 
 // Why: cap the per-session history so a long-lived workspace with many
 // worktree jumps cannot grow the array unbounded. 50 is generous enough

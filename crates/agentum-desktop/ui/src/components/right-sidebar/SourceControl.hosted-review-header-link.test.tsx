@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
 import { HostedReviewHeaderLink } from './SourceControl'
 
 function makeReview(overrides: Partial<HostedReviewInfo> = {}): HostedReviewInfo {

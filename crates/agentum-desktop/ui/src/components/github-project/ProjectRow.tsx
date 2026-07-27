@@ -1,5 +1,5 @@
 import React from 'react'
-import { ExternalLink, Play } from 'lucide-react'
+import { ExternalLink, FilePlus2 } from 'lucide-react'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
@@ -11,7 +11,7 @@ import type {
   GitHubProjectField,
   GitHubProjectFieldMutationValue,
   GitHubProjectRow as GitHubProjectRowType
-} from '../../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 
 const PROJECT_FROZEN_COLUMN_SURFACE_CLASS =
   '[background:color-mix(in_srgb,var(--muted)_50%,var(--background))]'
@@ -30,7 +30,7 @@ type Props = {
   onEditAssignees?: (add: string[], remove: string[]) => void
   onEditLabels?: (add: string[], remove: string[]) => void
   onEditIssueType?: (issueType: GitHubIssueType | null) => void
-  onStartWork?: () => void
+  onAuthorSpec?: () => void
   onOpenInBrowser?: () => void
 }
 
@@ -46,7 +46,7 @@ export default function ProjectRow({
   onEditAssignees,
   onEditLabels,
   onEditIssueType,
-  onStartWork,
+  onAuthorSpec,
   onOpenInBrowser
 }: Props): React.JSX.Element {
   const disabled = row.itemType === 'REDACTED'
@@ -131,14 +131,14 @@ export default function ProjectRow({
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onClick={onStartWork}
-                aria-label="Start work"
+                onClick={onAuthorSpec}
+                aria-label="Author spec"
                 className="rounded p-1 hover:bg-muted"
               >
-                <Play className="size-3.5" />
+                <FilePlus2 className="size-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent>Start work</TooltipContent>
+            <TooltipContent>Author spec</TooltipContent>
           </Tooltip>
         ) : null}
       </div>

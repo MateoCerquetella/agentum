@@ -4,10 +4,10 @@ import {
   FEATURE_WALL_WORKFLOWS,
   type FeatureWallWorkflow,
   type FeatureWallWorkflowId
-} from '../../../../shared/feature-wall-workflows'
-import type { AgentsStep, AgentsStepId } from '../../../../shared/agents-orchestration-steps'
-import type { WorkbenchStep, WorkbenchStepId } from '../../../../shared/workbench-steps'
-import type { ReviewStep, ReviewStepId } from '../../../../shared/review-steps'
+} from '@/shared/feature-wall-workflows'
+import type { AgentsStep, AgentsStepId } from '@/shared/agents-orchestration-steps'
+import type { WorkbenchStep, WorkbenchStepId } from '@/shared/workbench-steps'
+import type { ReviewStep, ReviewStepId } from '@/shared/review-steps'
 import { cn } from '@/lib/utils'
 
 const SUB_STEP_LABELS = ['a', 'b', 'c', 'd', 'e', 'f'] as const

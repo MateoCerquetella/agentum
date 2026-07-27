@@ -11,9 +11,9 @@
 //! over the 009a `ssh -L` forward tunnel, which also surfaces as a `127.0.0.1`
 //! port. A `?cdpPort=` query param selects it (default: the local shared browser).
 //!
-//! Authed like every `/api/*` route — the WS client passes the bearer as
-//! `?token=` (browsers can't set headers on upgrade); the embedded loopback
-//! server is no-auth so the desktop connects with no token.
+//! Authed like every `/api/*` route — the WS client passes the boot-scoped UI
+//! bearer as `?token=` because browsers cannot set headers on upgrade. The
+//! capability is exposed only to the trusted main desktop webview.
 
 use axum::Router;
 use axum::extract::Query;

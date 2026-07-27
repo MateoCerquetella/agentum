@@ -1,10 +1,10 @@
 // Spec 015 F3: the Tracker tab's "New issue" intake — written intent → drafted
-// issue → filed (GitHub/Linear) → optional gated run. A SIBLING of the
+// issue → filed (GitHub/Linear). A SIBLING of the
 // untouched ProjectBindingEditor: the tab keeps its config half, this is the
 // doing half. All behavior lives in `useTrackerIntake`; this file only renders
 // its state (the CreateIssuePanel look, adapted to the hub's card style).
 import React from 'react'
-import { CheckCircle2, ExternalLink, Loader2, Play, Sparkles } from 'lucide-react'
+import { CheckCircle2, ExternalLink, Loader2, Sparkles } from 'lucide-react'
 
 import { api } from '@/tauri'
 import type { Repo } from '@/shared/types'
@@ -27,7 +27,7 @@ export function TrackerIntakePanel({
       <h2 className="text-[14px] font-semibold tracking-tight text-foreground">New issue</h2>
       <p className="mt-0.5 text-[12px] text-muted-foreground">
         Write down what you want to do — it drafts a reviewable issue, files it with the resolved
-        tracker, and can kick off a gated run from there.
+        tracker. Open the workspace and use Run Center to create a specification.
       </p>
 
       <div className="mt-3 flex flex-col gap-2.5">
@@ -138,8 +138,8 @@ export function TrackerIntakePanel({
           <span className="text-[11px] text-destructive">{intake.error}</span>
         ) : null}
 
-        {/* Provider-confirmed filed issue (AC 11): the link, and — for a local
-            GitHub issue — the pre-armed composer hop into a gated run. */}
+        {/* Provider-confirmed filed issue (AC 11). Specification authoring is
+            intentionally owned by Run Center rather than tracker side effects. */}
         {intake.filed ? (
           <div className="flex flex-col gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2.5">
             <div className="flex min-w-0 items-center gap-2">
@@ -164,21 +164,9 @@ export function TrackerIntakePanel({
                 </button>
               ) : null}
             </div>
-            {intake.gate.eligible ? (
-              <button
-                type="button"
-                onClick={intake.startGatedRun}
-                className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-[11.5px] text-foreground transition-colors hover:border-muted-foreground/40"
-              >
-                <Play className="size-3.5" />
-                Start gated run
-              </button>
-            ) : intake.filed.provider === 'linear' ? (
-              // D3: honest, not silent — Linear issues can't start a gated run.
-              <span className="text-[11px] text-muted-foreground">
-                Gated runs: GitHub issues only.
-              </span>
-            ) : null}
+            <span className="text-[11px] text-muted-foreground">
+              Create and link a specification from Run Center after opening its workspace.
+            </span>
           </div>
         ) : null}
       </div>

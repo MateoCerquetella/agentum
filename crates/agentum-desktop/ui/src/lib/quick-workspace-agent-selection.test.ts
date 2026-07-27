@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TUI_AGENT_AUTO_PICK_ORDER } from '../../../shared/tui-agent-selection'
+import { TUI_AGENT_AUTO_PICK_ORDER } from '@/shared/tui-agent-selection'
 import { AGENT_CATALOG } from './agent-catalog'
 import {
   pickQuickWorkspaceAgent,

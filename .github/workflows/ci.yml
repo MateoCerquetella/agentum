@@ -1,38 +1,107 @@
 name: ci
 
-# Runs only when we cut a release (tag push) or via manual dispatch.
-# We don't gate every commit to main — keeps the Actions tab quiet.
+# Stable validation checks gate every promotion branch and release tag. The
+# publishing job remains tag-only and starts only after the full matrix passes.
 on:
   push:
+    branches: [main, develop, staging]
     tags: ['v*.*.*']
+  pull_request:
+    branches: [main, develop, staging]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
+  policy:
+    name: release policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.94.1 --profile minimal
+          rustup default 1.94.1
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        with:
+          tool: cargo-audit@0.22.2
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        with:
+          tool: cargo-deny@0.20.2
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        with:
+          tool: gitleaks@8.30.1
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        with:
+          tool: shellcheck@0.11.0
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        with:
+          tool: actionlint@1.7.7
+      - uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
+        with:
+          tool: zizmor@1.28.0
+      - name: Workflow policy
+        run: |
+          actionlint
+          zizmor --pedantic .
+      - name: Rust dependency policy
+        run: scripts/check-rust-dependencies.sh
+      - name: Secret scan of release source archive
+        run: scripts/check-secrets.sh
+      - name: Hard-cutover SDD runtime boundary
+        run: scripts/check-no-legacy-sdd.sh
+      - name: Installer asset contract
+        run: |
+          sh -n scripts/install.sh
+          sh -n scripts/uninstall.sh
+          shellcheck -x scripts/*.sh tests/*.sh .github/*.sh
+          bash tests/install_release_assets.sh
+          bash tests/uninstall_desktop.sh
+      - name: Desktop security configuration contract
+        run: python3 scripts/check-desktop-security-config.py
+      - name: SDD artifact, migration, and clean-fixture contracts
+        run: >-
+          python3 -m unittest
+          tests.test_agentum_artifacts
+          tests.test_sdd_migration
+          tests.test_sdd_demo_fixture
+          tests.test_openspec_golden
+          tests.test_release_workflow
+          tests.test_restricted_content_scan
+
   rust:
     name: rust ${{ matrix.os }}
+    needs: provider-authority
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       # Pin the toolchain (not @stable) so CI's rustfmt + clippy match the
       # repo's rust-toolchain.toml and what developers run locally. @stable
       # set RUSTUP_TOOLCHAIN=stable, which overrides rust-toolchain.toml and
       # floated CI to newer, stricter tooling — turning ci red on tags the
       # author had verified green (v0.8.12 clippy, v0.8.13 fmt). Keep this in
       # lockstep with rust-toolchain.toml's channel when bumping.
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.94.1
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.94.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.94.1
       # agentum-desktop (a workspace member) embeds crates/agentum-desktop/ui/dist
       # via generate_context! and links webkit2gtk on Linux at build time, so
       # `cargo test --all` can't compile it without the UI bundle and the GTK/
@@ -51,10 +120,10 @@ jobs:
       # gcc.
       - name: Set up MSVC (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
       - name: Install nasm (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
       - name: Use MSVC compiler instead of the gcc pin (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -83,7 +152,7 @@ jobs:
         shell: bash
         run: rm -rf target/release/.fingerprint/sherpa-rs-sys-* target/release/build/sherpa-rs-sys-* 2>/dev/null || true
       - name: Stage sherpa libs (download-binaries)
-        run: cargo build --release -p sherpa-rs
+        run: cargo build --locked --release -p sherpa-rs
       # `cargo test` links the desktop crate's onnxruntime/sherpa deps fine, but
       # the test binary's rpath ($ORIGIN = target/debug/deps/) doesn't hold the
       # .so files, so they fail to LOAD at runtime
@@ -95,13 +164,16 @@ jobs:
         shell: bash
         run: |
           dirs="$PWD/target/release"
-          for so in $(find "$PWD/target" \( -name 'libsherpa*.so*' -o -name 'lib*onnxruntime*.so*' \) 2>/dev/null); do
+          while IFS= read -r -d '' so; do
             dirs="$(dirname "$so"):$dirs"
-          done
+          done < <(find "$PWD/target" \( -name 'libsherpa*.so*' -o -name 'lib*onnxruntime*.so*' \) -print0 2>/dev/null)
           echo "LD_LIBRARY_PATH=$dirs:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-      - uses: oven-sh/setup-bun@v2
+      # Tag workflows do not restore shared dependency/toolchain caches: a
+      # release is rebuilt from locked source and registry checksums.
+      - name: Install pinned Bun
+        uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
-          bun-version: "1.3.14"
+          tool: bun@1.3.14
       - name: Build desktop UI bundle (embedded via generate_context!)
         working-directory: crates/agentum-desktop/ui
         # `--bun` runs vite under bun's runtime instead of the runner's node.
@@ -110,11 +182,55 @@ jobs:
         # v0.11.0; bun's runtime sidesteps that node bug.
         run: bun install --frozen-lockfile && bun run --bun build
 
+      - name: Audit JavaScript dependencies
+        if: runner.os == 'Linux'
+        working-directory: crates/agentum-desktop/ui
+        run: bun audit
+
+      - name: Type-check desktop UI
+        if: runner.os == 'Linux'
+        working-directory: crates/agentum-desktop/ui
+        run: bunx tsc --noEmit
+
+      - name: Test every desktop UI surface
+        if: runner.os == 'Linux'
+        working-directory: crates/agentum-desktop/ui
+        run: bunx vitest run
+
+      - name: Check desktop entry size
+        if: runner.os == 'Linux'
+        working-directory: crates/agentum-desktop/ui
+        run: bun run check:entry-size
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+      - name: SDD repository boundary
+        shell: bash
+        run: scripts/check-sdd-boundary.sh --boundary-only
+
+      - name: Release restricted-content boundary
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          RESTRICTED_PATTERNS: ${{ secrets.AGENTUM_RESTRICTED_PATTERNS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RESTRICTED_PATTERNS" ]]; then
+            echo "AGENTUM_RESTRICTED_PATTERNS is required for release validation" >&2
+            exit 1
+          fi
+          patterns="$(mktemp)"
+          chmod 600 "$patterns"
+          trap 'rm -f "$patterns"' EXIT
+          printf '%s\n' "$RESTRICTED_PATTERNS" > "$patterns"
+          scripts/check-sdd-boundary.sh "$patterns"
+
       - name: cargo clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: OpenSpec pinned golden and round-trip gate
+        run: cargo test --locked -p agentum-server openspec_ --no-fail-fast
 
       # Build the test binaries first (default shell — on Windows that's pwsh, so
       # linking uses MSVC's link.exe, not Git Bash's), then copy the staged sherpa/
@@ -125,17 +241,16 @@ jobs:
       # at runtime even though they linked fine. Copying (vs a DYLD_*/LD_* env var)
       # is the only approach that survives macOS SIP stripping those vars.
       - name: cargo test (build)
-        run: cargo test --all --no-run
+        run: cargo test --locked --all --no-run
       - name: Stage sherpa libs next to test binaries
         shell: bash
         run: |
           for ext in dylib so dll; do
             cp target/release/*sherpa*."$ext" target/release/*onnxruntime*."$ext" target/debug/deps/ 2>/dev/null || true
           done
-      # Windows hosted runners do not consistently export HOME. Several tests
-      # temporarily override and restore it while exercising config isolation;
-      # seed one authoritative value so parallel registry readers never observe
-      # a transient "no home directory" state.
+      # Windows hosted runners do not consistently export HOME. Tests that
+      # temporarily override configuration roots must always have one stable
+      # value to restore or parallel environment readers can observe no home.
       - name: Expose Windows home to tests
         if: runner.os == 'Windows'
         shell: pwsh
@@ -143,4 +258,141 @@ jobs:
           $homePath = [Environment]::GetFolderPath('UserProfile')
           "HOME=$homePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: cargo test (run)
-        run: cargo test --all
+        run: cargo test --locked --all
+
+      - name: Enforce Windows remote-client-only SDD boundary
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p agentum-server windows_local_sdd_boundary -- --nocapture
+
+  provider-authority:
+    name: provider runner execution authority
+    # This hosted, secret-free job is the only path to the persistent provider
+    # runner. Ordinary branch pushes never reach model credentials. A release
+    # tag must be signed, annotated, semver-shaped, and point at the exact HEAD
+    # of protected main before any candidate build script can run there.
+    needs: policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate signed annotated exact-main tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$GITHUB_REF" = "refs/tags/$TAG"
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
+          test "$(gh api "repos/$REPO/branches/main" --jq '.protected')" = "true"
+          test "$(git cat-file -t "refs/tags/$TAG")" = "tag"
+          test "$(git rev-parse "refs/tags/$TAG^{}")" = "$(git rev-parse HEAD)"
+          tag_object="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.sha')"
+          test -n "$tag_object"
+          test "$(gh api "repos/$REPO/git/tags/$tag_object" --jq '.verification.verified')" = "true"
+          test "$(gh api "repos/$REPO/git/tags/$tag_object" --jq '.object.type')" = "commit"
+          test "$(gh api "repos/$REPO/git/tags/$tag_object" --jq '.object.sha')" = "$(git rev-parse HEAD)"
+
+  provider-conformance:
+    name: live Standard + Guarded provider conformance
+    # Never expose persisted model credentials to pull-request, dispatch, or
+    # ordinary branch code. The hosted authority gate admits only a signed,
+    # annotated release tag at the exact protected-main HEAD. A missing runner,
+    # sandbox, CLI, authentication session, or lifecycle result fails closed.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [provider-authority, rust]
+    runs-on: [self-hosted, linux, x64, agentum-provider-conformance]
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          clean: true
+      - name: Require the Agentum provider sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bwrap
+          bwrap --version
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.94.1 --profile minimal
+          rustup default 1.94.1
+      - name: Build the conformance runner from the candidate source
+        run: >-
+          cargo build --locked --release -p agentum-server
+          --bin agentum-sdd-provider-conformance
+      - name: Run every bundled provider through the real lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          report_dir="$RUNNER_TEMP/agentum-provider-conformance-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if [[ -e "$report_dir" ]]; then
+            echo "stale provider-conformance directory exists; refusing mixed evidence" >&2
+            exit 1
+          fi
+          install -d -m 0700 "$report_dir"
+          runner="$PWD/target/release/agentum-sdd-provider-conformance"
+          "$runner" run-bundled \
+            --source-revision "$GITHUB_SHA" \
+            --output "$report_dir/provider-conformance.json" \
+            --provider claude \
+            --provider codex \
+            --provider agent \
+            --provider gemini \
+            --provider hermes \
+            --provider opencode \
+            --provider aider
+          "$runner" verify-report \
+            --report "$report_dir/provider-conformance.json" \
+            --source-revision "$GITHUB_SHA" \
+            --require-provider claude \
+            --require-provider codex \
+            --require-provider agent \
+            --require-provider gemini \
+            --require-provider hermes \
+            --require-provider opencode \
+            --require-provider aider
+          report_size="$(stat -c '%s' "$report_dir/provider-conformance.json")"
+          (( report_size > 0 && report_size <= 2097152 ))
+          (
+            cd "$report_dir"
+            sha256sum provider-conformance.json > SHA256SUMS
+          )
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: provider-conformance-${{ github.sha }}
+          path: ${{ runner.temp }}/agentum-provider-conformance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: verified release pipeline
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [rust, provider-authority, provider-conformance]
+    permissions:
+      contents: write # Creates and publishes the tag's verified release.
+    uses: ./.github/workflows/release.yml
+    with:
+      publish: true
+      provider_report_artifact: provider-conformance-${{ github.sha }}
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+      HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+      AGENTUM_RESTRICTED_PATTERNS: ${{ secrets.AGENTUM_RESTRICTED_PATTERNS }}

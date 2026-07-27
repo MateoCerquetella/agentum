@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { GitBranchChangeEntry, GitStatusEntry } from '../../../../shared/types'
+import type { GitBranchChangeEntry, GitStatusEntry } from '@/shared/types'
 import {
   buildGitStatusSourceControlTree,
   buildSourceControlTree,

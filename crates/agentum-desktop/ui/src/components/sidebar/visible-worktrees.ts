@@ -1,9 +1,9 @@
-import type { Worktree, Repo, TerminalTab, WorktreeLineage } from '../../../../shared/types'
+import type { Worktree, Repo, TerminalTab, WorktreeLineage } from '@/shared/types'
 import { buildWorktreeComparator, sortWorktreesSmart } from './smart-sort'
 import { isInactiveWorkspace } from '@/lib/worktree-activity-state'
 import { useAppStore } from '@/store'
 import { getAllWorktreesFromState, getRepoMapFromState } from '@/store/selectors'
-import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '../../../../shared/constants'
+import { DEFAULT_SHOW_SLEEPING_WORKSPACES } from '@/shared/constants'
 
 /**
  * Whether a worktree represents the repo's default-branch row that the

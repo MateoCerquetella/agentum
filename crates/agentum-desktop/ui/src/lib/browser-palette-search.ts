@@ -1,5 +1,5 @@
-import { AGENTUM_BROWSER_BLANK_URL } from '../../../shared/constants'
-import type { BrowserPage, BrowserWorkspace, Worktree } from '../../../shared/types'
+import { AGENTUM_BROWSER_BLANK_URL } from '@/shared/constants'
+import type { BrowserPage, BrowserWorkspace, Worktree } from '@/shared/types'
 import type { MatchRange } from './worktree-palette-search'
 
 export type SearchableBrowserPage = {

@@ -3,9 +3,9 @@ import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry,
   type AgentStatusState
-} from '../../../../shared/agent-status-types'
-import type { Repo, TerminalTab, Worktree } from '../../../../shared/types'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+} from '@/shared/agent-status-types'
+import type { Repo, TerminalTab, Worktree } from '@/shared/types'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { buildRetainedAgentsSyncSnapshot } from './useRetainedAgents'
 
 const ACTIVE_PANE_KEY = makePaneKey('tab-active', '22222222-2222-4222-8222-222222222222')

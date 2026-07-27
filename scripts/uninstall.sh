@@ -1,131 +1,197 @@
 #!/bin/sh
-# agentum uninstaller — reverses scripts/install.sh.
-#
-# curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/uninstall.sh | sh
-#
-# Options (passed after -- when piping):
-#   sh -s -- --purge              # also remove the data directory (no prompt)
-#   sh -s -- --keep-data          # keep the data directory (no prompt)
-#   sh -s -- --no-interactive     # never prompt; equivalent to --keep-data
-#
-# Environment:
-#   INSTALL_DIR=$HOME/.local/bin  override binary location
-#   AGENTUM_PURGE=1               equivalent to --purge
-#   AGENTUM_KEEP_DATA=1           equivalent to --keep-data
-#
+# Remove Agentum Desktop. User data is preserved unless --purge-data is given.
 # SPDX-License-Identifier: MIT
 set -eu
 
-# ── Configuration ──────────────────────────────────────────────
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
-DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/agentum"
-LA_PATH="$HOME/Library/LaunchAgents/dev.agentum.daemon.plist"
-SYSTEMD_UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agentum.service"
+UNINSTALL_HOME="${AGENTUM_UNINSTALL_HOME:-${HOME:?HOME is required}}"
+INSTALL_DIR="${AGENTUM_INSTALL_DIR:-${XDG_BIN_HOME:-$UNINSTALL_HOME/.local/bin}}"
+APPLICATIONS_DIR="${AGENTUM_APPLICATIONS_DIR:-/Applications}"
+PURGE_DATA=false
+PACKAGE_FORMAT=""
+# Tauri Bundler 2.9.2 derives both Debian's Package field and RPM's Name from
+# the kebab-case productName. tauri.conf.json fixes productName to "Agentum",
+# so both native package managers install the exact identifier below.
+PACKAGE_NAME="agentum"
 
-PURGE="${AGENTUM_PURGE:-}"
-KEEP_DATA="${AGENTUM_KEEP_DATA:-}"
-INTERACTIVE=true
+info() { printf 'agentum uninstall: %s\n' "$*"; }
+die() { printf 'agentum uninstall: %s\n' "$*" >&2; exit 1; }
 
-# ── Colors ─────────────────────────────────────────────────────
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    ESC=$(printf '\033')
-    C_R="${ESC}[0m"; C_B="${ESC}[1m"; C_D="${ESC}[2m"
-    C_Y="${ESC}[1;33m"; C_G="${ESC}[1;32m"; C_RED="${ESC}[1;31m"; C_BL="${ESC}[1;34m"
-else
-    C_R=''; C_B=''; C_D=''; C_Y=''; C_G=''; C_RED=''; C_BL=''
-fi
+usage() {
+    cat <<'EOF'
+Usage: uninstall.sh [--purge-data] [--package deb|rpm]
 
-i() { printf '  %s●%s %s\n' "${C_BL}" "${C_R}" "$1"; }
-o() { printf '  %s✔%s %s\n' "${C_G}"  "${C_R}" "$1"; }
-w() { printf '  %s⚠%s  %s\n' "${C_Y}"  "${C_R}" "$1" >&2; }
-e() { printf '  %s✖%s %s\n' "${C_RED}" "${C_R}" "$1" >&2; exit 1; }
+By default only Agentum Desktop is removed and all user data is preserved.
+--purge-data deletes only Agentum's known data/config/cache directories.
+EOF
+}
 
-# ── Args ───────────────────────────────────────────────────────
-while [ $# -gt 0 ]; do
+while [ "$#" -gt 0 ]; do
     case "$1" in
-        --purge) PURGE=1; shift ;;
-        --keep-data) KEEP_DATA=1; shift ;;
-        --no-interactive) INTERACTIVE=false; shift ;;
-        -h|--help) printf 'Usage: uninstall.sh [--purge|--keep-data] [--no-interactive]\n'; exit 0 ;;
-        *) shift ;;
+        --purge-data) PURGE_DATA=true; shift ;;
+        --keep-data|--no-interactive) shift ;;
+        --package)
+            [ "$#" -ge 2 ] || die "--package requires deb or rpm"
+            PACKAGE_FORMAT="$2"; shift 2 ;;
+        --package=*) PACKAGE_FORMAT="${1#*=}"; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "unknown option: $1" ;;
     esac
 done
 
-[ -n "${CI:-}" ] && INTERACTIVE=false
-[ -t 0 ] || INTERACTIVE=false
-
-# ── Stop and remove launchd LaunchAgent (macOS) ────────────────
-remove_launchd() {
-    [ -f "$LA_PATH" ] || return 0
-    i "removing LaunchAgent $LA_PATH"
-    launchctl bootout "gui/$(id -u)" "$LA_PATH" 2>/dev/null || \
-        launchctl unload "$LA_PATH" 2>/dev/null || true
-    rm -f "$LA_PATH"
-    o "LaunchAgent removed"
+validate_parent_directory() {
+    _directory="$1"
+    case "$_directory" in
+        /*) ;;
+        *) die "target parent must be absolute: $_directory" ;;
+    esac
+    case "/$_directory/" in
+        *'/../'*|*'/./'*) die "target parent contains traversal: $_directory" ;;
+    esac
+    [ "$_directory" != "/" ] || die "refusing a filesystem-root target"
+    [ ! -L "$_directory" ] || die "target parent must not be a symlink: $_directory"
 }
 
-# ── Stop and remove systemd user unit (Linux) ──────────────────
-remove_systemd_unit() {
-    [ -f "$SYSTEMD_UNIT" ] || return 0
-    i "removing systemd user unit $SYSTEMD_UNIT"
-    systemctl --user disable --now agentum.service 2>/dev/null || true
-    rm -f "$SYSTEMD_UNIT"
-    systemctl --user daemon-reload 2>/dev/null || true
-    o "systemd unit removed"
+remove_exact_file() {
+    _target="$1"
+    if [ -L "$_target" ]; then
+        rm -f -- "$_target"
+    elif [ -e "$_target" ]; then
+        [ -f "$_target" ] || die "refusing to remove a non-file target: $_target"
+        rm -f -- "$_target"
+    fi
 }
 
-# ── Remove binaries ────────────────────────────────────────────
-remove_binaries() {
-    for name in agentum lazyagentum; do
-        bin="$INSTALL_DIR/$name"
-        if [ -f "$bin" ]; then
-            i "removing $bin"
-            rm -f "$bin"
-            o "$name removed"
+remove_exact_app() {
+    validate_parent_directory "$APPLICATIONS_DIR"
+    _target="$APPLICATIONS_DIR/Agentum.app"
+    if [ -L "$_target" ]; then
+        rm -f -- "$_target"
+    elif [ -e "$_target" ]; then
+        [ -d "$_target" ] || die "refusing to remove a non-application target: $_target"
+        if [ -w "$APPLICATIONS_DIR" ]; then
+            rm -rf -- "$_target"
+        else
+            command -v sudo >/dev/null 2>&1 || die "removing $_target requires sudo"
+            sudo rm -rf -- "$_target"
         fi
-    done
+    fi
+    info "removed exact application target $_target"
 }
 
-# ── Data directory ─────────────────────────────────────────────
-# Default: keep. The user's SQLite DB lives here; deleting it loses all
-# session metadata, board state, notes, channels, and credentials.
-handle_data_dir() {
-    [ -d "$DATA_DIR" ] || { o "no data directory at $DATA_DIR"; return 0; }
+remove_standalone_linux() {
+    validate_parent_directory "$INSTALL_DIR"
+    remove_exact_file "$INSTALL_DIR/agentum-desktop"
+    info "removed exact standalone target $INSTALL_DIR/agentum-desktop"
+}
 
-    if [ -n "$PURGE" ]; then
-        i "purging data directory $DATA_DIR (--purge)"
-        rm -rf "$DATA_DIR"
-        o "data directory removed"
-        return 0
+run_as_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        die "package removal requires root privileges (sudo is unavailable)"
     fi
-    if [ -n "$KEEP_DATA" ] || [ "$INTERACTIVE" = false ]; then
-        w "data directory kept at $DATA_DIR (remove manually with: rm -rf $DATA_DIR)"
-        return 0
-    fi
+}
 
-    printf '  %s?%s also remove %s ? %s[y/N]%s ' "${C_Y}" "${C_R}" "$DATA_DIR" "${C_D}" "${C_R}"
-    read -r ans || ans=''
-    case "$ans" in
-        y|Y|yes|YES)
-            rm -rf "$DATA_DIR"
-            o "data directory removed"
+remove_package() {
+    case "$PACKAGE_FORMAT" in
+        "") return 0 ;;
+        deb)
+            command -v dpkg >/dev/null 2>&1 || die "dpkg is required for --package deb"
+            run_as_root dpkg -r "$PACKAGE_NAME"
             ;;
-        *)
-            w "data directory kept at $DATA_DIR"
+        rpm)
+            command -v rpm >/dev/null 2>&1 || die "rpm is required for --package rpm"
+            run_as_root rpm -e "$PACKAGE_NAME"
             ;;
+        *) die "unsupported package format: $PACKAGE_FORMAT" ;;
     esac
 }
 
-# ── Run ────────────────────────────────────────────────────────
-printf '\n  %sagentum uninstaller%s\n\n' "${C_B}" "${C_R}"
+purge_known_directory() {
+    _target="$1"
+    case "$UNINSTALL_HOME" in
+        /*) ;;
+        *) die "uninstall home must be absolute: $UNINSTALL_HOME" ;;
+    esac
+    case "/$UNINSTALL_HOME/" in
+        *'/../'*|*'/./'*) die "uninstall home contains traversal: $UNINSTALL_HOME" ;;
+    esac
+    [ "$UNINSTALL_HOME" != "/" ] || die "refusing a filesystem-root uninstall home"
+    case "/$_target/" in
+        *'/../'*|*'/./'*) die "data purge target contains traversal: $_target" ;;
+    esac
+    case "$_target" in
+        "$UNINSTALL_HOME"/*/agentum|"$UNINSTALL_HOME"/*/Agentum|"$UNINSTALL_HOME"/*/dev.agentum.app) ;;
+        *) die "refusing unrecognized data purge target: $_target" ;;
+    esac
+    [ -e "$_target" ] || [ -L "$_target" ] || return 0
+    [ ! -L "$_target" ] || die "refusing to follow a symlinked data directory: $_target"
+    [ -d "$_target" ] || die "refusing to purge a non-directory data target: $_target"
 
-case "$(uname -s)" in
-    Darwin) remove_launchd ;;
-    Linux)  remove_systemd_unit ;;
-    *) w "unsupported OS ($(uname -s)) — skipping service unit removal" ;;
-esac
+    # Resolve the configured home and the target's parent independently. The
+    # expected physical parent preserves the lexical path below UNINSTALL_HOME;
+    # a mismatch means an intermediate component is a symlink. Never recurse
+    # through that path, even when the link happens to point back inside home.
+    _home_physical="$(unset CDPATH; cd -P -- "$UNINSTALL_HOME" && pwd -P)" \
+        || die "could not resolve uninstall home: $UNINSTALL_HOME"
+    _parent="${_target%/*}"
+    _relative_parent="${_parent#"$UNINSTALL_HOME"/}"
+    [ "$_relative_parent" != "$_parent" ] \
+        || die "data purge target escaped uninstall home: $_target"
+    _parent_physical="$(unset CDPATH; cd -P -- "$_parent" && pwd -P)" \
+        || die "could not resolve data purge parent: $_parent"
+    _expected_parent="$_home_physical/$_relative_parent"
+    [ "$_parent_physical" = "$_expected_parent" ] \
+        || die "refusing to follow a symlinked data parent: $_parent"
 
-remove_binaries
-handle_data_dir
+    rm -rf -- "$_target"
+    info "purged $_target"
+}
 
-printf '\n  %sdone.%s\n\n' "${C_G}" "${C_R}"
+known_data_directories() {
+    case "$(uname -s)" in
+        Darwin)
+            printf '%s\n' \
+                "$UNINSTALL_HOME/Library/Application Support/agentum" \
+                "$UNINSTALL_HOME/Library/Application Support/Agentum" \
+                "$UNINSTALL_HOME/Library/Application Support/dev.agentum.app" \
+                "$UNINSTALL_HOME/Library/Caches/agentum" \
+                "$UNINSTALL_HOME/Library/Caches/dev.agentum.app"
+            ;;
+        Linux)
+            printf '%s\n' \
+                "${XDG_DATA_HOME:-$UNINSTALL_HOME/.local/share}/agentum" \
+                "${XDG_DATA_HOME:-$UNINSTALL_HOME/.local/share}/Agentum" \
+                "${XDG_CONFIG_HOME:-$UNINSTALL_HOME/.config}/agentum" \
+                "${XDG_CACHE_HOME:-$UNINSTALL_HOME/.cache}/agentum" \
+                "${XDG_STATE_HOME:-$UNINSTALL_HOME/.local/state}/agentum"
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+purge_known_data() {
+    [ "$PURGE_DATA" = true ] || {
+        info "user data preserved (use --purge-data for explicit removal)"
+        return 0
+    }
+    known_data_directories | while IFS= read -r _directory; do
+        purge_known_directory "$_directory"
+    done
+}
+
+main() {
+    case "$(uname -s)" in
+        Darwin) remove_exact_app ;;
+        Linux) remove_standalone_linux; remove_package ;;
+        *) die "unsupported platform: $(uname -s)" ;;
+    esac
+    purge_known_data
+    info "done"
+}
+
+if [ "${AGENTUM_UNINSTALL_SOURCE_ONLY:-}" != "1" ]; then
+    main
+fi

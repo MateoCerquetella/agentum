@@ -1,8 +1,8 @@
 import type {
   ProviderRateLimits,
   RateLimitRuntimeTarget
-} from '../../../../shared/rate-limit-types'
-import { isCodexAuthError } from '../../../../shared/codex-auth-errors'
+} from '@/shared/rate-limit-types'
+import { isCodexAuthError } from '@/shared/codex-auth-errors'
 
 type AccountRuntime = {
   runtime: 'host' | 'wsl'

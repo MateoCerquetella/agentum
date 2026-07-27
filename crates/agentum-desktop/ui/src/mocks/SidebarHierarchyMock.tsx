@@ -99,7 +99,7 @@ const INITIAL_HOSTS: Host[] = [
       agentumProject,
       project('agentum-www', 'agentum-www', ['Hero polish', 'Docs navigation', 'Pricing copy']),
       project('agentum-tui', 'agentum-tui', ['Host shortcuts', 'Session picker', 'Theme parity']),
-      project('orca', 'orca', ['Queue recovery', 'Model routing', 'Usage metrics']),
+      project('platform-tools', 'platform-tools', ['Queue recovery', 'Model routing', 'Usage metrics']),
       project('hermes', 'hermes-webui', ['Chat streaming', 'Tool timeline', 'Mobile pass']),
       project('bandely', 'Bandely', ['CI repair', 'Deploy preview', 'Billing events']),
       project('wiki', 'wiki-core', ['Cross linking', 'Tag cleanup', 'Search ranking']),
@@ -107,8 +107,8 @@ const INITIAL_HOSTS: Host[] = [
     ]
   },
   {
-    id: 'dyaus',
-    name: 'Dyaus',
+    id: 'developer',
+    name: 'Developer',
     kind: 'ssh',
     platform: 'Linux · SSH',
     status: 'online',

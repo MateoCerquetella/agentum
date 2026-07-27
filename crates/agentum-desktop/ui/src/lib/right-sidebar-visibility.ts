@@ -1,5 +1,5 @@
 import type { AppState } from '@/store/types'
-import { isFolderRepo } from '../../../shared/repo-kind'
+import { isFolderRepo } from '@/shared/repo-kind'
 
 type ActiveView = AppState['activeView']
 
@@ -7,14 +7,7 @@ const RIGHT_SIDEBAR_SUPPRESSED_VIEWS = new Set<ActiveView>([
   'settings',
   'tasks',
   'activity',
-  'skills',
-  'mobile',
-  // Chat (the 'harness' view) is a focused, full-page conversation surface —
-  // the Explorer/Search/Source-Control strip is noise here, so suppress it the
-  // same way the other full-page views do (the strip never mounts and the
-  // toggle/shortcuts are guarded off).
-  'harness',
-  // The Project Hub owns the full content area (its tabs embed Chat/Wiki/
+  // The Project Hub owns the full content area (its tabs embed Specs/Wiki/
   // Tasks/Sessions) — same distraction-free contract as the views above.
   'project',
   // The Projects page (the card-grid picker, #274) is a full-page surface too.

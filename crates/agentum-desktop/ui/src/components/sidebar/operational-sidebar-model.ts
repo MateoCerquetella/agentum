@@ -3,8 +3,8 @@ import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../shared/agent-status-types'
-import type { Repo, Worktree } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import type { Repo, Worktree } from '@/shared/types'
 import type {
   OperationalSection,
   OperationalWorkspaceMeta,

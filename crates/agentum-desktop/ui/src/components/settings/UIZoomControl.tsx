@@ -2,16 +2,28 @@ import { api } from '@/tauri'
 import { useEffect, useState, useCallback } from 'react'
 import { Button } from '../ui/button'
 import { Minus, Plus, RotateCcw } from 'lucide-react'
-import { applyUIZoom } from '@/lib/ui-zoom'
+import { applyUIZoom, getCurrentUIZoomLevel } from '@/lib/ui-zoom'
 import { ZOOM_STEP, ZOOM_MIN, ZOOM_MAX, zoomLevelToPercent } from './SettingsConstants'
 
 export function UIZoomControl(): React.JSX.Element {
-  const [zoomLevel, setZoomLevel] = useState(() => api.ui.getZoomLevel())
+  const [zoomLevel, setZoomLevel] = useState(getCurrentUIZoomLevel)
 
   useEffect(() => {
-    return api.ui.onTerminalZoom(() => {
-      setZoomLevel(api.ui.getZoomLevel())
+    void Promise.resolve(api.ui.getZoomLevel()).then((level) => {
+      const numericLevel = Number(level)
+      applyUIZoom(numericLevel)
+      setZoomLevel(numericLevel)
     })
+    const unsubscribe = api.ui.onTerminalZoom(() => {
+      void Promise.resolve(api.ui.getZoomLevel()).then((level) => {
+        const numericLevel = Number(level)
+        applyUIZoom(numericLevel)
+        setZoomLevel(numericLevel)
+      })
+    })
+    return () => {
+      void unsubscribe()
+    }
   }, [])
 
   const applyZoom = useCallback((level: number) => {

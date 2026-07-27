@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type * as ReactModule from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 
 const mocks = vi.hoisted(() => ({
   state: {

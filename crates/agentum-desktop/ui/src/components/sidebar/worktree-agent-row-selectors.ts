@@ -3,9 +3,9 @@ import type { AppState } from '@/store/types'
 import type {
   AgentStatusEntry,
   MigrationUnsupportedPtyEntry
-} from '../../../../shared/agent-status-types'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
-import type { TerminalLayoutSnapshot } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import { parsePaneKey } from '@/shared/stable-pane-id'
+import type { TerminalLayoutSnapshot } from '@/shared/types'
 
 const EMPTY_LIVE_ENTRIES: AgentStatusEntry[] = []
 const EMPTY_MIGRATION_UNSUPPORTED_ENTRIES: MigrationUnsupportedPtyEntry[] = []

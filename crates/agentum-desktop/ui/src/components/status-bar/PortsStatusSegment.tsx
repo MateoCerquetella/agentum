@@ -36,7 +36,7 @@ import {
 } from '@/lib/workspace-port-groups'
 import { SelectedTextCopyMenu } from '@/components/SelectedTextCopyMenu'
 import { STATUS_BAR_CONTEXT_MENU_EXEMPT_PROPS } from './status-bar-context-menu-policy'
-import type { WorkspacePort } from '../../../../shared/workspace-ports'
+import type { WorkspacePort } from '@/shared/workspace-ports'
 
 type PortsStatusSegmentProps = {
   compact?: boolean

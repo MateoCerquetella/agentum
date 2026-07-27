@@ -20,7 +20,7 @@ import {
 } from './WorktreeCardDetailSection'
 import { LinearStateBadge } from './WorktreeCardMetadataStatusBadges'
 import { IssueProjectStatusChip, useIssueProjectStatus } from './IssueProjectStatusChip'
-import type { IssueInfo } from '../../../../shared/types'
+import type { IssueInfo } from '@/shared/types'
 
 export type WorktreeCardIssueDisplay =
   | IssueInfo

@@ -60,6 +60,31 @@ impl From<StoreError> for ApiError {
             StoreError::NotFound(m) => ApiError::NotFound(m),
             StoreError::AlreadyExists(m) => ApiError::Conflict(m),
             StoreError::Core(c) => ApiError::BadRequest(c.to_string()),
+            StoreError::StaleRevision { expected, current } => ApiError::Custom(
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "stale_revision",
+                    "expectedRevision": expected,
+                    "currentRevision": current
+                }),
+            ),
+            StoreError::ApprovalInvalid => ApiError::Custom(
+                StatusCode::PRECONDITION_FAILED,
+                json!({ "error": "approval_digest_invalid" }),
+            ),
+            StoreError::SelfApproval => {
+                ApiError::Forbidden("artifact authors cannot approve their own work".into())
+            }
+            StoreError::InvalidCommand(message) => ApiError::BadRequest(message),
+            StoreError::IdempotencyConflict(scope) => ApiError::Custom(
+                StatusCode::CONFLICT,
+                json!({
+                    "error": "idempotency_conflict",
+                    "scope": scope,
+                    "message": "requestId was already used for a different payload"
+                }),
+            ),
+            StoreError::ArtifactSetConflict(message) => ApiError::Conflict(message),
             other => {
                 tracing::error!(error = %other, "store error");
                 ApiError::Internal(other.to_string())

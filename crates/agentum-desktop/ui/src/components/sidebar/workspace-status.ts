@@ -11,7 +11,7 @@ import {
   Flag,
   Timer
 } from 'lucide-react'
-import type { WorkspaceStatus, WorkspaceStatusDefinition } from '../../../../shared/types'
+import type { WorkspaceStatus, WorkspaceStatusDefinition } from '@/shared/types'
 import {
   DEFAULT_WORKSPACE_STATUS_COLOR_ID,
   DEFAULT_WORKSPACE_STATUS_ICON_ID,
@@ -23,7 +23,7 @@ import {
   getWorkspaceStatusFromGroupKey,
   getWorkspaceStatusGroupKey,
   isWorkspaceStatusId
-} from '../../../../shared/workspace-statuses'
+} from '@/shared/workspace-statuses'
 import {
   ConductorDoneIcon,
   ConductorProgressIcon,

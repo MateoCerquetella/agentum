@@ -8,8 +8,8 @@ import {
   RESET_TERMINAL_CURSOR_STYLE
 } from './layout-serialization'
 import type * as UseNotificationDispatchModule from './use-notification-dispatch'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
-import type { TerminalLayoutSnapshot } from '../../../../shared/types'
+import { makePaneKey } from '@/shared/stable-pane-id'
+import type { TerminalLayoutSnapshot } from '@/shared/types'
 
 // Why: the fresh-spawn and reattach paths now chain pre-signal → spawn →
 // register/settle through multiple microtasks. Tests that previously flushed
@@ -2111,7 +2111,7 @@ describe('connectPanePty', () => {
     const transport = createMockTransport()
     transportFactoryQueue.push(transport)
 
-    const remoteWorktreeId = 'repo1::/home/dyaus/Developer/projects/agentum'
+    const remoteWorktreeId = 'repo1::/srv/projects/agentum'
     mockStoreState = {
       ...mockStoreState,
       activeWorktreeId: remoteWorktreeId,
@@ -2122,7 +2122,7 @@ describe('connectPanePty', () => {
       // Regression: SSH tabs can mount before relay discovery has populated
       // the Worktree object. The composite id still identifies repo1.
       worktreesByRepo: {},
-      repos: [{ id: 'repo1', connectionId: 'ssh-dyaus' }]
+      repos: [{ id: 'repo1', connectionId: 'ssh-dev-host' }]
     }
 
     connectPanePty(
@@ -2130,15 +2130,15 @@ describe('connectPanePty', () => {
       createManager(1) as never,
       createDeps({
         worktreeId: remoteWorktreeId,
-        cwd: '/home/dyaus/Developer/projects/agentum'
+        cwd: '/srv/projects/agentum'
       }) as never
     )
     await flushAsyncTicks()
 
     expect(createdTransportOptions[0]).toEqual(
       expect.objectContaining({
-        connectionId: 'ssh-dyaus',
-        cwd: '/home/dyaus/Developer/projects/agentum',
+        connectionId: 'ssh-dev-host',
+        cwd: '/srv/projects/agentum',
         worktreeId: remoteWorktreeId
       })
     )

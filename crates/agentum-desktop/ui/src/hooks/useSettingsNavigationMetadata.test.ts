@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildSettingsNavigationMetadata } from './useSettingsNavigationMetadata'
 import { buildCmdJSettingsResults } from '../components/cmd-j/palette-results'
-import type { Repo } from '../../../shared/types'
+import type { Repo } from '@/shared/types'
 
 const repo = {
   id: 'repo-1',
@@ -78,6 +78,29 @@ describe('settings navigation metadata', () => {
   it('keeps macOS permissions mac-only', () => {
     expect(ids({ isMac: false })).not.toContain('developer-permissions')
     expect(ids({ isMac: true })).toContain('developer-permissions')
+  })
+
+  it('keeps every settings navigation page paired with a rendered configuration surface', () => {
+    const testDir = dirname(fileURLToPath(import.meta.url))
+    const settingsSource = readFileSync(
+      resolve(testDir, '../components/settings/Settings.tsx'),
+      'utf8'
+    )
+    const renderedSectionIds = Array.from(
+      settingsSource.matchAll(/<SettingsSection\s+[\s\S]*?\bid="([^"]+)"/g),
+      (match) => match[1]
+    )
+    const registeredSectionIds = buildSettingsNavigationMetadata({
+      isMac: true,
+      isWindows: false,
+      isWebClient: false,
+      repos: []
+    }).map((section) => section.id)
+
+    expect(new Set(renderedSectionIds).size).toBe(renderedSectionIds.length)
+    expect(renderedSectionIds.sort()).toEqual(registeredSectionIds.sort())
+    expect(settingsSource).toContain('id={repoSectionId}')
+    expect(settingsSource).toContain('<RepositoryPane')
   })
 
   it('does not import Settings page or pane UI modules from the metadata hook', () => {

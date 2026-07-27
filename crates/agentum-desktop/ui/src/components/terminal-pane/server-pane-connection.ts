@@ -19,11 +19,11 @@ import {
   type ServerSessionTerminalBinding
 } from '@/runtime/server-session-terminal'
 import { detectAgentStatusFromTitle } from '@/lib/agent-status'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { createPaneActivityTracker, type PaneActivityTracker } from './pane-activity-tracker'
-import type { AgentType } from '../../../../shared/agent-status-types'
+import type { AgentType } from '@/shared/agent-status-types'
 import { registerServerSessionActivity } from '@/runtime/server-session-activity'
-import { isTuiAgent } from '../../../../shared/tui-agent-config'
+import { isTuiAgent } from '@/shared/tui-agent-config'
 
 /** The tab's launch agent (claude/codex/…) drives the server session's tool;
  *  a plain terminal tab has none, so it runs a shell. */

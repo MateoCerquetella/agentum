@@ -20,9 +20,9 @@ import type {
   SetupSplitDirection,
   TerminalTab,
   TerminalLayoutSnapshot
-} from '../../../../shared/types'
-import type { EventProps } from '../../../../shared/telemetry-events'
-import { resolveTerminalFontWeights } from '../../../../shared/terminal-fonts'
+} from '@/shared/types'
+import type { EventProps } from '@/shared/telemetry-events'
+import { resolveTerminalFontWeights } from '@/shared/terminal-fonts'
 import {
   buildFontFamily,
   normalizeTerminalLayoutSnapshot,
@@ -30,7 +30,7 @@ import {
   replayTerminalLayout,
   restoreScrollbackBuffers
 } from './layout-serialization'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { applyExpandedLayoutTo, restoreExpandedLayoutFrom } from './expand-collapse'
 import {
   applyTerminalAppearance,

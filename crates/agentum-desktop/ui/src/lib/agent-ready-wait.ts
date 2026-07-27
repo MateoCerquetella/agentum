@@ -1,5 +1,5 @@
-import { detectAgentStatusFromTitle } from '../../../shared/agent-detection'
-import { isExpectedAgentProcess } from '../../../shared/agent-process-recognition'
+import { detectAgentStatusFromTitle } from '@/shared/agent-detection'
+import { isExpectedAgentProcess } from '@/shared/agent-process-recognition'
 import { isShellProcess } from './tui-agent-startup'
 import { useAppStore } from '@/store'
 import { inspectRuntimeTerminalProcess } from '@/runtime/runtime-terminal-inspection'

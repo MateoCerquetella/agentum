@@ -1,6 +1,6 @@
 /* eslint-disable max-lines */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RuntimeMobileSessionTabsResult } from '../../../shared/runtime-types'
+import type { RuntimeMobileSessionTabsResult } from '@/shared/runtime-types'
 import {
   activateWebRuntimeSessionTab,
   closeWebRuntimeTerminal,

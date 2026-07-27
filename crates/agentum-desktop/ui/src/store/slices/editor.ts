@@ -4,7 +4,7 @@ import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
 import { joinPath } from '@/lib/path'
 import { toast } from 'sonner'
-import { isPathInsideOrEqual } from '../../../../shared/cross-platform-path'
+import { isPathInsideOrEqual } from '@/shared/cross-platform-path'
 import { resolveMarkdownLinkTarget } from '@/components/editor/markdown-internal-links'
 import { openHttpLink } from '@/lib/http-link-routing'
 import { isLocalPathOpenBlocked, showLocalPathOpenBlockedToast } from '@/lib/local-path-open-guard'
@@ -28,11 +28,11 @@ import type {
   SearchResult,
   WorkspaceSessionState,
   WorkspaceVisibleTabType
-} from '../../../../shared/types'
-import { stripCredentialsFromMessage } from '../../../../shared/git-remote-error'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+} from '@/shared/types'
+import { stripCredentialsFromMessage } from '@/shared/git-remote-error'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 import type { RemoteOpKind } from '@/components/right-sidebar/source-control-primary-action'
-import { shouldForcePushWithLeaseForUpstream } from '../../../../shared/git-upstream-status'
+import { shouldForcePushWithLeaseForUpstream } from '@/shared/git-upstream-status'
 import {
   fastForwardRuntimeGit,
   fetchRuntimeGit,
@@ -51,7 +51,7 @@ import { findWorktreeById, getRepoIdFromWorktreeId } from './worktree-helpers'
 import { createUntitledMarkdownFileWithTemplateSelection } from '@/lib/create-untitled-markdown'
 import { extractIpcErrorMessage } from '@/lib/ipc-error'
 
-export type { RightSidebarTab } from '../../../../shared/types'
+export type { RightSidebarTab } from '@/shared/types'
 
 type DiffSource =
   | 'unstaged'

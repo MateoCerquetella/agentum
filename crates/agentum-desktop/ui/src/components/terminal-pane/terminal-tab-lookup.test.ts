@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 import { getCachedTerminalTabForWorktree } from './terminal-tab-lookup'
 
 function makeTab(id: string): TerminalTab {

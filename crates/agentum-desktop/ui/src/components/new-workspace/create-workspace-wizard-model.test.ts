@@ -16,7 +16,7 @@ import {
 } from './create-workspace-wizard-model'
 import type { PickerProjectRef } from './work-item-picker-model'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
-import type { TuiAgent } from '../../../../shared/types'
+import type { TuiAgent } from '@/shared/types'
 
 const PROJECT: PickerProjectRef = { owner: 'acme', ownerType: 'organization', number: 7 }
 const LINKED_ITEM: LinkedWorkItemSummary = {
@@ -260,18 +260,15 @@ describe('deriveWizardComposerSeed (spec 013 F4 single front door)', () => {
     expect(seed.initialWorkspaceStatus).toBeUndefined()
     expect(seed.initialBaseBranch).toBeUndefined()
     expect(seed.telemetrySource).toBeUndefined()
-    // Absent startGatedRun ⇒ the toggle prop is not seeded (stays default off).
-    expect('initialStartGatedRun' in seed).toBe(false)
   })
 
-  it('honors every opinionated field a caller can pass', () => {
+  it('honors workspace fields', () => {
     const seed = deriveWizardComposerSeed({
       prefilledName: 'fix-login',
       initialRepoId: 'repo-1',
       linkedWorkItem: LINKED,
       initialBaseBranch: 'develop',
       initialWorkspaceStatus: 'doing',
-      startGatedRun: true,
       telemetrySource: 'sidebar'
     })
     expect(seed.initialName).toBe('fix-login')
@@ -280,17 +277,10 @@ describe('deriveWizardComposerSeed (spec 013 F4 single front door)', () => {
     expect(seed.initialBaseBranch).toBe('develop')
     expect(seed.initialWorkspaceStatus).toBe('doing')
     expect(seed.telemetrySource).toBe('sidebar')
-    // Armed open ⇒ the toggle opens already armed (inv. 4, via initialStartGatedRunProp).
-    expect(seed).toHaveProperty('initialStartGatedRun', true)
   })
 
   it('locks the initial repository to a required project task scope', () => {
     expect(deriveWizardComposerSeed({ initialRepoId: 'wrong', requiredProjectTaskScope: { repoId: 'repo-locked', generation: 4, scopeKey: '["repo-locked","linear","w","p"]' } }).initialRepoId).toBe('repo-locked')
-  })
-
-  it('does not arm the gated-run toggle when startGatedRun is false/absent', () => {
-    expect('initialStartGatedRun' in deriveWizardComposerSeed({ startGatedRun: false })).toBe(false)
-    expect('initialStartGatedRun' in deriveWizardComposerSeed({ prefilledName: 'x' })).toBe(false)
   })
 })
 

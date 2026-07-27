@@ -4,9 +4,9 @@ import type {
   PersistedOpenFile,
   WorkspaceSessionState,
   WorkspaceVisibleTabType
-} from '../../../shared/types'
-import { pruneLocalTerminalScrollbackBuffers } from '../../../shared/workspace-session-terminal-buffers'
-import { normalizeBrowserHistoryEntries } from '../../../shared/workspace-session-browser-history'
+} from '@/shared/types'
+import { pruneLocalTerminalScrollbackBuffers } from '@/shared/workspace-session-terminal-buffers'
+import { normalizeBrowserHistoryEntries } from '@/shared/workspace-session-browser-history'
 import type { AppState } from '../store'
 import type { OpenFile } from '../store/slices/editor'
 

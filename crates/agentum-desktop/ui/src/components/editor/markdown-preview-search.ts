@@ -1,4 +1,4 @@
-import { keybindingMatchesAction, type KeybindingOverrides } from '../../../../shared/keybindings'
+import { keybindingMatchesAction, type KeybindingOverrides } from '@/shared/keybindings'
 
 export function isMarkdownPreviewFindShortcut(
   event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,

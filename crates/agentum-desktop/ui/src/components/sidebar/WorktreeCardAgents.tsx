@@ -13,10 +13,10 @@ import { selectLivePtyIdsForWorktree } from './worktree-card-status-inputs'
 import { buildWorktreeTerminalRows, type WorktreeTerminalRow } from './worktree-terminal-rows'
 import WorktreeCardTerminalRow from './WorktreeCardTerminalRow'
 import WorktreeCardBrowserRow from './WorktreeCardBrowserRow'
-import type { BrowserWorkspace } from '../../../../shared/types'
+import type { BrowserWorkspace } from '@/shared/types'
 import { cn } from '@/lib/utils'
 import type { DashboardAgentRow as DashboardAgentRowData } from '@/components/dashboard/useDashboardData'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
+import { parsePaneKey } from '@/shared/stable-pane-id'
 import { dismissStaleAgentRowByKey } from '../terminal-pane/stale-agent-row'
 import { useFocusedAgentPaneKey } from './focused-agent-row-highlight'
 import {
@@ -24,7 +24,7 @@ import {
   CompactAgentRow,
   CompactAgentSummaryButton
 } from './worktree-card-compact-agents'
-import { DEFAULT_AGENT_ACTIVITY_DISPLAY_MODE } from '../../../../shared/constants'
+import { DEFAULT_AGENT_ACTIVITY_DISPLAY_MODE } from '@/shared/constants'
 import { revealElementInScrollContainer } from './worktree-sidebar-reveal'
 
 // Why: stable empty fallbacks so the per-card body only subscribes to the live,
@@ -89,7 +89,7 @@ const WorktreeCardAgents = React.memo(function WorktreeCardAgents({
   }, [agents, tabs, ptyIdsByTabId])
   // Browser tabs in this worktree, listed beside agents/terminals; drag a row
   // onto another worktree card to MOVE the browser there.
-  const browserTabs = useAppStore((s) => s.browserTabsByWorktree[worktreeId])
+  const browserTabs = useAppStore((s) => s.browserTabsByWorktree?.[worktreeId])
 
   if (
     agents.length === 0 &&
@@ -205,7 +205,7 @@ const WorktreeCardAgentsBody = React.memo(function WorktreeCardAgentsBody({
     },
     [worktreeId]
   )
-  const activeBrowserTabId = useAppStore((s) => s.activeBrowserTabIdByWorktree[worktreeId])
+  const activeBrowserTabId = useAppStore((s) => s.activeBrowserTabIdByWorktree?.[worktreeId])
   const handleActivateBrowser = useCallback(
     (workspaceId: string) => {
       // Same reveal rule as the terminal/agent rows, then show that browser tab

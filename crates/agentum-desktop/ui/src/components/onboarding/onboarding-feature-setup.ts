@@ -2,7 +2,7 @@ import { api } from '@/tauri'
 import type {
   ComputerUsePermissionSetupResult,
   ComputerUsePermissionStatusResult
-} from '../../../../shared/computer-use-permissions-types'
+} from '@/shared/computer-use-permissions-types'
 import { buildAgentFeatureSkillInstallCommand } from '@/lib/agent-feature-install-commands'
 import { setOrchestrationSettings } from '@/runtime/agentum-server-client'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
@@ -12,7 +12,7 @@ import {
   ORCHESTRATION_SETUP_DISMISSED_STORAGE_KEY,
   notifyOrchestrationSetupStateChanged
 } from '@/lib/orchestration-setup-state'
-import type { EventProps } from '../../../../shared/telemetry-events'
+import type { EventProps } from '@/shared/telemetry-events'
 
 export type OnboardingFeatureSetupId = 'browserUse' | 'computerUse' | 'orchestration'
 

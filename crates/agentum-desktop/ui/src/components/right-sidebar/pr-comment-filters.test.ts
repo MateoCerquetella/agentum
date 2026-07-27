@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PRComment } from '../../../../shared/types'
+import type { PRComment } from '@/shared/types'
 import { filterPRCommentsByAudience, isAutomatedPRComment } from './pr-comment-filters'
 
 function comment(author: string): PRComment {

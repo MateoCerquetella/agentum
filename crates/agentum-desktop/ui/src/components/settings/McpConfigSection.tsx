@@ -3,8 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, FileCode2, LoaderCircle, Plus, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import type { Repo, Worktree } from '../../../../shared/types'
-import { getRepoIdFromWorktreeId } from '../../../../shared/worktree-id'
+import type { Repo, Worktree } from '@/shared/types'
+import { getRepoIdFromWorktreeId } from '@/shared/worktree-id'
 import {
   canInspectLocalMcpConfigRoot,
   getMcpConfigCandidateParentDir,
@@ -14,7 +14,7 @@ import {
   MCP_STARTER_CONFIG,
   selectExistingMcpConfigCandidates,
   type McpConfigDirectoryEntry
-} from '../../../../shared/mcp-config'
+} from '@/shared/mcp-config'
 import { useAppStore } from '../../store'
 import { joinPath } from '../../lib/path'
 import { extractIpcErrorMessage } from '../../lib/ipc-error'

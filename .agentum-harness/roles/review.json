@@ -1,1 +1,0 @@
-{"passed": true, "summary": "Spec 437 is complete: workdir-scoped snapshot continuity preserves the single gated-run topbar through reconnects, ordered gate refreshes, and workspace switching; 17 focused regressions, QA, and the production UI build pass."}

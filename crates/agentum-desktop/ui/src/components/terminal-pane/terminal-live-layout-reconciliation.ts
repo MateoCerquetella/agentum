@@ -1,4 +1,4 @@
-import type { TerminalPaneLayoutNode, TerminalPaneSplitDirection } from '../../../../shared/types'
+import type { TerminalPaneLayoutNode, TerminalPaneSplitDirection } from '@/shared/types'
 
 export type TerminalLiveLayoutInsertion = {
   sourceLeafId: string

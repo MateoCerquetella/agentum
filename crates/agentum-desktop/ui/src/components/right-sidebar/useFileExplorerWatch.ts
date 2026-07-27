@@ -1,7 +1,7 @@
 import { api } from '@/tauri'
 import { useEffect, useRef } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
-import type { FsChangedPayload } from '../../../../shared/types'
+import type { FsChangedPayload } from '@/shared/types'
 import type { DirCache } from './file-explorer-types'
 import type { InlineInput } from './FileExplorerRow'
 import { joinPath, normalizeRelativePath, dirname } from '@/lib/path'
@@ -9,7 +9,7 @@ import {
   isPathInsideOrEqual,
   normalizeRuntimePathForComparison,
   relativePathInsideRoot
-} from '../../../../shared/cross-platform-path'
+} from '@/shared/cross-platform-path'
 import {
   purgeDirCacheSubtree,
   purgeExpandedDirsSubtree,

@@ -382,9 +382,8 @@ async fn watch_session(
             return;
         }
 
-        // Context-low normally compacts. Harness-managed coordinator/worker/
-        // reviewer sessions are checkpoint-and-replace instead: compaction
-        // would erase their bounded role state and violate transcript isolation.
+        // Context-low interactive sessions compact after the cooldown. SDD v2
+        // attempts use isolated provider processes instead of this terminal path.
         if let Some(cmd) = compact_cmd {
             if context_low.is_match(&pane) {
                 let now = Instant::now();
@@ -393,34 +392,15 @@ async fn watch_session(
                     .unwrap_or(true);
                 if due {
                     last_compact = Some(now);
-                    let managed = store
-                        .harness_managed_session(&sess.id.to_string())
-                        .await
-                        .ok()
-                        .flatten()
-                        .filter(|m| m.active == 1);
-                    let ev = if let Some(managed) = managed {
-                        Event::new("harness.context_rotation_requested")
-                            .with_session(sess.id, &sess.name)
-                            .with_payload(serde_json::json!({
-                                "trigger": "context_low",
-                                "run_id": managed.run_id,
-                                "task_id": managed.task_id,
-                                "role": managed.role,
-                            }))
-                    } else {
-                        if let Err(e) =
-                            agentum_tmux::ssh::send_keys(&host, &target, cmd, true).await
-                        {
-                            tracing::warn!(error = ?e, "watchdog: send_keys /compact failed");
-                        }
-                        Event::new("watchdog.compact")
-                            .with_session(sess.id, &sess.name)
-                            .with_payload(serde_json::json!({
-                                "trigger": "context_low",
-                                "command": cmd,
-                            }))
-                    };
+                    if let Err(e) = agentum_tmux::ssh::send_keys(&host, &target, cmd, true).await {
+                        tracing::warn!(error = ?e, "watchdog: send_keys /compact failed");
+                    }
+                    let ev = Event::new("watchdog.compact")
+                        .with_session(sess.id, &sess.name)
+                        .with_payload(serde_json::json!({
+                            "trigger": "context_low",
+                            "command": cmd,
+                        }));
                     let _ = emit(&bus, &store, ev).await;
                 }
             }

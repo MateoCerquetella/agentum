@@ -13,7 +13,6 @@ import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
-import { fetchGithubIssueBody } from '@/runtime/github-issue-client'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Input } from '@/components/ui/input'
@@ -60,14 +59,14 @@ import {
 } from '@/lib/board-project-resolution'
 import { useKanbanPointerDrag } from '@/lib/use-kanban-pointer-drag'
 import { reconcileLinearTeamSelection } from '@/components/task-page-linear-team-selection'
-import { parseTaskQuery, stripRepoQualifiers, withQualifier } from '../../../shared/task-query'
+import { parseTaskQuery, stripRepoQualifiers, withQualifier } from '@/shared/task-query'
 import {
   buildLinearTeamUrl,
   getLinearOrganizationUrlKeyFromIssueUrl
-} from '../../../shared/linear-links'
+} from '@/shared/linear-links'
 import PRFilterDropdowns, { type PRFilterChange } from '@/components/github/PRFilterDropdowns'
 import { GitHubMarkdownComposer } from '@/components/github/GitHubMarkdownComposer'
-import { buildGitHubRepoUrl, parseGitHubIssueOrPRLink } from '@/lib/github-links'
+import { buildGitHubRepoUrl } from '@/lib/github-links'
 import {
   findGithubWorkItemWorkspaceAttachment,
   buildGithubWorkItemWorkspaceAttachmentIndex,
@@ -88,19 +87,16 @@ import {
 } from '@/components/linear-project-view-surfaces'
 import { cn } from '@/lib/utils'
 import {
-  getLinkedWorkItemSuggestedName,
   getTaskPresetQuery,
   PER_REPO_FETCH_LIMIT,
   CROSS_REPO_DISPLAY_LIMIT
 } from '@/lib/new-workspace'
-import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
-import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
-import { buildGithubIssueLinkedWorkItem } from '@/lib/github-linked-work-item'
-import { isGitRepoKind } from '../../../shared/repo-kind'
+import { requestNewSpecFromWorkItem } from '@/lib/sdd-new-spec-entry'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   resolveLinearContextForRepo,
   taskProjectScopeKey
-} from '../../../shared/task-project-scope'
+} from '@/shared/task-project-scope'
 import {
   buildTaskPageRepoSourceState,
   deriveTaskPageGitHubWorkItemsFetchOptions,
@@ -115,7 +111,7 @@ import {
   type TaskPageRepoSourceState
 } from '@/components/task-page-cache-selectors'
 import { deriveTaskPagePRCheckSummary } from '@/components/task-page-pr-check-summary'
-import type { GitHubOwnerRepo, GitHubAssignableUser, GitHubWorkItem, GitLabTodo, GitLabWorkItem, LinearCollectionResult, LinearCustomViewModel, LinearCustomViewSummary, LinearIssue, LinearProjectDetail, LinearProjectSummary, LinearTeam, LinearWorkspaceSelection, TaskProvider, TaskViewPresetId } from '../../../shared/types'
+import type { GitHubOwnerRepo, GitHubAssignableUser, GitHubWorkItem, GitLabTodo, GitLabWorkItem, LinearCollectionResult, LinearCustomViewModel, LinearCustomViewSummary, LinearIssue, LinearProjectDetail, LinearProjectSummary, LinearTeam, LinearWorkspaceSelection, TaskProvider, TaskViewPresetId } from '@/shared/types'
 import { shouldSuppressEnterSubmit } from '@/lib/new-workspace-enter-guard'
 import { getScreenSubmitShortcutLabel, isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
 import {
@@ -136,7 +132,7 @@ import {
   normalizeVisibleTaskProviders,
   restoreAvailableDefaultTaskProvider,
   resolveVisibleTaskProvider
-} from '../../../shared/task-providers'
+} from '@/shared/task-providers'
 import {
   GITLAB_ISSUE_FILTERS,
   GITLAB_MR_FILTERS,
@@ -235,7 +231,6 @@ export default function TaskPage({
     () => buildGithubWorkItemWorkspaceAttachmentIndex(allWorktrees),
     [allWorktrees]
   )
-  const openModal = useAppStore((s) => s.openModal)
   const updateSettings = useAppStore((s) => s.updateSettings)
   const fetchWorkItemsAcrossRepos = useAppStore((s) => s.fetchWorkItemsAcrossRepos)
   const fetchPRChecks = useAppStore((s) => s.fetchPRChecks)
@@ -2392,59 +2387,16 @@ export default function TaskPage({
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
   }, [activeModal, dialogWorkItem, githubMode, newIssueOpen, newLinearIssueOpen, taskSource])
 
-  const openComposerForItem = useCallback(
-    async (item: GitHubWorkItem, opts?: { startGatedRun?: boolean }): Promise<void> => {
-      // Why: a GitHub work item carries no body in memory, so without this the
-      // spawned agent would only get the URL — unlike Linear, which already
-      // snapshots its description into linkedContext. Fetch the issue body
-      // (server-side `gh issue view`) and fold it into the prompt the same way.
-      // PRs and any fetch failure fall back to the title+URL linked item so
-      // "Use" is never blocked (spec 002, Option B).
-      let linkedWorkItem: LinkedWorkItemSummary = {
-        type: item.type,
-        number: item.number,
-        title: item.title,
-        url: item.url
-      }
-      const workdir = repoMap.get(item.repoId)?.path
-      if (item.type === 'issue' && workdir) {
-        try {
-          const slug = parseGitHubIssueOrPRLink(item.url)?.slug
-          const fetched = await fetchGithubIssueBody({
-            number: item.number,
-            workdir,
-            slug: slug ? `${slug.owner}/${slug.repo}` : undefined
-          })
-          linkedWorkItem = buildGithubIssueLinkedWorkItem(item, fetched)
-        } catch (err) {
-          // Best-effort: keep the title+URL fallback so the composer still opens.
-          console.warn('[tasks] could not load GitHub issue body for Use:', err)
-        }
-      }
-      openModal('new-workspace-composer', {
-        linkedWorkItem,
-        prefilledName: getLinkedWorkItemSuggestedName(item),
-        initialRepoId: item.repoId,
-        // Spec 005 F1 (AC 3): pre-fill with the "Start gated run" toggle armed.
-        ...(opts?.startGatedRun ? { startGatedRun: true } : {}),
-        telemetrySource: 'sidebar'
-      })
-    },
-    [openModal, repoMap]
-  )
-
   const handleUseWorkItem = useCallback(
     (item: GitHubWorkItem): void => {
-      // Why: open the unified New Workspace dialog pre-filled with the work
-      // item as the selected source so the user can confirm name / agent /
-      // setup before the worktree is created. Earlier the "Use" CTA created
-      // and activated the worktree synchronously, which was disorienting —
-      // the worktree appeared in the sidebar before the user had a chance
-      // to review it. The composer already owns the prefill flow. Telemetry
-      // attribution flows via `openComposerForItem` (sets telemetrySource).
-      void openComposerForItem(item)
+      requestNewSpecFromWorkItem({
+        repoId: item.repoId,
+        title: item.title,
+        provider: 'github',
+        reference: item.url
+      })
     },
-    [openComposerForItem]
+    []
   )
 
   const handleOpenOrUseGitHubWorkItem = useCallback(
@@ -2472,29 +2424,16 @@ export default function TaskPage({
     [handleUseWorkItem]
   )
 
-  const openComposerForGitLabItem = useCallback(
-    (item: GitLabWorkItem): void => {
-      const linkedWorkItem: LinkedWorkItemSummary = {
-        type: item.type,
-        number: item.number,
-        title: item.title,
-        url: item.url
-      }
-      openModal('new-workspace-composer', {
-        linkedWorkItem,
-        prefilledName: getLinkedWorkItemSuggestedName(item),
-        initialRepoId: item.repoId,
-        telemetrySource: 'sidebar'
-      })
-    },
-    [openModal]
-  )
-
   const handleUseGitLabItem = useCallback(
     (item: GitLabWorkItem): void => {
-      openComposerForGitLabItem(item)
+      requestNewSpecFromWorkItem({
+        repoId: item.repoId,
+        title: item.title,
+        provider: 'unsupported',
+        reference: item.url
+      })
     },
-    [openComposerForGitLabItem]
+    []
   )
 
   const handleCreateNewIssue = useCallback(async (): Promise<void> => {
@@ -3145,31 +3084,24 @@ export default function TaskPage({
     taskSource
   ])
 
-  // Why: for Linear issues the "Use" flow opens the composer with the issue
-  // info adapted to the LinkedWorkItemSummary shape. Linear identifiers are
-  // strings (e.g. "ENG-123") so we use 0 as a placeholder number since the
-  // provider-generic work item shape still expects numeric issue metadata.
-  const openComposerForLinearItem = useCallback(
-    (issue: LinearIssue, renderedText?: string): void => {
-      const linkedWorkItem = buildLinearIssueLinkedWorkItem(issue, renderedText)
-      openModal('new-workspace-composer', {
-        linkedWorkItem,
-        prefilledName: getLinkedWorkItemSuggestedName(issue),
-        telemetrySource: 'sidebar'
-      })
-    },
-    [openModal]
-  )
-
   const handleUseLinearItem = useCallback(
     (issue: LinearIssue, renderedText?: string): void => {
-      // Why: same rationale as handleUseWorkItem — open the New Workspace
-      // dialog pre-filled rather than yolo-creating the worktree, so the
-      // user can confirm name / agent / setup before the worktree lands in
-      // the sidebar. Telemetry attribution flows via openComposerForLinearItem.
-      openComposerForLinearItem(issue, renderedText)
+      const targetRepoId = embeddedRepoId ?? activeRepoId ?? primaryRepo?.id
+      if (!targetRepoId) {
+        toast.error('Choose an Agentum project before authoring this Linear issue.')
+        return
+      }
+      requestNewSpecFromWorkItem({
+        repoId: targetRepoId,
+        title: issue.title,
+        provider: 'linear',
+        reference: issue.identifier || issue.url,
+        goal: renderedText?.trim()
+          ? `Author a specification for ${issue.title}.\n\nSource context:\n${renderedText.trim()}`
+          : undefined
+      })
     },
-    [openComposerForLinearItem]
+    [activeRepoId, embeddedRepoId, primaryRepo?.id]
   )
 
   const handleLinearWorkspaceChange = useCallback(
@@ -4430,10 +4362,10 @@ export default function TaskPage({
                                     aria-label={
                                       attachedWorkspace
                                         ? 'Resume workspace attached to PR'
-                                        : 'Start workspace from PR'
+                                        : 'Author spec from PR'
                                     }
                                   >
-                                    {attachedWorkspace ? 'Resume' : 'Start'}
+                                    {attachedWorkspace ? 'Resume' : 'New Spec'}
                                     <ArrowRight className="size-3" />
                                   </Button>
                                   <DropdownMenuTrigger asChild>
@@ -4458,7 +4390,7 @@ export default function TaskPage({
                                   {attachedWorkspace ? (
                                     <DropdownMenuItem onSelect={() => handleUseWorkItem(item)}>
                                       <Plus className="size-4" />
-                                      Start new workspace
+                                      Author another spec
                                     </DropdownMenuItem>
                                   ) : null}
                                   <DropdownMenuItem
@@ -4479,11 +4411,11 @@ export default function TaskPage({
                                 aria-label={
                                   attachedWorkspace
                                     ? 'Open workspace attached to issue'
-                                    : 'Start workspace from issue'
+                                    : 'Author spec from issue'
                                 }
                                 className="inline-flex items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2 py-1 text-[11px] text-foreground transition hover:bg-muted/60"
                               >
-                                {attachedWorkspace ? 'Open' : 'Start'}
+                                {attachedWorkspace ? 'Open' : 'New Spec'}
                                 <ArrowRight className="size-3" />
                               </button>
                             )}
@@ -4506,20 +4438,9 @@ export default function TaskPage({
                                   {attachedWorkspace ? (
                                     <DropdownMenuItem onSelect={() => handleUseWorkItem(item)}>
                                       <Plus className="size-4" />
-                                      Start new workspace
+                                      Author another spec
                                     </DropdownMenuItem>
                                   ) : null}
-                                  {/* Spec 005 F1 (AC 3): pre-fill the composer
-                                      with the "Start gated run" toggle armed —
-                                      the chat→Tasks→click path into the loop. */}
-                                  <DropdownMenuItem
-                                    onSelect={() =>
-                                      void openComposerForItem(item, { startGatedRun: true })
-                                    }
-                                  >
-                                    <CircleDot className="size-4" />
-                                    Start gated run
-                                  </DropdownMenuItem>
                                   <DropdownMenuItem
                                     onSelect={() => api.shell.openUrl(item.url)}
                                   >
@@ -4732,13 +4653,13 @@ export default function TaskPage({
                                 event.stopPropagation()
                                 handleUseGitLabItem(item)
                               }}
-                              aria-label={`Start workspace from ${item.type === 'mr' ? 'MR' : 'issue'} ${item.number}`}
+                              aria-label={`Author spec from ${item.type === 'mr' ? 'MR' : 'issue'} ${item.number}`}
                             >
                               <ArrowRight className="size-3.5" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent side="bottom" sideOffset={6}>
-                            Start workspace
+                            New Spec
                           </TooltipContent>
                         </Tooltip>
                         <button
@@ -4776,7 +4697,7 @@ export default function TaskPage({
               <LinearIcon className="mb-4 size-8 text-muted-foreground/60" />
               <p className="text-base font-medium text-foreground">Connect your Linear account</p>
               <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-                Browse and start work on your assigned Linear issues directly from here.
+                Browse Linear issues and turn them into reviewed Agentum specs.
               </p>
               <Button
                 className="mt-5"
@@ -5289,7 +5210,7 @@ export default function TaskPage({
                                         event.stopPropagation()
                                         handleUseLinearItem(issue)
                                       }}
-                                      aria-label={`Start workspace from ${issue.identifier}`}
+                                      aria-label={`Author spec from ${issue.identifier}`}
                                     >
                                       <ArrowRight className="size-3.5" />
                                     </Button>
@@ -5512,13 +5433,13 @@ export default function TaskPage({
                                     event.stopPropagation()
                                     handleUseLinearItem(issue)
                                   }}
-                                  aria-label={`Start workspace from ${issue.identifier}`}
+                                  aria-label={`Author spec from ${issue.identifier}`}
                                 >
                                   <ArrowRight className="size-3.5" />
                                 </Button>
                               </TooltipTrigger>
                               <TooltipContent side="bottom" sideOffset={6}>
-                                Start
+                                New Spec
                               </TooltipContent>
                             </Tooltip>
                             <Tooltip>

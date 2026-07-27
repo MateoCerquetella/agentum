@@ -1,5 +1,5 @@
 import type { ITerminalOptions } from '@xterm/xterm'
-import { isWslUncPath } from '../../../../shared/wsl-paths'
+import { isWslUncPath } from '@/shared/wsl-paths'
 
 export type WindowsPtyCompatibilityContext = {
   userAgent?: string

@@ -1,6 +1,6 @@
 import React, { lazy } from 'react'
 import type { OpenFile } from '@/store/slices/editor'
-import type { GitDiffResult, GitStatusEntry } from '../../../../shared/types'
+import type { GitDiffResult, GitStatusEntry } from '@/shared/types'
 import { ConflictBanner } from './ConflictComponents'
 
 const DiffViewer = lazy(() => import('./DiffViewer'))

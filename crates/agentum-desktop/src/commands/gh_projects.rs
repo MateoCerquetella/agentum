@@ -170,7 +170,7 @@ async fn graphql(query: &str, vars: &[(&str, Scalar)]) -> Result<Value, ProjectE
                 return Err(ProjectError::new(
                     "unknown",
                     "GitHub returned an empty response.",
-                ))
+                ));
             }
         }
     }

@@ -12,7 +12,7 @@ import {
 } from '@/runtime/web-runtime-session'
 import { useAppStore } from '@/store'
 import type { OpenFile } from '@/store/slices/editor'
-import type { BrowserTab as BrowserTabState } from '../../../../shared/types'
+import type { BrowserTab as BrowserTabState } from '@/shared/types'
 import type { RuntimeFileListState } from '../quick-open-file-list'
 import {
   classifyTabEntryQuery,

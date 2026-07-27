@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Bookmark, LoaderCircle, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
-import type { SparsePreset } from '../../../../shared/types'
+import type { SparsePreset } from '@/shared/types'
 import { useAppStore } from '../../store'
 import { cn } from '@/lib/utils'
 import { parseSparsePresetDirectories } from '@/lib/sparse-preset-draft'

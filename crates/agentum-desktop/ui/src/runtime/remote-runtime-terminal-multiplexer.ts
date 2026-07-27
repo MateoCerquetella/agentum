@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: the remote terminal multiplexer owns one bridged subscription, stream lifecycle, binary frame parsing, and remote lock events as a single transport contract. */
-import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
+import type { RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
 import {
   TerminalStreamOpcode,
   decodeTerminalStreamFrame,
@@ -8,7 +8,7 @@ import {
   encodeTerminalStreamFrame,
   encodeTerminalStreamJson,
   encodeTerminalStreamText
-} from '../../../shared/terminal-stream-protocol'
+} from '@/shared/terminal-stream-protocol'
 import { unwrapRuntimeRpcResult } from './runtime-rpc-client'
 
 type RuntimeEnvironmentSubscriptionHandle = {

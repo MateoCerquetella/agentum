@@ -1,7 +1,6 @@
 //! On-device speech-to-text (Voice dictation).
 //!
-//! Ported from orca's Electron engine (Node + sherpa-onnx) to Tauri/Rust using
-//! the `sherpa-rs` bindings. Layers:
+//! Implemented in Tauri/Rust with the `sherpa-rs` bindings. Layers:
 //!   - [`catalog`]: the fixed list of downloadable sherpa-onnx ASR models.
 //!   - [`model_manager`]: download → verify → extract → state machine.
 //!   - [`engine`]: the recognizer (offline safe wrappers + streaming FFI).

@@ -8,7 +8,7 @@ import type {
   OpenCodeUsageScope,
   OpenCodeUsageSessionRow,
   OpenCodeUsageSummary
-} from '../../../../shared/opencode-usage-types'
+} from '@/shared/opencode-usage-types'
 import type { AppState } from '../types'
 
 export type OpenCodeUsageSlice = {

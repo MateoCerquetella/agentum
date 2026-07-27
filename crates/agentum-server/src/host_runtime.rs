@@ -212,13 +212,8 @@ pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]
             if let Some(parent) = std::path::Path::new(abs_path).parent() {
                 std::fs::create_dir_all(parent).map_err(map_ssh_io)?;
             }
-            std::fs::write(abs_path, content).map_err(map_ssh_io)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(abs_path, std::fs::Permissions::from_mode(0o600))
-                    .map_err(map_ssh_io)?;
-            }
+            crate::sdd_v2::artifacts::atomic_write(std::path::Path::new(abs_path), content, None)
+                .map_err(|error| HostRuntimeError::Io(std::io::Error::other(error)))?;
             Ok(())
         }
         HostKind::Ssh { .. } => {
@@ -454,9 +449,7 @@ fn remote_stdin_write_script(parent: &str, abs_path: &str) -> Result<String> {
 }
 
 /// Read `abs_path` from `host` (local fs or SSH), or `None` when it doesn't
-/// exist. Used to merge agentum into an existing agent config file (Cursor,
-/// Gemini, OpenCode) without clobbering the user's other servers. Only stdout is
-/// read, so the host's login-shell noise (fnm, etc.) on stderr is ignored.
+/// exist. Only stdout is read, so login-shell noise on stderr is ignored.
 pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<String>> {
     match &host.kind {
         HostKind::Local => Ok(std::fs::read_to_string(abs_path).ok()),
@@ -464,9 +457,8 @@ pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<Stri
             // Keep reads on the same bounded, stale-ControlMaster-recovering
             // path as every other short-lived SSH operation. A raw
             // `Command::output()` here could wait forever on a wedged pooled
-            // socket. Harness registration reads several contract files in
-            // sequence, so one wedged read stranded the run before its worker
-            // was attached while the UI had already accepted the retry.
+            // socket. Sequential contract reads must not strand a request when
+            // a pooled connection becomes stale.
             let out = ssh_output(host, &format!("cat {}", q(abs_path)?), SSH_TIMEOUT)
                 .await
                 .map_err(map_ssh_io)?;

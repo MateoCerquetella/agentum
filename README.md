@@ -8,7 +8,7 @@
 ### Self-hosted control plane for AI coding agents
 
 Run Claude, Codex, Gemini & Cursor in tmux on a host you own — they survive a closed lid.<br>
-Then let a verification-gated loop drive them from spec to shipped, one feature at a time.
+Then use one durable, approval-aware workflow to move a local specification to Ready.
 
 [![release](https://img.shields.io/github/v/release/mateocerquetella/agentum?display_name=tag&color=111)](https://github.com/mateocerquetella/agentum/releases)
 [![ci](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml/badge.svg)](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml)
@@ -28,25 +28,29 @@ Then let a verification-gated loop drive them from spec to shipped, one feature 
 ## Why agentum
 
 - **Survive the lid.** Agents run in tmux on a host *you* control, not in a laptop session that dies when the screen sleeps. Close the lid, walk away, come back to finished work.
-- **Ship on autopilot.** A verification-gated loop drives agents through spec-driven development — build a feature, run the gate, QA it, hand off, repeat — moving tickets to done on their own and pinging you only when it's genuinely stuck.
+- **Work from one durable spec.** New Spec creates a stable `SPC-<ULID>` and Run Center drives specification, design, planning, implementation, verification, and independent review. Standard + Guarded asks once for spec approval and then stops at Ready.
 - **One pane for the whole fleet.** Drive everything from a fast **terminal UI** or a **native desktop app** — both speak the same HTTP/WS API and share one store.
-- **Any agent.** First-class adapters for Claude, Codex, Gemini, Hermes & OpenCode; passthrough for anything else on `PATH`. agentum probes what's installed and launches each one natively.
+- **Any agent.** First-class SDD adapters for Claude, Codex, Cursor/Agent,
+  Gemini, Hermes, OpenCode, and Aider; declared custom adapters pass the same
+  conformance contract. Agentum enables an adapter only when its executable,
+  authentication, conformance evidence, and required OS isolation are
+  available, then launches it through a bounded provider-neutral interface.
 - **Self-hosted, single binary.** Your machine, your hosts. No subscriptions, no cloud lock-in. One Rust binary wires `tmux` to a control plane.
 
-## The loop
+## The workflow
 
-agentum doesn't just *run* agents — it *drives* them. Point the **Harness Engine** at a backlog (or a chat, or your Linear / GitHub issues) and it works autonomously, one feature at a time:
+Agentum owns the state machine, artifacts, attempts, approvals, and evidence. Providers submit typed artifacts or bounded changes; they do not own run state or write ambient configuration into your project.
 
 ```
-  backlog / chat / tickets
-          │
-          ▼
-   spec ─→ agent builds ─→ verify.sh ─→ QA gate ─→ handoff ─→ next feature
-                               │
-                     red = retry · green = advance
+  New Spec → specification → design → planning → implementation
+                                                   │
+                                                   ▼
+                      Ready ← review ← verification
+                        │
+                        └── explicit Deliver preview → selected side effects
 ```
 
-The QA gate is a script or a spawned **browser-QA agent**. Tickets move **Todo → In Progress → Ready to Test → Done** on their own and escalate to **Needs Human** only when the loop is genuinely stuck — so you babysit the exceptions, not every step.
+Ready means locally implemented, verified, and independently reviewed. It does not mean committed, pushed, merged, released, or synchronized to a tracker. Those actions require an explicit, hash-bound Deliver confirmation.
 
 ## Install
 
@@ -54,22 +58,30 @@ Two ways to run it — pick one or use both. On the same machine they boot `agen
 
 ### Desktop app
 
-Native **Tauri 2** (no Electron), with in-app auto-update. arm64 + x86_64.
+Native **Tauri 2** (no Electron), with signed in-app auto-update. macOS ships
+arm64 and x86_64 builds; Windows and Linux currently ship x86_64 builds.
 
 > **The CLI/TUI (`agentum terminal`) now lives in a separate repo:** [`github.com/mateocerquetella/agentum-tui`](https://github.com/mateocerquetella/agentum-tui). This repo is the **desktop app** plus the shared backend crates. CLI install/run commands below point at that repo.
 
 ```sh
-# macOS — Homebrew (recommended; warning-free even though not yet notarized)
+# macOS — Homebrew (Developer ID signed and notarized)
 brew install --cask mateocerquetella/tap/agentum
+
+# Linux — verified AppImage (use --format deb, rpm, or raw if preferred)
+curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 ```
 
 | Platform | Get it |
 |----------|--------|
 | **macOS** | `brew install --cask mateocerquetella/tap/agentum` · or the `.dmg` |
 | **Windows** | `agentum-<ver>-windows-x64-setup.exe` |
-| **Linux** | `.deb`, `.rpm`, or tarball |
+| **Linux** | `.AppImage`, `.deb`, `.rpm`, or the standalone desktop executable |
 
 All native installers live on the [latest release](https://github.com/mateocerquetella/agentum/releases/latest).
+The release installer requires the published SHA-256 manifest; macOS also
+validates Developer ID signing, Gatekeeper acceptance, and notarization before
+replacing the app. The release `uninstall.sh` preserves user data by default;
+pass `--purge-data` explicitly to remove Agentum's known desktop data roots.
 
 ### Terminal UI / CLI
 
@@ -89,7 +101,11 @@ agentum new alpha --tool claude --dir ~/code/my-project --up  # …or spawn from
 
 ### Control other machines — no second install
 
-Point agentum at a box over SSH; it scans for what's missing, installs the deps (tmux, git), and asks which agent CLIs to set up. Nothing to install on the remote by hand.
+Point agentum at a box over SSH; it scans for what's missing, installs the deps
+(tmux, git), and asks which agent CLIs to set up for interactive sessions.
+The sequential remote SDD worker is a separate, version-matched,
+administrator-installed subsystem and remains capability-gated; see
+[`docs/AGENTUM_SDD.md`](docs/AGENTUM_SDD.md#remote-ssh-worker-deployment).
 
 ```sh
 agentum hosts add omarchy --user me --hostname omarchy.local
@@ -102,7 +118,7 @@ agentum hosts setup omarchy   # re-run the scan/install flow anytime
 |---|---|
 | **Sessions** | Agent CLIs in tmux, live terminal stream over WS, input bar, auto-`/compact` on context-low. |
 | **Executors** | Claude · Codex · Gemini · Hermes · OpenCode adapters, plus passthrough for any binary on `PATH`. |
-| **Harness Engine** | Verification-gated autonomy: drives agents one feature at a time behind a `verify.sh` gate — red blocks & retries, green writes a handoff and advances. |
+| **Agentum SDD** | New Spec + Run Center, stable artifact identity, isolated attempts, typed task DAGs, evidence, review, approval digests, crash recovery, and explicit delivery. |
 | **Coordination** | Atomic-claim kanban board, markdown notes, and 1:1 inter-session channels for cross-agent hand-off. |
 | **Watchdog** | Per-session monitor that compacts on context-low and emits `session.crashed` on known crash signatures. |
 | **MCP server** | agentum's own capabilities as MCP tools at `/mcp` — any agent gets list-sessions, worktrees & the orchestration mailbox. Local Claude/Codex launches are auto-wired. |
@@ -119,7 +135,7 @@ The daemon is **API-only** — no web UI. Both clients connect over HTTP/WS; the
         ▼                                  ▼
   ┌──────────────────────────────────────────────┐
   │        agentum-server  (axum · tokio)         │
-  │  sessions · tmux · watchdog · event bus · DB  │
+  │ sessions · SDD runs · tmux · event bus · DB   │
   │  TLS (rustls) · /api/* · /api/events (WS)      │
   └──────────────────────────────────────────────┘
                         │
@@ -141,6 +157,7 @@ crates/
   agentum-store/     # sqlx + SQLite (WAL) + XDG paths + migrations
   agentum-core/      # shared domain types
 docs/                # architecture, data model, API, CLI reference
+examples/sdd-demo/   # zero-pollution repository used by the SDD release gate
 
 # The CLI/TUI (binary `agentum`, package agentum-tui; the TUI in
 # commands/terminal/) moved to its own repo:
@@ -168,7 +185,18 @@ Repository layout, the new-agent checklist, and gotchas are in [`CLAUDE.md`](CLA
 
 ## Security
 
-Single-user, local-network by design — no multi-tenant features. A single bearer token (`$XDG_DATA_HOME/agentum/auth_token`, rotate with `agentum auth rotate`) guards networked daemons; loopback binds default to no-auth. TLS is a self-signed rustls cert with a plain-HTTP cert endpoint on `:8823` for trust-on-first-use. **Don't expose `:8822` to the internet without a real reverse proxy + cert.**
+Single-user, local-network by design — no multi-tenant features. Networked
+servers use database-backed bearer sessions. The embedded desktop server is
+also authenticated: each boot mints a high-entropy, memory-only bearer exposed
+only to the trusted main Tauri webview. Provider and agent processes never
+receive it. The MCP endpoint uses a distinct, explicitly rotated bearer.
+`agentum serve --no-auth` remains available for non-SDD local automation, but
+the complete `/api/sdd/v2` HTTP/WebSocket namespace still requires an
+authenticated human session. TLS uses a self-signed rustls certificate with a
+plain-HTTP cert endpoint on `:8823` for trust-on-first-use. **Don't expose
+`:8822` to the internet without a real reverse proxy + cert.** Release, signing,
+renderer, and artifact boundaries are documented in
+[`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## License
 

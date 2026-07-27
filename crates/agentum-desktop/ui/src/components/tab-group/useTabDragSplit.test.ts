@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TabGroup } from '../../../../shared/types'
+import type { TabGroup } from '@/shared/types'
 import type { TabDragItemData } from './useTabDragSplit'
 import { canDropTabIntoPaneBody } from './useTabDragSplit'
 

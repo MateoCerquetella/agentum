@@ -3,20 +3,20 @@ import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { toast } from 'sonner'
 import { Info } from 'lucide-react'
-import type { GlobalSettings, AgentumHooks } from '../../../../shared/types'
+import type { GlobalSettings, AgentumHooks } from '@/shared/types'
 import type {
   SourceControlAiSettings,
   SourceControlAiSettingsPatch
-} from '../../../../shared/source-control-ai-types'
-import { normalizeSourceControlAiSettings } from '../../../../shared/source-control-ai'
-import { isFolderRepo } from '../../../../shared/repo-kind'
+} from '@/shared/source-control-ai-types'
+import { normalizeSourceControlAiSettings } from '@/shared/source-control-ai'
+import { isFolderRepo } from '@/shared/repo-kind'
 import { useAppStore } from '../../store'
 import { useSystemPrefersDark } from '@/components/terminal-pane/use-system-prefers-dark'
 import { isMacUserAgent, isWindowsUserAgent } from '@/components/terminal-pane/pane-helpers'
 import { applyDocumentTheme } from '@/lib/document-theme'
 import { useConfirmationDialog } from '@/components/confirmation-dialog'
 import { SCROLLBACK_PRESETS_MB, getFallbackTerminalFonts } from './SettingsConstants'
-import { DEFAULT_APP_FONT_FAMILY } from '../../../../shared/constants'
+import { DEFAULT_APP_FONT_FAMILY } from '@/shared/constants'
 import { GeneralPane } from './GeneralPane'
 import { BrowserPane } from './BrowserPane'
 import { AppearancePane } from './AppearancePane'
@@ -54,7 +54,7 @@ import {
   useWindowsTerminalCapabilities
 } from '@/lib/windows-terminal-capabilities'
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
-import { keybindingMatchesAction } from '../../../../shared/keybindings'
+import { keybindingMatchesAction } from '@/shared/keybindings'
 import {
   isWebClientLocation,
   useSettingsNavigationMetadata

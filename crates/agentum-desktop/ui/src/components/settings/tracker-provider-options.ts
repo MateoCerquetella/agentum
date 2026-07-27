@@ -1,4 +1,4 @@
-import type { TrackerProviderPreference } from '../../../../shared/types'
+import type { TrackerProviderPreference } from '@/shared/types'
 
 /** Option model for the per-project Tracker picker, in render order. */
 export const TRACKER_PROVIDER_OPTIONS: ReadonlyArray<{

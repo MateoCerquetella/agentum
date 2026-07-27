@@ -12,7 +12,9 @@ use serde::Serialize;
 pub struct ServerEndpoint {
     /// Base URL for `/api/*` and WS routes, e.g. `http://127.0.0.1:54321`.
     pub url: String,
-    /// Bearer token, or `null` when the loopback server runs with auth disabled.
+    /// Boot-scoped bearer returned only to this Tauri webview. It is never
+    /// persisted or passed to provider/agent processes. `None` is retained for
+    /// compatibility with separately authenticated web clients.
     pub token: Option<String>,
 }
 

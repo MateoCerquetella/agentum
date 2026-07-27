@@ -1,4 +1,4 @@
-import type { LinearIssue } from '../../../shared/types'
+import type { LinearIssue } from '@/shared/types'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import { buildLinearIssueContextSnapshot } from '@/lib/linear-issue-context-snapshot'
 

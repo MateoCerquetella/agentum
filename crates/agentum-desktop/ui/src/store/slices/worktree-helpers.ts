@@ -16,9 +16,9 @@ import type {
   WorktreeLineage,
   WorktreeRemoteBranchConflictEvent,
   WorktreeMeta
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type { TerminalGitHubPRLink } from '@/lib/terminal-github-pr-link-detector'
-export { getRepoIdFromWorktreeId } from '../../../../shared/worktree-id'
+export { getRepoIdFromWorktreeId } from '@/shared/worktree-id'
 
 type WorktreeDeleteState = {
   isDeleting: boolean

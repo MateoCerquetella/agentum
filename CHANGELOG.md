@@ -4,6 +4,94 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.97.0] — 2026-07-27
+
+### Added
+
+- **Agentum now owns one specification workflow.** New Spec and Run Center use
+  stable `SPC-<ULID>` identities, external authoritative worktrees, typed
+  artifacts, durable events, revision-bound approvals, and provider-neutral
+  execution contracts under the `/api/sdd/v2` surface.
+- **Repository artifacts have one portable root.** Saved specifications create
+  only `.agentum/manifest.json` and a stable directory below `.agentum/specs/`;
+  runtime state, credentials, approvals, and delivery state remain in SQLite.
+- **Cutover is recoverable and fully accounted.** The migration previews and
+  SHA-256 inventories every retired specification source and demo fixture,
+  requires an external recovery archive and restricted-content policy before
+  apply, requires the exact repository root rather than inferring the caller's
+  working directory, and publishes validated native artifacts atomically.
+
+### Changed
+
+- **The competing SDD and harness surfaces have been retired.** New work enters
+  through New Spec and is observed through Run Center without ambient provider
+  configuration in customer repositories.
+- **Releases are fail-closed.** CI type-checks and tests the complete desktop UI,
+  validates all Rust targets and dependency policy, scans restricted content,
+  and publishes only from a verified signed annotated tag whose commit is
+  exactly the `main` tip. Updater payloads are checked against the key embedded in Agentum
+  before a draft is created.
+
+### Fixed
+
+- **Desktop installation now matches the published asset contract.** The
+  installer accepts only strict stable-version metadata, resolves exact
+  OS/architecture assets, requires a unique SHA-256 entry, and verifies macOS
+  signing, Gatekeeper acceptance, and notarization before replacement. The
+  desktop-only uninstaller preserves user data by default and purges only
+  explicit known data, config, cache, and state directories on request.
+- **Updater coverage is complete across supported systems.** Linux AppImage,
+  macOS app archives, and Windows NSIS updater signatures are required before a
+  draft can become the latest release; Homebrew synchronization is no longer
+  silently ignored.
+- **Desktop web content has an explicit security boundary.** The Tauri window
+  uses a restrictive CSP, macOS transport policy is limited to local networking,
+  and release bundles opt into hardened runtime and modern signing algorithms.
+- **Providers cannot impersonate the desktop user over loopback.** The embedded
+  API now requires a boot-scoped, memory-only bearer available only to the main
+  Tauri webview; browser child views and provider sandboxes cannot retrieve it.
+  MCP keeps a distinct rotated token, and `--no-auth` no longer exposes any
+  `/api/sdd/v2` HTTP or WebSocket route.
+
+## [0.96.8] — 2026-07-24
+
+### Fixed
+
+- **New Workspace now behaves like a conventional movable window.** The full
+  top title bar is the drag surface with no separate grip icon, and creation
+  progress is presented in a responsive bottom panel instead of a right rail.
+
+## [0.96.7] — 2026-07-24
+
+### Fixed
+
+- **Queue now honors the amber unread attention signal.** Completed turns that
+  transition from working to idle without a surviving pane-level done hook move
+  to Needs You as Ready to continue instead of being mixed into Settled.
+
+## [0.96.6] — 2026-07-24
+
+### Added
+
+- **The Queue now distinguishes completed turns that still need review.**
+  Unseen agent completions appear under Needs You as Ready to continue, remain
+  durable across retained pane state and restarts, and move to Settled after
+  the exact pane is viewed without hiding higher-priority permission requests.
+- **Workspace creation keeps progress visible and the dialog movable.** The
+  final setup step shows every durable preparation stage in a side rail with a
+  cancel action, while the title bar can move the dialog without letting it
+  drift outside the viewport.
+
+### Fixed
+
+- **Gated runs deliver agent prompts reliably.** Agent startup waits for the
+  real idle composer after MCP initialization, and role-sized prompts are split
+  below tmux's command-message limit instead of disappearing as oversized
+  `send-keys` calls.
+- **Gated-run retries now report actual recovery.** Retry waits for a worker or
+  coordinator to appear, surfaces a repeated failure or timeout, and bounds SSH
+  contract reads so a stale pooled connection cannot strand startup silently.
+
 ## [0.96.5] — 2026-07-23
 
 ### Fixed
@@ -746,7 +834,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `routes/cdp_browser.rs` wire a Chrome DevTools Protocol browser pane through
   the MCP layer, replacing the old native browser page pane with an
   agent-drivable browser.
-- **In-page annotate picker (orca-style).** A floating element-selector pill
+- **In-page annotate picker.** A floating element-selector pill
   renders over the webview, letting you pick elements on the page and annotate
   them via MCP `annotate`.
 
@@ -3091,7 +3179,7 @@ TUI sidebar polish.
 ### Changed
 - **Sidebar shows project name, not full path.** Groups display the
   basename of the workdir (e.g. `agentum` instead of
-  `/home/malloc/Developer/projects/agentum`). The full path is still
+  `/srv/projects/agentum`). The full path is still
   visible in the title bar / status when the project is selected.
 - **Sidebar is resizable.** `+` / `-` widen / narrow the tree pane
   in 4-column steps (clamped to 16 ≤ width ≤ 80, and the terminal

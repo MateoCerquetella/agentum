@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-0BNBETEP6DEW8AKJFNZFEA2W3X",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "Carry out the migrated plan section: F1 \u2014 Mission Control close redirect \u2705 CODE-COMPLETE + GREEN",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "Carry out the migrated plan section: F3 \u2014 Browser paste \u2705 CODE-COMPLETE + GREEN",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "Carry out the migrated plan section: F2 \u2014 Browser viewport + contain-aware clicks \u2705 CODE-COMPLETE + GREEN",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

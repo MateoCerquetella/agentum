@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { KeybindingActionId } from '../../../../shared/keybindings'
+import type { KeybindingActionId } from '@/shared/keybindings'
 import { clearRecordingActionForShortcutMutation } from './shortcut-recording-state'
 
 describe('clearRecordingActionForShortcutMutation', () => {

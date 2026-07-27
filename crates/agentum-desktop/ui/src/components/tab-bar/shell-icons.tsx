@@ -1,5 +1,5 @@
 import React from 'react'
-import { WINDOWS_GIT_BASH_SHELL } from '../../../../shared/windows-terminal-shell'
+import { WINDOWS_GIT_BASH_SHELL } from '@/shared/windows-terminal-shell'
 
 type WindowsShell = 'powershell.exe' | 'cmd.exe' | 'wsl.exe' | typeof WINDOWS_GIT_BASH_SHELL
 

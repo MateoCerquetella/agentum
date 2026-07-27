@@ -203,7 +203,12 @@ pub fn ssh_terminal_command(host: &Host, script: &str) -> Command {
 /// Variant of [`ssh_terminal_command`] for callers that have connection
 /// coordinates but do not own a persisted [`Host`] record.
 pub fn ssh_terminal_command_for_kind(kind: &HostKind, script: &str) -> Command {
-    ssh_command_opts_inner(kind, script, SshMux::Interactive, true)
+    ssh_command_opts_inner(
+        kind,
+        SshInvocation::Command(script),
+        SshMux::Interactive,
+        true,
+    )
 }
 
 /// Like [`ssh_command`] but selects which pooled master (or none) the
@@ -211,10 +216,29 @@ pub fn ssh_terminal_command_for_kind(kind: &HostKind, script: &str) -> Command {
 /// stale/racing pooled master (broken-pipe / "failed to connect to new control
 /// master") can't keep failing an op — the replay connects fresh instead.
 pub fn ssh_command_opts(host: &Host, script: &str, mux: SshMux) -> Command {
-    ssh_command_opts_inner(&host.kind, script, mux, false)
+    ssh_command_opts_inner(&host.kind, SshInvocation::Command(script), mux, false)
 }
 
-fn ssh_command_opts_inner(kind: &HostKind, script: &str, mux: SshMux, force_tty: bool) -> Command {
+/// Build a fixed OpenSSH subsystem invocation using the same authentication,
+/// host-key, keepalive, and ControlMaster policy as ordinary Agentum SSH
+/// operations. The subsystem name is a distinct argv item after `-s`; it is
+/// never interpolated into a remote command string or interpreted by a shell.
+pub fn ssh_subsystem_command(host: &Host, subsystem: &str, mux: SshMux) -> Command {
+    ssh_command_opts_inner(&host.kind, SshInvocation::Subsystem(subsystem), mux, false)
+}
+
+#[derive(Clone, Copy)]
+enum SshInvocation<'a> {
+    Command(&'a str),
+    Subsystem(&'a str),
+}
+
+fn ssh_command_opts_inner(
+    kind: &HostKind,
+    invocation: SshInvocation<'_>,
+    mux: SshMux,
+    force_tty: bool,
+) -> Command {
     let HostKind::Ssh {
         user,
         hostname,
@@ -355,7 +379,15 @@ fn ssh_command_opts_inner(kind: &HostKind, script: &str, mux: SshMux, force_tty:
         cmd.arg("-tt");
     }
 
-    cmd.arg(format!("{user}@{hostname}")).arg(script);
+    let destination = format!("{user}@{hostname}");
+    match invocation {
+        SshInvocation::Command(script) => {
+            cmd.arg(destination).arg(script);
+        }
+        SshInvocation::Subsystem(subsystem) => {
+            cmd.arg("-s").arg(destination).arg(subsystem);
+        }
+    }
     cmd
 }
 
@@ -794,6 +826,20 @@ mod tests {
             "ControlMaster must be off on the unmultiplexed retry: {args:?}"
         );
         assert!(!args.iter().any(|a| a.starts_with("ControlPath=")));
+    }
+
+    #[test]
+    fn ssh_subsystem_is_a_fixed_argv_invocation_without_a_remote_shell_string() {
+        let command =
+            ssh_subsystem_command(&ssh_host(SshAuth::Agent), "agentum-sdd-v1", SshMux::Off);
+        let args = arg_strings(&command);
+        let subsystem_flag = args.iter().position(|arg| arg == "-s").expect("-s");
+        assert_eq!(
+            &args[subsystem_flag..],
+            ["-s", "me@box.local", "agentum-sdd-v1"]
+        );
+        assert!(!args.iter().any(|arg| arg == "sh" || arg == "bash"));
+        assert!(!args.iter().any(|arg| arg.contains("agentum-sdd-v1 ")));
     }
 
     // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.

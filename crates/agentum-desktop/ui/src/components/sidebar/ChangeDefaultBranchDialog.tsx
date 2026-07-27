@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
 import { api } from '@/tauri'
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 
 // Wire shapes returned by the gh_repo_branches / gh_set_default_branch commands.
 // Both use the codebase's { ok, ... } | { ok:false, error } envelope. Modeled as

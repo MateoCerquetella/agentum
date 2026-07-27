@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ManagedPaneInternal } from './pane-manager-types'
 import { attachPaneDrag, createDragReorderState } from './pane-drag-reorder'
-import type { TerminalLeafId } from '../../../../shared/stable-pane-id'
+import type { TerminalLeafId } from '@/shared/stable-pane-id'
 
 const detachPaneFromTree = vi.hoisted(() => vi.fn())
 const insertPaneNextTo = vi.hoisted(() => vi.fn())

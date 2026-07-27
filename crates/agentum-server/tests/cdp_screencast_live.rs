@@ -65,17 +65,21 @@ async fn headless_browser_screencasts_into_the_bridge_and_takes_input() {
     let (input_tx, input_rx) = mpsc::channel::<InputCommand>(8);
 
     // Run the bridge exactly as the WS route does.
-    let bridge = tokio::spawn(async move {
+    let mut bridge = tokio::spawn(async move {
         run_screencast_bridge(&endpoint, ScreencastOptions::default(), input_rx, frame_tx).await
     });
 
     // The first frame must arrive promptly (CDP emits one on screencast start).
     // `changed()` fires on the first real frame (the `None` initial value is
     // pre-seen); take the freshest frame, mirroring the WS route's consumer.
-    timeout(Duration::from_secs(15), frame_rx.changed())
-        .await
-        .expect("a screencast frame within 15s")
-        .expect("bridge produced a frame, not a closed channel");
+    match timeout(Duration::from_secs(15), frame_rx.changed()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => {
+            let outcome = timeout(Duration::from_secs(2), &mut bridge).await;
+            panic!("bridge closed before its first frame: {outcome:?}");
+        }
+        Err(_) => panic!("a screencast frame within 15s"),
+    }
     let first = frame_rx
         .borrow_and_update()
         .clone()

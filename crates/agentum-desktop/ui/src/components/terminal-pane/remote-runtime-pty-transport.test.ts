@@ -8,7 +8,7 @@ import {
   encodeTerminalStreamFrame,
   encodeTerminalStreamJson,
   encodeTerminalStreamText
-} from '../../../../shared/terminal-stream-protocol'
+} from '@/shared/terminal-stream-protocol'
 
 describe('createRemoteRuntimePtyTransport', () => {
   const runtimeCall = vi.fn()

@@ -10,8 +10,8 @@ import {
   getPersistTmuxDefault,
   setPersistTmuxDefault
 } from '@/components/terminal-pane/resolve-pane-persist'
-import { filterEnabledTuiAgents } from '../../../shared/tui-agent-selection'
-import type { TuiAgent } from '../../../shared/types'
+import { filterEnabledTuiAgents } from '@/shared/tui-agent-selection'
+import type { TuiAgent } from '@/shared/types'
 
 // Web clients mirror the runtime server's tmux-backed sessions and can't opt a
 // new pane out of tmux, so the toggle is hidden there (mirrors TabBar).

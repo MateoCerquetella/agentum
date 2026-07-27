@@ -1,4 +1,4 @@
-import type { FeatureWallOpenSourceTelemetry } from '../../../../shared/telemetry-events'
+import type { FeatureWallOpenSourceTelemetry } from '@/shared/telemetry-events'
 export { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
 
 export function getFeatureWallOpenSource(

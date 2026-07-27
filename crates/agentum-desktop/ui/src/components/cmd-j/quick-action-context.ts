@@ -1,7 +1,7 @@
 import type { AppState } from '@/store/types'
 import { findWorktreeById } from '@/store/slices/worktree-helpers'
-import type { Worktree } from '../../../../shared/types'
-import type { SshConnectionStatus } from '../../../../shared/ssh-types'
+import type { Worktree } from '@/shared/types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
 
 export type CmdJUnavailableReason =
   | 'loading'

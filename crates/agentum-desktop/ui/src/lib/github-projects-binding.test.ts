@@ -88,7 +88,7 @@ describe('selectionForRebind (re-discover on a bound repo)', () => {
   ]
 
   it('prefers stored ids that still exist so manual edits survive re-discovery', () => {
-    const stored = { todo: 'o1', inProgress: 'o2', readyToTest: 'qa', done: 'o3', blocked: 'o2' }
+    const stored = { todo: 'o1', inProgress: 'o2', inReview: '', readyToTest: 'qa', done: 'o3', blocked: 'o2' }
     const sel = selectionForRebind(stored, resolvedDefault, options)
     expect(sel.readyToTest).toBe('qa')
   })
@@ -97,6 +97,7 @@ describe('selectionForRebind (re-discover on a bound repo)', () => {
     const stored = {
       todo: 'deleted',
       inProgress: 'o2',
+      inReview: '',
       readyToTest: 'qa',
       done: 'o3',
       blocked: 'o2'

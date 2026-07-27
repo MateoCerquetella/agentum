@@ -24,23 +24,22 @@ export function projectTaskScopeGuardMatchesTracker(
     const key = JSON.parse(guard.scopeKey) as unknown
     if (!Array.isArray(key) || key[0] !== guard.repoId) return false
     if (key[1] === 'linear') {
+      const linear = tracker.linear
+      if (tracker.provider !== 'linear' || !linear) return false
       return (
-        tracker.provider === 'linear' &&
-        tracker.linear?.workspaceId === key[2] &&
-        tracker.linear.scope?.kind === 'project' &&
-        tracker.linear.scope.id === key[3]
+        linear.workspaceId === key[2] &&
+        linear.scope?.kind === 'project' &&
+        linear.scope.id === key[3]
       )
     }
     if (key[1] !== 'github') return false
-    if (
-      tracker.provider !== 'github' ||
-      tracker.github?.repositorySlug !== key[2]
-    ) {
+    const github = tracker.github
+    if (tracker.provider !== 'github' || !github || github.repositorySlug !== key[2]) {
       return false
     }
     return key[3] === 'repository'
-      ? tracker.github.projectBinding === undefined
-      : tracker.github.projectBinding?.projectId === key[3]
+      ? github.projectBinding === undefined
+      : github.projectBinding?.projectId === key[3]
   } catch {
     return false
   }

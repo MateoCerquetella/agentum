@@ -30,12 +30,12 @@ import type {
   ClaudeRateLimitAccountsState,
   CodexRateLimitAccountsState,
   GlobalSettings
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type {
   ProviderRateLimits,
   RateLimitRuntimeTarget,
   RateLimitWindow
-} from '../../../../shared/rate-limit-types'
+} from '@/shared/rate-limit-types'
 import { ProviderIcon, ProviderPanel, barColor } from './tooltip'
 import { ClaudeIcon, GeminiIcon, OpenAIIcon, OpenCodeGoIcon } from './icons'
 import { formatWindowLabel } from '@/lib/window-label-formatter'

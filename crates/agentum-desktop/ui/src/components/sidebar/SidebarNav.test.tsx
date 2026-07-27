@@ -71,7 +71,7 @@ describe('navIconClass', () => {
   it('resolves every nav icon to one resting color and one accent — no per-item variance', () => {
     // The whole point of the rework: inactive icons must all share a single class,
     // so a future entry can't reintroduce color noise by hardcoding its own shade.
-    const inactive = ['activity', 'harness', 'projects', 'tasks', 'search'].map(() =>
+    const inactive = ['activity', 'projects', 'tasks', 'search'].map(() =>
       navIconClass(false)
     )
     expect(new Set(inactive).size).toBe(1)
@@ -122,17 +122,6 @@ describe('SidebarNav', () => {
     expect(missionControl).not.toBeNull()
     missionControl?.props.onClick()
     expect(sidebarState.openActivityPage).toHaveBeenCalledOnce()
-  })
-
-  it('does not retain a Chat item or selected state when Chat is opened elsewhere', () => {
-    sidebarState.activeView = 'harness'
-
-    const nav = SidebarNav()
-    const markup = renderToStaticMarkup(nav)
-
-    expect(findElementByLabel(nav, 'Chat')).toBeNull()
-    expect(markup).not.toContain('lucide-messages-square')
-    expect(markup).not.toContain('aria-current')
   })
 
   it('hides the Agents entry while settings are loading', () => {

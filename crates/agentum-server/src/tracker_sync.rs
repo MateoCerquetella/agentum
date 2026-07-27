@@ -18,7 +18,7 @@
 //! and only `Applied` advances the persisted phase. Advancement is guarded by
 //! the pure monotonic [`next_phase_write`] (invariant #4) so status never
 //! regresses (a reopened Done workspace does not drag the card back), the
-//! session-start `InProgress` converges with the harness's own `InProgress`, and
+//! session-start `InProgress` converges with any existing `InProgress`, and
 //! the poller's `Done` is a restart-safe terminal (the persisted `tracker_phase`
 //! excludes a merged workspace from the next tick).
 
@@ -95,7 +95,7 @@ fn acknowledged_phase(result: &TransitionResult, target: TrackerPhase) -> Option
 ///
 /// The `InReview(2)` slot is reserved for F3 so adding that variant never shifts
 /// the others. Chosen so `InReview`'s nearest-earlier mapped phase is
-/// `InProgress` (the spec's Projects fallback) and a gated run's `ReadyToTest`
+/// `InProgress` (the spec's Projects fallback) and an SDD run's `ReadyToTest`
 /// (unit-green) can never regress to `InReview` when a PR opens. `Done(4)` always
 /// wins — merge is terminal.
 fn phase_rank(phase: TrackerPhase) -> i8 {
@@ -124,7 +124,7 @@ pub(crate) fn tracker_phase_wire(phase: TrackerPhase) -> &'static str {
 /// An absent or unparseable `current` ranks below `Todo`, so a first transition
 /// always advances. Because the guard reads the *persisted* phase, a session
 /// re-start, reconnect, or extra tab is a no-op, the session-start `InProgress`
-/// converges with the harness's own `InProgress`, and a merged workspace's `Done`
+/// converges with an existing `InProgress`, and a merged workspace's `Done`
 /// is a restart-safe terminal.
 pub(crate) fn next_phase_write(
     current: Option<&str>,
@@ -159,7 +159,7 @@ pub(crate) fn resolve_binding(
 /// The session-start reactor's pure decision (AC 5–7): given a worktree's bind
 /// coords + its persisted phase, what transition (if any) should a session start
 /// fire? `None` for an unbound worktree (silent no-op) or one already ≥
-/// `InProgress` (converges with the harness, blocks a Done→InProgress regress).
+/// `InProgress` (converges without duplication and blocks a Done→InProgress regress).
 pub(crate) fn session_start_decision(
     provider: Option<&str>,
     url: Option<&str>,
@@ -763,7 +763,7 @@ mod tests {
             next_phase_write(Some("todo"), TrackerPhase::InProgress),
             Some(TrackerPhase::InProgress)
         );
-        // Idempotent: re-firing the same phase is a no-op (converges with harness).
+        // Idempotent: re-firing the same phase is a no-op.
         assert_eq!(
             next_phase_write(Some("in_progress"), TrackerPhase::InProgress),
             None
@@ -887,8 +887,8 @@ mod tests {
     }
 
     #[test]
-    fn session_start_converges_with_harness_inprogress_no_thrash() {
-        // Already InProgress (e.g. the harness fired it) → no duplicate.
+    fn session_start_converges_with_existing_inprogress_without_thrash() {
+        // Already InProgress → no duplicate.
         assert_eq!(
             session_start_decision(
                 Some("github"),

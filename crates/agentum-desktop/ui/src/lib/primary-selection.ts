@@ -28,7 +28,7 @@ function getSelectionClipboardApi(): SelectionClipboardApi | null {
   ) {
     return null
   }
-  return uiApi
+  return uiApi as unknown as SelectionClipboardApi
 }
 
 export function shouldUseSystemPrimarySelectionClipboard(userAgent = getUserAgent()): boolean {

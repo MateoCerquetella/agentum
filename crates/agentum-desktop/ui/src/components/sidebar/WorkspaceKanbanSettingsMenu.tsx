@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 import type {
   WorkspaceBoardColumnLayout,
   WorkspaceStatusDefinition
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { getWorkspaceStatusVisualMeta } from './workspace-status'
 import WorkspaceStatusAppearancePopover from './WorkspaceStatusAppearancePopover'
 

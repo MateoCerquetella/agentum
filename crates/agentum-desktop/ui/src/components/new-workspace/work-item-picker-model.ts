@@ -12,8 +12,8 @@ import type {
   GitHubProjectOwnerType,
   GitHubProjectRow,
   GitHubProjectTable
-} from '../../shared/github-project-types'
-import { groupRowsByField, sortRows } from '../../shared/github-project-group-sort'
+} from '@/shared/github-project-types'
+import { groupRowsByField, sortRows } from '@/shared/github-project-group-sort'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 
 /** One pickable Project item — an OPEN issue only. The Project item id is kept

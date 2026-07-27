@@ -11,12 +11,12 @@ import type {
   ProjectGroup,
   ProjectGroupImportResult,
   NestedRepoScanResult
-} from '../../../../shared/types'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
-import { sanitizeRepoIcon } from '../../../../shared/repo-icon'
-import { normalizeRepoBadgeColor } from '../../../../shared/repo-badge-color'
-import { normalizeLinearProjectBinding } from '../../shared/linear-project-binding'
-import { getProjectGroupSubtreeIds } from '../../../../shared/project-groups'
+} from '@/shared/types'
+import { isGitRepoKind } from '@/shared/repo-kind'
+import { sanitizeRepoIcon } from '@/shared/repo-icon'
+import { normalizeRepoBadgeColor } from '@/shared/repo-badge-color'
+import { normalizeLinearProjectBinding } from '@/shared/linear-project-binding'
+import { getProjectGroupSubtreeIds } from '@/shared/project-groups'
 import { getRepoIdFromWorktreeId } from './worktree-helpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 
@@ -179,9 +179,9 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
   fetchRepos: async () => {
     try {
       const target = getActiveRuntimeTarget(get().settings)
-      const repos =
+      const repos: Repo[] =
         target.kind === 'local'
-          ? await api.repos.list()
+          ? (await api.repos.list()) as Repo[]
           : (
               await callRuntimeRpc<{ repos: Repo[] }>(
                 target,

@@ -1,11 +1,11 @@
 import { api } from '@/tauri'
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
-import { recognizeAgentProcess } from '../../../shared/agent-process-recognition'
-import { isShellProcess, getAgentLabel } from '../../../shared/agent-detection'
+import { recognizeAgentProcess } from '@/shared/agent-process-recognition'
+import { isShellProcess, getAgentLabel } from '@/shared/agent-detection'
 import { worktreeUsesRemoteConnection } from '@/store/slices/terminals'
 import { resolveCompletedTabAgent, resolveTabAgent } from './tab-agent'
-import type { TerminalTab, TuiAgent } from '../../../shared/types'
+import type { TerminalTab, TuiAgent } from '@/shared/types'
 
 // Maps getAgentLabel()'s product labels to TuiAgent ids — the fallback for
 // agents whose foreground PROCESS name isn't self-identifying (Claude Code runs
@@ -99,7 +99,7 @@ export function resolveTabAgentFromSignals(args: {
 }
 
 /**
- * Resolve which coding-harness agent a terminal tab is running, for its tab-bar
+ * Resolve which coding agent a terminal tab is running, for its tab-bar
  * icon. Layered signals, most-authoritative first:
  *
  * 1. Live foreground process — the ground truth for what's running *now*: the

@@ -1,5 +1,5 @@
 import { api } from '@/tauri'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 export type OpenHttpLinkOptions = {
   worktreeId?: string | null

@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../store'
-import type { BrowserTab as BrowserTabState, Tab, TabGroup } from '../../../../shared/types'
+import type { BrowserTab as BrowserTabState, Tab, TabGroup } from '@/shared/types'
 import BrowserPane from './BrowserPane'
 import { tabGroupBodyAnchorName } from '../tab-group/tab-group-body-anchor'
 import { useBrowserAutomationVisibilityForAny } from './browser-automation-visibility'

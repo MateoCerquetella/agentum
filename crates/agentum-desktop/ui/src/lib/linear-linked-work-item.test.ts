@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { LinearIssue } from '../../../shared/types'
+import type { LinearIssue } from '@/shared/types'
 import { buildLinearIssueLinkedWorkItem } from './linear-linked-work-item'
 
 function makeIssue(patch: Partial<LinearIssue> = {}): LinearIssue {

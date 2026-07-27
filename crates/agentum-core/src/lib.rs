@@ -10,7 +10,9 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub mod profiles;
+pub mod sdd;
 pub mod transcript;
+pub mod updater_signature;
 
 /// Canonical, durable tracker ownership for one registered Agentum project.
 /// Credentials deliberately remain in their provider-specific global stores;
@@ -284,43 +286,6 @@ pub struct NewHost {
 }
 
 pub const LOCAL_HOST_ID: Uuid = Uuid::nil();
-
-/// Authoritative location of a harness run.
-///
-/// `path` is meaningful on `host_id`; it must never be interpreted on the
-/// daemon's machine when a registered `worktree_id` points at an SSH host.
-/// The identity fields are optional only for the legacy, workdir-only local
-/// harness API. Registered worktrees always carry all three ids (the local
-/// host is represented by [`LOCAL_HOST_ID`]).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HarnessScope {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_id: Option<Uuid>,
-    pub path: String,
-}
-
-impl HarnessScope {
-    /// Compatibility scope for callers that only supplied a local workdir.
-    pub fn local_path(path: impl Into<String>) -> Self {
-        Self {
-            worktree_id: None,
-            repo_id: None,
-            host_id: None,
-            path: path.into(),
-        }
-    }
-
-    /// The concrete host used for execution. Legacy local scopes intentionally
-    /// omit `host_id` on the wire but still execute on the local pseudo-host.
-    pub fn effective_host_id(&self) -> Uuid {
-        self.host_id.unwrap_or(LOCAL_HOST_ID)
-    }
-}
 
 /// Structured readiness report for a host, produced by a single
 /// preflight (one SSH round trip for `HostKind::Ssh`, local `which`

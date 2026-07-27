@@ -4,7 +4,7 @@ import type { Repo } from '@/shared/types'
 import type { GithubRepositoryTaskScope } from '@/lib/project-task-scope'
 import { captureProjectTaskScopeGuard } from '@/lib/project-task-scope-guard'
 import { isLiveProjectTaskScopeAuthority } from '@/lib/project-task-scope-authority'
-import { getLinkedWorkItemSuggestedName } from '@/lib/new-workspace'
+import { requestNewSpecFromWorkItem } from '@/lib/sdd-new-spec-entry'
 import { useAppStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -19,7 +19,6 @@ export function LockedGithubRepoTasks({
   scope: GithubRepositoryTaskScope
 }): React.JSX.Element {
   const fetchWorkItems = useAppStore((state) => state.fetchWorkItems)
-  const openModal = useAppStore((state) => state.openModal)
   const [items, setItems] = useState(() =>
     (useAppStore.getState().getCachedWorkItems(repo.id, ISSUE_LIMIT, '') ?? []).filter(
       (item) => item.type === 'issue'
@@ -65,24 +64,18 @@ export function LockedGithubRepoTasks({
     )
   }, [items, query])
 
-  const startWorkspace = useCallback(
+  const authorSpec = useCallback(
     (item: (typeof items)[number]): void => {
       const guard = captureProjectTaskScopeGuard(scope)
       if (!guard || !isLiveProjectTaskScopeAuthority(guard)) return
-      openModal('new-workspace-composer', {
-        linkedWorkItem: {
-          type: 'issue',
-          number: item.number,
-          title: item.title,
-          url: item.url
-        },
-        prefilledName: getLinkedWorkItemSuggestedName(item),
-        initialRepoId: repo.id,
-        telemetrySource: 'sidebar',
-        requiredProjectTaskScope: guard
+      requestNewSpecFromWorkItem({
+        repoId: repo.id,
+        title: item.title,
+        provider: 'github',
+        reference: item.url
       })
     },
-    [openModal, repo.id, scope]
+    [repo.id, scope]
   )
 
   return (
@@ -136,8 +129,13 @@ export function LockedGithubRepoTasks({
                 <CheckCircle2 className="size-3.5 flex-none text-muted-foreground" />
                 <span className="font-mono text-xs text-muted-foreground">#{item.number}</span>
                 <span className="min-w-0 flex-1 truncate text-sm">{item.title}</span>
-                <Button size="sm" variant="outline" onClick={() => startWorkspace(item)}>
-                  Start workspace
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label={`Author spec from issue #${item.number}`}
+                  onClick={() => authorSpec(item)}
+                >
+                  New Spec
                 </Button>
               </li>
             ))}

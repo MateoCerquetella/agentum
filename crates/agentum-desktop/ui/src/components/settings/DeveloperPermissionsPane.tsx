@@ -19,7 +19,7 @@ import type {
   DeveloperPermissionId,
   DeveloperPermissionState,
   DeveloperPermissionStatus
-} from '../../../../shared/developer-permissions-types'
+} from '@/shared/developer-permissions-types'
 import { Button } from '../ui/button'
 
 

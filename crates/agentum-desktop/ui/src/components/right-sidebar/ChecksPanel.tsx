@@ -13,7 +13,7 @@ import { getGitHubPRCacheKey, getGitHubRepoCacheKey } from '@/store/slices/githu
 import { useActiveWorktree, useRepoById } from '@/store/selectors'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { isFolderRepo } from '../../../../shared/repo-kind'
+import { isFolderRepo } from '@/shared/repo-kind'
 import HostedReviewActions from './HostedReviewActions'
 import {
   PullRequestIcon,
@@ -31,7 +31,7 @@ import type {
   PRInfo,
   PRCheckDetail,
   PRComment
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { getConnectionId } from '@/lib/connection-context'
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
@@ -43,15 +43,15 @@ import type {
   HostedReviewCreationEligibility,
   HostedReviewInfo,
   HostedReviewProvider
-} from '../../../../shared/hosted-review'
+} from '@/shared/hosted-review'
 import { getHostedReviewCacheKey, refreshHostedReviewCard } from '@/store/slices/hosted-review'
 import { toast } from 'sonner'
 import {
   classifyHostedReview,
   type HostedReviewClassificationOptions
-} from '../../../../shared/hosted-review-queue'
-import { hostedReviewSummaryFromGitHubPRInfo } from '../../../../shared/hosted-review-github'
-import { hostedReviewSummaryFromGitLabInfo } from '../../../../shared/hosted-review-gitlab'
+} from '@/shared/hosted-review-queue'
+import { hostedReviewSummaryFromGitHubPRInfo } from '@/shared/hosted-review-github'
+import { hostedReviewSummaryFromGitLabInfo } from '@/shared/hosted-review-gitlab'
 import {
   checksPanelAsyncResultKey,
   checksPanelHostedReviewAsyncResultKey,
@@ -76,7 +76,7 @@ import {
 import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
-import { gitLabPipelineJobsToPRChecks } from '../../../../shared/gitlab-pipeline-checks'
+import { gitLabPipelineJobsToPRChecks } from '@/shared/gitlab-pipeline-checks'
 
 const RUNTIME_SSH_STATUS_REFRESH_MS = 3000
 const GIT_STATUS_FAILURE_RETRY_MS = 3000

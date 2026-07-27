@@ -13,9 +13,9 @@ use super::*;
 /// longer than the 12s probe budget, so host-aware git gets its own,
 /// roomier timeout. Still bounded so a hung remote can't wedge a request.
 const GIT_TIMEOUT: Duration = Duration::from_secs(120);
-/// Harness init/verify/QA scripts legitimately run full builds and browser
-/// suites. Do not inherit the short git transport budget.
-const HARNESS_COMMAND_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Long-running repository commands may include full builds and browser suites.
+/// Do not inherit the short git transport budget.
+const REPOSITORY_COMMAND_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Captured output of a command run on a host. Unlike [`ssh_stdout`], a
 /// non-zero exit is NOT an error — callers inspect `success`/`stderr`
@@ -41,8 +41,7 @@ impl HostCommandOutput {
 }
 
 /// Run an arbitrary argv in `cwd` on `host` and capture its output. This is
-/// the host-aware command seam used by the sequential harness for `bash
-/// init.sh`, verification scripts, and compatibility `npm run verify`.
+/// the host-aware command seam used for typed verification commands.
 /// Arguments and environment values are shell-quoted independently on SSH;
 /// environment keys are restricted to portable identifier characters.
 pub async fn command_in_dir(
@@ -88,7 +87,7 @@ pub async fn command_in_dir(
                 inner.push_str(&q(arg)?);
             }
             let script = format!("sh -c {}", q(&inner)?);
-            let out = ssh_output(host, &script, HARNESS_COMMAND_TIMEOUT)
+            let out = ssh_output(host, &script, REPOSITORY_COMMAND_TIMEOUT)
                 .await
                 .map_err(map_ssh_io)?;
             Ok(HostCommandOutput {
@@ -159,11 +158,11 @@ pub async fn gh_in_dir(host: &Host, cwd: &str, args: &[&str]) -> Result<HostComm
             // fetch in the start-work live test (spec 008 F1 §B.3). Production is
             // byte-identical: the var is unset, so this is exactly `gh`.
             let program = std::env::var("AGENTUM_GH_BIN").unwrap_or_else(|_| "gh".into());
-            let out = Command::new(program)
-                .current_dir(cwd)
-                .args(args)
-                .output()
-                .await?;
+            let mut command = Command::new(program);
+            command.current_dir(cwd).args(args).kill_on_drop(true);
+            let out = timeout(GIT_TIMEOUT, command.output())
+                .await
+                .map_err(|_| HostRuntimeError::Timeout)??;
             Ok(HostCommandOutput {
                 success: out.status.success(),
                 code: out.status.code(),

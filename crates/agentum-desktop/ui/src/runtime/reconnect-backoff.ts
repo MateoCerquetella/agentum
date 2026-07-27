@@ -1,5 +1,5 @@
 // The ONE reconnect-backoff policy for every server-facing socket/stream in
-// the renderer (events bus, session streams, harness events, sidebar
+// the renderer (events bus, session streams, run events, sidebar
 // bootstrap). Capped exponential with jitter — same shape as the TUI's loop.
 // Keep it here rather than per-module: identical inline copies drifted into
 // five files before this was extracted, and a policy change (ceiling, jitter,

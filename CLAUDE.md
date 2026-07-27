@@ -80,9 +80,10 @@ Claude can drive the whole flow with the **`/ship <description>`** slash command
 (`.claude/commands/ship.md`): it creates the labeled issue, branches,
 implements, and opens the linked PR — in that order, without skipping the issue.
 
-**Autonomous (Harness Engine) runs update the issue too.** When the harness
-drives features autonomously, the linked GitHub issue is the live status board —
-keep it current (see the Harness Engine section for the exact rule).
+**Agentum SDD runs do not mutate linked work items while they run.** A run can
+read a source reference, but comments, fields, transitions, commits, pushes,
+pull requests, and releases occur only after the user confirms an exact
+hash-bound Deliver preview.
 
 ---
 
@@ -314,8 +315,7 @@ All HTTP/WS routes live in `crates/agentum-server/src/routes/`:
 | `host.rs`         | `/api/host/metrics`        | CPU+RAM samples; also broadcasts. |
 | `fs.rs`           | `/api/fs/list`             | Workdir picker. |
 | `mcp.rs`          | `/mcp`                     | agentum's own MCP server (see below). |
-| `harness.rs`      | `/api/harness/*` + `/events` WS | Harness Engine: drive agents one feature at a time behind a verify gate (see below). |
-| `sdd.rs`          | `/api/sdd/playbooks`, `/api/sessions/{id}/sdd/*` | Server-owned SDD playbooks: list, button inject, per-session SDD loop (see "SDD playbooks" below). |
+| `sdd_v2.rs`       | `/api/sdd/v2/*` + `/events` WS | Sole authoritative specification workflow: specs, runs, typed commands, artifacts, durable events, and delivery previews. |
 | `git.rs`          | `/api/sessions/{id}/git/*` | Per-session git surface. Decomposed by domain into `git/` submodules — `history_routes`, `compare_routes` (commit/branch compare), `conflict_routes` (rebase/abort/discard/upstream), `sync_routes` (branches/log/fetch/pull/push), `write_routes` (stage/commit mutations), `content_routes` (diff/file), `file_links_routes` (remote URL/blob). The root keeps the router, shared git-exec/path-safety plumbing (`run_git`, `host_and_cwd_for`, `ensure_safe_relative`), and the shared status core (`parse_porcelain_z`/`GitStatus`) that `write_routes` reuses; submodules reach it via `use super::*`. |
 | `board.rs`, `notes.rs`, `channels.rs`, `watchdog.rs`, `doctor.rs` | various | Self-explanatory. |
 
@@ -347,14 +347,14 @@ skill files. This supersedes the old "install a skill into
   `agentum_list_sessions`, `agentum_list_worktrees`,
   `agentum_send_message`, `agentum_check_messages` (the `orchestration`
   mailbox). Add a tool by appending to `tool_specs()` + a `call_tool`
-  arm. The `prompts/*` surface serves the SDD playbooks (below) as native
-  slash commands for clients that render MCP prompts (Claude Code,
-  Gemini CLI).
-- **Auth**: `/mcp` is **not** public — it requires the bearer token on a
-  networked daemon. It's reachable on the embedded loopback server
-  because that runs `no_auth` (loopback-bound). For an authed standalone
-  daemon, the launch wiring must inject the token as an `Authorization`
-  header (TODO).
+  arm. MCP prompts, when exposed, are convenience text only; they never own or
+  mutate SDD state outside the typed `/api/sdd/v2` command contract.
+- **Auth**: `/mcp` is **never public** — embedded and standalone daemons require
+  a dedicated MCP bearer even when legacy HTTP automation uses `--no-auth`.
+  Launch provisioning injects `Authorization: Bearer …` into Claude's combined
+  MCP config and Codex's per-server configuration; SSH sessions receive the
+  same authenticated endpoint through their reverse tunnel. The desktop UI
+  uses a separate boot-scoped capability.
 - **Auto-wiring** (`mcp_provision.rs`): every *local* Claude/Codex launch
   is wired to the agentum MCP **by default** (it's free — the running
   server), plus Playwright when `AGENTUM_BROWSER_VERIFY` is set. The
@@ -373,181 +373,114 @@ skill files. This supersedes the old "install a skill into
 
 ---
 
-## SDD playbooks (server-owned `/sdd-*`) — issue #313
+## Agentum SDD v2
 
-The SDD workflow commands (`sdd-spec`, `sdd-spec-socratic`, `sdd-orchestrate`,
-`sdd-status`, `sdd-handoff`, `sdd-init`) are **owned by agentum-server**, not
-installed per-agent. They used to be untracked `.claude/commands/*.md` files
-(gitignored → a fresh install never got them, and Claude-only); now the
-canonical bodies live in `crates/agentum-server/src/sdd_playbooks/*.md`,
-embedded via `include_str!` (registry: `src/sdd.rs`). A per-user override at
-`~/.agentum/commands/<name>.md` (`$AGENTUM_HOME/commands` in tests) wins over
-the embedded copy. **Edit the playbooks there, not in `~/.claude`.**
+Agentum has one provider-neutral owner for specification-driven work. Core
+contracts and validation live in `agentum-core/src/sdd.rs`; normalized
+persistence lives in store migration `0030_agentum_sdd_v2.sql` and
+`agentum-store/src/sdd.rs`; the public contract lives in
+`agentum-server/src/routes/sdd_v2.rs`.
 
-One registry, three delivery paths (all in-repo consumers read `crate::sdd`):
+### Public contract
 
-- **MCP** (`routes/mcp.rs`): the `agentum_sdd` tool (list/fetch — works in
-  every MCP client) + `prompts/list`/`prompts/get` (native `/sdd-*` slash
-  commands where the client renders MCP prompts). Any agentum-launched agent
-  is MCP-wired (see auto-wiring above), so every agent on every install gets
-  the same procedures.
-- **SDD bar** (`routes/sdd.rs` + `agentum-desktop/ui/src/components/sdd/SddBar.tsx`):
-  pill buttons (Spec / Spec Socratic / Continue / Status) under the active
-  agent tab's terminal. A click previews the playbook, then
-  `POST /api/sessions/{id}/sdd/inject` types a short **bootstrap line** into
-  the pane ("call `agentum_sdd` and follow it") via the harness's two-step
-  `inject_prompt`; tools with no MCP wiring (bash/aider/…) automatically get
-  the **full playbook text** instead (`mode: full`).
-- **SDD loop** (`routes/sdd.rs`): `POST /api/sessions/{id}/sdd/loop` toggles a
-  per-session worker that re-injects `sdd-orchestrate` (autonomous mode) each
-  time the agent settles (`agent.awaiting_input`/`agent.finished`, reusing
-  `harness::wait_for_settle`), capped at `max_steps` (default 10). The state
-  is **server-owned** (`AppState::sdd_loops`) and broadcast as
-  `sdd.loop.started/step/stopped` on `/api/events` — the UI's rainbow Loop
-  toggle renders whatever the server says, so it survives reloads and shows
-  loops started by anyone. The worker stops on toggle-off, session
-  stop/kill/crash, settle timeout, or step cap — every exit reason lands in
-  the `sdd.loop.stopped` payload. MCP exposes the same control seam as
-  `agentum_sdd_loop_control` (`start` / `stop` / `status`, session UUID from
-  `agentum_list_sessions`); the separate `agentum_sdd_loop` tool remains the
-  end-of-step agent check-in (`done` / progress summary), so control and
-  completion cannot be confused.
+The authoritative surface is:
 
----
+- `POST /api/sdd/v2/repos/{repo_id}/specs`
+- `GET /api/sdd/v2/repos/{repo_id}/specs`
+- `GET /api/sdd/v2/specs/{spec_id}`
+- `POST /api/sdd/v2/specs/{spec_id}/runs`
+- `GET /api/sdd/v2/runs/{run_id}`
+- `POST /api/sdd/v2/runs/{run_id}/commands`
+- `GET /api/sdd/v2/runs/{run_id}/artifacts`
+- `GET /api/sdd/v2/runs/{run_id}/events?after=<cursor>`
+- `WS /api/sdd/v2/events?repoId=<id>&after=<cursor>`
 
-## Harness Engine (`/api/harness/*`)
+Mutating commands form a closed discriminated union. Every command includes a
+caller-generated `requestId` and `expectedRevision`; duplicate requests
+return the stored response and stale revisions fail without changing state.
+State, artifact metadata, approvals, durable events, and outbox rows commit
+atomically. Git, filesystem, process, model, and network work happens outside
+that transaction and reports back through another revision-checked transition.
 
-A **verification-gated** agent runner. Point it at a project dir that
-contains a `.harness/` folder and it drives real agents one feature at a
-time, blocking advancement on a red gate.
+### Artifact contract
 
-- **`.harness/` contract** (all under the project root):
-  - `AGENTS.md` — instructions prepended to every feature prompt.
-  - `feature_list.json` — the ordered backlog + per-feature `state`
-    (`pending`/`coding`/`verifying`/`done`/`blocked`), plus run knobs
-    (`agent_tool`, `agent_model`, `max_retries`, `settle_*`). The engine
-    **writes state back here** as it runs — it is the single source of truth.
-  - `init.sh` — environment smoke-test, run once; non-zero aborts the run.
-  - `verify.sh` — **the gate**, run after each feature with
-    `$HARNESS_FEATURE_ID` set. exit 0 = green (advance + write handoff),
-    non-zero = red (block + retry). Falls back to `npm run verify`, then
-    to a pass if neither exists.
-  - `handoff.md` — overwritten after each green gate.
-- **Engine** (`harness.rs` is now a module dir: `harness.rs` keeps `HarnessEngine`
-  + the tests; the `.agentum-harness/` data types live in `harness/types.rs`,
-  prompt/verdict helpers in `harness/helpers.rs`, and the drive loop +
-  orchestration in `harness/drive.rs` — all re-exported so `harness::Foo` /
-  `harness::drive` are unchanged): `HarnessEngine` holds in-memory runs + a
-  `broadcast` event bus; the state machine (load/verify/mark-done/block)
-  is decoupled from spawning so it's unit-testable with stub `verify.sh`.
-  [`harness::drive`] is the live loop: init → for each pending feature
-  {spawn agent → wait-for-settle → verify gate → advance / retry / block}.
-- **Shared-worktree orchestration** (`harness/orchestrated.rs`, migration 0028):
-  newly created issue-to-gated-run backlogs are stamped
-  `execution_mode: "orchestrated"` and use one coordinator plus up to four
-  isolated workers in the same worktree. The architect writes a versioned
-  `execution-plan.json`; the server validates DAG/acceptance coverage/path and
-  ownership boundaries and compiles ≤32 KB task packets. Workers are read-only
-  at the CLI boundary and mutate only through capability-scoped MCP patch
-  transactions. Leases, managed sessions, checkpoints, patch preimages, and
-  decisions live in SQLite; patch application and verification share one lane.
-  Missing `execution_mode` deliberately retains the sequential loop for legacy,
-  hand-authored, and in-progress backlogs. Managed sessions rotate at 10%
-  reported context (or their first context-low signal) and never receive the
-  watchdog's `/compact`. Stop/recovery preserve user edits; drift freezes the
-  lease instead of reverting it.
-- **Real agents, one launch path**: `spawn_feature_agent` goes through
-  `routes::sessions::spawn_agent_into_pane` — the *same* helper the `start`
-  route uses (extracted in this work) — so YOLO translation, loopback
-  `pane_env`, the Claude `--settings` hook, and MCP wiring stay centralized.
-  Settle detection subscribes to the session lifecycle bus and waits for the
-  first `agent.awaiting_input`/`agent.finished` after a grace window (an early
-  settle inside the grace window is remembered, not discarded — otherwise a
-  fast feature would hang until `settle_timeout_secs`).
-- **Autonomy mechanics (hard-won, don't regress)**: an autonomous run can only
-  work if the agent never blocks on a human. Three non-obvious pieces make that
-  true, in `harness/drive.rs` (the spawn + REPL-interaction path):
-  1. **YOLO is mandatory** — `spawn_feature_agent` pushes
-     `agentum_executor::YOLO_MARKER` into the session flags (`agent_yolo`,
-     default true). Without it the agent stops at the first permission prompt
-     and never reaches the gate.
-  2. **Workspace-trust dialog** — Claude shows "Do you trust this folder?" on a
-     fresh workdir and `--dangerously-skip-permissions` does **not** skip it
-     (only non-interactive `-p` does). `await_repl_ready` watches the pane,
-     accepts the dialog (Enter on the default "Yes"), and waits for the idle
-     REPL footer — also outlasting an MCP-slowed boot (a fixed sleep is too
-     fragile for both).
-  3. **Prompt submit is two-step** — `inject_prompt` types the prompt with NO
-     trailing Enter, pauses (`SUBMIT_DELAY`), then sends a bare Enter. A single
-     combined `send-keys "<text>" Enter` is swallowed by the REPL's
-     bracketed-paste handling for a multi-line prompt: the text lands in the
-     input box (often collapsed to a "[Pasted text]" block) but never executes.
-  A `#[ignore]` live test (`tests/harness_live_agent.rs`) drives a **real**
-  Claude agent end-to-end against `examples/harness-demo/` and asserts the gate
-  goes green; run it with
-  `AGENTUM_BROWSER_VERIFY=1 cargo test -p agentum-server --test harness_live_agent -- --ignored --nocapture`.
-- **Issue is the status board (always)**: an autonomous run is tracked by a
-  GitHub issue (the epic/feature), and the engine **keeps that issue updated** as
-  it drives — this is non-negotiable for autonomous work, since no human is
-  watching the pane. On each feature state transition, post/append to the issue:
-  `coding` → "▶ starting <feature>", `verifying` → "🧪 gate running",
-  `done` → "✅ <feature> green" (and check off the matching acceptance-criteria
-  box in the issue body), `blocked` → "⛔ <feature> red after N retries" (apply
-  the `priority/*` bump + a `blocked` note). When the final gate is green, close
-  the issue (or let the PR's `Closes #N` do it) with a comment linking the run +
-  `handoff.md`. This mirrors the chat→GitHub→harness pipeline (Spec 011, GH #19).
-- **Routes** (`routes/harness.rs`): `POST /api/harness` (register),
-  `GET` (list/status), `POST /{id}/run` (kick off `drive` as a bg task,
-  rejects double-run via `claim_driver`), `POST /{id}/init`,
-  `POST /{id}/verify` (manual one-shot gate), `GET /{id}/files`,
-  `DELETE /{id}`, and `WS /api/harness/events` (live `HarnessEvent` stream).
-- **Desktop UI**: `agentum-desktop/ui/src/components/harness/HarnessEngine.tsx`
-  (sidebar **Harness** entry; `activeView === 'harness'`) — feature board,
-  an unmistakable verification-gate banner, the `.harness/` file viewer, and
-  a live event log, all fed by `runtime/harness-client.ts` over the embedded
-  loopback server. A runnable example lives in `examples/harness-demo/`.
+A saved specification owns exactly one portable project root:
 
-### SDD → Linear → QA pipeline (spec 012)
+```text
+.agentum/
+├── manifest.json
+└── specs/
+    └── spc-<ulid>-<slug>/
+        └── spec.md
+```
 
-The full automated loop a user runs is: SDD intake (Chat page) → ticket created
-in the tracker (Todo) → agent codes it (In Progress) → unit gate green (Ready to
-Test) → browser QA gate green → ticket Done. The pieces:
+`.agentum`, the static manifest, the stable specification directory, and
+`spec.md` are mandatory after save. `design.md`, `plan.json`,
+`decisions.md`, and `review.md` are created only by their corresponding
+phases and only when they contain real information. Runtime status, attempts,
+approvals, leases, credentials, and external delivery state stay in SQLite.
+Canceled or closed unsaved drafts create no repository files and no durable
+run.
 
-- **Two-phase gate** in `harness::drive_inner`: the unit-test gate (`verify.sh`,
-  existing) then the **browser QA gate** (`qa.sh`, new). BOTH must be green to
-  advance; a red gate at either phase hands the error back to the agent and
-  retries (shared `handle_gate_failure`). A missing `qa.sh` is a pass so non-web
-  projects aren't blocked. `scaffold_harness` writes a `qa.sh` template that
-  shows how to drive the `browser-verification-loop` skill for a web surface.
-- **QA gate as a spawned agent (012b)**: `FeatureList.qa_mode` (`auto`/`script`/
-  `agent`, default `auto`) picks how the QA gate runs. `agent` (or `auto` when no
-  `qa.sh` and `AGENTUM_BROWSER_VERIFY` is set) makes `drive_inner` call
-  `run_qa_agent_gate`, which spawns a browser-verification-loop agent
-  (`spawn_qa_agent`) that writes a verdict file `.agentum-harness/qa/<id>.json`
-  (`{"passed":bool,"summary":...}`); the harness reads it after the agent settles.
-  A missing/garbled verdict FAILS the gate (inconclusive never advances to Done).
-  `qa_agent_tool` overrides the QA CLI (default = the feature agent).
-- **New feature state** `FeatureState::ReadyToTest` (between `Verifying` and
-  `Done`) — set by `run_qa_once`; the in-app board has a "Ready to Test" column.
-- **Tracker transitions** (`task_sink::apply_tracker_transition`,
-  `TrackerPhase`): lifecycle events drive the ticket's state — Coding→InProgress,
-  unit-green→ReadyToTest, QA-green→Done; planning sets Todo. Linear uses
-  workflow-state transitions (`linear::transition_issue` + `LinearStateMap`,
-  resolved by name); the internal Board moves card `status`
-  (todo/doing/review/done); GitHub flips the canonical `status/*` label on the
-  issue (and, when the repo is board-bound, moves the ProjectV2 card too —
-  `github_transition_with_board`). **Best-effort by
-  contract**: a tracker hiccup is logged (`HarnessEvent::Log`), never halts the
-  run. Each `Feature` carries `tracker_provider`/`tracker_url`, threaded from the
-  goal's task sink in `routes::board_goals::plan_goal_harness`.
-  The harness engine fires these transitions itself; SDD-playbook-driven agents
-  fire them via the `agentum_report_status` MCP tool — the playbooks record the
-  ticket as `tracker:` in the spec frontmatter (`sdd-spec*`) and mirror every
-  phase transition to it (`sdd-orchestrate`'s "Tracker status" section).
-- **Linear state names** are configurable: `LinearStateMap` defaults to
-  Todo / In Progress / Ready to Test / Done, overridable via the `linear.json`
-  `state_map` (written by Settings) and `AGENTUM_LINEAR_STATE_*` env (highest
-  precedence). A missing target state is a logged skip, not an error.
+Canonical identity is uppercase `SPC-<26-character ULID>`; the lowercase path
+slug is cosmetic. Artifact writes use containment checks, no-follow opens,
+expected hashes, temporary publication, and filesystem synchronization.
+External user edits become immutable revisions. A valid edit pauses the run and
+invalidates approval and downstream artifacts; an invalid edit blocks without
+overwriting the user's file.
+
+### Execution boundary
+
+Authoritative and disposable attempt worktrees live below Agentum's data
+directory, never below the customer project. Every provider submits a typed
+artifact or bounded diff from an isolated attempt. Agentum alone applies
+accepted changes through capability grants, path leases, preimage hashes, a
+patch journal, and rollback. Providers are launched through typed
+`CommandSpec` values; generated shell strings are not executed.
+
+SDD adapters must not create or read ambient provider configuration in a
+customer repository. Claude, Codex, Cursor/Agent, Gemini, Hermes, OpenCode,
+Aider, and custom integrations all implement the same provider-neutral result,
+isolation, cancellation, timeout, and output-limit contract.
+
+Runs advance through:
+
+```text
+specification → design → planning → implementation → verification
+→ review → ready → delivery → completed
+```
+
+Ready means locally implemented, verified, and independently reviewed. It does
+not mean committed, pushed, merged, released, or synchronized to a tracker.
+Standard + Guarded pauses for authored-spec approval and then proceeds to Ready
+unless an exception occurs. Interactive pauses after major phases. Autopilot
+uses the explicit Start authorization for the current digest, but also stops at
+Ready. High-risk work adds design and plan approval and cannot waive
+verification. Review uses an isolated session distinct from implementation.
+
+All external effects remain behind Deliver. The UI presents an expiring,
+hash-bound preview of the selected commit, push, pull request, tracker, or
+release actions. Partial and ambiguous failures stay retryable without
+discarding Ready state.
+
+### UI, fixtures, and migration
+
+The desktop has one New Spec entry point and one Run Center with Overview,
+Spec, Plan, Tasks, Evidence, Review, and Activity views. The phase rail is the
+single place for next action, blockers, approval digest, workers, retries, and
+delivery state.
+
+`examples/sdd-demo/` is the zero-pollution fixture for the first vertical
+slice. Its tests prove that canceling before save creates nothing, while saving
+creates only `.agentum` in the external authoritative worktree and leaves the
+source checkout unchanged.
+
+The repository cutover is driven by `scripts/migrate-agentum-sdd.py`.
+Preview inventories and hashes every explicitly retired source. Apply requires
+an explicit absolute `--repo-root`, an external recovery archive, and an
+externally supplied restricted-content pattern file. It rejects active old
+runs and dirty sources, publishes validated native artifacts atomically, and
+removes only the exact inventoried sources. A second successful run is a no-op.
 
 ---
 

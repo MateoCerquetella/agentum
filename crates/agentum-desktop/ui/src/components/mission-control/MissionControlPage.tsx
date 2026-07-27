@@ -14,7 +14,7 @@ import { useAppStore } from '@/store'
 import { getPreflightIssues, type PreflightIssue } from '@/lib/preflight-issues'
 import { StatsPane } from '@/components/stats/StatsPane'
 import { Badge } from '@/components/ui/badge'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   MISSION_CONTROL_SOON_CARDS,
   type MissionControlSoonCard

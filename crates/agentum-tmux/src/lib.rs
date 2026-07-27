@@ -939,7 +939,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_bytes_chunks_role_prompt_sized_payloads_below_tmux_limit() {
-        // The gated-run PM prompt that exposed this regression is ~3.3 KiB.
+        // A long structured authoring prompt that exposed this regression is ~3.3 KiB.
         // Sending it as one `send-keys -H` command fails with "command too
         // long" on tmux 3.7b; the helper must split it into accepted commands.
         if Command::new("tmux").arg("-V").status().await.is_err() {

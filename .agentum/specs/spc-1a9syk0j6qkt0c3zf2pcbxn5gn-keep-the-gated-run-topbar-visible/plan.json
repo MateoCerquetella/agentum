@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-1A9SYK0J6QKT0C3ZF2PCBXN5GN",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T1",
+      "objective": "Make useWorktreeHarnessRun retain and select confirmed snapshots by normalized workdir, reject stale asynchronous responses, and add focused state-sequence and progress-markup regressions.",
+      "dependencies": [],
+      "readScopes": [
+        "crates/agentum-desktop/ui/src/components/Terminal.tsx",
+        "crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.tsx",
+        "crates/agentum-desktop/ui/src/lib/harness-run.ts",
+        "crates/agentum-desktop/ui/src/runtime/harness-client.ts",
+        "crates/agentum-desktop/ui/src/store/slices/worktrees.ts",
+        "crates/agentum-desktop/ui/src/App.tsx",
+        "crates/agentum-desktop/ui/src/components/error-boundaries/RecoverableRenderErrorBoundary.tsx"
+      ],
+      "writeScopes": [
+        "crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.ts",
+        "crates/agentum-desktop/ui/src/hooks/useWorktreeHarnessRun.test.ts",
+        "crates/agentum-desktop/ui/src/components/gated-run/GatedRunBar.test.tsx"
+      ],
+      "acceptanceCriteria": [
+        "AC-001",
+        "AC-002",
+        "AC-003"
+      ],
+      "verification": [
+        {
+          "program": "npm",
+          "args": [
+            "exec",
+            "vitest",
+            "run",
+            "src/hooks/useWorktreeHarnessRun.test.ts",
+            "src/components/gated-run/GatedRunBar.test.tsx"
+          ],
+          "cwd": "crates/agentum-desktop/ui",
+          "envAllowlist": [],
+          "timeoutMs": 900000,
+          "outputLimit": 1048576
+        }
+      ],
+      "risk": "medium",
+      "parallelSafe": false
+    },
+    {
+      "id": "MIG-FINAL-001",
+      "objective": "Run migrated final verification gate 1",
+      "dependencies": [
+        "T1"
+      ],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-004"
+      ],
+      "verification": [
+        {
+          "program": "npm",
+          "args": [
+            "exec",
+            "vitest",
+            "run",
+            "src/hooks/useWorktreeHarnessRun.test.ts",
+            "src/components/gated-run/GatedRunBar.test.tsx"
+          ],
+          "cwd": "crates/agentum-desktop/ui",
+          "envAllowlist": [],
+          "timeoutMs": 900000,
+          "outputLimit": 1048576
+        }
+      ],
+      "risk": "low",
+      "parallelSafe": false
+    },
+    {
+      "id": "MIG-FINAL-002",
+      "objective": "Run migrated final verification gate 2",
+      "dependencies": [
+        "T1"
+      ],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-005"
+      ],
+      "verification": [
+        {
+          "program": "npm",
+          "args": [
+            "run",
+            "build",
+            "--prefix",
+            "crates/agentum-desktop/ui"
+          ],
+          "cwd": ".",
+          "envAllowlist": [],
+          "timeoutMs": 900000,
+          "outputLimit": 1048576
+        }
+      ],
+      "risk": "low",
+      "parallelSafe": false
+    }
+  ]
+}

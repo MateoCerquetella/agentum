@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { WorkspacePort } from '../../../../shared/workspace-ports'
+import type { WorkspacePort } from '@/shared/workspace-ports'
 
 vi.mock('@/store', () => ({
   useAppStore: (selector: (state: unknown) => unknown) =>

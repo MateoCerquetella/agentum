@@ -5,7 +5,7 @@ import {
   decodeTerminalStreamJson,
   encodeTerminalStreamFrame,
   encodeTerminalStreamText
-} from '../../../shared/terminal-stream-protocol'
+} from '@/shared/terminal-stream-protocol'
 import {
   _getRemoteRuntimeTerminalMultiplexerCountForTest,
   resetRemoteRuntimeTerminalMultiplexersForTests

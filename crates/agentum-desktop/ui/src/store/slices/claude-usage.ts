@@ -8,7 +8,7 @@ import type {
   ClaudeUsageScope,
   ClaudeUsageSessionRow,
   ClaudeUsageSummary
-} from '../../../../shared/claude-usage-types'
+} from '@/shared/claude-usage-types'
 import type { AppState } from '../types'
 
 export type ClaudeUsageSlice = {

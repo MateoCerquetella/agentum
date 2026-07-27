@@ -1,5 +1,5 @@
-//! Dictation lifecycle + event fan-out — port of orca's `stt-service.ts` (minus
-//! the worker-thread plumbing, which Tauri's command threads replace).
+//! Dictation lifecycle and event fan-out. Tauri command threads provide the
+//! worker isolation for recognition calls.
 //!
 //! One dictation is active at a time, keyed by the renderer's `sessionId`
 //! ("owner"). The renderer captures mic audio in the webview and feeds Float32
@@ -175,7 +175,7 @@ fn emit_events(app: &AppHandle, session_id: &str, events: Vec<EngineEvent>) {
     }
 }
 
-/// Linear resample — direct port of orca's `resampleToRate`. sherpa aborts the
+/// Linear resample used before feeding sherpa, which aborts the
 /// process if one recognizer sees mixed input rates, so normalize before feeding.
 fn resample_to_rate(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
     if samples.is_empty() || input_rate == 0 || output_rate == 0 || input_rate == output_rate {

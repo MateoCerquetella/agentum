@@ -1,4 +1,4 @@
-import type { GitHubWorkItem } from '../../../shared/types'
+import type { GitHubWorkItem } from '@/shared/types'
 
 type GitHubStatusItem = Pick<GitHubWorkItem, 'id' | 'state'>
 

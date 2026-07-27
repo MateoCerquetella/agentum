@@ -1,5 +1,5 @@
 import React from 'react'
-import type { KeybindingActionId, KeybindingInput } from '../../../../shared/keybindings'
+import type { KeybindingActionId, KeybindingInput } from '@/shared/keybindings'
 import { cn } from '../../lib/utils'
 import { ShortcutBindingRow } from './ShortcutBindingRow'
 import type { ShortcutRowsByGroup } from './ShortcutFilterRail'

@@ -414,9 +414,92 @@ pub(crate) fn all_repo_ids() -> Result<Vec<String>, ApiError> {
     Ok(read_repos()?.into_iter().map(|repo| repo.id).collect())
 }
 
+#[cfg(test)]
+#[derive(Clone)]
+struct TestRepository {
+    path: String,
+    host_id: Option<Uuid>,
+}
+
+#[cfg(test)]
+fn test_repositories()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, TestRepository>> {
+    static REPOSITORIES: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, TestRepository>>,
+    > = std::sync::OnceLock::new();
+    REPOSITORIES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(test)]
+pub(crate) struct TestRepositoryRegistration(String);
+
+#[cfg(test)]
+impl Drop for TestRepositoryRegistration {
+    fn drop(&mut self) {
+        test_repositories()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.0);
+    }
+}
+
+/// Scoped, in-process repository injection for tests. This avoids changing
+/// process-wide account-directory variables or touching a developer's real
+/// repository registry.
+#[cfg(test)]
+pub(crate) fn register_test_repo(
+    repo_id: impl Into<String>,
+    path: impl Into<String>,
+) -> TestRepositoryRegistration {
+    let repo_id = repo_id.into();
+    test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            repo_id.clone(),
+            TestRepository {
+                path: path.into(),
+                host_id: None,
+            },
+        );
+    TestRepositoryRegistration(repo_id)
+}
+
+/// Scoped remote repository injection for route-boundary tests. Keeping the
+/// host identity beside the path proves callers do not silently reinterpret a
+/// remote checkout as local when a capability is unavailable.
+#[cfg(test)]
+pub(crate) fn register_test_remote_repo(
+    repo_id: impl Into<String>,
+    path: impl Into<String>,
+    host_id: Uuid,
+) -> TestRepositoryRegistration {
+    let repo_id = repo_id.into();
+    test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            repo_id.clone(),
+            TestRepository {
+                path: path.into(),
+                host_id: Some(host_id),
+            },
+        );
+    TestRepositoryRegistration(repo_id)
+}
+
 /// Resolve a repoId to its checkout path via the registry. `pub(crate)` so the
 /// worktrees route can resolve the same path without duplicating the read.
 pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
+    #[cfg(test)]
+    if let Some(repository) = test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(repo_id)
+        .cloned()
+    {
+        return Ok(repository.path);
+    }
     read_repos()?
         .iter()
         .find(|repo| repo.id == repo_id)
@@ -428,6 +511,15 @@ pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
 /// remote rows that predate `host_id` are rejected: their path is not local
 /// merely because the newer routing field is absent.
 pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiError> {
+    #[cfg(test)]
+    if let Some(repository) = test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(repo_id)
+        .cloned()
+    {
+        return Ok(repository.host_id);
+    }
     host_id_of(&read_repos()?, repo_id)
 }
 

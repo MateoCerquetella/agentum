@@ -5,7 +5,7 @@ import {
   getWorktreeDragGroups,
   renderRowContainsWorktree
 } from './WorktreeList'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 import type { Row } from './worktree-list-groups'
 
 const repo: Repo = {

@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import type { TerminalTab } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import type { TerminalTab } from '@/shared/types'
 import type { AppState } from '../types'
 import type { RetainedAgentEntry } from './agent-status'
 import { createTestStore, makeTab, makeWorktree } from './store-test-helpers'

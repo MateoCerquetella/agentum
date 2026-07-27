@@ -11,7 +11,7 @@ import {
   Sparkles,
   Waypoints
 } from 'lucide-react'
-import type { ClaudeUsageRange, ClaudeUsageScope } from '../../../../shared/claude-usage-types'
+import type { ClaudeUsageRange, ClaudeUsageScope } from '@/shared/claude-usage-types'
 import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
 import {

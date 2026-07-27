@@ -1,4 +1,4 @@
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 
 function getCacheTimerTabId(key: string): string | null {
   const separator = key.indexOf(':')

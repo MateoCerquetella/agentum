@@ -10,13 +10,13 @@ import type {
   TuiAgent,
   Worktree,
   WorkspaceSessionState
-} from '../../../../shared/types'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
-import { deriveGeneratedTabTitle } from '../../../../shared/agent-tab-title'
-import { parseLegacyNumericPaneKey, parsePaneKey } from '../../../../shared/stable-pane-id'
-import { isValidHostTerminalTabId, isValidTerminalTabId } from '../../../../shared/terminal-tab-id'
-import { getRepoIdFromWorktreeId, splitWorktreeId } from '../../../../shared/worktree-id'
-import { isWslUncPath } from '../../../../shared/wsl-paths'
+} from '@/shared/types'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
+import { deriveGeneratedTabTitle } from '@/shared/agent-tab-title'
+import { parseLegacyNumericPaneKey, parsePaneKey } from '@/shared/stable-pane-id'
+import { isValidHostTerminalTabId, isValidTerminalTabId } from '@/shared/terminal-tab-id'
+import { getRepoIdFromWorktreeId, splitWorktreeId } from '@/shared/worktree-id'
+import { isWslUncPath } from '@/shared/wsl-paths'
 import type { AgentStartedTelemetry } from '../../lib/worktree-activation'
 import { scheduleRuntimeGraphSync } from '@/runtime/sync-runtime-graph'
 import { clearTransientTerminalState, emptyLayoutSnapshot } from './terminal-helpers'
@@ -319,7 +319,7 @@ export type TerminalSlice = {
        *  with an existing tab anywhere in the store (tabIds form the global
        *  paneKey namespace, so collisions are checked across all worktrees). */
       id?: string
-      /** Coding-harness agent being launched in this tab, recorded so the tab
+      /** Coding agent being launched in this tab, recorded so the tab
        *  bar can show the provider icon before the agent's first hook event. */
       launchAgent?: TuiAgent
       /** Spec 005-C: the tab's "Run in tmux (persist)" choice. `true` → the

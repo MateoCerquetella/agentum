@@ -6,7 +6,7 @@
  */
 import React, { useCallback, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
-import type { SshTarget, SshConnectionState } from '../../../../shared/ssh-types'
+import type { SshTarget, SshConnectionState } from '@/shared/ssh-types'
 
 type Props = {
   target: SshTarget & { state?: SshConnectionState }

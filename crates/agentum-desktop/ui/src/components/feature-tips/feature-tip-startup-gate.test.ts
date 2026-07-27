@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { getDefaultOnboardingState, getDefaultVoiceSettings } from '../../../../shared/constants'
-import type { GlobalSettings, OnboardingState } from '../../../../shared/types'
+import { getDefaultOnboardingState, getDefaultVoiceSettings } from '@/shared/constants'
+import type { GlobalSettings, OnboardingState } from '@/shared/types'
 import { getFeatureTipsAppOpenDecision } from './feature-tip-startup-gate'
 
 const existingUserOnboarding: OnboardingState = {

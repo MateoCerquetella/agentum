@@ -20,8 +20,8 @@ import {
   formatCrashReportText,
   isReactErrorBoundaryReport,
   type CrashReportRecord
-} from '../../../../shared/crash-reporting'
-import type { GitHubViewer } from '../../../../shared/types'
+} from '@/shared/crash-reporting'
+import type { GitHubViewer } from '@/shared/types'
 
 function formatSummary(report: CrashReportRecord): string {
   if (isReactErrorBoundaryReport(report)) {

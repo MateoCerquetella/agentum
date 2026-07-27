@@ -14,7 +14,7 @@ import {
   findMatchingTabAgentLaunchOptions,
   type TabAgentLaunchOption
 } from './tab-agent-launch-options'
-import type { TuiAgent } from '../../../../shared/types'
+import type { TuiAgent } from '@/shared/types'
 
 type TabBarCreateEntryProps = {
   agentOptions?: readonly TabAgentLaunchOption[]

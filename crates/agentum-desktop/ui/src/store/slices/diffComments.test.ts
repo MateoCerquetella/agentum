@@ -3,7 +3,7 @@ slice's persistence, runtime routing, rollback, and compatibility behavior. */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { create } from 'zustand'
 import type { AppState } from '../types'
-import type { DiffComment, Worktree } from '../../../../shared/types'
+import type { DiffComment, Worktree } from '@/shared/types'
 import {
   createCompatibleRuntimeStatusResponseIfNeeded,
   type RuntimeEnvironmentCallRequest
@@ -133,6 +133,10 @@ import { createDetectedAgentsSlice } from './detected-agents'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createDictationSlice } from './dictation'
 import { createWorkspaceCleanupSlice } from './workspace-cleanup'
+import { createHostsSlice } from './hosts'
+import { createServerWorktreeActivitySlice } from './server-worktree-activity'
+import { createTrackerPhaseSlice } from './tracker-phase'
+import { createProjectTrackersSlice } from './project-trackers'
 
 function createTestStore() {
   return create<AppState>()((...a) => ({
@@ -161,7 +165,11 @@ function createTestStore() {
     ...createDetectedAgentsSlice(...a),
     ...createWorktreeNavHistorySlice(...a),
     ...createDictationSlice(...a),
-    ...createWorkspaceCleanupSlice(...a)
+    ...createWorkspaceCleanupSlice(...a),
+    ...createHostsSlice(...a),
+    ...createServerWorktreeActivitySlice(...a),
+    ...createTrackerPhaseSlice(...a),
+    ...createProjectTrackersSlice(...a)
   }))
 }
 

@@ -71,6 +71,18 @@ pub fn auth_token_path() -> Result<PathBuf, PathError> {
     Ok(data_dir()?.join("auth_token"))
 }
 
+/// Agentum-owned SDD worktrees live outside customer projects. The caller adds
+/// `<repo-key>/<run-id>/{authoritative,attempts/...}` below this directory.
+pub fn sdd_worktree_dir() -> Result<PathBuf, PathError> {
+    Ok(data_dir()?.join("worktrees"))
+}
+
+/// Immutable, content-addressed SDD evidence lives outside customer projects.
+/// Callers add `blobs/sha256/<prefix>/<digest>` below this directory.
+pub fn sdd_evidence_dir() -> Result<PathBuf, PathError> {
+    Ok(data_dir()?.join("evidence"))
+}
+
 pub fn tls_dir() -> Result<PathBuf, PathError> {
     Ok(data_dir()?.join("tls"))
 }

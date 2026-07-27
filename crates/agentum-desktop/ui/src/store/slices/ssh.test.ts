@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toAppSshPtyId } from '../../../../shared/ssh-pty-id'
+import { toAppSshPtyId } from '@/shared/ssh-pty-id'
 import { createTestStore, makeTab, makeWorktree, TEST_REPO } from './store-test-helpers'
 
 describe('createSshSlice', () => {

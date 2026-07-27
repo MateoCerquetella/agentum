@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   GitHubProjectRow,
   GitHubProjectTable
-} from '../../shared/github-project-types'
+} from '@/shared/github-project-types'
 import {
   buildBindPayload,
   deriveIssueOptions,

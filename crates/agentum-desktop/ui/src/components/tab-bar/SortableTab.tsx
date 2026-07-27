@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 import type { TabDragItemData } from '../tab-group/useTabDragSplit'
 import { FilledBellIcon } from '../sidebar/WorktreeCardHelpers'
 import { useAppStore } from '../../store'
@@ -100,7 +100,7 @@ export default function SortableTab({
   const shellForIcon = tab.shellOverride
 
   // Why: foreground process and hook status make the tab icon reflect the
-  // coding harness currently running in the pane, not just the launch command.
+  // coding agent currently running in the pane, not just the launch command.
   const tabAgent = useTabAgent(tab)
 
   // Why: when a provider icon is already shown, stripping the agent's own
@@ -288,7 +288,7 @@ export default function SortableTab({
         </span>
       ) : tabAgent ? (
         // Why: coding-agent tabs should read as Claude/Codex/etc. while the
-        // harness is running; plain shells keep the generic terminal tile.
+        // agent is running; plain shells keep the generic terminal tile.
         <span
           className={`mr-1 inline-flex shrink-0 ${isActive ? '' : 'opacity-70'}`}
           data-agent-icon={tabAgent}

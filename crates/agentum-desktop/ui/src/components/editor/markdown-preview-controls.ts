@@ -1,5 +1,5 @@
 import type { MarkdownViewMode, OpenFile } from '@/store/slices/editor'
-import { keybindingMatchesAction, type KeybindingOverrides } from '../../../../shared/keybindings'
+import { keybindingMatchesAction, type KeybindingOverrides } from '@/shared/keybindings'
 import type { EditorToggleValue } from './EditorViewToggle'
 
 type MarkdownPreviewTarget = Pick<OpenFile, 'mode' | 'diffSource'> & {

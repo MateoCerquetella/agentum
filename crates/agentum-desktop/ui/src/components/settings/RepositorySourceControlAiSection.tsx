@@ -1,27 +1,27 @@
 /* eslint-disable max-lines -- Why: repo Source Control AI settings keep one
    draft/save flow across model, instruction, and PR-default override groups. */
 import { useMemo, useState } from 'react'
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 import type {
   RepoSourceControlAiOverrides,
   SourceControlAiOperation
-} from '../../../../shared/source-control-ai-types'
+} from '@/shared/source-control-ai-types'
 import {
   clearSourceControlAiModelChoiceForHost,
   normalizeRepoSourceControlAiOverrides,
   normalizeSourceControlAiSettings,
   readSourceControlAiModelChoiceForHost,
   selectSourceControlAiModelChoiceForHost
-} from '../../../../shared/source-control-ai'
+} from '@/shared/source-control-ai'
 import {
   getCommitMessageAgentCapability,
   isCustomAgentId,
   resolveCommitMessageAgentChoice
-} from '../../../../shared/commit-message-agent-spec'
+} from '@/shared/commit-message-agent-spec'
 import {
   getCommitMessageModelDiscoveryHostKeyForScope,
   LOCAL_COMMIT_MESSAGE_HOST_KEY
-} from '../../../../shared/commit-message-host-key'
+} from '@/shared/commit-message-host-key'
 import { Label } from '../ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { useAppStore } from '../../store'

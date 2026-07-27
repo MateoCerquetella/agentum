@@ -162,7 +162,11 @@ export function ProjectBindingEditor({
         // Re-discovery on a bound repo keeps stored (possibly hand-edited)
         // option ids that still exist; a fresh bind seeds from `resolved`.
         const next: BindingSelection = stored
-          ? selectionForRebind(stored.statusMapping, res.resolved, res.options)
+          ? selectionForRebind(
+              { ...stored.statusMapping, inReview: stored.statusMapping.inReview ?? '' },
+              res.resolved,
+              res.options
+            )
           : selectionFromResolved(res.resolved)
         dispatchSelection({ type: 'reset', selection: next })
         if (res.resolved === null) {
@@ -513,7 +517,7 @@ export function ProjectBindingEditor({
   return (
     <div className="space-y-2.5">
       <p className="text-xs text-muted-foreground">
-        Bind a GitHub Projects v2 board so gated runs move its cards (and close issues at Done).
+        Bind a GitHub Projects v2 board for project task views and explicit delivery updates.
       </p>
       {authError ? (
         <GhAuthErrorHelp

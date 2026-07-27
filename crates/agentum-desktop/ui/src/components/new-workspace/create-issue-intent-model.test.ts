@@ -4,7 +4,6 @@ import {
   canFileIssue,
   deriveCreateIssueIntentPhase,
   deriveDraftGroundingNote,
-  deriveFiledGatedRunGate,
   deriveIntentTitle,
   deriveTrackerIntakePhase,
   resolveCreateIssueProvider
@@ -180,45 +179,6 @@ describe('deriveTrackerIntakePhase', () => {
     expect(
       deriveTrackerIntakePhase({ ...base, submitting: true, error: 'old', hasBody: true })
     ).toBe('filing')
-  })
-})
-
-describe('deriveFiledGatedRunGate', () => {
-  it('is eligible for a filed GitHub issue on a local repo (slug + number extracted)', () => {
-    expect(deriveFiledGatedRunGate(FILED_GITHUB, null)).toEqual({
-      eligible: true,
-      slug: { owner: 'acme', repo: 'widgets' },
-      number: 42
-    })
-    // undefined connectionId is local too (the Repo type leaves it optional).
-    expect(deriveFiledGatedRunGate(FILED_GITHUB, undefined).eligible).toBe(true)
-  })
-
-  it('allows a remote (SSH) repo when the filed item is a GitHub issue', () => {
-    expect(deriveFiledGatedRunGate(FILED_GITHUB, 'ssh-1')).toEqual({
-      eligible: true,
-      slug: { owner: 'acme', repo: 'widgets' },
-      number: 42
-    })
-  })
-
-  it('refuses a filed Linear issue as not-github-url (D3: GitHub issues only)', () => {
-    expect(deriveFiledGatedRunGate(FILED_LINEAR, null)).toEqual({
-      eligible: false,
-      reason: 'not-github-url'
-    })
-    // A Linear result can carry no URL at all — same honest reason.
-    expect(deriveFiledGatedRunGate({ ...FILED_LINEAR, url: null }, null)).toEqual({
-      eligible: false,
-      reason: 'not-github-url'
-    })
-  })
-
-  it('refuses when nothing is filed yet', () => {
-    expect(deriveFiledGatedRunGate(null, null)).toEqual({
-      eligible: false,
-      reason: 'no-linked-item'
-    })
   })
 })
 

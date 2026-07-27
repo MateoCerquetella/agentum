@@ -2,9 +2,9 @@ import type { AppState } from '@/store/types'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../shared/agent-status-types'
-import type { TerminalTab } from '../../../shared/types'
-import { parsePaneKey } from '../../../shared/stable-pane-id'
+} from '@/shared/agent-status-types'
+import type { TerminalTab } from '@/shared/types'
+import { parsePaneKey } from '@/shared/stable-pane-id'
 import { isExplicitAgentStatusFresh } from './agent-status'
 
 type RunningAgentTargetState = Pick<

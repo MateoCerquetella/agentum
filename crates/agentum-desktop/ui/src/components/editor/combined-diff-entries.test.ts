@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getCombinedBranchEntries, getCombinedUncommittedEntries } from './combined-diff-entries'
-import type { GitBranchChangeEntry, GitStatusEntry } from '../../../../shared/types'
+import type { GitBranchChangeEntry, GitStatusEntry } from '@/shared/types'
 
 describe('getCombinedUncommittedEntries', () => {
   it('filters unresolved conflicts from live entries', () => {

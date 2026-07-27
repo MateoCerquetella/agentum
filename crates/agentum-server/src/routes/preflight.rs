@@ -2,9 +2,9 @@
 //!
 //! Ported from the desktop's native `preflight_*` Tauri commands so the desktop
 //! drives the same embedded backend as everything else, instead of a parallel
-//! `which`/process implementation living in the Tauri crate. The embedded server
-//! runs as the user on a no-auth loopback, so it has the same `PATH` reach the
-//! desktop process did.
+//! `which`/process implementation living in the Tauri crate. The authenticated
+//! embedded server runs as the user, so it has the same `PATH` reach the desktop
+//! process did.
 
 use axum::routing::get;
 use axum::{Json, Router};

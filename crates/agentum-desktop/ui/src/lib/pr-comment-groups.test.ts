@@ -6,7 +6,7 @@ import {
   groupPRComments,
   isResolvedPRCommentGroup
 } from './pr-comment-groups'
-import type { PRComment } from '../../../shared/types'
+import type { PRComment } from '@/shared/types'
 
 function comment(overrides: Partial<PRComment>): PRComment {
   return {

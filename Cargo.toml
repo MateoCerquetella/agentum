@@ -8,10 +8,11 @@ members = [
     "crates/agentum-store",
     "crates/agentum-core",
     "crates/agentum-executor",
+    "crates/agentum-jira-broker",
 ]
 
 [workspace.package]
-version = "0.96.5"
+version = "0.97.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -42,6 +43,7 @@ tower-http        = { version = "0.6", features = ["cors", "trace", "compression
 clap              = { version = "4", features = ["derive", "env"] }
 directories       = "5"
 uuid              = { version = "1", features = ["v4", "serde"] }
+ulid              = { version = "1", features = ["serde"] }
 time              = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 toml              = "0.8"
 toml_edit         = "0.22"

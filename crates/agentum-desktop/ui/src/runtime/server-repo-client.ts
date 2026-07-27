@@ -1,7 +1,7 @@
 // Repo registry / base-ref client over the embedded agentum-server
 // (`/api/repos/*`). The repo logic moved off the desktop's native commands into
 // `agentum-server/src/routes/repos.rs`; this is the typed boundary the UI calls.
-import type { BaseRefSearchResult, Repo } from '../../../shared/types'
+import type { BaseRefSearchResult, Repo } from '@/shared/types'
 import { del, getJson, patchJson, postJson, qs } from './server-http'
 
 /** `GET /api/repos` — the registered repos, in order. */

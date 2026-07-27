@@ -1,0 +1,63 @@
+name: agentum-jira-oauth
+
+services:
+  jira-broker:
+    build:
+      context: ../..
+      dockerfile: deploy/jira-oauth-broker/Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENTUM_JIRA_BROKER_CLIENT_ID: ${ATLASSIAN_CLIENT_ID:?set ATLASSIAN_CLIENT_ID}
+      AGENTUM_JIRA_BROKER_CLIENT_SECRET_FILE: /run/secrets/atlassian_client_secret
+      AGENTUM_JIRA_BROKER_PUBLIC_URL: https://${BROKER_DOMAIN:?set BROKER_DOMAIN}/
+    secrets:
+      - atlassian_client_secret
+    volumes:
+      - broker-data:/var/lib/agentum-jira-broker
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - private
+
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    depends_on:
+      jira-broker:
+        condition: service_healthy
+    environment:
+      AGENTUM_JIRA_BROKER_DOMAIN: ${BROKER_DOMAIN:?set BROKER_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - private
+
+secrets:
+  atlassian_client_secret:
+    file: ${ATLASSIAN_CLIENT_SECRET_FILE:?set ATLASSIAN_CLIENT_SECRET_FILE}
+
+volumes:
+  broker-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  private:
+    internal: false

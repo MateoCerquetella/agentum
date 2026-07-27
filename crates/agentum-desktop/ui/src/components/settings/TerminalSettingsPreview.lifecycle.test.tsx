@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 type Cleanup = () => void
 
@@ -128,11 +128,11 @@ vi.mock('@/lib/terminal-theme', () => ({
   })
 }))
 
-vi.mock('../../../../shared/terminal-fonts', () => ({
+vi.mock('@/shared/terminal-fonts', () => ({
   resolveTerminalFontWeights: () => ({ fontWeight: 500, fontWeightBold: 700 })
 }))
 
-vi.mock('../../../../shared/terminal-ligatures', () => ({
+vi.mock('@/shared/terminal-ligatures', () => ({
   resolveTerminalLigaturesEnabled: () => mockLigaturesAddon.enabled
 }))
 

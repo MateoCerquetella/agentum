@@ -9,9 +9,9 @@ import type {
   GitCommitCompareResult,
   GitDiffResult,
   GitUpstreamStatus as DesktopGitUpstreamStatus
-} from '../../../shared/types'
-import type { GitConflictOperation } from '../../../shared/git-status-types'
-import type { GitHistoryOptions, GitHistoryResult } from '../../../shared/git-history'
+} from '@/shared/types'
+import type { GitConflictOperation } from '@/shared/git-status-types'
+import type { GitHistoryOptions, GitHistoryResult } from '@/shared/git-history'
 import { ensureWorkspaceSession } from './workspace-session'
 import {
   gitStatusEntries,

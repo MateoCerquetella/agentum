@@ -23,7 +23,7 @@ import { FilterToggleRow } from './FilterToggleRow'
 import {
   DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
   DEFAULT_SHOW_SLEEPING_WORKSPACES
-} from '../../../../shared/constants'
+} from '@/shared/constants'
 import { deriveWorkspaceFilterSummary } from './workspace-filter-summary'
 
 type SidebarFilterProps = {

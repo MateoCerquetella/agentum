@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest'
-import type { FsChangedPayload } from '../../../shared/types'
+import type { FsChangedPayload } from '@/shared/types'
 
 vi.mock('@/store', () => ({
   useAppStore: {

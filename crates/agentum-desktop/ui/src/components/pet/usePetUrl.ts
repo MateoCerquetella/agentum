@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { CustomPet } from '../../../../shared/types'
+import type { CustomPet } from '@/shared/types'
 import { useAppStore } from '../../store'
 import { BUNDLED_PET, findBundledPet, isBundledPetId } from './pet-models'
 import {

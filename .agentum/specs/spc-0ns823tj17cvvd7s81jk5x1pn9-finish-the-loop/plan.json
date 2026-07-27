@@ -1,0 +1,318 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-0NS823TJ17CVVD7S81JK5X1PN9",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "Carry out the migrated plan section: The four real silences F1 closes (architecture \u00a7B.1)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "Carry out the migrated plan section: Step 1 \u2014 `wait_for_settle \u2192 SettleOutcome` (#15, AC 2). NOT sacred.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-002"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "Carry out the migrated plan section: Step 2 \u2014 D6 `status/blocked` escalation (#16, AC 4). Localized to `task_sink.rs`.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-004"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "Carry out the migrated plan section: Step 4 \u2014 UI toasts + events bridge (#2/#5, AC 1). No composer-engine restructure.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-001"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "Carry out the migrated plan section: Step 5 \u2014 the new live test (the merge gate for Step 3). `#[ignore]`.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-006",
+      "objective": "Carry out the migrated plan section: Step 3 \u2014 the sacred readiness-bool (#14a, AC 2). DONE LAST. Behavior-preserving.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-002"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-007",
+      "objective": "Carry out the migrated plan section: Build + test results (observed)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-008",
+      "objective": "Carry out the migrated plan section: Deviations from the architecture (with rationale)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-009",
+      "objective": "Carry out the migrated plan section: Protected invariants (confirmed untouched)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-010",
+      "objective": "Carry out the migrated plan section: Handoff",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-011",
+      "objective": "Carry out the migrated plan section: The seam (architecture \u00a7C): an explicit `{mode, stage}` on `ChatRequest`",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-012",
+      "objective": "Carry out the migrated plan section: Server \u2014 `crates/agentum-server/src/routes/chat.rs` (AC 5\u20138)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-005"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-013",
+      "objective": "Carry out the migrated plan section: Client \u2014 the pure reducer + composer wiring (AC 5, 7)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-005"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-014",
+      "objective": "Carry out the migrated plan section: Convergence (AC 7/8) \u2014 unchanged, by construction",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-007"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-015",
+      "objective": "Carry out the migrated plan section: Build + test results (observed)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-016",
+      "objective": "Carry out the migrated plan section: Deviations from architecture \u00a7C (with rationale)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-017",
+      "objective": "Carry out the migrated plan section: Protected invariants (confirmed untouched)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-018",
+      "objective": "Carry out the migrated plan section: Handoff (F2)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-019",
+      "objective": "Carry out the migrated plan section: The seam (architecture \u00a7D): a thin `NewWorkspaceGoalStep` fronting the composer",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-020",
+      "objective": "Carry out the migrated plan section: Pure logic \u2014 `crates/agentum-desktop/ui/src/lib/workspace-goal-step.ts` (NEW)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-021",
+      "objective": "Carry out the migrated plan section: Component \u2014 `NewWorkspaceGoalStep.tsx` (NEW)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-022",
+      "objective": "Carry out the migrated plan section: Modal wiring \u2014 `NewWorkspaceComposerModal.tsx` (EDITED, F1 wiring kept)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-023",
+      "objective": "Carry out the migrated plan section: AC coverage (what's wired-and-unit-tested vs qa.sh/human)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-024",
+      "objective": "Carry out the migrated plan section: Build + test results (observed)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-025",
+      "objective": "Carry out the migrated plan section: Deviations from architecture \u00a7D (with rationale)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-026",
+      "objective": "Carry out the migrated plan section: Protected invariants (confirmed untouched)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-027",
+      "objective": "Carry out the migrated plan section: Handoff (F3)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

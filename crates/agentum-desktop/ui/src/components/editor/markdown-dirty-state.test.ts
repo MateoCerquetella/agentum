@@ -215,3 +215,4 @@ function countParagraphs(editor: Editor): number {
   })
   return count
 }
+// @vitest-environment happy-dom

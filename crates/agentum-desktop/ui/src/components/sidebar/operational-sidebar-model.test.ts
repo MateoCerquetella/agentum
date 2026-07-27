@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 import type { OperationalWorkspaceFact } from './operational-sidebar-model'
 import {
   buildOperationalSidebarRows,
@@ -7,7 +7,7 @@ import {
   selectOperationalContinuation,
   selectOperationalStatusTimestamp
 } from './operational-sidebar-model'
-import { AGENT_STATUS_STALE_AFTER_MS } from '../../shared/agent-status-types'
+import { AGENT_STATUS_STALE_AFTER_MS } from '@/shared/agent-status-types'
 
 function repo(id: string, displayName: string): Repo {
   return { id, displayName, path: `/tmp/${id}`, badgeColor: '#000', addedAt: 0 }
@@ -174,7 +174,9 @@ describe('buildOperationalSidebarRows', () => {
       worktree('pinned', { lastActivityAt: 1, isPinned: true }),
       worktree('middle', { lastActivityAt: 20 })
     ]
-    const facts = Object.fromEntries(trees.map((tree) => [tree.id, { status: 'inactive' }]))
+    const facts: Record<string, OperationalWorkspaceFact> = Object.fromEntries(
+      trees.map((tree) => [tree.id, { status: 'inactive' as const }])
+    )
     const collapsed = build(trees, facts, { settledLimit: 3 })
     expect(collapsed.filter((row) => row.type === 'item').map((row) => row.worktree.id)).toEqual([
       'new',

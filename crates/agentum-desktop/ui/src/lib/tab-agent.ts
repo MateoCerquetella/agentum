@@ -1,6 +1,6 @@
-import type { AgentStatusEntry } from '../../../shared/agent-status-types'
-import type { TerminalLayoutSnapshot, TuiAgent } from '../../../shared/types'
-import { isTerminalLeafId, makePaneKey, parsePaneKey } from '../../../shared/stable-pane-id'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
+import type { TerminalLayoutSnapshot, TuiAgent } from '@/shared/types'
+import { isTerminalLeafId, makePaneKey, parsePaneKey } from '@/shared/stable-pane-id'
 import { agentTypeToIconAgent } from './agent-status'
 
 /**

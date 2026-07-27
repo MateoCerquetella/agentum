@@ -1,4 +1,4 @@
--- Agent hooks loopback support (ORCA §2 P2).
+-- Agent session hooks over the authenticated loopback boundary.
 --
 -- hook_token            — ephemeral per-launch secret written by the server
 --                         at `POST /api/sessions/{id}/start` time. NULL when
