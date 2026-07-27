@@ -335,7 +335,7 @@ fn validate_private_parent(metadata: &std::fs::Metadata) -> Result<(), DatabaseE
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(windows)))]
 fn validate_private_parent(_metadata: &std::fs::Metadata) -> Result<(), DatabaseError> {
     Ok(())
 }
