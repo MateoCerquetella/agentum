@@ -99,6 +99,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      # macOS exposes /var as a system symlink to /private/var. tempfile uses
+      # that path by default, which must be rejected by Agentum's no-follow
+      # artifact boundary. Keep tests under GitHub's real, symlink-free path so
+      # they exercise repository-controlled links rather than the host alias.
+      - name: Use no-follow-safe test temp root (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: printf 'TMPDIR=%s\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Install pinned Ripgrep
         shell: bash
         run: |
@@ -124,8 +132,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            bubblewrap \
             libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
             libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev libasound2-dev
+      # Ubuntu 24.04's AppArmor default blocks the unprivileged user namespace
+      # that bubblewrap needs, even when the pinned package is installed. The
+      # hosted runner is ephemeral and already executes this checkout; enable
+      # the namespace only for this job, then prove the real sandbox starts.
+      - name: Enable and probe Bubblewrap sandbox (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if sysctl kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --die-with-parent --unshare-pid --ro-bind / / --proc /proc --dev /dev -- true
       # Windows desktop build deps: MSVC (puts cl.exe on PATH) + nasm for the
       # ring/aws-lc assembly, and override the repo .cargo/config CC=/usr/bin/gcc
       # pin (a unix-only local-dev workaround) so cc-rs uses MSVC, not a missing

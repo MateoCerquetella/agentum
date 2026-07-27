@@ -12,6 +12,7 @@ LOCKFILE = ROOT / "Cargo.lock"
 TAURI_CONFIG = ROOT / "crates/agentum-desktop/tauri.conf.json"
 MACOS_ENTITLEMENTS = ROOT / "crates/agentum-desktop/Entitlements.plist"
 CHANGELOG = ROOT / "CHANGELOG.md"
+SDD_BOUNDARY = ROOT / "scripts/check-sdd-boundary.sh"
 
 
 def workspace_version() -> str:
@@ -26,6 +27,24 @@ def workspace_version() -> str:
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
+    def test_clean_runners_activate_real_cross_platform_sdd_boundaries(self) -> None:
+        ci = CI.read_text(encoding="utf-8")
+        self.assertIn("Use no-follow-safe test temp root (macOS)", ci)
+        self.assertIn("printf 'TMPDIR=%s\\n' \"$RUNNER_TEMP\" >> \"$GITHUB_ENV\"", ci)
+        self.assertIn("Enable and probe Bubblewrap sandbox (Linux)", ci)
+        self.assertIn("kernel.apparmor_restrict_unprivileged_userns=0", ci)
+        self.assertIn(
+            "bwrap --die-with-parent --unshare-pid --ro-bind / / "
+            "--proc /proc --dev /dev -- true",
+            ci,
+        )
+
+    def test_sdd_boundary_normalizes_windows_scan_paths_before_allowlisting(self) -> None:
+        boundary = SDD_BOUNDARY.read_text(encoding="utf-8")
+        scan = boundary.index('direct_workspace_callers="$({')
+        allowlist = boundary.index('while IFS= read -r caller; do', scan)
+        self.assertIn(r"| tr '\134' '/' | sort", boundary[scan:allowlist])
+
     def test_minor_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")

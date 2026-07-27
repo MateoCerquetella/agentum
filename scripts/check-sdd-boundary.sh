@@ -62,7 +62,7 @@ direct_workspace_pattern="createWorktree[[:space:]]*\\(|openModal[[:space:]]*\\(
 direct_workspace_callers="$({
   rg -l --glob '*.{ts,tsx}' --glob '!**/*.test.*' \
     "$direct_workspace_pattern" "$ui_root" || true
-} | sort)"
+} | tr '\134' '/' | sort)"
 while IFS= read -r caller; do
   [[ -z "$caller" ]] && continue
   case "$caller" in

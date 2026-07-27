@@ -1966,7 +1966,17 @@ fn open_directory_chain(path: &Path) -> Result<File, ArtifactError> {
             )
         };
         if child < 0 {
-            return Err(std::io::Error::last_os_error().into());
+            let error = std::io::Error::last_os_error();
+            if matches!(
+                error.raw_os_error(),
+                Some(code) if code == libc::ELOOP || code == libc::ENOTDIR
+            ) {
+                return Err(ArtifactError::UnsafeRoot(format!(
+                    "{} ({error})",
+                    path.display()
+                )));
+            }
+            return Err(error.into());
         }
         // SAFETY: openat returned a new owned descriptor.
         directory = unsafe { File::from_raw_fd(child) };
@@ -2374,7 +2384,7 @@ mod tests {
         symlink(outside.path(), dir.path().join("staging")).unwrap();
         assert!(matches!(
             read_text(&dir.path().join("staging/spec-output.md")),
-            Err(ArtifactError::Io(_)) | Err(ArtifactError::UnsafeRoot(_))
+            Err(ArtifactError::UnsafeRoot(_))
         ));
     }
 
