@@ -4,6 +4,12 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.1] — 2026-07-28
+
+### Added
+
+- **New Workspace wizard can start with an SDD spec.** The three-step wizard now offers a "Start with SDD spec" toggle. Describe the feature in markdown, pick an agent, and the workspace opens with a guarded SDD run already in Run Center. The old tracker-neutral path remains available.
+
 ## [0.98.0] — 2026-07-27
 
 ### Changed
