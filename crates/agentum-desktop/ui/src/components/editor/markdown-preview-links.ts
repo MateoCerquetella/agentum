@@ -2,8 +2,8 @@ import {
   filesystemPathHrefToFileUri,
   filesystemPathToFileUri,
   fileUriToFilesystemPath
-} from '../../../../shared/file-uri-path'
-import { isWindowsAbsolutePathLike } from '../../../../shared/cross-platform-path'
+} from '@/shared/file-uri-path'
+import { isWindowsAbsolutePathLike } from '@/shared/cross-platform-path'
 
 function toFileUrl(filePath: string): string {
   return filesystemPathToFileUri(filePath)

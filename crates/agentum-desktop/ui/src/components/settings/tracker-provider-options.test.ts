@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 import { getRepositoryPaneSearchEntries } from './repository-search'
 import { matchesSettingsSearch } from './settings-search'
 import {
@@ -46,11 +46,11 @@ describe('tracker provider picker model', () => {
 
   it('is reachable through settings search for git repos but not folders', () => {
     const entries = getRepositoryPaneSearchEntries(repo)
-    expect(entries.some((entry) => entry.title === 'Tracker')).toBe(true)
+    expect(entries.some((entry) => entry.title === 'Project Integrations')).toBe(true)
     expect(matchesSettingsSearch('tracker', entries)).toBe(true)
     expect(matchesSettingsSearch('linear', entries)).toBe(true)
 
     const folderEntries = getRepositoryPaneSearchEntries({ ...repo, kind: 'folder' })
-    expect(folderEntries.some((entry) => entry.title === 'Tracker')).toBe(false)
+    expect(folderEntries.some((entry) => entry.title === 'Project Integrations')).toBe(false)
   })
 })

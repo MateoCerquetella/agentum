@@ -2182,15 +2182,15 @@ mod tests {
 
     #[test]
     fn parse_claude_record_extracts_all_four_token_fields() {
-        let line = r#"{"cwd":"/Users/me/Developer/projects/agentum-tui-fresh","gitBranch":"main","sessionId":"88acb90d-1c09-41f4-9a3e-0b44fbe9aae5","timestamp":"2026-06-19T15:21:41.300Z","type":"assistant","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":6,"output_tokens":275,"cache_creation_input_tokens":11477,"cache_read_input_tokens":26242}}}"#;
+        let line = r#"{"cwd":"/Users/tester/projects/example","gitBranch":"main","sessionId":"88acb90d-1c09-41f4-9a3e-0b44fbe9aae5","timestamp":"2026-06-19T15:21:41.300Z","type":"assistant","message":{"role":"assistant","model":"claude-opus-4-7","usage":{"input_tokens":6,"output_tokens":275,"cache_creation_input_tokens":11477,"cache_read_input_tokens":26242}}}"#;
         let r = parse_claude_usage_record(line).expect("parses");
         assert_eq!(r.input, 6);
         assert_eq!(r.output, 275);
         assert_eq!(r.cache_write, 11477);
         assert_eq!(r.cache_read, 26242);
         assert_eq!(r.day, "2026-06-19");
-        assert_eq!(r.project, "/Users/me/Developer/projects/agentum-tui-fresh");
-        assert_eq!(r.project_label, "agentum-tui-fresh");
+        assert_eq!(r.project, "/Users/tester/projects/example");
+        assert_eq!(r.project_label, "example");
         assert_eq!(r.branch.as_deref(), Some("main"));
         assert_eq!(r.session_id, "88acb90d-1c09-41f4-9a3e-0b44fbe9aae5");
         assert_eq!(r.model.as_deref(), Some("claude-opus-4-7"));

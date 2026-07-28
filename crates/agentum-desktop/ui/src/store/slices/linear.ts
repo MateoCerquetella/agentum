@@ -16,7 +16,7 @@ import type {
   LinearWorkspace,
   LinearWorkspaceError,
   LinearWorkspaceSelection
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type { CacheEntry } from './github'
 import { clearLinearMetadataCache } from '../../hooks/useIssueMetadata'
 import {

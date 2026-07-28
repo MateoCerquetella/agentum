@@ -1,4 +1,4 @@
-import type { Worktree } from '../../../../shared/types'
+import type { Worktree } from '@/shared/types'
 import { isDefaultBranchWorkspace } from './visible-worktrees'
 
 export type AddRepoSkipFinalizationState = {

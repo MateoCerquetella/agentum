@@ -18,11 +18,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { BrowserPage } from '../../../../shared/types'
+import type { BrowserPage } from '@/shared/types'
 import {
   decodeBrowserScreencastFrame,
   type BrowserScreencastFrameMetadata
-} from '../../../../shared/browser-screencast-protocol'
+} from '@/shared/browser-screencast-protocol'
 import {
   clearProjectCdpData,
   openCdpScreencast,
@@ -34,7 +34,7 @@ import {
   getRemoteBrowserInsertText,
   isRemoteBrowserPasteShortcut
 } from './remote-browser-keyboard'
-import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
+import { normalizeBrowserNavigationUrl } from '@/shared/browser-url'
 import AgentBrowserPickerOverlay from './AgentBrowserPickerOverlay'
 import { clientToDevicePoint } from './screencast-geometry'
 import { deriveProjectRepoId } from '../../lib/browser-project'

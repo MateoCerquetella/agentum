@@ -185,3 +185,4 @@ describe('rich markdown round trip', () => {
     expect(roundTripMarkdown(input)).toBe('```\n[[not-a-link]]\n```')
   })
 })
+// @vitest-environment happy-dom

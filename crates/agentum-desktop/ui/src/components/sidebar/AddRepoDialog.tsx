@@ -21,7 +21,7 @@ import { getProjectAddedPrimaryBranchName, SetupStep } from './AddRepoSetupStep'
 import { getCloneDestinationAutoFill } from './clone-defaults'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   buildNestedRepoImportActionTelemetry,
   buildNestedRepoImportResultTelemetry,
@@ -29,12 +29,12 @@ import {
   createNestedRepoTelemetryAttemptId,
   shouldEmitNestedRepoImportSubmitTelemetry,
   type NestedRepoTelemetryRuntimeKind
-} from '../../../../shared/nested-repo-telemetry'
+} from '@/shared/nested-repo-telemetry'
 import type {
   AddRepoExistingWorkspaceSource,
   AddRepoSetupStepAction
-} from '../../../../shared/telemetry-events'
-import type { NestedRepoScanResult, Repo } from '../../../../shared/types'
+} from '@/shared/telemetry-events'
+import type { NestedRepoScanResult, Repo } from '@/shared/types'
 import { finalizeImportedRepoAfterSkip } from './add-repo-skip-finalization'
 import {
   buildAddRepoExistingWorkspacesTelemetry,
@@ -43,7 +43,7 @@ import {
 import {
   effectiveExternalWorktreeVisibility,
   isLegacyRepoForExternalWorktreeVisibility
-} from '../../../../shared/worktree-ownership'
+} from '@/shared/worktree-ownership'
 
 function defaultProjectGroupNameForPath(path: string): string {
   return (
@@ -1008,7 +1008,7 @@ const AddRepoDialog = React.memo(function AddRepoDialog() {
               </Button>
 
               <Button
-                onClick={handleOpenRemoteStep}
+                onClick={() => void handleOpenRemoteStep()}
                 variant="outline"
                 className="h-auto py-5 px-2 flex flex-col items-center gap-2 text-center border-border/80"
               >

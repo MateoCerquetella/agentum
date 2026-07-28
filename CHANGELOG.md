@@ -4,6 +4,324 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.2] — 2026-07-28
+
+### Fixed
+
+- **New Workspace SDD now ships through the verified release pipeline.** The
+  workspace, lockfile, and desktop bundle versions stay synchronized so the
+  guarded SDD wizard can be built and published with complete release assets.
+- **The SDD cutover gate recognizes the canonical API route.** The policy still
+  rejects retired harness and playbook surfaces without mistaking the renamed
+  `/api/sdd` implementation for legacy code.
+
+## [0.98.1] — 2026-07-28
+
+### Added
+
+- **New Workspace wizard can start with an SDD spec.** The three-step wizard now offers a "Start with SDD spec" toggle. Describe the feature in markdown, pick an agent, and the workspace opens with a guarded SDD run already in Run Center. The old tracker-neutral path remains available.
+
+## [0.98.0] — 2026-07-27
+
+### Changed
+
+- **Dropped the "v2" suffix from SDD.** The specification workflow is now
+  simply Agentum SDD. All module paths, API routes (/api/sdd), file names,
+  and documentation use the clean `sdd` naming.
+
+## [0.97.0] — 2026-07-27
+
+### Added
+
+- **Agentum now owns one specification workflow.** New Spec and Run Center use
+  stable `SPC-<ULID>` identities, external authoritative worktrees, typed
+  artifacts, durable events, revision-bound approvals, and provider-neutral
+  execution contracts under the `/api/sdd` surface.
+- **Repository artifacts have one portable root.** Saved specifications create
+  only `.agentum/manifest.json` and a stable directory below `.agentum/specs/`;
+  runtime state, credentials, approvals, and delivery state remain in SQLite.
+- **The complete lifecycle works locally and over SSH.** Specification, design,
+  planning, isolated implementation, typed verification, browser evidence, and
+  independent review recover across restarts and advance to Ready without
+  falling back from a remote repository to the desktop filesystem.
+- **External systems are explicit adapters.** GitHub and Linear normalize work
+  item sources, Jira Cloud uses brokered OAuth or an advanced local token flow,
+  and OpenSpec supports previewed one-shot import/export with provenance and
+  changed-on-both-sides conflict detection.
+- **Cutover is recoverable and fully accounted.** The migration previews and
+  SHA-256 inventories every retired specification source and demo fixture,
+  requires an external recovery archive and restricted-content policy before
+  apply, requires the exact repository root rather than inferring the caller's
+  working directory, and publishes validated native artifacts atomically.
+
+### Changed
+
+- **The competing SDD and harness surfaces have been retired.** New work enters
+  through New Spec and is observed through Run Center without ambient provider
+  configuration in customer repositories.
+- **Provider execution is isolated and conformant.** Claude, Codex,
+  Cursor/Agent, Gemini, Hermes, OpenCode, Aider, and custom adapters share typed
+  result, cancellation, timeout, output-limit, and project-config isolation
+  contracts; a missing or unauthenticated bundled provider blocks publication.
+- **Delivery is a separate, hash-bound action.** Ready never implies a commit,
+  push, pull request, tracker mutation, or release. Users preview and confirm
+  exact delivery actions, and partial or ambiguous failures remain retryable
+  without losing Ready state.
+- **Releases are fail-closed.** CI type-checks and tests the complete desktop UI,
+  validates all Rust targets and dependency policy, scans restricted content,
+  and publishes only from a verified signed annotated tag whose commit is
+  exactly the `main` tip. Updater payloads are checked against the key embedded
+  in Agentum before a draft is created.
+
+### Fixed
+
+- **External and filesystem boundaries fail closed.** Jira and public-forge
+  requests stay on exact credential-bound HTTPS origins with redirects
+  disabled; repository reads, repository creation, and the headless credential
+  vault use no-follow, descriptor-bound operations across supported platforms.
+- **Desktop installation now matches the published asset contract.** The
+  installer accepts only strict stable-version metadata, resolves exact
+  OS/architecture assets, requires a unique SHA-256 entry, and verifies macOS
+  signing, Gatekeeper acceptance, and notarization before replacement. The
+  desktop-only uninstaller preserves user data by default and purges only
+  explicit known data, config, cache, and state directories on request.
+- **Updater coverage is complete across supported systems.** Linux AppImage,
+  macOS app archives, and Windows NSIS updater signatures are required before a
+  draft can become the latest release; Homebrew synchronization is no longer
+  silently ignored.
+- **Desktop web content has an explicit security boundary.** The Tauri window
+  uses a restrictive CSP, macOS transport policy is limited to local networking,
+  microphone access is declared explicitly, and release bundles require the
+  hardened runtime, validated entitlements, and modern signing algorithms.
+- **Providers cannot impersonate the desktop user over loopback.** The embedded
+  API now requires a boot-scoped, memory-only bearer available only to the main
+  Tauri webview; browser child views and provider sandboxes cannot retrieve it.
+  MCP keeps a distinct rotated token, and `--no-auth` no longer exposes any
+  `/api/sdd` HTTP or WebSocket route.
+
+## [0.96.12] — 2026-07-27
+
+### Fixed
+
+- **New Workspace keeps newly added projects isolated.** A folder selected from
+  the Add project flow becomes authoritative before worktree discovery begins,
+  and navigation stays locked while that selection is pending. A new project
+  can no longer inherit the previous project's tracker or create its worktree
+  inside the previous repository.
+
+## [0.96.11] — 2026-07-27
+
+### Fixed
+
+- **The sidebar is compact and queue-focused again.** The live hierarchy study
+  has been removed in favor of the previous production sidebar layout.
+- **SSH host headers are quieter.** Remote rows no longer show a drag-grip icon,
+  and their secondary line now uses only a friendly OS name such as Linux or
+  macOS instead of repeating transport, hostname, and kernel-version details.
+
+## [0.96.10] — 2026-07-27
+
+### Added
+
+- **The sidebar now uses the live host hierarchy from the approved UI study.**
+  Real hosts, projects, workspaces, and active sessions render as a compact tree
+  with persistent cross-level search, working/idle totals, collapse controls,
+  and reconnect actions for unavailable SSH hosts.
+
+### Fixed
+
+- **Deleting a worktree no longer loses its registration when SSH is down.**
+  Agentum cleans safe local runtime state, keeps the remote workspace registered,
+  and asks the user to reconnect and retry instead of orphaning the checkout.
+- **Release workflows comply with the repository's hardened Actions policy.**
+  Every external action is pinned to an immutable commit and the allowlist is
+  restricted to those exact revisions.
+
+## [0.96.9] — 2026-07-27
+
+### Added
+
+- **The sidebar now uses the live host hierarchy from the approved UI study.**
+  Real hosts, projects, workspaces, and active sessions render as a compact tree
+  with persistent cross-level search, working/idle totals, collapse controls,
+  and reconnect actions for unavailable SSH hosts.
+
+### Fixed
+
+- **Deleting a worktree no longer loses its registration when SSH is down.**
+  Agentum cleans safe local runtime state, keeps the remote workspace registered,
+  and asks the user to reconnect and retry instead of orphaning the checkout.
+
+## [0.96.8] — 2026-07-24
+
+### Fixed
+
+- **New Workspace now behaves like a conventional movable window.** The full
+  top title bar is the drag surface with no separate grip icon, and creation
+  progress is presented in a responsive bottom panel instead of a right rail.
+
+## [0.96.7] — 2026-07-24
+
+### Fixed
+
+- **Queue now honors the amber unread attention signal.** Completed turns that
+  transition from working to idle without a surviving pane-level done hook move
+  to Needs You as Ready to continue instead of being mixed into Settled.
+
+## [0.96.6] — 2026-07-24
+
+### Added
+
+- **The Queue now distinguishes completed turns that still need review.**
+  Unseen agent completions appear under Needs You as Ready to continue, remain
+  durable across retained pane state and restarts, and move to Settled after
+  the exact pane is viewed without hiding higher-priority permission requests.
+- **Workspace creation keeps progress visible and the dialog movable.** The
+  final setup step shows every durable preparation stage in a side rail with a
+  cancel action, while the title bar can move the dialog without letting it
+  drift outside the viewport.
+
+### Fixed
+
+- **Gated runs deliver agent prompts reliably.** Codex startup waits for the
+  real idle composer after MCP initialization, and role-sized prompts are split
+  below tmux's command-message limit instead of disappearing as oversized
+  `send-keys` calls.
+- **Gated-run retries now report actual recovery.** Retry waits for a worker or
+  coordinator to appear, surfaces a repeated failure or timeout, and bounds SSH
+  contract reads so a stale pooled connection cannot strand startup silently.
+
+## [0.96.5] — 2026-07-23
+
+### Fixed
+
+- **Remote-boundary security tests now validate on Windows.** Containment and
+  harness-scope fixtures use native absolute paths on every runner while still
+  exercising outside-root, traversal, identity, and path-mismatch rejection.
+
+## [0.96.4] — 2026-07-23
+
+### Fixed
+
+- **Cross-platform lifecycle validation no longer depends on a local tmux.**
+  Transcript stop/kill race tests use the non-destructive external-session path,
+  so macOS validates observer retirement without requiring a host tmux binary.
+
+## [0.96.3] — 2026-07-23
+
+### Added
+
+- **Tracker identity now follows work from project setup through gated runs.**
+  Project-scoped GitHub and Linear bindings are shared consistently by Tasks,
+  New workspace, harness launch, and tracker updates, including remote-host
+  repository scopes.
+
+### Fixed
+
+- **Live transcripts no longer leak observers or race session teardown.** Reads,
+  resets, stop, kill, delete, and watchdog retirement now share one ordered
+  lifecycle, so stale requests cannot resurrect retired transcript workers.
+- **Gated-run progress stays visible and current.** The top bar survives startup
+  and temporary empty responses, preserves the active run, and refreshes status
+  without flickering back to an offer or picker.
+- **Workspace issue intake fails closed and retries cleanly.** Tracker load
+  failures are shown instead of becoming false empty states, and the repository,
+  host, issue, and tracker snapshot used at launch cannot drift between steps.
+- **Ephemeral SSH terminals now stay on the remote host.** With tmux persistence
+  off, the desktop PTY launches OpenSSH for the bound target and rejects missing
+  or invalid target identities instead of falling through to a local shell.
+- **Remote harness operations keep their execution boundary.** Repo discovery,
+  filesystem access, provisioning, and MCP actions preserve host identity rather
+  than falling back to a same-looking local path.
+- **Remote harness recovery is quarantined before touching the local host.**
+  Offline, deleted, stale, or malformed remote bindings no longer make startup
+  inspect a same-looking local path or fail globally, and quarantined runs
+  cannot restart managed workers until a coordinator resolves them.
+
+## [0.96.2] — 2026-07-23
+
+### Fixed
+
+- **Simple and complex issue drafting now lives in the New workspace flow.**
+  Step 3’s New issue editor defaults to a concise draft and exposes the guided
+  SDD interview from the adjacent menu; the resulting issue stays editable and
+  is linked before the worktree starts.
+- **Project Tasks is minimal again.** The drafting choice no longer appears in
+  the standalone Tasks intake, keeping worktree-specific setup in its actual
+  creation path.
+
+## [0.96.1] — 2026-07-23
+
+### Fixed
+
+- **Shared-worktree lease keys are portable across operating systems.** Files
+  discovered inside worker creation directories now use stable `/`-separated
+  keys on Windows, matching execution-plan paths and allowing drift detection
+  and recovery checks to resolve the correct durable lease.
+
+## [0.96.0] — 2026-07-22
+
+### Added
+
+- **Project Tasks now supports quick and structured issue drafting.** The
+  primary action produces a concise issue description, while “Shape into
+  spec…” opens a focused five-pass interview and returns one structured issue
+  to the existing editable review form.
+- **Harness runs can orchestrate isolated workers in one shared worktree.** A
+  coordinator validates the execution DAG and ownership boundaries, while
+  capability-scoped worker patches, leases, checkpoints, and recovery state
+  are persisted and applied through a serialized verification lane.
+
+### Fixed
+
+- **Project tracker tasks load on the first visit.** The Tasks page now starts
+  its provider read when it mounts instead of waiting for a later state change,
+  eliminating the blank tracker panel.
+- **Quick issue drafts stay genuinely concise.** The server enforces a plain
+  paragraph with no markdown headings or checklists and caps output at 120
+  words even when the selected model ignores formatting instructions.
+
+## [0.95.0] — 2026-07-22
+
+### Added
+
+- **Workspaces can start without an issue.** The new-work wizard offers a
+  manual-work option that skips issue creation and linking while preserving the
+  selected repository, agent, and model.
+- **SSH repositories support issue-first work.** Existing GitHub issues can be
+  searched and selected for SSH-backed projects, and new issues are created
+  against the repository's configured identity instead of requiring a local
+  checkout.
+
+### Fixed
+
+- **Failed gated runs recover cleanly.** Agentum tears down stale harness
+  sessions before recording failure and exposes a retry action instead of
+  leaving the run indefinitely stuck.
+- **SDD progress remains visible and aligned.** The gated-run header stays
+  mounted while Autopilot starts, and the connector correctly follows PM Spec,
+  Architecture, Plan tasks, Build, and Review.
+
+## [0.94.0] — 2026-07-22
+
+### Changed
+
+- **Project trackers are now the only active work-item source.** Agentum uses
+  each project's configured GitHub Project or Linear workspace for task views,
+  gated-run transitions, and work selection; the retired internal Workspace
+  board is no longer exposed through the desktop or HTTP API.
+- **Legacy board data is compatibility-only.** Existing database rows survive
+  upgrades without being read, reconciled, or mutated during normal work.
+
+### Fixed
+
+- **Gated runs no longer require an unconfigured tracker provider.** SDD and
+  harness transitions use the repository's existing GitHub or Linear binding,
+  avoiding spurious architecture blockers for unsupported integrations.
+- **Tracker-empty projects have a clear recovery path.** Project Tasks shows
+  explicit configuration and empty-state guidance instead of dead board
+  actions or broken navigation.
+
 ## [0.93.0] — 2026-07-22
 
 ### Added
@@ -615,7 +933,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `routes/cdp_browser.rs` wire a Chrome DevTools Protocol browser pane through
   the MCP layer, replacing the old native browser page pane with an
   agent-drivable browser.
-- **In-page annotate picker (orca-style).** A floating element-selector pill
+- **In-page annotate picker.** A floating element-selector pill
   renders over the webview, letting you pick elements on the page and annotate
   them via MCP `annotate`.
 
@@ -2960,7 +3278,7 @@ TUI sidebar polish.
 ### Changed
 - **Sidebar shows project name, not full path.** Groups display the
   basename of the workdir (e.g. `agentum` instead of
-  `/home/malloc/Developer/projects/agentum`). The full path is still
+  `/srv/projects/agentum`). The full path is still
   visible in the title bar / status when the project is selected.
 - **Sidebar is resizable.** `+` / `-` widen / narrow the tree pane
   in 4-column steps (clamped to 16 ≤ width ≤ 80, and the terminal

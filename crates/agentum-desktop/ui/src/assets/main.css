@@ -1613,9 +1613,8 @@
   }
 }
 
-/* Why: smooth reveal for the Tasks-tile workspace card so it eases in once the
-   workspace flips from "Creating" to "Ready" instead of popping in. */
-@keyframes tasks-workspace-in {
+/* Why: smooth reveal for the Tasks-tile spec card at the approval stop. */
+@keyframes tasks-spec-in {
   0% {
     opacity: 0;
     transform: translateY(4px);
@@ -2122,7 +2121,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 }
 
 /* Frame 3 — Tasks: cursor lands on the second row, the "Open" pill morphs
-   to a dark "Start workspace →" pill, then a workspace card slides in. */
+   to a dark "New Spec →" pill, then a spec card slides in. */
 .feature-tour-tasks-cursor {
   /* Why: anchored from the row's right edge so the cursor sits just past the
      pill's right edge (12px row padding + ~6px past pill end) instead of
@@ -2308,15 +2307,15 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   }
 }
 
-/* Newly-created workspace card slides in beneath the task row once the
-   user clicks "Start workspace" — sells the "task → workspace" jump. */
-.feature-tour-tasks-workspace {
+/* Newly-authored spec card slides in beneath the task row once the user
+   clicks "New Spec" — sells the tracker-to-spec handoff. */
+.feature-tour-tasks-spec {
   opacity: 0;
   transform: translateY(-6px);
-  animation: feature-tour-tasks-workspace var(--feature-tour-cycle) linear infinite;
+  animation: feature-tour-tasks-spec var(--feature-tour-cycle) linear infinite;
   animation-delay: 8s;
 }
-@keyframes feature-tour-tasks-workspace {
+@keyframes feature-tour-tasks-spec {
   0%,
   10% {
     opacity: 0;
@@ -2391,7 +2390,7 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
   .feature-tour-tasks-pill,
   .feature-tour-tasks-pill-label,
   .feature-tour-tasks-click-ring,
-  .feature-tour-tasks-workspace,
+  .feature-tour-tasks-spec,
   .feature-tour-terminal-output {
     animation: none !important;
   }
@@ -2840,40 +2839,3 @@ html.onboarding-tour-start-transition::view-transition-new(root) {
 .dark .file-type-icon[data-fcategory='data'] { color: #5cc9e8; }
 .file-type-icon[data-fcategory='secure'] { color: #b0870e; }
 .dark .file-type-icon[data-fcategory='secure'] { color: #f0c94a; }
-
-/* ── SDD loop rainbow (issue #313) ─────────────────────────────────────────
-   The active SDD Loop toggle shimmers like Claude Code's ultrathink: an
-   animated rainbow gradient clipped to the label text, plus a soft matching
-   border. Applied only while the SERVER says the loop is running (sdd.loop.*
-   events) — the shimmer is a truthful state indicator, not a hover effect. */
-@keyframes sdd-rainbow-slide {
-  to {
-    background-position: 200% center;
-  }
-}
-.sdd-rainbow-text {
-  background-image: linear-gradient(
-    90deg,
-    #f43f5e,
-    #f59e0b,
-    #22c55e,
-    #06b6d4,
-    #8b5cf6,
-    #f43f5e
-  );
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: sdd-rainbow-slide 2.5s linear infinite;
-}
-.sdd-rainbow-border {
-  border-color: transparent;
-  background:
-    linear-gradient(var(--card), var(--card)) padding-box,
-    linear-gradient(90deg, #f43f5e, #f59e0b, #22c55e, #06b6d4, #8b5cf6, #f43f5e) border-box;
-  background-size:
-    auto,
-    200% auto;
-  animation: sdd-rainbow-slide 2.5s linear infinite;
-}

@@ -11,12 +11,12 @@ import type {
   ProjectGroup,
   ProjectGroupImportResult,
   NestedRepoScanResult
-} from '../../../../shared/types'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
-import { sanitizeRepoIcon } from '../../../../shared/repo-icon'
-import { normalizeRepoBadgeColor } from '../../../../shared/repo-badge-color'
-import { normalizeLinearProjectBinding } from '../../shared/linear-project-binding'
-import { getProjectGroupSubtreeIds } from '../../../../shared/project-groups'
+} from '@/shared/types'
+import { isGitRepoKind } from '@/shared/repo-kind'
+import { sanitizeRepoIcon } from '@/shared/repo-icon'
+import { normalizeRepoBadgeColor } from '@/shared/repo-badge-color'
+import { normalizeLinearProjectBinding } from '@/shared/linear-project-binding'
+import { getProjectGroupSubtreeIds } from '@/shared/project-groups'
 import { getRepoIdFromWorktreeId } from './worktree-helpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 
@@ -179,9 +179,9 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
   fetchRepos: async () => {
     try {
       const target = getActiveRuntimeTarget(get().settings)
-      const repos =
+      const repos: Repo[] =
         target.kind === 'local'
-          ? await api.repos.list()
+          ? (await api.repos.list()) as Repo[]
           : (
               await callRuntimeRpc<{ repos: Repo[] }>(
                 target,
@@ -532,6 +532,12 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
       get().clearAgentumHookTrustForRepo(projectId)
       const repoPath = get().repos.find((repo) => repo.id === projectId)?.path
       get().evictGitHubRepoCaches(projectId, repoPath)
+      // Repo ids can be reused after remove/re-add. Drop every canonical
+      // tracker bucket now so a prior provider, conflict, or load error cannot
+      // flash on the newly registered project before its authoritative GET.
+      // Some isolated slice consumers (including migration/test harnesses)
+      // compose the repository slice without the tracker slice.
+      get().forgetProjectTrackerConfig?.(projectId)
       const { clearRepoSlugCacheEntry } = await import('../../lib/repo-slug-index')
       clearRepoSlugCacheEntry(projectId)
 

@@ -6,7 +6,7 @@ import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { parseSparsePresetDirectories } from '@/lib/sparse-preset-draft'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import type { SparsePreset } from '../../../../shared/types'
+import type { SparsePreset } from '@/shared/types'
 
 type SparseCheckoutPresetSelectProps = {
   repoId: string

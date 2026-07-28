@@ -12,7 +12,7 @@ import { useAppStore } from '@/store'
 
 export function resolveBoardRoute(input: {
   repos: ReadonlyArray<Pick<Repo, 'id' | 'kind'>>
-  /** e.g. ChatPage's filed-card repo. */
+  /** Optional caller-selected repository. */
   preferredRepoId?: string | null
   /** null on cold start (activeRepoId is reset, not persisted). */
   activeRepoId: string | null

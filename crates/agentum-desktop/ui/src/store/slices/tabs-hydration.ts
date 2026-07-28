@@ -3,8 +3,8 @@ import type {
   TabGroup,
   TabGroupLayoutNode,
   WorkspaceSessionState
-} from '../../../../shared/types'
-import { isValidTerminalTabId } from '../../../../shared/terminal-tab-id'
+} from '@/shared/types'
+import { isValidTerminalTabId } from '@/shared/terminal-tab-id'
 import { createBrowserUuid } from '@/lib/browser-uuid'
 import {
   dedupeTabOrder,

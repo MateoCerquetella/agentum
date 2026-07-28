@@ -6,8 +6,6 @@
 // phase and gates the two buttons, so the sub-panel is unit-testable without a
 // DOM (the UI package ships no jsdom).
 import { deriveGoalIssueDraft } from '@/lib/workspace-goal-step'
-import { deriveIssueSideEffectGate } from '@/lib/issue-side-effect-gate'
-import type { IssueSideEffectGate } from '@/lib/issue-side-effect-gate'
 import type { PickerProjectRef } from './work-item-picker-model'
 
 /**
@@ -81,8 +79,7 @@ export function resolveCreateIssueProvider(input: {
 // ---------- Spec 015 F3: Tracker-tab intake (add-only extensions) ----------
 // The Project Hub's Tracker panel reuses the 013 phase/gating helpers above
 // unchanged; the additions below cover what the wizard panel never needed — a
-// terminal `filed` phase (the panel outlives the file, offering "Start gated
-// run") and gated-run eligibility for the *filed* issue.
+// terminal `filed` phase (the panel outlives the file).
 
 /** The Tracker panel's phase — 013's `CreateIssueIntentPhase` plus `filed`. */
 export type TrackerIntakePhase = 'idle' | 'drafting' | 'review' | 'filing' | 'filed' | 'error'
@@ -115,23 +112,6 @@ export function deriveTrackerIntakePhase(s: {
   if (s.filed) return 'filed'
   if (s.hasBody) return 'review'
   return 'idle'
-}
-
-/**
- * Gated-run eligibility for a filed issue: composes the SAME
- * `deriveIssueSideEffectGate` the wizard submits through, so the panel's
- * "Start gated run" renders exactly when the wizard's toggle would arm. A
- * Linear identifier/URL fails the github.com parse and returns
- * `not-github-url` — honest by construction (D3: gated runs are GitHub-only).
- */
-export function deriveFiledGatedRunGate(
-  filed: FiledIssue | null,
-  repoConnectionId: string | null | undefined
-): IssueSideEffectGate {
-  return deriveIssueSideEffectGate(
-    filed ? { type: 'issue', url: filed.url ?? '' } : null,
-    repoConnectionId
-  )
 }
 
 // ---------- Spec 020 F3: the honest grounding note (add-only) ----------

@@ -4,7 +4,7 @@ mutation, rollback, persistence ordering, and sent-state transitions together
 so every write follows the same queue and rollback invariants. */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
-import type { DiffComment, Worktree } from '../../../../shared/types'
+import type { DiffComment, Worktree } from '@/shared/types'
 import { findWorktreeById, getRepoIdFromWorktreeId } from './worktree-helpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 import { createBrowserUuid } from '@/lib/browser-uuid'

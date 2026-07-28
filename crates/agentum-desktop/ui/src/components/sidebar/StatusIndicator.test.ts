@@ -20,7 +20,7 @@ describe('StatusIndicator', () => {
   it('renders working as a yellow spinner', () => {
     const classNames = renderDotClassNames('working')
 
-    expect(classNames).toContain('border-yellow-500')
+    expect(classNames).toContain('border-yellow-500/70')
     expect(classNames).toContain('border-t-transparent')
     expect(classNames).toContain('animate-spin')
   })
@@ -28,19 +28,19 @@ describe('StatusIndicator', () => {
   it('renders permission as an amber attention dot', () => {
     const classNames = renderDotClassNames('permission')
 
-    expect(classNames).toContain('bg-amber-500')
+    expect(classNames).toContain('bg-amber-500/70')
     expect(classNames).not.toContain('bg-red-500')
   })
 
   it('renders active as full emerald dot', () => {
     const classNames = renderDotClassNames('active')
 
-    expect(classNames).toContain('bg-emerald-500')
+    expect(classNames).toContain('bg-emerald-500/70')
   })
 
   it('renders done as an emerald dot', () => {
     const classNames = renderDotClassNames('done')
 
-    expect(classNames).toContain('bg-emerald-500')
+    expect(classNames).toContain('bg-emerald-500/70')
   })
 })

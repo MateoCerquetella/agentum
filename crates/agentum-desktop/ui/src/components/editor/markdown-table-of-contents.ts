@@ -49,13 +49,17 @@ function decodeTocHtmlEntities(text: string): string {
 }
 
 export function stripInlineMarkdownForToc(text: string): string {
+  const tree = parseMarkdownForToc(text)
+  return normalizeTocPlainText(markdownAstNodeToText(tree))
+}
+
+function normalizeTocPlainText(text: string): string {
   return decodeTocHtmlEntities(text)
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/\[\[[^|\]]+\|([^\]]+)\]\]/g, '$1')
     .replace(/\[\[([^\]]+)\]\]/g, '$1')
-    .replace(/<[^>]+>/g, '')
-    .replace(/[*_`~]/g, '')
+    // Removing each delimiter character is stable under repetition: unlike a
+    // whole-tag regex, nested input cannot expose a new `<script>` token.
+    .replace(/[<>]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -88,6 +92,12 @@ type MarkdownAstNode = {
 // Why: TOC generation only needs text/alt/child concatenation from parsed
 // Markdown headings, so a local walker keeps the dependency boundary smaller.
 function markdownAstNodeToText(node: MarkdownAstNode): string {
+  // Raw HTML is represented as an explicit mdast node. Ignore that node
+  // instead of trying to sanitize markup with repeated string replacement;
+  // nested/malformed tags can otherwise synthesize a new tag after removal.
+  if (node.type === 'html') {
+    return ''
+  }
   if (typeof node.value === 'string') {
     return node.value
   }
@@ -97,6 +107,14 @@ function markdownAstNodeToText(node: MarkdownAstNode): string {
   return (node.children ?? []).map(markdownAstNodeToText).join('')
 }
 
+function parseMarkdownForToc(markdown: string): MarkdownAstNode {
+  return unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(remarkFrontmatter, ['yaml', 'toml'])
+    .parse(markdown) as MarkdownAstNode
+}
+
 export function buildMarkdownTableOfContents(markdown: string): MarkdownTocItem[] {
   const slugger = new MarkdownHeadingSlugger()
   const root: MarkdownTocItem = { id: 'toc-root', level: 1, title: '', children: [] }
@@ -104,11 +122,7 @@ export function buildMarkdownTableOfContents(markdown: string): MarkdownTocItem[
 
   // Why: parsing Markdown keeps the TOC aligned with rendered setext/GFM/entity
   // headings without carrying separate mdast stringifier/entity packages.
-  const tree = unified()
-    .use(remarkParse)
-    .use(remarkGfm)
-    .use(remarkFrontmatter, ['yaml', 'toml'])
-    .parse(markdown) as MarkdownAstNode
+  const tree = parseMarkdownForToc(markdown)
 
   function visit(node: MarkdownAstNode): void {
     if (
@@ -116,7 +130,7 @@ export function buildMarkdownTableOfContents(markdown: string): MarkdownTocItem[
       typeof node.depth === 'number' &&
       isMarkdownTocLevel(node.depth)
     ) {
-      const title = markdownAstNodeToText(node).replace(/\s+/g, ' ').trim()
+      const title = normalizeTocPlainText(markdownAstNodeToText(node))
       if (title) {
         appendTocItem(stack, {
           children: [],

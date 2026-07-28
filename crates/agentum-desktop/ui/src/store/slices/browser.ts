@@ -12,15 +12,15 @@ import type {
   BrowserViewportPresetId,
   BrowserWorkspace,
   WorkspaceSessionState
-} from '../../../../shared/types'
-import { GRAB_BUDGET, type BrowserPageAnnotation } from '../../../../shared/browser-grab-types'
-import { FLOATING_TERMINAL_WORKTREE_ID, AGENTUM_BROWSER_BLANK_URL } from '../../../../shared/constants'
-import { redactKagiSessionToken } from '../../../../shared/browser-url'
+} from '@/shared/types'
+import { GRAB_BUDGET, type BrowserPageAnnotation } from '@/shared/browser-grab-types'
+import { FLOATING_TERMINAL_WORKTREE_ID, AGENTUM_BROWSER_BLANK_URL } from '@/shared/constants'
+import { redactKagiSessionToken } from '@/shared/browser-url'
 import {
   MAX_BROWSER_HISTORY_ENTRIES,
   normalizeBrowserHistoryEntries,
   normalizeBrowserHistoryUrl
-} from '../../../../shared/workspace-session-browser-history'
+} from '@/shared/workspace-session-browser-history'
 import { pickNeighbor } from './tab-group-state'
 import { destroyWorkspaceWebviews } from './browser-webview-cleanup'
 import {
@@ -36,7 +36,7 @@ import type {
   BrowserProfileDeleteResult,
   BrowserProfileImportFromBrowserResult,
   BrowserProfileListResult
-} from '../../../../shared/runtime-types'
+} from '@/shared/runtime-types'
 import { createBrowserUuid } from '@/lib/browser-uuid'
 
 type CreateBrowserTabOptions = {
@@ -1474,7 +1474,8 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       }
     }),
 
-  addBrowserPageAnnotation: (annotation) =>
+  addBrowserPageAnnotation: (annotation) => {
+    get().recordFeatureInteraction?.('browser-annotations')
     set((s) => {
       const existing = s.browserAnnotationsByPageId[annotation.browserPageId] ?? []
       const next = [...existing, sanitizeBrowserPageAnnotation(annotation)].slice(
@@ -1486,7 +1487,8 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
           [annotation.browserPageId]: next
         }
       }
-    }),
+    })
+  },
 
   deleteBrowserPageAnnotation: (pageId, annotationId) =>
     set((s) => {

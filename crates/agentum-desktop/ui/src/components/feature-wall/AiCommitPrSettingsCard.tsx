@@ -1,6 +1,6 @@
 import { useCallback, useState, type JSX } from 'react'
 import { Terminal } from 'lucide-react'
-import type { CommitMessageAiSettings, GlobalSettings, TuiAgent } from '../../../../shared/types'
+import type { CommitMessageAiSettings, GlobalSettings, TuiAgent } from '@/shared/types'
 import {
   CUSTOM_AGENT_ID,
   getCommitMessageAgentCapability,
@@ -9,8 +9,8 @@ import {
   resolveCommitMessageAgentChoice,
   type CommitMessageAgentCapability,
   type CommitMessageModelCapability
-} from '../../../../shared/commit-message-agent-spec'
-import { CUSTOM_PROMPT_PLACEHOLDER } from '../../../../shared/commit-message-prompt'
+} from '@/shared/commit-message-agent-spec'
+import { CUSTOM_PROMPT_PLACEHOLDER } from '@/shared/commit-message-prompt'
 import { AgentIcon, AGENT_CATALOG } from '@/lib/agent-catalog'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'

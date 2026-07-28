@@ -22,7 +22,7 @@ function collectTrackerRows(): TrackerWorktreeRow[] {
  * Spec 014 F2: route `tracker.phase_changed` / `tracker.blocked` events from
  * the shared `/api/events` bus (server-events-bus — no extra socket) into the
  * tracker-phase slice, joined to worktrees by id (or trackerUrl for
- * harness/MCP emitters that carry `worktree_id: null`). Unmatched events are
+ * automation/MCP emitters that carry `worktree_id: null`). Unmatched events are
  * dropped — the chip then waits for the persisted-phase re-fetch (the events
  * are hints, never the only truth). Mount once at the app root, beside
  * useServerWorktreeActivity.

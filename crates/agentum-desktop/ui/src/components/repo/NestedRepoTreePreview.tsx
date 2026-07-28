@@ -1,6 +1,6 @@
 import { useCallback, useMemo, type Dispatch, type SetStateAction } from 'react'
 import { FolderTree, GitBranch } from 'lucide-react'
-import type { NestedRepoCandidate, NestedRepoScanResult } from '../../../../shared/types'
+import type { NestedRepoCandidate, NestedRepoScanResult } from '@/shared/types'
 import { cn } from '@/lib/utils'
 
 type TreeFolder = {

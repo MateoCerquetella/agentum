@@ -6,7 +6,7 @@ import {
   resolveDefaultHostKey,
   resolveRepoIdForHost
 } from './composer-host-scoping'
-import type { Repo } from '../../../shared/types'
+import type { Repo } from '@/shared/types'
 import type { HostKey, HostMeta } from '@/store/slices/hosts'
 
 function repo(id: string, connectionId?: string): Repo {

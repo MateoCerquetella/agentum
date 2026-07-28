@@ -24,7 +24,7 @@ import type {
   LinearProjectDetail,
   LinearProjectSummary,
   LinearWorkspaceError
-} from '../../../shared/types'
+} from '@/shared/types'
 
 type LinearProjectLike = LinearProjectSummary & {
   content?: string

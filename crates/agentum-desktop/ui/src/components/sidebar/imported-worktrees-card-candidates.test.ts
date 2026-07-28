@@ -9,7 +9,7 @@ import type {
   DetectedWorktreeListResult,
   Repo,
   Worktree
-} from '../../../../shared/types'
+} from '@/shared/types'
 
 const repo: Repo = {
   id: 'repo-1',

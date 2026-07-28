@@ -12,7 +12,7 @@ import {
   ContextMenuContent,
   ContextMenuItem
 } from '@/components/ui/context-menu'
-import type { SearchFileResult, SearchMatch } from '../../../../shared/types'
+import type { SearchFileResult, SearchMatch } from '@/shared/types'
 
 // ─── Toggle Button ────────────────────────────────────────
 export function ToggleButton({

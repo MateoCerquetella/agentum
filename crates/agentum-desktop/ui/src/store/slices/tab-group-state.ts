@@ -1,4 +1,4 @@
-import type { Tab, TabContentType, TabGroup, WorkspaceSessionState } from '../../../../shared/types'
+import type { Tab, TabContentType, TabGroup, WorkspaceSessionState } from '@/shared/types'
 import { createBrowserUuid } from '@/lib/browser-uuid'
 
 export function findTabAndWorktree(

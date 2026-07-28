@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { create } from 'zustand'
-import type { PreflightStatus } from '../../shared/types'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { PreflightStatus } from '@/shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 import type { AppState } from '../types'
 import { createPreflightSlice } from './preflight'
 
@@ -37,7 +37,22 @@ function makeStatus(glabInstalled: boolean): PreflightStatus {
   return {
     git: { installed: true },
     gh: { installed: true, authenticated: true },
-    glab: { installed: glabInstalled, authenticated: glabInstalled }
+    glab: { installed: glabInstalled, authenticated: glabInstalled },
+    bitbucket: { configured: false, authenticated: false, account: null },
+    azureDevOps: {
+      configured: false,
+      authenticated: false,
+      account: null,
+      baseUrl: null,
+      tokenConfigured: false
+    },
+    gitea: {
+      configured: false,
+      authenticated: false,
+      account: null,
+      baseUrl: null,
+      tokenConfigured: false
+    }
   }
 }
 

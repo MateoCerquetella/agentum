@@ -6,7 +6,7 @@ import {
   type PickerOption
 } from '@/components/github/PRFilterPickers'
 import { cn } from '@/lib/utils'
-import type { ParsedTaskQuery } from '../../../../shared/task-query'
+import type { ParsedTaskQuery } from '@/shared/task-query'
 
 export type PRFilterChange = {
   author?: string | null

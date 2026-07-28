@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ManagedPaneInternal, ScrollState } from './pane-manager-types'
-import type { TerminalLeafId } from '../../../../shared/stable-pane-id'
+import type { TerminalLeafId } from '@/shared/stable-pane-id'
 
 const restoreScrollState = vi.hoisted(() => vi.fn())
 const releaseScrollStateMarker = vi.hoisted(() => vi.fn())

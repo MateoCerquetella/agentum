@@ -1,4 +1,4 @@
-import type { Repo } from '../../../shared/types'
+import type { Repo } from '@/shared/types'
 
 /** Exact-path lookup over the repo registry that tolerates spec-015 dual
  *  entries (same path, local + remote): prefers the local entry

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
-import { getDefaultSettings } from '../../../../shared/constants'
+import { getDefaultSettings } from '@/shared/constants'
 import { applyTerminalAppearance } from './terminal-appearance'
 
 describe('terminal inactive cursor style', () => {

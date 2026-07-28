@@ -8,9 +8,52 @@ use axum::http::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
-use super::board_goals::SlugReason;
 use crate::AppState;
 use crate::error::ApiError;
+
+/// Why a GitHub slug could not be resolved from a repository origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlugReason {
+    NoGithubRemote,
+    HostUnreachable,
+}
+
+/// Resolve an `owner/repo` slug from a validated hint or the host's git origin.
+pub(crate) async fn resolve_github_slug(
+    host: &Host,
+    workdir: &str,
+    hint: Option<&str>,
+) -> Result<String, SlugReason> {
+    if let Some(hint) = hint.map(str::trim).filter(|hint| is_valid_slug(hint)) {
+        return Ok(hint.to_string());
+    }
+
+    let out = crate::host_runtime::git_in_dir(host, workdir, &["remote", "get-url", "origin"])
+        .await
+        .map_err(|_| SlugReason::HostUnreachable)?;
+    if !out.success {
+        return Err(SlugReason::NoGithubRemote);
+    }
+    let (host, project) = super::forge::parse_remote_url(out.stdout_string().trim())
+        .ok_or(SlugReason::NoGithubRemote)?;
+    match super::forge::classify_remote(&host, project) {
+        Some(remote) if remote.is_github() => Ok(remote.project),
+        _ => Err(SlugReason::NoGithubRemote),
+    }
+}
+
+fn is_valid_slug(slug: &str) -> bool {
+    let mut parts = slug.split('/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(owner), Some(repo), None) => {
+            !owner.is_empty()
+                && !repo.is_empty()
+                && !owner.chars().any(char::is_whitespace)
+                && !repo.chars().any(char::is_whitespace)
+        }
+        _ => false,
+    }
+}
 
 /// Expand `~` / `~/x` to the daemon's `$HOME` and trim trailing
 /// slashes (preserving a bare `/`). Other paths pass through unchanged.
@@ -121,7 +164,7 @@ pub(crate) async fn resolve_tracker_slug(
     // Local-only `~` expand (#359, merged): a remote repo's workdir must reach
     // its host verbatim — expanding against the daemon's HOME would mangle it.
     let workdir = effective_workdir(&host, workdir)?;
-    super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
+    resolve_github_slug(&host, &workdir, slug_hint)
         .await
         .map_err(|reason| {
             let (status, body) = no_github_repo_envelope(reason);
@@ -181,15 +224,17 @@ mod tests {
             wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: "test".to_string(),
             no_auth: true,
+            embedded_ui_token: None,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus: broadcast::channel(64).0,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp_token: Arc::new(String::from("test-mcp-token")),
             api_base_url: None,
             desktop_bridge: None,
-            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
-            sdd_loops: Default::default(),
             events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sdd_credentials: std::sync::Arc::new(
+                crate::sdd::credentials::MemoryCredentialVault::default(),
+            ),
         }
     }
 
@@ -294,7 +339,7 @@ mod tests {
     /// distinguishable — an unreachable host is not "no origin".
     #[test]
     fn no_github_repo_envelope_distinguishes_reasons() {
-        use super::super::board_goals::SlugReason;
+        use super::SlugReason;
         let (s1, b1) = no_github_repo_envelope(SlugReason::NoGithubRemote);
         let (s2, b2) = no_github_repo_envelope(SlugReason::HostUnreachable);
         assert_eq!(s1, StatusCode::UNPROCESSABLE_ENTITY);

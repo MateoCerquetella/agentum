@@ -5,7 +5,7 @@ import {
   getPRCommentAudienceCounts,
   isBotPRComment
 } from './pr-comment-audience'
-import type { PRComment } from '../../../shared/types'
+import type { PRComment } from '@/shared/types'
 
 function comment(overrides: Partial<PRComment>): PRComment {
   return {

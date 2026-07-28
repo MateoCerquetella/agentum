@@ -137,6 +137,12 @@ describe('registerVueLanguage', () => {
     expect(setLanguageConfiguration).toHaveBeenCalledWith('vue', vueLanguageConfiguration)
   })
 
+  it('closes HTML comments on both standard and legacy end tags', () => {
+    for (const endTag of ['-->', '--!>']) {
+      expect(findRuleAction('comment', endTag)).toMatchObject({ next: '@pop' })
+    }
+  })
+
   it('captures Vue tokenizer transitions for a representative SFC fixture', () => {
     const fixture = `<template>
   <p>{{ message.toUpperCase() }}</p>

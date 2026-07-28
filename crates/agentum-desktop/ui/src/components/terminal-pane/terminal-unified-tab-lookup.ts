@@ -1,4 +1,4 @@
-import type { Tab } from '../../../../shared/types'
+import type { Tab } from '@/shared/types'
 
 const terminalGroupLookupByUnifiedTabs = new WeakMap<readonly Tab[], Map<string, string>>()
 

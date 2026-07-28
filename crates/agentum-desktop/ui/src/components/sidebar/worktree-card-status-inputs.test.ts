@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { shallow } from 'zustand/shallow'
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 import {
   selectLivePtyIdsForWorktree,
   selectRuntimePaneTitlesForWorktree

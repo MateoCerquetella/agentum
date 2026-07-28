@@ -98,6 +98,64 @@ fn read_accounts_array(conn: &Connection, key: &str) -> Vec<Value> {
     }
 }
 
+/// Persist only the non-secret metadata needed to locate and display managed
+/// accounts. Credential blobs are written to the owner-only secret store and
+/// must never be serialized into SQLite (or a diagnostic derived from it).
+fn write_account_metadata(
+    conn: &Connection,
+    key: &str,
+    accounts: Vec<Value>,
+) -> Result<(), String> {
+    const CLAUDE_FIELDS: &[&str] = &[
+        "id",
+        "email",
+        "managedAuthPath",
+        "managedAuthRuntime",
+        "wslDistro",
+        "wslLinuxAuthPath",
+        "authMethod",
+        "organizationUuid",
+        "organizationName",
+        "createdAt",
+        "updatedAt",
+        "lastAuthenticatedAt",
+    ];
+    const CODEX_FIELDS: &[&str] = &[
+        "id",
+        "email",
+        "managedHomePath",
+        "managedHomeRuntime",
+        "wslDistro",
+        "wslLinuxHomePath",
+        "providerAccountId",
+        "workspaceLabel",
+        "workspaceAccountId",
+        "createdAt",
+        "updatedAt",
+        "lastAuthenticatedAt",
+    ];
+
+    let allowed = match key {
+        "claudeManagedAccounts" => CLAUDE_FIELDS,
+        "codexManagedAccounts" => CODEX_FIELDS,
+        _ => return Err("refused unknown managed-account metadata target".to_string()),
+    };
+    let safe = accounts.iter().all(|account| {
+        account.as_object().is_some_and(|fields| {
+            fields.iter().all(|(name, value)| {
+                allowed.contains(&name.as_str())
+                    && !matches!(value, Value::Array(_) | Value::Object(_))
+            })
+        })
+    });
+    if !safe {
+        // Keep this fixed: neither field names nor values from the rejected
+        // record are safe to echo into a log or UI error.
+        return Err("refused unsafe managed-account metadata".to_string());
+    }
+    write_setting(conn, key, &Value::Array(accounts))
+}
+
 // ---------------------------------------------------------------------------
 // Filesystem helpers
 // ---------------------------------------------------------------------------
@@ -470,6 +528,16 @@ mod tests {
         conn
     }
 
+    fn raw_setting(conn: &Connection, key: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
     #[test]
     fn empty_state_shape_matches_contract() {
         let conn = mem_db();
@@ -538,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn capture_upserts_by_email_and_sets_active() {
+    fn captures_store_credentials_only_in_owner_only_files() {
         // Serialize against the other AGENTUM_HOME-mutating test (usage_prefs):
         // both set this process-global var, and parallel test threads would
         // otherwise race. Hold the guard for the whole body.
@@ -552,18 +620,24 @@ mod tests {
         let conn = mem_db();
 
         let oauth_a = json!({ "emailAddress": "a@example.com" });
-        let (id_a, email_a) = claude_capture_account(&conn, r#"{"blob":1}"#, &oauth_a).unwrap();
+        let (id_a, email_a) =
+            claude_capture_account(&conn, r#"{"blob":"CLAUDE_SECRET_SENTINEL_1"}"#, &oauth_a)
+                .unwrap();
         assert_eq!(email_a, "a@example.com");
 
         // Capturing the same email again must reuse the slot, not duplicate it
         // (the "Add gave me the same account twice" bug class).
-        let (id_a2, _) = claude_capture_account(&conn, r#"{"blob":2}"#, &oauth_a).unwrap();
+        let (id_a2, _) =
+            claude_capture_account(&conn, r#"{"blob":"CLAUDE_SECRET_SENTINEL_2"}"#, &oauth_a)
+                .unwrap();
         assert_eq!(id_a, id_a2);
         assert_eq!(read_accounts_array(&conn, "claudeManagedAccounts").len(), 1);
 
         // A different email gets its own slot and becomes the active account.
         let oauth_b = json!({ "emailAddress": "b@example.com" });
-        let (id_b, _) = claude_capture_account(&conn, r#"{"blob":3}"#, &oauth_b).unwrap();
+        let (id_b, _) =
+            claude_capture_account(&conn, r#"{"blob":"CLAUDE_SECRET_SENTINEL_3"}"#, &oauth_b)
+                .unwrap();
         assert_ne!(id_a, id_b);
         let accounts = read_accounts_array(&conn, "claudeManagedAccounts");
         assert_eq!(accounts.len(), 2);
@@ -575,9 +649,80 @@ mod tests {
         // The stored secret round-trips for the new account.
         let path = string_field(&accounts[1], "managedAuthPath").unwrap();
         let (blob, _) = load_claude_secret(path).unwrap();
-        assert_eq!(blob, r#"{"blob":3}"#);
+        assert_eq!(blob, r#"{"blob":"CLAUDE_SECRET_SENTINEL_3"}"#);
+
+        // SQLite contains only the whitelisted account metadata. Full auth
+        // blobs are confined to the chmod-0600 secret files referenced above.
+        let claude_row = raw_setting(&conn, "claudeManagedAccounts").unwrap();
+        for credential_fragment in [
+            "CLAUDE_SECRET_SENTINEL_1",
+            "CLAUDE_SECRET_SENTINEL_2",
+            "CLAUDE_SECRET_SENTINEL_3",
+        ] {
+            assert!(!claude_row.contains(credential_fragment));
+        }
+
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"email":"codex@example.com"}"#);
+        let codex_blob = json!({
+            "tokens": {
+                "id_token": format!("header.{payload}.signature"),
+                "account_id": "acct_safe_display_id",
+                "access_token": "CODEX_ACCESS_SECRET_SENTINEL",
+                "refresh_token": "CODEX_REFRESH_SECRET_SENTINEL"
+            },
+            "OPENAI_API_KEY": "CODEX_KEY_SECRET_SENTINEL"
+        })
+        .to_string();
+        let (codex_id, _) = codex_capture_account(&conn, &codex_blob).unwrap();
+        let codex_accounts = read_accounts_array(&conn, "codexManagedAccounts");
+        let codex_path = codex_accounts
+            .iter()
+            .find(|account| string_field(account, "id") == Some(&codex_id))
+            .and_then(|account| string_field(account, "managedHomePath"))
+            .unwrap();
+        assert_eq!(load_codex_secret(codex_path).unwrap(), codex_blob);
+        let codex_row = raw_setting(&conn, "codexManagedAccounts").unwrap();
+        for credential_fragment in [
+            "CODEX_ACCESS_SECRET_SENTINEL",
+            "CODEX_REFRESH_SECRET_SENTINEL",
+            "CODEX_KEY_SECRET_SENTINEL",
+            "id_token",
+            "access_token",
+            "refresh_token",
+            "OPENAI_API_KEY",
+        ] {
+            assert!(!codex_row.contains(credential_fragment));
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn metadata_writer_rejects_secret_or_nested_fields_without_echoing_them() {
+        let conn = mem_db();
+        let error = write_account_metadata(
+            &conn,
+            "claudeManagedAccounts",
+            vec![json!({
+                "id": "a1",
+                "email": "safe@example.com",
+                "credentials": "DO_NOT_PERSIST_OR_ECHO",
+            })],
+        )
+        .unwrap_err();
+        assert_eq!(error, "refused unsafe managed-account metadata");
+        assert!(!error.contains("DO_NOT_PERSIST_OR_ECHO"));
+        assert!(raw_setting(&conn, "claudeManagedAccounts").is_none());
+
+        let nested_error = write_account_metadata(
+            &conn,
+            "codexManagedAccounts",
+            vec![json!({ "id": "a1", "workspaceLabel": { "token": "secret" } })],
+        )
+        .unwrap_err();
+        assert_eq!(nested_error, "refused unsafe managed-account metadata");
+        assert!(raw_setting(&conn, "codexManagedAccounts").is_none());
     }
 
     #[test]

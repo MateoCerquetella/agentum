@@ -6,7 +6,7 @@ import {
   type KeybindingActionId,
   type KeybindingDefinition,
   type KeybindingInput
-} from '../../../../shared/keybindings'
+} from '@/shared/keybindings'
 import { cn } from '../../lib/utils'
 import { ShortcutKeyCombo } from '../ShortcutKeyCombo'
 import { Badge } from '../ui/badge'
@@ -85,7 +85,9 @@ export function ShortcutBindingRow({
       recordButtonRef.current?.focus()
     }
     api.ui.setShortcutRecorderFocused(recording)
-    return () => api.ui.setShortcutRecorderFocused(false)
+    return () => {
+      void api.ui.setShortcutRecorderFocused(false)
+    }
   }, [recording])
 
   const statusMessage = error ?? (warnings.length > 0 ? warnings.join(' ') : '')

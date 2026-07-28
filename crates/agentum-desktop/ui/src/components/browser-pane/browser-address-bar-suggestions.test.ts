@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { BrowserHistoryEntry } from '../../../../shared/types'
+import type { BrowserHistoryEntry } from '@/shared/types'
 import { buildBrowserAddressBarSuggestions } from './browser-address-bar-suggestions'
 
 function historyEntry(overrides: Partial<BrowserHistoryEntry>): BrowserHistoryEntry {

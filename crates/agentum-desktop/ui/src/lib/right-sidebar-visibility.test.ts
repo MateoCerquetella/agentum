@@ -30,9 +30,7 @@ function makeState(
 
 describe('right sidebar visibility helpers', () => {
   it('suppresses right sidebar controls on full-page views', () => {
-    // 'harness' is the Chat view — a focused conversation surface that hides the
-    // Explorer/Search/Source-Control strip just like the other full-page views.
-    for (const view of ['settings', 'tasks', 'activity', 'skills', 'mobile', 'harness']) {
+    for (const view of ['settings', 'tasks', 'activity', 'project', 'projects']) {
       expect(canShowRightSidebarForView(view as AppState['activeView'])).toBe(false)
     }
   })

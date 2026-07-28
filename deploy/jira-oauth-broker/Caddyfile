@@ -1,0 +1,17 @@
+{
+	admin off
+	email {$ACME_EMAIL}
+}
+
+{$AGENTUM_JIRA_BROKER_DOMAIN} {
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+
+	# Access logging is intentionally disabled because the OAuth callback carries
+	# a short-lived authorization code and state in its query string.
+	reverse_proxy jira-broker:8787
+}

@@ -12,8 +12,15 @@ export default defineConfig({
     // crash at the app root. Deduping resolves every import to the top-level copy.
     dedupe: ['react', 'react-dom', 'react/jsx-runtime'],
     alias: {
+      // The beta package declares a CommonJS entry that it does not ship.
+      // Resolve its published ESM entry explicitly for Vitest as well as Vite.
+      '@xterm/addon-ligatures': resolve(
+        __dirname,
+        'node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs'
+      ),
       '@renderer': resolve(__dirname, 'src'),
       '@': resolve(__dirname, 'src'),
+      '@resources': resolve(__dirname, 'resources'),
       // Map Electron-era relative imports to their new locations
       '../../shared': resolve(__dirname, 'src/shared'),
       '../../../shared': resolve(__dirname, 'src/shared'),

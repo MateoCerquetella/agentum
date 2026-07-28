@@ -1,5 +1,5 @@
 import { useAppStore } from '@/store'
-import type { TabContentType } from '../../../../shared/types'
+import type { TabContentType } from '@/shared/types'
 import { TOGGLE_TERMINAL_PANE_EXPAND_EVENT } from '@/constants/terminal'
 import { reconcileTabOrder } from '../tab-bar/reconcile-order'
 import {

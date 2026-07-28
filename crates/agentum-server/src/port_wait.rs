@@ -31,3 +31,19 @@ pub(crate) async fn wait_until_listening(port: u16, max: Duration) -> bool {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
+
+/// Poll until the port stops accepting connections or the deadline passes.
+/// Teardown callers use this as a completion barrier before reusing a fixed
+/// local port for a replacement process.
+pub(crate) async fn wait_until_not_listening(port: u16, max: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + max;
+    loop {
+        if !port_listening(port).await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

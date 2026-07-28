@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Worktree } from '../../../../shared/types'
+import type { Worktree } from '@/shared/types'
 import {
   decodeMarkdownPreviewAnchor,
   deriveMarkdownPreviewSourceRoot,
@@ -9,7 +9,7 @@ import {
   getMarkdownPreviewAnchorScrollTop,
   resolveMarkdownPreviewSourceWorktree
 } from './MarkdownPreview'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 function makeWorktree(id: string, path: string): Worktree {
   return {

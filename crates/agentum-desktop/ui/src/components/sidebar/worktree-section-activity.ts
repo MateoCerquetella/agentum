@@ -5,7 +5,7 @@ import type {
   Repo,
   Worktree,
   WorkspaceStatusDefinition
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   getGroupKeysForWorktree,
   type WorktreeGroupBy,

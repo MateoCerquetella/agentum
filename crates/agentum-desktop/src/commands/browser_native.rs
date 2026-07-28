@@ -423,7 +423,7 @@ pub fn browser_webview_state(
     })
 }
 
-/// In-page annotate mode (orca-style). Because the browser content is a native
+/// In-page annotate mode. Because the browser content is a native
 /// child webview that paints over all React UI, the annotation picker + comment
 /// box are injected INTO the guest page (so they render on top of the content).
 /// On submit, the element payload + comment + intent are sent to the host over

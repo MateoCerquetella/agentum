@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Why: these activation cases share one mock store and assert ordering across startup, setup, issue commands, and default tabs. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SetupScriptLaunchMode } from '../../../shared/types'
+import type { SetupScriptLaunchMode } from '@/shared/types'
 import { ensureWorktreeHasInitialTerminal } from './worktree-activation'
 import { useAppStore } from '@/store'
 

@@ -52,13 +52,13 @@ import {
   type SmartNameMode,
   type SmartWorkspaceSourceRow
 } from './smart-workspace-source-results'
-import { filterAvailableTaskProviders } from '../../../../shared/task-providers'
+import { filterAvailableTaskProviders } from '@/shared/task-providers'
 import type {
   BaseRefSearchResult,
   GitHubWorkItem,
   GitLabWorkItem,
   LinearIssue
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { resolveSmartWorkspaceCommandValue } from './smart-workspace-command-value'
 
 // Why: GitLab MR list filter — Open / Merged / Closed / All — replaces

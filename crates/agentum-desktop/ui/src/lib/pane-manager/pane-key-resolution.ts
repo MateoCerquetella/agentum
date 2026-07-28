@@ -2,7 +2,7 @@ import {
   isTerminalLeafId,
   parsePaneKey,
   type TerminalLeafId
-} from '../../../../shared/stable-pane-id'
+} from '@/shared/stable-pane-id'
 import type { ManagedPane } from './pane-manager-types'
 
 type PaneKeyUnresolvedReason = 'confirmed-missing' | 'ownership-mismatch' | 'invalid'

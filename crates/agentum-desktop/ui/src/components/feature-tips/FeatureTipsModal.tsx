@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react'
 import { Loader2, Mic } from 'lucide-react'
-import { getDefaultVoiceSettings } from '../../../../shared/constants'
-import type { FeatureTip } from '../../../../shared/feature-tips'
+import { getDefaultVoiceSettings } from '@/shared/constants'
+import type { FeatureTip } from '@/shared/feature-tips'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

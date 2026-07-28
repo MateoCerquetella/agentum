@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { shallow } from 'zustand/shallow'
 
 import { workItemsCacheKey, type CacheEntry } from '@/store/slices/github'
-import type { GitHubWorkItem, LinearIssue } from '../../../shared/types'
+import type { GitHubWorkItem, LinearIssue } from '@/shared/types'
 import {
   buildTaskPageRepoSourceState,
   deriveTaskPageGitHubWorkItemsFetchOptions,

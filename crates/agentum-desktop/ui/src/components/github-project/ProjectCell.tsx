@@ -21,7 +21,7 @@ import type {
   GitHubProjectRow,
   GitHubProjectUser,
   ListIssueTypesBySlugResult
-} from '../../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 
 type Props = {
   row: GitHubProjectRow

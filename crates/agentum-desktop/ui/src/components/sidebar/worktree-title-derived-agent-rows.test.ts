@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { TerminalLayoutSnapshot, TerminalTab } from '../../../../shared/types'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import type { TerminalLayoutSnapshot, TerminalTab } from '@/shared/types'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { buildWorktreeAgentRows } from './worktree-agent-rows'
 
 const LEAF_ID_1 = '77777777-7777-4777-8777-777777777777'

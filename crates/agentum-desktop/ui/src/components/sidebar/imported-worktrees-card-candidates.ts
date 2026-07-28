@@ -3,12 +3,12 @@ import type {
   DetectedWorktreeListResult,
   Repo,
   Worktree
-} from '../../../../shared/types'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+} from '@/shared/types'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   effectiveExternalWorktreeVisibility,
   isLegacyRepoForExternalWorktreeVisibility
-} from '../../../../shared/worktree-ownership'
+} from '@/shared/worktree-ownership'
 import type { ImportedWorktreesCardCandidate } from './worktree-list-groups'
 
 export function getHiddenImportedWorktrees(

@@ -266,7 +266,7 @@ pub async fn send_bytes(host: &Host, target: &str, bytes: &[u8]) -> Result<()> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::send_bytes(target, bytes).await?),
         HostKind::Ssh { .. } => {
-            for chunk in bytes.chunks(4096) {
+            for chunk in bytes.chunks(agentum_tmux::SEND_KEYS_HEX_CHUNK_BYTES) {
                 let mut script = format!("tmux send-keys -H -t {}", q(target)?);
                 for b in chunk {
                     script.push(' ');
@@ -475,17 +475,17 @@ pub fn spawn_remote_input_writer(host: &Host, target: &str) -> Result<tokio::pro
 
 /// Encode raw keystroke bytes as space-separated lowercase-hex lines
 /// (newline-terminated) for the [`spawn_remote_input_writer`] remote loop,
-/// split at 4 KiB of input per line.
+/// split at [`agentum_tmux::SEND_KEYS_HEX_CHUNK_BYTES`] of input per line.
 ///
 /// The split is load-bearing: each line becomes ONE remote `tmux send-keys`,
-/// and tmux rejects a command whose marshalled form exceeds its ~16 KB
-/// client→server message cap — an error the remote loop deliberately
-/// swallows. A long paste encoded as a single line therefore vanished
-/// silently. 4 KiB of bytes ≈ 12 KiB of hex args, the same per-exec bound
-/// [`send_bytes`] uses.
+/// and tmux rejects an oversized marshalled command before it reaches the pane
+/// — an error the remote loop deliberately swallows. Every byte is a separate
+/// argv entry, so the safe input bound is substantially smaller than the
+/// rendered hex text suggests. Use the same conservative bound as local
+/// [`send_bytes`].
 pub fn encode_input_hex_lines(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() * 3 + 1);
-    for chunk in bytes.chunks(4096) {
+    for chunk in bytes.chunks(agentum_tmux::SEND_KEYS_HEX_CHUNK_BYTES) {
         for (i, b) in chunk.iter().enumerate() {
             if i > 0 {
                 out.push(b' ');

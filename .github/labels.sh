@@ -23,7 +23,7 @@ label "area/store"     "5319e7" "SQLite persistence (crates/agentum-store)"
 label "area/tmux"      "5319e7" "tmux wrapper (crates/agentum-tmux)"
 label "area/watchdog"  "5319e7" "Pane watchdog (crates/agentum-watchdog)"
 label "area/core"      "5319e7" "Shared types (crates/agentum-core)"
-label "area/harness"   "5319e7" "Harness Engine"
+label "area/sdd"       "5319e7" "Agentum SDD, Run Center, artifacts, and execution"
 label "area/ci"        "5319e7" "CI / release / build"
 
 # --- priority/* ----------------------------------------------------------

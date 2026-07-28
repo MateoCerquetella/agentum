@@ -14,20 +14,12 @@ cask "agentum" do
 
   app "Agentum.app"
 
-  # Agentum is not yet Apple-notarized. Homebrew applies com.apple.quarantine to
-  # downloads by default, which makes Gatekeeper block an unsigned app on first
-  # launch. Strip it post-install so `brew install` is warning-free — the same
-  # approach nikitabobko/aerospace and mocki-toki/barik use. Once releases are
-  # Apple-notarized, delete this postflight block.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args:         ["-dr", "com.apple.quarantine", "#{appdir}/Agentum.app"],
-                   must_succeed: false
-  end
-
   zap trash: [
     "~/.agentum",
+    "~/Library/Application Support/agentum",
+    "~/Library/Application Support/Agentum",
     "~/Library/Application Support/dev.agentum.app",
+    "~/Library/Caches/agentum",
     "~/Library/Caches/dev.agentum.app",
     "~/Library/Preferences/dev.agentum.app.plist",
     "~/Library/Saved Application State/dev.agentum.app.savedState",

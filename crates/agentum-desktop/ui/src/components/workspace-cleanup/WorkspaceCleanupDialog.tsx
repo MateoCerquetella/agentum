@@ -30,14 +30,14 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   canQueueWorkspaceCleanupCandidate,
   type WorkspaceCleanupBlocker,
   type WorkspaceCleanupCandidate,
   type WorkspaceCleanupScanError,
   type WorkspaceCleanupTier
-} from '../../../../shared/workspace-cleanup'
+} from '@/shared/workspace-cleanup'
 import {
   resolveWorkspaceCleanupActiveView,
   type WorkspaceCleanupView,

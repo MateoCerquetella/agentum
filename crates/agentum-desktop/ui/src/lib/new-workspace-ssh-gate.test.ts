@@ -4,7 +4,7 @@ import {
   getSelectedRepoSshGate,
   isSshConnectInProgress
 } from './new-workspace-ssh-gate'
-import type { SshConnectionStatus } from '../../../shared/ssh-types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
 
 describe('new workspace SSH gate', () => {
   it('does not gate local repos', () => {

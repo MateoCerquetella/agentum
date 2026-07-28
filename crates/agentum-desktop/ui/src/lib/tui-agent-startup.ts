@@ -2,5 +2,5 @@ export {
   buildAgentDraftLaunchPlan,
   buildAgentStartupPlan,
   isShellProcess
-} from '../../../shared/tui-agent-startup'
-export type { AgentDraftLaunchPlan, AgentStartupPlan } from '../../../shared/tui-agent-startup'
+} from '@/shared/tui-agent-startup'
+export type { AgentDraftLaunchPlan, AgentStartupPlan } from '@/shared/tui-agent-startup'

@@ -3,7 +3,7 @@ import { api } from '@/tauri'
 import type {
   CrashReportBreadcrumbData,
   CrashReportDetailValue
-} from '../../../shared/crash-reporting'
+} from '@/shared/crash-reporting'
 
 const RENDERER_MEMORY_SAMPLE_INTERVAL_MS = 60_000
 const BYTES_PER_MEGABYTE = 1024 * 1024

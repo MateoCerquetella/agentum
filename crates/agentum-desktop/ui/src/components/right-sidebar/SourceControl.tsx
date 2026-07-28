@@ -18,7 +18,7 @@ import { detectLanguage } from '@/lib/language-detect'
 import { basename, dirname, joinPath } from '@/lib/path'
 import { cn } from '@/lib/utils'
 import { WORKSPACE_FILE_PATH_MIME } from '@/lib/workspace-file-drag'
-import { isFolderRepo } from '../../../../shared/repo-kind'
+import { isFolderRepo } from '@/shared/repo-kind'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -71,7 +71,7 @@ import {
   type PendingDiffCommentsClear
 } from './diff-comments-clear-dialog-state'
 import { AGENT_CATALOG } from '@/lib/agent-catalog'
-import { filterEnabledTuiAgents } from '../../../../shared/tui-agent-selection'
+import { filterEnabledTuiAgents } from '@/shared/tui-agent-selection'
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
 import { installWindowVisibilityInterval } from '@/lib/window-visibility-interval'
 import {
@@ -105,9 +105,9 @@ import {
   type PullRequestFieldRevisions
 } from './useCreatePullRequestDialogFields'
 import { GitHistoryPanel, type GitHistoryPanelState } from './GitHistoryPanel'
-import type { GitHistoryItem } from '../../../../shared/git-history'
-import { normalizeHostedReviewHeadRef } from '../../../../shared/hosted-review-refs'
-import { shouldForcePushWithLeaseForUpstream } from '../../../../shared/git-upstream-status'
+import type { GitHistoryItem } from '@/shared/git-history'
+import { normalizeHostedReviewHeadRef } from '@/shared/hosted-review-refs'
+import { shouldForcePushWithLeaseForUpstream } from '@/shared/git-upstream-status'
 import type {
   DiffComment,
   GitBranchChangeEntry,
@@ -116,25 +116,25 @@ import type {
   GitStatusEntry,
   SourceControlViewMode,
   TuiAgent
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type {
   HostedReviewCreationEligibility,
   HostedReviewInfo,
   HostedReviewProvider
-} from '../../../../shared/hosted-review'
+} from '@/shared/hosted-review'
 import { STATUS_COLORS, STATUS_LABELS } from './status-display'
 import {
   isCustomAgentId,
   resolveCommitMessageAgentChoice
-} from '../../../../shared/commit-message-agent-spec'
+} from '@/shared/commit-message-agent-spec'
 import {
   DEFAULT_SOURCE_CONTROL_AI_PR_CREATION_DEFAULTS,
   hasConfiguredSourceControlAiInstructions,
   normalizeSourceControlAiSettings,
   resolveSourceControlAiForOperation,
   resolveSourceControlAiPrCreationDefaults
-} from '../../../../shared/source-control-ai'
-import { getCommitMessageModelDiscoveryHostKeyForScope } from '../../../../shared/commit-message-host-key'
+} from '@/shared/source-control-ai'
+import { getCommitMessageModelDiscoveryHostKeyForScope } from '@/shared/commit-message-host-key'
 import { getRuntimeGitScope } from '@/runtime/runtime-git-client'
 import { getRepositorySourceControlAiSectionId } from '@/components/settings/repository-settings-targets'
 import { summarizeCommitFailure } from './commit-failure-summary'

@@ -36,7 +36,7 @@ export const FEATURE_WALL_WORKFLOWS: readonly FeatureWallWorkflow[] = [
     id: 'tasks',
     title: 'Tasks',
     meta: 'GitHub · Linear',
-    lede: 'Start work directly from GitHub or Linear.',
+    lede: 'Turn GitHub and Linear work into reviewed, project-owned specs.',
     primaryTileId: 'tile-03',
     relatedTileIds: [],
     docsUrl: 'https://www.onagentum.dev/docs/review/linear'

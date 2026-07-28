@@ -6,7 +6,7 @@ import type {
   GitFileStatus,
   TerminalTab,
   TuiAgent
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type { OpenFile } from '../../store/slices/editor'
 import type { TabDragItemData } from '../tab-group/useTabDragSplit'
 import BrowserTab from './BrowserTab'
@@ -105,6 +105,7 @@ vi.mock('@/store', () => ({
 }))
 
 vi.mock('@/store/selectors', () => ({
+  useAllWorktrees: () => [],
   useRepoById: () => ({ connectionId: null }),
   useWorktreeById: () => ({ path: '/repo', repoId: 'repo-1' })
 }))

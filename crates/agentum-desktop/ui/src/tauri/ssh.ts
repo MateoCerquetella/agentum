@@ -16,6 +16,7 @@ export const ssh = defineNamespace('ssh', {
   listPortForwards: (...args: any[]) => call('ssh_list_port_forwards', args),
   listTargets: (...args: any[]) => call('ssh_list_targets', args),
   needsPassphrasePrompt: (...args: any[]) => call('ssh_needs_passphrase_prompt', args),
+  removeTarget: (...args: any[]) => call('ssh_remove_target', args),
   removePortForward: (...args: any[]) => call('ssh_remove_port_forward', args),
   resetRelay: (...args: any[]) => call('ssh_reset_relay', args),
   submitCredential: (...args: any[]) => call('ssh_submit_credential', args),

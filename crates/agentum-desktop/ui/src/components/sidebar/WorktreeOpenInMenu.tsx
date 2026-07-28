@@ -10,8 +10,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useAppStore } from '@/store'
 import { isLocalPathOpenBlocked, showLocalPathOpenBlockedToast } from '@/lib/local-path-open-guard'
-import type { ShellOpenLocalPathFailureReason } from '../../../../shared/shell-open-types'
-import type { OpenInApplication } from '../../../../shared/types'
+import type { ShellOpenLocalPathFailureReason } from '@/shared/shell-open-types'
+import type { OpenInApplication } from '@/shared/types'
 
 type WorktreeOpenInMenuItemsProps = {
   worktreePath: string

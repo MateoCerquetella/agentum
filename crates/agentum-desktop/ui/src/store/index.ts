@@ -29,8 +29,7 @@ import { createWorkspaceCleanupSlice } from './slices/workspace-cleanup'
 import { createHostsSlice } from './slices/hosts'
 import { createServerWorktreeActivitySlice } from './slices/server-worktree-activity'
 import { createTrackerPhaseSlice } from './slices/tracker-phase'
-import { createWorkspaceHarnessOfferSlice } from './slices/workspace-harness-offer'
-import { createGatedRunStartingSlice } from './slices/gated-run-starting'
+import { createProjectTrackersSlice } from './slices/project-trackers'
 import { e2eConfig } from '@/lib/e2e-config'
 import { registerHttpLinkStoreAccessor } from '@/lib/http-link-routing'
 
@@ -64,8 +63,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createHostsSlice(...a),
   ...createServerWorktreeActivitySlice(...a),
   ...createTrackerPhaseSlice(...a),
-  ...createWorkspaceHarnessOfferSlice(...a),
-  ...createGatedRunStartingSlice(...a)
+  ...createProjectTrackersSlice(...a)
 }))
 
 registerHttpLinkStoreAccessor(() => useAppStore.getState())

@@ -7,7 +7,7 @@ import { useAppStore } from '@/store'
 import { isWindowsUserAgent, shellEscapePath } from './pane-helpers'
 import type { PtyTransport } from './pty-transport'
 import { importExternalPathsToRuntime } from '@/runtime/runtime-file-client'
-import { isWindowsAbsolutePathLike } from '../../../../shared/cross-platform-path'
+import { isWindowsAbsolutePathLike } from '@/shared/cross-platform-path'
 
 type Args = {
   manager: PaneManager

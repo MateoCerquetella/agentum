@@ -7,10 +7,10 @@ import type { CreateWorkspaceWizardData } from '@/components/new-workspace/creat
  * Spec 013 F4: the New Workspace composer modal is now a thin host for the
  * single front door — `CreateWorkspaceWizard`. The former phase machine (goal /
  * provision / details → the composer card) is gone: every opinionated open
- * (`startGatedRun`, `linkedWorkItem`, `prefilledName`, `initialRepoId`,
- * `initialBaseBranch`, `initialWorkspaceStatus`, `telemetrySource`) is honored
- * by the wizard via `deriveWizardComposerSeed`, and a gated run started here
- * hits the SAME `start_work` precondition set through the SAME `submitQuick`.
+ * (`linkedWorkItem`, `prefilledName`, `initialRepoId`, `initialBaseBranch`,
+ * `initialWorkspaceStatus`, `telemetrySource`) is honored by the wizard via
+ * `deriveWizardComposerSeed`. Retired workflow-specific inputs are ignored;
+ * specification work starts from Run Center after workspace creation.
  */
 export default function NewWorkspaceComposerModal(): React.JSX.Element | null {
   const visible = useAppStore((s) => s.activeModal === 'new-workspace-composer')

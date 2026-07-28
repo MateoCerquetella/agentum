@@ -32,7 +32,7 @@ import {
 import {
   AGENTUM_EDITOR_SAVE_DIRTY_FILES_EVENT,
   type EditorSaveDirtyFilesDetail
-} from '../../../../shared/editor-save-events'
+} from '@/shared/editor-save-events'
 
 type AppStoreApi = Pick<StoreApi<AppState>, 'getState' | 'subscribe'>
 

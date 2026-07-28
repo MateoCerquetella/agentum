@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
 /* eslint-disable max-lines */
-import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
+import type { RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
 import type {
   BrowserTabCreateResult,
   RuntimeMobileSessionCreateTerminalResult,
@@ -9,7 +9,7 @@ import type {
   RuntimeMobileSessionTabsResult,
   RuntimeTerminalClose,
   RuntimeTerminalSplit
-} from '../../../shared/runtime-types'
+} from '@/shared/runtime-types'
 import type { AppState } from '../store/types'
 import { useAppStore } from '../store'
 import { unwrapRuntimeRpcResult } from './runtime-rpc-client'

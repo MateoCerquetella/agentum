@@ -4,8 +4,8 @@
 //! - `GET  /api/wiki/{slug}?workdir=` → one page's markdown
 //! - `POST /api/wiki/generate`        → spawn an agent that WRITES the wiki; returns its session id
 //!
-//! `generate` transposes the harness QA-gate recipe
-//! (`harness::drive::run_qa_agent_gate`): spawn through the *one* launch path →
+//! `generate` uses the shared interactive-agent lifecycle: spawn through the
+//! one launch path →
 //! inject the prompt → wait for the agent to settle → tear it down → read
 //! `index.json` back. A missing/garbled index is a **failure** (AC-9), recorded in
 //! `.status.json` so the browse view shows an error, never a half-empty success.
@@ -446,7 +446,7 @@ async fn generate(
     let dir_bg = dir.clone();
     let repo_id = req.repo_id.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::harness::inject_prompt(&st, &session, &prompt).await {
+        if let Err(e) = crate::agent_delivery::inject_prompt(&st, &session, &prompt).await {
             write_status(
                 &dir_bg,
                 "failed",
@@ -455,14 +455,14 @@ async fn generate(
             )
             .await;
             emit_wiki_updated(&st.bus, &repo_id, "failed", None);
-            crate::harness::teardown_session(&st, &session).await;
+            crate::agent_delivery::teardown_session(&st, &session).await;
             return;
         }
         // Race the settle wait against the page scanner: the scanner pushes
         // `{running, pages}` as files land and dies with the run (it never
         // completes on its own — the settle arm always wins the select).
         tokio::select! {
-            _ = crate::harness::wait_for_settle(
+            _ = crate::agent_delivery::wait_for_settle(
                 &st.bus,
                 session.id,
                 WIKI_SETTLE_GRACE,
@@ -470,7 +470,7 @@ async fn generate(
             ) => {}
             _ = scan_pages_loop(&st.bus, &dir_bg, &repo_id, WIKI_SCAN_EVERY) => {}
         }
-        crate::harness::teardown_session(&st, &session).await;
+        crate::agent_delivery::teardown_session(&st, &session).await;
 
         // AC-9: a valid index ⇒ success (drop the sidecar so GET reports Ready);
         // a missing/garbled index ⇒ failure recorded for the browse view.
@@ -929,7 +929,7 @@ mod tests {
     #[test]
     fn wiki_key_cache_hit_skips_resolution() {
         let cache = std::sync::Mutex::new(std::collections::HashMap::new());
-        let key: WikiKeyCacheKey = ("repo-1".into(), "/Users/me/proj".into(), Uuid::nil());
+        let key: WikiKeyCacheKey = ("repo-1".into(), "/Users/tester/proj".into(), Uuid::nil());
         // The resolve_target flow over the pure helpers, with the git shell
         // replaced by a counter: only a cache miss may resolve.
         let mut resolutions = 0u32;

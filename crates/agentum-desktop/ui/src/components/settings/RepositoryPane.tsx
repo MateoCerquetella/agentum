@@ -1,7 +1,7 @@
 import { api } from '@/tauri'
 import { useCallback, useRef, useState } from 'react'
-import type { AgentumHooks, Repo, RepoHookSettings } from '../../../../shared/types'
-import { getRepoKindLabel, isFolderRepo } from '../../../../shared/repo-kind'
+import type { AgentumHooks, Repo, RepoHookSettings } from '@/shared/types'
+import { getRepoKindLabel, isFolderRepo } from '@/shared/repo-kind'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
@@ -163,10 +163,29 @@ export function RepositoryPane({
       />
     ) : null
 
-  // Why: Identity (name, icon, base ref) stays at the top so it's the first
-  // thing a user sees. Setup commands follow immediately because they're the
-  // most-edited surface and should beat MCP/symlinks/sparse-presets.
+  // The canonical tracker comes first because New Work, Project Tasks, and
+  // automation consume it. Identity and setup controls follow in their
+  // established order.
+  const trackerSection =
+    !isFolder &&
+    (forceFullPaneForRepoMatch || matchesSettingsSearch(searchQuery, trackerEntries)) ? (
+      <section key="tracker" className="space-y-4">
+        <SearchableSetting
+          title="Project Integrations"
+          description="Choose the external tracker owned by this project."
+          keywords={[repo.displayName, 'integrations', 'tracker', 'github projects', 'linear project', 'board', 'status mapping']}
+          className="space-y-2"
+          forceVisible={forceFullPaneForRepoMatch}
+        >
+          <ProjectIntegrationsSection repo={repo} />
+        </SearchableSetting>
+      </section>
+    ) : null
+
   const visibleSections = [
+    // Tracker is the first project-specific decision: downstream task lists,
+    // New Work, and automation all consume this one canonical target.
+    trackerSection,
     forceFullPaneForRepoMatch || matchesSettingsSearch(searchQuery, identityEntries) ? (
       <section key="identity" className="relative space-y-8">
         <div className="flex items-start justify-between gap-4">
@@ -321,20 +340,6 @@ export function RepositoryPane({
         repo={repo}
         updateRepo={updateRepo}
       />
-    ) : null,
-    !isFolder &&
-    (forceFullPaneForRepoMatch || matchesSettingsSearch(searchQuery, trackerEntries)) ? (
-      <section key="tracker" className="space-y-4">
-        <SearchableSetting
-          title="Project Integrations"
-          description="Choose the external board owned by this project."
-          keywords={[repo.displayName, 'integrations', 'tracker', 'github projects', 'linear project', 'board', 'status mapping']}
-          className="space-y-2"
-          forceVisible={forceFullPaneForRepoMatch}
-        >
-          <ProjectIntegrationsSection repo={repo} updateRepo={updateRepo} />
-        </SearchableSetting>
-      </section>
     ) : null,
     !isFolder &&
     !repo.connectionId &&

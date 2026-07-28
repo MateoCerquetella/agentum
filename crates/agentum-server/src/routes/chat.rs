@@ -61,6 +61,9 @@ pub fn router() -> Router<AppState> {
         // filing anything — the UI shows it, the user edits/regenerates, then
         // `/api/chat/issues` files the (edited) plan verbatim.
         .route("/api/chat/issues/preview", post(chat_issues_preview))
+        // Singular, provider-neutral structured issue extraction for the
+        // Project Tasks "Shape into spec" modal. Preview-only: files nothing.
+        .route("/api/chat/issue/preview", post(chat_issue_preview))
         .route("/api/chat/issues", post(chat_issues))
 }
 
@@ -177,6 +180,17 @@ enum IntakeMode {
     Socratic,
 }
 
+/// The surface consuming the interview. Absent/default remains Chat's feature
+/// breakdown prompt byte-for-byte; `issue_spec` changes only the framing and
+/// convergence action for the focused single-issue modal.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+enum IntakeTarget {
+    #[default]
+    FeatureBreakdown,
+    IssueSpec,
+}
+
 #[derive(Deserialize)]
 struct ChatRequest {
     /// Full turn history, oldest first (user/assistant only — the server owns
@@ -211,6 +225,8 @@ struct ChatRequest {
     /// (D-B/D1) with NO stage state of its own.
     #[serde(default)]
     stage: Option<u8>,
+    #[serde(default)]
+    target: IntakeTarget,
     /// Which agent runs the interview (`"claude"` default, `"codex"`). Absent
     /// ⇒ resolved from `chat.toml` → Claude — old clients are unchanged.
     #[serde(default)]
@@ -224,17 +240,49 @@ struct ChatResponse {
     content: String,
 }
 
-/// Total budget (chars) for the repo+harness snapshot inlined into the system
+#[derive(Deserialize)]
+struct IssueSpecPreviewRequest {
+    messages: Vec<ChatMessage>,
+    #[serde(default)]
+    workdir: Option<String>,
+    #[serde(default)]
+    repo_id: Option<String>,
+    #[serde(default)]
+    repo_slug: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct IssueSpecDraft {
+    title: String,
+    #[serde(default)]
+    problem: String,
+    #[serde(default)]
+    goal: String,
+    #[serde(default)]
+    users: String,
+    #[serde(default)]
+    acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    in_scope: Vec<String>,
+    #[serde(default)]
+    out_of_scope: Vec<String>,
+    #[serde(default)]
+    risks: Vec<String>,
+}
+
+/// Total budget (chars) for the repository snapshot inlined into the system
 /// prompt. Generous on purpose — the spec must fit the ACTUAL repo, so we want
 /// (near-)full context: the whole guide + the whole file tree for normal repos.
 /// The cap (~22k tokens) only clips a pathological monorepo so it can't blow the
 /// 200k window. ~90k chars.
 const CONTEXT_BUDGET: usize = 90_000;
 /// Per-section caps inside [`CONTEXT_BUDGET`] — sized to hold a full CLAUDE.md /
-/// AGENTS.md guide, the full harness contract, and the root manifests.
+/// AGENTS.md guide and the root manifests.
 const GUIDE_BUDGET: usize = 40_000;
-const HARNESS_AGENTS_BUDGET: usize = 20_000;
-const FEATURE_LIST_BUDGET: usize = 12_000;
 const MANIFEST_BUDGET: usize = 8_000;
 /// Cap on the git-tracked file tree (lines). High enough to be the full tree for
 /// a normal repo; bounds a huge monorepo.
@@ -309,8 +357,6 @@ fn git_tracked_tree(root: &std::path::Path) -> Option<String> {
 struct RepoContextParts {
     /// `(filename, body)` of the first guide candidate found.
     guide: Option<(String, String)>,
-    harness_agents: Option<String>,
-    feature_list: Option<String>,
     /// `(filename, body)` in [`MANIFEST_NAMES`] order.
     manifests: Vec<(String, String)>,
     /// Raw `git ls-files` output; capped here, not at the collectors.
@@ -328,23 +374,6 @@ fn assemble_repo_context(parts: RepoContextParts) -> Option<String> {
         let body = truncate_chars(body.trim(), GUIDE_BUDGET);
         if !body.is_empty() {
             out.push_str(&format!("## Repo guide ({name})\n{body}\n\n"));
-        }
-    }
-
-    // The harness contract — so the breakdown fits the verification-gated
-    // pipeline: the harness AGENTS.md + the current feature backlog.
-    if let Some(body) = parts.harness_agents {
-        let body = truncate_chars(body.trim(), HARNESS_AGENTS_BUDGET);
-        if !body.is_empty() {
-            out.push_str(&format!("## .harness/AGENTS.md\n{body}\n\n"));
-        }
-    }
-    if let Some(body) = parts.feature_list {
-        let body = truncate_chars(body.trim(), FEATURE_LIST_BUDGET);
-        if !body.is_empty() {
-            out.push_str(&format!(
-                "## .harness/feature_list.json (current backlog)\n{body}\n\n"
-            ));
         }
     }
 
@@ -390,11 +419,11 @@ fn capped_tree(text: &str) -> Option<String> {
 }
 
 /// Read a real snapshot of the selected workspace so the interviewer grounds its
-/// questions and the task breakdown in the ACTUAL repo + harness — not blind
+/// questions and the task breakdown in the ACTUAL repository — not blind
 /// Q&A. This is agentum's whole point: agents work with repo context. Reads
 /// (best-effort, all LOCAL — Chat never SSHes): the repo guide
-/// (CLAUDE.md/AGENTS.md), the `.harness/` contract (AGENTS.md + the feature
-/// backlog), and a git-tracked file tree. A missing/remote/empty workdir → None.
+/// (CLAUDE.md/AGENTS.md), root build manifests, and a git-tracked file tree. A
+/// missing/remote/empty workdir → None.
 pub(crate) fn gather_repo_context(workdir: Option<&str>) -> Option<String> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     local_repo_context(workdir, home.as_deref())
@@ -414,19 +443,8 @@ fn local_repo_context(workdir: Option<&str>, home: Option<&std::path::Path>) -> 
     }
     let root = root.as_path();
 
-    // `.harness/*` reads stay gated on the dir existing — a repo with a FILE
-    // named `.harness` must not surface it as the contract.
-    let harness = root.join(".harness").is_dir();
     let parts = RepoContextParts {
         guide: read_first_file(root, &GUIDE_CANDIDATES),
-        harness_agents: harness
-            .then(|| read_first_file(root, &[".harness/AGENTS.md"]))
-            .flatten()
-            .map(|(_, body)| body),
-        feature_list: harness
-            .then(|| read_first_file(root, &[".harness/feature_list.json"]))
-            .flatten()
-            .map(|(_, body)| body),
         manifests: MANIFEST_NAMES
             .iter()
             .filter_map(|name| read_first_file(root, &[name]))
@@ -459,8 +477,6 @@ fn remote_context_script(workdir: &str) -> Option<String> {
 for f in {guides}; do
   if [ -f "$f" ]; then printf '===AGENTUM-CTX guide %s===\n' "$f"; head -c 80000 "$f"; printf '\n'; break; fi
 done
-if [ -f .harness/AGENTS.md ]; then printf '===AGENTUM-CTX harness-agents===\n'; head -c 40000 .harness/AGENTS.md; printf '\n'; fi
-if [ -f .harness/feature_list.json ]; then printf '===AGENTUM-CTX feature-list===\n'; head -c 24000 .harness/feature_list.json; printf '\n'; fi
 for f in {manifests}; do
   if [ -f "$f" ]; then printf '===AGENTUM-CTX manifest %s===\n' "$f"; head -c 16000 "$f"; printf '\n'; fi
 done
@@ -479,10 +495,6 @@ fn parse_remote_context_output(out: &str) -> RepoContextParts {
             if parts.guide.is_none() {
                 parts.guide = Some((name.to_string(), body));
             }
-        } else if header == "harness-agents" {
-            parts.harness_agents = Some(body);
-        } else if header == "feature-list" {
-            parts.feature_list = Some(body);
         } else if let Some(name) = header.strip_prefix("manifest ") {
             parts.manifests.push((name.to_string(), body));
         } else if header == "tree" {
@@ -492,8 +504,6 @@ fn parse_remote_context_output(out: &str) -> RepoContextParts {
 
     let mut parts = RepoContextParts {
         guide: None,
-        harness_agents: None,
-        feature_list: None,
         manifests: Vec::new(),
         tree: None,
     };
@@ -615,7 +625,7 @@ fn log_repo_context_outcome(
 }
 
 /// The grounding blocks BOTH intake modes prepend (spec 008 F2): the
-/// slug/workdir context line, the repo+harness snapshot block with its matching
+/// slug/workdir context line, the repository snapshot block with its matching
 /// access rule, and the semantically-retrieved wiki block. Extracted VERBATIM
 /// from `interviewer_instructions` so Fast and every Socratic pass ground
 /// identically — the block strings are byte-for-byte the same in both, which is
@@ -635,17 +645,17 @@ fn intake_grounding_blocks(
         ctx.push_str(&format!("\nThe project lives at `{wd}`."));
     }
 
-    // The repo + harness snapshot (when a local workspace is selected) plus the
+    // The repository snapshot (when a local workspace is selected) plus the
     // matching access rule — grounded when present, honest-blind when not.
     let (repo_block, access_rule) = match repo_context {
         Some(c) => (
             format!(
-                "\n\n=== REPO & HARNESS CONTEXT (a real snapshot of the user's project — USE IT) ===\n\
+                "\n\n=== REPOSITORY CONTEXT (a real snapshot of the user's project — USE IT) ===\n\
 {c}\n=== END CONTEXT ===\n"
             ),
-            "- You HAVE the repo + harness snapshot above (the guide, the .harness/ contract, and the \
-file tree). GROUND every question and the final breakdown in it: reference real files, modules, and \
-existing patterns; fit the project's architecture and (if present) its harness pipeline. Don't ask \
+            "- You HAVE the repository snapshot above (the guide, root manifests, and the file tree). \
+GROUND every question and the final breakdown in it: reference real files, modules, and existing \
+patterns; fit the project's architecture. Don't ask \
 about anything the snapshot already answers. It is a STATIC snapshot — you can't run commands or read \
 files beyond it, so never claim to have executed anything.",
         ),
@@ -848,6 +858,56 @@ fn build_intake_instructions(
     }
 }
 
+fn build_targeted_intake_instructions(
+    mode: IntakeMode,
+    stage: u8,
+    target: IntakeTarget,
+    workdir: Option<&str>,
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+    wiki_context: Option<&str>,
+) -> String {
+    match target {
+        IntakeTarget::FeatureBreakdown => {
+            build_intake_instructions(mode, stage, workdir, repo_slug, repo_context, wiki_context)
+        }
+        IntakeTarget::IssueSpec => {
+            issue_spec_intake_instructions(stage, workdir, repo_slug, repo_context, wiki_context)
+        }
+    }
+}
+
+/// Focused variant of the existing adaptive Socratic interview. It deliberately
+/// reuses the same passes, anti-patterns, convergence bar, grounding blocks and
+/// control markers; only the surface and terminal action differ from Chat.
+fn issue_spec_intake_instructions(
+    stage: u8,
+    workdir: Option<&str>,
+    repo_slug: Option<&str>,
+    repo_context: Option<&str>,
+    wiki_context: Option<&str>,
+) -> String {
+    let (ctx, repo_block, access_rule, wiki_block) =
+        intake_grounding_blocks(workdir, repo_slug, repo_context, wiki_context);
+    let stage = stage.clamp(1, 5);
+    let pass = socratic_pass_body_for(
+        stage,
+        "Otherwise this is the FINAL pass: STOP asking questions and tell the user the issue is ready to review.",
+    );
+    format!(
+        "You are running inside agentum as the interviewer in the focused Shape into spec dialog. \
+You are conducting an ADAPTIVE Socratic interview — one focused pass per turn across five topics \
+(WHO → WHAT → WHY → done-criteria → risks). This is pass {stage} of 5.{ctx}{repo_block}{wiki_block}\n\n\
+Your job THIS TURN, and nothing else:\n{pass}\n\n\
+Rules:\n\
+- First judge whether the user's previous answer actually covered THIS pass's topic. If it was vague, contradictory, or missing, re-ask this topic more concretely instead of moving on.\n\
+- Ask ONE short, concrete question (two only if tightly related). No filler, marketing language, or premature solution design.\n\
+- Never re-ask what the user or repo context already answered. Do NOT jump ahead or draft the issue before convergence.\n\
+{access_rule}\n\
+- End EVERY reply with exactly one control line, alone on the final line: [[socratic:advance]], [[socratic:stay]], or [[socratic:done]]. Use done ONLY on the final pass after the problem, outcome, acceptance criteria, risks, and scope boundaries are concrete. The line is machine-read and hidden; never explain it."
+    )
+}
+
 /// One Socratic pass (spec 008 F2, made adaptive by #257). Reuses the SAME
 /// grounding blocks as [`interviewer_instructions`] (context line / repo
 /// snapshot / access rule / wiki) but swaps the "job/Rules" body for a
@@ -912,6 +972,13 @@ mention or explain it."
 /// the feature is actually well-defined, not just because it's turn five.
 /// `stage` is clamped 1..=5 by the caller; clamped again here so indexing is safe.
 fn socratic_pass_body(stage: u8) -> String {
+    socratic_pass_body_for(
+        stage,
+        "Otherwise this is the FINAL pass: STOP asking questions and tell the user to click the \"Preview issues\" button below the chat to review and file the drafted issues.",
+    )
+}
+
+fn socratic_pass_body_for(stage: u8, final_instruction: &str) -> String {
     let stage = stage.clamp(1, 5);
     let p = &INTERVIEW_PASSES[(stage - 1) as usize];
     if stage == 5 {
@@ -919,13 +986,13 @@ fn socratic_pass_body(stage: u8) -> String {
             "PASS 5 — {topic}. {reflect} {probe} {anti_pattern}\n\
 Then CONVERGE — but only if the feature is genuinely well-defined: {selfcheck}. If any of \
 those is still fuzzy, ask ONE more sharpening question on just that gap instead of finishing. \
-Otherwise this is the FINAL pass: STOP asking questions and tell the user to click the \
-\"Preview issues\" button below the chat to review and file the drafted issues.",
+{final_instruction}",
             topic = p.topic,
             reflect = p.reflect,
             probe = p.probe,
             anti_pattern = p.anti_pattern,
             selfcheck = CONVERGENCE_SELFCHECK,
+            final_instruction = final_instruction,
         )
     } else {
         format!(
@@ -1024,9 +1091,10 @@ async fn chat(
         repo_context.as_deref(),
     );
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
-    let instructions = build_intake_instructions(
+    let instructions = build_targeted_intake_instructions(
         mode,
         stage,
+        body.target,
         body.workdir.as_deref(),
         body.repo_slug.as_deref(),
         repo_context.as_deref(),
@@ -1167,9 +1235,10 @@ async fn chat_stream(
         repo_context.as_deref(),
     );
     let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
-    let instructions = build_intake_instructions(
+    let instructions = build_targeted_intake_instructions(
         mode,
         stage,
+        body.target,
         body.workdir.as_deref(),
         body.repo_slug.as_deref(),
         repo_context.as_deref(),
@@ -1575,6 +1644,76 @@ const EXTRACT_INSTRUCTIONS: &str = "From this conversation, extract the agreed f
 /// instruction to emit the JSON now.
 const EXTRACT_USER_PROMPT: &str = "Output the agreed feature plan now as the single JSON object described above — only the raw JSON object, nothing else.";
 
+const ISSUE_SPEC_EXTRACT_INSTRUCTIONS: &str = "From this focused issue-shaping conversation, extract exactly ONE tracker issue as a JSON object with this shape: {\"title\": string, \"problem\": string, \"goal\": string, \"users\": string, \"acceptance_criteria\": [string], \"in_scope\": [string], \"out_of_scope\": [string], \"risks\": [string]}. Preserve the decisions actually made. Acceptance criteria must be concrete and testable. Use empty arrays rather than inventing scope or risks. Write concise plain engineering language. Output ONLY the raw JSON object, with no markdown fences or prose.";
+
+const ISSUE_SPEC_EXTRACT_USER_PROMPT: &str =
+    "Output the agreed single issue now as the JSON object described above — only raw JSON.";
+
+fn extract_issue_spec(raw: &str) -> Option<IssueSpecDraft> {
+    let cleaned = raw.replace("```json", "").replace("```", "");
+    let start = cleaned.find('{')?;
+    let end = cleaned.rfind('}')?;
+    if end < start {
+        return None;
+    }
+    let mut draft: IssueSpecDraft = serde_json::from_str(&cleaned[start..=end]).ok()?;
+    draft.title = draft.title.trim().to_string();
+    draft.problem = draft.problem.trim().to_string();
+    draft.goal = draft.goal.trim().to_string();
+    draft.users = draft.users.trim().to_string();
+    for list in [
+        &mut draft.acceptance_criteria,
+        &mut draft.in_scope,
+        &mut draft.out_of_scope,
+        &mut draft.risks,
+    ] {
+        list.iter_mut()
+            .for_each(|item| *item = item.trim().to_string());
+        list.retain(|item| !item.is_empty());
+    }
+    if draft.title.is_empty() || draft.acceptance_criteria.is_empty() {
+        return None;
+    }
+    Some(draft)
+}
+
+fn render_issue_spec_body(draft: &IssueSpecDraft) -> String {
+    fn prose(value: &str) -> &str {
+        if value.trim().is_empty() {
+            "Not specified."
+        } else {
+            value.trim()
+        }
+    }
+    fn bullets(items: &[String]) -> String {
+        if items.is_empty() {
+            "- None identified.".to_string()
+        } else {
+            items
+                .iter()
+                .map(|item| format!("- {}", item.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    }
+    let criteria = draft
+        .acceptance_criteria
+        .iter()
+        .map(|item| format!("- [ ] {}", item.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "## Problem\n\n{}\n\n## Goal\n\n{}\n\n## Users / context\n\n{}\n\n## Acceptance criteria\n\n{}\n\n## Scope\n\n### In\n\n{}\n\n### Out\n\n{}\n\n## Risks\n\n{}\n",
+        prose(&draft.problem),
+        prose(&draft.goal),
+        prose(&draft.users),
+        criteria,
+        bullets(&draft.in_scope),
+        bullets(&draft.out_of_scope),
+        bullets(&draft.risks),
+    )
+}
+
 #[derive(Deserialize)]
 struct ChatIssuesRequest {
     /// The conversation to distil into issues (user/assistant turns only).
@@ -1845,13 +1984,13 @@ async fn extract_plan(
         .collect();
     messages.push(json!({ "role": "user", "content": EXTRACT_USER_PROMPT }));
 
-    // Lead the system with the strict-JSON instruction, then the SAME repo +
-    // harness snapshot the interview used — so each task names the real files.
+    // Lead the system with the strict-JSON instruction, then the SAME repository
+    // snapshot the interview used — so each task names the real files.
     let extract_system = match gather_repo_context(workdir) {
         Some(c) => format!(
             "{EXTRACT_INSTRUCTIONS}\n\nGround every task in this real project snapshot — \
 name the actual files/modules each task touches:\n\
-=== REPO & HARNESS CONTEXT ===\n{c}\n=== END CONTEXT ==="
+=== REPOSITORY CONTEXT ===\n{c}\n=== END CONTEXT ==="
         ),
         None => EXTRACT_INSTRUCTIONS.to_string(),
     };
@@ -1864,6 +2003,75 @@ name the actual files/modules each task touches:\n\
             json!({ "error": { "code": "no_tasks", "message": "could not extract a feature plan from the conversation" } }),
         )
     })
+}
+
+/// Convert a converged focused interview into one structured, editable issue.
+/// This endpoint only previews: tracker filing remains behind the existing New
+/// issue review controls.
+async fn chat_issue_preview(
+    State(state): State<AppState>,
+    Json(body): Json<IssueSpecPreviewRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.messages.is_empty() {
+        return Err(ApiError::BadRequest(
+            "chat issue preview: messages cannot be empty".into(),
+        ));
+    }
+    let resolved = resolve_chat_agent(body.agent.as_deref())?;
+    let creds = resolve_chat_creds(resolved.agent)?;
+    let model = resolve_chat_model(body.model.as_deref(), &resolved);
+    let (repo_context, ctx_arm) =
+        gather_repo_context_for(&state, body.workdir.as_deref(), body.repo_id.as_deref()).await;
+    log_repo_context_outcome(
+        "chat_issue_preview",
+        body.workdir.as_deref(),
+        body.repo_id.as_deref(),
+        ctx_arm,
+        repo_context.as_deref(),
+    );
+    let wiki_context = retrieve_wiki(body.workdir.as_deref(), &body.messages).await;
+
+    let mut instructions = ISSUE_SPEC_EXTRACT_INSTRUCTIONS.to_string();
+    if let Some(slug) = body
+        .repo_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        instructions.push_str(&format!("\n\nThe repository is `{slug}`."));
+    }
+    if let Some(context) = repo_context.as_deref() {
+        instructions.push_str(&format!(
+            "\n\n=== REPOSITORY CONTEXT ===\n{context}\n=== END CONTEXT ==="
+        ));
+    }
+    if let Some(wiki) = wiki_context.as_deref() {
+        instructions.push_str(&format!(
+            "\n\n=== RELEVANT WIKI ===\n{wiki}\n=== END WIKI ==="
+        ));
+    }
+    let mut messages: Vec<serde_json::Value> = body
+        .messages
+        .iter()
+        .map(|message| json!({ "role": message.role, "content": message.content }))
+        .collect();
+    messages.push(json!({ "role": "user", "content": ISSUE_SPEC_EXTRACT_USER_PROMPT }));
+    let text = call_chat_model(&creds, &model, &instructions, &messages, 3072).await?;
+    let draft = extract_issue_spec(&text).ok_or_else(|| {
+        ApiError::Custom(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "error": { "code": "no_issue_spec", "message": "could not shape one complete issue from the conversation" } }),
+        )
+    })?;
+    let rendered = render_issue_spec_body(&draft);
+    Ok(Json(json!({
+        "title": draft.title,
+        "body": rendered,
+        "grounding": {
+            "repo": repo_context.is_some(),
+            "wiki": wiki_context.is_some(),
+        }
+    })))
 }
 
 /// Distil the agreed task breakdown from a chat transcript, then file each task
@@ -2032,12 +2240,7 @@ async fn create_github_issues(
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|_| "/".to_string())
                 });
-            match super::board_goals::resolve_github_slug(
-                &host,
-                &workdir,
-                body.repo_slug.as_deref(),
-            )
-            .await
+            match super::util::resolve_github_slug(&host, &workdir, body.repo_slug.as_deref()).await
             {
                 Ok(slug) => slug,
                 Err(_) => {
@@ -2065,9 +2268,7 @@ async fn create_github_issues(
         let res = TaskSink::Github
             .create_feature(
                 &SinkCtx {
-                    store: &state.store,
                     workdir: &workdir_path,
-                    parent_goal_id: None,
                     slug: Some(&slug),
                 },
                 feature,
@@ -2101,7 +2302,7 @@ async fn create_github_issues(
 /// arm ignores them for now (documented v1 no-op); per-issue failures land in
 /// `failed` (still a 200).
 async fn create_linear_issues(
-    state: &AppState,
+    _state: &AppState,
     plan: &FeaturePlan,
     split: SplitMode,
     labels: &[String],
@@ -2116,7 +2317,7 @@ async fn create_linear_issues(
         ));
     }
 
-    // Linear's create arm ignores `workdir`/`slug`/`parent_goal_id`; pass a
+    // Linear's create arm ignores `workdir`/`slug`; pass a
     // neutral ctx for shape only.
     let tmp = std::env::temp_dir();
     let features = plan_to_features(plan, split, labels);
@@ -2125,9 +2326,7 @@ async fn create_linear_issues(
         let res = TaskSink::Linear
             .create_feature(
                 &SinkCtx {
-                    store: &state.store,
                     workdir: &tmp,
-                    parent_goal_id: None,
                     slug: None,
                 },
                 feature,
@@ -2177,7 +2376,7 @@ fn extract_feature_plan(raw: &str) -> Option<FeaturePlan> {
 
 /// A client `repo_slug` must look like `owner/repo` — exactly one `/`, both
 /// halves non-empty, no whitespace (the `^[^/\s]+/[^/\s]+$` shape). Mirrors
-/// `board_goals::is_valid_slug` so a malformed hint falls through to the read.
+/// the shared slug validator so a malformed hint falls through to the read.
 fn slug_matches(s: &str) -> bool {
     let mut parts = s.split('/');
     match (parts.next(), parts.next(), parts.next()) {
@@ -2211,6 +2410,17 @@ fn redact(msg: &str, token: &str) -> String {
 /// anything beyond this is runaway output, not signal.
 const DRAFT_BODY_MAX_CHARS: usize = 12_000;
 
+/// Output shape for the one-shot issue drafter. `Sdd` is the legacy default;
+/// the Project Tasks quick path opts into `Concise` so the structured shape is
+/// reserved for the explicit "Shape into spec" interview.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DraftIssueStyle {
+    Concise,
+    #[default]
+    Sdd,
+}
+
 /// Instructions for the drafting call. Pinned as a `const` so the prompt test
 /// can assert the section contract without duplicating strings.
 const DRAFT_BODY_INSTRUCTIONS: &str = "You draft GitHub issue descriptions for the repository described below.\n\
@@ -2220,6 +2430,10 @@ Given an issue TITLE, write the issue BODY as GitHub-flavored markdown with exac
 ## Acceptance criteria — 3 to 6 checklist items, each on its own line as `- [ ] …`, concrete and testable.\n\
 Rules: output ONLY the markdown body (no title heading, no code fences around the whole reply, no preamble or sign-off). \
 Reference real files/areas from the repo context when it is provided; never invent paths.";
+
+const CONCISE_DRAFT_BODY_INSTRUCTIONS: &str = "You draft concise issue descriptions for the repository described below.\n\
+Given an issue TITLE, write one short paragraph of 2 to 4 plain sentences (at most 120 words) that states what is wrong or missing and the observable outcome wanted.\n\
+Rules: output ONLY the paragraph; no markdown headings, checklists, bullets, code fences, preamble, or sign-off. Ground it in the repo context when available; never invent paths or implementation details.";
 
 /// The user turn for the drafting call — kept tiny; the repo grounding rides in
 /// the system block like every other call in this module.
@@ -2233,11 +2447,15 @@ fn draft_body_user_message(title: &str) -> String {
 /// Best-effort (inv. 6): a `None` wiki appends nothing — the drafter still
 /// grounds on the repo context — and never throws.
 fn draft_body_instructions(
+    style: DraftIssueStyle,
     repo_slug: Option<&str>,
     repo_context: Option<&str>,
     wiki: Option<&str>,
 ) -> String {
-    let mut out = String::from(DRAFT_BODY_INSTRUCTIONS);
+    let mut out = String::from(match style {
+        DraftIssueStyle::Concise => CONCISE_DRAFT_BODY_INSTRUCTIONS,
+        DraftIssueStyle::Sdd => DRAFT_BODY_INSTRUCTIONS,
+    });
     if let Some(slug) = repo_slug {
         out.push_str(&format!("\n\nThe repository is `{slug}`."));
     }
@@ -2274,6 +2492,36 @@ fn sanitize_draft_body(raw: &str) -> String {
     truncate_chars(unfenced, DRAFT_BODY_MAX_CHARS)
 }
 
+/// Enforce the quick path's compact wire contract even when a model ignores
+/// formatting instructions: one plain paragraph, no markdown list/headings,
+/// and never more than 120 words.
+fn sanitize_concise_draft_body(raw: &str) -> String {
+    let cleaned = sanitize_draft_body(raw);
+    let paragraph = cleaned
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            Some(
+                line.strip_prefix("- [ ] ")
+                    .or_else(|| line.strip_prefix("- [x] "))
+                    .or_else(|| line.strip_prefix("- [X] "))
+                    .or_else(|| line.strip_prefix("- "))
+                    .or_else(|| line.strip_prefix("* "))
+                    .unwrap_or(line),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    paragraph
+        .split_whitespace()
+        .take(120)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// A drafted issue body plus the grounding facts (spec 020 F3, D4): whether
 /// the LOCAL repo snapshot and the wiki sidecar actually contributed. Both
 /// reads are local-by-design ("Chat never SSHes"), so an SSH repo's draft is
@@ -2285,7 +2533,7 @@ pub(crate) struct DraftedIssue {
     pub grounded_wiki: bool,
 }
 
-/// Draft an SDD-shaped issue body from a title + local repo context. Shared
+/// Draft either a concise or SDD-shaped issue body from a title + local repo context. Shared
 /// plumbing with `/api/chat`: same agent + credential resolution (spec 394 —
 /// loud, actionable error naming both recovery paths when absent), same repo
 /// snapshot, same [`call_chat_model`] backend fan-out. `pub(crate)` — the HTTP
@@ -2296,6 +2544,7 @@ pub(crate) async fn draft_issue_body(
     title: &str,
     agent: Option<&str>,
     model: Option<&str>,
+    style: DraftIssueStyle,
 ) -> Result<DraftedIssue, ApiError> {
     let title = title.trim();
     if title.is_empty() {
@@ -2316,13 +2565,17 @@ pub(crate) async fn draft_issue_body(
     // grounding facts the response reports (a non-local dir → `None` → false).
     let grounded_repo = repo_context.is_some();
     let grounded_wiki = wiki.is_some();
-    let instructions = draft_body_instructions(repo_slug, repo_context.as_deref(), wiki.as_deref());
+    let instructions =
+        draft_body_instructions(style, repo_slug, repo_context.as_deref(), wiki.as_deref());
     let messages = vec![json!({ "role": "user", "content": draft_body_user_message(title) })];
 
     // 2048 output tokens: a full Problem/Goal/ACs body comfortably fits; the
     // interview's 1024 reply cap is tuned for short turns, not a document.
     let text = call_chat_model(&creds, &model, &instructions, &messages, 2048).await?;
-    let body = sanitize_draft_body(&text);
+    let body = match style {
+        DraftIssueStyle::Concise => sanitize_concise_draft_body(&text),
+        DraftIssueStyle::Sdd => sanitize_draft_body(&text),
+    };
     if body.is_empty() {
         return Err(ApiError::Internal(
             "the model returned an empty issue body".into(),
@@ -2699,62 +2952,6 @@ mod tests {
         assert_eq!(new.goal.as_deref(), Some("G"));
     }
 
-    /// Spec 006 AC 5: an SDD-shaped issue body round-trips through the harness
-    /// bridge — `spec_md_from_issue` keeps the `- [ ]` lines parseable and
-    /// `derive_backlog_from_spec` yields one feature per task (no fallback).
-    #[test]
-    fn sdd_issue_body_round_trips_through_spec_md_to_backlog() {
-        let plan = FeaturePlan {
-            title: "T".into(),
-            summary: "Sum.".into(),
-            problem: Some("Pain.".into()),
-            goal: Some("Outcome.".into()),
-            tasks: vec![
-                SubTask {
-                    title: "First task".into(),
-                    detail: "d1".into(),
-                    priority: Some("high".into()),
-                },
-                SubTask {
-                    title: "Second task".into(),
-                    detail: String::new(),
-                    priority: None,
-                },
-                SubTask {
-                    title: "Third task".into(),
-                    detail: "d3".into(),
-                    priority: Some("low".into()),
-                },
-            ],
-        };
-        let body = compose_issue_body(&plan);
-        let spec = crate::harness::spec_md_from_issue(
-            "42",
-            "T",
-            &body,
-            "https://github.com/o/r/issues/42",
-        );
-        // The checkboxes were found, so the safety-net `- [ ] T` line (appended
-        // only when the body has none) must be absent.
-        assert!(
-            !spec.contains("- [ ] T\n"),
-            "no fallback checkbox — the composed lines parsed: {spec}"
-        );
-        let backlog = crate::harness::derive_backlog_from_spec(&spec);
-        assert_eq!(backlog.features.len(), 3, "one feature per task: {spec}");
-        for (f, title) in backlog
-            .features
-            .iter()
-            .zip(["First task", "Second task", "Third task"])
-        {
-            assert!(
-                f.name.contains(title),
-                "feature {} carries the task title {title}",
-                f.name
-            );
-        }
-    }
-
     /// Guard a prompt regression without pinning prose: the extraction prompt
     /// must name both SDD fields (AC 4).
     #[test]
@@ -2773,15 +2970,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     // The awaited create must observe AGENTUM_GH_BIN, so the guard spans the
-    // await — the same accepted pattern as routes::harness's env-locked test.
+    // await — guarded by the process-wide environment lock.
     #[allow(clippy::await_holding_lock)]
     async fn chat_plan_body_reaches_gh_create_argv_non_empty() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = agentum_store::Store::open(&dir.path().join("t.db"))
-            .await
-            .unwrap();
         // NUL-separated argv log: the body embeds newlines, so a line-based
         // log could not be split back into arguments unambiguously.
         let log = dir.path().join("argv.log");
@@ -2827,9 +3021,7 @@ mod tests {
         let res = TaskSink::Github
             .create_feature(
                 &SinkCtx {
-                    store: &store,
                     workdir: dir.path(),
-                    parent_goal_id: None,
                     slug: Some("o/r"),
                 },
                 &features[0],
@@ -2874,7 +3066,7 @@ mod tests {
         assert!(!slug_matches("owner/"));
     }
 
-    // --- repo + harness grounding (the interviewer's context) ---
+    // --- repository grounding (the interviewer's context) ---
 
     #[test]
     fn interviewer_grounds_when_context_present() {
@@ -2884,16 +3076,13 @@ mod tests {
             Some("## Repo guide (CLAUDE.md)\nThis project uses axum."),
             Some("### Watchdog\nThe watchdog tails panes and emits AgentCrashed."),
         );
-        assert!(
-            with.contains("REPO & HARNESS CONTEXT"),
-            "context block present"
-        );
+        assert!(with.contains("REPOSITORY CONTEXT"), "context block present");
         assert!(
             with.contains("This project uses axum."),
             "context body inlined"
         );
         assert!(
-            with.contains("You HAVE the repo + harness snapshot"),
+            with.contains("You HAVE the repository snapshot"),
             "grounded access rule"
         );
         assert!(
@@ -2910,7 +3099,7 @@ mod tests {
     fn interviewer_is_honest_blind_when_no_context() {
         let without = interviewer_instructions(Some("/tmp/proj"), None, None, None);
         assert!(
-            !without.contains("REPO & HARNESS CONTEXT"),
+            !without.contains("REPOSITORY CONTEXT"),
             "no context block when absent"
         );
         assert!(
@@ -2944,6 +3133,33 @@ mod tests {
             build_intake_instructions(IntakeMode::Fast, 1, None, None, None, None),
             interviewer_instructions(None, None, None, None)
         );
+    }
+
+    #[test]
+    fn issue_spec_target_reuses_passes_but_changes_the_terminal_action() {
+        let legacy = build_targeted_intake_instructions(
+            IntakeMode::Socratic,
+            5,
+            IntakeTarget::FeatureBreakdown,
+            None,
+            None,
+            None,
+            None,
+        );
+        let focused = build_targeted_intake_instructions(
+            IntakeMode::Socratic,
+            5,
+            IntakeTarget::IssueSpec,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(legacy.contains("Preview issues"));
+        assert!(focused.contains("Shape into spec dialog"));
+        assert!(focused.contains("ready to review"));
+        assert!(!focused.contains("Preview issues"));
+        assert!(focused.contains("[[socratic:done]]"));
     }
 
     /// AC 7 — each Socratic pass covers exactly its one topic and (from pass 2 on)
@@ -3069,11 +3285,11 @@ mod tests {
             Some("### Watchdog\nTails panes."),
         );
         assert!(
-            grounded.contains("REPO & HARNESS CONTEXT"),
+            grounded.contains("REPOSITORY CONTEXT"),
             "repo block present"
         );
         assert!(
-            grounded.contains("You HAVE the repo + harness snapshot"),
+            grounded.contains("You HAVE the repository snapshot"),
             "grounded access rule"
         );
         assert!(grounded.contains("Uses axum."), "context body inlined");
@@ -3082,7 +3298,7 @@ mod tests {
 
         let blind = socratic_stage_instructions(2, None, None, None, None);
         assert!(
-            !blind.contains("REPO & HARNESS CONTEXT"),
+            !blind.contains("REPOSITORY CONTEXT"),
             "no context block when absent"
         );
         assert!(
@@ -3517,7 +3733,12 @@ mod tests {
         let user = draft_body_user_message("Fix the sidebar flicker");
         assert!(user.contains("Fix the sidebar flicker"));
 
-        let instructions = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"), None);
+        let instructions = draft_body_instructions(
+            DraftIssueStyle::Sdd,
+            Some("o/r"),
+            Some("## Repo guide\nstuff"),
+            None,
+        );
         assert!(instructions.contains("## Problem"));
         assert!(instructions.contains("## Goal"));
         assert!(instructions.contains("## Acceptance criteria"));
@@ -3526,8 +3747,51 @@ mod tests {
         assert!(instructions.contains("## Repo guide\nstuff"));
 
         // Without a snapshot the prompt says so instead of inviting invention.
-        let blind = draft_body_instructions(None, None, None);
+        let blind = draft_body_instructions(DraftIssueStyle::Sdd, None, None, None);
         assert!(blind.contains("No repo snapshot is available"));
+    }
+
+    #[test]
+    fn concise_draft_prompt_forbids_the_structured_shape() {
+        let instructions =
+            draft_body_instructions(DraftIssueStyle::Concise, Some("o/r"), Some("context"), None);
+        assert!(instructions.contains("2 to 4 plain sentences"));
+        assert!(instructions.contains("at most 120 words"));
+        assert!(instructions.contains("no markdown headings"));
+        assert!(!instructions.contains("## Acceptance criteria"));
+    }
+
+    #[test]
+    fn concise_draft_sanitizer_flattens_markdown_and_caps_words() {
+        let raw = format!(
+            "## Problem\n\n- [ ] First concrete sentence.\n- Second sentence. {}",
+            std::iter::repeat_n("word", 140)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let body = sanitize_concise_draft_body(&raw);
+        assert!(!body.contains('#'));
+        assert!(!body.contains("- [ ]"));
+        assert!(!body.contains('\n'));
+        assert_eq!(body.split_whitespace().count(), 120);
+    }
+
+    #[test]
+    fn issue_spec_extracts_and_renders_one_complete_issue() {
+        let raw = r#"Here:\n```json\n{"title":"Shape issue intake","problem":"Quick and complex work look the same.","goal":"Let users choose the right amount of shaping.","users":"Project maintainers creating tracker issues.","acceptance_criteria":["Quick creates a short paragraph","Complex returns to review"],"in_scope":["Project Tasks intake"],"out_of_scope":["Creating a spec file"],"risks":["The interview may be abandoned"]}\n```"#;
+        let draft = extract_issue_spec(raw).expect("valid issue spec");
+        let body = render_issue_spec_body(&draft);
+        assert_eq!(draft.title, "Shape issue intake");
+        assert!(body.contains("## Users / context"));
+        assert!(body.contains("- [ ] Quick creates a short paragraph"));
+        assert!(body.contains("### In\n\n- Project Tasks intake"));
+        assert!(body.contains("### Out\n\n- Creating a spec file"));
+        assert!(body.contains("## Risks"));
+    }
+
+    #[test]
+    fn issue_spec_rejects_missing_acceptance_criteria() {
+        assert!(extract_issue_spec(r#"{"title":"Incomplete","acceptance_criteria":[]}"#).is_none());
     }
 
     // ── Spec 013 F2: wiki-grounded issue drafting ────────────────────────
@@ -3537,6 +3801,7 @@ mod tests {
         // With a wiki retrieval, the drafting system prompt gains a WIKI block
         // (in addition to the repo context) so the body grounds on both.
         let with_wiki = draft_body_instructions(
+            DraftIssueStyle::Sdd,
             Some("o/r"),
             Some("## Repo guide\nstuff"),
             Some("Domain fact: sessions are (name, workdir, tool)."),
@@ -3549,7 +3814,12 @@ mod tests {
 
         // Best-effort (inv. 6): a `None` wiki appends NO wiki block, yet the
         // body still drafts from the repo context — never wedges on a miss.
-        let no_wiki = draft_body_instructions(Some("o/r"), Some("## Repo guide\nstuff"), None);
+        let no_wiki = draft_body_instructions(
+            DraftIssueStyle::Sdd,
+            Some("o/r"),
+            Some("## Repo guide\nstuff"),
+            None,
+        );
         assert!(!no_wiki.contains("WIKI CONTEXT"));
         assert!(no_wiki.contains("## Repo guide\nstuff"));
     }
@@ -3558,7 +3828,8 @@ mod tests {
     fn draft_body_instructions_is_provider_neutral() {
         // Open question 1: the body is provider-agnostic (reused for Linear), so
         // the drafting instructions must not hard-code "GitHub".
-        let instructions = draft_body_instructions(Some("o/r"), Some("ctx"), Some("wiki"));
+        let instructions =
+            draft_body_instructions(DraftIssueStyle::Sdd, Some("o/r"), Some("ctx"), Some("wiki"));
         assert!(instructions.contains("The repository is `o/r`."));
         assert!(!instructions.contains("GitHub repository"));
     }

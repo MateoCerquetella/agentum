@@ -21,6 +21,5 @@ describe('viewAfterWorktreeClose', () => {
     expect(viewAfterWorktreeClose(true, 'tasks')).toBe('tasks')
     expect(viewAfterWorktreeClose(true, 'projects')).toBe('projects')
     expect(viewAfterWorktreeClose(true, 'project')).toBe('project')
-    expect(viewAfterWorktreeClose(true, 'harness')).toBe('harness')
   })
 })

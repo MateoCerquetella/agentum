@@ -1,5 +1,5 @@
 // Typed client for `GET /api/github/issue` on the embedded agentum-server.
-// Mirrors `board-client.ts`: same loopback endpoint + bearer auth. The Tasks
+// Uses the shared loopback endpoint + bearer auth. The Tasks
 // "Use" path calls this to fetch a GitHub issue's body so the spawned agent
 // starts from the spec — the same way Linear already snapshots its description
 // into linked context (spec 002, Option B). Wire shape is faithful to
@@ -11,6 +11,8 @@ export type DraftLlmChoice = {
   agent: ChatAgentId
   model?: string
 }
+
+export type DraftIssueStyle = 'concise' | 'sdd'
 
 export type GithubIssueBody = {
   title: string
@@ -77,12 +79,17 @@ export async function fetchGithubIssueBody(input: {
 export async function fetchGithubRepoLabels(input: {
   workdir: string
   slug?: string
+  /** Resolve the slug on the registered repo's host (required for SSH paths). */
+  repoId?: string
   /** Abort budget — a slow/hung `gh` must not delay the composer. */
   timeoutMs?: number
 }): Promise<string[]> {
   const params = new URLSearchParams({ workdir: input.workdir })
   if (input.slug) {
     params.set('slug', input.slug)
+  }
+  if (input.repoId) {
+    params.set('repoId', input.repoId)
   }
   const url = await apiUrl(`/api/github/labels?${params.toString()}`)
 
@@ -211,8 +218,8 @@ export type DraftedGithubIssueBody = {
 }
 
 /**
- * Draft an SDD-shaped issue body (## Problem / ## Goal / ## Acceptance
- * criteria checklist) from the typed title + local repo context (spec 007).
+ * Draft a concise or SDD-shaped issue body from the typed title + local repo
+ * context (spec 007).
  * The composer puts the result in the body TEXTAREA for review — this call
  * never files anything. Throws with the server's message on any non-2xx so
  * the form can render it inline (including the "set ANTHROPIC_API_KEY / sign
@@ -224,13 +231,15 @@ export function draftIssueBodyPayload(input: {
   slug?: string
   agent?: ChatAgentId
   model?: string
+  style?: DraftIssueStyle
 }): Record<string, string> {
   return {
     workdir: input.workdir,
     title: input.title,
     ...(input.slug ? { slug: input.slug } : {}),
     ...(input.agent ? { agent: input.agent } : {}),
-    ...(input.model ? { model: input.model } : {})
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.style ? { style: input.style } : {})
   }
 }
 
@@ -240,6 +249,7 @@ export async function draftGithubIssueBody(input: {
   slug?: string
   agent?: ChatAgentId
   model?: string
+  style?: DraftIssueStyle
   /** Abort budget — a full LLM draft; generous but bounded. */
   timeoutMs?: number
 }): Promise<DraftedGithubIssueBody> {
@@ -261,64 +271,6 @@ export async function draftGithubIssueBody(input: {
     }
     const text = await res.text()
     return JSON.parse(text) as DraftedGithubIssueBody
-  } finally {
-    window.clearTimeout(timeout)
-  }
-}
-
-// Wire shape of `POST /api/harness/spec-from-issue`
-// (crates/agentum-server/src/routes/harness.rs::SpecFromIssueResponse).
-export type ScaffoldedSpecFromIssue = {
-  specId: string
-  specExisted: boolean
-  specPath: string
-  written: string[]
-}
-
-/**
- * Scaffold `.agentum-harness/specs/<n>-<slug>/spec.md` (+ a tracker-stamped
- * backlog) from a linked GitHub issue into a freshly created worktree
- * (spec 004 F4, opt-in via the composer's "Scaffold spec" toggle — D5).
- * Failures are the caller's to swallow: the workspace must stay usable even
- * when the scaffold fails.
- */
-export async function scaffoldSpecFromIssue(input: {
-  /** The new worktree's absolute path — the spec is written INTO it. */
-  workdir: string
-  number: number
-  slug?: string
-  /** Also derive feature_list.json (server default: true). */
-  plan?: boolean
-  /** Retain an existing human-edited spec and return success (retry/adoption). */
-  converge?: boolean
-  /** Spec 021 (#379): the repo's tracker pin (`auto`/`github`/`linear`).
-   *  Absent/`auto` keeps the issue-driven path's GitHub stamping. */
-  tracker?: string
-  timeoutMs?: number
-}): Promise<ScaffoldedSpecFromIssue> {
-  const url = await apiUrl('/api/harness/spec-from-issue')
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 15000)
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-      body: JSON.stringify({
-        workdir: input.workdir,
-        number: String(input.number),
-        ...(input.slug ? { slug: input.slug } : {}),
-        ...(input.plan !== undefined ? { plan: input.plan } : {}),
-        ...(input.converge !== undefined ? { converge: input.converge } : {}),
-        ...(input.tracker ? { tracker: input.tracker } : {})
-      }),
-      signal: controller.signal
-    })
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '')
-      throw new Error(`spec from issue ${res.status}${detail ? ` — ${detail}` : ''}`)
-    }
-    const text = await res.text()
-    return JSON.parse(text) as ScaffoldedSpecFromIssue
   } finally {
     window.clearTimeout(timeout)
   }

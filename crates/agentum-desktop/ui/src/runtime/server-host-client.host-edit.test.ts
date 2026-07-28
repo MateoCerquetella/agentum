@@ -27,7 +27,7 @@ const NEW_IP = '100.99.1.7'
 function target(overrides: Partial<SshTarget> = {}): SshTarget {
   return {
     id: 'conn-1',
-    label: 'dyaus-vps',
+    label: 'dev-vps',
     host: OLD_IP,
     port: 22,
     username: 'me',
@@ -38,7 +38,7 @@ function target(overrides: Partial<SshTarget> = {}): SshTarget {
 function hostRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'host-1',
-    name: 'dyaus-vps',
+    name: 'dev-vps',
     kind: 'ssh',
     user: 'me',
     hostname: OLD_IP,

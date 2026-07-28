@@ -6,9 +6,9 @@ import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
 import { useAppStore } from '@/store'
 import { useDetectedAgents } from '@/hooks/useDetectedAgents'
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
-import type { TuiAgent } from '../../../../shared/types'
-import type { LaunchSource } from '../../../../shared/telemetry-events'
-import { filterEnabledTuiAgents } from '../../../../shared/tui-agent-selection'
+import type { TuiAgent } from '@/shared/types'
+import type { LaunchSource } from '@/shared/telemetry-events'
+import { filterEnabledTuiAgents } from '@/shared/tui-agent-selection'
 
 export type QuickLaunchAgentMenuItemsProps = {
   worktreeId: string

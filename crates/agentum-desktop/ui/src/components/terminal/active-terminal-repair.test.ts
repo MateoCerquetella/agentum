@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TerminalTab } from '../../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 import { shouldRepairActiveTerminalTab } from './active-terminal-repair'
 
 function tab(id: string): TerminalTab {

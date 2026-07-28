@@ -29,7 +29,7 @@ import { clearRuntimeCompatibilityCacheForTests } from './runtime-rpc-client'
 import {
   MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION,
   RUNTIME_PROTOCOL_VERSION
-} from '../../../shared/protocol-version'
+} from '@/shared/protocol-version'
 
 const fsReadFile = vi.fn()
 const fsReadDir = vi.fn()

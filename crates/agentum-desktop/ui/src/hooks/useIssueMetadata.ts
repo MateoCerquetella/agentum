@@ -14,7 +14,7 @@ import type {
   LinearWorkflowState,
   LinearLabel,
   LinearMember
-} from '../../../shared/types'
+} from '@/shared/types'
 import {
   clearMetadataRequestStore,
   createMetadataRequestStore,

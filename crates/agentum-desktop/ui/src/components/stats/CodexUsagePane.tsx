@@ -10,7 +10,7 @@ import {
   SlidersHorizontal,
   Sparkles
 } from 'lucide-react'
-import type { CodexUsageRange, CodexUsageScope } from '../../../../shared/codex-usage-types'
+import type { CodexUsageRange, CodexUsageScope } from '@/shared/codex-usage-types'
 import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
 import {

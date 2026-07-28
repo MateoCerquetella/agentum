@@ -1,9 +1,9 @@
 /* eslint-disable max-lines */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type * as AgentStatusModule from '@/lib/agent-status'
-import type { BrowserTab, DetectedWorktreeListResult, Worktree } from '../../../../shared/types'
-import { isTerminalLeafId } from '../../../../shared/stable-pane-id'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+import type { BrowserTab, DetectedWorktreeListResult, Worktree } from '@/shared/types'
+import { isTerminalLeafId } from '@/shared/stable-pane-id'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 // Mock sonner (imported by repos.ts)
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }))
@@ -34,6 +34,10 @@ const mockApi = {
   },
   pty: {
     kill: vi.fn().mockResolvedValue(undefined)
+  },
+  browser: {
+    webviewClose: vi.fn().mockResolvedValue(undefined),
+    unregisterGuest: vi.fn().mockResolvedValue(undefined)
   },
   gh: {
     prForBranch: vi.fn().mockResolvedValue(null),

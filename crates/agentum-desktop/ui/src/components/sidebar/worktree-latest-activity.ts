@@ -1,4 +1,4 @@
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
 import { selectLiveAgentStatusEntriesForWorktree } from './worktree-agent-row-selectors'
 
 /** The fields the active-session card + leaf ctx% chip render. All optional —

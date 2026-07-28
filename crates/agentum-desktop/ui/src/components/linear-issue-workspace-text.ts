@@ -1,5 +1,5 @@
 import { getLinkedWorkItemSuggestedName } from '@/lib/new-workspace'
-import type { LinearIssue } from '../../../shared/types'
+import type { LinearIssue } from '@/shared/types'
 
 const relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
 

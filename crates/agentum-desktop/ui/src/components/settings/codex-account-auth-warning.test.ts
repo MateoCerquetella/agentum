@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { isCodexAuthError } from '../../../../shared/codex-auth-errors'
-import type { ProviderRateLimits } from '../../../../shared/rate-limit-types'
+import { isCodexAuthError } from '@/shared/codex-auth-errors'
+import type { ProviderRateLimits } from '@/shared/rate-limit-types'
 import {
   codexRateLimitTargetMatchesAccountRuntime,
   getCodexAccountAuthWarning

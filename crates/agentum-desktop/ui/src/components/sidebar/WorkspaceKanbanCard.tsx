@@ -1,7 +1,7 @@
 import React from 'react'
 import { Pin } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 import WorktreeCard from './WorktreeCard'
 
 type WorkspaceKanbanCardProps = {

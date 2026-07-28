@@ -4,9 +4,9 @@ import type { RetainedAgentEntry } from '@/store/slices/agent-status'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
-import type { TerminalLayoutSnapshot, TerminalTab } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import { parsePaneKey } from '@/shared/stable-pane-id'
+import type { TerminalLayoutSnapshot, TerminalTab } from '@/shared/types'
 import { buildTitleDerivedAgentRows } from './worktree-title-derived-agent-rows'
 
 export function buildWorktreeAgentRows(args: {

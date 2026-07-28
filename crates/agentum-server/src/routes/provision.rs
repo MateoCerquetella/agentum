@@ -4,17 +4,17 @@
 //!
 //! `POST /api/github/repo-from-template` — create-or-adopt a repo from a
 //! template and clone it under a local directory.
-//! `POST /api/workspace/provision` — the ONE idempotent provisioning ensure
-//! (labels, board link-or-create + bind, scaffold, consent-gated commit).
+//! `POST /api/workspace/provision` — the idempotent GitHub label and board
+//! binding ensure.
 //!
-//! Provisioning is local-host only (the harness routes' pattern):
+//! Provisioning is local-host only:
 //! `expand_workdir` + `is_dir` guards; the only hard 4xx are request-shape /
 //! missing-workdir errors — every provisioning step inside is best-effort and
 //! per-step reported. Only the *slug resolution* half is host-aware
 //! (spec 020 F1, via the shared `util::resolve_tracker_slug`); an SSH repoId
 //! still dies at the local `is_dir` gate first, which is correct — remote
-//! scaffolding is its own future spec. All routes authed (no `is_public`
-//! changes).
+//! remote project provisioning remains out of scope. All routes are
+//! authenticated.
 
 use axum::Json;
 use axum::Router;
@@ -250,7 +250,7 @@ struct ProvisionRequest {
     #[serde(default)]
     repo_id: Option<String>,
     /// Absent = no board requested (an existing binding still short-circuits
-    /// to "already bound"; labels + scaffold + commit still ensure).
+    /// to "already bound").
     #[serde(default)]
     project: Option<ProjectChoiceDto>,
     #[serde(default)]
@@ -258,8 +258,6 @@ struct ProvisionRequest {
     /// Absent = ON — D1's default via the binding type's one definition site.
     #[serde(default)]
     done_closes_issue: Option<bool>,
-    /// D8 consent — explicit on the wire (the UI's toggle defaults it ON).
-    commit_scaffold: bool,
 }
 
 /// `POST /api/workspace/provision` — run the one idempotent ensure and return
@@ -294,14 +292,12 @@ async fn provision_workspace(
     let report = provision_repo(ProvisionCtx {
         program: &crate::github_projects::gh_bin(),
         bindings_path: None,
-        workdir: &workdir,
         slug: &slug,
         project,
         status_mapping,
         done_closes_issue: req
             .done_closes_issue
             .unwrap_or_else(crate::github_projects::default_true),
-        commit_scaffold: req.commit_scaffold,
         state_map: crate::task_sink::GithubStateMap::from_env(),
     })
     .await;
@@ -379,11 +375,9 @@ mod tests {
             "project": { "create": true, "owner": "acme", "ownerType": "user", "title": "B" },
             "statusMapping": { "todo": "t", "inProgress": "i", "readyToTest": "r",
                                "done": "d", "blocked": "b" },
-            "doneClosesIssue": false,
-            "commitScaffold": true
+            "doneClosesIssue": false
         }))
         .unwrap();
-        assert!(req.commit_scaffold);
         assert_eq!(req.done_closes_issue, Some(false));
         // Spec 020 F1: absent repoId → None (pre-020 requests byte-identical).
         assert_eq!(req.repo_id, None);
@@ -392,8 +386,7 @@ mod tests {
 
         let with_repo: ProvisionRequest = serde_json::from_value(serde_json::json!({
             "workdir": "/tmp/repo",
-            "repoId": "r-1",
-            "commitScaffold": false
+            "repoId": "r-1"
         }))
         .unwrap();
         assert_eq!(with_repo.repo_id.as_deref(), Some("r-1"));

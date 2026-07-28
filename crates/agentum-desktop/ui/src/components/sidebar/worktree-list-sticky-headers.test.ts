@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildRows } from './worktree-list-groups'
 import { getStickyHeaderIndexes } from './worktree-list-virtual-rows'
-import type { ProjectGroup, Repo, Worktree } from '../../../../shared/types'
+import type { ProjectGroup, Repo, Worktree } from '@/shared/types'
 import type { Row } from './worktree-list-groups'
 
 const repo: Repo = {

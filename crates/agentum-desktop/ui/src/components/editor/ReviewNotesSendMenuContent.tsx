@@ -13,7 +13,7 @@ import {
   sendNotesToActiveAgentSession,
   useCanSendNotesToActiveTerminal
 } from '@/lib/active-agent-note-send'
-import type { LaunchSource } from '../../../../shared/telemetry-events'
+import type { LaunchSource } from '@/shared/telemetry-events'
 
 export function ReviewNotesSendMenuContent({
   worktreeId,

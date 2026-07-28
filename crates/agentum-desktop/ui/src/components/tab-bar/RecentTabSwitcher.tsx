@@ -5,7 +5,7 @@ import { FileText, GitCompare, Globe2, TerminalSquare } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { activateCyclableTab } from '../../hooks/ipc-tab-switch'
 import { getShortcutPlatform } from '../../hooks/useShortcutLabel'
-import { matchesRecentTabSwitcherChord } from '../../../../shared/window-shortcut-policy'
+import { matchesRecentTabSwitcherChord } from '@/shared/window-shortcut-policy'
 import {
   buildRecentTabSwitcherModel,
   getNextRecentTabSwitcherIndex,

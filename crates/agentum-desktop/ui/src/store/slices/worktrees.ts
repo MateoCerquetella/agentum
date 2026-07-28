@@ -17,9 +17,9 @@ import type {
   RemoveWorktreeResult,
   WorktreeLineage,
   WorktreeMeta
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type { TerminalGitHubPRLink } from '@/lib/terminal-github-pr-link-detector'
-import type { RuntimeWorktreeListResult } from '../../../../shared/runtime-types'
+import type { RuntimeWorktreeListResult } from '@/shared/runtime-types'
 import {
   findWorktreeById,
   applyWorktreeUpdates,
@@ -691,10 +691,6 @@ function buildWorktreePurgeState(s: AppState, worktreeIds: string[]): Partial<Ap
     deleteStateByWorktreeId: omitByWorktree(s.deleteStateByWorktreeId),
     baseStatusByWorktreeId: omitByWorktree(s.baseStatusByWorktreeId),
     remoteBranchConflictByWorktreeId: omitByWorktree(s.remoteBranchConflictByWorktreeId),
-    // Spec 023: the gated-run-starting surface must not outlive its worktree —
-    // a stale entry would resurface if the same `${repoId}::${path}` id
-    // reappeared out-of-band (the 015 review's offer-slice lesson).
-    gatedRunStartingByWorktreeId: omitByWorktree(s.gatedRunStartingByWorktreeId),
     // File search
     fileSearchStateByWorktree: omitByWorktree(s.fileSearchStateByWorktree),
     // Browser state

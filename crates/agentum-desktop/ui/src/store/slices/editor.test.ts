@@ -10,7 +10,7 @@ import {
   type RuntimeEnvironmentCallRequest
 } from '../../runtime/runtime-compatibility-test-fixture'
 import { clearRuntimeCompatibilityCacheForTests } from '../../runtime/runtime-rpc-client'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 const { toastErrorMock } = vi.hoisted(() => ({
   toastErrorMock: vi.fn()
@@ -24,6 +24,57 @@ const { openHttpLinkMock } = vi.hoisted(() => ({ openHttpLinkMock: vi.fn() }))
 vi.mock('@/lib/http-link-routing', () => ({
   openHttpLink: openHttpLinkMock
 }))
+vi.mock('@/runtime/runtime-git-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/runtime/runtime-git-client')>()
+  const gitApi = () =>
+    (globalThis.window as unknown as {
+      api: {
+        git: Record<string, (args: Record<string, unknown>) => Promise<unknown>>
+      }
+    }).api.git
+  const base = (context: {
+    worktreePath: string
+    connectionId?: string
+  }): Record<string, unknown> => ({
+    worktreePath: context.worktreePath,
+    connectionId: context.connectionId
+  })
+  return {
+    ...actual,
+    getRuntimeGitStatus: (context: Parameters<typeof actual.getRuntimeGitStatus>[0]) =>
+      gitApi().status(base(context)),
+    getRuntimeGitUpstreamStatus: (
+      context: Parameters<typeof actual.getRuntimeGitUpstreamStatus>[0],
+      pushTarget?: Parameters<typeof actual.getRuntimeGitUpstreamStatus>[1]
+    ) => gitApi().upstreamStatus({ ...base(context), ...(pushTarget ? { pushTarget } : {}) }),
+    fetchRuntimeGit: (
+      context: Parameters<typeof actual.fetchRuntimeGit>[0],
+      pushTarget?: Parameters<typeof actual.fetchRuntimeGit>[1]
+    ) => gitApi().fetch({ ...base(context), ...(pushTarget ? { pushTarget } : {}) }),
+    pullRuntimeGit: (
+      context: Parameters<typeof actual.pullRuntimeGit>[0],
+      pushTarget?: Parameters<typeof actual.pullRuntimeGit>[1]
+    ) => gitApi().pull({ ...base(context), ...(pushTarget ? { pushTarget } : {}) }),
+    fastForwardRuntimeGit: (
+      context: Parameters<typeof actual.fastForwardRuntimeGit>[0],
+      pushTarget?: Parameters<typeof actual.fastForwardRuntimeGit>[1]
+    ) => gitApi().fastForward({ ...base(context), ...(pushTarget ? { pushTarget } : {}) }),
+    rebaseRuntimeGitFromBase: (
+      context: Parameters<typeof actual.rebaseRuntimeGitFromBase>[0],
+      baseRef: string
+    ) => gitApi().rebaseFromBase({ ...base(context), baseRef }),
+    pushRuntimeGit: (
+      context: Parameters<typeof actual.pushRuntimeGit>[0],
+      options: Parameters<typeof actual.pushRuntimeGit>[1]
+    ) =>
+      gitApi().push({
+        ...base(context),
+        ...(options?.publish ? { publish: true } : {}),
+        ...(options?.pushTarget ? { pushTarget: options.pushTarget } : {}),
+        ...(options?.forceWithLease ? { forceWithLease: true } : {})
+      })
+  }
+})
 
 function createEditorStore(): StoreApi<AppState> {
   // Only the editor slice + activeWorktreeId are needed for these tests.
@@ -1509,6 +1560,7 @@ describe('createEditorSlice remote branch actions', () => {
     gitFetchMock.mockReset()
 
     gitStatusMock.mockResolvedValue({ entries: [], conflictOperation: 'unknown' })
+    gitFetchMock.mockResolvedValue(undefined)
     gitUpstreamStatusMock.mockResolvedValue({
       hasUpstream: true,
       upstreamName: 'origin/main',

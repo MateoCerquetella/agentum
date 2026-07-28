@@ -4,12 +4,12 @@ import { useAppStore } from '@/store'
 import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
 import { type DashboardAgentRow } from './useDashboardData'
 import type { RetainedAgentEntry } from '@/store/slices/agent-status'
-import type { Repo, TerminalTab, Worktree } from '../../../../shared/types'
+import type { Repo, TerminalTab, Worktree } from '@/shared/types'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
+} from '@/shared/agent-status-types'
+import { parsePaneKey } from '@/shared/stable-pane-id'
 
 // Why: when an agent finishes or its terminal closes, the store cleans up the
 // explicit status entry and the agent vanishes from the live status set.

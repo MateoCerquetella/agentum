@@ -7,7 +7,7 @@ import {
   createHostedReviewSlice,
   getHostedReviewCacheKey
 } from './hosted-review'
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
 
 const runtimeRpc = vi.hoisted(() => ({
   callRuntimeRpc: vi.fn()

@@ -3,13 +3,13 @@ import type {
   Repo,
   TerminalQuickCommand,
   TerminalQuickCommandScope
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   getTerminalQuickCommandAction,
   getTerminalQuickCommandScope,
   isTerminalAgentQuickCommand,
   supportsTerminalAgentQuickCommand
-} from '../../../../shared/terminal-quick-commands'
+} from '@/shared/terminal-quick-commands'
 import { createBrowserUuid } from '@/lib/browser-uuid'
 import {
   Dialog,
@@ -28,7 +28,7 @@ import {
 } from '@/components/ui/select'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
 import { getScreenSubmitShortcutLabel, isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
-import type { TuiAgent } from '../../../../shared/types'
+import type { TuiAgent } from '@/shared/types'
 import { TerminalQuickCommandActionToggle } from './TerminalQuickCommandActionToggle'
 import { TerminalQuickCommandAppendEnterSwitch } from './TerminalQuickCommandAppendEnterSwitch'
 import { TerminalQuickCommandDialogFooter } from './TerminalQuickCommandDialogFooter'

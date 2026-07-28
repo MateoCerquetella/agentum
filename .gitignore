@@ -6,6 +6,10 @@ Cargo.lock.bak
 # Node
 .pnpm-store
 
+# Python test/tool caches
+__pycache__/
+*.py[cod]
+
 # Desktop UI (React/Vite) — build artifacts, not source.
 crates/agentum-desktop/ui/node_modules
 crates/agentum-desktop/ui/dist

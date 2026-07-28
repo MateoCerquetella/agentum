@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { type AgentStatusEntry } from '../../../../shared/agent-status-types'
-import type { TerminalTab } from '../../../../shared/types'
+import { type AgentStatusEntry } from '@/shared/agent-status-types'
+import type { TerminalTab } from '@/shared/types'
 import type { RetainedAgentEntry } from './agent-status'
 import { createTestStore } from './store-test-helpers'
 

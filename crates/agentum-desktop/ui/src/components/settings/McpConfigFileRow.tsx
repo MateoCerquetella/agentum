@@ -1,5 +1,5 @@
 import { AlertCircle, CheckCircle2 } from 'lucide-react'
-import type { McpConfigInspection } from '../../../../shared/mcp-config'
+import type { McpConfigInspection } from '@/shared/mcp-config'
 import { Button } from '../ui/button'
 
 export type LoadedMcpConfigInspection = McpConfigInspection & {

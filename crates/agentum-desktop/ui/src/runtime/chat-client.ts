@@ -1,10 +1,11 @@
 // Typed client for the conversational chat route on the embedded agentum-server
-// (`POST /api/chat`). Mirrors `board-client.ts`: same loopback endpoint + bearer
-// auth (`getServerEndpoint` → `apiUrl`), wire shapes faithful to the server's
+// (`POST /api/chat`). Uses the shared loopback endpoint + bearer auth
+// (`getServerEndpoint` → `apiUrl`), with wire shapes faithful to the server's
 // `/api/chat` contract. The endpoint is a Socratic interviewer — it asks
 // clarifying questions, then proposes a task breakdown the user can file into
 // GitHub or Linear. This client is conversation-only; it never creates tasks.
 import { buildChatBody, buildChatStreamBody } from '../lib/chat-body'
+import type { IntakeTarget } from '../lib/chat-body'
 import type { IntakeMode } from '../lib/socratic-intake'
 import type { ChatAgentId, TuiAgent } from '../shared/types'
 import { apiUrl, getServerEndpoint } from './server-endpoint'
@@ -90,8 +91,8 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 /**
  * `POST /api/chat` — send the running transcript and get the assistant's next
- * reply. Mirrors board-client's `createGoal`: own fetch path so the typed error
- * envelope survives. On a non-ok response, surfaces the server's message text:
+ * reply. It owns its fetch path so the typed error envelope survives. On a
+ * non-ok response, surfaces the server's message text:
  * handles BOTH `{ error: string }` (400) and `{ error: { message } }` (502
  * `llm_failed`) shapes, throwing `Error(<server message>)` either way.
  */
@@ -103,6 +104,7 @@ async function sendChat(
     repoSlug?: string
     mode?: IntakeMode
     stage?: number
+    target?: IntakeTarget
     agent?: ChatAgentId
   }
 ): Promise<string> {
@@ -169,6 +171,8 @@ export async function streamChat(
     mode?: IntakeMode
     /** Spec 008 F2: the socratic pass (1..=5); ignored by the server for Fast. */
     stage?: number
+    /** Provider-neutral focused interview for one structured issue. */
+    target?: IntakeTarget
     signal?: AbortSignal
     onDelta?: (delta: ChatStreamDelta) => void
   } = {}
@@ -290,6 +294,12 @@ export type DraftPlan = {
   body: string
 }
 
+export type IssueSpecDraft = {
+  title: string
+  body: string
+  grounding: { repo: boolean; wiki: boolean }
+}
+
 /** Decode the server's typed error envelope — `{error:string}` or
  *  `{error:{message}}` — into a message, falling back to `fallback`. */
 function decodeError(text: string, fallback: string): string {
@@ -301,6 +311,48 @@ function decodeError(text: string, fallback: string): string {
     if (text) return text
   }
   return fallback
+}
+
+/** Extract one structured issue from a converged focused interview. Files nothing. */
+export async function previewIssueSpec(
+  messages: ChatTurn[],
+  opts?: {
+    workdir?: string
+    repoId?: string
+    repoSlug?: string
+    agent?: ChatAgentId
+    model?: string
+    signal?: AbortSignal
+  }
+): Promise<IssueSpecDraft> {
+  const url = await apiUrl('/api/chat/issue/preview')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(await authHeaders())
+    },
+    body: JSON.stringify({
+      messages,
+      workdir: opts?.workdir,
+      repo_id: opts?.repoId,
+      repo_slug: normalizeRepoSlug(opts?.repoSlug) || undefined,
+      agent: opts?.agent,
+      model: opts?.model
+    }),
+    signal: opts?.signal
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(decodeError(text, `chat issue preview ${res.status}`))
+  const parsed = (text ? JSON.parse(text) : {}) as Partial<IssueSpecDraft>
+  return {
+    title: parsed.title ?? '',
+    body: parsed.body ?? '',
+    grounding: {
+      repo: parsed.grounding?.repo ?? false,
+      wiki: parsed.grounding?.wiki ?? false
+    }
+  }
 }
 
 /**

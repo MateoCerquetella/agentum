@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   WorkspaceBoardColumnLayout,
   WorkspaceStatusDefinition
-} from '../../../../shared/types'
+} from '@/shared/types'
 import WorkspaceKanbanDrawerHeader from './WorkspaceKanbanDrawerHeader'
 
 type InspectableProps = {

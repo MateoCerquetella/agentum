@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { SshConnectionState } from '../../../../shared/ssh-types'
+import type { SshConnectionState } from '@/shared/ssh-types'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { SshDestructiveActionDialog } from './SshDestructiveActionDialog'
 import {

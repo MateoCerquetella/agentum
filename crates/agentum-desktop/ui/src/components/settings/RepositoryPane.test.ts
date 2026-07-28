@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 import { useAppStore } from '../../store'
 import {
   getRepositoryPaneSearchEntries,

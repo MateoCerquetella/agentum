@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { hasActiveWorkspaceActivity, isInactiveWorkspace } from './worktree-activity-state'
-import type { TerminalTab } from '../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 
 function makeTab(id: string): Pick<TerminalTab, 'id'> {
   return { id }

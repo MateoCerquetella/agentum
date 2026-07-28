@@ -22,7 +22,7 @@ import { fitPanes, isWindowsUserAgent, shellEscapePath } from './pane-helpers'
 import { getConnectionId } from '@/lib/connection-context'
 import { resolveTerminalDropTargetShell } from './terminal-drop-handler'
 import { EMPTY_LAYOUT, serializeTerminalLayout } from './layout-serialization'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import {
   applyExpandedLayoutTo,
   cancelPendingPaneSizeRefreshFrames,
@@ -45,7 +45,7 @@ import { useTerminalPaneContextMenu } from './use-terminal-pane-context-menu'
 import type { PreparedAgentSessionFork } from './terminal-agent-session-fork'
 import { useNotificationDispatch } from './use-notification-dispatch'
 import { connectPanePty } from './pty-connection'
-import { shouldPreserveTerminalScrollbackBuffers } from '../../../../shared/workspace-session-terminal-buffers'
+import { shouldPreserveTerminalScrollbackBuffers } from '@/shared/workspace-session-terminal-buffers'
 import { resolvePaneKeyForManager } from '@/lib/pane-manager/pane-key-resolution'
 import { safeFit } from '@/lib/pane-manager/pane-tree-ops'
 import { captureTerminalShutdownLayout } from './terminal-shutdown-layout-capture'
@@ -53,25 +53,25 @@ import { inspectRuntimeTerminalProcess } from '@/runtime/runtime-terminal-inspec
 import { closeWebRuntimeTerminal } from '@/runtime/web-runtime-session'
 import { isPrimarySelectionEnabled, readPrimarySelectionText } from '@/lib/primary-selection'
 import { WORKSPACE_FILE_PATH_MIME } from '@/lib/workspace-file-drag'
-import { isTerminalSessionStateSaveFailure } from '../../../../shared/terminal-session-state-save-failure'
+import { isTerminalSessionStateSaveFailure } from '@/shared/terminal-session-state-save-failure'
 import {
   isSyntheticSinglePaneTitle,
   sanitizeTerminalLayoutPaneTitles
 } from '@/lib/terminal-pane-title-sanitization'
 import { planTerminalLiveLayoutInsertions } from './terminal-live-layout-reconciliation'
-import type { TerminalQuickCommand, TerminalQuickCommandScope } from '../../../../shared/types'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
-import { getRepoIdFromWorktreeId } from '../../../../shared/worktree-id'
+import type { TerminalQuickCommand, TerminalQuickCommandScope } from '@/shared/types'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
+import { getRepoIdFromWorktreeId } from '@/shared/worktree-id'
 import {
   getTerminalQuickCommandScope,
   isTerminalQuickCommandComplete,
   terminalQuickCommandMatchesRepo
-} from '../../../../shared/terminal-quick-commands'
+} from '@/shared/terminal-quick-commands'
 import {
   createTerminalQuickCommandDraft,
   TerminalQuickCommandDialog
 } from '@/components/terminal-quick-commands/TerminalQuickCommandDialog'
-import { keybindingMatchesAction } from '../../../../shared/keybindings'
+import { keybindingMatchesAction } from '@/shared/keybindings'
 import { pasteTerminalClipboard } from './terminal-clipboard-paste'
 import { resolveServerSessionId, uploadLocalImageToSession } from './screenshot-remote-upload'
 

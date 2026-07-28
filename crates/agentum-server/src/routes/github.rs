@@ -21,12 +21,25 @@
 use axum::Json;
 use axum::Router;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::error::ApiError;
 use crate::task_sink::{NewFeature, SinkCtx, TaskSink};
+
+fn issue_fetch_cwd(host_kind: &agentum_core::HostKind, resolved_workdir: &str) -> String {
+    match host_kind {
+        agentum_core::HostKind::Local => crate::task_sink::neutral_cwd()
+            .to_string_lossy()
+            .into_owned(),
+        // A daemon-local $HOME path is meaningless over SSH. `--repo` keeps
+        // gh repository selection explicit, so the authoritative remote
+        // worktree is a safe, existing cwd.
+        agentum_core::HostKind::Ssh { .. } => resolved_workdir.to_string(),
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -75,9 +88,15 @@ fn is_numeric_issue_id(s: &str) -> bool {
 pub(crate) struct FetchedIssue {
     pub title: String,
     pub body: String,
+    #[allow(dead_code)] // consumed only by the read-only legacy migration path
     pub url: String,
     #[allow(dead_code)]
     pub slug: String,
+    /// Provider-owned immutable revision input for SDD import previews. This is
+    /// fetched in the same read as the body so a later preview/commit can bind
+    /// the exact work-item version without trusting a client timestamp.
+    #[allow(dead_code)] // consumed by the v2 source adapter integration
+    pub updated_at: String,
 }
 
 /// Fetch a single issue's title + body + URL via `gh` from a neutral cwd
@@ -116,7 +135,7 @@ pub(crate) async fn fetch_github_issue(
     let workdir = super::util::effective_workdir(&host, workdir)?;
     // Prefer the `owner/repo` hint (zero I/O); fall back to the project's
     // `origin` read. Reuses the exact resolver the board issue path uses.
-    let slug = super::board_goals::resolve_github_slug(&host, &workdir, slug_hint)
+    let slug = super::util::resolve_github_slug(&host, &workdir, slug_hint)
         .await
         .map_err(|reason| {
             ApiError::BadRequest(format!("could not resolve a GitHub repo: {reason:?}"))
@@ -124,8 +143,7 @@ pub(crate) async fn fetch_github_issue(
 
     // `gh` is addressed by `--repo <slug>` and run from a neutral cwd ($HOME) so
     // a stray `.git`/`GH_REPO` can't redirect it — identical to issue creation.
-    let cwd = crate::task_sink::neutral_cwd();
-    let cwd = cwd.to_string_lossy();
+    let cwd = issue_fetch_cwd(&host.kind, &workdir);
     let out = crate::host_runtime::gh_in_dir(
         &host,
         &cwd,
@@ -136,17 +154,25 @@ pub(crate) async fn fetch_github_issue(
             "--repo",
             slug.as_str(),
             "--json",
-            "title,body,url",
+            "title,body,url,updatedAt",
         ],
     )
     .await
     .map_err(|e| ApiError::Internal(format!("could not run `gh`: {e}")))?;
 
+    const MAX_ISSUE_SOURCE_OUTPUT: usize = 2 * 1024 * 1024;
+    if out.stdout.len().saturating_add(out.stderr.len()) > MAX_ISSUE_SOURCE_OUTPUT {
+        return Err(ApiError::BadRequest(
+            "`gh issue view` returned more than 2 MiB; refusing an unbounded work-item source"
+                .into(),
+        ));
+    }
+
     if !out.success {
-        // `gh` owns its own auth, so its stderr carries no agentum-held secret;
-        // still, log it server-side and return a generic message — the desktop
-        // falls back to the title+URL prompt on any error (never breaks "Use").
-        tracing::warn!(stderr = %out.stderr, slug = %slug, number = %number, "gh issue view failed");
+        // Keep external command output out of logs: provider stderr may include
+        // account, host, or work-item details. The typed client error remains
+        // intentionally generic.
+        tracing::warn!(slug = %slug, number = %number, "gh issue view failed");
         return Err(ApiError::BadRequest("`gh issue view` failed".into()));
     }
 
@@ -157,6 +183,7 @@ pub(crate) async fn fetch_github_issue(
         body: v["body"].as_str().unwrap_or_default().to_string(),
         url: v["url"].as_str().unwrap_or_default().to_string(),
         slug,
+        updated_at: v["updatedAt"].as_str().unwrap_or_default().to_string(),
     })
 }
 
@@ -273,17 +300,15 @@ async fn create_issue(
     let fref = TaskSink::Github
         .create_feature(
             &SinkCtx {
-                store: &state.store,
                 // The explicit-slug GitHub arm runs `gh` from `$HOME`; workdir
                 // is passed for shape only (same note as the Chat path).
                 workdir: std::path::Path::new(workdir),
-                parent_goal_id: None,
                 slug: Some(&slug),
             },
             &feature,
         )
         .await
-        .map_err(|e| super::board_goals::map_sink_error(TaskSink::Github, &e))?;
+        .map_err(map_github_sink_error)?;
 
     let number = issue_number_from_ref_id(&fref.id)?;
     // Spec 006 F4: fetched AFTER the successful create — a login failure must
@@ -296,6 +321,34 @@ async fn create_issue(
         slug,
         author,
     }))
+}
+
+fn map_github_sink_error(error: anyhow::Error) -> ApiError {
+    let message = error.to_string();
+    let (code, message) = if message.contains("failed to run `gh`") {
+        (
+            "no_gh",
+            "GitHub CLI (`gh`) is not installed or not on PATH.".to_string(),
+        )
+    } else {
+        let lower = message.to_ascii_lowercase();
+        let code = if lower.contains("no default remote repository")
+            || lower.contains("not a git repository")
+            || lower.contains("none of the git remotes")
+            || lower.contains("could not determine")
+        {
+            "not_github_repo"
+        } else {
+            "gh_failed"
+        };
+        (code, message)
+    };
+    ApiError::Custom(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        serde_json::json!({
+            "error": { "code": code, "message": message, "provider": "github" }
+        }),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -317,6 +370,10 @@ struct DraftBodyRequest {
     /// agent is resolved, ahead of chat.toml and the backend default.
     #[serde(default)]
     model: Option<String>,
+    /// Optional output shape. Absent stays on the legacy SDD-shaped prompt;
+    /// Project Tasks opts into the concise paragraph explicitly.
+    #[serde(default)]
+    style: super::chat::DraftIssueStyle,
 }
 
 /// Spec 020 F3 (D4): which context sources actually grounded the draft. Both
@@ -336,7 +393,7 @@ struct DraftBodyResponse {
     grounding: DraftGroundingDto,
 }
 
-/// `POST /api/github/issues/draft-body` — draft an SDD-shaped issue body
+/// `POST /api/github/issues/draft-body` — draft a concise or SDD-shaped body
 /// (## Problem / ## Goal / ## Acceptance criteria checklist) from the typed
 /// title + the local repo snapshot (spec 007). Thin over the chat module's
 /// LLM plumbing; the composer fills its body textarea with the result so the
@@ -364,6 +421,7 @@ async fn draft_issue_body(
         &body.title,
         body.agent.as_deref(),
         body.model.as_deref(),
+        body.style,
     )
     .await?;
     Ok(Json(DraftBodyResponse {
@@ -503,6 +561,24 @@ mod tests {
         assert!(!is_numeric_issue_id("--repo"));
         assert!(!is_numeric_issue_id("1a"));
         assert!(!is_numeric_issue_id("-5"));
+    }
+
+    #[test]
+    fn issue_fetch_cwd_is_remote_path_on_ssh() {
+        let ssh = agentum_core::HostKind::Ssh {
+            user: "dev".into(),
+            hostname: "forge.example".into(),
+            port: 22,
+            auth: agentum_core::SshAuth::Agent,
+        };
+        assert_eq!(
+            issue_fetch_cwd(&ssh, "/srv/repo/worktree"),
+            "/srv/repo/worktree"
+        );
+        assert_eq!(
+            issue_fetch_cwd(&agentum_core::HostKind::Local, "/srv/repo/worktree"),
+            crate::task_sink::neutral_cwd().to_string_lossy()
+        );
     }
 
     #[test]
@@ -655,6 +731,7 @@ mod tests {
         assert_eq!(full.slug.as_deref(), Some("acme/widgets"));
         assert_eq!(full.agent.as_deref(), Some("claude"));
         assert_eq!(full.model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(full.style, super::super::chat::DraftIssueStyle::Sdd);
 
         let minimal: DraftBodyRequest = serde_json::from_value(serde_json::json!({
             "title": "Add a widget",
@@ -664,6 +741,15 @@ mod tests {
         assert!(minimal.slug.is_none());
         assert!(minimal.agent.is_none());
         assert!(minimal.model.is_none());
+        assert_eq!(minimal.style, super::super::chat::DraftIssueStyle::Sdd);
+
+        let concise: DraftBodyRequest = serde_json::from_value(serde_json::json!({
+            "title": "Add a widget",
+            "workdir": "/tmp/repo",
+            "style": "concise"
+        }))
+        .unwrap();
+        assert_eq!(concise.style, super::super::chat::DraftIssueStyle::Concise);
 
         // A missing workdir is a deserialization error (the field is required),
         // matching the sibling create-issue contract.

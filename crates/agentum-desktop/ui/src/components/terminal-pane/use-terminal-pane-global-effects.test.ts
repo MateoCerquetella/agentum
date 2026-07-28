@@ -106,6 +106,7 @@ function useMountForFileDrop(
   })
   const manager = {
     getPanes: vi.fn(() => []),
+    restoreHiddenScrollback: vi.fn(),
     resumeRendering: vi.fn(),
     suspendRendering: vi.fn(),
     getActivePane: vi.fn(() => null)
@@ -162,6 +163,7 @@ describe('useTerminalPaneGlobalEffects', () => {
         { id: 1, terminal: terminalA },
         { id: 2, terminal: terminalB }
       ]),
+      restoreHiddenScrollback: vi.fn(),
       resumeRendering: vi.fn(() => order.push('resume')),
       suspendRendering: vi.fn(),
       fitAllPanes: vi.fn(),
@@ -228,6 +230,7 @@ describe('useTerminalPaneGlobalEffects', () => {
     const terminalA = { name: 'terminal-a' }
     const manager = {
       getPanes: vi.fn(() => [{ id: 1, terminal: terminalA }]),
+      restoreHiddenScrollback: vi.fn(),
       resumeRendering: vi.fn(),
       suspendRendering: vi.fn(),
       fitAllPanes: vi.fn(),
@@ -301,6 +304,7 @@ describe('useTerminalPaneGlobalEffects', () => {
       manager,
       paneTransports,
       worktreeId: 'wt-1',
+      tabId: 'tab-1',
       cwd: '/worktree',
       data
     })
@@ -316,6 +320,7 @@ describe('useTerminalPaneGlobalEffects', () => {
       manager,
       paneTransports,
       worktreeId: 'wt-1',
+      tabId: 'tab-1',
       cwd: undefined,
       data
     })
@@ -340,6 +345,7 @@ describe('useTerminalPaneGlobalEffects', () => {
   it('skips global sync-fit registration for hidden non-measurable terminal panes', () => {
     const manager = {
       getPanes: vi.fn(() => []),
+      restoreHiddenScrollback: vi.fn(),
       resumeRendering: vi.fn(),
       suspendRendering: vi.fn(),
       fitAllPanes: vi.fn(),
@@ -372,6 +378,7 @@ describe('useTerminalPaneGlobalEffects', () => {
   it('registers global sync-fit for measurable hidden startup panes', () => {
     const manager = {
       getPanes: vi.fn(() => []),
+      restoreHiddenScrollback: vi.fn(),
       resumeRendering: vi.fn(),
       suspendRendering: vi.fn(),
       fitAllPanes: vi.fn(),

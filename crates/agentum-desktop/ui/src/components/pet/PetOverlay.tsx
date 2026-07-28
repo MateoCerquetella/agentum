@@ -4,9 +4,9 @@ import { usePetUrl } from './usePetUrl'
 import { AgentRoamer } from './AgentRoamer'
 import { useDocumentVisible } from './useDocumentVisible'
 import type { DetectedSpriteCacheEntry } from './pet-blob-cache'
-import type { CustomPet } from '../../../../shared/types'
+import type { CustomPet } from '@/shared/types'
 import { useAppStore } from '../../store'
-import { AGENT_STATUS_STALE_AFTER_MS } from '../../../../shared/agent-status-types'
+import { AGENT_STATUS_STALE_AFTER_MS } from '@/shared/agent-status-types'
 import { selectPetAnimationName, type PetAnimationName } from './pet-agent-state'
 
 type Sprite = NonNullable<CustomPet['sprite']>

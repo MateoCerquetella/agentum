@@ -4,7 +4,7 @@ import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStateHistoryEntry,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import {
   IDLE,
   buildAttentionByWorktree,
@@ -12,7 +12,7 @@ import {
   resolveAttention,
   type PaneInput
 } from './smart-attention'
-import type { TerminalLayoutSnapshot, TerminalTab, Worktree } from '../../../../shared/types'
+import type { TerminalLayoutSnapshot, TerminalTab, Worktree } from '@/shared/types'
 
 function hookPane(entry: AgentStatusEntry): PaneInput {
   return { kind: 'hook', entry }

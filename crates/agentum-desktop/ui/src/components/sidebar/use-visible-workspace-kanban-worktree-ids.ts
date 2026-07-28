@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useAppStore } from '@/store'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 import { computeVisibleWorktreeIds } from './visible-worktrees'
 
 type UseVisibleWorkspaceKanbanWorktreeIdsParams = {

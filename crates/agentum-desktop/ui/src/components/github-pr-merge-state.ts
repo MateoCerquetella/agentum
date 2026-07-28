@@ -4,7 +4,7 @@ import type {
   PRMergeableState,
   PRReviewDecision,
   PRState
-} from '../../../shared/types'
+} from '@/shared/types'
 
 export type GitHubPRMergeStateInput = {
   state: PRState | 'open' | 'closed' | 'merged' | 'draft'

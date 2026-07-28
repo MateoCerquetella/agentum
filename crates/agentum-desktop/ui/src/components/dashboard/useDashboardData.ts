@@ -7,9 +7,9 @@ import {
   type AgentStatusState,
   type AgentType,
   type MigrationUnsupportedPtyEntry
-} from '../../../../shared/agent-status-types'
-import type { Repo, Worktree, TerminalTab } from '../../../../shared/types'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
+} from '@/shared/agent-status-types'
+import type { Repo, Worktree, TerminalTab } from '@/shared/types'
+import { parsePaneKey } from '@/shared/stable-pane-id'
 import { migrationUnsupportedToAgentStatusEntry } from '@/lib/migration-unsupported-agent-entry'
 
 // ─── Shared data types ────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import {
   isDefaultBranchWorkspace,
   sidebarHasActiveFilters
 } from './visible-worktrees'
-import type { Repo, TerminalTab, Worktree, WorktreeLineage } from '../../../../shared/types'
+import type { Repo, TerminalTab, Worktree, WorktreeLineage } from '@/shared/types'
 
 function makeTab(id: string, worktreeId: string, ptyId: string | null): TerminalTab {
   return {

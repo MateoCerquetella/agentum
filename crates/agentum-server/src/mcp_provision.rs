@@ -4,10 +4,11 @@
 //! Two servers can be provisioned per session:
 //! - **agentum** — agentum's own MCP server (this daemon's `/mcp`). Free (no
 //!   process to spawn — it's the already-running server), so it's wired by
-//!   default whenever the agent can reach it without a bearer token (the
-//!   embedded loopback server runs `no_auth`; so does a standalone `--no-auth`
-//!   daemon). This is the "skills → MCP" surface: any agent gets agentum's
-//!   tools with zero per-agent skill files.
+//!   default whenever the agent can reach it. The embedded loopback server and
+//!   authenticated standalone daemon both require the dedicated MCP bearer;
+//!   that credential is distinct from the desktop UI capability. This is the
+//!   "skills → MCP" surface: any agent gets Agentum's tools with zero per-agent
+//!   skill files.
 //! - **playwright** — the shared Playwright browser MCP (see [`playwright_mcp`]).
 //!   Opt-in (`AGENTUM_BROWSER_VERIFY`) because it spawns `npx`.
 //!
@@ -17,7 +18,6 @@
 
 use std::path::{Path, PathBuf};
 
-use agentum_core::Host;
 use agentum_executor::{McpProvision, McpServer};
 use anyhow::{Context, Result};
 
@@ -31,121 +31,6 @@ const MCP_ARG_TOOLS: &[&str] = &["claude", "codex"];
 /// Does this tool take MCP via a launch argument?
 pub fn tool_supports_mcp(tool: &str) -> bool {
     MCP_ARG_TOOLS.contains(&tool)
-}
-
-/// Agents that load MCP from a config FILE in the project dir instead of a launch
-/// flag (Cursor, Gemini, OpenCode). For these agentum writes a per-session config
-/// in the workdir at launch — each has its own path, top-level key, and HTTP
-/// field. This is what makes the MCP **agent-agnostic**: every agent gets the
-/// agentum server, however it happens to load MCP.
-#[derive(Debug, Clone, Copy)]
-pub struct AgentMcpFile {
-    /// Config path relative to the session workdir, e.g. `.cursor/mcp.json`.
-    pub rel_path: &'static str,
-    /// Top-level servers key: `mcpServers` (Cursor/Gemini) or `mcp` (OpenCode).
-    pub servers_key: &'static str,
-    /// The field holding the HTTP URL: `url` (Cursor/OpenCode) or `httpUrl`
-    /// (Gemini).
-    pub url_field: &'static str,
-    /// Extra fixed fields on the server entry (OpenCode needs `type:"remote"`).
-    pub extra: &'static [(&'static str, &'static str)],
-}
-
-/// The project-config descriptor for a file-based agent, or `None` for arg-based
-/// / unsupported tools.
-pub fn agent_mcp_file(tool: &str) -> Option<AgentMcpFile> {
-    match tool {
-        "cursor" | "agent" => Some(AgentMcpFile {
-            rel_path: ".cursor/mcp.json",
-            servers_key: "mcpServers",
-            url_field: "url",
-            extra: &[],
-        }),
-        "gemini" => Some(AgentMcpFile {
-            rel_path: ".gemini/settings.json",
-            servers_key: "mcpServers",
-            url_field: "httpUrl",
-            extra: &[],
-        }),
-        "opencode" => Some(AgentMcpFile {
-            rel_path: "opencode.json",
-            servers_key: "mcp",
-            url_field: "url",
-            extra: &[("type", "remote")],
-        }),
-        _ => None,
-    }
-}
-
-/// The agentum server entry for a file-based agent (its HTTP field + bearer
-/// header + any fixed extras).
-fn agent_entry(file: &AgentMcpFile, server: &McpServer) -> serde_json::Value {
-    let mut e = serde_json::Map::new();
-    for (k, v) in file.extra {
-        e.insert((*k).to_string(), serde_json::json!(v));
-    }
-    e.insert(file.url_field.to_string(), serde_json::json!(server.url));
-    if let Some(token) = &server.auth_token {
-        e.insert(
-            "headers".to_string(),
-            serde_json::json!({ "Authorization": format!("Bearer {token}") }),
-        );
-    }
-    serde_json::Value::Object(e)
-}
-
-/// Merge the agentum server into an existing agent config (preserving the user's
-/// other servers and settings — we never read or rewrite their secret values,
-/// just round-trip the JSON) and return the new file content. `existing` is the
-/// current file text, or `None` when it doesn't exist yet.
-pub fn merge_agent_config(
-    existing: Option<&str>,
-    file: &AgentMcpFile,
-    server: &McpServer,
-) -> String {
-    let mut root = existing
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .filter(serde_json::Value::is_object)
-        .unwrap_or_else(|| serde_json::json!({}));
-    let obj = root.as_object_mut().expect("object");
-    let servers = obj
-        .entry(file.servers_key)
-        .or_insert_with(|| serde_json::json!({}));
-    if !servers.is_object() {
-        *servers = serde_json::json!({});
-    }
-    servers
-        .as_object_mut()
-        .expect("object")
-        .insert("agentum".to_string(), agent_entry(file, server));
-    serde_json::to_string_pretty(&root).unwrap_or_else(|_| "{}".to_string())
-}
-
-/// Wire a **file-based** agent (Cursor/Gemini/OpenCode) by merging the agentum
-/// MCP server into its project config in the session workdir — local fs or, for
-/// an SSH session, on the host. Reads any existing config first so the user's
-/// other servers survive. Best-effort: a failure logs and the agent just
-/// launches without the agentum MCP.
-pub async fn write_agent_project_config(
-    state: &AppState,
-    host: &Host,
-    workdir: &str,
-    tool: &str,
-    agentum_mcp_url: &str,
-) {
-    let Some(file) = agent_mcp_file(tool) else {
-        return;
-    };
-    let abs = format!("{}/{}", workdir.trim_end_matches('/'), file.rel_path);
-    let server = agentum_server(state, agentum_mcp_url);
-    let existing = crate::host_runtime::read_remote_file(host, &abs)
-        .await
-        .ok()
-        .flatten();
-    let merged = merge_agent_config(existing.as_deref(), &file, &server);
-    if let Err(e) = crate::host_runtime::write_remote_file(host, &abs, &merged).await {
-        tracing::warn!(tool, "could not write agentum MCP config to {abs}: {e:#}");
-    }
 }
 
 /// Fixed loopback port the reverse SSH tunnel binds on each host. A remote
@@ -189,8 +74,8 @@ pub async fn provision(
     // agentum tools reach any agent. Default ON so existing setups are unchanged;
     // this is a launch-time gate, so flipping it affects the next agent launch.
     // It's secured by the per-server bearer token (every agent presents it; the
-    // `/mcp` handler 401s without it), so it no longer matters whether the server
-    // is no-auth: the token is the gate.
+    // `/mcp` handler 401s without it). A standalone `--no-auth` daemon relaxes
+    // legacy HTTP automation only; it never makes MCP or SDD public.
     if state
         .store
         .setting_get_bool(crate::routes::mcp::MCP_ENABLED_SETTING, true)
@@ -353,8 +238,9 @@ fn write_combined_config_in(state_dir: &Path, servers: &[McpServer]) -> Result<P
     std::fs::create_dir_all(state_dir)
         .with_context(|| format!("create state dir {}", state_dir.display()))?;
     let path = state_dir.join("mcp.json");
-    std::fs::write(&path, config_json(servers))
-        .with_context(|| format!("write {}", path.display()))?;
+    crate::sdd::artifacts::atomic_write(&path, config_json(servers).as_bytes(), None)
+        .map_err(anyhow::Error::new)
+        .with_context(|| format!("securely publish {}", path.display()))?;
     Ok(path)
 }
 
@@ -390,7 +276,8 @@ mod tests {
 
     #[test]
     fn only_claude_and_codex_take_mcp_args() {
-        // Claude/Codex wire via launch args; Cursor/Gemini/OpenCode via a file.
+        // Only launch-argument transports are supported; Agentum never writes
+        // provider configuration into a customer repository.
         assert!(tool_supports_mcp("claude"));
         assert!(tool_supports_mcp("codex"));
         for t in [
@@ -398,50 +285,6 @@ mod tests {
         ] {
             assert!(!tool_supports_mcp(t));
         }
-    }
-
-    #[test]
-    fn file_based_agents_have_the_right_config_descriptor() {
-        assert_eq!(
-            agent_mcp_file("cursor").unwrap().rel_path,
-            ".cursor/mcp.json"
-        );
-        assert_eq!(agent_mcp_file("cursor").unwrap().url_field, "url");
-        assert_eq!(agent_mcp_file("gemini").unwrap().url_field, "httpUrl"); // gemini quirk
-        assert_eq!(agent_mcp_file("opencode").unwrap().servers_key, "mcp"); // opencode quirk
-        assert!(agent_mcp_file("claude").is_none()); // arg-based, no file
-    }
-
-    #[test]
-    fn merge_preserves_existing_servers_and_adds_agentum() {
-        let server = McpServer {
-            name: "agentum".into(),
-            url: "http://127.0.0.1:5555/mcp".into(),
-            auth_token: Some("tok".into()),
-        };
-        // An existing Cursor config with the user's own (stdio) server.
-        let existing = r#"{"mcpServers":{"toolbox":{"command":"npx","args":["x"]}}}"#;
-        let file = agent_mcp_file("cursor").unwrap();
-        let merged = merge_agent_config(Some(existing), &file, &server);
-        let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        // user's server survives untouched
-        assert_eq!(v["mcpServers"]["toolbox"]["command"], "npx");
-        // agentum added with cursor's `url` + bearer header
-        assert_eq!(
-            v["mcpServers"]["agentum"]["url"],
-            "http://127.0.0.1:5555/mcp"
-        );
-        assert_eq!(
-            v["mcpServers"]["agentum"]["headers"]["Authorization"],
-            "Bearer tok"
-        );
-
-        // OpenCode uses `mcp` + type:"remote".
-        let oc = agent_mcp_file("opencode").unwrap();
-        let m2: serde_json::Value =
-            serde_json::from_str(&merge_agent_config(None, &oc, &server)).unwrap();
-        assert_eq!(m2["mcp"]["agentum"]["type"], "remote");
-        assert_eq!(m2["mcp"]["agentum"]["url"], "http://127.0.0.1:5555/mcp");
     }
 
     #[test]
@@ -458,83 +301,6 @@ mod tests {
             token_hash(""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
-    }
-
-    #[test]
-    fn reprovision_seam_rewrites_mcpjson_and_agent_config_to_new_endpoint() {
-        // The S1 config-rewrite seam: after an endpoint change, BOTH the launch-arg
-        // `<state_dir>/mcp.json` and a file-based agent's config (Cursor + OpenCode)
-        // must reflect the NEW url+token. Exercises the exact writers
-        // `reprovision_session` calls (`write_combined_config_in` / `merge_agent_config`)
-        // without standing up an AppState or a tmux mock.
-        let tmp = std::env::temp_dir().join(format!(
-            "agentum-reprov-{}-{}",
-            std::process::id(),
-            Uuid::new_v4()
-        ));
-
-        // --- provisioned state #1 (what the session was launched with) ---
-        let old = McpServer {
-            name: "agentum".to_string(),
-            url: "http://127.0.0.1:8822/mcp".to_string(),
-            auth_token: Some("old-token".to_string()),
-        };
-        write_combined_config_in(&tmp, std::slice::from_ref(&old)).unwrap();
-        let cursor_file = agent_mcp_file("cursor").unwrap();
-        let cursor_v1 = merge_agent_config(None, &cursor_file, &old);
-        // The user's own server must be preserved across the later rewrite.
-        let cursor_with_user = {
-            let mut root: serde_json::Value = serde_json::from_str(&cursor_v1).unwrap();
-            root["mcpServers"]["toolbox"] = serde_json::json!({ "command": "npx" });
-            serde_json::to_string(&root).unwrap()
-        };
-
-        // --- endpoint drifts: ephemeral rebind to a new port + rotated token ---
-        let new = McpServer {
-            name: "agentum".to_string(),
-            url: "http://127.0.0.1:60102/mcp".to_string(),
-            auth_token: Some("new-token".to_string()),
-        };
-
-        // 1) launch-arg mcp.json now points at the new endpoint+token.
-        let path = write_combined_config_in(&tmp, std::slice::from_ref(&new)).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(
-            v["mcpServers"]["agentum"]["url"],
-            "http://127.0.0.1:60102/mcp"
-        );
-        assert_eq!(
-            v["mcpServers"]["agentum"]["headers"]["Authorization"],
-            "Bearer new-token"
-        );
-
-        // 2) Cursor file (.cursor/mcp.json) re-merged to the new endpoint, user's
-        //    server intact, no stale old token left behind.
-        let cursor_v2 = merge_agent_config(Some(&cursor_with_user), &cursor_file, &new);
-        let cv: serde_json::Value = serde_json::from_str(&cursor_v2).unwrap();
-        assert_eq!(
-            cv["mcpServers"]["agentum"]["url"],
-            "http://127.0.0.1:60102/mcp"
-        );
-        assert_eq!(
-            cv["mcpServers"]["agentum"]["headers"]["Authorization"],
-            "Bearer new-token"
-        );
-        assert_eq!(cv["mcpServers"]["toolbox"]["command"], "npx"); // preserved
-        assert!(!cursor_v2.contains("old-token"));
-        assert!(!cursor_v2.contains("8822"));
-
-        // 3) OpenCode quirk path (`mcp` key + type:"remote") also re-points.
-        let oc_file = agent_mcp_file("opencode").unwrap();
-        let oc_v1 = merge_agent_config(None, &oc_file, &old);
-        let oc_v2 = merge_agent_config(Some(&oc_v1), &oc_file, &new);
-        let ov: serde_json::Value = serde_json::from_str(&oc_v2).unwrap();
-        assert_eq!(ov["mcp"]["agentum"]["type"], "remote");
-        assert_eq!(ov["mcp"]["agentum"]["url"], "http://127.0.0.1:60102/mcp");
-        assert!(!oc_v2.contains("old-token"));
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -571,5 +337,32 @@ mod tests {
             assert!(v["mcpServers"][name]["command"].is_null()); // streamable-HTTP, not stdio
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn combined_config_is_owner_only_and_never_follows_a_final_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let state = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), "do-not-replace").unwrap();
+        let target = state.path().join("mcp.json");
+        symlink(outside.path(), &target).unwrap();
+        let server = McpServer {
+            name: "agentum".into(),
+            url: "http://127.0.0.1:8822/mcp".into(),
+            auth_token: Some("secret-token".into()),
+        };
+        assert!(write_combined_config_in(state.path(), std::slice::from_ref(&server)).is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.path()).unwrap(),
+            "do-not-replace"
+        );
+
+        std::fs::remove_file(&target).unwrap();
+        write_combined_config_in(state.path(), std::slice::from_ref(&server)).unwrap();
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

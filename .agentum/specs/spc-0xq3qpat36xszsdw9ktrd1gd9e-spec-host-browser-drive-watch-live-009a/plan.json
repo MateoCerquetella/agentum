@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-0XQ3QPAT36XSZSDW9KTRD1GD9E",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "**T1** `agentum-tmux/src/ssh.rs` \u2014 add a `-L` forward-command builder beside `ssh_control_forward_cmd` (`:341`): `ssh -O forward -L 127.0.0.1:<mac>:127.0.0.1:<host>`. Unit-test the emitted argv.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "**T2** `agentum-server/src/host_runtime.rs` \u2014 add `ensure_forward_tunnel(host, host_port) -> Result<u16>` mirroring `ensure_reverse_tunnel` (`:857`): scan a **new** range `REMOTE_CDP_PORT_BASE = 9200` (24 tries) for a free **Mac** loopback port, reuse the Interactive `ControlMaster`, cancel-then-arm. Unit-test port selection.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "**T3** `agentum-server/src/host_browser.rs` (NEW) \u2014 `launch_host_browser(host, workdir)`: build chromium argv (`--headless=new --remote-debugging-address=127.0.0.1 --remote-debugging-port=0 --user-data-dir=/tmp/agentum-hostbrowser-<wt>`), launch via `host_runtime::new_session` (`:646`) into tmux `agentum-hostbrowser-<wt>`; read the bound CDP port from the host-side `DevToolsActivePort` file; write a host marker `~/.agentum/hostbrowser/<wt>.port`. Teardown = `kill_session` (not `C-c`).",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "**Verify P1:** after launch + `ensure_forward_tunnel`, `curl 127.0.0.1:<mac>/json/version` from the Mac returns the host Chromium's CDP banner. (Proves browser-on-host + forward tunnel.)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "**T4** `host_browser.rs` \u2014 CDP client: WS to the page target, `Page.navigate`, `Page.startScreencast{format:'jpeg'}`; re-encode each `Page.screencastFrame` into the **existing** wire format (`ui/src/shared/browser-screencast-protocol.ts`: kind `0x62`, v1, opcode `Frame`, JSON metadata + JPEG); ack frames. Input: map incoming events \u2192 `Input.dispatchMouseEvent` / `dispatchKeyEvent`.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-006",
+      "objective": "**T5** `agentum-server/src/routes/host_browser.rs` (NEW) \u2014 `POST /api/host-browser` (start-or-attach), `GET /{id}/screencast` (WS: frames out / input in), `POST /{id}/navigate`, `GET /{id}`, `DELETE /{id}`. Register in `routes/mod.rs` + `lib.rs::router` (behind the existing auth layer). TCP-healthcheck the CDP port before returning \"ready\".",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-007",
+      "objective": "**Verify P2:** a scratch WS client receives protocol-framed JPEG frames; a `navigate` + injected click changes subsequent frames. (Pure backend, no desktop yet.)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-008",
+      "objective": "**T6** `ui/src/shared/types.ts:551` \u2014 add `BrowserPage.renderMode?: 'native' | 'remote-screencast'`; `ui/src/store/slices/browser.ts` \u2014 set it on create + reuse `remoteBrowserPageHandlesByPageId`.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-009",
+      "objective": "**T7** `ui/src/components/browser-pane/BrowserPane.tsx:745` \u2014 branch to the existing `RemoteBrowserPagePane` (`:764\u2013896`) when `renderMode==='remote-screencast'`; restore its WS subscription + `decodeBrowserScreencastFrame` loop + input listeners (`getRemoteBrowserKeypressKey`, `getRemoteBrowserKeyboardShortcut`); finish `remote-browser-frame-style.ts` (`:4`) using frame metadata. Native path (`NativeBrowserPagePane` / `commands/browser_native.rs`) untouched.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-010",
+      "objective": "**T8** Entry point: from a **host session/worktree**, \"Open host browser\" creates a browser tab in `remote-screencast` mode bound to `{hostId, workdir}`, wired to `POST /api/host-browser` + the screencast WS.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-011",
+      "objective": "**Verify P3:** in the app, open a host browser \u2192 the host app's `localhost:PORT` renders live; click/type works; scoped to the worktree. (AC #1, #2, #3-watch, #4-live.)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-012",
+      "objective": "**T9** Preflight: `chromium --version` (or `npx playwright install chromium --dry-run`) on the host; if missing, **offer-install** (`npx playwright install chromium`); if it still can't start, surface a **stated reason** (no silent hang). Reuse the `/api/hosts/{id}/readiness` pattern.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-013",
+      "objective": "**T10** Reconnect: `POST /api/host-browser` is **attach-if-exists** (reads the host marker); reopening agentum re-tunnels + re-subscribes to the same Chromium \u2192 live view resumes at current state.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-014",
+      "objective": "**Verify P4 (full AC sweep):** close lid / quit agentum \u2192 host browser keeps running \u2192 reopen \u2192 live view resumes (AC #4). Missing Chromium \u2192 offer-install / stated reason (AC #5).",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { basename } from '@/lib/path'
-import type { GitBranchChangeEntry, GitStatusEntry } from '../../../../shared/types'
+import type { GitBranchChangeEntry, GitStatusEntry } from '@/shared/types'
 
 export type CombinedDiffFileTreeMode = 'uncommitted' | 'branch' | 'commit'
 export type CombinedDiffFileTreeEntry = GitStatusEntry | GitBranchChangeEntry

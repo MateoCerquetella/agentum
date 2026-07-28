@@ -187,17 +187,64 @@ pub fn ssh_command(host: &Host, script: &str) -> Command {
     ssh_command_opts(host, script, SshMux::Interactive)
 }
 
+/// Build an interactive SSH command whose stdin/stdout will be attached to a
+/// local PTY. Unlike the short-lived execs built by [`ssh_command`], this
+/// forces allocation of a remote PTY so a shell launched without tmux still
+/// runs on the selected SSH host with normal terminal semantics.
+///
+/// Keeping this beside [`ssh_command_opts`] is intentional: desktop ephemeral
+/// terminals must use the exact same authentication, keepalive, host-key, and
+/// ControlMaster policy as every other SSH operation. A second hand-written
+/// SSH argv is how remote execution can silently drift back to the local host.
+pub fn ssh_terminal_command(host: &Host, script: &str) -> Command {
+    ssh_terminal_command_for_kind(&host.kind, script)
+}
+
+/// Variant of [`ssh_terminal_command`] for callers that have connection
+/// coordinates but do not own a persisted [`Host`] record.
+pub fn ssh_terminal_command_for_kind(kind: &HostKind, script: &str) -> Command {
+    ssh_command_opts_inner(
+        kind,
+        SshInvocation::Command(script),
+        SshMux::Interactive,
+        true,
+    )
+}
+
 /// Like [`ssh_command`] but selects which pooled master (or none) the
 /// connection uses. [`ssh_output`]'s retry rebuilds with [`SshMux::Off`] so a
 /// stale/racing pooled master (broken-pipe / "failed to connect to new control
 /// master") can't keep failing an op — the replay connects fresh instead.
 pub fn ssh_command_opts(host: &Host, script: &str, mux: SshMux) -> Command {
+    ssh_command_opts_inner(&host.kind, SshInvocation::Command(script), mux, false)
+}
+
+/// Build a fixed OpenSSH subsystem invocation using the same authentication,
+/// host-key, keepalive, and ControlMaster policy as ordinary Agentum SSH
+/// operations. The subsystem name is a distinct argv item after `-s`; it is
+/// never interpolated into a remote command string or interpreted by a shell.
+pub fn ssh_subsystem_command(host: &Host, subsystem: &str, mux: SshMux) -> Command {
+    ssh_command_opts_inner(&host.kind, SshInvocation::Subsystem(subsystem), mux, false)
+}
+
+#[derive(Clone, Copy)]
+enum SshInvocation<'a> {
+    Command(&'a str),
+    Subsystem(&'a str),
+}
+
+fn ssh_command_opts_inner(
+    kind: &HostKind,
+    invocation: SshInvocation<'_>,
+    mux: SshMux,
+    force_tty: bool,
+) -> Command {
     let HostKind::Ssh {
         user,
         hostname,
         port,
         auth,
-    } = &host.kind
+    } = kind
     else {
         return Command::new("false");
     };
@@ -324,7 +371,23 @@ pub fn ssh_command_opts(host: &Host, script: &str, mux: SshMux) -> Command {
         _ => {}
     }
 
-    cmd.arg(format!("{user}@{hostname}")).arg(script);
+    if force_tty {
+        // `-tt` forces allocation even though the desktop supplies a remote
+        // command (cd/export/exec shell). One `-t` can still be declined when
+        // ssh cannot prove its stdin is a tty during process hand-off; two is
+        // OpenSSH's documented force form.
+        cmd.arg("-tt");
+    }
+
+    let destination = format!("{user}@{hostname}");
+    match invocation {
+        SshInvocation::Command(script) => {
+            cmd.arg(destination).arg(script);
+        }
+        SshInvocation::Subsystem(subsystem) => {
+            cmd.arg("-s").arg(destination).arg(subsystem);
+        }
+    }
     cmd
 }
 
@@ -692,6 +755,28 @@ mod tests {
         assert!(!args.contains(&"PreferredAuthentications=password".to_string()));
     }
 
+    #[test]
+    fn ssh_terminal_command_forces_remote_tty_before_destination() {
+        let cmd = ssh_terminal_command(&ssh_host(SshAuth::Agent), "exec \"$SHELL\" -l");
+        let args = arg_strings(&cmd);
+        let tty_index = args.iter().position(|arg| arg == "-tt").expect("-tt");
+        let destination_index = args
+            .iter()
+            .position(|arg| arg == "me@box.local")
+            .expect("destination");
+        assert!(
+            tty_index < destination_index,
+            "-tt must be an ssh option: {args:?}"
+        );
+        assert_eq!(args.last().map(String::as_str), Some("exec \"$SHELL\" -l"));
+
+        let exec_args = arg_strings(&ssh_command(&ssh_host(SshAuth::Agent), "true"));
+        assert!(
+            !exec_args.iter().any(|arg| arg == "-tt"),
+            "short-lived SSH execs must not allocate a tty: {exec_args:?}"
+        );
+    }
+
     /// ControlMaster pooling must be present on every connection so repeated
     /// remote ops reuse one authenticated socket. Shared assertion for both auth
     /// paths (key/agent and password).
@@ -741,6 +826,20 @@ mod tests {
             "ControlMaster must be off on the unmultiplexed retry: {args:?}"
         );
         assert!(!args.iter().any(|a| a.starts_with("ControlPath=")));
+    }
+
+    #[test]
+    fn ssh_subsystem_is_a_fixed_argv_invocation_without_a_remote_shell_string() {
+        let command =
+            ssh_subsystem_command(&ssh_host(SshAuth::Agent), "agentum-sdd-v1", SshMux::Off);
+        let args = arg_strings(&command);
+        let subsystem_flag = args.iter().position(|arg| arg == "-s").expect("-s");
+        assert_eq!(
+            &args[subsystem_flag..],
+            ["-s", "me@box.local", "agentum-sdd-v1"]
+        );
+        assert!(!args.iter().any(|arg| arg == "sh" || arg == "bash"));
+        assert!(!args.iter().any(|arg| arg.contains("agentum-sdd-v1 ")));
     }
 
     // SSH ControlMaster sockets are Unix-only — control_socket_dir() is None on Windows.

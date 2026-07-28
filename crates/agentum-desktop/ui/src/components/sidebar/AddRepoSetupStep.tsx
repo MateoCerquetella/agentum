@@ -3,7 +3,7 @@ import { GitBranch, GitBranchPlus, Settings } from 'lucide-react'
 import { DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import type { Worktree } from '../../../../shared/types'
+import type { Worktree } from '@/shared/types'
 
 type ProjectAddedChoice = 'primary' | 'create' | 'existing'
 

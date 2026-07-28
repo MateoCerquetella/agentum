@@ -106,7 +106,12 @@ pub fn spawn_ticker(
     bus: broadcast::Sender<Event>,
     events_ws_clients: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) {
-    tokio::task::spawn_blocking(move || {
+    // Keep this as an abortable async task. An infinite `spawn_blocking` job
+    // prevents Tokio runtimes (including the embedded server's boot smoke and
+    // desktop shutdown) from terminating because blocking tasks cannot be
+    // canceled once started. Sampling is already skipped with no clients and
+    // the remaining sysinfo refresh is short and infrequent.
+    tokio::spawn(async move {
         let refresh = RefreshKind::new()
             .with_cpu(CpuRefreshKind::new().with_cpu_usage())
             .with_memory(MemoryRefreshKind::new().with_ram().with_swap());
@@ -117,7 +122,7 @@ pub fn spawn_ticker(
         }
 
         loop {
-            std::thread::sleep(HOST_METRICS_INTERVAL);
+            tokio::time::sleep(HOST_METRICS_INTERVAL).await;
             // No dashboards connected → don't bother sampling; the atomic
             // load is free and skipping the all-cores refresh keeps the
             // daemon at zero idle cost.

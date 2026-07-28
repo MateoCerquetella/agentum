@@ -1,5 +1,5 @@
-import type { CustomPet } from '../../../../shared/types'
-import agentUrl from '../../../resources/agent-sprites.png?url'
+import type { CustomPet } from '@/shared/types'
+import agentUrl from '@resources/agent-sprites.png?url'
 
 type Sprite = NonNullable<CustomPet['sprite']>
 

@@ -13,17 +13,17 @@ import type { PtyConnectionDeps } from './pty-connection-types'
 import { useAppStore } from '@/store'
 import { ensureWorkspaceSession, sessionName } from '@/runtime/workspace-session'
 import { resolveServerHostIdForConnection } from '@/runtime/server-host-client'
-import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
+import { getConnectionId } from '@/lib/connection-context'
 import {
   bindServerSessionTerminal,
   type ServerSessionTerminalBinding
 } from '@/runtime/server-session-terminal'
 import { detectAgentStatusFromTitle } from '@/lib/agent-status'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { createPaneActivityTracker, type PaneActivityTracker } from './pane-activity-tracker'
-import type { AgentType } from '../../../../shared/agent-status-types'
+import type { AgentType } from '@/shared/agent-status-types'
 import { registerServerSessionActivity } from '@/runtime/server-session-activity'
-import { isTuiAgent } from '../../../../shared/tui-agent-config'
+import { isTuiAgent } from '@/shared/tui-agent-config'
 
 /** The tab's launch agent (claude/codex/…) drives the server session's tool;
  *  a plain terminal tab has none, so it runs a shell. */
@@ -60,7 +60,8 @@ export function shouldUseServerTerminals(): boolean {
  * Drop-in alternative to `connectPanePty`: ensure a server session exists for
  * this pane's workspace (workdir) and bind its tmux pane to the xterm. If the
  * server path can't establish (no workdir, session/stream failure), it falls
- * back to `connectPanePty` so the pane still works — the proven local path.
+ * back to `connectPanePty` so the pane still works — the native PTY path,
+ * which preserves the repo's local/SSH host boundary.
  */
 export function connectPaneServerSession(
   pane: ManagedPane,
@@ -297,7 +298,7 @@ export function connectPaneServerSession(
     if (disposed || localFallback) {
       return
     }
-    console.warn(`[agentum] server terminal unavailable, using local PTY: ${reason}`)
+    console.warn(`[agentum] server terminal unavailable, using native PTY: ${reason}`)
     localFallback = connectPanePty(pane, manager, deps)
   }
 
@@ -323,10 +324,10 @@ export function connectPaneServerSession(
         // SSH target). Resolve it to a server host id so the session's tmux pane
         // runs ON THE REMOTE over SSH — the same path the TUI uses. Local repos
         // have no connectionId and run on the local host (hostId undefined).
-        const state = useAppStore.getState()
-        const worktree = getWorktreeMapFromState(state).get(deps.worktreeId)
-        const repo = worktree ? getRepoMapFromState(state).get(worktree.repoId) : null
-        const connectionId = repo?.connectionId ?? null
+        // Composite worktree ids retain their repo ownership even before SSH
+        // worktree discovery completes. Use the shared resolver so this path
+        // cannot downgrade a remote session to localhost during that window.
+        const connectionId = getConnectionId(deps.worktreeId) ?? null
         const hostId = connectionId
           ? await resolveServerHostIdForConnection(connectionId)
           : undefined

@@ -103,10 +103,10 @@ impl Store {
         .bind(id.to_string())
         .execute(&self.pool)
         .await;
-        if let Err(sqlx::Error::Database(db)) = &res
-            && db.is_unique_violation()
-        {
-            return Err(StoreError::AlreadyExists(new.name));
+        if let Err(sqlx::Error::Database(db)) = &res {
+            if db.is_unique_violation() {
+                return Err(StoreError::AlreadyExists(new.name));
+            }
         }
         let affected = res?.rows_affected();
         if affected == 0 {

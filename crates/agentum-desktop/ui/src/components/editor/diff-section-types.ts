@@ -1,4 +1,4 @@
-import type { GitDiffResult, GitStatusEntry } from '../../../../shared/types'
+import type { GitDiffResult, GitStatusEntry } from '@/shared/types'
 
 export type DiffSection = {
   key: string

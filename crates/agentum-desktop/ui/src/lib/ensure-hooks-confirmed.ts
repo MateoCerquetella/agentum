@@ -1,6 +1,6 @@
 import type { AppState } from '@/store/types'
-import type { AgentumHooks } from '../../../shared/types'
-import { resolveHookCommandSourcePolicy } from '../../../shared/hook-command-source-policy'
+import type { AgentumHooks } from '@/shared/types'
+import { resolveHookCommandSourcePolicy } from '@/shared/hook-command-source-policy'
 import { hashAgentumHookScript, type AgentumHookScriptKind } from './agentum-hook-trust'
 import { checkRuntimeHooks, readRuntimeIssueCommand } from '@/runtime/runtime-hooks-client'
 

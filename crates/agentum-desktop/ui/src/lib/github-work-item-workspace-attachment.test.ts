@@ -9,7 +9,7 @@ import {
   getGithubPrWorkspaceAttachmentLabel,
   lookupGithubWorkItemWorkspaceAttachment
 } from './github-work-item-workspace-attachment'
-import type { Worktree } from '../../../shared/types'
+import type { Worktree } from '@/shared/types'
 
 function worktree(overrides: Partial<Worktree> = {}): Worktree {
   return {

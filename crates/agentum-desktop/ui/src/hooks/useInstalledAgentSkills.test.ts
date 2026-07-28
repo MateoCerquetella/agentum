@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { DiscoveredSkill, SkillDiscoveryResult } from '../../../shared/skills'
+import type { DiscoveredSkill, SkillDiscoveryResult } from '@/shared/skills'
 import {
   GLOBAL_AGENT_SKILL_SOURCE_KINDS,
   _installedAgentSkillDiscoveryInternalsForTests,

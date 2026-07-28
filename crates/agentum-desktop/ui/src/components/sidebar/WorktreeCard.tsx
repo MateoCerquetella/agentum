@@ -23,15 +23,15 @@ import WorktreeCardAgents from './WorktreeCardAgents'
 import { WorktreeCardStatusSlot } from './WorktreeCardStatusSlot'
 import { cn } from '@/lib/utils'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { getRepoKindLabel, isFolderRepo } from '../../../../shared/repo-kind'
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
+import { getRepoKindLabel, isFolderRepo } from '@/shared/repo-kind'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
 import type {
   GitHubWorkItem,
   Worktree,
   Repo,
   IssueInfo,
   LinearIssue
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { branchDisplayName, CONFLICT_OPERATION_LABELS } from './WorktreeCardHelpers'
 import {
   WorktreeCardCtxChip,

@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
 import { useState } from 'react'
-import type { GhosttyImportPreview, GlobalSettings } from '../../../../shared/types'
+import type { GhosttyImportPreview, GlobalSettings } from '@/shared/types'
 import { useMountedRef } from '../../hooks/useMountedRef'
 
 export type UseGhosttyImportReturn = {

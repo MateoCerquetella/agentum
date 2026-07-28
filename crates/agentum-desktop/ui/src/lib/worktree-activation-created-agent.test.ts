@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Worktree } from '../../../shared/types'
+import type { Worktree } from '@/shared/types'
 import { useAppStore } from '@/store'
 import { activateAndRevealWorktree } from './worktree-activation'
 
@@ -83,6 +83,7 @@ describe('activateAndRevealWorktree created agent reopen', () => {
     expect(reopenedTab).toBeDefined()
     expect(state.pendingStartupByTabId[reopenedTab!.id]).toEqual({
       command: 'codex',
+      onlyIfFresh: true,
       telemetry: {
         agent_kind: 'codex',
         launch_source: 'sidebar',

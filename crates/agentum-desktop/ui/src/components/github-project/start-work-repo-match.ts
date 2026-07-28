@@ -1,4 +1,4 @@
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 
 // Why: post spec-015 F1 the registry can hold the same owner/repo slug on
 // several hosts (same path, local + remote). The board's Start-work used to

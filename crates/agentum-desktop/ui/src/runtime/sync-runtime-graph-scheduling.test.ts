@@ -8,7 +8,7 @@ import {
   setRuntimeGraphSyncEnabled
 } from './sync-runtime-graph'
 import type { AppState } from '../store/types'
-import type { TerminalTab } from '../../../shared/types'
+import type { TerminalTab } from '@/shared/types'
 
 function makeState(overrides: Partial<AppState> = {}): AppState {
   return {

@@ -2,7 +2,7 @@ import type {
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
   TerminalTab
-} from '../../../shared/types'
+} from '@/shared/types'
 
 function collectLeafIds(node: TerminalPaneLayoutNode | null): string[] {
   if (!node) {

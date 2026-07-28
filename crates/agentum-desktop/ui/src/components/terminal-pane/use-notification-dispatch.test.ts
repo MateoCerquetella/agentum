@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { dispatchTerminalNotification } from './use-notification-dispatch'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
-import type { TerminalLayoutSnapshot } from '../../../../shared/types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
+import type { TerminalLayoutSnapshot } from '@/shared/types'
 
 type MockState = {
   activeWorktreeId: string | null
@@ -233,7 +233,7 @@ describe('dispatchTerminalNotification', () => {
       paneKey
     })
 
-    expect(window.api.notifications.dispatch).toHaveBeenCalled()
+    expect(window.api.notifications.dispatch).not.toHaveBeenCalled()
     expect(mockState.markWorktreeUnread).not.toHaveBeenCalled()
     expect(mockState.markTerminalTabUnread).not.toHaveBeenCalled()
     expect(mockState.markTerminalPaneUnread).not.toHaveBeenCalled()

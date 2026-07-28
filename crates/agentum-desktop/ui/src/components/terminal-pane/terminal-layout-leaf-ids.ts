@@ -1,5 +1,5 @@
-import type { TerminalLayoutSnapshot, TerminalPaneLayoutNode } from '../../../../shared/types'
-import { isTerminalLeafId, type TerminalLeafId } from '../../../../shared/stable-pane-id'
+import type { TerminalLayoutSnapshot, TerminalPaneLayoutNode } from '@/shared/types'
+import { isTerminalLeafId, type TerminalLeafId } from '@/shared/stable-pane-id'
 import { mintStablePaneId } from '@/lib/pane-manager/mint-stable-pane-id'
 
 const EMPTY_TERMINAL_LAYOUT: TerminalLayoutSnapshot = {

@@ -1,4 +1,4 @@
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
 
 export type WorktreeCardPrDisplay =
   | HostedReviewInfo

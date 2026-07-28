@@ -32,7 +32,7 @@ impl Store {
         mut config: ProjectTrackerConfig,
         expected_revision: Option<i64>,
     ) -> Result<ProjectTrackerWrite> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let current =
             sqlx::query("SELECT config_json FROM project_tracker_configs WHERE repo_id = ?")
                 .bind(&config.repo_id)
@@ -68,7 +68,7 @@ impl Store {
         repo_id: &str,
         expected_revision: Option<i64>,
     ) -> Result<ProjectTrackerWrite> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let current =
             sqlx::query("SELECT config_json FROM project_tracker_configs WHERE repo_id = ?")
                 .bind(repo_id)

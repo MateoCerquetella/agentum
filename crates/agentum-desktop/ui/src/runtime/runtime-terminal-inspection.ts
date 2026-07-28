@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
-import type { GlobalSettings } from '../../../shared/types'
-import type { RuntimeTerminalSend } from '../../../shared/runtime-types'
+import type { GlobalSettings } from '@/shared/types'
+import type { RuntimeTerminalSend } from '@/shared/runtime-types'
 import { RuntimeRpcCallError, callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
 import {
   getRemoteRuntimePtyEnvironmentId,

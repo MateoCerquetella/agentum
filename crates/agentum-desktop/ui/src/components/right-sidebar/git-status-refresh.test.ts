@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { refreshGitStatusForWorktree, type GitStatusRefreshDeps } from './git-status-refresh'
-import type { GitStatusResult } from '../../../../shared/types'
+import type { GitStatusResult } from '@/shared/types'
+
+vi.mock('@/runtime/runtime-git-client', () => ({
+  getRuntimeGitStatus: (context: { worktreePath: string; connectionId?: string }) =>
+    (globalThis.window as unknown as { api: { git: { status: (args: unknown) => unknown } } }).api.git.status({
+      worktreePath: context.worktreePath,
+      connectionId: context.connectionId
+    })
+}))
 
 function makeDeps(): GitStatusRefreshDeps {
   return {

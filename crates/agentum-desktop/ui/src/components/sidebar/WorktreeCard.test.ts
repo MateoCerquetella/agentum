@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
-import type { TerminalTab } from '../../../../shared/types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
+import type { TerminalTab } from '@/shared/types'
 
 vi.mock('@/lib/agent-status', () => ({
   detectAgentStatusFromTitle: vi.fn((title: string) => {

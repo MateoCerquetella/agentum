@@ -3,14 +3,13 @@
 // recap, the agent-pill fallback, and the footer copy — live here where they
 // can be unit-tested without mounting the component (mirrors the goal step's
 // `workspace-goal-step.ts`). The component owns only local state + JSX.
-import { filterEnabledTuiAgents, isTuiAgentEnabled } from '../../../../shared/tui-agent-selection'
+import { filterEnabledTuiAgents, isTuiAgentEnabled } from '@/shared/tui-agent-selection'
 import type {
   TuiAgent,
   WorkspaceCreateTelemetrySource,
   WorkspaceStatus
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
-import { initialStartGatedRunProp } from '@/lib/composer-modal-props'
 import type { PickerBindingResolution, PickerProjectRef } from './work-item-picker-model'
 
 export type WizardStep = 1 | 2 | 3
@@ -18,7 +17,25 @@ export type WizardStep = 1 | 2 | 3
 // Why this order: the issue is linked/created BEFORE the worktree is named, so
 // the name can derive from the issue title (step 3 renders tracker → name →
 // agent). Step 2 only picks the repo + base branch.
-export const WIZARD_STEP_LABELS = ['Host', 'Repo & branch', 'Issue & agent'] as const
+export const WIZARD_STEP_LABELS = ['Host', 'Repo & branch', 'Work & agent'] as const
+
+/** The mutually exclusive ways the wizard can seed a workspace. Tracker
+ * sources remain available alongside Agentum-native SDD and a plain workspace. */
+export type WizardWorkSource = 'sdd' | 'new' | 'existing' | 'none'
+
+/** Derive the required SDD title without adding a second feature field. Prefer
+ * the first meaningful markdown line and fall back to the workspace name. */
+export function deriveWizardSddTitle(description: string, workspaceName: string): string {
+  const firstLine = description
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/^#{1,6}\s+/, '')
+    .replace(/^[-*+]\s+/, '')
+    .trim()
+  const title = firstLine || workspaceName.trim() || 'New workspace feature'
+  return title.length > 120 ? `${title.slice(0, 117).trimEnd()}…` : title
+}
 
 // Fallback agent pills for when detection hasn't produced a set yet (or found
 // nothing installed) — kept small and catalog-ordered so the picker is never
@@ -30,8 +47,28 @@ export const WIZARD_FALLBACK_AGENT_IDS: TuiAgent[] = ['claude', 'codex', 'gemini
 export function canLeaveRepoStep(input: {
   repoId: string
   requiresConnection: boolean
+  /** A folder/remote-project selection is still being registered or hydrated.
+   *  The previously selected repo must not remain an actionable escape hatch
+   *  while that asynchronous replacement is in flight. */
+  selectionPending?: boolean
 }): boolean {
-  return Boolean(input.repoId) && !input.requiresConnection
+  return Boolean(input.repoId) && !input.requiresConnection && !input.selectionPending
+}
+
+/**
+ * Adopt a project returned by the Add project flow before doing any slower
+ * follow-up work for it. The ordering is the safety property: tracker lookup
+ * and workspace creation are keyed by the selected repo id, so leaving the old
+ * repo selected while `fetchWorktrees` runs can send both operations to the
+ * previous project.
+ */
+export async function selectAddedRepoBeforeHydration(input: {
+  repoId: string
+  selectRepo: (repoId: string) => void
+  hydrateRepo?: (repoId: string) => Promise<unknown>
+}): Promise<void> {
+  input.selectRepo(input.repoId)
+  await input.hydrateRepo?.(input.repoId)
 }
 
 /**
@@ -204,7 +241,7 @@ export function deriveUnifiedTrackerStatus(input: {
   if (input.status === 'loading') return { kind: 'connecting' }
   if (input.status === 'failed' && !input.hasTable) return { kind: 'unavailable' }
   const refreshing = input.status === 'refreshing'
-  const stale = input.status === 'failed' && input.hasTable
+  const stale = input.status === 'failed' && Boolean(input.hasTable)
   if (input.optionCount <= 0) return { kind: 'connected-empty', refreshing, stale }
   return { kind: 'connected', issueCount: input.optionCount, refreshing, stale }
 }
@@ -250,10 +287,8 @@ export function linkedWorkItemAfterRepoChange(input: {
 /**
  * The modal-open data the wizard honors. Widened (spec 013 F4) from the plain
  * subset to the full `ComposerModalData` shape so the wizard is the SINGLE
- * front door: every opinionated open (`startGatedRun`, `linkedWorkItem`,
- * `initialBaseBranch`, `initialWorkspaceStatus`, …) reaches an equivalent
- * create through the wizard, with no lost capability (the composer card + goal
- * step are removed).
+ * front door: workspace identity and issue inputs reach an equivalent create
+ * through the wizard.
  */
 export type CreateWorkspaceWizardData = {
   prefilledName?: string
@@ -261,8 +296,6 @@ export type CreateWorkspaceWizardData = {
   linkedWorkItem?: LinkedWorkItemSummary | null
   initialBaseBranch?: string
   initialWorkspaceStatus?: WorkspaceStatus
-  /** Spec 005 F1 (AC 3): open with the "Start gated run" toggle armed. */
-  startGatedRun?: boolean
   telemetrySource?: WorkspaceCreateTelemetrySource
   /** Locks workspace creation to the Project Hub scope that opened it. */
   requiredProjectTaskScope?: Readonly<{ scopeKey: string; generation: number; repoId: string }>
@@ -272,9 +305,7 @@ export type CreateWorkspaceWizardData = {
  * Map the modal-open data onto the `useComposerState` seed the wizard passes
  * (spec 013 F4). Pure so each opinionated field's honoring is unit-pinned — a
  * caller's `linkedWorkItem` / `initialBaseBranch` / `initialWorkspaceStatus` /
- * `startGatedRun` can never silently fail to seed. `initialStartGatedRun` rides
- * through the existing `initialStartGatedRunProp` seam (inv. 4), so an armed
- * open opens the toggle already armed and submits via the same gated path.
+ * Agentum-native SDD starts only from Run Center after the workspace exists.
  */
 export function deriveWizardComposerSeed(modalData: CreateWorkspaceWizardData): {
   initialName: string
@@ -283,14 +314,13 @@ export function deriveWizardComposerSeed(modalData: CreateWorkspaceWizardData): 
   initialWorkspaceStatus: WorkspaceStatus | undefined
   initialBaseBranch: string | undefined
   telemetrySource: WorkspaceCreateTelemetrySource | undefined
-} & ({ initialStartGatedRun: true } | Record<string, never>) {
+} {
   return {
     initialName: modalData.prefilledName ?? '',
     initialRepoId: modalData.requiredProjectTaskScope?.repoId ?? modalData.initialRepoId,
     initialLinkedWorkItem: modalData.linkedWorkItem ?? null,
     initialWorkspaceStatus: modalData.initialWorkspaceStatus,
     initialBaseBranch: modalData.initialBaseBranch,
-    telemetrySource: modalData.telemetrySource,
-    ...initialStartGatedRunProp(modalData)
+    telemetrySource: modalData.telemetrySource
   }
 }

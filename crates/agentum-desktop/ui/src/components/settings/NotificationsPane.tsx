@@ -2,7 +2,7 @@ import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: notification settings keeps delivery toggles, system test feedback, and sound selection on one settings merge path. */
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import { CHOOSE_CUSTOM_SOUND_VALUE, isNotificationSoundId, type NotificationSoundSelectValue } from '@/lib/notification-sound-select'
 import { Button } from '../ui/button'
 import { Label } from '../ui/label'

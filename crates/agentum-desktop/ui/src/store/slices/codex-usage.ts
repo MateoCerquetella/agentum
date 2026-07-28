@@ -8,7 +8,7 @@ import type {
   CodexUsageScope,
   CodexUsageSessionRow,
   CodexUsageSummary
-} from '../../../../shared/codex-usage-types'
+} from '@/shared/codex-usage-types'
 import type { AppState } from '../types'
 
 export type CodexUsageSlice = {

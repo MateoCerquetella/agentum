@@ -119,6 +119,211 @@ pub async fn run_browser_op(op: &str, args: &Value) -> Result<Value> {
     }
 }
 
+/// Fixed-expression status probe for SDD BrowserCheck. Unlike the legacy
+/// process-global diagnostics listener, this reads Navigation Timing from the
+/// exact target page connection owned by the verification attempt.
+pub(crate) async fn sdd_page_status(port: u16, target: &str) -> Result<Option<u16>> {
+    let base = cdp_browser::cdp_endpoint_for(port);
+    let op_lock = op_lock_for(&base);
+    let _op_guard = op_lock.lock().await;
+    let mut conn = connect_page(&base, &json!({ "target": target })).await?;
+    let result = conn
+        .call(
+            "Runtime.evaluate",
+            json!({
+                "expression": "(()=>{const n=performance.getEntriesByType('navigation')[0];return n&&Number.isInteger(n.responseStatus)?n.responseStatus:0})()",
+                "returnByValue": true
+            }),
+        )
+        .await?;
+    Ok(result
+        .get("result")
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| *value > 0))
+}
+
+/// Target-local network-idle approximation for SDD evidence. It observes only
+/// this page's Resource Timing buffer and readyState; it never reads the shared
+/// MCP listener counters.
+pub(crate) async fn sdd_wait_network_idle(
+    port: u16,
+    target: &str,
+    timeout_ms: u64,
+) -> Result<bool> {
+    let base = cdp_browser::cdp_endpoint_for(port);
+    let op_lock = op_lock_for(&base);
+    let _op_guard = op_lock.lock().await;
+    let mut conn = connect_page(&base, &json!({ "target": target })).await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let mut prior_count = None;
+    let mut stable_polls = 0_u8;
+    loop {
+        let result = conn
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": "JSON.stringify({ready:document.readyState==='complete',count:performance.getEntriesByType('resource').length})",
+                    "returnByValue": true
+                }),
+            )
+            .await?;
+        let sample = result
+            .get("result")
+            .and_then(|value| value.get("value"))
+            .and_then(Value::as_str)
+            .and_then(|value| serde_json::from_str::<Value>(value).ok())
+            .unwrap_or(Value::Null);
+        let ready = sample
+            .get("ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let count = sample.get("count").and_then(Value::as_u64).unwrap_or(0);
+        if ready && prior_count == Some(count) {
+            stable_polls = stable_polls.saturating_add(1);
+            if stable_polls >= 3 {
+                return Ok(true);
+            }
+        } else {
+            stable_polls = 0;
+        }
+        prior_count = Some(count);
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Attempt-scoped request-time allowlist. Fetch interception is enabled on the
+/// exact isolated page target before navigation, so redirect hops and
+/// subresources are continued only when they match the approved origin.
+pub(crate) struct SddOriginGuard {
+    shutdown: tokio::sync::watch::Sender<bool>,
+    task: Option<tokio::task::JoinHandle<Result<()>>>,
+}
+
+impl SddOriginGuard {
+    pub(crate) async fn stop(mut self) -> Result<()> {
+        let _ = self.shutdown.send(true);
+        match self.task.take() {
+            Some(task) => task.await.context("join SDD browser origin guard")?,
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for SddOriginGuard {
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(true);
+    }
+}
+
+pub(crate) async fn start_sdd_origin_guard(
+    port: u16,
+    target: &str,
+    approved_origin: &str,
+) -> Result<SddOriginGuard> {
+    let approved = reqwest::Url::parse(approved_origin).context("parse approved SDD origin")?;
+    if approved.origin().ascii_serialization() != approved_origin
+        || !matches!(approved.scheme(), "http" | "https")
+    {
+        anyhow::bail!("approved SDD origin is not canonical http(s)");
+    }
+    let base = cdp_browser::cdp_endpoint_for(port);
+    let mut conn = connect_page(&base, &json!({ "target": target })).await?;
+    conn.call(
+        "Fetch.enable",
+        json!({
+            "patterns": [{ "urlPattern": "*", "requestStage": "Request" }],
+            "handleAuthRequests": false
+        }),
+    )
+    .await
+    .context("enable SDD request interception")?;
+    let (mut write, mut read) = conn.ws.split();
+    let (shutdown, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let approved_origin = approved_origin.to_owned();
+    let task = tokio::spawn(async move {
+        let mut command_id = 10_000_u64;
+        loop {
+            tokio::select! {
+                changed = shutdown_rx.changed() => {
+                    let _ = changed;
+                    return Ok(());
+                }
+                frame = read.next() => {
+                    let Some(frame) = frame else {
+                        anyhow::bail!("SDD origin guard socket closed");
+                    };
+                    let Message::Text(text) = frame? else { continue };
+                    let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
+                    if value.get("method").and_then(Value::as_str) != Some("Fetch.requestPaused") {
+                        continue;
+                    }
+                    let params = value.get("params").unwrap_or(&Value::Null);
+                    let Some(request_id) = params.get("requestId").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let raw_url = params
+                        .get("request")
+                        .and_then(|request| request.get("url"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    command_id += 1;
+                    let (method, params) = if sdd_request_url_allowed(raw_url, &approved_origin) {
+                        ("Fetch.continueRequest", json!({ "requestId": request_id }))
+                    } else {
+                        (
+                            "Fetch.failRequest",
+                            json!({ "requestId": request_id, "errorReason": "BlockedByClient" }),
+                        )
+                    };
+                    write
+                        .send(Message::Text(
+                            json!({ "id": command_id, "method": method, "params": params })
+                                .to_string(),
+                        ))
+                        .await
+                        .context("enforce SDD request origin")?;
+                }
+            }
+        }
+    });
+    Ok(SddOriginGuard {
+        shutdown,
+        task: Some(task),
+    })
+}
+
+fn sdd_request_url_allowed(raw_url: &str, approved_origin: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw_url) else {
+        return false;
+    };
+    if matches!(url.scheme(), "data" | "about") {
+        return true;
+    }
+    if url.scheme() == "blob" {
+        return raw_url
+            .strip_prefix("blob:")
+            .and_then(|nested| reqwest::Url::parse(nested).ok())
+            .is_some_and(|nested| nested.origin().ascii_serialization() == approved_origin);
+    }
+    if matches!(url.scheme(), "ws" | "wss") {
+        let Ok(approved) = reqwest::Url::parse(approved_origin) else {
+            return false;
+        };
+        return url.host_str() == approved.host_str()
+            && url.port_or_known_default() == approved.port_or_known_default()
+            && matches!(
+                (url.scheme(), approved.scheme()),
+                ("ws", "http") | ("wss", "https")
+            );
+    }
+    url.origin().ascii_serialization() == approved_origin
+}
+
 // --- ops --------------------------------------------------------------------
 
 /// `open`: navigate to `url` and return its `tab` (a CDP target id) for later ops.
@@ -951,6 +1156,39 @@ fn screenshot_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sdd_origin_guard_blocks_redirects_and_cross_origin_subresources() {
+        let origin = "http://127.0.0.1:3000";
+        assert!(sdd_request_url_allowed(
+            "http://127.0.0.1:3000/app.js",
+            origin
+        ));
+        assert!(sdd_request_url_allowed(
+            "ws://127.0.0.1:3000/socket",
+            origin
+        ));
+        assert!(sdd_request_url_allowed(
+            "data:image/png;base64,AA==",
+            origin
+        ));
+        assert!(!sdd_request_url_allowed(
+            "http://127.0.0.1:3001/app.js",
+            origin
+        ));
+        assert!(!sdd_request_url_allowed(
+            "http://169.254.169.254/latest/meta-data",
+            origin
+        ));
+        assert!(!sdd_request_url_allowed(
+            "https://example.com/redirect",
+            origin
+        ));
+        assert!(!sdd_request_url_allowed(
+            "blob:https://example.com/id",
+            origin
+        ));
+    }
 
     #[test]
     fn handles_only_the_page_driving_ops() {

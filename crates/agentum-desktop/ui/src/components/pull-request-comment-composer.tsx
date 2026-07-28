@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { cn } from '@/lib/utils'
 import { isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
-import type { PRComment } from '../../../shared/types'
+import type { PRComment } from '@/shared/types'
 
 export function GHCommentComposer({
   className,

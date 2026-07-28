@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_REPO_BADGE_COLOR, REPO_COLORS } from '../../../../shared/constants'
+import { DEFAULT_REPO_BADGE_COLOR, REPO_COLORS } from '@/shared/constants'
 import { resolveProjectGroupHeaderColor, resolveRepoHeaderColor } from './project-header-color'
 
 describe('resolveRepoHeaderColor', () => {

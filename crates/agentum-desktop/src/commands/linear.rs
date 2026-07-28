@@ -3,18 +3,23 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use agentum_server::sdd::credentials::{
+    clear_selected_linear_credential, delete_linear_credential, get_linear_credential,
+    put_linear_credential, select_linear_credential, LinearCredential, OsCredentialVault,
+};
+
 // Connection surface (connect/status/test/disconnect/selectWorkspace) is wired to
-// the real Linear GraphQL API + a small on-disk credential store, so the
+// the real Linear GraphQL API + the operating-system credential vault, so the
 // Integrations config pane can actually connect a workspace. The core data-read
 // surface (issues / search / projects / teams) is wired to GraphQL below using
 // the stored token. The remaining reads (custom views, comments, single gets)
 // and the mutations stay stubbed pending their queries.
 
 // ─── Credential store ───────────────────────────────────────────────────────
-// Linear personal API keys + the resolved viewer per workspace. Persisted next to
-// the desktop's other state (settings.sqlite3) so a connected workspace survives
-// restarts. Multiple workspaces are supported; `selected_workspace_id` may be a
-// concrete id or the sentinel "all".
+// Linear personal API keys live only in the operating-system credential vault.
+// This metadata file keeps the non-secret resolved viewer per workspace so a
+// connected workspace survives restarts. Multiple workspaces are supported;
+// `selected_workspace_id` may be a concrete id or the sentinel "all".
 
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredViewer {
@@ -28,7 +33,6 @@ struct StoredViewer {
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredWorkspace {
     id: String,
-    token: String,
     viewer: StoredViewer,
     #[serde(default)]
     credential_revision: u32,
@@ -98,24 +102,29 @@ fn update_creds<F: FnOnce(&mut LinearCreds)>(apply: F) -> Result<LinearCreds, St
     Ok(creds)
 }
 
-fn pick_token(creds: &LinearCreds, workspace_id: Option<&str>) -> Option<String> {
+fn vault() -> OsCredentialVault {
+    OsCredentialVault::new()
+}
+
+fn pick_token(creds: &LinearCreds, workspace_id: Option<&str>) -> Option<LinearCredential> {
     if let Some(id) = workspace_id {
         if id != "all" {
-            return creds
-                .workspaces
-                .iter()
-                .find(|w| w.id == id)
-                .map(|w| w.token.clone());
+            if !creds.workspaces.iter().any(|workspace| workspace.id == id) {
+                return None;
+            }
+            return get_linear_credential(&vault(), Some(id)).ok().flatten();
         }
     }
     if let Some(sel) = creds.selected_workspace_id.as_deref() {
-        if sel != "all" {
-            if let Some(w) = creds.workspaces.iter().find(|w| w.id == sel) {
-                return Some(w.token.clone());
-            }
+        if sel != "all" && creds.workspaces.iter().any(|workspace| workspace.id == sel) {
+            return get_linear_credential(&vault(), Some(sel)).ok().flatten();
         }
     }
-    creds.workspaces.first().map(|w| w.token.clone())
+    creds.workspaces.first().and_then(|workspace| {
+        get_linear_credential(&vault(), Some(&workspace.id))
+            .ok()
+            .flatten()
+    })
 }
 
 // ─── Shape mappers (match shared/types.ts LinearViewer/Workspace/Status) ──────
@@ -143,26 +152,36 @@ fn workspace_to_json(workspace: &StoredWorkspace) -> Value {
 }
 
 fn status_to_json(creds: &LinearCreds) -> Value {
-    if creds.workspaces.is_empty() {
+    let connected: Vec<_> = creds
+        .workspaces
+        .iter()
+        .filter(|workspace| {
+            get_linear_credential(&vault(), Some(&workspace.id))
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .collect();
+    if connected.is_empty() {
         return json!({ "connected": false, "viewer": null });
     }
     let selected = creds
         .selected_workspace_id
         .clone()
-        .unwrap_or_else(|| creds.workspaces[0].id.clone());
+        .unwrap_or_else(|| connected[0].id.clone());
     let active = if selected == "all" {
-        &creds.workspaces[0]
+        connected[0]
     } else {
-        creds
-            .workspaces
+        connected
             .iter()
+            .copied()
             .find(|w| w.id == selected)
-            .unwrap_or(&creds.workspaces[0])
+            .unwrap_or(connected[0])
     };
     json!({
         "connected": true,
         "viewer": viewer_to_json(&active.viewer),
-        "workspaces": creds.workspaces.iter().map(workspace_to_json).collect::<Vec<_>>(),
+        "workspaces": connected.into_iter().map(workspace_to_json).collect::<Vec<_>>(),
         "activeWorkspaceId": active.id,
         "selectedWorkspaceId": selected,
     })
@@ -266,27 +285,30 @@ async fn graphql(token: &str, query: &str, variables: Value) -> Result<Value, St
 fn active_workspace(
     creds: &LinearCreds,
     workspace_id: Option<&str>,
-) -> Option<(String, String, String)> {
+) -> Option<(LinearCredential, String, String)> {
     let identify = |w: &StoredWorkspace| {
-        (
-            w.token.clone(),
-            w.id.clone(),
-            w.viewer.organization_name.clone(),
-        )
+        get_linear_credential(&vault(), Some(&w.id))
+            .ok()
+            .flatten()
+            .map(|credential| (credential, w.id.clone(), w.viewer.organization_name.clone()))
     };
     if let Some(id) = workspace_id {
         if id != "all" {
-            return creds.workspaces.iter().find(|w| w.id == id).map(identify);
+            return creds
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .and_then(identify);
         }
     }
     if let Some(sel) = creds.selected_workspace_id.as_deref() {
         if sel != "all" {
             if let Some(w) = creds.workspaces.iter().find(|w| w.id == sel) {
-                return Some(identify(w));
+                return identify(w);
             }
         }
     }
-    creds.workspaces.first().map(identify)
+    creds.workspaces.first().and_then(identify)
 }
 
 // Fields shared by every issue list/search read. The filter is the only thing
@@ -384,7 +406,7 @@ async fn run_issue_query(
         return Ok(Vec::new());
     };
     let vars = json!({ "filter": filter, "first": limit.clamp(1, 100) });
-    let data = graphql(&token, ISSUES_QUERY, vars).await?;
+    let data = graphql(token.token(), ISSUES_QUERY, vars).await?;
     let nodes = data
         .pointer("/issues/nodes")
         .and_then(Value::as_array)
@@ -417,6 +439,15 @@ pub async fn linear_connect(api_key: String) -> Value {
         .organization_id
         .clone()
         .unwrap_or_else(|| "default".to_string());
+    let before = read_creds();
+    let selected = before
+        .selected_workspace_id
+        .as_deref()
+        .is_none_or(|selected| selected == id);
+    let previous = get_linear_credential(&vault(), Some(&id)).ok().flatten();
+    if let Err(error) = put_linear_credential(&vault(), &id, &key, selected) {
+        return json!({ "ok": false, "error": format!("Secure credential storage failed: {error}") });
+    }
     let result = update_creds(|creds| {
         let revision = creds
             .workspaces
@@ -427,7 +458,6 @@ pub async fn linear_connect(api_key: String) -> Value {
         creds.workspaces.retain(|w| w.id != id);
         creds.workspaces.push(StoredWorkspace {
             id: id.clone(),
-            token: key.clone(),
             viewer: viewer.clone(),
             credential_revision: revision,
         });
@@ -437,7 +467,17 @@ pub async fn linear_connect(api_key: String) -> Value {
     });
     match result {
         Ok(_) => json!({ "ok": true, "viewer": viewer_to_json(&viewer) }),
-        Err(error) => json!({ "ok": false, "error": error }),
+        Err(error) => {
+            if let Some(previous) = previous {
+                let _ = put_linear_credential(&vault(), &id, previous.token(), selected);
+            } else {
+                let _ = delete_linear_credential(&vault(), &id);
+                if selected {
+                    let _ = clear_selected_linear_credential(&vault());
+                }
+            }
+            json!({ "ok": false, "error": error })
+        }
     }
 }
 
@@ -445,7 +485,7 @@ pub async fn linear_connect(api_key: String) -> Value {
 pub async fn linear_test_connection(workspace_id: Option<String>) -> Value {
     let token = pick_token(&read_creds(), workspace_id.as_deref());
     match token {
-        Some(token) => match fetch_viewer(&token).await {
+        Some(token) => match fetch_viewer(token.token()).await {
             Ok(viewer) => json!({ "ok": true, "viewer": viewer_to_json(&viewer) }),
             Err(error) => json!({ "ok": false, "error": error }),
         },
@@ -455,6 +495,27 @@ pub async fn linear_test_connection(workspace_id: Option<String>) -> Value {
 
 #[tauri::command]
 pub fn linear_select_workspace(workspace_id: String) -> Value {
+    let creds = read_creds();
+    let vault_result = if workspace_id == "all" {
+        clear_selected_linear_credential(&vault())
+    } else if !creds
+        .workspaces
+        .iter()
+        .any(|workspace| workspace.id == workspace_id)
+    {
+        return status_to_json(&creds);
+    } else if get_linear_credential(&vault(), Some(&workspace_id))
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        select_linear_credential(&vault(), &workspace_id)
+    } else {
+        return status_to_json(&creds);
+    };
+    if vault_result.is_err() {
+        return status_to_json(&creds);
+    }
     match update_creds(move |creds| creds.selected_workspace_id = Some(workspace_id)) {
         Ok(creds) => status_to_json(&creds),
         Err(_) => status_to_json(&read_creds()),
@@ -499,7 +560,16 @@ pub fn linear_set_state_map(
 
 #[tauri::command]
 pub fn linear_disconnect(workspace_id: Option<String>) {
-    let _ = update_creds(move |creds| {
+    let before = read_creds();
+    let removed: Vec<String> = match workspace_id.as_deref() {
+        Some(id) => vec![id.to_owned()],
+        None => before
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id.clone())
+            .collect(),
+    };
+    let result = update_creds(move |creds| {
         if let Some(id) = workspace_id.as_deref() {
             creds.workspaces.retain(|w| w.id != id);
             if creds.selected_workspace_id.as_deref() == Some(id) {
@@ -510,6 +580,27 @@ pub fn linear_disconnect(workspace_id: Option<String>) {
             creds.selected_workspace_id = None;
         }
     });
+    let Ok(after) = result else {
+        return;
+    };
+    for id in removed {
+        let _ = delete_linear_credential(&vault(), &id);
+    }
+    if let Some(selected) = after
+        .selected_workspace_id
+        .as_deref()
+        .filter(|selected| *selected != "all")
+        .filter(|selected| {
+            get_linear_credential(&vault(), Some(selected))
+                .ok()
+                .flatten()
+                .is_some()
+        })
+    {
+        let _ = select_linear_credential(&vault(), selected);
+    } else {
+        let _ = clear_selected_linear_credential(&vault());
+    }
 }
 
 // ─── Data-read surface ───────────────────────────────────────────────────────
@@ -559,7 +650,7 @@ pub async fn linear_list_teams(workspace_id: Option<String>) -> Result<Vec<Value
         return Ok(Vec::new());
     };
     let data = graphql(
-        &token,
+        token.token(),
         "query { teams(first: 250) { nodes { id name key } } }",
         json!({}),
     )
@@ -593,7 +684,7 @@ pub async fn linear_team_states(
         return Ok(Vec::new());
     };
     let data = graphql(
-        &token,
+        token.token(),
         "query($teamId: String!) { team(id: $teamId) { id states { nodes { id name type color position } } } }",
         json!({ "teamId": team_id }),
     ).await?;
@@ -634,7 +725,7 @@ pub async fn linear_list_projects(
     };
     let vars = json!({ "first": limit.unwrap_or(50).clamp(1, 100) });
     let data = graphql(
-        &token,
+        token.token(),
         "query($first: Int) { projects(first: $first, orderBy: updatedAt) { nodes { \
             id name url description color icon progress startDate targetDate createdAt updatedAt } } }",
         vars,
@@ -702,7 +793,7 @@ pub async fn linear_list_project_issues(
         return Err("Linear workspace identity mismatch.".into());
     }
     let data = graphql(
-        &token,
+        token.token(),
         ISSUES_QUERY,
         json!({ "filter": { "project": { "id": { "eq": project_id } } }, "first": limit.unwrap_or(100).clamp(1, 100) }),
     ).await?;
@@ -745,7 +836,7 @@ pub async fn linear_get_issue(
         return Ok(None);
     };
     let query = "query($id: String!) { issue(id: $id) { id identifier title description url priority estimate updatedAt state { name type color } team { id name key } assignee { id displayName avatarUrl } labels { nodes { id name } } project { id name url color } } }";
-    let data = graphql(&token, query, json!({ "id": id })).await?;
+    let data = graphql(token.token(), query, json!({ "id": id })).await?;
     Ok(data
         .get("issue")
         .filter(|node| node.is_object())
@@ -761,7 +852,7 @@ pub async fn linear_get_project(id: String, workspace_id: String) -> Result<Opti
     if ws_id != workspace_id {
         return Err("Linear workspace identity mismatch.".into());
     }
-    let data = graphql(&token, "query($id: String!) { project(id: $id) { id name url description color icon progress startDate targetDate createdAt updatedAt teams { nodes { id name key } } } }", json!({ "id": id })).await?;
+    let data = graphql(token.token(), "query($id: String!) { project(id: $id) { id name url description color icon progress startDate targetDate createdAt updatedAt teams { nodes { id name key } } } }", json!({ "id": id })).await?;
     let Some(project) = data.get("project").filter(|value| value.is_object()) else {
         return Ok(None);
     };
@@ -818,7 +909,7 @@ pub async fn linear_create_issue(
     if let Some(value) = label_ids {
         input["labelIds"] = json!(value);
     }
-    match graphql(&token, "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title url project { id } team { id } } } }", json!({ "input": input })).await {
+    match graphql(token.token(), "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title url project { id } team { id } } } }", json!({ "input": input })).await {
         Ok(data) => match data.pointer("/issueCreate/issue") { Some(issue) => json!({ "ok": true, "id": issue["id"], "identifier": issue["identifier"], "title": issue["title"], "url": issue["url"], "projectId": issue.pointer("/project/id"), "teamId": issue.pointer("/team/id") }), None => json!({ "ok": false, "error": "Linear did not create the issue." }) },
         Err(error) => json!({ "ok": false, "error": error }),
     }
@@ -834,7 +925,7 @@ pub async fn linear_update_issue(
     let Some((token, _, _)) = active_workspace(&creds, workspace_id.as_deref()) else {
         return json!({ "ok": false, "error": "Linear is not connected." });
     };
-    match graphql(&token, "mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id project { id } team { id } } } }", json!({ "id": id, "input": updates })).await {
+    match graphql(token.token(), "mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id project { id } team { id } } } }", json!({ "id": id, "input": updates })).await {
         Ok(data) if data.pointer("/issueUpdate/success").and_then(Value::as_bool) == Some(true) => json!({ "ok": true }),
         Ok(_) => json!({ "ok": false, "error": "Linear did not update the issue." }),
         Err(error) => json!({ "ok": false, "error": error }),
@@ -871,7 +962,7 @@ pub async fn linear_add_issue_comment(
     };
     const ADD_COMMENT_MUTATION: &str = "mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success comment { id url } } }";
     let variables = json!({ "issueId": issue_id, "body": body });
-    match graphql(&token, ADD_COMMENT_MUTATION, variables).await {
+    match graphql(token.token(), ADD_COMMENT_MUTATION, variables).await {
         Ok(data) => {
             let comment = data.get("commentCreate").and_then(|c| c.get("comment"));
             json!({

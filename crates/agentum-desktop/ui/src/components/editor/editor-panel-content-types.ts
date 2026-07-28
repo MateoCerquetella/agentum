@@ -1,4 +1,4 @@
-import type { GitDiffResult } from '../../../../shared/types'
+import type { GitDiffResult } from '@/shared/types'
 
 export type FileContent = {
   content: string

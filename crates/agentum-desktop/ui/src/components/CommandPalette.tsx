@@ -1,7 +1,6 @@
 import React, { useCallback, useDeferredValue, useMemo, useState } from 'react'
 import {
   Columns3,
-  MessagesSquare,
   Palette,
   Radar,
   Settings as SettingsIcon,
@@ -64,7 +63,6 @@ export default function CommandPalette(): React.JSX.Element {
   const closeModal = useAppStore((s) => s.closeModal)
   const openModal = useAppStore((s) => s.openModal)
   const openActivityPage = useAppStore((s) => s.openActivityPage)
-  const openHarnessPage = useAppStore((s) => s.openHarnessPage)
   const openSettingsPage = useAppStore((s) => s.openSettingsPage)
   const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
   const repos = useAppStore((s) => s.repos)
@@ -93,13 +91,6 @@ export default function CommandPalette(): React.JSX.Element {
       hint: 'Home — every agent you’re running',
       icon: Radar,
       run: go(openActivityPage)
-    },
-    {
-      id: 'view-harness',
-      label: 'Chat',
-      hint: 'Describe what you want → a spec',
-      icon: MessagesSquare,
-      run: go(openHarnessPage)
     },
     {
       id: 'view-board',

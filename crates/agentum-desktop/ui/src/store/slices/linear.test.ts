@@ -10,7 +10,7 @@ import type {
   LinearProjectSummary,
   LinearTeam,
   LinearViewer
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { createLinearSlice } from './linear'
 
 const linearStatus = vi.fn()

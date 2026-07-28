@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/react'
 import type { JSONContent } from '@tiptap/core'
-import type { DiffComment, MarkdownDocument } from '../../../../shared/types'
+import type { DiffComment, MarkdownDocument } from '@/shared/types'
 import { RichMarkdownSlashMenu } from './RichMarkdownSlashMenu'
 import { RichMarkdownDocLinkMenu } from './RichMarkdownDocLinkMenu'
 import { RichMarkdownEmojiMenu } from './RichMarkdownEmojiMenu'
@@ -50,7 +50,7 @@ import { scrollToAnchorInEditor } from './markdown-anchor-scroll'
 import type {
   RichMarkdownContextMenuCommand,
   RichMarkdownContextMenuCommandPayload
-} from '../../../../shared/rich-markdown-context-menu'
+} from '@/shared/rich-markdown-context-menu'
 import { buildMarkdownTableOfContents, type MarkdownTocItem } from './markdown-table-of-contents'
 import { MarkdownTableOfContentsPanel } from './MarkdownTableOfContentsPanel'
 import { getRelativePathInsideRoot, normalizeRelativePath } from '@/lib/path'

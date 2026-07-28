@@ -19,7 +19,10 @@ import {
 // even though both have dedicated named icons. Keeping that rule is what makes
 // the badges match the look users already see in the tree.
 
-export type FileIconComponent = React.ComponentType<{ className?: string }>
+export type FileIconComponent = React.ComponentType<{
+  className?: string
+  style?: React.CSSProperties
+}>
 
 // Color group → label. One label per color group (aliases share a group).
 const BADGE_LABEL_BY_GROUP: Record<string, string> = {
@@ -114,8 +117,13 @@ function badgeComponentForGroup(group: string): FileIconComponent {
     return cached
   }
   const label = BADGE_LABEL_BY_GROUP[group]
-  const Component: FileIconComponent = ({ className }) => (
-    <span aria-hidden="true" data-ft={group} className={cn('file-type-badge', className)}>
+  const Component: FileIconComponent = ({ className, style }) => (
+    <span
+      aria-hidden="true"
+      data-ft={group}
+      className={cn('file-type-badge', className)}
+      style={style}
+    >
       {label}
     </span>
   )
@@ -136,8 +144,8 @@ function categoryTintedIcon(Icon: LucideIcon, category: LucideFileIconCategory):
   }
   // `data-fcategory` keys the per-theme colour in main.css. Like the badge
   // rules, that CSS is unlayered so it wins over any `text-*` in `className`.
-  const Component: FileIconComponent = ({ className }) => (
-    <Icon data-fcategory={category} className={cn('file-type-icon', className)} />
+  const Component: FileIconComponent = ({ className, style }) => (
+    <Icon data-fcategory={category} className={cn('file-type-icon', className)} style={style} />
   )
   Component.displayName = `FileTypeIcon(${category})`
   categoryIconCache.set(key, Component)

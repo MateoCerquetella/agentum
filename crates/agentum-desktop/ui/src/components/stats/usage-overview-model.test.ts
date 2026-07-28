@@ -3,17 +3,17 @@ import type {
   ClaudeUsageDailyPoint,
   ClaudeUsageScanState,
   ClaudeUsageSummary
-} from '../../../../shared/claude-usage-types'
+} from '@/shared/claude-usage-types'
 import type {
   CodexUsageDailyPoint,
   CodexUsageScanState,
   CodexUsageSummary
-} from '../../../../shared/codex-usage-types'
+} from '@/shared/codex-usage-types'
 import type {
   OpenCodeUsageDailyPoint,
   OpenCodeUsageScanState,
   OpenCodeUsageSummary
-} from '../../../../shared/opencode-usage-types'
+} from '@/shared/opencode-usage-types'
 import {
   buildUsageOverview,
   formatUsageCost,

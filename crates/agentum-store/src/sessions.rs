@@ -190,22 +190,6 @@ impl Store {
         row.map(Session::try_from).transpose()
     }
 
-    /// Look up the planner session bound to a goal card via `session.card_id`.
-    /// Returns `Some(Session)` when exactly one session references `card_id`,
-    /// `None` when none do. Used by the goal-status reconciler (plan 01-04)
-    /// to find the planner session to auto-stop on first child arrival (D-07).
-    pub async fn get_session_by_card_id(&self, card_id: i64) -> Result<Option<Session>> {
-        let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
-             FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id \
-             WHERE s.card_id = ?",
-        )
-        .bind(card_id)
-        .fetch_optional(&self.pool)
-        .await?;
-        row.map(Session::try_from).transpose()
-    }
-
     pub async fn update_status(&self, id: Uuid, status: Status) -> Result<()> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
         let affected = sqlx::query("UPDATE sessions SET status = ?, updated_at = ? WHERE id = ?")

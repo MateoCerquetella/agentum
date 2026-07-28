@@ -313,8 +313,9 @@ describe('WorktreeCardAgents', () => {
     const markup = renderToStaticMarkup(<WorktreeCardAgents worktreeId="wt-1" />)
 
     expect(markup).toContain('group/compact-agent-row')
-    expect(markup).toContain('<img')
-    expect(markup).toContain('alt="Image #1"')
+    // The markdown renderer is lazy; server rendering intentionally exercises
+    // its plaintext first-paint fallback while preserving the image payload.
+    expect(markup).toContain('![Image #1](data:image/png;base64,abc123)')
     expect(markup).toContain('max-h-36')
     expect(markup).not.toContain('data-testid="agent-row"')
   })
@@ -337,7 +338,7 @@ describe('WorktreeCardAgents', () => {
     expect(markup).toContain('max-h-36')
     expect(markup).toContain('overflow-hidden')
     expect(markup).not.toContain('<img')
-    expect(markup).toContain('href="https://example.com/screenshot.png"')
+    expect(markup).toContain('https://example.com/screenshot.png')
   })
 
   it('renders a compact summary affordance for multiple flat agents', async () => {

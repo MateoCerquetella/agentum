@@ -15,15 +15,15 @@ import {
 import {
   isCustomAgentId,
   resolveCommitMessageAgentChoice
-} from '../../../../shared/commit-message-agent-spec'
-import type { HostedReviewCreationEligibility } from '../../../../shared/hosted-review'
-import { normalizeHostedReviewBaseRef } from '../../../../shared/hosted-review-refs'
-import type { BaseRefSearchResult } from '../../../../shared/types'
+} from '@/shared/commit-message-agent-spec'
+import type { HostedReviewCreationEligibility } from '@/shared/hosted-review'
+import { normalizeHostedReviewBaseRef } from '@/shared/hosted-review-refs'
+import type { BaseRefSearchResult } from '@/shared/types'
 import {
   DEFAULT_SOURCE_CONTROL_AI_PR_CREATION_DEFAULTS,
   normalizeSourceControlAiSettings
-} from '../../../../shared/source-control-ai'
-import type { SourceControlAiPrCreationDefaults } from '../../../../shared/source-control-ai-types'
+} from '@/shared/source-control-ai'
+import type { SourceControlAiPrCreationDefaults } from '@/shared/source-control-ai-types'
 
 type PullRequestFieldName = 'base' | 'title' | 'body' | 'draft'
 export type PullRequestFieldRevisions = Record<PullRequestFieldName, number>

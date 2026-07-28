@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Why: TerminalPane keeps terminal workflow, runtime, and recovery
    settings together so search shows one focused terminal behavior surface. */
-import type { GlobalSettings, SetupScriptLaunchMode } from '../../../../shared/types'
+import type { GlobalSettings, SetupScriptLaunchMode } from '@/shared/types'
 import { Input } from '../ui/input'
 import { Separator } from '../ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group'
@@ -34,7 +34,7 @@ import {
 import { useDetectedOptionAsAlt } from '@/lib/keyboard-layout/use-effective-mac-option-as-alt'
 import { ManageSessionsSection } from './ManageSessionsSection'
 import { OSC52_CLIPBOARD_SETTING_ID } from '../terminal-pane/osc52-clipboard-setting-anchor'
-import { WINDOWS_GIT_BASH_SHELL } from '../../../../shared/windows-terminal-shell'
+import { WINDOWS_GIT_BASH_SHELL } from '@/shared/windows-terminal-shell'
 
 type TerminalPaneProps = {
   settings: GlobalSettings

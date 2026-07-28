@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 vi.mock('./TerminalSettingsPreview', () => ({
   TerminalSettingsPreview: function TerminalSettingsPreview() {

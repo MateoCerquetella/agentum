@@ -24,6 +24,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
+mod agent_delivery;
 pub mod auth;
 pub mod bridge;
 pub mod cdp_browser;
@@ -34,7 +35,6 @@ pub mod endpoint;
 mod error;
 pub mod git;
 pub mod github_projects;
-pub mod harness;
 mod headers;
 pub mod host_install_hints;
 pub mod host_runtime;
@@ -49,7 +49,6 @@ mod port_wait;
 pub mod provision;
 pub mod ratelimit;
 mod routes;
-mod rules;
 pub mod sdd;
 pub mod task_sink;
 pub mod tls;
@@ -154,9 +153,15 @@ pub struct AppState {
     /// `omarchy`, `mateo-mac`) instead of a generic placeholder. Cut
     /// at the first `.` so `omarchy.local` reads as `omarchy`.
     pub hostname: String,
-    /// When `true`, the auth middleware is bypassed and all API routes are
-    /// accessible without a bearer token. Set via `agentum serve --no-auth`.
+    /// When `true`, the auth middleware admits requests as an explicitly
+    /// untrusted local principal. Set via `agentum serve --no-auth`. SDD
+    /// mutation handlers still require an authenticated human capability.
     pub no_auth: bool,
+    /// Boot-scoped bearer capability for the embedded desktop webview. Minted
+    /// in memory, returned only across the Tauri command boundary, and never
+    /// persisted, logged, mounted into a provider sandbox, or injected into an
+    /// agent process. `None` for standalone daemons.
+    pub(crate) embedded_ui_token: Option<Arc<String>>,
     /// Pending clipboard requests, keyed by request_id. Inserted by
     /// `POST /api/clipboard/request`, removed by either the timeout
     /// path, the uploads route (on a matching
@@ -190,7 +195,7 @@ pub struct AppState {
     /// Secret bearer token guarding the agentum MCP server (`/mcp`). Minted once
     /// at boot. Every agentum-launched agent gets it baked into its MCP config
     /// (`Authorization: Bearer …`), and the `/mcp` handler rejects any request
-    /// without it — *even on the no-auth embedded server*. This is what makes the
+    /// without it — independently of normal API authentication. This makes the
     /// MCP safe to expose to a remote host over the reverse SSH tunnel: the port
     /// is loopback-bound on the host AND the tool surface needs this token, so
     /// another user/process on the host can't drive agentum.
@@ -206,15 +211,6 @@ pub struct AppState {
     /// webview automation, macOS computer-use). `None` for the standalone
     /// daemon — `/api/browser/*` and `/api/computer/*` then return 501.
     pub desktop_bridge: Option<std::sync::Arc<dyn crate::bridge::DesktopBridge>>,
-    /// The Harness Engine: drives agents one feature at a time behind a
-    /// verification gate. Shared (`Arc`) so the `/api/harness/*` routes and the
-    /// background [`harness::drive`] task operate on the same in-memory runs +
-    /// event bus. Cheap to construct; always present.
-    pub harness: Arc<harness::HarnessEngine>,
-    /// Live per-session SDD loops (issue #313). Server-owned so the desktop's
-    /// Loop toggle renders one truth across clients/reloads; workers remove
-    /// their own entry when they end and announce it as `sdd.loop.stopped`.
-    pub sdd_loops: routes::sdd::SddLoops,
     /// Live `/api/events` WebSocket client count. The host-metrics ticker
     /// gates its sysinfo sampling on THIS, not `bus.receiver_count()`: the
     /// goal reconciler and comment bridge hold permanent bus subscriptions,
@@ -222,6 +218,10 @@ pub struct AppState {
     /// don't sample" guard was dead code — the daemon paid an all-cores CPU
     /// refresh every 2 s forever. Only the events route touches this.
     pub events_ws_clients: Arc<std::sync::atomic::AtomicUsize>,
+    /// SDD integrations never read legacy plaintext credential files. Desktop
+    /// builds replace this with the OS credential store; standalone servers
+    /// receive an encrypted vault only when an external master key is present.
+    pub sdd_credentials: Arc<dyn sdd::credentials::SddCredentialVault>,
 }
 
 impl AppState {
@@ -253,6 +253,7 @@ impl AppState {
             wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: detect_short_hostname(),
             no_auth: false,
+            embedded_ui_token: None,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -263,9 +264,8 @@ impl AppState {
             api_base_url: None,
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
-            harness: Arc::new(harness::HarnessEngine::new()),
-            sdd_loops: Default::default(),
             events_ws_clients: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sdd_credentials: sdd::credentials::headless_vault_or_unavailable(),
         }
     }
 }
@@ -309,14 +309,6 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::uploads::router())
         .merge(routes::agents::router())
         .merge(routes::agent_tasks::router())
-        .merge(routes::board::router())
-        .merge(routes::board_goals::router())
-        .merge(routes::board_links::router())
-        .merge(routes::board_rules::router())
-        // 016a: server-side board←GitHub pull + durable tracker bindings. Adds
-        // `/api/board/bindings*` only; #58's `POST /api/board/sync` stays in
-        // `board::router()` above, untouched.
-        .merge(routes::board_sync::router())
         .merge(routes::notes::router())
         .merge(routes::wiki::router())
         .merge(routes::preferences::router())
@@ -343,7 +335,6 @@ pub fn router(state: AppState) -> Router {
         // Spec 010 F3: workspace provisioning (repo-from-template + the ensure).
         .merge(routes::provision::router())
         .merge(routes::usage::router())
-        .merge(routes::harness::router())
         .merge(routes::sdd::router())
         .layer(axum_mw::from_fn_with_state(
             state.clone(),
@@ -403,7 +394,7 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
         );
     }
 
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
 
     let app = router(state.clone());
 
@@ -447,11 +438,137 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
 }
 
 /// Spawn the always-on background workers shared by every server boot path:
-/// the auth-session sweeper, the watchdog, the goal-status reconciler, the
-/// session→comment bridge, and the host-metrics ticker. Factored out so the
+/// the auth-session sweeper, watchdog, tracker workers, and host-metrics ticker.
+/// Factored out so the
 /// in-process embedded boot (desktop) and the standalone `serve()` (TUI/daemon)
 /// stay in lockstep.
-fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
+fn watchdog_with_transcript_retirement(
+    bus: broadcast::Sender<Event>,
+    store: Arc<Store>,
+    transcripts: TranscriptStore,
+) -> agentum_watchdog::Watchdog {
+    agentum_watchdog::Watchdog::new(bus, store).with_running_sessions_hook(move |running| {
+        transcripts.retain_observers(running);
+    })
+}
+
+async fn spawn_background_workers(
+    state: &AppState,
+    bus: &broadcast::Sender<Event>,
+) -> anyhow::Result<()> {
+    // Agentum-native create recovery is a boot gate. Retired v1 workers are not
+    // revived after the hard cutover.
+    for saga in state.store.sdd_claim_interrupted_creates().await? {
+        if saga.authoritative_path.starts_with("agentum+ssh://") {
+            match routes::sdd::recover_remote_create(state, &saga).await {
+                Ok(()) => tracing::info!(
+                    run_id = %saga.run_id,
+                    "recovered interrupted remote SDD create through its durable typed intent"
+                ),
+                Err(error) => tracing::error!(
+                    run_id = %saga.run_id,
+                    error = %error,
+                    "remote SDD create recovery remains required; no local filesystem fallback was attempted"
+                ),
+            }
+            continue;
+        }
+        let repository = std::path::Path::new(&saga.repository_path);
+        let authoritative = std::path::Path::new(&saga.authoritative_path);
+        let recovery = async {
+            sdd::workspace::recover_interrupted_attempt(
+                repository,
+                authoritative,
+                std::path::Path::new(&saga.attempt_path),
+            )
+            .await?;
+            sdd::workspace::recover_interrupted_create(repository, authoritative, &saga.branch_name)
+                .await
+        }
+        .await;
+        match recovery {
+            Ok(()) => {
+                let _ = state
+                    .store
+                    .sdd_update_create_stage(
+                        &saga.repo_id,
+                        &saga.request_id,
+                        &saga.request_hash,
+                        &["recovery_required"],
+                        "failed",
+                        Some("interrupted creation was safely rolled back"),
+                    )
+                    .await;
+            }
+            Err(error) => tracing::error!(
+                run_id = %saga.run_id,
+                %error,
+                "SDD create recovery requires operator attention"
+            ),
+        }
+    }
+    for saga in state.store.sdd_claim_interrupted_run_creates().await? {
+        let repository = std::path::Path::new(&saga.repository_path);
+        let authoritative = std::path::Path::new(&saga.authoritative_path);
+        let recovery = async {
+            sdd::workspace::recover_interrupted_attempt(
+                repository,
+                authoritative,
+                std::path::Path::new(&saga.attempt_path),
+            )
+            .await?;
+            sdd::workspace::recover_interrupted_create(repository, authoritative, &saga.branch_name)
+                .await
+        }
+        .await;
+        match recovery {
+            Ok(()) => {
+                let _ = state
+                    .store
+                    .sdd_update_run_create_stage(
+                        &saga.spec_id,
+                        &saga.request_id,
+                        &saga.request_hash,
+                        &["recovery_required"],
+                        "failed",
+                        Some("interrupted first-run creation was safely rolled back"),
+                    )
+                    .await;
+            }
+            Err(error) => tracing::error!(
+                run_id = %saga.run_id,
+                %error,
+                "SDD discovered-run recovery requires operator attention"
+            ),
+        }
+    }
+    let recovered = state.store.sdd_recover_interrupted_runs().await?;
+    if recovered > 0 {
+        tracing::warn!(
+            runs = recovered,
+            "paused interrupted SDD runs during recovery"
+        );
+    }
+    let recovered_delivery = sdd::delivery::recover_interrupted(state).await?;
+    if recovered_delivery > 0 {
+        tracing::warn!(
+            actions = recovered_delivery,
+            "marked interrupted SDD delivery actions sync-pending"
+        );
+    }
+    {
+        let store = state.store.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                if let Err(error) = store.sdd_ack_realtime_outbox(500).await {
+                    tracing::warn!(%error, "SDD realtime outbox acknowledgement failed");
+                }
+            }
+        });
+    }
+
     // Sweep stale tokens once at boot, then on a slow timer.
     let sweep_state = state.clone();
     tokio::spawn(async move {
@@ -477,29 +594,10 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
         let bus = bus.clone();
         tokio::spawn(async move {
             routes::sessions::boot_revive_dead_sessions(&state).await;
-            agentum_watchdog::Watchdog::new(bus, state.store.clone())
+            let transcripts = state.transcripts.clone();
+            watchdog_with_transcript_retirement(bus, state.store.clone(), transcripts)
                 .run()
                 .await;
-        });
-    }
-
-    // Goal-status auto-progression reconciler: enforces `goal.status = max(child
-    // statuses)` and fires the planner auto-stop on first child arrival.
-    {
-        let store = state.store.clone();
-        let bus = bus.clone();
-        tokio::spawn(async move {
-            agentum_watchdog::run_goal_reconciler(store, bus).await;
-        });
-    }
-
-    // Watchdog → comment bridge: converts agent.*/session.crashed events into
-    // [system] comments on the bound card's thread.
-    {
-        let store = state.store.clone();
-        let bus = bus.clone();
-        tokio::spawn(async move {
-            agentum_watchdog::run_session_comment_bridge(store, bus).await;
         });
     }
 
@@ -522,10 +620,9 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
     // The bus rides in so an applied transition emits `tracker.phase_changed`
     // (spec 014 F1).
     {
-        let store = state.store.clone();
         let bus = bus.clone();
         tokio::spawn(async move {
-            tracker_sync::run_pr_merge_poller(store, bus).await;
+            tracker_sync::run_pr_merge_poller(bus).await;
         });
     }
 
@@ -622,28 +719,44 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
             routes::sessions::boot_drift_rescan(state).await;
         });
     }
+
+    Ok(())
 }
 
-/// Boot the API server in-process on an ephemeral loopback port with auth
-/// disabled (loopback bind → only this machine can reach it). Spawns the same
-/// background workers as [`serve`] and serves on the current Tokio runtime,
-/// returning the bound `127.0.0.1:<port>` address. The desktop shell embeds the
-/// server this way so the webview drives the exact same core as the TUI.
-pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<SocketAddr> {
-    let (addr, _state) = serve_embedded_loopback_state(store).await?;
-    Ok(addr)
+/// Address and boot-scoped UI capability for an embedded server. This type
+/// intentionally does not implement `Debug`: the bearer must not enter logs.
+pub struct EmbeddedLoopbackEndpoint {
+    pub addr: SocketAddr,
+    pub ui_token: String,
 }
 
-/// Build the embedded-server `AppState` for a given bound address: no-auth, with
-/// `api_base_url` set so the session-start handler can inject `AGENTUM_API_URL`
-/// into panes and anchor the hook URL. Pure (no spawning / no serving) so the
-/// construction can be unit-tested without standing up the full server. Returns
-/// the bus alongside so the caller can wire background workers.
+/// Boot the API server in-process on a stable loopback port with a high-entropy
+/// in-memory UI bearer. Spawns the same background workers as [`serve`] and
+/// serves on the current Tokio runtime. The desktop shell embeds the server so
+/// the webview drives the exact same core as the TUI.
+pub async fn serve_embedded_loopback(store: Store) -> anyhow::Result<EmbeddedLoopbackEndpoint> {
+    let (addr, state) = serve_embedded_loopback_state(store).await?;
+    let ui_token = state
+        .embedded_ui_token
+        .as_deref()
+        .expect("embedded state always carries a UI capability")
+        .clone();
+    Ok(EmbeddedLoopbackEndpoint { addr, ui_token })
+}
+
+/// Build the embedded-server `AppState` for a given bound address, with a
+/// boot-scoped UI capability and `api_base_url` set so the session-start handler
+/// can inject `AGENTUM_API_URL` into panes and anchor the hook URL. The URL is
+/// intentionally injected into agents; the UI capability is not. Pure (no
+/// spawning / no serving) so construction can be unit-tested without standing
+/// up the full server. Returns the bus alongside for background workers.
 fn embedded_app_state(store: Store, addr: SocketAddr) -> (AppState, broadcast::Sender<Event>) {
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let mut state = AppState::with_fingerprint(store, bus.clone(), String::new());
-    state.no_auth = true;
+    state.no_auth = false;
+    state.embedded_ui_token = Some(Arc::new(auth::new_token()));
     state.api_base_url = Some(format!("http://{addr}"));
+    state.sdd_credentials = Arc::new(sdd::credentials::OsCredentialVault::new());
     (state, bus)
 }
 
@@ -653,16 +766,25 @@ fn embedded_app_state(store: Store, addr: SocketAddr) -> (AppState, broadcast::S
 pub async fn serve_embedded_loopback_with_bridge(
     store: Store,
     bridge: Arc<dyn bridge::DesktopBridge>,
-) -> anyhow::Result<SocketAddr> {
+) -> anyhow::Result<EmbeddedLoopbackEndpoint> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     // Prefer the persisted/stable port so a restart doesn't invalidate live
     // sessions' baked-in MCP config (R2); reuse the persisted /mcp token (R1).
     let listener = endpoint::bind_stable_loopback().await?;
     let addr = listener.local_addr()?;
     let (mut state, bus) = embedded_app_state(store, addr);
-    state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
+    let token = endpoint::load_or_rotate_mcp_token();
+    state.mcp_token = Arc::new(token.token);
+    if token.rotated {
+        tracing::warn!("MCP bearer rotated; live sessions will be marked for reconnect");
+    }
     state.desktop_bridge = Some(bridge);
-    spawn_background_workers(&state, &bus);
+    let ui_token = state
+        .embedded_ui_token
+        .as_deref()
+        .expect("embedded state always carries a UI capability")
+        .clone();
+    spawn_background_workers(&state, &bus).await?;
     let app = router(state);
     tracing::info!(%addr, "agentum-server listening (embedded loopback, desktop bridge)");
     tokio::spawn(async move {
@@ -675,7 +797,7 @@ pub async fn serve_embedded_loopback_with_bridge(
             tracing::error!("embedded agentum-server exited: {e}");
         }
     });
-    Ok(addr)
+    Ok(EmbeddedLoopbackEndpoint { addr, ui_token })
 }
 
 /// As [`serve_embedded_loopback`], but also returns the `AppState` the router was
@@ -692,12 +814,16 @@ pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(Sock
     let addr = listener.local_addr()?;
 
     let (mut state, bus) = embedded_app_state(store, addr);
-    state.mcp_token = Arc::new(endpoint::load_or_create_mcp_token());
+    let token = endpoint::load_or_rotate_mcp_token();
+    state.mcp_token = Arc::new(token.token);
+    if token.rotated {
+        tracing::warn!("MCP bearer rotated; live sessions will be marked for reconnect");
+    }
 
-    spawn_background_workers(&state, &bus);
+    spawn_background_workers(&state, &bus).await?;
 
     let app = router(state.clone());
-    tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");
+    tracing::info!(%addr, "agentum-server listening (embedded loopback, UI bearer required)");
     tokio::spawn(async move {
         if let Err(e) = axum::serve(
             listener,
@@ -744,9 +870,51 @@ async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentum_core::{NewSession, Status};
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
 
     #[tokio::test]
-    async fn embedded_app_state_carries_its_url_and_is_no_auth() {
+    async fn internal_board_route_families_are_unregistered() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let addr: SocketAddr = "127.0.0.1:5544".parse().unwrap();
+        let (state, _bus) = embedded_app_state(store, addr);
+        let ui_token = state.embedded_ui_token.as_deref().unwrap().clone();
+        let app = router(state);
+
+        for path in [
+            "/api/board",
+            "/api/board/1",
+            "/api/board/goals",
+            "/api/board/goals/1/harness-plan",
+            "/api/board/links",
+            "/api/board/links/1/2/blocks",
+            "/api/board/rules",
+            "/api/board/rules/todo",
+            "/api/board/bindings",
+            "/api/board/bindings/1/sync",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get(path)
+                        .header("authorization", format!("Bearer {ui_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::NOT_FOUND,
+                "retired internal-board route {path} must not be exposed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn embedded_app_state_carries_its_url_and_boot_scoped_ui_capability() {
         // Use the pure builder, NOT serve_embedded_loopback_state — the latter
         // spawns the server + background workers, which would keep the test
         // process alive and hang the suite.
@@ -754,10 +922,13 @@ mod tests {
         let store = Store::open(&dir.path().join("t.db")).await.unwrap();
         let addr: SocketAddr = "127.0.0.1:5544".parse().unwrap();
         let (state, _bus) = embedded_app_state(store, addr);
-        // The embedded state must carry its own URL (so panes get AGENTUM_API_URL)
-        // and be no-auth (loopback bind).
+        // Panes receive only the URL. The webview receives a separate
+        // boot-scoped capability through Tauri; provider processes do not.
         assert_eq!(state.api_base_url.as_deref(), Some("http://127.0.0.1:5544"));
-        assert!(state.no_auth);
+        assert!(!state.no_auth);
+        let token = state.embedded_ui_token.as_deref().unwrap();
+        assert_eq!(token.len(), 43);
+        assert_ne!(token.as_str(), state.mcp_token.as_str());
     }
 
     #[tokio::test]
@@ -767,5 +938,85 @@ mod tests {
         let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
         let state = AppState::new(store, bus);
         assert_eq!(state.api_base_url, None);
+    }
+
+    #[tokio::test]
+    async fn server_wired_watchdog_callback_retires_only_non_running_claude_observers() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&root.path().join("watchdog.db")).await.unwrap());
+        let (bus, _) = broadcast::channel::<Event>(32);
+        let (transcripts, counts) = TranscriptStore::with_counting_factory(bus.clone());
+        let mut observed = Vec::new();
+        for (name, tool, status) in [
+            ("running-claude", "claude", Status::Running),
+            ("stopped-claude", "claude", Status::Stopped),
+            ("crashed-claude", "claude", Status::Crashed),
+            ("running-codex", "codex", Status::Running),
+        ] {
+            let workdir = root.path().join(name);
+            std::fs::create_dir_all(&workdir).unwrap();
+            let session = store
+                .create_session(NewSession {
+                    name: name.into(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                    tool: "claude".into(),
+                    model: None,
+                    flags: vec![],
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                })
+                .await
+                .unwrap();
+            transcripts.read(
+                session.id,
+                workdir.clone(),
+                "claude",
+                transcript_store::ObservationMode::Live,
+            );
+            if tool != "claude" {
+                store.patch_session_tool(session.id, tool).await.unwrap();
+            }
+            store
+                .update_status_and_target(
+                    session.id,
+                    status,
+                    (status == Status::Running).then_some("missing-watchdog-test-pane"),
+                )
+                .await
+                .unwrap();
+            observed.push((session.id, workdir));
+        }
+        let deleted_id = uuid::Uuid::new_v4();
+        let deleted_workdir = root.path().join("deleted-claude");
+        std::fs::create_dir_all(&deleted_workdir).unwrap();
+        transcripts.read(
+            deleted_id,
+            deleted_workdir.clone(),
+            "claude",
+            transcript_store::ObservationMode::Live,
+        );
+        observed.push((deleted_id, deleted_workdir));
+
+        assert_eq!(counts.created(), 5);
+        assert_eq!(transcripts.observing_count(), 5);
+        let watchdog = watchdog_with_transcript_retirement(bus, store, transcripts.clone());
+        watchdog.reconcile_once().await.unwrap();
+        assert_eq!(counts.dropped(), 4);
+        assert_eq!(transcripts.observing_count(), 1);
+        assert_eq!(transcripts.cache_count(), 5);
+        assert_eq!(
+            counts.created(),
+            5,
+            "the server callback only retires observers"
+        );
+
+        transcripts.stop_observing(observed[0].0);
+        for (_, workdir) in observed {
+            if let Some(project_dir) = agentum_core::transcript::project_dir_for(&workdir) {
+                let _ = std::fs::remove_dir_all(project_dir);
+            }
+        }
     }
 }

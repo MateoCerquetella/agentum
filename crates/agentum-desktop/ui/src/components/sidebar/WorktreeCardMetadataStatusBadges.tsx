@@ -4,7 +4,7 @@ import { CircleCheck, CircleDot, CircleX, Clock, GitMerge } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PullRequestIcon, checksLabel } from './WorktreeCardHelpers'
 import type { WorktreeCardPrDisplay } from './worktree-card-pr-display'
-import type { IssueInfo } from '../../../../shared/types'
+import type { IssueInfo } from '@/shared/types'
 
 function MetadataStatusBadge({
   label,

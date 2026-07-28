@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Worktree, WorktreeLineage } from '../../../../shared/types'
+import type { Worktree, WorktreeLineage } from '@/shared/types'
 import { getWorkspaceDeleteLineage } from './workspace-delete-lineage'
 
 function makeWorktree(id: string, path: string): Worktree {

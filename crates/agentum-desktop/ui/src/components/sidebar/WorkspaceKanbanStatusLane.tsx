@@ -1,10 +1,10 @@
 import React from 'react'
 import { Plus } from 'lucide-react'
-import type { Repo, WorkspaceStatusDefinition, Worktree } from '../../../../shared/types'
+import type { Repo, WorkspaceStatusDefinition, Worktree } from '@/shared/types'
 import {
   WORKSPACE_BOARD_COLUMN_WIDTH_MAX,
   WORKSPACE_BOARD_COLUMN_WIDTH_MIN
-} from '../../../../shared/workspace-statuses'
+} from '@/shared/workspace-statuses'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'

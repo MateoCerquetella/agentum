@@ -174,6 +174,9 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuContent: function DropdownMenuContent(props: { children?: unknown }) {
     return { type: 'DropdownMenuContent', props }
   },
+  DropdownMenuCheckboxItem: function DropdownMenuCheckboxItem(props: { children?: unknown }) {
+    return { type: 'DropdownMenuCheckboxItem', props }
+  },
   DropdownMenuItem: function DropdownMenuItem(props: {
     children?: unknown
     onSelect?: () => void

@@ -14,12 +14,12 @@ import {
   type SetupScriptPromptInspection
 } from '@/lib/setup-script-prompt'
 import { checkRuntimeHooks, inspectRuntimeSetupScriptImports } from '@/runtime/runtime-hooks-client'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
-import type { SetupScriptImportCandidate } from '../../../../shared/setup-script-imports'
+import { isGitRepoKind } from '@/shared/repo-kind'
+import type { SetupScriptImportCandidate } from '@/shared/setup-script-imports'
 import {
   buildSetupScriptPromptActionTelemetry,
   buildSetupScriptPromptTelemetry
-} from '../../../../shared/setup-script-telemetry'
+} from '@/shared/setup-script-telemetry'
 import {
   ConfigureOnlyAction,
   DetectedSetupPreview,

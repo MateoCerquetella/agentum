@@ -3,12 +3,12 @@ import { ArrowLeft, ArrowRight, Globe, Loader2, MessageSquarePlus, RefreshCw } f
 import { Button } from '@/components/ui/button'
 import { api } from '@/tauri'
 import { useAppStore } from '@/store'
-import { AGENTUM_BROWSER_BLANK_URL } from '../../../../shared/constants'
-import type { BrowserPage as BrowserPageState } from '../../../../shared/types'
+import { AGENTUM_BROWSER_BLANK_URL } from '@/shared/constants'
+import type { BrowserPage as BrowserPageState } from '@/shared/types'
 import {
   normalizeBrowserNavigationUrl,
   redactKagiSessionToken
-} from '../../../../shared/browser-url'
+} from '@/shared/browser-url'
 import BrowserAddressBar from './BrowserAddressBar'
 import {
   isNativeBrowserOverlayOpen,
@@ -386,7 +386,7 @@ export default function NativeBrowserPagePane({
           onNavigate={navigateToUrl}
           inputRef={addressBarInputRef}
         />
-        {/* Annotate: inject the in-page picker (orca-style). Lives on the native
+        {/* Annotate: inject the in-page picker. Lives on the native
             toolbar because this — not BrowserPane — is the rendered pane. */}
         <Button
           size="icon"

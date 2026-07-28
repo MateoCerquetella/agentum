@@ -1,5 +1,5 @@
-import type { Repo } from '../../../../shared/types'
-import { isFolderRepo } from '../../../../shared/repo-kind'
+import type { Repo } from '@/shared/types'
+import { isFolderRepo } from '@/shared/repo-kind'
 import type { SettingsSearchEntry } from './settings-search'
 
 export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[] {
@@ -98,7 +98,6 @@ export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[
               'status mapping',
               'issues',
               'tickets',
-              'harness',
               'auto detect',
               'none'
             ]

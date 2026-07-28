@@ -1,4 +1,4 @@
-import type { BrowserPage, BrowserWorkspace } from '../../../../shared/types'
+import type { BrowserPage, BrowserWorkspace } from '@/shared/types'
 import { clearEvictedBrowserTab } from '../../components/browser-pane/browser-runtime'
 import {
   destroyPersistentWebview,

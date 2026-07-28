@@ -1,1 +1,0 @@
-{"passed": true, "summary": "Grounded minimal plan reuses the existing normalized repo color and badge primitives, preserves theme-owned contrast, maps every criterion to named tests, and limits production changes to the actual repo-header renderer."}

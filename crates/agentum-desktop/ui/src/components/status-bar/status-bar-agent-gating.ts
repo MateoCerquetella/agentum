@@ -1,4 +1,4 @@
-import type { StatusBarItem, TuiAgent } from '../../../../shared/types'
+import type { StatusBarItem, TuiAgent } from '@/shared/types'
 
 // Why: Claude/Codex/Gemini usage bars are surface noise when the underlying
 // CLI isn't installed (e.g. a fresh Ubuntu install showing "Gemini Usage"

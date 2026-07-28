@@ -3,7 +3,7 @@ import { api } from '@/tauri'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BellRing, FileAudio, Settings, Upload } from 'lucide-react'
 import { toast } from 'sonner'
-import type { GlobalSettings, NotificationPermissionStatusResult } from '../../../../shared/types'
+import type { GlobalSettings, NotificationPermissionStatusResult } from '@/shared/types'
 import { CHOOSE_CUSTOM_SOUND_VALUE, isNotificationSoundId, type NotificationSoundSelectValue } from '@/lib/notification-sound-select'
 import { Button } from '@/components/ui/button'
 import {

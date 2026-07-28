@@ -4,7 +4,7 @@ import type {
   WorkspaceStatus,
   WorkspaceStatusDefinition,
   Worktree
-} from '../../../../shared/types'
+} from '@/shared/types'
 import WorkspaceKanbanStatusLane from './WorkspaceKanbanStatusLane'
 
 type WorkspaceKanbanLaneGridProps = {

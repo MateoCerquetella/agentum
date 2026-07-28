@@ -21,17 +21,6 @@ Rotation = `agentum auth rotate` (overwrites the file with a new random
 | GET    | `/api/sessions/:id/peek?lines=30` | —                                       | `{lines: string[]}` |
 | WS     | `/api/sessions/:id/stream`        | upgrade                                 | binary frames of pane bytes |
 
-## Board
-
-- `GET /api/board` → items grouped by status
-- `POST /api/board` → create
-- `PATCH /api/board/:id` → status / body / title
-- `POST /api/board/:id/claim` → atomic CAS by session_id
-- `DELETE /api/board/:id`
-
-Claims are atomic compare-and-swap: the `claim` endpoint succeeds only
-if `claimed_by` is currently NULL. On conflict it returns 409.
-
 ## Notes / Channels / Messages
 
 Conventional REST per the data model.

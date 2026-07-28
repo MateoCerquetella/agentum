@@ -4,8 +4,8 @@ import { migrationUnsupportedToAgentStatusEntry } from '@/lib/migration-unsuppor
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import { parsePaneKey } from '../../../../shared/stable-pane-id'
+} from '@/shared/agent-status-types'
+import { parsePaneKey } from '@/shared/stable-pane-id'
 
 export type WorktreeAgentActivitySummary = {
   hasPermission: boolean

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentsStepId } from '../../../../shared/agents-orchestration-steps'
-import type { FeatureWallWorkflowId } from '../../../../shared/feature-wall-workflows'
-import type { ReviewStepId } from '../../../../shared/review-steps'
-import type { WorkbenchStepId } from '../../../../shared/workbench-steps'
+import type { AgentsStepId } from '@/shared/agents-orchestration-steps'
+import type { FeatureWallWorkflowId } from '@/shared/feature-wall-workflows'
+import type { ReviewStepId } from '@/shared/review-steps'
+import type { WorkbenchStepId } from '@/shared/workbench-steps'
 import {
   normalizeFeatureWallVisitedWorkflows,
   normalizeFeatureWallVisitedAgentSteps,

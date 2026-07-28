@@ -52,7 +52,7 @@ export const astroMonarchLanguage: Monaco.languages.IMonarchLanguage = {
     ],
     markupReenter: [[/(?=.)/, { token: '@rematch', switchTo: '@markup', nextEmbedded: 'html' }]],
     comment: [
-      [/-->/, { token: 'comment', switchTo: '@markupReenter' }],
+      [/--!?>/, { token: 'comment', switchTo: '@markupReenter' }],
       [/[^-]+/, 'comment'],
       [/./, 'comment']
     ],

@@ -1,7 +1,7 @@
 /* eslint-disable max-lines -- Why: AppearancePane keeps theme, typography, zoom, and status-bar
    visibility settings together so the searchable settings rows share one filtered surface. */
 import type React from 'react'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import { Separator } from '../ui/separator'
 import { UIZoomControl } from './UIZoomControl'
 import { SearchableSetting } from './SearchableSetting'
@@ -16,7 +16,7 @@ import {
   SettingsSwitchRow
 } from './SettingsFormControls'
 import { ThemeGallery } from './ThemeGallery'
-import { DEFAULT_APP_FONT_FAMILY } from '../../../../shared/constants'
+import { DEFAULT_APP_FONT_FAMILY } from '@/shared/constants'
 import { useAvailableStatusBarToggles } from '../status-bar/use-available-status-bar-toggles'
 import {
   APPEARANCE_PANE_SEARCH_ENTRIES,

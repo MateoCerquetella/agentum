@@ -1,6 +1,6 @@
-import type { SshConnectionStatus } from '../../../../shared/ssh-types'
-import type { Repo } from '../../../../shared/types'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
+import type { Repo } from '@/shared/types'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import { getSelectedRepoSshGate } from '../../lib/new-workspace-ssh-gate'
 
 export type RepoHeaderCreateState = {

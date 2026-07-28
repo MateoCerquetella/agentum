@@ -22,7 +22,7 @@ export const vueMonarchLanguage: Monaco.languages.IMonarchLanguage = {
       [/[^<]+/, '']
     ],
     comment: [
-      [/-->/, 'comment', '@pop'],
+      [/--!?>/, 'comment', '@pop'],
       [/[^-]+/, 'comment'],
       [/./, 'comment']
     ],

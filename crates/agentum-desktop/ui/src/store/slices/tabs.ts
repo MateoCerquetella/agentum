@@ -11,7 +11,7 @@ import type {
   TabGroupLayoutNode,
   WorkspaceSessionState,
   WorkspaceVisibleTabType
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   dedupeTabOrder,
   ensureGroup,
@@ -29,7 +29,7 @@ import { buildHydratedTabState } from './tabs-hydration'
 import { viewAfterWorktreeClose } from './worktree-close-view'
 import { buildOrphanTerminalCleanupPatch, getOrphanTerminalIds } from './terminal-orphan-helpers'
 import { createBrowserUuid } from '@/lib/browser-uuid'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 export type TabSplitDirection = 'left' | 'right' | 'up' | 'down'
 

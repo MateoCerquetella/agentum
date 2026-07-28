@@ -10,13 +10,13 @@ import type {
   GitStatusResult,
   GitUpstreamStatus,
   GlobalSettings
-} from '../../../shared/types'
+} from '@/shared/types'
 import type {
   CommitMessageAgentCapability,
   CommitMessageModelCapability
-} from '../../../shared/commit-message-agent-spec'
-import { getCommitMessageModelDiscoveryHostKeyForScope } from '../../../shared/commit-message-host-key'
-import type { GitHistoryOptions, GitHistoryResult } from '../../../shared/git-history'
+} from '@/shared/commit-message-agent-spec'
+import { getCommitMessageModelDiscoveryHostKeyForScope } from '@/shared/commit-message-host-key'
+import type { GitHistoryOptions, GitHistoryResult } from '@/shared/git-history'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
 import {
   getServerGitStatus,

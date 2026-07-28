@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils'
 import ColumnResizeHandle from './ColumnResizeHandle'
 import ProjectGroupHeader from './ProjectGroupHeader'
 import ProjectRow from './ProjectRow'
-import { groupRows, sortRows } from '../../../../shared/github-project-group-sort'
+import { groupRows, sortRows } from '@/shared/github-project-group-sort'
 import { getAvailableColumns, loadHiddenColumns, saveHiddenColumns } from './columns'
 import {
   ACTION_COLUMN_WIDTH,
@@ -21,7 +21,7 @@ import type {
   GitHubProjectRow,
   GitHubProjectSortDirection,
   GitHubProjectTable
-} from '../../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 
 type SortOverride = { fieldId: string; direction: GitHubProjectSortDirection }
 
@@ -54,7 +54,7 @@ type Props = {
   onEditAssignees?: (row: GitHubProjectRow, add: string[], remove: string[]) => void
   onEditLabels?: (row: GitHubProjectRow, add: string[], remove: string[]) => void
   onEditIssueType?: (row: GitHubProjectRow, issueType: GitHubIssueType | null) => void
-  onStartWork?: (row: GitHubProjectRow) => void
+  onAuthorSpec?: (row: GitHubProjectRow) => void
   onOpenInBrowser?: (row: GitHubProjectRow) => void
 }
 
@@ -65,7 +65,7 @@ export default function ProjectViewList({
   onEditAssignees,
   onEditLabels,
   onEditIssueType,
-  onStartWork,
+  onAuthorSpec,
   onOpenInBrowser
 }: Props): React.JSX.Element {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -249,7 +249,7 @@ export default function ProjectViewList({
                     onEditAssignees={(add, remove) => onEditAssignees?.(row, add, remove)}
                     onEditLabels={(add, remove) => onEditLabels?.(row, add, remove)}
                     onEditIssueType={(issueType) => onEditIssueType?.(row, issueType)}
-                    onStartWork={() => onStartWork?.(row)}
+                    onAuthorSpec={() => onAuthorSpec?.(row)}
                     onOpenInBrowser={() => onOpenInBrowser?.(row)}
                   />
                 ))

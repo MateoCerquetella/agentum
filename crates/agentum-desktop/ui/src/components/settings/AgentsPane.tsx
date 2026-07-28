@@ -3,7 +3,7 @@
    reconciliation stays visible in one file. */
 import { useMemo, useState } from 'react'
 import { Check, ChevronDown, ExternalLink, RefreshCw, Terminal } from 'lucide-react'
-import type { GlobalSettings, TuiAgent } from '../../../../shared/types'
+import type { GlobalSettings, TuiAgent } from '@/shared/types'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
 import { useDetectedAgents } from '@/hooks/useDetectedAgents'
 import { useAppStore } from '@/store'
@@ -26,7 +26,7 @@ import {
 import {
   isTuiAgentEnabled,
   normalizeDisabledTuiAgents
-} from '../../../../shared/tui-agent-selection'
+} from '@/shared/tui-agent-selection'
 
 export { AGENTS_PANE_SEARCH_ENTRIES } from './agents-search'
 

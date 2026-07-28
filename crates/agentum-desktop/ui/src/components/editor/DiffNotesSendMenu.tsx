@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react'
-import type { DiffComment } from '../../../../shared/types'
+import type { DiffComment } from '@/shared/types'
 import { useAppStore } from '@/store'
 import { formatDiffComments } from '@/lib/diff-comments-format'
 import { NotesSendMenu, type NotesSendMenuScope } from './NotesSendMenu'

@@ -13,13 +13,13 @@ import {
   type KeybindingOverrides,
   type KeybindingPlatform,
   type TerminalShortcutPolicy
-} from '../../../../shared/keybindings'
+} from '@/shared/keybindings'
 import { resolveSplitCwd, type PaneCwdMap } from './resolve-split-cwd'
 import { keyboardEventBelongsToScope } from './terminal-keyboard-scope'
 import { normalizeSelectedTextForFileSearch } from '@/lib/file-search-selection'
 import { splitWebRuntimeTerminal } from '@/runtime/web-runtime-session'
 import { useAppStore } from '@/store'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { paneRunsAgentForWordNav } from './word-nav-agent-detection'
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -299,7 +299,10 @@ export function useTerminalKeyboardShortcuts({
           pane.id,
           action.data,
           paneTransportsRef.current,
-          panePtyBindingsRef.current
+          panePtyBindingsRef.current as Map<
+            number,
+            IDisposable & { sendChordInput?: (data: string) => void }
+          >
         )
         return
       }

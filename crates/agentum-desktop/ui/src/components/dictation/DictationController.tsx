@@ -12,7 +12,7 @@ import {
 import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { formatFinalTranscriptSegment } from './dictation-final-segments'
 import { recordStoppedSession, waitForStoppedSession } from './dictation-stopped-sessions'
-import { keybindingMatchesAction } from '../../../../shared/keybindings'
+import { keybindingMatchesAction } from '@/shared/keybindings'
 
 export function DictationController() {
   const dictationState = useAppStore((s) => s.dictationState)
@@ -237,7 +237,7 @@ export function DictationController() {
   }, [finishDictationSession, setDictationState, stopCapture])
 
   // Toggle mode: handle the dictation shortcut (Cmd+O by default) entirely in
-  // the renderer. orca's Electron build intercepted this in the main process via
+  // the renderer. Desktop shells commonly intercept this in the main process via
   // before-input-event and forwarded a `ui-dictation-key-down` IPC event, but
   // Tauri has no such interceptor and never emits it — so toggle did nothing
   // (notably in terminals, where xterm also captures keys). We instead listen on

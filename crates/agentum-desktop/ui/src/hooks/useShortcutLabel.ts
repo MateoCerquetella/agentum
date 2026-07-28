@@ -4,7 +4,7 @@ import {
   getEffectiveKeybindingsForAction,
   type KeybindingActionId,
   type KeybindingOverrides
-} from '../../../shared/keybindings'
+} from '@/shared/keybindings'
 import { useAppStore } from '../store'
 import { getShortcutPlatform } from '../lib/shortcut-platform'
 

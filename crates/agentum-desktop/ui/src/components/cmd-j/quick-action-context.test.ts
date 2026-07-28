@@ -8,7 +8,7 @@ import {
 } from './quick-action-context'
 import { CMD_J_QUICK_ACTIONS } from './quick-actions'
 import type { AppState } from '@/store/types'
-import type { Worktree } from '../../../../shared/types'
+import type { Worktree } from '@/shared/types'
 
 type GroupState = Pick<AppState, 'activeGroupIdByWorktree' | 'groupsByWorktree'>
 

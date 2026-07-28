@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { useAppStore } from '@/store'
-import { DEFAULT_SEARCH_ENGINE, type SearchEngine } from '../../../../shared/browser-url'
+import { DEFAULT_SEARCH_ENGINE, type SearchEngine } from '@/shared/browser-url'
 import { buildBrowserAddressBarSuggestions } from './browser-address-bar-suggestions'
 
 type BrowserAddressBarProps = {

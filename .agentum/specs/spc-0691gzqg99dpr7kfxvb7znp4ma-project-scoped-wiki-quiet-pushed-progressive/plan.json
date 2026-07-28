@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-0691GZQG99DPR7KFXVB7ZNP4MA",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "Carry out the migrated plan section: F1 \u2014 `projects-sidebar-wiki-off-rail` (AC 1\u20133) \u2014 DONE (this slice)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-001"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "Carry out the migrated plan section: F2 \u2014 `wiki-quiet-probing` (AC 4\u20136) \u2014 DONE (this slice)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-004"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "Carry out the migrated plan section: F3 \u2014 `wiki-push-status-progressive` (AC 7\u20138) \u2014 DONE (this slice)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-007"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

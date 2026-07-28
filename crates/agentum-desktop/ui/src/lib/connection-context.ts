@@ -1,5 +1,5 @@
 import { useAppStore } from '@/store'
-import { getRepoIdFromWorktreeId } from '../../../shared/worktree-id'
+import { getRepoIdFromWorktreeId } from '@/shared/worktree-id'
 
 /**
  * Resolve the SSH connectionId for a worktree. Returns null for local repos,

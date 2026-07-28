@@ -1,7 +1,7 @@
 import {
   isPathInsideOrEqual,
   normalizeRuntimePathForComparison
-} from '../../../shared/cross-platform-path'
+} from '@/shared/cross-platform-path'
 
 export const WORKSPACE_FILE_PATH_MIME = 'text/x-agentum-file-path'
 export const WORKSPACE_FILE_PATHS_MIME = 'text/x-agentum-file-paths'

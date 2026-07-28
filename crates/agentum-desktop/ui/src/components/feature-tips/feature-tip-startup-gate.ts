@@ -1,10 +1,10 @@
-import type { FeatureTipId } from '../../../../shared/feature-tips'
+import type { FeatureTipId } from '@/shared/feature-tips'
 import {
   getCompletedFeatureTipIds,
   getOrderedUnseenFeatureTips
-} from '../../../../shared/feature-tips'
-import type { FeatureInteractionState } from '../../../../shared/feature-interactions'
-import type { GlobalSettings, OnboardingState } from '../../../../shared/types'
+} from '@/shared/feature-tips'
+import type { FeatureInteractionState } from '@/shared/feature-interactions'
+import type { GlobalSettings, OnboardingState } from '@/shared/types'
 import { shouldShowOnboarding } from '../onboarding/should-show-onboarding'
 
 export type FeatureTipsAppOpenDecision =

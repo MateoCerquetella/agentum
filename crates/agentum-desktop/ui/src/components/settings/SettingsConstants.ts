@@ -1,5 +1,5 @@
-import type { AgentumHooks } from '../../../../shared/types'
-import { getDefaultRepoHookSettings } from '../../../../shared/constants'
+import type { AgentumHooks } from '@/shared/types'
+import { getDefaultRepoHookSettings } from '@/shared/constants'
 
 type HookName = keyof AgentumHooks['scripts']
 export const DEFAULT_REPO_HOOK_SETTINGS = getDefaultRepoHookSettings()

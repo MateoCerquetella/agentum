@@ -1,15 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Worktree } from '../../../shared/types'
+import type { Worktree } from '@/shared/types'
 import { useAppStore } from '@/store'
 import { takePendingSessionPrompt } from '@/lib/pending-session-prompt'
-import { maybeOfferWorkspaceHarnessRun } from '@/lib/workspace-harness-offer'
 import { openCreatedWorkspace, planCreatedWorkspaceOpen } from './open-created-workspace'
-
-// Spec 015: the harness-offer runner is fire-and-forget IO — mock it so these
-// tests stay network/fs-free and pin only the trigger contract.
-vi.mock('@/lib/workspace-harness-offer', () => ({
-  maybeOfferWorkspaceHarnessRun: vi.fn(() => Promise.resolve())
-}))
 
 const initialAppStoreState = useAppStore.getState()
 
@@ -112,85 +105,9 @@ describe('openCreatedWorkspace', () => {
     expect(takePendingSessionPrompt(worktree.id)).toBe('implement feature X')
   })
 
-  it('gated run launches no agent and stashes nothing (spec 005 F1, D2)', () => {
-    const worktree = makeWorktree()
-    seedStore(worktree)
-
-    openCreatedWorkspace({
-      worktreeId: worktree.id,
-      agent: 'codex',
-      prompt: 'implement feature X',
-      gatedRun: true
-    })
-
-    const state = useAppStore.getState()
-    const tabs = state.tabsByWorktree[worktree.id] ?? []
-    // The engine's sessions are the only agents in the worktree: no draft-open…
-    expect(tabs).toHaveLength(0)
-    // …and no prompt stashed for the picker either.
-    expect(takePendingSessionPrompt(worktree.id)).toBeUndefined()
-  })
 })
 
-// Spec 015 (D2): every create fires the harness-spec detection runner exactly
-// once, with the creation context it needs for the D6 gate.
-describe('openCreatedWorkspace → harness offer trigger (spec 015)', () => {
-  it('fires the runner once per create with { worktreeId, gatedRun: false }', () => {
-    const worktree = makeWorktree()
-    seedStore(worktree)
-    vi.mocked(maybeOfferWorkspaceHarnessRun).mockClear()
-
-    openCreatedWorkspace({ worktreeId: worktree.id, agent: 'codex' })
-
-    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledTimes(1)
-    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledWith({
-      worktreeId: worktree.id,
-      gatedRun: false
-    })
-  })
-
-  it('passes gatedRun: true through to the runner (D6 input)', () => {
-    const worktree = makeWorktree()
-    seedStore(worktree)
-    vi.mocked(maybeOfferWorkspaceHarnessRun).mockClear()
-
-    openCreatedWorkspace({ worktreeId: worktree.id, agent: 'codex', gatedRun: true })
-
-    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledTimes(1)
-    expect(maybeOfferWorkspaceHarnessRun).toHaveBeenCalledWith({
-      worktreeId: worktree.id,
-      gatedRun: true
-    })
-  })
-})
-
-// Spec 005 F1 (D2): the "suppression flag round-trips" unit pin. A gated
-// engine run must skip ALL THREE plain-delivery paths (draft-open, picker
-// prompt stash, issueCommand automation); the default path stays exactly
-// today's behavior.
 describe('planCreatedWorkspaceOpen', () => {
-  it('gated run suppresses all three plain-delivery paths', () => {
-    expect(
-      planCreatedWorkspaceOpen({
-        gatedRun: true,
-        agent: 'claude',
-        prompt: 'do the thing',
-        hasIssueCommand: true
-      })
-    ).toEqual({ launchAgent: false, stashPrompt: false, runIssueCommand: false })
-  })
-
-  it('gated run suppresses even without an agent or issueCommand', () => {
-    expect(
-      planCreatedWorkspaceOpen({
-        gatedRun: true,
-        agent: null,
-        prompt: 'typed prompt',
-        hasIssueCommand: false
-      })
-    ).toEqual({ launchAgent: false, stashPrompt: false, runIssueCommand: false })
-  })
-
   it('agent + prompt launches the agent only (prompt rides as a draft)', () => {
     expect(
       planCreatedWorkspaceOpen({ agent: 'claude', prompt: 'hello', hasIssueCommand: false })
@@ -215,16 +132,5 @@ describe('planCreatedWorkspaceOpen', () => {
       stashPrompt: false,
       runIssueCommand: true
     })
-  })
-
-  it('explicit gatedRun: false behaves like the default path', () => {
-    expect(
-      planCreatedWorkspaceOpen({
-        gatedRun: false,
-        agent: null,
-        prompt: 'hello',
-        hasIssueCommand: true
-      })
-    ).toEqual({ launchAgent: false, stashPrompt: true, runIssueCommand: true })
   })
 })

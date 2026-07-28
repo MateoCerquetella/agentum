@@ -1,11 +1,11 @@
 import { api } from '@/tauri'
 /* eslint-disable max-lines -- Why: remote PTY transport keeps lifecycle, JSON fallback, and binary stream wiring together so reconnect/destroy ordering stays testable as one behavior surface. */
-import type { RuntimeRpcResponse } from '../../../../shared/runtime-rpc-envelope'
+import type { RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
 import type {
   RuntimeMobileSessionTabsResult,
   RuntimeTerminalCreate,
   RuntimeTerminalSend
-} from '../../../../shared/runtime-types'
+} from '@/shared/runtime-types'
 import type { PtyConnectResult, PtyTransport, IpcPtyTransportOptions } from './pty-dispatcher'
 import { createPtyOutputProcessor } from './pty-transport'
 import { unwrapRuntimeRpcResult } from '../../runtime/runtime-rpc-client'

@@ -10,7 +10,7 @@ import {
   type SourceControlTreeNode
 } from '@/components/right-sidebar/source-control-tree'
 import type { ConflictReviewEntry } from '@/store/slices/editor'
-import type { GitStatusEntry } from '../../../../shared/types'
+import type { GitStatusEntry } from '@/shared/types'
 
 type ConflictReviewTreeEntry = ConflictReviewEntry & {
   liveEntry?: GitStatusEntry

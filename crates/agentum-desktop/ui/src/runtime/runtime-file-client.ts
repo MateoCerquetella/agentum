@@ -9,19 +9,19 @@ import type {
   MarkdownDocument,
   SearchOptions,
   SearchResult
-} from '../../../shared/types'
-import type { RuntimeFilePreviewResult, RuntimeFileReadResult } from '../../../shared/runtime-types'
+} from '@/shared/types'
+import type { RuntimeFilePreviewResult, RuntimeFileReadResult } from '@/shared/runtime-types'
 import {
   callRuntimeRpc,
   getActiveRuntimeTarget,
   unwrapRuntimeRpcResult
 } from './runtime-rpc-client'
-import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
+import type { RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
 import { basename, dirname, joinPath, normalizeRelativePath } from '@/lib/path'
 import {
   isWindowsAbsolutePathLike,
   relativePathInsideRoot
-} from '../../../shared/cross-platform-path'
+} from '@/shared/cross-platform-path'
 import { fsListEntries, fsReadFile, type FsFileEntry } from './server-fs-client'
 import { resolveServerHostIdForConnection } from './server-host-client'
 

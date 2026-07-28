@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import {
   NATIVE_FILE_DROP_TARGET,
   hasNativeFileDragTypes
-} from '../../../../shared/native-file-drop'
+} from '@/shared/native-file-drop'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { useAppStore } from '@/store'
 import {

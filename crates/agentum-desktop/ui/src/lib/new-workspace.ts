@@ -7,11 +7,11 @@ import {
 import type { AgentStartupPlan } from '@/lib/tui-agent-startup'
 import { isShellProcess } from '@/lib/tui-agent-startup'
 import type { LinkedWorkItemContext } from '@/lib/linked-work-item-context'
-import type { AgentumHooks, TaskViewPresetId } from '../../../shared/types'
-import { resolveHookCommandSourcePolicy } from '../../../shared/hook-command-source-policy'
-import { isExpectedAgentProcess } from '../../../shared/agent-process-recognition'
-import { getLinkedWorkItemSuggestedName, slugifyForWorkspaceName } from '../../../shared/workspace-name'
-export { getLinkedWorkItemSuggestedName } from '../../../shared/workspace-name'
+import type { AgentumHooks, TaskViewPresetId } from '@/shared/types'
+import { resolveHookCommandSourcePolicy } from '@/shared/hook-command-source-policy'
+import { isExpectedAgentProcess } from '@/shared/agent-process-recognition'
+import { getLinkedWorkItemSuggestedName, slugifyForWorkspaceName } from '@/shared/workspace-name'
+export { getLinkedWorkItemSuggestedName } from '@/shared/workspace-name'
 
 /**
  * Why: the TaskPage's preset buttons and the openTaskPage prefetcher both need
@@ -19,7 +19,7 @@ export { getLinkedWorkItemSuggestedName } from '../../../shared/workspace-name'
  * mapping here so the prefetch warms exactly the cache key the page will look
  * up on mount.
  */
-export { PER_REPO_FETCH_LIMIT, CROSS_REPO_DISPLAY_LIMIT } from '../../../shared/work-items'
+export { PER_REPO_FETCH_LIMIT, CROSS_REPO_DISPLAY_LIMIT } from '@/shared/work-items'
 
 export function getTaskPresetQuery(presetId: TaskViewPresetId | null): string {
   switch (presetId) {
@@ -311,8 +311,7 @@ export async function ensureAgentStartupInTerminal(args: {
   }
 
   // Why: draftPrompt uses bracketed-paste so the URL lands atomically in the
-  // agent's input buffer (no per-char echo, no auto-submit). Shared with the
-  // launch-work-item-direct flow so both behave identically.
+  // agent's input buffer (no per-char echo, no auto-submit).
   if (draftPrompt) {
     await pasteDraftWhenAgentReady({
       tabId,

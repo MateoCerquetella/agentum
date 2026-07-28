@@ -4,7 +4,7 @@ import {
   clearReactErrorBoundaryReportingForTest,
   reportReactErrorBoundaryCrash
 } from './react-error-boundary-reporting'
-import type { CrashReportRecord } from '../../../shared/crash-reporting'
+import type { CrashReportRecord } from '@/shared/crash-reporting'
 
 const mocks = vi.hoisted(() => ({
   recordRendererError: vi.fn(),

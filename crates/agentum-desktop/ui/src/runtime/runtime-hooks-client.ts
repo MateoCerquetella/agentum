@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
-import type { GlobalSettings, AgentumHooks } from '../../../shared/types'
-import type { SetupScriptImportCandidate } from '../../../shared/setup-script-imports'
+import type { GlobalSettings, AgentumHooks } from '@/shared/types'
+import type { SetupScriptImportCandidate } from '@/shared/setup-script-imports'
 import { callRuntimeRpc, getActiveRuntimeTarget } from './runtime-rpc-client'
 
 export type HookCheckResult = {

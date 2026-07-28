@@ -3,7 +3,6 @@
 // loopback endpoint + bearer auth. Wire shapes are faithful to
 // `crates/agentum-server/src/routes/github_projects.rs`.
 import type { ResolvedMappingDto } from '../lib/github-projects-binding'
-import type { ProvisionReport } from '../lib/workspace-provision-step'
 import { apiUrl, getServerEndpoint } from './server-endpoint'
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -266,49 +265,6 @@ export async function createRepoFromTemplate(input: {
 export type ProvisionProjectChoice =
   | { owner: string; ownerType: 'user' | 'organization'; number: number }
   | { create: true; owner: string; ownerType: 'user' | 'organization'; title: string }
-
-/**
- * `POST /api/workspace/provision` — the ONE idempotent provisioning ensure
- * (labels, board link-or-create + bind, `.agentum-harness/` scaffold,
- * consent-gated commit+push). Returns the per-step `ProvisionReport`; step
- * failures live INSIDE the report and render as warnings, never blockers.
- * `commitScaffold` is the explicit D8 consent (the UI toggle defaults it ON).
- */
-export async function provisionWorkspace(input: {
-  workdir: string
-  slug?: string
-  project?: ProvisionProjectChoice
-  statusMapping?: StatusMappingWire
-  doneClosesIssue?: boolean
-  commitScaffold: boolean
-  /** Several bounded `gh`/git calls run in sequence — allow the sum. */
-  timeoutMs?: number
-}): Promise<ProvisionReport> {
-  const url = await apiUrl('/api/workspace/provision')
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), input.timeoutMs ?? 180000)
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-      body: JSON.stringify({
-        workdir: input.workdir,
-        ...(input.slug ? { slug: input.slug } : {}),
-        ...(input.project ? { project: input.project } : {}),
-        ...(input.statusMapping ? { statusMapping: input.statusMapping } : {}),
-        ...(input.doneClosesIssue !== undefined ? { doneClosesIssue: input.doneClosesIssue } : {}),
-        commitScaffold: input.commitScaffold
-      }),
-      signal: controller.signal
-    })
-    if (!res.ok) {
-      await throwClassified(res, 'provisioning failed')
-    }
-    return (await res.json()) as ProvisionReport
-  } finally {
-    window.clearTimeout(timeout)
-  }
-}
 
 /** `DELETE /api/github/project-binding` — unbind (idempotent; 204). `repoId`
  *  (spec 020 F3) resolves the slug on the repo's own host, like the GET. */

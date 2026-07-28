@@ -1,14 +1,13 @@
 import type { JSX, KeyboardEvent, MutableRefObject, ReactNode } from 'react'
-import type { AgentsStep, AgentsStepId } from '../../../../shared/agents-orchestration-steps'
+import type { AgentsStep, AgentsStepId } from '@/shared/agents-orchestration-steps'
 import type {
   FeatureWallWorkflow,
   FeatureWallWorkflowId
-} from '../../../../shared/feature-wall-workflows'
-import type { ReviewStep, ReviewStepId } from '../../../../shared/review-steps'
-import type { FeatureWallOpenSourceTelemetry } from '../../../../shared/telemetry-events'
-import type { GlobalSettings } from '../../../../shared/types'
-import type { WorkbenchStep, WorkbenchStepId } from '../../../../shared/workbench-steps'
-import type { InstalledAgentSkillState } from '@/hooks/useInstalledAgentSkills'
+} from '@/shared/feature-wall-workflows'
+import type { ReviewStep, ReviewStepId } from '@/shared/review-steps'
+import type { FeatureWallOpenSourceTelemetry } from '@/shared/telemetry-events'
+import type { GlobalSettings } from '@/shared/types'
+import type { WorkbenchStep, WorkbenchStepId } from '@/shared/workbench-steps'
 import { cn } from '@/lib/utils'
 import type { FeatureWallCompletionState } from './use-feature-wall-completion'
 import { FeatureWallBody } from './FeatureWallBody'
@@ -48,8 +47,6 @@ export function FeatureWallTourPanel(props: {
   showGif: boolean
   prefersReducedMotion: boolean
   source: FeatureWallOpenSourceTelemetry
-  orchestrationSkill: InstalledAgentSkillState
-  browserUseSkill: InstalledAgentSkillState
   settings: GlobalSettings | null
   updateSettings: (updates: Partial<GlobalSettings>) => void
   footerText: string | null
@@ -135,8 +132,6 @@ export function FeatureWallTourPanel(props: {
               agentsActiveStep={props.agentsActiveStep}
               workbenchActiveStep={props.workbenchActiveStep}
               reviewActiveStep={props.reviewActiveStep}
-              orchestrationSkill={props.orchestrationSkill}
-              browserUseSkill={props.browserUseSkill}
               onUsageAccountStateChange={props.completion.refreshUsageAccountState}
               settings={props.settings}
               updateSettings={props.updateSettings}

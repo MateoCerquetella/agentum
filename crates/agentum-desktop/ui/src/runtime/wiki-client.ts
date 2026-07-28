@@ -1,5 +1,5 @@
 // Typed client for the AutoWiki routes on the embedded agentum-server
-// (`/api/wiki*`, spec 001). Mirrors `harness-client.ts`: thin calls over the
+// (`/api/wiki*`, spec 001). These are thin calls over the
 // shared loopback HTTP helpers in `server-http.ts`. The wire shapes here are
 // kept faithful to `crates/agentum-server/src/routes/wiki.rs` (serde camelCase,
 // internally tagged on `state`) so there is one source of truth and no silent

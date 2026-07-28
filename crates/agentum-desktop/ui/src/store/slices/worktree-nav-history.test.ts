@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AppState } from '../types'
-import type { Worktree } from '../../../../shared/types'
+import type { Worktree } from '@/shared/types'
 import {
   canGoBackWorktreeHistory,
   canGoForwardWorktreeHistory,

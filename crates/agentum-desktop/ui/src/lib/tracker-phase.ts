@@ -20,7 +20,7 @@ export function parseTrackerPhaseWire(value: unknown): TrackerPhaseWire | null {
 }
 
 /** A distilled `tracker.*` bus event. `worktreeId` is null for tracker-coord-
- *  only emitters (harness / MCP / planning) — consumers join on `trackerUrl`. */
+ *  only emitters (automation / MCP / planning) — consumers join on `trackerUrl`. */
 export type TrackerLiveEvent =
   | { kind: 'phase'; worktreeId: string | null; trackerUrl: string | null; phase: TrackerPhaseWire }
   | { kind: 'blocked'; worktreeId: string | null; trackerUrl: string | null }
@@ -76,7 +76,7 @@ export type TrackerWorktreeRow = {
 
 /**
  * Resolve which worktree a tracker event belongs to: the emitter-supplied
- * `worktree_id` when present, else a `trackerUrl` fallback (harness/MCP events
+ * `worktree_id` when present, else a `trackerUrl` fallback (automation/MCP events
  * carry `worktree_id: null`; in the issue-first flow the workspace and its
  * features share the issue URL). No match → null — never a fabricated join.
  */

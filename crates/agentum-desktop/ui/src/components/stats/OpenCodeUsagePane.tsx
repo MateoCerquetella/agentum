@@ -13,7 +13,7 @@ import {
 import type {
   OpenCodeUsageRange,
   OpenCodeUsageScope
-} from '../../../../shared/opencode-usage-types'
+} from '@/shared/opencode-usage-types'
 import { useAppStore } from '../../store'
 import { Button } from '../ui/button'
 import {

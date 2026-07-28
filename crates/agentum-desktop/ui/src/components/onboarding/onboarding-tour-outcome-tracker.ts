@@ -1,6 +1,6 @@
-import { FEATURE_WALL_MAX_DWELL_MS } from '../../../../shared/feature-wall-telemetry'
-import type { FeatureWallTourDepthSummary } from '../../../../shared/feature-wall-tour-depth'
-import type { EventProps } from '../../../../shared/telemetry-events'
+import { FEATURE_WALL_MAX_DWELL_MS } from '@/shared/feature-wall-telemetry'
+import type { FeatureWallTourDepthSummary } from '@/shared/feature-wall-tour-depth'
+import type { EventProps } from '@/shared/telemetry-events'
 
 type OnboardingTourOutcome = EventProps<'onboarding_tour_outcome'>['outcome']
 type OnboardingTourOutcomePayload = EventProps<'onboarding_tour_outcome'>

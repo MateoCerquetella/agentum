@@ -1,4 +1,4 @@
-import type { StatusBarItem } from '../../../../shared/types'
+import type { StatusBarItem } from '@/shared/types'
 import type { SettingsSearchEntry } from './settings-search'
 import { TERMINAL_APPEARANCE_SEARCH_ENTRIES } from './terminal-search'
 

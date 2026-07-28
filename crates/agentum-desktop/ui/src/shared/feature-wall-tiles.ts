@@ -84,7 +84,7 @@ export const FEATURE_WALL_TILES: readonly FeatureWallTile[] = [
     kind: 'media',
     title: 'GitHub & Linear, native',
     caption:
-      'Find connected GitHub or Linear work in Tasks, open its context, and start workspaces without switching tools.',
+      'Find connected GitHub or Linear work in Tasks and author a reviewed Agentum spec without switching tools.',
     gifPath: 'tile-03.gif',
     posterPath: 'tile-03.poster.jpg',
     recordedAtPath: 'tile-03.recorded-at.json',

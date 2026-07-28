@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { PRCheckDetail, PRComment, PRInfo } from '../../../../shared/types'
+import type { PRCheckDetail, PRComment, PRInfo } from '@/shared/types'
 import {
   getFailedChecksForDetails,
   MergeConflictNotice,

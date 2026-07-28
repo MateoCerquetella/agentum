@@ -1,5 +1,5 @@
-import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-types'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { ParsedAgentStatusPayload } from '@/shared/agent-status-types'
+import type { GlobalSettings } from '@/shared/types'
 import type { RuntimeTerminalProcessInspection } from '@/runtime/runtime-terminal-inspection'
 
 type AgentCompletionDispatchMeta = {

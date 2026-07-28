@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
-import type { TerminalQuickCommand } from '../../../../shared/types'
+import type { TerminalQuickCommand } from '@/shared/types'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "upstreamRepository": "https://github.com/Fission-AI/OpenSpec",
+  "upstreamCommit": "c33fcb3fdb729455b114bdcfad84df01b3531bfe",
+  "upstreamCommitUrl": "https://github.com/Fission-AI/OpenSpec/commit/c33fcb3fdb729455b114bdcfad84df01b3531bfe",
+  "retrievedAt": "2026-07-27",
+  "license": "MIT",
+  "upstreamLicensePath": "LICENSE",
+  "upstreamLicenseSha256": "c3c7235bea1214ab62df643473975c2e8b8848f528901a976693f7d069713e64",
+  "licenseFile": "LICENSE.OpenSpec",
+  "licenseSha256": "df2a58221f6cc979c0e27309d3b422d6936e13db7664333579e97056a1eeb366",
+  "licenseNormalization": "One redundant trailing blank line was removed; license text is unchanged.",
+  "upstreamFixturePath": "openspec/changes/archive/2025-10-14-update-cli-init-enter-selection",
+  "fixtureRoot": "changes/archive/2025-10-14-update-cli-init-enter-selection",
+  "files": [
+    {
+      "path": "proposal.md",
+      "sha256": "8aa5093ecf60c57db1e2ed305e52830c66d3f549f2a501457bbf59981903dff5"
+    },
+    {
+      "path": "specs/cli-init/spec.md",
+      "sha256": "e412187365e0da6dcb9464dfedd5bb58eeca06fc0de23e87bd53474651acda59"
+    },
+    {
+      "path": "tasks.md",
+      "sha256": "dd526da3d12ab1b88e95239ed0a637fff40b20705ca3240564efaf534bfc4bc3"
+    }
+  ]
+}

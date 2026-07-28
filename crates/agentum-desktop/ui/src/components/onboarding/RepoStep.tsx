@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import type { Dispatch, SetStateAction } from 'react'
 import { NestedRepoTreePreview } from '@/components/repo/NestedRepoTreePreview'
-import type { NestedRepoScanResult } from '../../../../shared/types'
+import type { NestedRepoScanResult } from '@/shared/types'
 
 type RepoStepProps = {
   cloneUrl: string

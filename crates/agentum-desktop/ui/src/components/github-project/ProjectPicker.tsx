@@ -25,7 +25,7 @@ import type {
   ListAccessibleProjectsResult,
   ListProjectViewsResult,
   ResolveProjectRefResult
-} from '../../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 
 export type ResolvedProjectSelection = {
   owner: string

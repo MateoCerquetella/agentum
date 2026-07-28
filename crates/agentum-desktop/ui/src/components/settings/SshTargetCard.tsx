@@ -13,7 +13,7 @@ import type {
   SshTarget,
   SshConnectionState,
   SshConnectionStatus
-} from '../../../../shared/ssh-types'
+} from '@/shared/ssh-types'
 import { Button } from '../ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { isSshTargetConnecting, type SshTargetBusyAction } from './ssh-target-action-state'

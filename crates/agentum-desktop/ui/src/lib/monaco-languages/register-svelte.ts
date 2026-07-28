@@ -90,7 +90,7 @@ export const svelteMonarchLanguage: Monaco.languages.IMonarchLanguage = {
     // depth otherwise throws "no progress in tokenizer".
     markupReenter: [[/(?=.)/, { token: '@rematch', switchTo: '@markup', nextEmbedded: 'html' }]],
     comment: [
-      [/-->/, { token: 'comment', switchTo: '@markupReenter' }],
+      [/--!?>/, { token: 'comment', switchTo: '@markupReenter' }],
       [/[^-]+/, 'comment'],
       [/./, 'comment']
     ],

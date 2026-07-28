@@ -1,5 +1,5 @@
 import type { OpenFile } from '@/store/slices/editor'
-import type { GitBranchChangeEntry, GitStatusEntry } from '../../../../shared/types'
+import type { GitBranchChangeEntry, GitStatusEntry } from '@/shared/types'
 import { getEditorDisplayLabel } from './editor-labels'
 
 export type EditorHeaderCopyState = {

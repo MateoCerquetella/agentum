@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useShallow } from 'zustand/react/shallow'
-import type { Tab, TabGroup, TerminalTab } from '../../../../shared/types'
+import type { Tab, TabGroup, TerminalTab } from '@/shared/types'
 import { useAppStore } from '../../store'
 import { tabGroupBodyAnchorName } from '../tab-group/tab-group-body-anchor'
 import {

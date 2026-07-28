@@ -49,16 +49,6 @@ describe('WorktreeCardDetailsHover', () => {
         workspaceTitle="Fix stale GH PR"
         issue={null}
         linearIssue={null}
-        review={{
-          provider: 'github',
-          number: 456,
-          title: 'Fix stale GH PR',
-          state: 'open',
-          url: 'https://github.com/acme/agentum/pull/456',
-          status: 'success',
-          updatedAt: '2026-05-17T00:00:00.000Z',
-          mergeable: 'MERGEABLE'
-        }}
         comment={null}
         onEditIssue={vi.fn()}
         onEditComment={vi.fn()}

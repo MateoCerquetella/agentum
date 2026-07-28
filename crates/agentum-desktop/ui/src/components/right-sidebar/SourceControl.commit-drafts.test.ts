@@ -17,7 +17,7 @@ import {
   type SourceControlViewModePreferenceWriteState
 } from './source-control-view-mode'
 import { buildResolveConflictsPrompt } from './source-control-prompts'
-import type { GitBranchCompareSummary } from '../../../../shared/types'
+import type { GitBranchCompareSummary } from '@/shared/types'
 
 type ReactElementLike = {
   type: unknown

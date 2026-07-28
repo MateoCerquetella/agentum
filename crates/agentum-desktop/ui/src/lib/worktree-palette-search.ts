@@ -1,5 +1,5 @@
 import { branchName } from '@/lib/git-utils'
-import type { Repo, Worktree } from '../../../shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 
 export type MatchRange = { start: number; end: number }
 

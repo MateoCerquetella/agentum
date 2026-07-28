@@ -189,7 +189,7 @@ export function TmuxSessionsModal({ host, onClose }: TmuxSessionsModalProps): Re
     try {
       const store = useAppStore.getState()
       const allWorktrees = Object.values(store.worktreesByRepo).flat()
-      const repoMap = new Map((store.repos as import('../../../../shared/types').Repo[]).map((r) => [r.id, r]))
+      const repoMap = new Map((store.repos as import('@/shared/types').Repo[]).map((r) => [r.id, r]))
       const worktree = pickWorktreeForHost(host.key, allWorktrees, repoMap, store.activeWorktreeId)
       if (!worktree) throw new Error('No workspace on this host to open the session in')
       const serverSession = await attachHostTmuxSession(hostId, sessionName)

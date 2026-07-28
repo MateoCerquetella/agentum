@@ -346,15 +346,17 @@ mod tests {
             wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: "test".to_string(),
             no_auth: true,
+            embedded_ui_token: None,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus: clip_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp_token: Arc::new(String::from("test-mcp-token")),
             api_base_url: None,
             desktop_bridge: None,
-            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
-            sdd_loops: Default::default(),
             events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sdd_credentials: std::sync::Arc::new(
+                crate::sdd::credentials::MemoryCredentialVault::default(),
+            ),
         }
     }
 

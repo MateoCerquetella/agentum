@@ -23,7 +23,7 @@
 //! than guessing a system Chrome. Fails **loud** (descriptive error) when the
 //! browser isn't installed or never opens its CDP port — never a silent hang.
 
-use crate::port_wait::{port_listening, wait_until_listening};
+use crate::port_wait::{port_listening, wait_until_listening, wait_until_not_listening};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
@@ -146,20 +146,22 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
     let port = cdp_port();
     let endpoint = cdp_endpoint_for(port);
 
-    // Fast path (no lock): CDP already serving the port → reuse it. One browser
-    // per machine, shared across sessions and surviving agent restarts.
-    if port_listening(port).await {
+    // Fast path (no lock): a real CDP page target is already serving → reuse
+    // it. A TCP-only probe is insufficient here: during teardown Chromium can
+    // briefly keep the socket open while resetting HTTP requests, which handed
+    // callers an endpoint that died before their first `/json` request.
+    if cdp_ready(&endpoint).await {
         return Ok(endpoint);
     }
 
-    // Serialize the launch: concurrent `provision()` calls (e.g. the harness
-    // starting several sessions at once) would otherwise both pass the checks
+    // Serialize the launch: concurrent `provision()` calls starting several
+    // sessions at once would otherwise both pass the checks
     // below and race on `new_session`, and the loser would get a "duplicate
     // session" error and wrongly degrade to headless even though the browser is
     // healthy. Double-checked: re-probe under the lock in case a peer just
     // launched it while we waited.
     let _guard = launch_lock().lock().await;
-    if port_listening(port).await {
+    if cdp_ready(&endpoint).await {
         return Ok(endpoint);
     }
 
@@ -168,19 +170,30 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
     // pane that dies opaquely.
     let exe = chromium_executable()?;
 
+    let user_data_dir = user_data_dir()?;
+
     // A leftover session not (yet) listening is either still booting or dead.
     // Give a slow boot a brief grace window; otherwise reset the singleton.
     if agentum_tmux::has_session(CDP_TMUX_TARGET)
         .await
         .unwrap_or(false)
     {
-        if wait_until_listening(port, cdp_leftover_grace()).await {
+        if wait_until_cdp_ready(&endpoint, cdp_leftover_grace()).await {
             return Ok(endpoint);
         }
         let _ = agentum_tmux::kill_session(CDP_TMUX_TARGET).await;
     }
 
-    let user_data_dir = user_data_dir()?;
+    // Chromium can survive its tmux parent (including after an Agentum crash).
+    // Reap by the dedicated profile even when the tmux session is already gone,
+    // and refuse to launch if some unrelated process still owns the fixed port.
+    pkill_by_signature(&user_data_dir.to_string_lossy()).await;
+    if !wait_until_not_listening(port, cdp_leftover_grace()).await {
+        anyhow::bail!(
+            "CDP port 127.0.0.1:{port} remains in use after cleaning the Agentum browser"
+        );
+    }
+
     let argv = build_chrome_argv(&exe, port, &user_data_dir);
     // Chromium needs no project context — run from $HOME so tmux has a valid cwd.
     let workdir = home_dir();
@@ -191,7 +204,7 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
     // Headless Chromium boots then binds the debugging port; allow boot time
     // (a cold profile + GPU init on a loaded machine can take tens of seconds).
     let ready = cdp_ready_timeout();
-    if wait_until_listening(port, ready).await {
+    if wait_until_cdp_ready(&endpoint, ready).await {
         Ok(endpoint)
     } else {
         anyhow::bail!(
@@ -207,19 +220,57 @@ pub async fn ensure_local_cdp_browser() -> Result<String> {
 /// isolated profile. Idempotent. (Wired into session/browser teardown later;
 /// exposed now so the lifecycle has a single owner.)
 pub async fn stop_local_cdp_browser() -> Result<()> {
-    agentum_tmux::kill_session(CDP_TMUX_TARGET)
-        .await
-        .context("kill the local CDP-Chromium tmux session")?;
+    // Serialize teardown with in-process launch. Chromium can outlive the tmux
+    // pane that started it, so killing the session alone is not a completion
+    // signal and lets the next caller race a half-dead CDP listener.
+    let _guard = launch_lock().lock().await;
     // The bound Playwright MCP holds an open CDP WebSocket to *this* browser
     // process; if we leave it running, the next launch (new browser, same port)
     // would be served by an MCP still pointing at the dead process. Reset it so
     // the next `ensure_playwright_mcp_bound` reconnects cleanly. Best-effort.
     let _ = crate::playwright_mcp::stop_bound_mcp().await;
+    let tmux_result = agentum_tmux::kill_session(CDP_TMUX_TARGET).await;
     if let Ok(dir) = user_data_dir() {
+        // Chromium forks away from the tmux pane on some platforms. Reap the
+        // browser by Agentum's dedicated profile signature, then wait for the
+        // listener to disappear before deleting the profile or returning.
+        pkill_by_signature(&dir.to_string_lossy()).await;
+        let stopped = wait_until_not_listening(cdp_port(), cdp_leftover_grace()).await;
+        if !stopped {
+            anyhow::bail!(
+                "Chromium did not release CDP port 127.0.0.1:{} within {}s",
+                cdp_port(),
+                cdp_leftover_grace().as_secs()
+            );
+        }
         // Best-effort: a stale profile shouldn't block teardown.
         let _ = std::fs::remove_dir_all(&dir);
     }
+    tmux_result.context("kill the local CDP-Chromium tmux session")?;
     Ok(())
+}
+
+/// A serving CDP endpoint must complete protocol discovery and expose a page
+/// target. This deliberately rejects a merely-open socket left behind while a
+/// browser is starting or shutting down.
+async fn cdp_ready(endpoint: &str) -> bool {
+    crate::cdp_http::discover_page_ws_url(endpoint)
+        .await
+        .is_ok()
+}
+
+/// Poll for protocol-level CDP readiness, bounded by `max`.
+async fn wait_until_cdp_ready(endpoint: &str, max: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + max;
+    loop {
+        if cdp_ready(endpoint).await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// Process-wide lock serializing browser launches (see `ensure_local_cdp_browser`).
@@ -995,6 +1046,12 @@ pub(crate) fn chromium_executable() -> Result<PathBuf> {
             root.display()
         )
     })
+}
+
+/// Cheap capability probe used by the SDD contract. This does not launch a
+/// browser or mutate a project; it only resolves an executable Agentum can own.
+pub(crate) fn local_browser_runtime_available() -> bool {
+    chromium_executable().is_ok()
 }
 
 /// Parse the revision from a `chromium-<rev>` cache dir name, or `None` for

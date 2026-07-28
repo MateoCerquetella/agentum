@@ -3,21 +3,16 @@ export type FeatureInteractionId =
   | 'workspace-board-actions'
   | 'browser'
   | 'tasks'
-  | 'automations'
-  | 'automation-created'
-  | 'automation-run'
   | 'browser-annotations'
   | 'browser-grab'
   | 'workspace-creation'
   | 'agent-browser-setup'
   | 'agent-browser-use'
   | 'agent-orchestration-setup'
-  | 'agent-orchestration'
   | 'ai-commit-generation'
   | 'ai-pr-generation'
   | 'claude-account-switching'
   | 'computer-use-setup'
-  | 'computer-use'
   | 'codex-account-switching'
   | 'cookie-import'
   | 'floating-workspace'
@@ -70,18 +65,6 @@ export const FEATURE_INTERACTIONS = [
     interaction: 'Tasks page opened'
   },
   {
-    id: 'automations',
-    interaction: 'Automations page opened'
-  },
-  {
-    id: 'automation-created',
-    interaction: 'automation created'
-  },
-  {
-    id: 'automation-run',
-    interaction: 'automation run queued'
-  },
-  {
     id: 'browser-annotations',
     interaction: 'browser annotation added, copied, or cleared'
   },
@@ -106,10 +89,6 @@ export const FEATURE_INTERACTIONS = [
     interaction: 'Agent Orchestration setup enabled or opened'
   },
   {
-    id: 'agent-orchestration',
-    interaction: 'agent orchestration runtime method used'
-  },
-  {
     id: 'ai-commit-generation',
     interaction: 'AI commit message generation enabled or used'
   },
@@ -124,10 +103,6 @@ export const FEATURE_INTERACTIONS = [
   {
     id: 'computer-use-setup',
     interaction: 'Computer Use setup or permission flow opened'
-  },
-  {
-    id: 'computer-use',
-    interaction: 'computer-use runtime method used'
   },
   {
     id: 'codex-account-switching',

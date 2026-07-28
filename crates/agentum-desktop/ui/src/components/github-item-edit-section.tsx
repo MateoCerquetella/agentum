@@ -34,7 +34,8 @@ import { parseIssueRef } from '@/lib/issue-project-status'
 import { getProjectBinding } from '@/runtime/github-projects-client'
 import { useRepoLabels, useRepoAssignees, useImmediateMutation } from '@/hooks/useIssueMetadata'
 import { useRepoLabelsBySlug, useRepoAssigneesBySlug } from '@/hooks/useGitHubSlugMetadata'
-import type { GitHubWorkItem } from '../../../shared/types'
+import type { GitHubWorkItem } from '@/shared/types'
+import { runIssueUpdate } from '@/lib/github-work-item-mutation-routing'
 
 // Why: the GH item dialog can be opened from any work-item list surface and
 // doesn't have the full owner/repo context the list's cache entry carries.
@@ -796,7 +797,7 @@ export function GHEditSection({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onSelect={() => onUse(item)}>
                   <Plus className="size-4" />
-                  Start new workspace
+                  Author another spec
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -806,9 +807,9 @@ export function GHEditSection({
               size="sm"
               onClick={() => onUse(item)}
               className="w-full gap-1.5"
-              aria-label="Start workspace from issue"
+              aria-label="Author spec from issue"
             >
-              Start workspace from issue
+              New Spec
               <ArrowRight className="size-3.5" />
             </Button>
           )}
@@ -1013,7 +1014,7 @@ export function GHEditSection({
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={() => onUse(item)}>
                 <Plus className="size-4" />
-                Start new workspace
+                Author another spec
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1023,9 +1024,9 @@ export function GHEditSection({
             size="sm"
             onClick={() => onUse(item)}
             className="gap-2"
-            aria-label="Start workspace from issue"
+            aria-label="Author spec from issue"
           >
-            Start workspace from issue
+            New Spec
             <ArrowRight className="size-4" />
           </Button>
         )}

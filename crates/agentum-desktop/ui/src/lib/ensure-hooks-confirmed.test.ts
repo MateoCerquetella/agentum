@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppState } from '@/store/types'
-import type { PersistedTrustedAgentumHooks } from '../../../shared/types'
+import type { PersistedTrustedAgentumHooks } from '@/shared/types'
 import { __resetTrustPromptChainForTests, ensureHooksConfirmed } from './ensure-hooks-confirmed'
 import { hashAgentumHookScript } from './agentum-hook-trust'
 

@@ -1,5 +1,5 @@
-import type { TuiAgent } from '../../../shared/types'
-import { TUI_AGENT_CONFIG, type DraftPasteReadySignal } from '../../../shared/tui-agent-config'
+import type { TuiAgent } from '@/shared/types'
+import { TUI_AGENT_CONFIG, type DraftPasteReadySignal } from '@/shared/tui-agent-config'
 import { useAppStore } from '@/store'
 import { subscribeToPtyData } from '@/components/terminal-pane/pty-dispatcher'
 import {

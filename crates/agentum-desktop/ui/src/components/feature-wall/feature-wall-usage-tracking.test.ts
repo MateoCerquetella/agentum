@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ProviderRateLimits } from '../../../../shared/rate-limit-types'
+import type { ProviderRateLimits } from '@/shared/rate-limit-types'
 import {
   getFeatureWallUsageProviderConnection,
   hasFeatureWallUsageTracking

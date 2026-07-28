@@ -1,5 +1,5 @@
 import { toast } from 'sonner'
-import type { GlobalSettings } from '../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 export function isLocalPathOpenBlocked(
   settings: Pick<GlobalSettings, 'activeRuntimeEnvironmentId'> | null | undefined,

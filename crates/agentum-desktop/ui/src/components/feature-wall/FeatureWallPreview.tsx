@@ -5,8 +5,8 @@ import { ChevronRight } from 'lucide-react'
 import {
   getFeatureWallMediaTile,
   type FeatureWallWorkflow
-} from '../../../../shared/feature-wall-workflows'
-import type { FeatureWallOpenSourceTelemetry } from '../../../../shared/telemetry-events'
+} from '@/shared/feature-wall-workflows'
+import type { FeatureWallOpenSourceTelemetry } from '@/shared/telemetry-events'
 import { track } from '@/lib/telemetry'
 
 export function PreviewMedia(props: {

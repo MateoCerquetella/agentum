@@ -1,6 +1,6 @@
 import { toast } from 'sonner'
-import { AGENTUM_BROWSER_BLANK_URL } from '../../../../shared/constants'
-import { normalizeBrowserNavigationUrl } from '../../../../shared/browser-url'
+import { AGENTUM_BROWSER_BLANK_URL } from '@/shared/constants'
+import { normalizeBrowserNavigationUrl } from '@/shared/browser-url'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'

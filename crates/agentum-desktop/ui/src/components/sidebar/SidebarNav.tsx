@@ -1,8 +1,8 @@
 import React from 'react'
-import { FolderGit2, MessagesSquare, Radar, Search, type LucideIcon } from 'lucide-react'
+import { FolderGit2, Radar, Search, type LucideIcon } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { cn } from '@/lib/utils'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import { useActivityUnreadCount } from '@/components/activity/useActivityUnreadCount'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { requestOperationalSidebarSearchFocus } from '@/lib/operational-sidebar-search-focus'
@@ -82,17 +82,15 @@ function PrimaryNavItem({
   )
 }
 
-const SidebarNav = React.memo(function SidebarNav() {
+export function SidebarNav(): React.JSX.Element {
   const worktreePaletteShortcut = useShortcutLabel('worktree.palette')
   const openActivityPage = useAppStore((s) => s.openActivityPage)
-  const openHarnessPage = useAppStore((s) => s.openHarnessPage)
   const openProjectsPage = useAppStore((s) => s.openProjectsPage)
   const openModal = useAppStore((s) => s.openModal)
   const activeView = useAppStore((s) => s.activeView)
   const groupBy = useAppStore((s) => s.groupBy)
 
   const activityActive = activeView === 'activity'
-  const harnessActive = activeView === 'harness'
   // The hub ('project') is a destination *inside* Projects, so the rail item
   // stays lit while the user is in either — one section, two depths.
   const projectsActive = activeView === 'projects' || activeView === 'project'
@@ -103,7 +101,7 @@ const SidebarNav = React.memo(function SidebarNav() {
   return (
     <div className="flex flex-col gap-0.5 px-2 pt-2 pb-1">
       {/* Primary workflow rail (Phase 1 nav shell, #48): Mission Control →
-          Chat → Projects. Settings lives in the bottom toolbar. The Board is
+          Projects. Settings lives in the bottom toolbar. The Board is
           no longer a rail entry (spec 016): it lives inside each project's
           hub (Projects → project → Tasks). */}
       <PrimaryNavItem
@@ -112,12 +110,6 @@ const SidebarNav = React.memo(function SidebarNav() {
         active={activityActive}
         onClick={openActivityPage}
         badge={activityUnreadCount}
-      />
-      <PrimaryNavItem
-        icon={MessagesSquare}
-        label="Chat"
-        active={harnessActive}
-        onClick={openHarnessPage}
       />
       {/* Projects replaces both the old global Wiki rail item (spec 009 D1)
           and the v0.59.0 per-repo sidebar group (#274 — Mateo: repos never
@@ -153,6 +145,6 @@ const SidebarNav = React.memo(function SidebarNav() {
       </button>
     </div>
   )
-})
+}
 
-export default SidebarNav
+export default React.memo(SidebarNav)

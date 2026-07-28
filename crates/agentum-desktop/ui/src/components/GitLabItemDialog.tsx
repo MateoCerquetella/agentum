@@ -38,7 +38,7 @@ import type {
   GitLabWorkItem,
   GitLabWorkItemDetails,
   MRComment
-} from '../../../shared/types'
+} from '@/shared/types'
 
 type Props = {
   item: GitLabWorkItem | null

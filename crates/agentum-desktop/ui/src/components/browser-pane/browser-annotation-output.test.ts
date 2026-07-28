@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { BrowserPageAnnotation } from '../../../../shared/browser-grab-types'
+import type { BrowserPageAnnotation } from '@/shared/browser-grab-types'
 import { formatBrowserAnnotationsAsMarkdown } from './browser-annotation-output'
 
 function makeAnnotation(overrides?: Partial<BrowserPageAnnotation>): BrowserPageAnnotation {

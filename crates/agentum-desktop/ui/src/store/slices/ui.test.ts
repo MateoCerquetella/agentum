@@ -1,19 +1,19 @@
 /* eslint-disable max-lines */
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getDefaultUIState } from '../../../../shared/constants'
+import { getDefaultUIState } from '@/shared/constants'
 import type {
   GitHubWorkItem,
   PersistedUIState,
   Worktree,
   WorktreeCardProperty
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { createUISlice, normalizePersistedGroupBy } from './ui'
 import { createWorktreeNavHistorySlice } from './worktree-nav-history'
 import { createSettingsSearchState } from './settings-search-state'
 import type { AppState } from '../types'
-import type { FeatureInteractionState } from '../../../../shared/feature-interactions'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import type { FeatureInteractionState } from '@/shared/feature-interactions'
+import { makePaneKey } from '@/shared/stable-pane-id'
 
 const mocks = vi.hoisted(() => ({
   sendBracketedPasteToRunningAgent: vi.fn(),
@@ -844,7 +844,7 @@ describe('createUISlice hydratePersistedUI', () => {
     expect(store.getState().browserKagiSessionLink).toBeNull()
   })
 
-  it('hydrates legacy sidekick persisted keys into pet state', () => {
+  it('retires legacy custom sidekick assets during pet-state hydration', () => {
     const store = createUIStore()
 
     store.getState().hydratePersistedUI(
@@ -869,17 +869,9 @@ describe('createUISlice hydratePersistedUI', () => {
     )
 
     expect(store.getState().petVisible).toBe(false)
-    expect(store.getState().petId).toBe('custom-pet')
+    expect(store.getState().petId).toBe('agentum-agent')
     expect(store.getState().petSize).toBe(240)
-    expect(store.getState().customPets).toEqual([
-      {
-        id: 'custom-pet',
-        label: 'Legacy pet',
-        fileName: 'custom-pet.webp',
-        mimeType: 'image/webp',
-        kind: 'image'
-      }
-    ])
+    expect(store.getState().customPets).toEqual([])
   })
 
   it('sanitizes task resume state field-by-field during hydration', () => {
@@ -1389,7 +1381,7 @@ describe('createUISlice page navigation history', () => {
     expect(store.getState().worktreeNavHistoryIndex).toBe(1)
 
     store.getState().closeTaskPage()
-    expect(store.getState().activeView).toBe('terminal')
+    expect(store.getState().activeView).toBe('activity')
     expect(store.getState().worktreeNavHistoryIndex).toBe(0)
   })
 
@@ -1408,7 +1400,7 @@ describe('createUISlice page navigation history', () => {
     expect(store.getState().worktreeNavHistoryIndex).toBe(2)
 
     store.getState().closeTaskPage()
-    expect(store.getState().activeView).toBe('terminal')
+    expect(store.getState().activeView).toBe('activity')
     expect(store.getState().taskPageData).toEqual({})
     expect(store.getState().githubTaskDrawerWorkItem).toBeNull()
     expect(store.getState().worktreeNavHistoryIndex).toBe(0)
@@ -1430,7 +1422,7 @@ describe('createUISlice page navigation history', () => {
     ])
 
     store.getState().closeTaskPage()
-    expect(store.getState().activeView).toBe('terminal')
+    expect(store.getState().activeView).toBe('activity')
     expect(store.getState().worktreeNavHistoryIndex).toBe(0)
   })
 })
@@ -1476,7 +1468,6 @@ describe('createUISlice feature interactions', () => {
       makePersistedUI({
         featureInteractions: {
           tasks: { firstInteractedAt: 100 },
-          automations: { firstInteractedAt: 150, interactionCount: 4 },
           browser: { firstInteractedAt: Number.NaN },
           unknown: { firstInteractedAt: 200 }
         } as unknown as FeatureInteractionState
@@ -1485,7 +1476,6 @@ describe('createUISlice feature interactions', () => {
 
     expect(store.getState().featureInteractions).toEqual({
       tasks: { firstInteractedAt: 100, interactionCount: 1 },
-      automations: { firstInteractedAt: 150, interactionCount: 4 }
     })
   })
 

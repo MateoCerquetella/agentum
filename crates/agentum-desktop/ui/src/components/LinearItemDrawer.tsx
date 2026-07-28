@@ -40,7 +40,7 @@ import {
   getLinearStateMarkerStyle,
   getLinearStatePillStyle
 } from '@/components/linear-state-pill-style'
-import type { LinearIssue, LinearComment } from '../../../shared/types'
+import type { LinearIssue, LinearComment } from '@/shared/types'
 import {
   linearAddIssueComment,
   linearGetIssue,
@@ -1362,7 +1362,7 @@ function LinearItemDrawer({
               </div>
             </div>
 
-            {/* Comment footer + Start workspace */}
+            {/* Comment footer + New Spec */}
             <LinearIssueCommentFooter
               issueId={displayed.id}
               workspaceId={displayed.workspaceId}
@@ -1372,9 +1372,9 @@ function LinearItemDrawer({
               <Button
                 onClick={() => onUse(displayed)}
                 className="w-full justify-center gap-2"
-                aria-label="Start workspace from issue"
+                aria-label="Author spec from issue"
               >
-                Start workspace from issue
+                New Spec
                 <ArrowRight className="size-4" />
               </Button>
             </div>

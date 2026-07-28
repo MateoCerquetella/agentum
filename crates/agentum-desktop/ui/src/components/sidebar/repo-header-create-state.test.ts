@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { SshConnectionStatus } from '../../../../shared/ssh-types'
-import type { Repo } from '../../../../shared/types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
+import type { Repo } from '@/shared/types'
 import { getRepoHeaderCreateState } from './repo-header-create-state'
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {

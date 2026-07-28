@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getDefaultOnboardingState, getDefaultSettings } from '../../../../shared/constants'
+import { getDefaultOnboardingState, getDefaultSettings } from '@/shared/constants'
 import { useAppStore } from '@/store'
 import OnboardingFlow from './OnboardingFlow'
 import { ONBOARDING_SKIP_CONFIRMATION_COPY } from './OnboardingSkipConfirmationDialog'
@@ -71,7 +71,11 @@ describe('OnboardingFlow', () => {
     useAppStore.setState({
       preflightStatus: {
         git: { installed: true },
-        gh: { installed: true, authenticated: false }
+        gh: { installed: true, authenticated: false },
+        glab: { installed: false, authenticated: false },
+        bitbucket: { configured: false, authenticated: false, account: null },
+        azureDevOps: { configured: false, authenticated: false, account: null, baseUrl: null, tokenConfigured: false },
+        gitea: { configured: false, authenticated: false, account: null, baseUrl: null, tokenConfigured: false }
       },
       preflightStatusChecked: true
     })
@@ -95,7 +99,11 @@ describe('OnboardingFlow', () => {
     useAppStore.setState({
       preflightStatus: {
         git: { installed: true },
-        gh: { installed: false, authenticated: false }
+        gh: { installed: false, authenticated: false },
+        glab: { installed: false, authenticated: false },
+        bitbucket: { configured: false, authenticated: false, account: null },
+        azureDevOps: { configured: false, authenticated: false, account: null, baseUrl: null, tokenConfigured: false },
+        gitea: { configured: false, authenticated: false, account: null, baseUrl: null, tokenConfigured: false }
       },
       preflightStatusChecked: true
     })
