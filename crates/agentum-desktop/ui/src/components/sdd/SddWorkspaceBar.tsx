@@ -41,6 +41,7 @@ import {
   redeemJiraOauth,
   selectJiraSite,
   startJiraOauth,
+  subscribeRunCenterSelection,
   subscribeSddEvents,
   type SddArtifact,
   type SddBrowserEvidence,
@@ -562,6 +563,16 @@ export default function SddWorkspaceBar({
       setNewSpecOpen(true)
     })
   }, [presentation, repoId])
+
+  useEffect(
+    () =>
+      subscribeRunCenterSelection(repoId, (selection) => {
+        setExpanded(true)
+        setView('Spec')
+        void restore(selection.specId, selection.runId)
+      }),
+    [repoId, restore]
+  )
 
   useEffect(() => {
     const unsubscribe = subscribeSddEvents({

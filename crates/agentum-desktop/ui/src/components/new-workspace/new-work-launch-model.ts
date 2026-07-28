@@ -1,8 +1,10 @@
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace';
 import type { CreateWorktreeResult } from '@/shared/types';
+import type { CreateSpecResult } from '@/runtime/sdd-client';
+import type { WizardWorkSource } from './create-workspace-wizard-model';
 
-export type WorkSource = 'new' | 'existing' | 'none';
-export type NewWorkStage = 'issue' | 'worktree';
+export type WorkSource = WizardWorkSource;
+export type NewWorkStage = 'issue' | 'worktree' | 'sdd';
 export type NewWorkStageStatus = 'pending' | 'active' | 'done' | 'error';
 
 export type NewWorkProgress = Record<NewWorkStage, NewWorkStageStatus>;
@@ -10,11 +12,13 @@ export type NewWorkProgress = Record<NewWorkStage, NewWorkStageStatus>;
 export type NewWorkCheckpoint = {
   linkedWorkItem?: LinkedWorkItemSummary;
   worktreeResult?: CreateWorktreeResult;
+  sddResult?: CreateSpecResult;
 };
 
 export const NEW_WORK_STAGES: readonly NewWorkStage[] = [
   'issue',
-  'worktree'
+  'worktree',
+  'sdd'
 ];
 
 /** Stable footer copy for each durable launch checkpoint. Keeping these labels
@@ -22,7 +26,8 @@ export const NEW_WORK_STAGES: readonly NewWorkStage[] = [
  * while issue creation hands off to worktree creation. */
 export const NEW_WORK_STAGE_ACTIVE_LABELS: Readonly<Record<NewWorkStage, string>> = {
   issue: 'Preparing issue…',
-  worktree: 'Creating worktree…'
+  worktree: 'Creating worktree…',
+  sdd: 'Starting SDD run…'
 };
 
 export function activeNewWorkStage(progress: NewWorkProgress): NewWorkStage | null {
@@ -79,6 +84,7 @@ export function newWorkPrimaryLabel(
 ): string {
   if (retrying) return 'Retry from incomplete step';
   if (source === 'new') return 'Create issue';
+  if (source === 'sdd') return 'Create workspace & start SDD';
   return source === 'none' ? 'Create workspace' : 'Create worktree';
 }
 
@@ -89,8 +95,10 @@ export function canLaunchNewWork(input: {
   hasNewIssueTitle: boolean;
   hasSelectedIssue: boolean;
   hasIssueCheckpoint: boolean;
+  hasSddDescription?: boolean;
 }): boolean {
   if (!input.hasSelectedAgent) return false;
+  if (input.source === 'sdd' && !input.hasSddDescription) return false;
   if (
     input.source === 'new' &&
     !input.hasIssueCheckpoint &&

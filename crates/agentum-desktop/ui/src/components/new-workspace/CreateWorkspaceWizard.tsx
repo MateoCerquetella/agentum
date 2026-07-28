@@ -53,6 +53,7 @@ import {
   canLeaveRepoStep as canLeaveRepoStepModel,
   capRepoList,
   deriveWizardComposerSeed,
+  deriveWizardSddTitle,
   filterRepoList,
   resolveWizardAgentOptions,
   selectAddedRepoBeforeHydration,
@@ -74,6 +75,10 @@ import {
   type NewWorkProgress,
   type WorkSource
 } from './new-work-launch-model'
+import {
+  createWorkspaceSpec,
+  selectRunInRunCenter
+} from '@/runtime/sdd-client'
 import {
   clampDialogOffset,
   type DialogBaseRect,
@@ -187,9 +192,11 @@ export default function CreateWorkspaceWizard({
     baseRect: DialogBaseRect
   } | null>(null)
   const workSource: WorkSource = 'none'
+  const [useSdd, setUseSdd] = useState(false)
+  const [sddDescription, setSddDescription] = useState('')
   const [launchCheckpoint, setLaunchCheckpoint] = useState<NewWorkCheckpoint>({})
   const [launchProgress, setLaunchProgress] = useState(() =>
-    initialNewWorkProgress({}, workSource)
+    initialNewWorkProgress({}, useSdd ? 'sdd' : workSource)
   )
   const [launchInFlight, setLaunchInFlight] = useState(false)
   const launchInFlightRef = useRef(false)
@@ -393,12 +400,13 @@ export default function CreateWorkspaceWizard({
   )
 
   const launchAllowed = canLaunchNewWork({
-    source: workSource,
+    source: useSdd ? 'sdd' : workSource,
     hasSelectedAgent: Boolean(quickAgent),
     canStageNewIssue: false,
     hasNewIssueTitle: false,
     hasSelectedIssue: false,
-    hasIssueCheckpoint: false
+    hasIssueCheckpoint: false,
+    hasSddDescription: Boolean(sddDescription.trim())
   })
 
   const handlePrimary = useCallback(async () => {
@@ -414,13 +422,48 @@ export default function CreateWorkspaceWizard({
       setLaunchInFlight(true)
       try {
         setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'done'))
-        await submitQuick(quickAgent, {
-          linkedWorkItem: null,
-          checkpoint: launchCheckpoint,
-          onCheckpoint: setLaunchCheckpoint,
-          onProgress: (stage, status) =>
-            setLaunchProgress((current) => updateNewWorkProgress(current, stage, status))
-        })
+
+        if (useSdd && sddDescription.trim() && repoId) {
+          // Start SDD run
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'sdd', 'active'))
+          const sddResult = await createWorkspaceSpec(repoId, {
+            requestId: `wizard-${Date.now()}`,
+            title: deriveWizardSddTitle(sddDescription, name),
+            description: sddDescription.trim(),
+            provider: quickAgent || 'codex',
+            baseRef: baseBranch || 'HEAD'
+          })
+          setLaunchCheckpoint((current) => ({ ...current, sddResult }))
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'sdd', 'done'))
+
+          // Create workspace and link to SDD run
+          await submitQuick(quickAgent, {
+            linkedWorkItem: null,
+            checkpoint: launchCheckpoint,
+            onCheckpoint: setLaunchCheckpoint,
+            onProgress: (stage, status) =>
+              setLaunchProgress((current) => updateNewWorkProgress(current, stage, status))
+          })
+
+          // Notify Run Center to open the SDD run
+          if (sddResult.specId && sddResult.runId) {
+            selectRunInRunCenter({
+              repoId,
+              specId: sddResult.specId,
+              runId: sddResult.runId,
+              workspaceId: '' // Will be filled by workspace activation
+            })
+          }
+        } else {
+          // Normal workspace creation without SDD
+          await submitQuick(quickAgent, {
+            linkedWorkItem: null,
+            checkpoint: launchCheckpoint,
+            onCheckpoint: setLaunchCheckpoint,
+            onProgress: (stage, status) =>
+              setLaunchProgress((current) => updateNewWorkProgress(current, stage, status))
+          })
+        }
       } finally {
         launchInFlightRef.current = false
         setLaunchInFlight(false)
@@ -431,7 +474,7 @@ export default function CreateWorkspaceWizard({
       return
     }
     goNext()
-  }, [canLeaveRepoStep, creating, goNext, launchAllowed, launchCheckpoint, quickAgent, step, submitQuick])
+  }, [canLeaveRepoStep, creating, goNext, launchAllowed, launchCheckpoint, quickAgent, step, submitQuick, useSdd, sddDescription, repoId, name, baseBranch])
 
   // Enter advances / creates (there are no multi-line inputs here, so a bare
   // Enter is unambiguous); Radix handles Esc → close on its own.
@@ -472,6 +515,14 @@ export default function CreateWorkspaceWizard({
       }),
     [name, quickAgent, selectedHostLabel, selectedRepo, step]
   )
+
+  // Keep progress model in sync with the SDD toggle
+  useEffect(() => {
+    setLaunchProgress((current) => ({
+      ...current,
+      sdd: useSdd ? (launchCheckpoint.sddResult ? 'done' : 'pending') : 'done'
+    }))
+  }, [useSdd, launchCheckpoint.sddResult])
 
   const launchBusy = launchInFlight || creating
   const launchScopeLocked = launchBusy || Boolean(launchCheckpoint.worktreeResult)
@@ -614,6 +665,10 @@ export default function CreateWorkspaceWizard({
                   setupDecision={setupDecision}
                   onSetupDecisionChange={onSetupDecisionChange}
                   worktreeLocked={launchScopeLocked}
+                  useSdd={useSdd}
+                  onUseSddChange={setUseSdd}
+                  sddDescription={sddDescription}
+                  onSddDescriptionChange={setSddDescription}
                 />
               </fieldset>
             ) : null}
@@ -1556,6 +1611,10 @@ function AgentStep({
   setupDecision,
   onSetupDecisionChange,
   worktreeLocked,
+  useSdd,
+  onUseSddChange,
+  sddDescription,
+  onSddDescriptionChange,
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
@@ -1570,6 +1629,10 @@ function AgentStep({
   setupDecision: 'run' | 'skip' | null
   onSetupDecisionChange: (value: 'run' | 'skip') => void
   worktreeLocked: boolean
+  useSdd: boolean
+  onUseSddChange: (value: boolean) => void
+  sddDescription: string
+  onSddDescriptionChange: (value: string) => void
 }): React.JSX.Element {
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
@@ -1599,6 +1662,64 @@ function AgentStep({
           <span className="text-[11px] text-muted-foreground">
             {repoDisplayName} isn&apos;t a git repo — the workspace opens the folder as-is.
           </span>
+        ) : null}
+      </div>
+
+      {/* SDD Toggle */}
+      <div className="flex flex-col gap-2.5">
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={useSdd}
+            disabled={worktreeLocked}
+            onClick={() => onUseSddChange(!useSdd)}
+            className={cn(
+              'relative inline-flex h-5 w-9 flex-none cursor-pointer rounded-full border-2 border-transparent transition-colors',
+              useSdd ? 'bg-primary' : 'bg-muted',
+              worktreeLocked && 'cursor-not-allowed opacity-50'
+            )}
+          >
+            <span
+              className={cn(
+                'pointer-events-none inline-block size-4 rounded-full bg-white shadow-sm transition-transform',
+                useSdd ? 'translate-x-4' : 'translate-x-0'
+              )}
+            />
+          </button>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12.5px] font-medium text-foreground">
+              Start with SDD spec
+            </span>
+            <span className="text-[10.5px] text-muted-foreground">
+              Generate a specification and run the full workflow
+            </span>
+          </div>
+        </div>
+
+        {useSdd ? (
+          <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-muted/25 p-3">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              Feature description
+            </span>
+            <textarea
+              value={sddDescription}
+              disabled={worktreeLocked}
+              onChange={(event) => onSddDescriptionChange(event.target.value)}
+              rows={4}
+              placeholder="Describe what you want to build...
+
+## Requirements
+- RQ-001 ...
+
+## Acceptance Criteria
+- AC-001 ..."
+              className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+            />
+            <span className="text-[10px] text-muted-foreground">
+              The first line becomes the spec title. Markdown is supported.
+            </span>
+          </div>
         ) : null}
       </div>
 
@@ -1684,7 +1805,9 @@ function AgentStep({
       </div>
 
       <p className="rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] text-muted-foreground">
-        This opens one agent in the workspace. Specification authoring starts explicitly from Run Center.
+        {useSdd
+          ? 'The workspace opens with an SDD run in Run Center. The provider writes the spec, you approve it, then implementation starts.'
+          : 'This opens one agent in the workspace. Specification authoring starts explicitly from Run Center.'}
       </p>
     </div>
   )
