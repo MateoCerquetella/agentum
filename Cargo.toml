@@ -36,17 +36,17 @@ tracing           = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum              = { version = "0.8", features = ["ws", "macros"] }
 tower             = "0.5"
-tower-http        = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
+tower-http        = { version = "0.7", features = ["cors", "trace", "compression-gzip"] }
 # sqlx is consumed only by agentum-store; pinned there directly with the
 # `sqlite` (bundled) feature so prebuilt release binaries don't need
 # system libsqlite3 headers/library.
 clap              = { version = "4", features = ["derive", "env"] }
-directories       = "5"
+directories       = "6"
 uuid              = { version = "1", features = ["v4", "serde"] }
-ulid              = { version = "1", features = ["serde"] }
+ulid              = { version = "3", features = ["serde"] }
 time              = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
-toml              = "0.8"
-toml_edit         = "0.22"
+toml              = "1.1"
+toml_edit         = "0.25"
 exec              = "0.3"
 
 # Tuned for CI build time over marginal runtime perf: agentum is I/O-bound

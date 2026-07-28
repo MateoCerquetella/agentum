@@ -13,7 +13,7 @@ agentum-core  = { workspace = true }
 thiserror     = { workspace = true }
 tokio         = { workspace = true }
 tracing       = { workspace = true }
-shlex         = "1"
+shlex         = "2"
 
 [dev-dependencies]
 # The ssh-module tests construct a `Host` (created_at/updated_at are
