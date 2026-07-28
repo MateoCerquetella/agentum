@@ -66,6 +66,15 @@ pub async fn has_session(target: &str) -> Result<bool> {
 pub const DEFAULT_PANE_COLS: u16 = 132;
 pub const DEFAULT_PANE_ROWS: u16 = 40;
 
+/// Maximum raw-input bytes carried by one `tmux send-keys -H` invocation.
+///
+/// This is bounded by tmux's own client-to-server command message, not the OS
+/// `ARG_MAX`. Each byte becomes a separate two-character argv entry plus tmux's
+/// per-argument framing; on tmux 3.7b a 1,000-byte batch already fails with
+/// `command too long`. Keep a conservative shared bound for local sends and the
+/// server's SSH encoders so large agent prompts/pastes are delivered losslessly.
+pub const SEND_KEYS_HEX_CHUNK_BYTES: usize = 512;
+
 pub async fn new_session(
     target: &str,
     workdir: &Path,
@@ -318,13 +327,13 @@ pub async fn send_keys(target: &str, keys: &str, append_enter: bool) -> Result<(
 /// including control chars and escape sequences. Used by the interactive WS
 /// terminal so xterm.js keystrokes round-trip into the running pty.
 ///
-/// Splits into chunks to stay under typical argv limits when a paste is huge.
+/// Splits into chunks to stay under tmux's command-message limit when a paste
+/// is huge.
 pub async fn send_bytes(target: &str, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
     }
-    // ARG_MAX is system-dependent; 4 KiB of bytes = 8 KiB of hex args, safe.
-    for chunk in bytes.chunks(4096) {
+    for chunk in bytes.chunks(SEND_KEYS_HEX_CHUNK_BYTES) {
         let mut c = Command::new("tmux");
         c.arg("send-keys").arg("-H").arg("-t").arg(target);
         for b in chunk {
@@ -929,6 +938,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_bytes_chunks_role_prompt_sized_payloads_below_tmux_limit() {
+        // A long structured authoring prompt that exposed this regression is ~3.3 KiB.
+        // Sending it as one `send-keys -H` command fails with "command too
+        // long" on tmux 3.7b; the helper must split it into accepted commands.
+        if Command::new("tmux").arg("-V").status().await.is_err() {
+            return;
+        }
+        let target = "agentum-test-send-bytes-large";
+        let _ = kill_session(target).await;
+        let workdir = std::env::temp_dir();
+        new_session(target, &workdir, &["sleep".into(), "3600".into()], &[])
+            .await
+            .unwrap();
+
+        send_bytes(target, &vec![b'a'; 3_281]).await.unwrap();
+
+        kill_session(target).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn combined_sample_batches_three_sections() {
         // The batched watchdog read must produce the same three-section,
         // boundary-delimited output the SSH path does — proving tmux accepts the
@@ -943,7 +972,11 @@ mod tests {
         new_session(target, &workdir, &["sleep".into(), "3600".into()], &[])
             .await
             .unwrap();
-        sleep(Duration::from_millis(300)).await;
+        // Some interactive shell profiles render a startup banner (for example
+        // fastfetch) before handing the pane to `sleep`. Let that output settle
+        // so the combined and immediately-following individual captures compare
+        // the same static viewport rather than racing shell initialization.
+        sleep(Duration::from_secs(10)).await;
 
         let boundary = ":::agentum-test-boundary:::";
         let stdout = capture_pane_sample_combined(target, 50, boundary)

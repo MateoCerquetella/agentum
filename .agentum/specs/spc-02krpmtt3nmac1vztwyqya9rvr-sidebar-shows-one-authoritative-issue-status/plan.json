@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-02KRPMTT3NMAC1VZTWYQYA9RVR",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "Carry out the migrated plan section: F1 \u2014 Sidebar single authoritative issue status",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

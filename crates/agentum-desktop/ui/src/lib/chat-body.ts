@@ -6,6 +6,7 @@ import type { IntakeMode } from './socratic-intake'
 import type { ChatAgentId } from '../shared/types'
 
 export type ChatBodyTurn = { role: 'user' | 'assistant'; content: string }
+export type IntakeTarget = 'issue_spec'
 
 export type ChatBodyOpts = {
   workdir?: string
@@ -16,6 +17,8 @@ export type ChatBodyOpts = {
   repoSlug?: string
   mode?: IntakeMode
   stage?: number
+  /** Focus the existing Socratic engine on one structured tracker issue. */
+  target?: IntakeTarget
   /** Agent selected in global Chat settings. Absent preserves Claude. */
   agent?: ChatAgentId
 }
@@ -32,6 +35,7 @@ export function buildChatBody(messages: ChatBodyTurn[], opts?: ChatBodyOpts): Re
     // so omitting them is the byte-identical Fast path).
     mode: opts?.mode,
     stage: opts?.stage,
+    target: opts?.target,
     agent: opts?.agent
   }
 }
@@ -52,6 +56,7 @@ export function buildChatStreamBody(
     thinking: opts?.thinking ?? false,
     mode: opts?.mode,
     stage: opts?.stage,
+    target: opts?.target,
     agent: opts?.agent
   }
 }

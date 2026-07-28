@@ -7,12 +7,12 @@ import {
   getFeatureWallMediaTile,
   type FeatureWallWorkflow,
   type FeatureWallWorkflowId
-} from '../../../../shared/feature-wall-workflows'
-import { getAgentsSteps, type AgentsStepId } from '../../../../shared/agents-orchestration-steps'
-import { getWorkbenchSteps, type WorkbenchStepId } from '../../../../shared/workbench-steps'
-import { getReviewSteps, type ReviewStepId } from '../../../../shared/review-steps'
-import type { FeatureWallOpenSourceTelemetry } from '../../../../shared/telemetry-events'
-import type { FeatureWallTourDepthSummary } from '../../../../shared/feature-wall-tour-depth'
+} from '@/shared/feature-wall-workflows'
+import { getAgentsSteps, type AgentsStepId } from '@/shared/agents-orchestration-steps'
+import { getWorkbenchSteps, type WorkbenchStepId } from '@/shared/workbench-steps'
+import { getReviewSteps, type ReviewStepId } from '@/shared/review-steps'
+import type { FeatureWallOpenSourceTelemetry } from '@/shared/telemetry-events'
+import type { FeatureWallTourDepthSummary } from '@/shared/feature-wall-tour-depth'
 import { track } from '@/lib/telemetry'
 import { useAppStore } from '@/store'
 import { isOrchestrationSetupEnabled } from '@/lib/orchestration-setup-state'

@@ -1,4 +1,4 @@
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 
 export type ImportedWorktreeCardActionState = {
   pending: boolean

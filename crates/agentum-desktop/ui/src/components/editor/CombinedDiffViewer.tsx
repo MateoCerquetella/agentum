@@ -40,7 +40,7 @@ import type {
   GitBranchChangeEntry,
   GitDiffResult,
   GitStatusEntry
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { Check, Copy, MessageSquare, PanelLeftOpen, Sparkles, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { DiffSectionItem } from './DiffSectionItem'

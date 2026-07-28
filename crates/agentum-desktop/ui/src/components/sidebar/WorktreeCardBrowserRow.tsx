@@ -1,7 +1,7 @@
 import React, { useCallback } from 'react'
 import { Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { BrowserWorkspace } from '../../../../shared/types'
+import type { BrowserWorkspace } from '@/shared/types'
 import { writeBrowserTabDragData } from './workspace-status'
 
 type Props = {

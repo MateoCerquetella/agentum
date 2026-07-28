@@ -16,7 +16,7 @@ import {
   Table2,
   Workflow
 } from 'lucide-react'
-import type { MarkdownDocument } from '../../../../shared/types'
+import type { MarkdownDocument } from '@/shared/types'
 import { stripMarkdownExtension } from './markdown-doc-links'
 
 export type SlashMenuState = {

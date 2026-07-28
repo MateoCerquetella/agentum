@@ -1,4 +1,4 @@
-import { keybindingMatchesInput } from '../../../../shared/keybindings'
+import { keybindingMatchesInput } from '@/shared/keybindings'
 
 // Why: when a CLI activates kitty progressive enhancement (CSI > N u), xterm's
 // KittyKeyboard encoder turns every modifier chord — including plain Cmd+C —

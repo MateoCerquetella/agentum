@@ -1,8 +1,8 @@
 import { buildAgentStartupPlan } from '@/lib/tui-agent-startup'
 import { tuiAgentToAgentKind } from '@/lib/telemetry'
-import { isTuiAgentEnabled } from '../../../shared/tui-agent-selection'
+import { isTuiAgentEnabled } from '@/shared/tui-agent-selection'
 import type { AgentStartedTelemetry } from '@/lib/worktree-activation'
-import type { GlobalSettings, OnboardingState } from '../../../shared/types'
+import type { GlobalSettings, OnboardingState } from '@/shared/types'
 
 export type OnboardingFolderAgentStartup = {
   command: string

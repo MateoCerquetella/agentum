@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { hasCompletedTabAgent, resolveCompletedTabAgent, resolveTabAgent } from './tab-agent'
-import type { AgentStatusEntry, AgentType } from '../../../shared/agent-status-types'
-import type { TerminalLayoutSnapshot } from '../../../shared/types'
+import type { AgentStatusEntry, AgentType } from '@/shared/agent-status-types'
+import type { TerminalLayoutSnapshot } from '@/shared/types'
 
 const LEAF_A = '11111111-1111-4111-8111-111111111111'
 const LEAF_B = '22222222-2222-4222-8222-222222222222'

@@ -23,10 +23,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useConfirmationDialog } from '@/components/confirmation-dialog'
 import { presentGitHubPRMergeState } from '@/components/github-pr-merge-state'
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
-import type { PRInfo, Repo, Worktree } from '../../../../shared/types'
-import type { GitHubPRMergeMethod } from '../../../../shared/types'
-import { resolveGitHubPRMergeMethods } from '../../../../shared/github-pr-merge-methods'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
+import type { PRInfo, Repo, Worktree } from '@/shared/types'
+import type { GitHubPRMergeMethod } from '@/shared/types'
+import { resolveGitHubPRMergeMethods } from '@/shared/github-pr-merge-methods'
 import { runWorktreeDelete } from '../sidebar/delete-worktree-flow'
 
 type HostedReviewActionInfo = Pick<

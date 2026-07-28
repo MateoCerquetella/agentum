@@ -3,12 +3,10 @@
 <!--
   Merged into the macOS app's Info.plist by Tauri (bundle.macOS.infoPlist).
 
-  The desktop shell loads its embedded dashboard from the in-process daemon at
-  http://127.0.0.1:<port>. macOS App Transport Security blocks plain http in
-  WKWebView by default, which left the window blank ("app didn't respond").
-  NSAllowsLocalNetworking permits http to loopback/.local hosts; we also set
-  NSAllowsArbitraryLoads so a numeric 127.0.0.1 URL is covered regardless of
-  how ATS classifies it. This only affects this app's own loopback server.
+  The desktop shell loads bundled frontend assets. Those assets call the
+  in-process Agentum API over a random http://127.0.0.1:<port> endpoint.
+  NSAllowsLocalNetworking permits that loopback API without granting an
+  arbitrary-load exception to unrelated network destinations.
 -->
 <plist version="1.0">
 <dict>
@@ -19,8 +17,6 @@
   <string>Agentum uses the microphone for on-device voice dictation.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
-    <key>NSAllowsArbitraryLoads</key>
-    <true/>
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>

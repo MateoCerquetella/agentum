@@ -2,8 +2,8 @@ import { parseOwnerRepoFromItemUrl } from '@/lib/github-item-url'
 import React, { useMemo } from 'react'
 import { useAppStore } from '@/store'
 import IssueSourceIndicator, { sameGitHubOwnerRepo } from '@/components/github/IssueSourceIndicator'
-import type { GitHubOwnerRepo } from '../../../shared/types'
-import { PER_REPO_FETCH_LIMIT } from '../../../shared/work-items'
+import type { GitHubOwnerRepo } from '@/shared/types'
+import { PER_REPO_FETCH_LIMIT } from '@/shared/work-items'
 
 // Why: the dialog doesn't carry the resolved PR-source slug the Tasks view's
 // list cache carries, so we reach into workItemsCache to recover it. We scope

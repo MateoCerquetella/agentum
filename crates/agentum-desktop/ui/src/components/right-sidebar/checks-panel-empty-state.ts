@@ -1,4 +1,4 @@
-import type { HostedReviewCreationBlockedReason } from '../../../../shared/hosted-review'
+import type { HostedReviewCreationBlockedReason } from '@/shared/hosted-review'
 
 type PRRefreshStatus = 'queued' | 'in-flight' | 'paused' | 'error' | 'skipped' | undefined
 

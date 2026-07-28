@@ -21,7 +21,7 @@ import type {
   Repo,
   Worktree,
   GitHubWorkItem
-} from '../../../../shared/types'
+} from '@/shared/types'
 import type {
   GetProjectViewTableArgs,
   GetProjectViewTableResult,
@@ -30,18 +30,18 @@ import type {
   GitHubProjectRow,
   GitHubProjectTable,
   GitHubProjectViewError
-} from '../../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 import {
   isGitHubWorkItemsSshRemoteRequiredError,
   sortWorkItemsByUpdatedAt,
   PER_REPO_FETCH_LIMIT
-} from '../../../../shared/work-items'
+} from '@/shared/work-items'
 import type { BoardBindingState } from '@/lib/board-project-resolution'
 import { deriveCheckStatusFromChecks, syncPRChecksStatus } from './github-checks'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '../../runtime/runtime-rpc-client'
 import { rightSidebarShowsPullRequestData } from '@/lib/right-sidebar-visibility'
 import { findRepoByPathPreferLocal } from '@/lib/find-repo-by-path'
-import { hostedReviewInfoFromGitHubPRInfo } from '../../../../shared/hosted-review-github'
+import { hostedReviewInfoFromGitHubPRInfo } from '@/shared/hosted-review-github'
 import { getHostedReviewCacheKey, linkedReviewHintKey } from './hosted-review-cache-identity'
 import { getGitHubPRCacheKey, getGitHubRepoCacheKey } from './github-cache-key'
 import { isMacAppDataPath } from '@/lib/passive-macos-app-data-access'

@@ -1,7 +1,7 @@
 import type {
   AgentStatusEntry,
   MigrationUnsupportedPtyEntry
-} from '../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 
 const cachedMigrationUnsupportedEntries = new WeakMap<
   MigrationUnsupportedPtyEntry,

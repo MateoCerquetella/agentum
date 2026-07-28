@@ -9,8 +9,8 @@ import type {
   Tab,
   TabGroup,
   TerminalTab
-} from '../../../../shared/types'
-import { resolveUnifiedTabLabel } from '../../../../shared/tab-title-resolution'
+} from '@/shared/types'
+import { resolveUnifiedTabLabel } from '@/shared/tab-title-resolution'
 import { useAppStore } from '../../store'
 import { destroyWorkspaceWebviews } from '../../store/slices/browser-webview-cleanup'
 import { requestEditorFileClose } from '../editor/editor-autosave'

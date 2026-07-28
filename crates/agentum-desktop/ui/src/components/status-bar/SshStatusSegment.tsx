@@ -13,7 +13,7 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import { useAppStore } from '../../store'
 import { STATUS_LABELS, statusColor } from '../settings/SshTargetCard'
 import { connectSshTargetViaServer } from '@/runtime/server-host-client'
-import type { SshConnectionStatus } from '../../../../shared/ssh-types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
 import type { RemoteWorkspaceSyncStatus } from '../../store/slices/ssh'
 
 function isConnecting(status: SshConnectionStatus): boolean {

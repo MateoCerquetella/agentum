@@ -57,7 +57,7 @@ export function McpPane(): React.JSX.Element {
           <Label>Agent MCP</Label>
           <p className="text-xs text-muted-foreground">
             agentum wires its own MCP server into every agent it launches, giving them tools to
-            manage sessions &amp; worktrees, drive the browser and computer, run the harness, and
+            manage sessions &amp; worktrees, drive the browser and computer, run workflows, and
             orchestrate other agents. Turn this off to wire <strong>no</strong> agentum tools into
             any agent — the per-capability toggles below have no effect while it&apos;s off.
           </p>

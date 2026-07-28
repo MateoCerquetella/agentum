@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { AgentActivityDisplayMode, WorktreeCardProperty } from '../../../../shared/types'
+import type { AgentActivityDisplayMode, WorktreeCardProperty } from '@/shared/types'
 import SidebarRepositoryFilterSection from './SidebarRepositoryFilterSection'
 import SidebarWorkspaceFilterSection from './SidebarWorkspaceFilterSection'
 import { deriveWorkspaceFilterSummary } from './workspace-filter-summary'

@@ -1,5 +1,5 @@
 import React from 'react'
-import type { TerminalShortcutPolicy } from '../../../../shared/keybindings'
+import type { TerminalShortcutPolicy } from '@/shared/keybindings'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SearchableSetting } from './SearchableSetting'
 import { SettingsRow } from './SettingsFormControls'

@@ -10,7 +10,7 @@ describe('pairing offer', () => {
   const offer: PairingOffer = {
     v: 2,
     endpoint: 'ws://192.168.1.10:6768',
-    deviceToken: 'abcdef1234567890abcdef1234567890abcdef1234567890',
+    deviceToken: 'synthetic-test-device-token-not-a-secret',
     publicKeyB64: 'dGVzdC1wdWJsaWMta2V5LWJhc2U2NC1lbmNvZGVk'
   }
 

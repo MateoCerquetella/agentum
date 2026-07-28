@@ -2,7 +2,7 @@
 import type * as ReactModule from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolveBrowserSessionTabTarget, resolveZoomTarget } from './useIpcEvents'
-import { makePaneKey } from '../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 
 const FUTURE_LEAF_ID = '11111111-1111-4111-8111-111111111111'
 const STALE_LEAF_ID = '22222222-2222-4222-8222-222222222222'
@@ -166,6 +166,8 @@ describe('useIpcEvents browser tab create routing', () => {
       enqueueSshCredentialRequest: vi.fn(),
       removeSshCredentialRequest: vi.fn(),
       clearTabPtyId: vi.fn(),
+      allWorktrees: () => [{ id: 'wt-1', path: '/repo' }],
+      detectedWorktreesByRepo: {},
       settings: { terminalFontSize: 13 },
       activeBrowserTabIdByWorktree: { 'wt-1': 'workspace-active' },
       browserTabsByWorktree: {
@@ -189,7 +191,7 @@ describe('useIpcEvents browser tab create routing', () => {
           const workspace = { id: 'workspace-new', activePageId: 'page-new', pageIds: ['page-new'] }
           state.browserTabsByWorktree['wt-1'].push(workspace)
           state.browserPagesByWorkspace['workspace-new'] = [{ id: 'page-new', worktreeId: 'wt-1' }]
-          expect(options.activate).toBe(false)
+          expect(options.activate).toBe(true)
           return workspace
         }
       )
@@ -214,7 +216,7 @@ describe('useIpcEvents browser tab create routing', () => {
       acquireBrowserAutomationVisibility,
       releaseBrowserAutomationVisibility
     }))
-    vi.doMock('@/lib/ui-zoom', () => ({ applyUIZoom: vi.fn() }))
+    vi.doMock('@/lib/ui-zoom', () => ({ applyUIZoom: vi.fn(), getCurrentUIZoomLevel: () => 0 }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
       ensureWorktreeHasInitialTerminal: vi.fn()
@@ -256,6 +258,9 @@ describe('useIpcEvents browser tab create routing', () => {
           onWorktreeHistoryNavigate: () => () => {},
           onActivateWorktree: () => () => {},
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -300,6 +305,7 @@ describe('useIpcEvents browser tab create routing', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -416,7 +422,8 @@ describe('useIpcEvents updater integration', () => {
     }))
 
     vi.doMock('@/lib/ui-zoom', () => ({
-      applyUIZoom: vi.fn()
+      applyUIZoom: vi.fn(),
+      getCurrentUIZoomLevel: () => 0
     }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
@@ -460,6 +467,9 @@ describe('useIpcEvents updater integration', () => {
           onWorktreeHistoryNavigate: () => () => {},
           onActivateWorktree: () => () => {},
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -504,6 +514,7 @@ describe('useIpcEvents updater integration', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -652,7 +663,8 @@ describe('useIpcEvents updater integration', () => {
     }))
 
     vi.doMock('@/lib/ui-zoom', () => ({
-      applyUIZoom: vi.fn()
+      applyUIZoom: vi.fn(),
+      getCurrentUIZoomLevel: () => 0
     }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
@@ -696,6 +708,9 @@ describe('useIpcEvents updater integration', () => {
           onWorktreeHistoryNavigate: () => () => {},
           onActivateWorktree: () => () => {},
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -737,6 +752,7 @@ describe('useIpcEvents updater integration', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -1017,7 +1033,8 @@ describe('useIpcEvents updater integration', () => {
     }))
 
     vi.doMock('@/lib/ui-zoom', () => ({
-      applyUIZoom: vi.fn()
+      applyUIZoom: vi.fn(),
+      getCurrentUIZoomLevel: () => 0
     }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
@@ -1088,6 +1105,9 @@ describe('useIpcEvents updater integration', () => {
             createTerminalListenerRef.current = listener
             return () => {}
           },
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: (
             listener: (data: {
               requestId: string
@@ -1145,6 +1165,7 @@ describe('useIpcEvents updater integration', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -1535,7 +1556,8 @@ describe('useIpcEvents browser tab close routing', () => {
     }))
 
     vi.doMock('@/lib/ui-zoom', () => ({
-      applyUIZoom: vi.fn()
+      applyUIZoom: vi.fn(),
+      getCurrentUIZoomLevel: () => 0
     }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
@@ -1580,6 +1602,9 @@ describe('useIpcEvents browser tab close routing', () => {
           onWorktreeHistoryNavigate: () => () => {},
           onActivateWorktree: () => () => {},
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -1630,6 +1655,7 @@ describe('useIpcEvents browser tab close routing', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -1748,7 +1774,8 @@ describe('useIpcEvents browser tab close routing', () => {
     }))
 
     vi.doMock('@/lib/ui-zoom', () => ({
-      applyUIZoom: vi.fn()
+      applyUIZoom: vi.fn(),
+      getCurrentUIZoomLevel: () => 0
     }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
@@ -1793,6 +1820,9 @@ describe('useIpcEvents browser tab close routing', () => {
           onWorktreeHistoryNavigate: () => () => {},
           onActivateWorktree: () => () => {},
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -1843,6 +1873,7 @@ describe('useIpcEvents browser tab close routing', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -1956,7 +1987,8 @@ describe('useIpcEvents browser tab close routing', () => {
     }))
 
     vi.doMock('@/lib/ui-zoom', () => ({
-      applyUIZoom: vi.fn()
+      applyUIZoom: vi.fn(),
+      getCurrentUIZoomLevel: () => 0
     }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
@@ -2001,6 +2033,9 @@ describe('useIpcEvents browser tab close routing', () => {
           onWorktreeHistoryNavigate: () => () => {},
           onActivateWorktree: () => () => {},
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -2051,6 +2086,7 @@ describe('useIpcEvents browser tab close routing', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -2183,7 +2219,8 @@ describe('useIpcEvents CLI-created worktree activation', () => {
     }))
 
     vi.doMock('@/lib/ui-zoom', () => ({
-      applyUIZoom: vi.fn()
+      applyUIZoom: vi.fn(),
+      getCurrentUIZoomLevel: () => 0
     }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree,
@@ -2236,6 +2273,9 @@ describe('useIpcEvents CLI-created worktree activation', () => {
             return () => {}
           },
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -2277,6 +2317,7 @@ describe('useIpcEvents CLI-created worktree activation', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
           onNavigationUpdate: () => () => {},
@@ -2382,7 +2423,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
     stateStartedAt: number
   }
   type StoreLike = Record<string, unknown>
-  type StoreSubscribeListener = (state: StoreLike) => void
+  type StoreSubscribeListener = (state: StoreLike, previousState: StoreLike) => void
 
   function buildStoreState(overrides: StoreLike): StoreLike {
     // Why: copy the defensive set of getState() fields the hook touches during
@@ -2459,6 +2500,9 @@ describe('useIpcEvents agent status snapshot integration', () => {
           onWorktreeHistoryNavigate: () => () => {},
           onActivateWorktree: () => () => {},
           onCreateTerminal: () => () => {},
+          onRequestSplitRatio: () => () => {},
+          onRequestBrowserAnnotations: () => () => {},
+          onRequestBrowserAnnotate: () => () => {},
           onRequestTerminalCreate: () => () => {},
           replyTerminalCreate: () => {},
           onSplitTerminal: () => () => {},
@@ -2498,6 +2542,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
           onClearDismissal: () => () => {}
         },
         browser: {
+          onInpageAnnotation: () => () => {},
           onGuestLoadFailed: () => () => {},
           onPaneFocus: () => () => {},
           onOpenLinkInAgentumTab: () => () => {},
@@ -2551,7 +2596,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
   }
 
   function stubAuxiliaryModules(): void {
-    vi.doMock('@/lib/ui-zoom', () => ({ applyUIZoom: vi.fn() }))
+    vi.doMock('@/lib/ui-zoom', () => ({ applyUIZoom: vi.fn(), getCurrentUIZoomLevel: () => 0 }))
     vi.doMock('@/lib/worktree-activation', () => ({
       activateAndRevealWorktree: vi.fn(),
       ensureWorktreeHasInitialTerminal: vi.fn()
@@ -2647,6 +2692,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
     expect(setAgentStatus).not.toHaveBeenCalled()
     expect(getSnapshot).not.toHaveBeenCalled()
 
+    const previousStoreState = { ...storeState }
     storeState.workspaceSessionReady = true
     storeState.tabsByWorktree = {
       'wt-1': [{ id: 'tab-future', ptyId: 'pty-1', worktreeId: 'wt-1', title: 'Future Tab' }]
@@ -2661,7 +2707,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
     if (typeof subscribeListenerRef.current !== 'function') {
       throw new Error('Expected useAppStore.subscribe listener to be registered')
     }
-    subscribeListenerRef.current(storeState)
+    subscribeListenerRef.current(storeState, previousStoreState)
     await Promise.resolve()
 
     expect(setAgentStatus).toHaveBeenCalledTimes(1)
@@ -3055,6 +3101,7 @@ describe('useIpcEvents agent status snapshot integration', () => {
       reason: 'unknown_tab_id'
     })
 
+    const previousStoreState = { ...storeState }
     storeState.terminalLayoutsByTabId = {
       'tab-future': {
         root: { type: 'leaf', leafId: FUTURE_LEAF_ID },
@@ -3065,7 +3112,8 @@ describe('useIpcEvents agent status snapshot integration', () => {
     if (typeof subscribeListenerRef.current !== 'function') {
       throw new Error('Expected useAppStore.subscribe listener to be registered')
     }
-    subscribeListenerRef.current(storeState)
+    subscribeListenerRef.current(storeState, previousStoreState)
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 110))
 
     expect(setAgentStatus).toHaveBeenCalledTimes(2)
     expect(setAgentStatus).toHaveBeenNthCalledWith(

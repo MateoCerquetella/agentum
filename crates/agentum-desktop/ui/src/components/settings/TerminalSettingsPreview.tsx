@@ -8,11 +8,11 @@ import { buildDefaultTerminalOptions } from '@/lib/pane-manager/pane-terminal-op
 import { buildFontFamily } from '@/components/terminal-pane/layout-serialization'
 import { composeActiveTerminalTheme } from '@/components/terminal-pane/terminal-appearance'
 import { clampNumber, resolveEffectiveTerminalAppearance } from '@/lib/terminal-theme'
-import { resolveTerminalFontWeights } from '../../../../shared/terminal-fonts'
-import { resolveTerminalLigaturesEnabled } from '../../../../shared/terminal-ligatures'
+import { resolveTerminalFontWeights } from '@/shared/terminal-fonts'
+import { resolveTerminalLigaturesEnabled } from '@/shared/terminal-ligatures'
 import { PREVIEW_BUFFER } from './terminal-preview-content'
 import { SettingsSwitch } from './SettingsFormControls'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 // Why: pin cols/rows so PREVIEW_BUFFER never wraps. Sized so the longest
 // line (the def total signature, 32 chars) plus a few cols of margin fits

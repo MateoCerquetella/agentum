@@ -6,7 +6,7 @@
 // coordinates and caches the mapping for the session lifetime.
 import { del, getJson, postJson, putJson } from './server-http'
 import { api } from '@/tauri'
-import type { SshTarget } from '../../../shared/ssh-types'
+import type { SshTarget } from '@/shared/ssh-types'
 
 /** A server host as returned by `/api/hosts` (camelCase flattened kind). */
 export type ServerHost = {

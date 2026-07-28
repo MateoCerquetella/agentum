@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
-import type { GlobalSettings, Repo, Worktree, WorktreeCardProperty } from '../../../../shared/types'
-import type { WorkspacePortScanResult } from '../../../../shared/workspace-ports'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
+import type { GlobalSettings, Repo, Worktree, WorktreeCardProperty } from '@/shared/types'
+import type { WorkspacePortScanResult } from '@/shared/workspace-ports'
 
 const fetchHostedReviewForBranch = vi.fn()
 const fetchIssue = vi.fn()

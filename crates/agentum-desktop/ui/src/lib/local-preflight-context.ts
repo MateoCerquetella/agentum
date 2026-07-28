@@ -1,5 +1,5 @@
 import type { AppState } from '@/store/types'
-import { parseWslUncPath } from '../../../shared/wsl-paths'
+import { parseWslUncPath } from '@/shared/wsl-paths'
 
 export type LocalPreflightContext = { wslDistro?: string | null; wslDefault?: boolean } | undefined
 

@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import type { TerminalTab } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import type { TerminalTab } from '@/shared/types'
 import type { RetainedAgentEntry } from '@/store/slices/agent-status'
 import { applyAgentRowLineage } from '@/components/dashboard/agent-row-lineage'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { buildWorktreeAgentRows } from './worktree-agent-rows'
 
 const ORPHAN_PANE_KEY = makePaneKey('tab-orphan', '11111111-1111-4111-8111-111111111111')

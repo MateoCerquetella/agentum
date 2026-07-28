@@ -92,8 +92,8 @@ const mockApi = {
 // @ts-expect-error -- mocked browser preload API
 globalThis.window = { api: mockApi }
 
-import type { WorkspaceSessionState } from '../../../../shared/types'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+import type { WorkspaceSessionState } from '@/shared/types'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 import { createTestStore, makeLayout, makeTab, makeWorktree, seedStore } from './store-test-helpers'
 import { canGoBackWorktreeHistory } from './worktree-nav-history'
 

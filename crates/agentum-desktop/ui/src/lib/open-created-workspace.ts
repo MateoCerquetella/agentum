@@ -2,11 +2,10 @@ import type {
   TuiAgent,
   WorktreeDefaultTabsLaunch,
   WorktreeSetupLaunch
-} from '../../../shared/types'
+} from '@/shared/types'
 import { activateAndRevealWorktree, type IssueCommandLaunch } from './worktree-activation'
 import { launchAgentInNewTab } from './launch-agent-in-new-tab'
 import { stashPendingSessionPrompt } from './pending-session-prompt'
-import { maybeOfferWorkspaceHarnessRun } from './workspace-harness-offer'
 
 export type OpenCreatedWorkspaceOptions = {
   worktreeId: string
@@ -19,28 +18,18 @@ export type OpenCreatedWorkspaceOptions = {
   setup?: WorktreeSetupLaunch
   defaultTabs?: WorktreeDefaultTabsLaunch
   issueCommand?: IssueCommandLaunch
-  /** Spec 005 F1 (D2): a gated engine run owns the worktree's agents. Skip all
-   *  three plain-delivery paths — the draft-open, the picker prompt stash, and
-   *  the issueCommand automation — so exactly one (engine-spawned) agent runs. */
-  gatedRun?: boolean
 }
 
 /**
- * The plain-delivery decision, extracted pure so the spec 005 "three skips"
- * are unit-testable: with `gatedRun` armed all three paths are suppressed;
- * otherwise today's behavior — launch the selected agent (prompt rides as a
- * draft), stash the prompt for the picker when no agent was selected, and run
- * the issueCommand automation when one was built.
+ * The plain-delivery decision: launch the selected agent (the prompt rides as
+ * a draft), stash the prompt for the picker when no agent was selected, and
+ * run issue automation when one was built.
  */
 export function planCreatedWorkspaceOpen(opts: {
-  gatedRun?: boolean
   agent: TuiAgent | null
   prompt?: string
   hasIssueCommand: boolean
 }): { launchAgent: boolean; stashPrompt: boolean; runIssueCommand: boolean } {
-  if (opts.gatedRun) {
-    return { launchAgent: false, stashPrompt: false, runIssueCommand: false }
-  }
   const hasPrompt = Boolean(opts.prompt?.trim())
   return {
     launchAgent: opts.agent !== null,
@@ -66,15 +55,11 @@ export function planCreatedWorkspaceOpen(opts: {
  * along as an editable draft, which the bare reopen fallback can't carry); when
  * none was selected we deliberately want the picker, not an auto-launch.
  *
- * With `gatedRun` (spec 005 F1) the Harness Engine drives the worktree: the
- * activation still runs (repo `setup`/`defaultTabs` are project config, not
- * agents) but every plain delivery is suppressed per `planCreatedWorkspaceOpen`.
  */
 export function openCreatedWorkspace(opts: OpenCreatedWorkspaceOptions): void {
-  const { worktreeId, agent, setup, defaultTabs, issueCommand, gatedRun } = opts
+  const { worktreeId, agent, setup, defaultTabs, issueCommand } = opts
   const prompt = opts.prompt?.trim() ? opts.prompt : undefined
   const plan = planCreatedWorkspaceOpen({
-    ...(gatedRun !== undefined ? { gatedRun } : {}),
     agent,
     ...(prompt !== undefined ? { prompt } : {}),
     hasIssueCommand: Boolean(issueCommand)
@@ -84,8 +69,6 @@ export function openCreatedWorkspace(opts: OpenCreatedWorkspaceOptions): void {
     sidebarRevealBehavior: 'auto',
     ...(setup ? { setup } : {}),
     ...(defaultTabs ? { defaultTabs } : {}),
-    // Belt-and-braces with the composer-side suppression: a gated run never
-    // receives the issueCommand automation (the third skip).
     ...(plan.runIssueCommand && issueCommand ? { issueCommand } : {}),
     skipCreatedAgentStartup: true
   })
@@ -105,8 +88,4 @@ export function openCreatedWorkspace(opts: OpenCreatedWorkspaceOptions): void {
     // user chooses an agent; without this the typed text would be dropped.
     stashPendingSessionPrompt(worktreeId, prompt)
   }
-
-  // Spec 015 (D2): detect a harness spec in the new workspace's workdir and
-  // offer a run — fire-and-forget so the create flow never waits on fs.
-  void maybeOfferWorkspaceHarnessRun({ worktreeId, gatedRun: gatedRun === true })
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { TerminalTab, Worktree } from '../../../shared/types'
+import type { TerminalTab, Worktree } from '@/shared/types'
 import { countWorkingAgents, getWorkingAgentsPerWorktree } from './agent-status'
 
 function makeTab(overrides: Partial<TerminalTab> = {}): TerminalTab {

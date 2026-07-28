@@ -1,4 +1,4 @@
-import type { GitHubPRCheckSummary, PRCheckDetail } from '../../../shared/types'
+import type { GitHubPRCheckSummary, PRCheckDetail } from '@/shared/types'
 import { getCheckConclusion } from '@/lib/pr-check-format'
 
 function isPendingCheck(check: PRCheckDetail): boolean {

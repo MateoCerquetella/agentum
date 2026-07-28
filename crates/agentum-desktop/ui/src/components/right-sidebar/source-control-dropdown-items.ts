@@ -2,8 +2,8 @@
 // Why: split from source-control-primary-action because the primary and dropdown are independent derivations with different priority ladders; together they exceed the max-lines budget and tangle unrelated concerns.
 
 import type { PrimaryActionInputs } from './source-control-primary-action'
-import type { GitConflictOperation } from '../../../../shared/types'
-import { shouldForcePushWithLeaseForUpstream } from '../../../../shared/git-upstream-status'
+import type { GitConflictOperation } from '@/shared/types'
+import { shouldForcePushWithLeaseForUpstream } from '@/shared/git-upstream-status'
 
 export type DropdownActionInputs = PrimaryActionInputs & {
   conflictOperation?: GitConflictOperation

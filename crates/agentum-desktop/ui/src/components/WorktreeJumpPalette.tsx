@@ -14,8 +14,8 @@ import {
 } from '@/components/ui/command'
 import { branchName } from '@/lib/git-utils'
 import { parseGitHubIssueOrPRNumber, parseGitHubIssueOrPRLink } from '@/lib/github-links'
-import { getLinkedWorkItemSuggestedName } from '@/lib/new-workspace'
-import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
+import { requestNewSpecFromWorkItem } from '@/lib/sdd-new-spec-entry'
+import { useRepoSlugIndex } from '@/lib/repo-slug-index'
 import { sortWorktreesSmart } from '@/components/sidebar/smart-sort'
 import { isDefaultBranchWorkspace } from '@/components/sidebar/visible-worktrees'
 import { isInactiveWorkspace } from '@/lib/worktree-activity-state'
@@ -66,8 +66,8 @@ import {
   type CmdJActiveGroupSnapshot
 } from '@/components/cmd-j/quick-action-context'
 import { CMD_J_QUICK_ACTIONS } from '@/components/cmd-j/quick-actions'
-import type { BrowserPage, BrowserWorkspace, Worktree } from '../../../shared/types'
-import { isGitRepoKind } from '../../../shared/repo-kind'
+import type { BrowserPage, BrowserWorkspace, Worktree } from '@/shared/types'
+import { isGitRepoKind } from '@/shared/repo-kind'
 
 type WorktreePaletteItem = {
   id: string
@@ -246,6 +246,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
     (s) => s.openNewTerminalTabInActiveWorkspace
   )
   const settingsSections = useSettingsNavigationMetadata()
+  const { lookupSlug, ready: repoSlugIndexReady } = useRepoSlugIndex()
 
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
@@ -939,13 +940,20 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
         return
       }
 
-      // Resolve via gh.workItem: prefer the active repo, else the first eligible.
-      const eligibleRepos = state.repos.filter((r) => isGitRepoKind(r))
+      // Resolve only against Agentum projects that actually match the URL.
+      // A tracker URL can never fall back to manual workspace creation.
+      const eligibleRepos = lookupSlug(`${slug.owner}/${slug.repo}`).filter((r) =>
+        isGitRepoKind(r)
+      )
       const repoForLookup =
         (state.activeRepoId && eligibleRepos.find((r) => r.id === state.activeRepoId)) ||
         eligibleRepos[0]
       if (!repoForLookup) {
-        openComposer({ prefilledName: trimmed })
+        toast.error(
+          repoSlugIndexReady
+            ? 'Add this GitHub repository to Agentum before authoring its spec.'
+            : 'Repository identity is still loading. Try again in a moment.'
+        )
         return
       }
 
@@ -968,34 +976,32 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
           if (!createLookupGuard.isCurrent(lookupToken)) {
             return
           }
-          const data: Record<string, unknown> = { initialRepoId: repoForLookup.id }
           if (item) {
-            const linkedWorkItem: LinkedWorkItemSummary = {
-              type: item.type,
-              number: item.number,
+            requestNewSpecFromWorkItem({
+              repoId: repoForLookup.id,
               title: item.title,
-              url: item.url
-            }
-            data.linkedWorkItem = linkedWorkItem
-            data.prefilledName = getLinkedWorkItemSuggestedName({ title: item.title })
+              provider: 'github',
+              reference: item.url
+            })
           } else {
-            // Fallback: we couldn't resolve the URL, just seed the name.
-            data.prefilledName = `${slug.owner}-${slug.repo}-${number}`
+            requestNewSpecFromWorkItem({
+              repoId: repoForLookup.id,
+              title: `${slug.owner}/${slug.repo} #${number}`,
+              provider: 'github',
+              reference: trimmed
+            })
           }
-          queueMicrotask(() =>
-            openModal('new-workspace-composer', { ...data, telemetrySource: 'command_palette' })
-          )
         })
         .catch(() => {
           if (!createLookupGuard.isCurrent(lookupToken)) {
             return
           }
-          queueMicrotask(() =>
-            openModal('new-workspace-composer', {
-              initialRepoId: repoForLookup.id,
-              telemetrySource: 'command_palette'
-            })
-          )
+          requestNewSpecFromWorkItem({
+            repoId: repoForLookup.id,
+            title: `${slug.owner}/${slug.repo} #${number}`,
+            provider: 'github',
+            reference: trimmed
+          })
         })
       return
     }
@@ -1017,7 +1023,7 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
         (state.activeRepoId ? (repoMap.get(state.activeRepoId) ?? null) : null) ||
         [...getRepoMapFromState(state).values()].find((repo) => isGitRepoKind(repo))
       if (!repoForLookup || !isGitRepoKind(repoForLookup)) {
-        openComposer({ prefilledName: trimmed })
+        toast.error('Choose a Git project before authoring an issue spec.')
         return
       }
 
@@ -1030,41 +1036,29 @@ export default function WorktreeJumpPalette(): React.JSX.Element | null {
           if (!createLookupGuard.isCurrent(lookupToken)) {
             return
           }
-          const data: Record<string, unknown> = { initialRepoId: repoForLookup.id }
           if (item) {
-            const linkedWorkItem: LinkedWorkItemSummary = {
-              type: item.type,
-              number: item.number,
+            requestNewSpecFromWorkItem({
+              repoId: repoForLookup.id,
               title: item.title,
-              url: item.url
-            }
-            data.linkedWorkItem = linkedWorkItem
-            data.prefilledName = getLinkedWorkItemSuggestedName({ title: item.title })
+              provider: 'github',
+              reference: item.url
+            })
           } else {
-            data.prefilledName = trimmed
+            toast.error(`GitHub issue or pull request #${ghNumber} was not found.`)
           }
-          queueMicrotask(() =>
-            openModal('new-workspace-composer', { ...data, telemetrySource: 'command_palette' })
-          )
         })
         .catch(() => {
           if (!createLookupGuard.isCurrent(lookupToken)) {
             return
           }
-          queueMicrotask(() =>
-            openModal('new-workspace-composer', {
-              initialRepoId: repoForLookup.id,
-              prefilledName: trimmed,
-              telemetrySource: 'command_palette'
-            })
-          )
+          toast.error(`Could not load GitHub item #${ghNumber}.`)
         })
       return
     }
 
     // Case 3: plain name — open composer prefilled.
     openComposer(trimmed ? { prefilledName: trimmed } : {})
-  }, [allWorktrees, closeModal, createLookupGuard, createWorktreeName, openModal, repoMap])
+  }, [allWorktrees, closeModal, createLookupGuard, createWorktreeName, lookupSlug, openModal, repoMap, repoSlugIndexReady])
 
   const handleCloseAutoFocus = useCallback((e: Event) => {
     e.preventDefault()

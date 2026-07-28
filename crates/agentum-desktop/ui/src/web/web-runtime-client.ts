@@ -1,8 +1,8 @@
 /* eslint-disable max-lines -- Why: this browser runtime client owns the E2EE
    WebSocket state machine, JSON-RPC request routing, streaming callbacks, and
    binary frame forwarding as one transport boundary. */
-import type { RuntimeRpcResponse, RuntimeRpcSuccess } from '../../../shared/runtime-rpc-envelope'
-import { isKeepaliveFrame } from '../../../shared/runtime-rpc-envelope'
+import type { RuntimeRpcResponse, RuntimeRpcSuccess } from '@/shared/runtime-rpc-envelope'
+import { isKeepaliveFrame } from '@/shared/runtime-rpc-envelope'
 import type { WebPairingOffer } from './web-pairing'
 import {
   decrypt,

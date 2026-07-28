@@ -1,7 +1,7 @@
 import type { PtyTransport } from './pty-transport'
 import type { ReplayingPanesRef } from './replay-guard'
-import type { EventProps } from '../../../../shared/telemetry-events'
-import type { TuiAgent } from '../../../../shared/types'
+import type { EventProps } from '@/shared/telemetry-events'
+import type { TuiAgent } from '@/shared/types'
 
 export type PtyConnectionDeps = {
   tabId: string

@@ -1,5 +1,5 @@
 import type { AppState } from '../store'
-import type { WorkspaceSessionPatch } from '../../../shared/types'
+import type { WorkspaceSessionPatch } from '@/shared/types'
 import { SESSION_RELEVANT_FIELDS, shouldPersistWorkspaceSession } from './workspace-session'
 import { buildWorkspaceSessionPatch } from './workspace-session-patch'
 

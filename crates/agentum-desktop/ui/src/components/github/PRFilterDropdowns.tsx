@@ -19,8 +19,8 @@ import type {
   GitHubAssignableUser,
   GitHubOwnerRepo,
   GlobalSettings
-} from '../../../../shared/types'
-import type { ParsedTaskQuery } from '../../../../shared/task-query'
+} from '@/shared/types'
+import type { ParsedTaskQuery } from '@/shared/task-query'
 
 type Props = {
   parsed: ParsedTaskQuery

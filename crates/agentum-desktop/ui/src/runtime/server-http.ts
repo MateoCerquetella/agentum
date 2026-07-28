@@ -1,6 +1,6 @@
 // Low-level authed HTTP against the embedded agentum-server, shared by the
-// per-domain server clients (git, fs, …). Loopback + no-auth today, but
-// token-ready via server-endpoint.ts.
+// per-domain server clients (git, fs, …). The embedded desktop endpoint is
+// loopback-only and protected by a boot-scoped UI bearer from server-endpoint.
 import { apiUrl, getServerEndpoint } from './server-endpoint'
 
 async function authHeaders(): Promise<Record<string, string>> {
@@ -31,6 +31,10 @@ export async function getJson<T>(path: string): Promise<T> {
 
 export async function getText(path: string): Promise<string> {
   return (await run(path)).text()
+}
+
+export async function getBlob(path: string): Promise<Blob> {
+  return (await run(path)).blob()
 }
 
 async function bodyJson<T>(res: Response): Promise<T> {

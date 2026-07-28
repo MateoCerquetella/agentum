@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentStatusEntry, AgentStatusState } from '../../../../shared/agent-status-types'
+import type { AgentStatusEntry, AgentStatusState } from '@/shared/agent-status-types'
 import { collectRetainedAgentsOnDisappear } from './useRetainedAgents'
 
 function makeAgentRow(args: { paneKey: string; state: AgentStatusState; interrupted?: boolean }) {

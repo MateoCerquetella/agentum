@@ -1,6 +1,6 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { formatTokens } from '@/lib/stats-format'
-import type { CodexUsageDailyPoint } from '../../../../shared/codex-usage-types'
+import type { CodexUsageDailyPoint } from '@/shared/codex-usage-types'
 
 function getMaxDailyTotal(daily: CodexUsageDailyPoint[]): number {
   let max = 1

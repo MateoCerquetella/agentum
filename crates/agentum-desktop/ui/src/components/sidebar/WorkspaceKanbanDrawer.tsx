@@ -30,12 +30,12 @@ import {
   shouldWriteManualOrderForGroupDrop,
   type WorktreeDragGroup
 } from './worktree-manual-order'
-import type { WorkspaceStatus, WorktreeMeta } from '../../../../shared/types'
+import type { WorkspaceStatus, WorktreeMeta } from '@/shared/types'
 import {
   WORKSPACE_BOARD_COLUMN_GAP,
   fitWorkspaceBoardColumnWidth,
   makeWorkspaceStatusId
-} from '../../../../shared/workspace-statuses'
+} from '@/shared/workspace-statuses'
 
 type WorkspaceKanbanDrawerProps = {
   open: boolean

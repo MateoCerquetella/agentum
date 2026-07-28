@@ -7,8 +7,8 @@ import {
   encodeTerminalStreamFrame,
   encodeTerminalStreamJson,
   encodeTerminalStreamText
-} from '../../../../shared/terminal-stream-protocol'
-import { createTerminalSessionStateSaveFailureMessage } from '../../../../shared/terminal-session-state-save-failure'
+} from '@/shared/terminal-stream-protocol'
+import { createTerminalSessionStateSaveFailureMessage } from '@/shared/terminal-session-state-save-failure'
 
 describe('createIpcPtyTransport', () => {
   const originalWindow = (globalThis as { window?: typeof window }).window
@@ -261,6 +261,9 @@ describe('createIpcPtyTransport', () => {
 
     const sshTransport = createIpcPtyTransport({ connectionId: 'ssh-1' })
     await sshTransport.connect({ url: '', callbacks: {} })
+    expect(window.api.pty.spawn).toHaveBeenLastCalledWith(
+      expect.objectContaining({ connectionId: 'ssh-1' })
+    )
     expect(sshTransport.sendInputAccepted).toBeUndefined()
   })
 

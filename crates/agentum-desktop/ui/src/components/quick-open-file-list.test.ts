@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Worktree } from '../../../shared/types'
-import { buildExcludePathPrefixes } from '../../../shared/quick-open-filter'
+import type { Worktree } from '@/shared/types'
+import { buildExcludePathPrefixes } from '@/shared/quick-open-filter'
 import {
   getNestedWorktreeExcludePaths,
   getNestedWorktreeExcludeRequest,

@@ -3,7 +3,7 @@ import { api } from '@/tauri'
    splitting individual settings into separate files would scatter related controls without a
    meaningful abstraction boundary. */
 import { useEffect, useRef, useState } from 'react'
-import type { GlobalSettings, OpenInApplication } from '../../../../shared/types'
+import type { GlobalSettings, OpenInApplication } from '@/shared/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
@@ -15,8 +15,8 @@ import {
   DEFAULT_EDITOR_AUTO_SAVE_DELAY_MS,
   MAX_EDITOR_AUTO_SAVE_DELAY_MS,
   MIN_EDITOR_AUTO_SAVE_DELAY_MS
-} from '../../../../shared/constants'
-import { OPEN_IN_APPLICATIONS_MAX } from '../../../../shared/open-in-applications'
+} from '@/shared/constants'
+import { OPEN_IN_APPLICATIONS_MAX } from '@/shared/open-in-applications'
 import { clampNumber } from '@/lib/terminal-theme'
 import {
   GENERAL_CACHE_TIMER_SEARCH_ENTRIES,
@@ -39,7 +39,7 @@ import {
   SettingsSwitchRow
 } from './SettingsFormControls'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import { normalizeProxyBypassRules, normalizeProxyUrl } from '../../../../shared/network-proxy'
+import { normalizeProxyBypassRules, normalizeProxyUrl } from '@/shared/network-proxy'
 
 function createOpenInApplication(): OpenInApplication {
   return {

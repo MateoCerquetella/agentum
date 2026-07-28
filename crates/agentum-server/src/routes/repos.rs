@@ -12,7 +12,7 @@
 //! window); everything else — list/add/update/create/clone/remove/reorder and
 //! the base-ref helpers — is here.
 
-use super::board_goals::SlugReason;
+use super::util::SlugReason;
 use super::util::now_millis;
 use std::path::{Path as StdPath, PathBuf};
 
@@ -136,12 +136,14 @@ fn write_repos(repos: &[Repo]) -> Result<(), ApiError> {
     std::fs::write(path, format!("{serialized}\n")).map_err(|e| ApiError::Internal(e.to_string()))
 }
 
-fn detect_kind(path: &str) -> String {
-    if StdPath::new(path).join(".git").exists() {
-        "git".to_string()
-    } else {
-        "folder".to_string()
-    }
+fn detect_kind(directory: &std::fs::File) -> String {
+    let is_git = cap_primitives::fs::stat(
+        directory,
+        StdPath::new(".git"),
+        cap_primitives::fs::FollowSymlinks::No,
+    )
+    .is_ok_and(|metadata| !metadata.is_symlink() && (metadata.is_dir() || metadata.is_file()));
+    if is_git { "git" } else { "folder" }.into()
 }
 
 fn basename(path: &str) -> String {
@@ -175,7 +177,10 @@ fn register_repo(
         if connection_id.is_some() {
             "git".to_string()
         } else {
-            detect_kind(&path)
+            // HTTP registration resolves local kinds before this pure registry
+            // seam. Tests and internal callers that deliberately omit it get
+            // the conservative non-Git default without probing an ambient path.
+            "folder".to_string()
         }
     });
     let repo = Repo {
@@ -235,13 +240,33 @@ struct AddBody {
 /// `POST /api/repos` — register `path`. Returns `{repo}` or `{error}` (the
 /// renderer's add-project dialogs branch on `'error' in result`).
 async fn add(Json(body): Json<AddBody>) -> Result<Json<Value>, ApiError> {
-    // Only validate existence for LOCAL paths; a remote path can't be stat'd here.
-    if body.connection_id.is_none() && !StdPath::new(&body.path).exists() {
-        return Ok(Json(
-            serde_json::json!({ "error": format!("path does not exist: {}", body.path) }),
+    if body.connection_id.is_some() && body.host_id.is_none() {
+        return Err(ApiError::BadRequest(
+            "remote repo is missing hostId; reconnect or re-add the project before server-side operations"
+                .into(),
         ));
     }
-    let repo = append_repo(body.path, body.kind, body.connection_id, body.host_id)?;
+    // A local registration is an explicit user-selected directory capability.
+    // Resolve it once, pin a no-follow handle, and store the canonical path so
+    // later operations cannot be redirected by a linked ancestor. Remote paths
+    // stay opaque and are never reinterpreted on the daemon's filesystem.
+    let (path, kind) = if body.connection_id.is_none() {
+        let path = match canonical_local_directory(&body.path) {
+            Ok(path) => path,
+            Err(_) => {
+                return Ok(Json(serde_json::json!({
+                    "error": format!("path does not exist or is not a directory: {}", body.path)
+                })));
+            }
+        };
+        let directory = crate::host_runtime::open_local_directory_chain_nofollow(&path)
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        let kind = body.kind.or_else(|| Some(detect_kind(&directory)));
+        (path.to_string_lossy().into_owned(), kind)
+    } else {
+        (body.path, body.kind)
+    };
+    let repo = append_repo(path, kind, body.connection_id, body.host_id)?;
     Ok(Json(serde_json::json!({ "repo": repo })))
 }
 
@@ -291,26 +316,31 @@ struct CreateBody {
 
 /// `POST /api/repos/create` — make a new folder (optionally `git init`) + register.
 async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
-    // `name` is a single new folder under `parent_path` — reject separators/`..`
-    // so it can't escape, and a leading dash so `git init` can't read it as a flag.
-    if body.name.contains('/') || body.name.contains('\\') || body.name == ".." {
+    if !matches!(body.kind.as_str(), "git" | "folder") {
+        return Err(ApiError::BadRequest("kind must be git or folder".into()));
+    }
+    #[cfg(not(unix))]
+    if body.kind == "git" {
         return Err(ApiError::BadRequest(
-            "name must be a single path segment (no '/' or '..')".into(),
+            "secure descriptor-bound git initialization is unsupported on this operating system"
+                .into(),
         ));
     }
-    let target = StdPath::new(&body.parent_path).join(&body.name);
-    if target.exists() {
-        return Ok(Json(serde_json::json!({
-            "error": format!("path already exists: {}", target.display())
-        })));
-    }
-    std::fs::create_dir_all(&target).map_err(|e| ApiError::Internal(e.to_string()))?;
+    validate_repository_child_name(&body.name)?;
+    let (target, _directory_guard) =
+        match create_local_repository_directory(&body.parent_path, &body.name) {
+            Ok(created) => created,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let display = StdPath::new(&body.parent_path).join(&body.name);
+                return Ok(Json(serde_json::json!({
+                    "error": format!("path already exists: {}", display.display())
+                })));
+            }
+            Err(error) => return Err(ApiError::BadRequest(error.to_string())),
+        };
+    #[cfg(unix)]
     if body.kind == "git" {
-        let status = Command::new("git")
-            .arg("init")
-            .arg("--")
-            .arg(&target)
-            .status()
+        let status = git_init_directory(&_directory_guard)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
         if !status.success() {
@@ -324,6 +354,84 @@ async fn create(Json(body): Json<CreateBody>) -> Result<Json<Value>, ApiError> {
         None,
     )?;
     Ok(Json(serde_json::json!({ "repo": repo })))
+}
+
+fn canonical_local_directory(raw: &str) -> Result<PathBuf, std::io::Error> {
+    let path = StdPath::new(raw);
+    if raw.trim().is_empty() || !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "local repository path must be absolute",
+        ));
+    }
+    let path = path.canonicalize()?;
+    if !path.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "local repository path must be a directory",
+        ));
+    }
+    Ok(path)
+}
+
+fn create_local_repository_directory(
+    parent_raw: &str,
+    name: &str,
+) -> Result<(PathBuf, std::fs::File), std::io::Error> {
+    let parent = canonical_local_directory(parent_raw)?;
+    let parent_directory = crate::host_runtime::open_local_directory_chain_nofollow(&parent)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    cap_primitives::fs::create_dir(
+        &parent_directory,
+        StdPath::new(name),
+        &cap_primitives::fs::DirOptions::new(),
+    )?;
+    let directory = cap_primitives::fs::open_dir_nofollow(&parent_directory, StdPath::new(name))?;
+    Ok((parent.join(name), directory))
+}
+
+/// Initialize Git with the already-open child directory as the process working
+/// directory. An ambient path is not safe here: another process can rename the
+/// newly-created directory and replace its old name with a symlink between
+/// creation and `git init`. `fchdir` binds the child process to the held inode
+/// before `exec`, so Git can only modify the directory Agentum created.
+#[cfg(unix)]
+async fn git_init_directory(
+    directory: &std::fs::File,
+) -> Result<std::process::ExitStatus, std::io::Error> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt as _;
+
+    let descriptor = directory.as_raw_fd();
+    let mut command = Command::new("git");
+    command.args(["init", "--", "."]);
+    // SAFETY: `fchdir` is async-signal-safe, the descriptor remains owned by
+    // `directory` until the child has been spawned, and the callback performs
+    // no allocation or other non-signal-safe work after `fork`.
+    unsafe {
+        command.as_std_mut().pre_exec(move || {
+            if libc::fchdir(descriptor) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    command.status().await
+}
+
+fn validate_repository_child_name(name: &str) -> Result<(), ApiError> {
+    let mut components = StdPath::new(name).components();
+    let valid = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+        && !name.starts_with('-')
+        && !name.contains(['\0', '/', '\\']);
+    if !valid {
+        return Err(ApiError::BadRequest(
+            "name must be one non-option path segment".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -408,9 +516,92 @@ pub(crate) fn all_repo_ids() -> Result<Vec<String>, ApiError> {
     Ok(read_repos()?.into_iter().map(|repo| repo.id).collect())
 }
 
+#[cfg(test)]
+#[derive(Clone)]
+struct TestRepository {
+    path: String,
+    host_id: Option<Uuid>,
+}
+
+#[cfg(test)]
+fn test_repositories()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, TestRepository>> {
+    static REPOSITORIES: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, TestRepository>>,
+    > = std::sync::OnceLock::new();
+    REPOSITORIES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(test)]
+pub(crate) struct TestRepositoryRegistration(String);
+
+#[cfg(test)]
+impl Drop for TestRepositoryRegistration {
+    fn drop(&mut self) {
+        test_repositories()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.0);
+    }
+}
+
+/// Scoped, in-process repository injection for tests. This avoids changing
+/// process-wide account-directory variables or touching a developer's real
+/// repository registry.
+#[cfg(test)]
+pub(crate) fn register_test_repo(
+    repo_id: impl Into<String>,
+    path: impl Into<String>,
+) -> TestRepositoryRegistration {
+    let repo_id = repo_id.into();
+    test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            repo_id.clone(),
+            TestRepository {
+                path: path.into(),
+                host_id: None,
+            },
+        );
+    TestRepositoryRegistration(repo_id)
+}
+
+/// Scoped remote repository injection for route-boundary tests. Keeping the
+/// host identity beside the path proves callers do not silently reinterpret a
+/// remote checkout as local when a capability is unavailable.
+#[cfg(test)]
+pub(crate) fn register_test_remote_repo(
+    repo_id: impl Into<String>,
+    path: impl Into<String>,
+    host_id: Uuid,
+) -> TestRepositoryRegistration {
+    let repo_id = repo_id.into();
+    test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(
+            repo_id.clone(),
+            TestRepository {
+                path: path.into(),
+                host_id: Some(host_id),
+            },
+        );
+    TestRepositoryRegistration(repo_id)
+}
+
 /// Resolve a repoId to its checkout path via the registry. `pub(crate)` so the
 /// worktrees route can resolve the same path without duplicating the read.
 pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
+    #[cfg(test)]
+    if let Some(repository) = test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(repo_id)
+        .cloned()
+    {
+        return Ok(repository.path);
+    }
     read_repos()?
         .iter()
         .find(|repo| repo.id == repo_id)
@@ -418,10 +609,19 @@ pub(crate) fn resolve_repo_path(repo_id: &str) -> Result<String, ApiError> {
         .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))
 }
 
-/// The server host id a repo lives on, or `None` for a local repo. `None`
-/// when the repo carries no `host_id` (a local repo, or one added before
-/// this field existed). `pub(crate)` so the worktrees route shares it.
+/// The server host id a repo lives on, or `None` for a local repo. Legacy
+/// remote rows that predate `host_id` are rejected: their path is not local
+/// merely because the newer routing field is absent.
 pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiError> {
+    #[cfg(test)]
+    if let Some(repository) = test_repositories()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(repo_id)
+        .cloned()
+    {
+        return Ok(repository.host_id);
+    }
     host_id_of(&read_repos()?, repo_id)
 }
 
@@ -430,16 +630,22 @@ pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiErr
 /// `Ok(Some(_))` = a server host, `Err(NotFound)` = the id isn't registered —
 /// never a silent local fallback (spec 020 D1).
 fn host_id_of(repos: &[Repo], repo_id: &str) -> Result<Option<Uuid>, ApiError> {
-    repos
+    let repo = repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .map(|repo| repo.host_id)
-        .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))
+        .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))?;
+    match (repo.host_id, repo.connection_id.as_deref()) {
+        (Some(host_id), _) => Ok(Some(host_id)),
+        (None, Some(_)) => Err(ApiError::BadRequest(format!(
+            "remote repo {repo_id} is missing hostId; reconnect or re-add the project"
+        ))),
+        (None, None) => Ok(None),
+    }
 }
 
 /// Load the [`Host`] a repo's git/worktree ops run on. Mirrors
-/// `sessions::load_host_for_session`: the repo's `host_id` (or the local
-/// host when absent) → `store.get_host`. `pub(crate)` so the worktrees
+/// `sessions::load_host_for_session`: the repo's `host_id` (or the local host
+/// for an explicitly local row) → `store.get_host`. `pub(crate)` so the worktrees
 /// route resolves the same host. A repo whose recorded host has since been
 /// deleted surfaces a clear error rather than silently running locally.
 pub(crate) async fn load_host_for_repo(state: &AppState, repo_id: &str) -> Result<Host, ApiError> {
@@ -627,7 +833,7 @@ fn slug_reason_wire(reason: SlugReason) -> (StatusCode, &'static str, &'static s
 /// with/without-origin contract is testable against a temp git repo without
 /// touching the real `~/.agentum` registry.
 async fn slug_on_host(host: &Host, path: &str) -> Result<RepoSlugResponse, ApiError> {
-    let slug = super::board_goals::resolve_github_slug(host, path, None)
+    let slug = super::util::resolve_github_slug(host, path, None)
         .await
         .map_err(|reason| {
             let (status, code, message) = slug_reason_wire(reason);
@@ -674,6 +880,52 @@ mod tests {
             host_id: None,
             extra: Map::new(),
         }
+    }
+
+    #[test]
+    fn repository_child_names_are_exactly_one_non_option_component() {
+        assert!(validate_repository_child_name("project").is_ok());
+        for unsafe_name in ["", ".", "..", "../escape", "a/b", "a\\b", "-flag"] {
+            assert!(
+                validate_repository_child_name(unsafe_name).is_err(),
+                "accepted {unsafe_name:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_creation_never_reuses_a_racing_symlink_destination() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), parent.path().join("project")).unwrap();
+        let result = create_local_repository_directory(&parent.path().to_string_lossy(), "project");
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn git_init_remains_bound_after_created_directory_is_renamed_and_replaced() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let (target, directory) =
+            create_local_repository_directory(&parent.path().to_string_lossy(), "project").unwrap();
+        let moved = parent.path().join("moved-project");
+        std::fs::rename(&target, &moved).unwrap();
+        symlink(outside.path(), &target).unwrap();
+
+        let status = git_init_directory(&directory).await.unwrap();
+        assert!(status.success());
+        assert!(moved.join(".git").is_dir());
+        assert!(!outside.path().join(".git").exists());
     }
 
     // ── spec 015 F1: identity is (path, connection_id) ──────────────────────
@@ -835,6 +1087,18 @@ mod tests {
     }
 
     #[test]
+    fn host_id_of_legacy_remote_never_falls_back_local() {
+        let remote = repo_with("/srv/project", Some("ssh-legacy"));
+        let err = host_id_of(std::slice::from_ref(&remote), &remote.id).unwrap_err();
+        match err {
+            ApiError::BadRequest(message) => {
+                assert!(message.contains("missing hostId"), "got: {message}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn host_id_of_unknown_id_is_not_found() {
         // D1: an unknown repoId is a loud NotFound, never a silent local pick.
         let repos = vec![repo_with("/x/proj", None)];
@@ -883,7 +1147,7 @@ mod tests {
     /// 020 invariant this wire exists to carry.
     #[test]
     fn slug_reason_wire_distinguishes_transport_from_semantic() {
-        use super::super::board_goals::SlugReason;
+        use super::super::util::SlugReason;
         let (semantic_status, semantic_code, semantic_msg) =
             slug_reason_wire(SlugReason::NoGithubRemote);
         let (transport_status, transport_code, transport_msg) =

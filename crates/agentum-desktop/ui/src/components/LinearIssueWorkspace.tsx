@@ -56,7 +56,7 @@ import type {
   LinearIssue,
   LinearIssueChildSummary,
   LinearProjectSummary
-} from '../../../shared/types'
+} from '@/shared/types'
 
 type LinearIssueWorkspaceProps = {
   issue: LinearIssue | null
@@ -684,13 +684,13 @@ export default function LinearIssueWorkspace({
                 variant="ghost"
                 size="icon-sm"
                 onClick={handleUseIssue}
-                aria-label="Start workspace from issue"
+                aria-label="Author spec from issue"
               >
                 <ArrowRight className="size-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" sideOffset={6}>
-              Start workspace
+              New Spec
             </TooltipContent>
           </Tooltip>
           {variant === 'sheet' ? (
@@ -877,7 +877,7 @@ export default function LinearIssueWorkspace({
         </VisuallyHidden.Root>
         <VisuallyHidden.Root asChild>
           <SheetDescription>
-            Preview, edit, and start work from the selected issue.
+            Preview, edit, and author a specification from the selected issue.
           </SheetDescription>
         </VisuallyHidden.Root>
 

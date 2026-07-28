@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   ClaudeRateLimitAccountsState,
   CodexRateLimitAccountsState
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { buildClaudeStatusSwitchGroups, buildCodexStatusSwitchGroups } from './StatusBar'
 
 const hostLabel = navigator.userAgent.includes('Windows') ? 'Windows' : 'This device'

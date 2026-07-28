@@ -4,7 +4,7 @@ import {
   DEFAULT_EDITOR_AUTO_SAVE_DELAY_MS,
   MAX_EDITOR_AUTO_SAVE_DELAY_MS,
   MIN_EDITOR_AUTO_SAVE_DELAY_MS
-} from '../../../../shared/constants'
+} from '@/shared/constants'
 import { clampNumber } from '@/lib/terminal-theme'
 
 export const AGENTUM_EDITOR_QUIESCE_FILE_SAVES_EVENT = 'agentum:editor-quiesce-file-saves'

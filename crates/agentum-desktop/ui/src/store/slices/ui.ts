@@ -21,28 +21,28 @@ import type {
   WorkspaceStatusDefinition,
   AgentActivityDisplayMode,
   WorktreeCardProperty
-} from '../../../../shared/types'
-import { GLOBAL_TASK_PROJECT_SCOPE } from '../../../../shared/types'
-import { taskProjectScopeKey } from '../../../../shared/task-project-scope'
-import type { LaunchSource } from '../../../../shared/telemetry-events'
-import { tuiAgentToAgentKind } from '../../../../shared/agent-kind'
-import { PET_SIZE_DEFAULT, PET_SIZE_MAX, PET_SIZE_MIN } from '../../../../shared/types'
+} from '@/shared/types'
+import { GLOBAL_TASK_PROJECT_SCOPE } from '@/shared/types'
+import { taskProjectScopeKey } from '@/shared/task-project-scope'
+import type { LaunchSource } from '@/shared/telemetry-events'
+import { tuiAgentToAgentKind } from '@/shared/agent-kind'
+import { PET_SIZE_DEFAULT, PET_SIZE_MAX, PET_SIZE_MIN } from '@/shared/types'
 import {
   WORKSPACE_CLEANUP_CLASSIFIER_VERSION,
   type WorkspaceCleanupDismissal
-} from '../../../../shared/workspace-cleanup'
-import { normalizeFeatureTipIds, type FeatureTipId } from '../../../../shared/feature-tips'
+} from '@/shared/workspace-cleanup'
+import { normalizeFeatureTipIds, type FeatureTipId } from '@/shared/feature-tips'
 import {
   normalizeFeatureInteractions,
   type FeatureInteractionId,
   type FeatureInteractionState
-} from '../../../../shared/feature-interactions'
-import { PER_REPO_FETCH_LIMIT } from '../../../../shared/work-items'
+} from '@/shared/feature-interactions'
+import { PER_REPO_FETCH_LIMIT } from '@/shared/work-items'
 import {
   normalizeVisibleTaskProviders,
   restoreAvailableDefaultTaskProvider,
   resolveVisibleTaskProvider
-} from '../../../../shared/task-providers'
+} from '@/shared/task-providers'
 import {
   DEFAULT_HIDE_SLEEPING_WORKSPACES,
   DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE,
@@ -52,7 +52,7 @@ import {
   DEFAULT_WORKTREE_CARD_PROPERTIES,
   normalizeAgentActivityDisplayMode,
   normalizeWorktreeCardProperties
-} from '../../../../shared/constants'
+} from '@/shared/constants'
 import {
   WORKSPACE_BOARD_COLUMN_WIDTH_DEFAULT,
   clampWorkspaceBoardColumnWidth,
@@ -60,8 +60,8 @@ import {
   cloneDefaultWorkspaceStatuses,
   normalizeWorkspaceBoardColumnLayout,
   normalizeWorkspaceStatuses
-} from '../../../../shared/workspace-statuses'
-import { normalizeKagiSessionLink } from '../../../../shared/browser-url'
+} from '@/shared/workspace-statuses'
+import { normalizeKagiSessionLink } from '@/shared/browser-url'
 import type { AgentumHookScriptKind } from '../../lib/agentum-hook-trust'
 import {
   filterSetupScriptPromptDismissalsToValidRepos,
@@ -69,8 +69,8 @@ import {
 } from '../../lib/setup-script-prompt'
 import { DEFAULT_PET_ID, isBundledPetId } from '../../components/pet/pet-models'
 import { revokeCustomPetBlobUrl } from '../../components/pet/pet-blob-cache'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
-import type { WorkspacePortScanResult } from '../../../../shared/workspace-ports'
+import { isGitRepoKind } from '@/shared/repo-kind'
+import type { WorkspacePortScanResult } from '@/shared/workspace-ports'
 import { agentTypeToIconAgent, formatAgentTypeLabel } from '../../lib/agent-status'
 import {
   deriveRunningAgentSendTargets,
@@ -475,48 +475,24 @@ export type UISlice = {
     | 'settings'
     | 'tasks'
     | 'activity'
-    | 'skills'
-    | 'harness'
     | 'project'
     | 'projects'
   previousViewBeforeTasks:
     | 'terminal'
     | 'settings'
     | 'activity'
-    | 'skills'
-    | 'harness'
     | 'project'
     | 'projects'
   previousViewBeforeSettings:
     | 'terminal'
     | 'tasks'
     | 'activity'
-    | 'skills'
-    | 'harness'
     | 'project'
     | 'projects'
   previousViewBeforeActivity:
     | 'terminal'
     | 'settings'
     | 'tasks'
-    | 'skills'
-    | 'harness'
-    | 'project'
-    | 'projects'
-  previousViewBeforeSkills:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'harness'
-    | 'project'
-    | 'projects'
-  previousViewBeforeHarness:
-    | 'terminal'
-    | 'settings'
-    | 'tasks'
-    | 'activity'
-    | 'skills'
     | 'project'
     | 'projects'
   /** Where the hub returns on close — 'projects' when it was opened from the
@@ -526,14 +502,12 @@ export type UISlice = {
     | 'settings'
     | 'tasks'
     | 'activity'
-    | 'skills'
-    | 'harness'
     | 'projects'
-  previousViewBeforeProjects: 'terminal' | 'settings' | 'tasks' | 'activity' | 'skills' | 'harness' | 'project'
-  /** Which tab the Project Hub shows (ADE redesign: a project opens as a hub
-   *  with per-project Chat / Wiki / Tasks / Tracker / Sessions). Survives tab
+  previousViewBeforeProjects: 'terminal' | 'settings' | 'tasks' | 'activity' | 'project'
+  /** Which tab the Project Hub shows (a project opens as a hub
+   *  with per-project Specs / Wiki / Tasks / Tracker / Sessions). Survives tab
    *  switches within a session; the repo itself is `activeRepoId`. */
-  projectHubTab: 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
+  projectHubTab: 'specs' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
   setProjectHubTab: (tab: UISlice['projectHubTab']) => void
   /** Open the per-project hub for a repo (sidebar project click). Sets the
    *  active repo, seeds the embedded Tasks tab's repo preselection, and
@@ -593,10 +567,6 @@ export type UISlice = {
   closeTaskPage: () => void
   openActivityPage: () => void
   closeActivityPage: () => void
-  openSkillsPage: () => void
-  closeSkillsPage: () => void
-  openHarnessPage: () => void
-  closeHarnessPage: () => void
   /** Open the Projects page (the card-grid picker; per Mateo the sidebar
    *  never lists repos — projects are chosen inside this page, then the hub). */
   openProjectsPage: () => void
@@ -960,11 +930,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
   previousViewBeforeTasks: 'terminal',
   previousViewBeforeSettings: 'terminal',
   previousViewBeforeActivity: 'terminal',
-  previousViewBeforeSkills: 'terminal',
-  previousViewBeforeHarness: 'terminal',
   previousViewBeforeProject: 'terminal',
   previousViewBeforeProjects: 'terminal',
-  projectHubTab: 'chat',
+  projectHubTab: 'specs',
   setProjectHubTab: (tab) => set({ projectHubTab: tab }),
   openProjectHub: (repoId, tab, seed) => {
     // Why: the hub's embedded Tasks tab is the full TaskPage seeded from
@@ -1191,26 +1159,6 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set((state) => ({
       activeView: state.previousViewBeforeActivity
     })),
-  openSkillsPage: () =>
-    set((state) => ({
-      activeView: 'skills',
-      previousViewBeforeSkills:
-        state.activeView === 'skills' ? state.previousViewBeforeSkills : state.activeView
-    })),
-  closeSkillsPage: () =>
-    set((state) => ({
-      activeView: state.previousViewBeforeSkills
-    })),
-  openHarnessPage: () =>
-    set((state) => ({
-      activeView: 'harness',
-      previousViewBeforeHarness:
-        state.activeView === 'harness' ? state.previousViewBeforeHarness : state.activeView
-    })),
-  closeHarnessPage: () =>
-    set((state) => ({
-      activeView: state.previousViewBeforeHarness
-    })),
   openProjectsPage: () =>
     set((state) => ({
       activeView: 'projects',
@@ -1240,7 +1188,12 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     // always restore the view it was opened from — no activity→terminal fallback.
     set((state) => ({ activeView: state.previousViewBeforeSettings })),
   settingsNavigationTarget: null,
-  openSettingsTarget: (target) => set({ settingsNavigationTarget: target }),
+  openSettingsTarget: (target) => {
+    if (target.pane === 'floating-workspace') {
+      get().recordFeatureInteraction?.('floating-workspace')
+    }
+    set({ settingsNavigationTarget: target })
+  },
   clearSettingsTarget: () => set({ settingsNavigationTarget: null }),
 
   activeModal: 'none',

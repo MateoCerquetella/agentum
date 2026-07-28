@@ -8,9 +8,9 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { applyDocumentTheme } from '@/lib/document-theme'
 import { track } from '@/lib/telemetry'
 import { buildAgentPickedPayload } from './agent-picked-payload'
-import { ONBOARDING_FINAL_STEP } from '../../../../shared/constants'
-import type { FeatureWallTourDepthSummary } from '../../../../shared/feature-wall-tour-depth'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import { ONBOARDING_FINAL_STEP } from '@/shared/constants'
+import type { FeatureWallTourDepthSummary } from '@/shared/feature-wall-tour-depth'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   buildNestedRepoImportActionTelemetry,
   buildNestedRepoImportResultTelemetry,
@@ -18,15 +18,15 @@ import {
   createNestedRepoTelemetryAttemptId,
   shouldEmitNestedRepoImportSubmitTelemetry,
   type NestedRepoTelemetryRuntimeKind
-} from '../../../../shared/nested-repo-telemetry'
-import type { EventProps } from '../../../../shared/telemetry-events'
+} from '@/shared/nested-repo-telemetry'
+import type { EventProps } from '@/shared/telemetry-events'
 import type {
   GlobalSettings,
   NestedRepoScanResult,
   OnboardingState,
   Repo,
   TuiAgent
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   DEFAULT_ONBOARDING_FEATURE_SETUP_SELECTION,
   ONBOARDING_FEATURE_SETUP_IDS,

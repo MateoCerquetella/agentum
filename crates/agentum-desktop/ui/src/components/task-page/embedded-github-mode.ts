@@ -8,7 +8,7 @@ import type { BoardProjectResolution } from '@/lib/board-project-resolution'
  * leaked into the new project.
  */
 export function embeddedGithubModeForResolution(
-  _resolution: Exclude<BoardProjectResolution, { source: 'pending' }>
+  _resolution: BoardProjectResolution
 ): 'project' {
   return 'project'
 }

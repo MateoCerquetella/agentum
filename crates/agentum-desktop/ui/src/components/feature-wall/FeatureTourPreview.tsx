@@ -33,7 +33,7 @@ export const FEATURE_TOUR_PREVIEW_COPY: readonly FeatureTourPreviewFrameCopy[] =
     id: 3,
     title: 'GitHub & Linear tasks',
     caption:
-      'Skip the tab-switching. Pick from your GitHub or Linear backlog and start a workspace in one click.'
+      'Skip the tab-switching. Turn GitHub or Linear work into a reviewed, project-owned spec.'
   },
   {
     id: 4,
@@ -243,7 +243,7 @@ function TasksFrame(): JSX.Element {
             </span>
             <span className="feature-tour-tasks-pill relative ml-auto flex h-6 items-center justify-center overflow-hidden rounded-full border border-emerald-500/30 bg-emerald-500/15">
               <span className="feature-tour-tasks-pill-label flex items-center gap-1 whitespace-nowrap pl-3 pr-2.5 text-[13px] font-semibold leading-none tracking-[0.01em] text-primary-foreground">
-                Start
+                New Spec
                 <svg
                   width="11"
                   height="11"
@@ -276,22 +276,21 @@ function TasksFrame(): JSX.Element {
           </div>
         </div>
 
-        <div className="feature-tour-tasks-workspace flex flex-col gap-2 rounded-md border border-border bg-background px-4 py-2.5">
+        <div className="feature-tour-tasks-spec flex flex-col gap-2 rounded-md border border-border bg-background px-4 py-2.5">
           <div className="flex items-center gap-2.5">
-            <WorkingSpinner />
+            <span className="size-2.5 rounded-full bg-amber-500" />
             <span className="truncate text-[15.5px] font-medium leading-none text-foreground">
-              fix/worktree-picker-truncates
+              Worktree picker truncates
             </span>
-            <span className="ml-auto inline-flex">
-              <ClaudeIcon size={13} />
+            <span className="ml-auto rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-700 dark:text-amber-300">
+              Approval required
             </span>
           </div>
-          <div className="flex items-center gap-2.5 pl-4">
-            <WorkingSpinner size="xs" />
-            <ClaudeIcon size={12} />
-            <span className="h-2 w-[55%] rounded-full bg-foreground/15" />
+          <div className="flex items-center gap-2.5 pl-4 font-mono text-[12px] text-muted-foreground">
+            <span>SPC-01K…</span>
+            <span>RQ-1 · AC-1</span>
           </div>
-          <div className="text-[13.5px] leading-none text-muted-foreground">Linked to GH #1842</div>
+          <div className="text-[13.5px] leading-none text-muted-foreground">Source: GH #1842</div>
         </div>
       </div>
     </div>

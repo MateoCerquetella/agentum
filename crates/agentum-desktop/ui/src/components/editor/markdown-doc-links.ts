@@ -1,4 +1,4 @@
-import type { MarkdownDocument } from '../../../../shared/types'
+import type { MarkdownDocument } from '@/shared/types'
 import { slugMarkdownHeading } from './markdown-heading-slug'
 
 const MARKDOWN_DOC_LINK_PREFIX = '#agentum-doc-link='

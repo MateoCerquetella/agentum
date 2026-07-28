@@ -6,8 +6,8 @@ import {
   getRuntimeMobileSessionSyncKey,
   runtimeMobileSessionSyncKeysEqual
 } from './sync-runtime-graph'
-import type { AgentStatusEntry } from '../../../shared/agent-status-types'
-import { getDefaultSettings } from '../../../shared/constants'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
+import { getDefaultSettings } from '@/shared/constants'
 import type { AppState } from '../store/types'
 
 function makeState(overrides: Partial<AppState> = {}): AppState {

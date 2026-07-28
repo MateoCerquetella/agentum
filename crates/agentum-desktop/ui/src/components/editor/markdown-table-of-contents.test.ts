@@ -98,4 +98,14 @@ describe('markdown table of contents', () => {
       'Use bold links and Docs'
     )
   })
+
+  it('drops raw HTML nodes without synthesizing nested tags', () => {
+    const malicious = 'Before <scr<script>ipt>alert(1)</scr</script>ipt> after'
+    const stripped = stripInlineMarkdownForToc(malicious)
+
+    expect(stripped).not.toMatch(/<\/?script/i)
+    expect(buildMarkdownTableOfContents(`# Safe <script>alert(1)</script> title`)[0]).toMatchObject({
+      title: 'Safe alert(1) title'
+    })
+  })
 })

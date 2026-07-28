@@ -8,7 +8,7 @@ import type {
   Worktree,
   WorktreeLineage,
   WorkspaceStatusDefinition
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { branchName } from '@/lib/git-utils'
 import {
   getWorkspaceStatus,
@@ -21,13 +21,13 @@ import {
   ConductorProgressIcon,
   ConductorReviewIcon
 } from './workspace-status-icons'
-import { cloneDefaultWorkspaceStatuses } from '../../../../shared/workspace-statuses'
+import { cloneDefaultWorkspaceStatuses } from '@/shared/workspace-statuses'
 import { applyPersistedHostOrder } from './sidebar-host-order'
-import type { SshConnectionStatus } from '../../../../shared/ssh-types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
 import type { SortBy } from './smart-sort'
 import type { AppState } from '@/store/types'
 import { getGitHubPRCacheKey, getLegacyGitHubPRCacheKey } from '@/store/slices/github-cache-key'
-import { UNGROUPED_PROJECT_GROUP_KEY } from '../../../../shared/project-groups'
+import { UNGROUPED_PROJECT_GROUP_KEY } from '@/shared/project-groups'
 
 export type WorktreeGroupBy =
   | 'operational'
@@ -43,7 +43,7 @@ export type OperationalWorkspaceMeta = {
   presentation: 'operational-rich' | 'operational-settled'
   section: OperationalSection
   status: 'permission' | 'working' | 'done' | 'active' | 'inactive'
-  statusLabel: 'Needs input' | 'Working' | 'Ready' | 'Active' | 'Settled'
+  statusLabel: 'Needs input' | 'Ready to continue' | 'Working' | 'Settled'
   projectName?: string
   agentLabel?: string
   stateTimestamp?: number

@@ -1,4 +1,4 @@
-import type { GitHubWorkItem } from '../../../shared/types'
+import type { GitHubWorkItem } from '@/shared/types'
 import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 
 // Why: a large issue body must not blow the prompt budget. The composer applies

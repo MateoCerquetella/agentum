@@ -7,20 +7,12 @@
 // reads that host's readiness (the server probes agent CLIs over SSH there), so
 // the composer's remote Agent picker lists what's actually installed on the
 // remote — not just "Blank Terminal". See `detectRemoteAgentsViaServer`.
-import { apiUrl } from '@/runtime/server-endpoint'
-
-async function serverGet<T>(path: string): Promise<T> {
-  const res = await fetch(await apiUrl(path))
-  if (!res.ok) {
-    throw new Error(`agentum-server ${res.status} on ${path}`)
-  }
-  return (await res.json()) as T
-}
+import { getJson } from '@/runtime/server-http'
 
 export const preflight = {
-  check: () => serverGet('/api/preflight/check'),
-  detectAgents: () => serverGet('/api/preflight/agents'),
-  refreshAgents: () => serverGet('/api/preflight/agents/refresh'),
+  check: () => getJson('/api/preflight/check'),
+  detectAgents: () => getJson('/api/preflight/agents'),
+  refreshAgents: () => getJson('/api/preflight/agents/refresh'),
   // Dynamic import: server-host-client pulls in `@/store` + `@/tauri`, which
   // statically importing here would weave into the barrel's init cycle. Defer
   // it to call time (this only runs when a remote project's picker opens).

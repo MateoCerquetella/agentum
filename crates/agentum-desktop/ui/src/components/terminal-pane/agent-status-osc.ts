@@ -1,5 +1,5 @@
-import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-types'
-import { parseAgentStatusPayload } from '../../../../shared/agent-status-types'
+import type { ParsedAgentStatusPayload } from '@/shared/agent-status-types'
+import { parseAgentStatusPayload } from '@/shared/agent-status-types'
 
 const OSC_AGENT_STATUS_PREFIX = '\x1b]9999;'
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { DiscoveredSkill } from '../../../../shared/skills'
+import type { DiscoveredSkill } from '@/shared/skills'
 import { countSkillsBySource, filterSkills } from './skills-filter'
 
 function skill(overrides: Partial<DiscoveredSkill>): DiscoveredSkill {

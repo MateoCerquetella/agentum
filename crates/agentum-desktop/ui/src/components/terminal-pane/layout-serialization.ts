@@ -2,8 +2,8 @@ import type {
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
   TerminalPaneSplitDirection
-} from '../../../../shared/types'
-import { isTerminalLeafId } from '../../../../shared/stable-pane-id'
+} from '@/shared/types'
+import { isTerminalLeafId } from '@/shared/stable-pane-id'
 import type { PaneManager } from '@/lib/pane-manager/pane-manager'
 import { replayIntoTerminal, type ReplayingPanesRef } from './replay-guard'
 import { getLeftmostLeafId, normalizeTerminalLayoutSnapshot } from './terminal-layout-leaf-ids'

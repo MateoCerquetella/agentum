@@ -3,12 +3,12 @@ import { ChevronDown, CircleHelp, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import type { GitHistoryItem, GitHistoryResult } from '../../../../shared/git-history'
+import type { GitHistoryItem, GitHistoryResult } from '@/shared/git-history'
 import {
   buildDefaultGitHistoryColorMap,
   buildGitHistoryViewModels,
   type GitHistoryItemViewModel
-} from '../../../../shared/git-history-graph'
+} from '@/shared/git-history-graph'
 import { GitHistoryGraphSvg, graphColor } from './GitHistoryGraphSvg'
 
 export type GitHistoryPanelState =

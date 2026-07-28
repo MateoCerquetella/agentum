@@ -2,19 +2,19 @@ import { api } from '@/tauri'
 /* eslint-disable max-lines */
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import { toast } from 'sonner'
 import { callRuntimeRpc, clearRuntimeCompatibilityCache } from '@/runtime/runtime-rpc-client'
 import {
   getRemoteRuntimePtyEnvironmentId,
   getRemoteRuntimeTerminalHandle
 } from '@/runtime/runtime-terminal-stream'
-import { getDefaultSettings } from '../../../../shared/constants'
-import { normalizeTerminalQuickCommands } from '../../../../shared/terminal-quick-commands'
-import { normalizeTaskProviderSettings } from '../../../../shared/task-providers'
-import { normalizeOpenInApplications } from '../../../../shared/open-in-applications'
+import { getDefaultSettings } from '@/shared/constants'
+import { normalizeTerminalQuickCommands } from '@/shared/terminal-quick-commands'
+import { normalizeTaskProviderSettings } from '@/shared/task-providers'
+import { normalizeOpenInApplications } from '@/shared/open-in-applications'
 import { createSettingsSearchState, type SettingsSearchState } from './settings-search-state'
-import { normalizeDisabledTuiAgents } from '../../../../shared/tui-agent-selection'
+import { normalizeDisabledTuiAgents } from '@/shared/tui-agent-selection'
 
 export type SettingsSlice = SettingsSearchState & {
   settings: GlobalSettings | null

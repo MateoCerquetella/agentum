@@ -1,18 +1,18 @@
 /* eslint-disable max-lines -- Why: terminal visual controls stay together under Appearance so
    search, previews, and the Ghostty import flow move as one user-facing surface. */
 import { useState } from 'react'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import {
   DEFAULT_TERMINAL_FONT_WEIGHT,
   TERMINAL_FONT_WEIGHT_MAX,
   TERMINAL_FONT_WEIGHT_MIN,
   TERMINAL_FONT_WEIGHT_STEP,
   normalizeTerminalFontWeight
-} from '../../../../shared/terminal-fonts'
+} from '@/shared/terminal-fonts'
 import {
   fontFamilyHasKnownLigatures,
   resolveTerminalLigaturesEnabled
-} from '../../../../shared/terminal-ligatures'
+} from '@/shared/terminal-ligatures'
 import { Minus, Plus } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -42,7 +42,7 @@ import { TerminalWindowSection } from './TerminalWindowSection'
 import { TerminalSettingsPreview } from './TerminalSettingsPreview'
 import { GhosttyImportModal } from './GhosttyImportModal'
 import type { UseGhosttyImportReturn } from './useGhosttyImport'
-import ghosttyIcon from '../../../resources/ghostty.svg'
+import ghosttyIcon from '@resources/ghostty.svg'
 
 type TerminalAppearanceSectionProps = {
   settings: GlobalSettings

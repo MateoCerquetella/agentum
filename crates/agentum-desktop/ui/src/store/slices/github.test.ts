@@ -16,9 +16,9 @@ import {
 } from './github'
 import { createHostedReviewSlice } from './hosted-review'
 import type { AppState } from '../types'
-import type { GitHubWorkItem, PRInfo } from '../../../../shared/types'
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
-import { GITHUB_WORK_ITEMS_SSH_REMOTE_REQUIRED_MESSAGE } from '../../../../shared/work-items'
+import type { GitHubWorkItem, PRInfo } from '@/shared/types'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
+import { GITHUB_WORK_ITEMS_SSH_REMOTE_REQUIRED_MESSAGE } from '@/shared/work-items'
 import {
   createCompatibleRuntimeStatusResponseIfNeeded,
   type RuntimeEnvironmentCallRequest

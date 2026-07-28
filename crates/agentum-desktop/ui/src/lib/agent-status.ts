@@ -1,9 +1,9 @@
-import type { TerminalTab, TuiAgent, Worktree } from '../../../shared/types'
+import type { TerminalTab, TuiAgent, Worktree } from '@/shared/types'
 import type {
   AgentStatusEntry,
   AgentStatusState,
   AgentType
-} from '../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import { tabHasLivePty } from './tab-has-live-pty'
 import type { WorktreeStatus } from './worktree-status'
 
@@ -19,12 +19,12 @@ export {
   isGeminiTerminalTitle,
   isClaudeAgent,
   getAgentLabel
-} from '../../../shared/agent-detection'
+} from '@/shared/agent-detection'
 import {
   type AgentStatus,
   detectAgentStatusFromTitle,
   getAgentLabel
-} from '../../../shared/agent-detection'
+} from '@/shared/agent-detection'
 
 type AgentQueryArgs = {
   tabsByWorktree: Record<string, TerminalTab[]>

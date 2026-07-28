@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getDefaultUIState } from '../../../shared/constants'
-import type { PersistedUIState } from '../../../shared/types'
+import { getDefaultUIState } from '@/shared/constants'
+import type { PersistedUIState } from '@/shared/types'
 import {
   getStartupErrorFallbackUI,
   hydratePersistedUIAfterStartupRead

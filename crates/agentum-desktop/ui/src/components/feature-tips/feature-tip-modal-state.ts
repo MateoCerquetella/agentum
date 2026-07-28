@@ -1,5 +1,5 @@
-import type { GlobalSettings } from '../../../../shared/types'
-import type { FeatureInteractionState } from '../../../../shared/feature-interactions'
+import type { GlobalSettings } from '@/shared/types'
+import type { FeatureInteractionState } from '@/shared/feature-interactions'
 import {
   FEATURE_TIPS,
   getCompletedFeatureTipIds,
@@ -7,7 +7,7 @@ import {
   isFeatureTipId,
   type FeatureTip,
   type FeatureTipId
-} from '../../../../shared/feature-tips'
+} from '@/shared/feature-tips'
 
 export function getFeatureTipForModal(args: {
   modalData: Record<string, unknown>

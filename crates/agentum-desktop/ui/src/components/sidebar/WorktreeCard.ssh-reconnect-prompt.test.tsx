@@ -1,7 +1,7 @@
-import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
+import { act, create } from 'react-test-renderer'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Repo, Worktree, WorktreeCardProperty } from '../../../../shared/types'
+import type { Repo, Worktree, WorktreeCardProperty } from '@/shared/types'
 import type WorktreeCardComponent from './WorktreeCard'
 
 const fetchHostedReviewForBranch = vi.fn()
@@ -129,16 +129,19 @@ describe('WorktreeCard SSH reconnect prompt', () => {
     worktreeCardProperties = ['status']
   })
 
-  it('opens the reconnect dialog for an active disconnected SSH worktree during render', () => {
+  it('opens the reconnect dialog for an active disconnected SSH worktree after mount', async () => {
     sshConnectionStates.set('ssh-target-1', { status: 'disconnected' })
     sshTargetLabels.set('ssh-target-1', 'Remote target')
 
-    const markup = renderToStaticMarkup(
-      <WorktreeCard worktree={makeWorktree()} repo={makeRepo()} isActive={true} />
-    )
+    let renderer: ReturnType<typeof create>
+    await act(async () => {
+      renderer = create(<WorktreeCard worktree={makeWorktree()} repo={makeRepo()} isActive={true} />)
+    })
 
-    expect(markup).toContain('data-ssh-disconnected-dialog="open"')
-    expect(markup).toContain('data-ssh-status="disconnected"')
-    expect(markup).toContain('data-ssh-target-label="Remote target"')
+    const dialog = renderer!.root.findByProps({ 'data-ssh-disconnected-dialog': 'open' })
+    expect(dialog.props['data-ssh-status']).toBe('disconnected')
+    expect(dialog.props['data-ssh-target-label']).toBe('Remote target')
+    await act(async () => renderer!.unmount())
   })
 })
+// @vitest-environment happy-dom

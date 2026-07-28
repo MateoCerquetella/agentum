@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ClaudeUsageDailyPoint } from '../../../../shared/claude-usage-types'
-import type { CodexUsageDailyPoint } from '../../../../shared/codex-usage-types'
+import type { ClaudeUsageDailyPoint } from '@/shared/claude-usage-types'
+import type { CodexUsageDailyPoint } from '@/shared/codex-usage-types'
 import { ClaudeUsageDailyChart } from './ClaudeUsageDailyChart'
 import { CodexUsageDailyChart } from './CodexUsageDailyChart'
 

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import type { FeatureWallWorkflow } from '../../../../shared/feature-wall-workflows'
+import type { FeatureWallWorkflow } from '@/shared/feature-wall-workflows'
 import { useAppStore } from '@/store'
 
 export type FeatureWallTaskSourcePresentation = {

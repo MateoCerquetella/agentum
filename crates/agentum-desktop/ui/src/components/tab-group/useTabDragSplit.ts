@@ -15,8 +15,8 @@ import {
   useSensor,
   useSensors
 } from '@dnd-kit/core'
-import type { TabGroup, TuiAgent } from '../../../../shared/types'
-import type { RuntimeMobileSessionTabMove } from '../../../../shared/runtime-types'
+import type { TabGroup, TuiAgent } from '@/shared/types'
+import type { RuntimeMobileSessionTabMove } from '@/shared/runtime-types'
 import { useAppStore } from '../../store'
 import {
   isWebRuntimeSessionActive,
@@ -48,7 +48,7 @@ export type TabDragItemData = {
   label: string
   iconPath?: string
   color?: string | null
-  /** Coding-harness agent running in a terminal tab, so the drag ghost shows
+  /** Coding agent running in a terminal tab, so the drag ghost shows
    *  the provider glyph and matches the resting tab. Resolved per-tab in
    *  SortableTab (not at the TabBar level) to avoid re-rendering the whole tab
    *  strip on every agent-status ping. */

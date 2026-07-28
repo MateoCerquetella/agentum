@@ -4,7 +4,7 @@ import {
   normalizeRuntimePathForComparison,
   normalizeRuntimePathSeparators,
   relativePathInsideRoot
-} from '../../../../shared/cross-platform-path'
+} from '@/shared/cross-platform-path'
 import { splitPathSegments } from './path-tree'
 
 export function normalizeAbsolutePath(path: string): string {

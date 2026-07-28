@@ -97,8 +97,8 @@ fn worktree_tag_path<'a>(worktree_path: Option<&'a str>, workdir: &'a str) -> &'
 
 /// Spawn the agent process for a freshly-(re)started session into a tmux pane
 /// on `host`, arm the output pipe, and mark it `Running`. Shared by the `start`
-/// HTTP handler and the harness-engine driver ([`crate::harness`]) so both go
-/// through the *one* launch path — YOLO marker translation, loopback `pane_env`,
+/// HTTP handler and recovery workers so both go through the one launch path —
+/// YOLO marker translation, loopback `pane_env`,
 /// the Claude `--settings` PostToolUse hook, and MCP wiring all stay centralized
 /// here. `workdir` must already be resolved + validated by the caller (the
 /// reattach / external / worktree-heal decisions differ per caller and stay
@@ -190,16 +190,6 @@ pub(crate) async fn spawn_agent_into_pane(
             launch.argv.extend(adapter.mcp_args(&p));
             launch.env.extend(adapter.mcp_env(&p));
         }
-        // File-based agents (Cursor/Gemini/OpenCode) load MCP from a config file
-        // in the workdir — write it (no-op for claude/codex).
-        crate::mcp_provision::write_agent_project_config(
-            state,
-            host,
-            &workdir.to_string_lossy(),
-            &session.tool,
-            &agentum_mcp_url,
-        )
-        .await;
     } else if matches!(host.kind, HostKind::Ssh { .. }) {
         // Remote MCP parity: the agentum MCP lives on the Mac. Reverse-tunnel it
         // to the host (token-guarded, loopback-bound), then wire each agent at
@@ -227,8 +217,10 @@ pub(crate) async fn spawn_agent_into_pane(
                             // Claude needs the --mcp-config FILE on the HOST.
                             let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
                             let json = crate::mcp_provision::config_json(&servers);
-                            match crate::host_runtime::write_remote_file(host, &host_cfg, &json)
-                                .await
+                            match crate::host_runtime::write_remote_file_contained(
+                                host, "/tmp", &host_cfg, &json,
+                            )
+                            .await
                             {
                                 Ok(()) => Some(agentum_executor::McpProvision {
                                     servers,
@@ -250,25 +242,20 @@ pub(crate) async fn spawn_agent_into_pane(
                             launch.argv.extend(adapter.mcp_args(&p));
                             launch.env.extend(adapter.mcp_env(&p));
                         }
-                        // File-based agents: write the config on the HOST in the workdir.
-                        crate::mcp_provision::write_agent_project_config(
-                            state,
-                            host,
-                            &workdir.to_string_lossy(),
-                            &session.tool,
-                            &agentum_mcp_url,
-                        )
-                        .await;
                     }
-                    Err(e) => tracing::warn!(
-                        session = %session.id,
-                        "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
-                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            session = %session.id,
+                            "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
+                        );
+                    }
                 }
             }
-            None => tracing::warn!(
-                "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
-            ),
+            None => {
+                tracing::warn!(
+                    "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
+                );
+            }
         }
     }
 
@@ -411,7 +398,9 @@ pub(super) async fn reprovision_session(
         HostKind::Ssh { .. } if session.tool == "claude" => {
             let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
             let json = crate::mcp_provision::config_json(&servers);
-            match crate::host_runtime::write_remote_file(host, &host_cfg, &json).await {
+            match crate::host_runtime::write_remote_file_contained(host, "/tmp", &host_cfg, &json)
+                .await
+            {
                 Ok(()) => rewrote = true,
                 Err(e) => {
                     tracing::warn!(session = %session.id, "reprovision: could not rewrite remote MCP config: {e}")
@@ -421,22 +410,7 @@ pub(super) async fn reprovision_session(
         HostKind::Ssh { .. } => { /* Codex inline `-c`: nothing to rewrite */ }
     }
 
-    // 3. File-based agents (Cursor/Gemini/OpenCode): merge the agentum server into
-    //    the project config (no-op for claude/codex; host-aware; preserves the
-    //    user's own servers).
-    if crate::mcp_provision::agent_mcp_file(&session.tool).is_some() {
-        crate::mcp_provision::write_agent_project_config(
-            state,
-            host,
-            session.effective_cwd(),
-            &session.tool,
-            &url,
-        )
-        .await;
-        rewrote = true;
-    }
-
-    // 4. Live pane env: re-apply the AGENTUM_* connection vars to the pane so
+    // 3. Live pane env: re-apply the AGENTUM_* connection vars to the pane so
     //    *future* commands in it (and a reconnect) see the current endpoint.
     //    Reuse the in-memory hook token if present; never mint a fresh one.
     let hook_token = state.hook_tokens.lock().unwrap().get(&session.id).cloned();

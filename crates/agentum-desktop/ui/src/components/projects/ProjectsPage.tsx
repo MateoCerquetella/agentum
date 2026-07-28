@@ -16,8 +16,8 @@ import {
 /**
  * The Projects page (#274): the ONE project entry point. Mateo's design rule —
  * the sidebar never lists repos (the v0.59.0 SidebarProjectsNav group was
- * reverted); you pick a project HERE, then choose its surface (Chat / Wiki /
- * Board / Sessions) inside the Project Hub this page opens.
+ * reverted); you pick a project HERE, then choose its surface (Specs / Wiki /
+ * Tasks / Sessions) inside the Project Hub this page opens.
  *
  * #279: a case-insensitive name filter narrows the grid, and projects are
  * grouped under their host (Local first, then each SSH remote) so a specific
@@ -54,7 +54,7 @@ export default function ProjectsPage(): React.JSX.Element {
       <div className="mx-auto w-full max-w-5xl px-8 py-10">
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Projects</h1>
         <p className="mt-1 text-[13px] text-muted-foreground">
-          Pick a project — its Chat, Wiki, Board and Sessions live inside.
+          Pick a project — its Specs, Wiki, Tasks and Sessions live inside.
         </p>
 
         {!hasProjects ? (

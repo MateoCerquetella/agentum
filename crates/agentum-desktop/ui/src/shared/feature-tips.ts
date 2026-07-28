@@ -27,7 +27,7 @@ export type CompletedFeatureTipState = {
   featureInteractions?: FeatureInteractionState
 }
 
-export const FEATURE_TIPS = [
+export const FEATURE_TIPS: readonly FeatureTip[] = [
   {
     id: 'voice-dictation',
     priority: 'unseen',
@@ -39,7 +39,7 @@ export const FEATURE_TIPS = [
     ctaLabel: 'Set Up Voice',
     completedByFeatureInteractions: ['voice-dictation']
   }
-] as const satisfies readonly FeatureTip[]
+]
 
 const FEATURE_TIP_IDS = FEATURE_TIPS.map((tip) => tip.id)
 

@@ -12,7 +12,7 @@ import {
   statRuntimePath,
   type RuntimeFileOperationArgs
 } from '@/runtime/runtime-file-client'
-import type { GlobalSettings } from '../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 export function shouldUploadRemoteEditorFileDrop(
   settings: Pick<GlobalSettings, 'activeRuntimeEnvironmentId'> | null | undefined,

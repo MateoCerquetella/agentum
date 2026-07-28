@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   GitHubProjectRow,
   GitHubProjectTable
-} from '../../shared/github-project-types'
+} from '@/shared/github-project-types'
 import {
   buildBindPayload,
   deriveIssueOptions,
@@ -508,6 +508,18 @@ describe('deriveTrackerBindCoords', () => {
     ).toBeNull()
     expect(
       deriveTrackerBindCoords({ type: 'issue', url: 'https://gitlab.com/o/r/-/issues/3' })
+    ).toBeNull()
+    expect(
+      deriveTrackerBindCoords({
+        type: 'issue',
+        url: 'https://github.com.attacker.example/o/r/issues/3'
+      })
+    ).toBeNull()
+    expect(
+      deriveTrackerBindCoords({
+        type: 'issue',
+        url: 'https://attacker.example/github.com/o/r/issues/3'
+      })
     ).toBeNull()
     expect(deriveTrackerBindCoords(null)).toBeNull()
     expect(deriveTrackerBindCoords(undefined)).toBeNull()

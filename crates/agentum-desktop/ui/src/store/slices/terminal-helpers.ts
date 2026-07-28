@@ -1,4 +1,4 @@
-import type { TerminalLayoutSnapshot, TerminalTab } from '../../../../shared/types'
+import type { TerminalLayoutSnapshot, TerminalTab } from '@/shared/types'
 import { detectAgentStatusFromTitle } from '@/lib/agent-status'
 
 export function emptyLayoutSnapshot(): TerminalLayoutSnapshot {

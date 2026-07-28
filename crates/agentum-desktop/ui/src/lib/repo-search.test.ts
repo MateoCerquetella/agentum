@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { searchRepos } from './repo-search'
-import type { Repo } from '../../../shared/types'
+import type { Repo } from '@/shared/types'
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {

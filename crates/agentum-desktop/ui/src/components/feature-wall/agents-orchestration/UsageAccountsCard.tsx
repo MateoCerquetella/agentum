@@ -11,7 +11,7 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import type {
   ClaudeRateLimitAccountsState,
   CodexRateLimitAccountsState
-} from '../../../shared/types'
+} from '@/shared/types'
 import { getFeatureWallUsageProviderConnection } from '../feature-wall-usage-tracking'
 
 type ConnectAction = 'idle' | 'adding'

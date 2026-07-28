@@ -2,8 +2,8 @@ import type {
   BrowserDownloadFinishedEvent,
   BrowserPermissionDeniedEvent,
   BrowserPopupEvent
-} from '../../../../shared/browser-guest-events'
-import type { BrowserLoadError } from '../../../../shared/types'
+} from '@/shared/browser-guest-events'
+import type { BrowserLoadError } from '@/shared/types'
 
 type LoadFailureMeta = {
   host: string | null

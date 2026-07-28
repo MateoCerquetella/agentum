@@ -5,10 +5,10 @@ import { buildAgentStartupPlan, type AgentStartupPlan } from '@/lib/tui-agent-st
 import { CLIENT_PLATFORM } from '@/lib/new-workspace'
 import { track, tuiAgentToAgentKind } from '@/lib/telemetry'
 import { pasteDraftWhenAgentReady } from '@/lib/agent-paste-draft'
-import { TUI_AGENT_CONFIG } from '../../../shared/tui-agent-config'
-import type { TuiAgent } from '../../../shared/types'
-import type { LaunchSource } from '../../../shared/telemetry-events'
-import { makePaneKey } from '../../../shared/stable-pane-id'
+import { TUI_AGENT_CONFIG } from '@/shared/tui-agent-config'
+import type { TuiAgent } from '@/shared/types'
+import type { LaunchSource } from '@/shared/telemetry-events'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import {
   registerEagerPtyBuffer,
   subscribeToPtyData,
@@ -22,8 +22,8 @@ import {
   subscribeToRuntimeTerminalData,
   toRemoteRuntimePtyId
 } from '@/runtime/runtime-terminal-stream'
-import type { ParsedAgentStatusPayload } from '../../../shared/agent-status-types'
-import type { RuntimeTerminalCreate } from '../../../shared/runtime-types'
+import type { ParsedAgentStatusPayload } from '@/shared/agent-status-types'
+import type { RuntimeTerminalCreate } from '@/shared/runtime-types'
 
 export type LaunchAgentBackgroundSessionArgs = {
   agent: TuiAgent

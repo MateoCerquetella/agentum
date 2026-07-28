@@ -594,7 +594,7 @@ impl DesktopBridge for TauriBridge {
             // the renderer reads `tab`/`selector`/`comment`/`intent` as needed.
             match name.as_str() {
                 "annotations" => {
-                    return self.renderer_op("ui-request-browser-annotations", op).await
+                    return self.renderer_op("ui-request-browser-annotations", op).await;
                 }
                 "grab" => return self.grab_element(&op).await,
                 "annotate" => return self.annotate_element(&op).await,

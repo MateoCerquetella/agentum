@@ -20,9 +20,9 @@ import { getConnectionId } from '@/lib/connection-context'
 import { focusTerminalTabSurface } from '@/lib/focus-terminal-tab-surface'
 import { findGithubPrWorkspaceAttachment } from '@/lib/github-work-item-workspace-attachment'
 import { launchAgentInNewTab } from '@/lib/launch-agent-in-new-tab'
-import { launchWorkItemDirect } from '@/lib/launch-work-item-direct'
+import { requestNewSpecFromWorkItem } from '@/lib/sdd-new-spec-entry'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import type { GitHubWorkItem, GitHubWorkItemDetails, PRCheckDetail } from '../../../shared/types'
+import type { GitHubWorkItem, GitHubWorkItemDetails, PRCheckDetail } from '@/shared/types'
 
 function buildFixBrokenChecksPrompt(item: GitHubWorkItem, checks: PRCheckDetail[]): string {
   const brokenChecks = getBrokenChecks(checks)
@@ -186,15 +186,14 @@ export function ChecksTab({
       )
 
       if (!attachedWorkspace) {
-        await launchWorkItemDirect({
-          item: { ...item, pasteContent: prompt },
+        requestNewSpecFromWorkItem({
           repoId: targetRepoId,
-          launchSource: 'task_page',
-          telemetrySource: 'sidebar',
-          openModalFallback: () => {
-            toast.error('Unable to create a fix workspace automatically.')
-          }
+          title: `Fix broken checks for ${item.title}`,
+          provider: 'github',
+          reference: item.url,
+          goal: prompt
         })
+        toast.message('Review the pull request in New Spec before implementation.')
         return
       }
 
@@ -335,7 +334,7 @@ export function ChecksTab({
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" sideOffset={6}>
-          Start the default AI agent on these checks
+          Open New Spec, or resume the workspace already attached to this pull request
         </TooltipContent>
       </Tooltip>
     ) : null

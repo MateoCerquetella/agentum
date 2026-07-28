@@ -3,8 +3,8 @@ import type { WorktreeStatus } from '@/lib/worktree-status'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import type { TerminalTab } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import type { TerminalTab } from '@/shared/types'
 
 type WorktreeCardStatusInput = {
   tabs: Pick<TerminalTab, 'id' | 'ptyId' | 'title'>[]

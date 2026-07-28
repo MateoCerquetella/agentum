@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   ComputerUsePermissionSetupResult,
   ComputerUsePermissionStatusResult
-} from '../../../../shared/computer-use-permissions-types'
+} from '@/shared/computer-use-permissions-types'
 import { BROWSER_USE_ENABLED_STORAGE_KEY } from '@/lib/browser-use-setup-state'
 import {
   ORCHESTRATION_ENABLED_STORAGE_KEY,

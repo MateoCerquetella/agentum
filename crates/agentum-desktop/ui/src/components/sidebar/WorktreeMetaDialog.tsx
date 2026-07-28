@@ -15,7 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { parseGitHubIssueOrPRLink, parseGitHubIssueOrPRNumber } from '@/lib/github-links'
 import { getScreenSubmitShortcutLabel, isScreenSubmitShortcut } from '@/lib/screen-submit-shortcut'
 import { ExternalLink, LoaderCircle } from 'lucide-react'
-import type { WorktreeMeta } from '../../../../shared/types'
+import type { WorktreeMeta } from '@/shared/types'
 import { useMountedRef } from '@/hooks/useMountedRef'
 
 function parseExplicitGitHubIssueUrl(input: string): string | null {

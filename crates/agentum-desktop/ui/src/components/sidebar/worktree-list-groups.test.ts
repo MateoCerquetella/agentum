@@ -30,7 +30,7 @@ import type {
   ProjectGroup,
   Worktree,
   WorktreeLineage
-} from '../../../../shared/types'
+} from '@/shared/types'
 
 const repo: Repo = {
   id: 'repo-1',

@@ -8,8 +8,8 @@ import {
   RESET_TERMINAL_CURSOR_STYLE
 } from './layout-serialization'
 import type * as UseNotificationDispatchModule from './use-notification-dispatch'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
-import type { TerminalLayoutSnapshot } from '../../../../shared/types'
+import { makePaneKey } from '@/shared/stable-pane-id'
+import type { TerminalLayoutSnapshot } from '@/shared/types'
 
 // Why: the fresh-spawn and reattach paths now chain pre-signal → spawn →
 // register/settle through multiple microtasks. Tests that previously flushed
@@ -2089,6 +2089,8 @@ describe('connectPanePty', () => {
 
       connectPanePty(pane as never, manager as never, deps as never)
       expect(capturedDataCallback.current).not.toBeNull()
+      expect(createdTransportOptions[0]).toMatchObject({ connectionId: 'ssh-conn-1' })
+      expect(createdTransportOptions[0]?.command).toBeUndefined()
 
       // Simulate shell prompt arriving — queues the debounce timer
       capturedDataCallback.current?.('user@remote $ ')
@@ -2102,6 +2104,44 @@ describe('connectPanePty', () => {
     } finally {
       globalThis.setTimeout = originalSetTimeout
     }
+  })
+
+  it('keeps an undiscovered composite SSH worktree on its remote PTY provider', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport()
+    transportFactoryQueue.push(transport)
+
+    const remoteWorktreeId = 'repo1::/srv/projects/agentum'
+    mockStoreState = {
+      ...mockStoreState,
+      activeWorktreeId: remoteWorktreeId,
+      tabsByWorktree: {
+        [remoteWorktreeId]: [{ id: 'tab-1', ptyId: null }]
+      },
+      ptyIdsByTabId: { 'tab-1': [] },
+      // Regression: SSH tabs can mount before relay discovery has populated
+      // the Worktree object. The composite id still identifies repo1.
+      worktreesByRepo: {},
+      repos: [{ id: 'repo1', connectionId: 'ssh-dev-host' }]
+    }
+
+    connectPanePty(
+      createPane(1) as never,
+      createManager(1) as never,
+      createDeps({
+        worktreeId: remoteWorktreeId,
+        cwd: '/srv/projects/agentum'
+      }) as never
+    )
+    await flushAsyncTicks()
+
+    expect(createdTransportOptions[0]).toEqual(
+      expect.objectContaining({
+        connectionId: 'ssh-dev-host',
+        cwd: '/srv/projects/agentum',
+        worktreeId: remoteWorktreeId
+      })
+    )
   })
 
   it('drops agent status without retaining when OSC 133 reports the command finished', async () => {

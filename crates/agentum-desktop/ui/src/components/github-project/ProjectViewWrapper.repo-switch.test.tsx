@@ -2,7 +2,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { GitHubProjectTable } from '../../../../shared/github-project-types'
+import type { GitHubProjectTable } from '@/shared/github-project-types'
 import type { AppState } from '@/store/types'
 import { projectViewCacheKey } from '@/store/slices/github'
 
@@ -67,7 +67,7 @@ const agentumTable = {
   project: {
     id: 'project-agentum',
     title: 'Agentum board',
-    url: 'https://github.com/users/MateoCerquetella/projects/2'
+    url: 'https://github.com/example-org/projects/2'
   },
   selectedView: {
     id: AGENTUM_VIEW_ID,
@@ -94,7 +94,7 @@ describe('ProjectViewWrapper repo switch isolation', () => {
           activeProjectByRepo: {},
           lastViewByProject: { [AGENTUM_PROJECT_KEY]: { viewId: AGENTUM_VIEW_ID } }
         }
-      } as AppState['settings'],
+      } as unknown as AppState['settings'],
       projectBindingByRepo: {
         agentum: {
           status: 'loaded',

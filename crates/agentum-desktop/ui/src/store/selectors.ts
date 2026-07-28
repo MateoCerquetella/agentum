@@ -1,6 +1,6 @@
 import { useAppStore } from './index'
 import { useShallow } from 'zustand/react/shallow'
-import type { Repo, Worktree, TerminalTab } from '../../../shared/types'
+import type { Repo, Worktree, TerminalTab } from '@/shared/types'
 import type { AppState } from './types'
 
 const EMPTY_WORKTREES: Worktree[] = []

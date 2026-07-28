@@ -3,8 +3,8 @@ import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../shared/agent-status-types'
-import type { Repo, Worktree } from '../../../../shared/types'
+} from '@/shared/agent-status-types'
+import type { Repo, Worktree } from '@/shared/types'
 import type {
   OperationalSection,
   OperationalWorkspaceMeta,
@@ -16,6 +16,17 @@ export type OperationalWorkspaceFact = {
   agentLabel?: string
   /** Timestamp for the winning status signal, in epoch milliseconds. */
   stateTimestamp?: number
+  /**
+   * A completed agent turn that is newer than the user's last acknowledgement.
+   * Kept separate from `status` because another pane may still be working while
+   * this completion is waiting to be reviewed.
+   */
+  continuation?: OperationalContinuation
+}
+
+export type OperationalContinuation = {
+  stateTimestamp: number
+  agentLabel?: string
 }
 
 export type BuildOperationalSidebarRowsArgs = {
@@ -44,9 +55,19 @@ const STATUS_META: Record<
 > = {
   permission: { section: 'needs-you', statusLabel: 'Needs input' },
   working: { section: 'active', statusLabel: 'Working' },
-  done: { section: 'active', statusLabel: 'Ready' },
-  active: { section: 'active', statusLabel: 'Active' },
+  // A done hook means the agent's turn stopped, not that the user has dealt
+  // with the result. Unacknowledged completions are promoted to Needs You by
+  // `continuation`; acknowledged completions belong with other quiet work.
+  done: { section: 'settled', statusLabel: 'Settled' },
+  // A mounted tab, browser surface, or live tmux session is only liveness. It
+  // does not mean an agent is doing work, so keep it out of the action queue.
+  active: { section: 'settled', statusLabel: 'Settled' },
   inactive: { section: 'settled', statusLabel: 'Settled' }
+}
+
+const CONTINUATION_META: Pick<OperationalWorkspaceMeta, 'section' | 'statusLabel'> = {
+  section: 'needs-you',
+  statusLabel: 'Ready to continue'
 }
 
 type OperationalEntry = {
@@ -87,6 +108,55 @@ export function selectOperationalStatusTimestamp(
     }
   }
   return finiteTimestamp(winner?.stateStartedAt)
+}
+
+/**
+ * Return the newest current `done` state the user has not viewed yet.
+ *
+ * This intentionally does not apply the live-status freshness TTL. A done
+ * transition is a durable event (the Activity badge follows the same
+ * acknowledgement contract), not a claim that an agent is still executing.
+ * It remains actionable until the user visits that exact pane, including when
+ * the entry has moved to retained state or the app has restarted.
+ */
+export function selectOperationalContinuation(
+  entries: readonly Pick<
+    AgentStatusEntry,
+    'agentType' | 'paneKey' | 'state' | 'stateStartedAt' | 'updatedAt'
+  >[],
+  acknowledgedAgentsByPaneKey: Readonly<Record<string, number>>
+): OperationalContinuation | undefined {
+  let winner:
+    | Pick<
+        AgentStatusEntry,
+        'agentType' | 'paneKey' | 'state' | 'stateStartedAt' | 'updatedAt'
+      >
+    | undefined
+
+  for (const entry of entries) {
+    const stateTimestamp = finiteTimestamp(entry.stateStartedAt)
+    const acknowledgedAt = finiteTimestamp(acknowledgedAgentsByPaneKey[entry.paneKey]) ?? 0
+    if (
+      entry.state !== 'done' ||
+      stateTimestamp === undefined ||
+      acknowledgedAt >= stateTimestamp
+    ) {
+      continue
+    }
+    if (
+      !winner ||
+      entry.stateStartedAt > winner.stateStartedAt ||
+      (entry.stateStartedAt === winner.stateStartedAt && entry.updatedAt > winner.updatedAt)
+    ) {
+      winner = entry
+    }
+  }
+
+  if (!winner) return undefined
+  return {
+    stateTimestamp: winner.stateStartedAt,
+    agentLabel: winner.agentType?.trim() || undefined
+  }
 }
 
 export function formatOperationalShortAge(timestamp: number | undefined, now: number): string | undefined {
@@ -172,23 +242,39 @@ export function buildOperationalSidebarRows({
   for (const worktree of worktrees) {
     const fact = factsByWorktreeId.get(worktree.id) ?? { status: 'inactive' as const }
     const repo = repoMap.get(worktree.repoId)
+    // Explicit input/permission requests remain the most urgent signal. An
+    // unseen completion otherwise outranks working liveness: split panes can
+    // have one agent waiting for review while another continues executing.
+    const continuation = fact.status === 'permission' ? undefined : fact.continuation
+    // `isUnread` is the durable worktree-level attention contract used by the
+    // amber bell. It covers working→idle completions that do not leave a
+    // pane-level `done` hook behind, so Queue must treat it as a continuation
+    // even when `selectOperationalContinuation` cannot recover that pane event.
+    const isReadyToContinue = fact.status !== 'permission' && Boolean(
+      continuation || worktree.isUnread
+    )
+    const agentLabel = continuation?.agentLabel ?? fact.agentLabel
     if (
       normalizedQuery &&
       !normalizedSearchText([
         worktree.displayName,
         worktree.branch,
         repo?.displayName,
-        fact.agentLabel
+        agentLabel
       ]).includes(normalizedQuery)
     ) {
       continue
     }
 
-    const statusMeta = STATUS_META[fact.status]
+    const statusMeta = isReadyToContinue ? CONTINUATION_META : STATUS_META[fact.status]
     const timestamp =
-      fact.status === 'inactive'
-        ? finiteTimestamp(worktree.lastActivityAt)
-        : finiteTimestamp(fact.stateTimestamp)
+      continuation !== undefined
+        ? finiteTimestamp(continuation.stateTimestamp)
+        : isReadyToContinue
+          ? finiteTimestamp(fact.stateTimestamp) ?? finiteTimestamp(worktree.lastActivityAt)
+        : fact.status === 'inactive'
+          ? finiteTimestamp(worktree.lastActivityAt)
+          : finiteTimestamp(fact.stateTimestamp)
     const relativeAge = formatOperationalShortAge(timestamp, now)
     const meta: OperationalWorkspaceMeta = {
       presentation:
@@ -197,7 +283,7 @@ export function buildOperationalSidebarRows({
       status: fact.status,
       statusLabel: statusMeta.statusLabel,
       projectName: repo?.displayName,
-      agentLabel: fact.agentLabel?.trim() || undefined,
+      agentLabel: agentLabel?.trim() || undefined,
       stateTimestamp: timestamp,
       ageLabel: relativeAge,
       relativeAge

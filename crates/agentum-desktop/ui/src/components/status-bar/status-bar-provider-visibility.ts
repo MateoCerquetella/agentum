@@ -1,4 +1,4 @@
-import type { ProviderRateLimits } from '../../../../shared/rate-limit-types'
+import type { ProviderRateLimits } from '@/shared/rate-limit-types'
 
 function hasUsageData(provider: ProviderRateLimits): boolean {
   return Boolean(

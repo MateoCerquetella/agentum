@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
-import type { PreflightStatus } from '../../shared/types'
+import type { PreflightStatus } from '@/shared/types'
 import type { AppState } from '../types'
 import {
   getLocalPreflightContext,

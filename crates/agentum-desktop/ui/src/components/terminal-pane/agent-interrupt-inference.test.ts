@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Why: this suite locks the interrupt inference state machine across several agent-specific keyboard semantics. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
 import {
   createAgentInterruptInference,
   isCtrlCKeyEvent,

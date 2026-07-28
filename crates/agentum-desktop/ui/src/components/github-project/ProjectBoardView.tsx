@@ -9,12 +9,12 @@
 import React, { useMemo, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { useKanbanPointerDrag } from '@/lib/use-kanban-pointer-drag'
-import { boardColumns } from '../../../../shared/github-project-group-sort'
+import { boardColumns } from '@/shared/github-project-group-sort'
 import type {
   GitHubProjectFieldMutationValue,
   GitHubProjectRow,
   GitHubProjectTable
-} from '../../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 import ProjectBoardCard from './ProjectBoardCard'
 
 // GitHub single-select colors are keywords ("YELLOW"), not hex — mirror the
@@ -53,7 +53,7 @@ type Props = {
     fieldId: string,
     value: GitHubProjectFieldMutationValue | null
   ) => void
-  onStartWork?: (row: GitHubProjectRow) => void
+  onAuthorSpec?: (row: GitHubProjectRow) => void
   onOpenInBrowser?: (row: GitHubProjectRow) => void
 }
 
@@ -61,7 +61,7 @@ export default function ProjectBoardView({
   table,
   onOpenDialog,
   onEditField,
-  onStartWork,
+  onAuthorSpec,
   onOpenInBrowser
 }: Props): React.JSX.Element {
   const board = useMemo(() => boardColumns(table), [table])
@@ -142,7 +142,7 @@ export default function ProjectBoardView({
                     dragging={dragCardId === row.id}
                     onOpenDialog={onOpenDialog ? () => onOpenDialog(row) : undefined}
                     onOpenInBrowser={onOpenInBrowser ? () => onOpenInBrowser(row) : undefined}
-                    onStartWork={onStartWork ? () => onStartWork(row) : undefined}
+                    onAuthorSpec={onAuthorSpec ? () => onAuthorSpec(row) : undefined}
                   />
                 ))
               )}

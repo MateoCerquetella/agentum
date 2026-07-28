@@ -2,8 +2,8 @@
    lifecycle-oriented suite because the store caching and visibility rules interact directly. */
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getDefaultUIState } from '../../../shared/constants'
-import type { ChangelogData, UpdateStatus } from '../../../shared/types'
+import { getDefaultUIState } from '@/shared/constants'
+import type { ChangelogData, UpdateStatus } from '@/shared/types'
 import { createUISlice } from '../store/slices/ui'
 import type { AppState } from '../store/types'
 

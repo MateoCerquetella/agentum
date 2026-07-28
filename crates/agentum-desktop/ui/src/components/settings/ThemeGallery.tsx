@@ -1,7 +1,7 @@
 import type React from 'react'
 import { Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 // VS Code-style appearance gallery: pick the window theme from labelled preview
 // cards instead of a plain segmented control. Each card paints a tiny mock

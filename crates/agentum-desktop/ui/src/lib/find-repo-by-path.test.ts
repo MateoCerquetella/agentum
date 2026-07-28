@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Repo } from '../../../shared/types'
+import type { Repo } from '@/shared/types'
 import { findRepoByPathPreferLocal } from './find-repo-by-path'
 
 function makeRepo(overrides: Partial<Repo> & Pick<Repo, 'id' | 'path'>): Repo {

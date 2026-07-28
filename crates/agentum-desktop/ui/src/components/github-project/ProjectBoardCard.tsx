@@ -1,10 +1,10 @@
 // A compact Kanban card for a GitHub Project row, used by ProjectBoardView.
-// Mirrors ProjectRow's affordances (open-in-GitHub, start-work, draft handling)
+// Mirrors ProjectRow's affordances (open-in-GitHub, author-spec, draft handling)
 // in a card form. Purely presentational — the board owns drag state and moves.
 import React from 'react'
-import { CircleDot, EyeOff, ExternalLink, GitPullRequest, Play, SquarePen } from 'lucide-react'
+import { CircleDot, EyeOff, ExternalLink, FilePlus2, GitPullRequest, SquarePen } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { GitHubProjectRow } from '../../../../shared/github-project-types'
+import type { GitHubProjectRow } from '@/shared/github-project-types'
 
 // GitHub label colors come back as 6-hex without a `#`; normalize for CSS.
 function labelHex(color: string): string {
@@ -25,7 +25,7 @@ type Props = {
   dragging: boolean
   onOpenDialog?: () => void
   onOpenInBrowser?: () => void
-  onStartWork?: () => void
+  onAuthorSpec?: () => void
 }
 
 export default function ProjectBoardCard({
@@ -34,7 +34,7 @@ export default function ProjectBoardCard({
   dragging,
   onOpenDialog,
   onOpenInBrowser,
-  onStartWork
+  onAuthorSpec
 }: Props): React.JSX.Element {
   const { content } = row
   const TypeIcon =
@@ -47,7 +47,7 @@ export default function ProjectBoardCard({
           : CircleDot
   // Drafts/redacted rows have no detail page to open; keep their title static.
   const titleClickable = Boolean(onOpenDialog) && row.itemType !== 'REDACTED'
-  const canStartWork =
+  const canAuthorSpec =
     row.itemType !== 'REDACTED' && row.itemType !== 'DRAFT_ISSUE' && content.number != null
   const labels = content.labels.slice(0, 4)
   const assignees = content.assignees.slice(0, 3)
@@ -84,14 +84,14 @@ export default function ProjectBoardCard({
               <ExternalLink className="size-3.5" />
             </button>
           ) : null}
-          {canStartWork && onStartWork ? (
+          {canAuthorSpec && onAuthorSpec ? (
             <button
               type="button"
-              onClick={onStartWork}
-              aria-label="Start work"
+              onClick={onAuthorSpec}
+              aria-label="Author spec"
               className="rounded p-1 hover:bg-muted"
             >
-              <Play className="size-3.5" />
+              <FilePlus2 className="size-3.5" />
             </button>
           ) : null}
         </div>

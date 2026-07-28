@@ -2,7 +2,7 @@
 // click-suppression window as pure functions so they are unit-testable in the
 // node vitest environment (no DOM). Mirrors the shouldXxx predicates in
 // WorktreeContextMenu.tsx.
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 import type { WorktreeGroupBy } from './worktree-list-groups'
 
 export type ProjectContextMenuTarget = { repo: Repo; x: number; y: number }

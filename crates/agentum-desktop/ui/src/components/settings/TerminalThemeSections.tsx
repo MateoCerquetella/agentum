@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import { ColorField, ThemePicker } from './SettingsFormControls'
 import { SearchableSetting } from './SearchableSetting'
 import { TerminalSettingsPreview } from './TerminalSettingsPreview'

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Repo, Worktree, WorktreeLineage } from '../../../../shared/types'
+import type { Repo, Worktree, WorktreeLineage } from '@/shared/types'
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -150,7 +150,7 @@ describe('DeleteWorktreeDialog lineage copy', () => {
   it('keeps long child workspace paths constrained inside the lineage notice', async () => {
     const child = makeWorktree(
       'docs-file-upload-discovery-with-a-very-long-name',
-      '/Users/jinjingliang/Documents/projects/agent-slack/docs-file-upload-discovery-with-a-very-long-path-segment'
+      '/workspace/example/docs-file-upload-discovery-with-a-very-long-path-segment'
     )
     const { DeleteWorktreeLineageNotice } = await import('./DeleteWorktreeLineageNotice')
 

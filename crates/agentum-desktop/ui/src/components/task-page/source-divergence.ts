@@ -1,6 +1,6 @@
 import { sameGitHubOwnerRepo } from '@/components/github/IssueSourceIndicator'
 import { type TaskPageRepoSourceState } from '@/components/task-page-cache-selectors'
-import type { GitHubOwnerRepo } from '../../../shared/types'
+import type { GitHubOwnerRepo } from '@/shared/types'
 
 // Why: type-guard predicate used to filter `perRepoSourceState` down to rows
 // whose issue-source and PR-source slugs differ. Hoisted to module scope so

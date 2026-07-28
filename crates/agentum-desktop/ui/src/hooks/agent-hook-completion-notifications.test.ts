@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ParsedAgentStatusPayload } from '../../../shared/agent-status-types'
+import type { ParsedAgentStatusPayload } from '@/shared/agent-status-types'
 
 const dispatchTerminalNotification = vi.fn()
 

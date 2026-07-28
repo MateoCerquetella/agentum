@@ -6,8 +6,8 @@ import { api } from '@/tauri'
  * co-locating the global handler maps that both the transport factory
  * and the eager-buffer reconnection logic share.
  */
-import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-types'
-import type { EventProps } from '../../../../shared/telemetry-events'
+import type { ParsedAgentStatusPayload } from '@/shared/agent-status-types'
+import type { EventProps } from '@/shared/telemetry-events'
 
 // ── Singleton PTY event dispatcher ───────────────────────────────────
 // One global IPC listener per channel, routes events to transports by

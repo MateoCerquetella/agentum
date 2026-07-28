@@ -9,7 +9,8 @@ import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { useRepoLabels, useRepoAssignees, useImmediateMutation } from '@/hooks/useIssueMetadata'
 import { useRepoLabelsBySlug, useRepoAssigneesBySlug } from '@/hooks/useGitHubSlugMetadata'
-import type { GitHubWorkItem } from '../../../shared/types'
+import type { GitHubWorkItem } from '@/shared/types'
+import { runIssueUpdate } from '@/lib/github-work-item-mutation-routing'
 
 export function GHEditSection({
   item,
@@ -464,9 +465,9 @@ export function GHEditSection({
         size="sm"
         onClick={() => onUse(item)}
         className="ml-auto gap-2"
-        aria-label="Start workspace from issue"
+        aria-label="Author spec from issue"
       >
-        Start workspace from issue
+        New Spec
         <ArrowRight className="size-4" />
       </Button>
     </div>

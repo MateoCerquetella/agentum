@@ -4,8 +4,8 @@ import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../../shared/agent-status-types'
-import { isTerminalLeafId, makePaneKey } from '../../../../shared/stable-pane-id'
+} from '@/shared/agent-status-types'
+import { isTerminalLeafId, makePaneKey } from '@/shared/stable-pane-id'
 
 export type FocusedAgentRowHighlightState = Pick<
   AppState,

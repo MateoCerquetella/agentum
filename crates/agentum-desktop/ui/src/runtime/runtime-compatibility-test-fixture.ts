@@ -1,9 +1,9 @@
-import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
-import type { RuntimeStatus } from '../../../shared/runtime-types'
+import type { RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
+import type { RuntimeStatus } from '@/shared/runtime-types'
 import {
   MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION,
   RUNTIME_PROTOCOL_VERSION
-} from '../../../shared/protocol-version'
+} from '@/shared/protocol-version'
 
 export type RuntimeEnvironmentCallRequest = {
   method: string

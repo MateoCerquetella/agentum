@@ -1,5 +1,5 @@
-import type { GlobalSettings } from '../../../../shared/types'
-import type { SourceControlAiSettingsPatch } from '../../../../shared/source-control-ai-types'
+import type { GlobalSettings } from '@/shared/types'
+import type { SourceControlAiSettingsPatch } from '@/shared/source-control-ai-types'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { useAppStore } from '../../store'

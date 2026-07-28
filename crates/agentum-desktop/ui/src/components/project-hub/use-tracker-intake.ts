@@ -1,7 +1,7 @@
-// Spec 015 F3: the Tracker tab's intent → issue → gated-run intake, as a thin
+// The Tracker tab's intent → issue intake, as a thin
 // hook over EXISTING seams — `draftGithubIssueBody` / `createGithubIssue`
 // (embedded server), `linearCreateIssue` (the 013 F3 native-command client),
-// and the spec-008 pre-armed composer hop. It deliberately does NOT reuse
+// It deliberately does NOT reuse
 // `useComposerState` (that hook owns a composer's whole lifecycle); it mirrors
 // its create-issue handlers so the two panels stay behaviorally aligned while
 // this one can outlive the file with a `filed` phase.
@@ -16,7 +16,6 @@ import {
   canDraftIssue,
   canFileIssue,
   deriveDraftGroundingNote,
-  deriveFiledGatedRunGate,
   deriveIntentTitle,
   deriveTrackerIntakePhase,
 } from '@/components/new-workspace/create-issue-intent-model'
@@ -32,8 +31,6 @@ import {
   linearCreateIssue,
   linearListTeams
 } from '@/runtime/runtime-linear-client'
-import type { IssueSideEffectGate } from '@/lib/issue-side-effect-gate'
-import { getLinkedWorkItemSuggestedName } from '@/lib/new-workspace'
 
 export type TrackerIntake = {
   /** The provider locked by Project Settings. */
@@ -67,10 +64,6 @@ export type TrackerIntake = {
   teamId: string | null
   setTeamId: (id: string | null) => void
 
-  /** Gated-run eligibility for the FILED issue — the wizard's own gate. */
-  gate: IssueSideEffectGate
-  /** The spec-008 pre-armed composer hop (never a direct `startGatedWork`). */
-  startGatedRun: () => void
 }
 
 export function useTrackerIntake({
@@ -80,7 +73,6 @@ export function useTrackerIntake({
   repo: Repo
   scope: Extract<ProjectTaskScope, { status: 'bound' }>
 }): TrackerIntake {
-  const openModal = useAppStore((s) => s.openModal)
   // Only the runtime-target field routes the Linear RPC — selecting it (not the
   // whole settings object) keeps the probe from re-running on unrelated writes.
   const activeRuntimeEnvironmentId = useAppStore(
@@ -94,7 +86,7 @@ export function useTrackerIntake({
   const guard = useMemo(() => captureProjectTaskScopeGuard(scope), [scope])!
   const guardCurrent = useCallback(() => isLiveProjectTaskScopeAuthority(guard), [guard])
   const slug = scope.provider === 'github' ? scope.repoSlug : null
-  const resolved: PickerProjectRef | null = scope.provider === 'github'
+  const resolved: PickerProjectRef | null = scope.provider === 'github' && scope.target === 'project'
     ? { owner: scope.owner, ownerType: scope.ownerType, number: scope.projectNumber }
     : null
 
@@ -263,30 +255,12 @@ export function useTrackerIntake({
     }
   }, [busy, effectiveProvider, fileGithub, fileLinear, guardCurrent, title])
 
-  const gate = deriveFiledGatedRunGate(filed, repo.connectionId)
-
-  // The host label explains WHY the files weren't readable (presentation
-  // only — the WorktreeCard sshTargetLabels precedent); the note itself keys
-  // exclusively on the server's grounding flag.
+  // The host label explains why repo grounding was unavailable (presentation
+  // only).
   const hostLabel = useAppStore((s) =>
     repo.connectionId ? (s.sshTargetLabels.get(repo.connectionId) ?? 'a remote host') : null
   )
   const groundingNote = deriveDraftGroundingNote(grounding, hostLabel)
-
-  const startGatedRun = useCallback((): void => {
-    // The gate composes D3 (GitHub-only) and the local-repo precondition; a
-    // gated run needs the FRESH worktree the composer creates, so this is the
-    // spec-008 pre-armed hop — never a direct `startGatedWork` from here.
-    if (!gate.eligible || !filed || filed.provider !== 'github' || !guardCurrent()) return
-    openModal('new-workspace-composer', {
-      linkedWorkItem: { type: 'issue', number: filed.number, title: filed.title, url: filed.url },
-      prefilledName: getLinkedWorkItemSuggestedName({ title: filed.title }),
-      initialRepoId: repo.id,
-      startGatedRun: true,
-      telemetrySource: 'sidebar',
-      requiredProjectTaskScope: guard
-    })
-  }, [filed, gate.eligible, guard, guardCurrent, openModal, repo.id])
 
   return {
     provider,
@@ -311,8 +285,6 @@ export function useTrackerIntake({
     file,
     teams,
     teamId,
-    setTeamId,
-    gate,
-    startGatedRun
+    setTeamId
   }
 }

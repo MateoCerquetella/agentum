@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { connectSshTargetViaServer } from '@/runtime/server-host-client'
 import { statusColor } from '@/components/settings/SshTargetCard'
-import type { SshConnectionStatus } from '../../../../shared/ssh-types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
 
 type SshDisconnectedDialogProps = {
   open: boolean

@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION,
   RUNTIME_PROTOCOL_VERSION
-} from '../../../../shared/protocol-version'
-import type { PortForwardEntry } from '../../../../shared/ssh-types'
-import type { WorkspacePort, WorkspacePortScanResult } from '../../../../shared/workspace-ports'
+} from '@/shared/protocol-version'
+import type { PortForwardEntry } from '@/shared/ssh-types'
+import type { WorkspacePort, WorkspacePortScanResult } from '@/shared/workspace-ports'
 import { clearRuntimeCompatibilityCacheForTests } from '@/runtime/runtime-rpc-client'
 import {
   addressForPort,

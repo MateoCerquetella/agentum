@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { MarkdownDocument } from '../../../../shared/types'
+import type { MarkdownDocument } from '@/shared/types'
 import { useAppStore } from '@/store'
 import { findWorktreeById } from '@/store/slices/worktree-helpers'
 import { getConnectionId } from '@/lib/connection-context'

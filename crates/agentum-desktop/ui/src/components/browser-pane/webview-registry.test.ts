@@ -49,7 +49,8 @@ describe('webview registry drag listeners', () => {
       focus: vi.fn(),
       api: {
         browser: {
-          unregisterGuest: unregisterGuestMock
+          unregisterGuest: unregisterGuestMock,
+          webviewClose: vi.fn(() => Promise.resolve())
         }
       }
     })

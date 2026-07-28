@@ -4,18 +4,18 @@
    the ~6 conditional render branches without making any of them clearer. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Terminal } from 'lucide-react'
-import type { GlobalSettings, TuiAgent } from '../../../../shared/types'
+import type { GlobalSettings, TuiAgent } from '@/shared/types'
 import type {
   SourceControlAiOperation,
   SourceControlAiSettingsPatch,
   SourceControlAiSettings
-} from '../../../../shared/source-control-ai-types'
+} from '@/shared/source-control-ai-types'
 import {
   clearSourceControlAiModelChoiceForHost,
   normalizeSourceControlAiSettings,
   readSourceControlAiModelChoiceForHost,
   selectSourceControlAiModelChoiceForHost
-} from '../../../../shared/source-control-ai'
+} from '@/shared/source-control-ai'
 import {
   CUSTOM_AGENT_ID,
   getCommitMessageAgentCapability,
@@ -24,12 +24,12 @@ import {
   resolveCommitMessageAgentChoice,
   type CommitMessageAgentCapability,
   type CommitMessageModelCapability
-} from '../../../../shared/commit-message-agent-spec'
-import { CUSTOM_PROMPT_PLACEHOLDER } from '../../../../shared/commit-message-prompt'
+} from '@/shared/commit-message-agent-spec'
+import { CUSTOM_PROMPT_PLACEHOLDER } from '@/shared/commit-message-prompt'
 import {
   getCommitMessageModelDiscoveryHostKeyForScope,
   LOCAL_COMMIT_MESSAGE_HOST_KEY
-} from '../../../../shared/commit-message-host-key'
+} from '@/shared/commit-message-host-key'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
 import { getConnectionId } from '@/lib/connection-context'
 import { Button } from '../ui/button'

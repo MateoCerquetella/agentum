@@ -15,7 +15,7 @@ import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-cl
 import { useRepoAssignees } from '@/hooks/useIssueMetadata'
 import { useRepoAssigneesBySlug } from '@/hooks/useGitHubSlugMetadata'
 import { getGitHubPRReviewerRows, normalizeGitHubReviewerLogins } from '@/components/github-pr-reviewer-display'
-import type { GitHubWorkItem, GitHubAssignableUser } from '../../../shared/types'
+import type { GitHubWorkItem, GitHubAssignableUser } from '@/shared/types'
 
 export function PRReviewersPanel({
   item,

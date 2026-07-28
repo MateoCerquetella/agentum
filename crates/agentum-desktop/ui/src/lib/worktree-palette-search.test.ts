@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getWorktreePaletteSearchScope, searchWorktrees } from './worktree-palette-search'
-import type { Repo, Worktree } from '../../../shared/types'
+import type { Repo, Worktree } from '@/shared/types'
 
 function makeWorktree(overrides: Partial<Worktree> = {}): Worktree {
   return {
@@ -180,7 +180,7 @@ describe('worktree-palette-search', () => {
     expect(results).toHaveLength(1)
     expect(results[0].worktreeId).toBe('wt-main')
     expect(results[0].matchedField).toBe('branch')
-    expect(results[0].repoRange).toEqual({ start: 9, end: 13 })
+    expect(results[0].repoRange).toEqual({ start: 17, end: 24 })
     expect(results[0].branchRange).toEqual({ start: 0, end: 4 })
   })
 

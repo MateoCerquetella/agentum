@@ -10,6 +10,14 @@ declare module 'monaco-editor/esm/vs/basic-languages/python/python.js' {
 }
 
 declare global {
+  namespace Electron {
+    type FindInPageOptions = Record<string, unknown>
+    type FoundInPageEvent = Event & {
+      result: { activeMatchOrdinal: number; matches: number }
+    }
+    type WebviewTag = HTMLElement & Record<string, any>
+  }
+
   var MonacoEnvironment:
     | {
         getWorker(workerId: string, label: string): Worker

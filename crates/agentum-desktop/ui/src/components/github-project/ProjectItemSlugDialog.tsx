@@ -10,7 +10,7 @@
 import React from 'react'
 import { VisuallyHidden } from 'radix-ui'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
-import type { GitHubItemDialogProjectOrigin } from '@/components/GitHubItemDialog'
+import type { GitHubItemDialogProjectOrigin } from '@/components/github-item-types'
 import { SlugDialogBody } from './slug-dialog/SlugDialogBody'
 
 type Props = {

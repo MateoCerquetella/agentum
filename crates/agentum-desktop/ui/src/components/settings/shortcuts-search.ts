@@ -1,4 +1,4 @@
-import { KEYBINDING_DEFINITIONS } from '../../../../shared/keybindings'
+import { KEYBINDING_DEFINITIONS } from '@/shared/keybindings'
 import type { SettingsSearchEntry } from './settings-search'
 
 export const TERMINAL_SHORTCUT_POLICY_SEARCH_ENTRY: SettingsSearchEntry = {

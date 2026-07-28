@@ -1,4 +1,4 @@
-import type { SshConnectionStatus } from '../../../shared/ssh-types'
+import type { SshConnectionStatus } from '@/shared/ssh-types'
 
 export type SelectedRepoSshGate = {
   selectedRepoConnectionId: string | null

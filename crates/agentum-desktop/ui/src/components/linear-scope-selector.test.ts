@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { LinearTeam, LinearWorkspace } from '../../../shared/types'
+import type { LinearTeam, LinearWorkspace } from '@/shared/types'
 import {
   getLinearScopeTriggerLabel,
   normalizeLinearScopeTeamSelection

@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-0NC35Z5EME3ER7N7JZYJBGZC5P",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "Carry out the migrated plan section: F1 \u2014 what was built",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "Carry out the migrated plan section: Deviations from architecture.md (F1)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "Carry out the migrated plan section: Gate results (F1)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "Carry out the migrated plan section: F2 \u2014 what was built (this iteration; AC 4\u20138)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-004"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "Carry out the migrated plan section: Deviations from architecture.md (F2)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-006",
+      "objective": "Carry out the migrated plan section: Gate results (F2)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-007",
+      "objective": "Carry out the migrated plan section: F3 \u2014 what was built (this iteration; AC 9\u201310)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-009"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-008",
+      "objective": "Carry out the migrated plan section: Deviations from architecture.md (F3)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-009",
+      "objective": "Carry out the migrated plan section: Gate results (F3)",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

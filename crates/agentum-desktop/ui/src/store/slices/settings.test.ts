@@ -2,13 +2,13 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createTestStore, makeWorktree } from './store-test-helpers'
 import type { AppState } from '../types'
-import type { WorktreeLineage } from '../../../../shared/types'
+import type { WorktreeLineage } from '@/shared/types'
 import { toast } from 'sonner'
 import {
   MIN_COMPATIBLE_RUNTIME_SERVER_VERSION,
   MIN_COMPATIBLE_RUNTIME_CLIENT_VERSION,
   RUNTIME_PROTOCOL_VERSION
-} from '../../../../shared/protocol-version'
+} from '@/shared/protocol-version'
 import { clearRuntimeCompatibilityCacheForTests } from '../../runtime/runtime-rpc-client'
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))

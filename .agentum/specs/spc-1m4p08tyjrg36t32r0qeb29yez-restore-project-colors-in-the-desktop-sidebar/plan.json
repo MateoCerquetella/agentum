@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-1M4P08TYJRG36T32R0QEB29YEZ",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "`WorktreeList.tsx` renders `RepoBadgeMark` only for `row.repo` and feeds",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "The existing `RepoIconGlyph` receives the same `repoHeaderColor` while",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "Project color remains outside active, selected, hover, and drag state",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "Header content inherits `text-sidebar-foreground`, and the existing",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "Resolver tests table-cover missing, `null`, empty, and invalid persisted",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-006",
+      "objective": "Source-contract tests pin the repo-only mark, resolver/glyph wiring,",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

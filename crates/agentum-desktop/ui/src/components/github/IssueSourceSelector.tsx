@@ -1,5 +1,5 @@
 import React from 'react'
-import type { GitHubOwnerRepo, IssueSourcePreference } from '../../../../shared/types'
+import type { GitHubOwnerRepo, IssueSourcePreference } from '@/shared/types'
 import { sameGitHubOwnerRepo } from '@/components/github/IssueSourceIndicator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'

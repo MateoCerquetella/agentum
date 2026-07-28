@@ -12,8 +12,8 @@ import {
   generateKeyPair,
   publicKeyToBase64,
   encryptBytes as encryptSharedBytes
-} from '../../../shared/e2ee-crypto'
-import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
+} from '@/shared/e2ee-crypto'
+import type { RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
 
 const fakeSockets: FakeWebSocket[] = []
 

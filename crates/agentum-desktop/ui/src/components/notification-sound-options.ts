@@ -13,7 +13,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { basename } from '@/lib/path'
-import type { GlobalSettings } from '../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 
 export type NotificationSoundOption = {
   id: GlobalSettings['notifications']['customSoundId']

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import type { CustomPet } from '../../../../shared/types'
+import type { CustomPet } from '@/shared/types'
 import { useAppStore } from '../../store'
 import { useDocumentVisible } from './useDocumentVisible'
 import {
@@ -123,12 +123,12 @@ export function AgentRoamer({ url, sprite }: { url: string; sprite: Sprite }): R
         stateRef.current = advanceRoamer(s, e, dt)
       }
       lastTimeRef.current = now
-      render(stateRef.current, e)
+      render(stateRef.current ?? s, e)
       raf = requestAnimationFrame(frame)
     }
 
     // Render once even when paused so a reduced-motion / hidden pet still shows.
-    render(stateRef.current, env())
+    render(stateRef.current!, env())
     if (animate || imgReadyRef.current === false) {
       lastTimeRef.current = 0
       raf = requestAnimationFrame(frame)
@@ -220,4 +220,3 @@ export function AgentRoamer({ url, sprite }: { url: string; sprite: Sprite }): R
     </div>
   )
 }
-

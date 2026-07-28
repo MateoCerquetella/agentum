@@ -1,6 +1,6 @@
 import type { AppState } from '../types'
-import type { SshConnectionState, SshTarget } from '../../../../shared/ssh-types'
-import { parseAppSshPtyId } from '../../../../shared/ssh-pty-id'
+import type { SshConnectionState, SshTarget } from '@/shared/ssh-types'
+import { parseAppSshPtyId } from '@/shared/ssh-pty-id'
 
 export function sshConnectionStatesEqual(
   a: SshConnectionState | undefined,

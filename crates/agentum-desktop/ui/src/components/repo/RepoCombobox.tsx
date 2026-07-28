@@ -10,11 +10,11 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAppStore } from '@/store'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import { searchRepos } from '@/lib/repo-search'
 import { cn } from '@/lib/utils'
 import { useMountedRef } from '@/hooks/useMountedRef'
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 import RepoBadgeLabel from './RepoBadgeLabel'
 
 /** Per-row presentation for a repo in the combobox list. Extracted as a pure

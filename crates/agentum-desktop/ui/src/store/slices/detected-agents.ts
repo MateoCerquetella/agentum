@@ -1,7 +1,7 @@
 import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import type { AppState } from '../types'
-import type { PathSource, ShellHydrationFailureReason, TuiAgent } from '../../../../shared/types'
+import type { PathSource, ShellHydrationFailureReason, TuiAgent } from '@/shared/types'
 import {
   getLocalAgentPreflightContext,
   localPreflightContextKey

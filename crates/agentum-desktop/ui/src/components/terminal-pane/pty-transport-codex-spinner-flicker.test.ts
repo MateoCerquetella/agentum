@@ -3,7 +3,7 @@
 // status-less bare frame ("testi") between them *while still working*. Each bare
 // frame makes detectAgentStatusFromTitle return null, which would collapse the
 // sidebar spinner to idle for that instant — so the spinner flickers and never
-// reads as steadily working (the user's "no spinning action like orca does").
+// reads as steadily working without a distracting spinner.
 // The transport must hold a transient working→non-working blip and only commit
 // to idle when the bare title is sustained (a real turn end). This pins that
 // contract at the transport level, where runtimePaneTitlesByTabId is fed.

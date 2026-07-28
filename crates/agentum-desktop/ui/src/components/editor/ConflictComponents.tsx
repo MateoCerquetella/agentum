@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { ConflictReviewEntry, OpenFile } from '@/store/slices/editor'
-import type { GitConflictKind, GitStatusEntry } from '../../../../shared/types'
+import type { GitConflictKind, GitStatusEntry } from '@/shared/types'
 import { ConflictReviewFileTree } from './ConflictReviewFileTree'
 
 const CONFLICT_KIND_LABELS: Record<GitConflictKind, string> = {

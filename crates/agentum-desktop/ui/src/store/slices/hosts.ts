@@ -18,8 +18,8 @@ export type HostMeta = {
   kind: 'local' | 'ssh'
   /** Display name on the host header (e.g. "studio", "forge"). */
   label: string
-  /** Right-of-name OS line, e.g. "localhost · Darwin 24.5" or
-   *  "ssh forge.lan · Linux 6.9". Undefined until readiness resolves. */
+  /** Secondary host line. Local includes its uname; SSH uses only a friendly
+   *  OS family such as "Linux" or "macOS". Undefined until readiness resolves. */
   detail?: string
   /** Whether `tmux` is installed on the host. Sessions run inside tmux there,
    *  so this is the "tmux available" signal on the host header (and the hook for
@@ -58,6 +58,31 @@ export type HostsSlice = {
  *  transport prefix when it's unknown — never a dangling separator. */
 export function unameDetail(prefix: string, uname: string | null): string {
   return uname ? `${prefix} · ${uname}` : prefix
+}
+
+/** Keep remote host subtitles intentionally terse. The header already names
+ *  the SSH target, so repeating its transport, hostname, and kernel version
+ *  adds noise without helping users distinguish hosts. */
+export function sshOsDetail(uname: string | null): string {
+  const kernel = uname?.trim().split(/\s+/, 1)[0]
+  if (!kernel) return 'SSH'
+
+  switch (kernel.toLowerCase()) {
+    case 'darwin':
+      return 'macOS'
+    case 'linux':
+      return 'Linux'
+    case 'freebsd':
+      return 'FreeBSD'
+    case 'openbsd':
+      return 'OpenBSD'
+    case 'netbsd':
+      return 'NetBSD'
+    case 'windows_nt':
+      return 'Windows'
+    default:
+      return /^(cygwin|mingw|msys)/i.test(kernel) ? 'Windows' : kernel
+  }
 }
 
 export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set, get) => ({
@@ -119,15 +144,12 @@ export const createHostsSlice: StateCreator<AppState, [], [], HostsSlice> = (set
       try {
         const hostId = await resolveServerHostIdForConnection(connectionId)
         if (!hostId) continue
-        const hosts: ServerHost[] = await listServerHosts()
-        const host = hosts.find((h) => h.id === hostId)
         const info = await getServerHostReadinessInfo(hostId)
-        const prefix = host?.hostname ? `ssh ${host.hostname}` : 'ssh'
         get().setHostMeta(key, {
           key,
           kind: 'ssh',
           label,
-          detail: unameDetail(prefix, info.uname),
+          detail: sshOsDetail(info.uname),
           tmuxInstalled: info.tmuxInstalled
         })
       } catch (err) {

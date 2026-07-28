@@ -21,15 +21,15 @@ import type {
   CreateHostedReviewResult,
   HostedReviewCreationEligibility,
   HostedReviewProvider
-} from '../../../../shared/hosted-review'
-import { normalizeHostedReviewHeadRef } from '../../../../shared/hosted-review-refs'
+} from '@/shared/hosted-review'
+import { normalizeHostedReviewHeadRef } from '@/shared/hosted-review-refs'
 import { stripBaseRef, useCreatePullRequestDialogFields } from './useCreatePullRequestDialogFields'
 import {
   DEFAULT_SOURCE_CONTROL_AI_PR_CREATION_DEFAULTS,
   resolveSourceControlAiForOperation,
   resolveSourceControlAiPrCreationDefaults
-} from '../../../../shared/source-control-ai'
-import { getCommitMessageModelDiscoveryHostKeyForScope } from '../../../../shared/commit-message-host-key'
+} from '@/shared/source-control-ai'
+import { getCommitMessageModelDiscoveryHostKeyForScope } from '@/shared/commit-message-host-key'
 import { getRuntimeGitScope } from '@/runtime/runtime-git-client'
 
 type CreatePullRequestDialogProps = {

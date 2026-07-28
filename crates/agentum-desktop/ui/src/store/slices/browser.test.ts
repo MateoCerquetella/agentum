@@ -7,9 +7,9 @@ import {
   createCompatibleRuntimeStatusResponseIfNeeded,
   type RuntimeEnvironmentCallRequest
 } from '../../runtime/runtime-compatibility-test-fixture'
-import { GRAB_BUDGET, type BrowserPageAnnotation } from '../../../../shared/browser-grab-types'
+import { GRAB_BUDGET, type BrowserPageAnnotation } from '@/shared/browser-grab-types'
 import { clearRuntimeCompatibilityCacheForTests } from '../../runtime/runtime-rpc-client'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 const runtimeEnvironmentCall = vi.fn()
 const runtimeEnvironmentTransportCall = vi.fn()

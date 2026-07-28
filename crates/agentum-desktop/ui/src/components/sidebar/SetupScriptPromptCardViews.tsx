@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
-import type { Repo } from '../../../../shared/types'
+import type { Repo } from '@/shared/types'
 
 type DismissButtonProps = {
   onDismiss: () => void

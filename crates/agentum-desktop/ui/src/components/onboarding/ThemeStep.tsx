@@ -9,8 +9,8 @@ import type {
   DiscoveryStatusEmitted,
   GhosttyImportPreview,
   GlobalSettings
-} from '../../../../shared/types'
-import ghosttyIcon from '../../../resources/ghostty.svg'
+} from '@/shared/types'
+import ghosttyIcon from '@resources/ghostty.svg'
 
 type ThemeStepProps = {
   theme: GlobalSettings['theme']

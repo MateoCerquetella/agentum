@@ -1,9 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createIssuePayload,
   draftIssueBodyPayload,
   extractServerErrorMessage
 } from './github-issue-client'
+
+vi.mock('./server-endpoint', () => ({
+  apiUrl: vi.fn((path: string) => Promise.resolve(path)),
+  getServerEndpoint: vi.fn(() => Promise.resolve({ token: null }))
+}))
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.clearAllMocks()
+})
 
 // Spec 007: the "Generate description" form surfaces server errors inline —
 // most importantly the no-credentials message from /api/github/issues/draft-body
@@ -101,5 +111,11 @@ describe('draftIssueBodyPayload', () => {
     expect(
       draftIssueBodyPayload({ title: 'Draft it', workdir: '/repo', agent: 'codex' })
     ).toEqual({ title: 'Draft it', workdir: '/repo', agent: 'codex' })
+  })
+
+  it('opts into a concise quick draft without changing the legacy default', () => {
+    expect(
+      draftIssueBodyPayload({ title: 'Draft it', workdir: '/repo', style: 'concise' })
+    ).toEqual({ title: 'Draft it', workdir: '/repo', style: 'concise' })
   })
 })

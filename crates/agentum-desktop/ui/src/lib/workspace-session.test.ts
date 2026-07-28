@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildWorkspaceSessionPayload } from './workspace-session'
 import type { AppState } from '../store'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 function createSnapshot(overrides: Partial<AppState> = {}): AppState {
   return {

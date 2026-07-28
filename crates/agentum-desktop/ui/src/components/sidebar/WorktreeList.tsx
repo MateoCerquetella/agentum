@@ -52,11 +52,11 @@ import type {
   WorktreeLineage,
   WorkspaceStatus,
   WorkspaceStatusDefinition
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   DEFAULT_SHOW_SLEEPING_WORKSPACES,
   DEFAULT_HIDE_DEFAULT_BRANCH_WORKSPACE
-} from '../../../../shared/constants'
+} from '@/shared/constants'
 import { buildWorktreeComparator } from './smart-sort'
 import {
   buildAttentionByWorktree,
@@ -183,14 +183,14 @@ import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-cl
 import { getRepoHeaderCreateState } from './repo-header-create-state'
 import type { PendingSidebarWorktreeReveal } from '@/store/slices/ui'
 import { getRepositoryIconSectionId } from '@/components/settings/repository-settings-targets'
-import { keybindingMatchesAction } from '../../../../shared/keybindings'
+import { keybindingMatchesAction } from '@/shared/keybindings'
 import { ProjectGroupNameDialog } from './ProjectGroupNameDialog'
 import { ProjectGroupDeleteDialog } from './ProjectGroupDeleteDialog'
-import { isGitRepoKind } from '../../../../shared/repo-kind'
+import { isGitRepoKind } from '@/shared/repo-kind'
 import {
   effectiveExternalWorktreeVisibility,
   isLegacyRepoForExternalWorktreeVisibility
-} from '../../../../shared/worktree-ownership'
+} from '@/shared/worktree-ownership'
 import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import ImportedWorktreesVisibilityLine from './ImportedWorktreesVisibilityLine'
@@ -210,10 +210,14 @@ import {
 } from './worktree-section-activity'
 import {
   buildOperationalSidebarRows,
+  selectOperationalContinuation,
   selectOperationalStatusTimestamp,
   type OperationalWorkspaceFact
 } from './operational-sidebar-model'
-import { selectLiveAgentStatusEntriesForWorktree } from './worktree-agent-row-selectors'
+import {
+  selectLiveAgentStatusEntriesForWorktree,
+  selectRetainedAgentEntriesForWorktree
+} from './worktree-agent-row-selectors'
 import { useNow } from '@/components/dashboard/useNow'
 import { runWorktreeBatchDelete } from './delete-worktree-flow'
 
@@ -242,6 +246,7 @@ const EMPTY_PROJECT_GROUPS: readonly ProjectGroup[] = []
 // open. When it's closed — the overwhelmingly common case — this component would
 // otherwise re-render on every agent status ping from every pane (O(agents) jank).
 const EMPTY_AGENT_STATUS_BY_PANE_KEY: AppState['agentStatusByPaneKey'] = {}
+const EMPTY_ACKNOWLEDGED_AGENTS: AppState['acknowledgedAgentsByPaneKey'] = {}
 const EXPANDING_CARD_MEASUREMENT_ADJUSTMENT_SUPPRESS_MS = 300
 const WORKTREE_SIDEBAR_SCROLL_STYLE: React.CSSProperties = {
   // Why: TanStack Virtual owns scroll correction. Native browser anchoring can
@@ -423,8 +428,10 @@ const PROJECT_GROUP_HEADER_BASE_PADDING = 4
 const PROJECT_GROUP_HEADER_INDENT = 10
 // Why: in host-first grouping the host header is the top-level parent, so every
 // row beneath it (repo sub-headers + their worktrees) shifts right to make the
-// host → project → worktree nesting read clearly.
-const HOST_CHILD_INDENT = 40
+// host → project → worktree nesting read clearly. Keep this compact: it applies
+// to the whole card body, including inline agents, so a larger inset wastes the
+// narrow sidebar's most useful text space at every descendant level.
+const HOST_CHILD_INDENT = 24
 const SIDEBAR_POINTER_DRAG_THRESHOLD_PX = 4
 
 type VirtualizedWorktreeViewportProps = {
@@ -3958,6 +3965,11 @@ const WorktreeList = React.memo(function WorktreeList({
   const sectionActivityServerByWorktreeId = useAppStore(
     (s) => s.serverWorktreeActivityByWorktreeId
   )
+  const operationalAcknowledgedAgentsByPaneKey = useAppStore((s) =>
+    groupBy === 'operational'
+      ? (s.acknowledgedAgentsByPaneKey ?? EMPTY_ACKNOWLEDGED_AGENTS)
+      : EMPTY_ACKNOWLEDGED_AGENTS
+  )
 
   const sortEpoch = useAppStore((s) => s.sortEpoch)
 
@@ -4479,7 +4491,11 @@ const WorktreeList = React.memo(function WorktreeList({
     const now = Date.now()
     const facts = new Map<string, OperationalWorkspaceFact>()
     for (const worktree of worktrees) {
-      const entries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
+      const liveEntries = selectLiveAgentStatusEntriesForWorktree(current, worktree.id)
+      const retainedEntries = selectRetainedAgentEntriesForWorktree(current, worktree.id).map(
+        (retained) => retained.entry
+      )
+      const entries = retainedEntries.length > 0 ? [...liveEntries, ...retainedEntries] : liveEntries
       const status = resolveWorktreeStatusFromState(sectionActivityState, worktree.id, now)
       let latest = entries[0]
       for (const entry of entries) {
@@ -4488,11 +4504,15 @@ const WorktreeList = React.memo(function WorktreeList({
       facts.set(worktree.id, {
         status,
         agentLabel: latest?.agentType ?? worktree.createdWithAgent,
-        stateTimestamp: selectOperationalStatusTimestamp(status, entries, now)
+        stateTimestamp: selectOperationalStatusTimestamp(status, entries, now),
+        continuation: selectOperationalContinuation(
+          entries,
+          operationalAcknowledgedAgentsByPaneKey
+        )
       })
     }
     return facts
-  }, [sectionActivityState, worktrees])
+  }, [operationalAcknowledgedAgentsByPaneKey, sectionActivityState, worktrees])
 
   // Build flat row list for rendering
   const rows: Row[] = useMemo(() => {

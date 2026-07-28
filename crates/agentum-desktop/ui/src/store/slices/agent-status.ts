@@ -11,12 +11,12 @@ import {
   type AgentType,
   type MigrationUnsupportedPtyEntry,
   type ParsedAgentStatusPayload
-} from '../../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import {
   resolveAgentStatusIdentity,
   shouldSuppressInheritedTerminalStatus
-} from '../../../../shared/agent-status-identity'
-import type { TerminalTab } from '../../../../shared/types'
+} from '@/shared/agent-status-identity'
+import type { TerminalTab } from '@/shared/types'
 import { isExplicitAgentStatusFresh } from '@/lib/agent-status'
 import { createFreshnessScheduler } from './agent-status-freshness-scheduler'
 

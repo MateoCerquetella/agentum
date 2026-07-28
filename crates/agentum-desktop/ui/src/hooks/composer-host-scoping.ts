@@ -2,7 +2,7 @@
 // `useComposerState` owns the React state; this module holds the derivations so
 // the host→repo scoping + default-host + repoId-reset rules are unit-testable
 // without mounting the hook (mirrors composer-branch-selection.ts).
-import type { Repo } from '../../../shared/types'
+import type { Repo } from '@/shared/types'
 import type { HostKey, HostMeta } from '@/store/slices/hosts'
 import { LOCAL_HOST_KEY, hostKeyForRepo } from '@/components/sidebar/worktree-list-groups'
 

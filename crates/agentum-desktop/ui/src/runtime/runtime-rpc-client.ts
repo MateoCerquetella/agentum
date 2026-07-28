@@ -1,8 +1,8 @@
 import { api } from '@/tauri'
-import type { GlobalSettings } from '../../../shared/types'
-import type { RuntimeRpcFailure, RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
-import type { RuntimeStatus } from '../../../shared/runtime-types'
-import { withBrowserPaneUiRuntimeRpcSource } from '../../../shared/runtime-rpc-feature-interaction-source'
+import type { GlobalSettings } from '@/shared/types'
+import type { RuntimeRpcFailure, RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
+import type { RuntimeStatus } from '@/shared/runtime-types'
+import { withBrowserPaneUiRuntimeRpcSource } from '@/shared/runtime-rpc-feature-interaction-source'
 import { assertRuntimeStatusCompatible } from './runtime-protocol-compat'
 
 export type RuntimeClientTarget = { kind: 'local' } | { kind: 'environment'; environmentId: string }

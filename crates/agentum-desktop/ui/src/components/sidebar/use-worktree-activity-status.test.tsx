@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
-import type { TerminalTab } from '../../../../shared/types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
+import { makePaneKey } from '@/shared/stable-pane-id'
+import type { TerminalTab } from '@/shared/types'
 import { useWorktreeActivityStatus } from './use-worktree-activity-status'
 
 const LEAF_ID = '11111111-1111-4111-8111-111111111111'

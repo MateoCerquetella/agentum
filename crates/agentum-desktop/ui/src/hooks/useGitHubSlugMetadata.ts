@@ -7,11 +7,11 @@ import { api } from '@/tauri'
 // and so this file remains under the lint line cap.
 import { useEffect, useRef, useState } from 'react'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
-import type { GitHubAssignableUser, GlobalSettings } from '../../../shared/types'
+import type { GitHubAssignableUser, GlobalSettings } from '@/shared/types'
 import type {
   ListAssignableUsersBySlugResult,
   ListLabelsBySlugResult
-} from '../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 import {
   clearMetadataRequestStore,
   createMetadataRequestStore,

@@ -6,11 +6,11 @@ import { Button } from '@/components/ui/button'
 import CommentMarkdown from '@/components/sidebar/CommentMarkdown'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { useAppStore } from '@/store'
-import type { PRComment } from '../../../shared/types'
+import type { PRComment } from '@/shared/types'
 import type {
   GitHubProjectCommentMutationResult,
   GitHubProjectMutationResult
-} from '../../../shared/github-project-types'
+} from '@/shared/github-project-types'
 
 function getRuntimeTarget() {
   const target = getActiveRuntimeTarget(useAppStore.getState().settings)

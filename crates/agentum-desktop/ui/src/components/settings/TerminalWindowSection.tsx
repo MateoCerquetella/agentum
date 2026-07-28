@@ -1,7 +1,7 @@
 import { api } from '@/tauri'
 import { useRef, useState } from 'react'
 import { RotateCw } from 'lucide-react'
-import type { GlobalSettings, TerminalColorOverrides } from '../../../../shared/types'
+import type { GlobalSettings, TerminalColorOverrides } from '@/shared/types'
 import { Button } from '../ui/button'
 import { Label } from '../ui/label'
 import { ColorField, NumberField } from './SettingsFormControls'

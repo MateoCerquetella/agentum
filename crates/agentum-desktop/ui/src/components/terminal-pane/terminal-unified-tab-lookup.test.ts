@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { Tab } from '../../../../shared/types'
+import type { Tab } from '@/shared/types'
 import { getCachedTerminalGroupIdForWorktree } from './terminal-unified-tab-lookup'
 
 function makeTerminalTab(entityId: string, groupId: string): Tab {

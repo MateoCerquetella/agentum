@@ -11,8 +11,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { presentGitHubPRMergeState } from '@/components/github-pr-merge-state'
-import { GITHUB_PR_MERGE_METHOD_LABELS, resolveGitHubPRMergeMethods } from '../../../shared/github-pr-merge-methods'
-import type { GitHubWorkItem, GitHubPRMergeMethod } from '../../../shared/types'
+import { GITHUB_PR_MERGE_METHOD_LABELS, resolveGitHubPRMergeMethods } from '@/shared/github-pr-merge-methods'
+import type { GitHubWorkItem, GitHubPRMergeMethod } from '@/shared/types'
+import { runPullRequestStateUpdate } from '@/lib/github-work-item-mutation-routing'
 
 export function PRActionsPanel({
   item,

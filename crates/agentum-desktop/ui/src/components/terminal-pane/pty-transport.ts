@@ -9,7 +9,7 @@ import {
   createAgentStatusTracker,
   normalizeTerminalTitle,
   extractAllOscTitles
-} from '../../../../shared/agent-detection'
+} from '@/shared/agent-detection'
 import {
   ptyDataHandlers,
   ptyReplayHandlers,
@@ -42,7 +42,7 @@ export type {
   PtyConnectResult,
   IpcPtyTransportOptions
 } from './pty-dispatcher'
-export { extractLastOscTitle } from '../../../../shared/agent-detection'
+export { extractLastOscTitle } from '@/shared/agent-detection'
 
 const SSH_SESSION_EXPIRED_ERROR = 'SSH_SESSION_EXPIRED'
 const STALE_TITLE_TIMEOUT = 3000 // ms before stale working title is cleared

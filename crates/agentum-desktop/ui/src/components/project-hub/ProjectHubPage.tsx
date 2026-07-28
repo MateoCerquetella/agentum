@@ -1,11 +1,10 @@
 // Project Hub (ADE redesign, "Agentum ADE Prototype"): clicking a project in
-// the sidebar opens THIS view — the project's Chat / Wiki / Tasks / Sessions
+// the sidebar opens THIS view — the project's Specs / Wiki / Tasks / Sessions
 // as tabs under one header — instead of only expanding the sidebar group. Each
-// tab embeds the existing full-page surface pinned to the hub's repo (Chat's
-// workspace picker, Wiki's projects rail, and the Board's repo filter collapse
+// tab embeds the existing full-page surface pinned to the hub's repo (Run
+// Center, Wiki's projects rail, and the Tasks repo filter collapse
 // into the hub's single project scope), so the hub adds navigation, not a
-// parallel implementation. The rail's Chat / Wiki / Board entries stay the
-// global, cross-project views.
+// parallel implementation.
 import React, { lazy, Suspense, useMemo } from 'react'
 import { ChevronLeft } from 'lucide-react'
 
@@ -17,16 +16,16 @@ import { RepoIconGlyph } from '@/components/repo/repo-icon'
 import { RepoBadgeMark } from '@/components/repo/RepoBadgeLabel'
 import { ProjectSessionsList } from './ProjectSessionsList'
 import { ProjectTasksPage } from './ProjectTasksPage'
+import SddWorkspaceBar from '@/components/sdd/SddWorkspaceBar'
 
 // Lazy like App.tsx's page mounts: the hub chunk stays small and each surface
-// loads on first tab visit (Chat/Wiki/TaskPage are already split chunks).
-const ChatPage = lazy(() => import('@/components/harness/ChatPage'))
+// loads on first tab visit (Wiki/TaskPage are already split chunks).
 const WikiPage = lazy(() => import('@/components/wiki/WikiPage'))
 
-type HubTab = 'chat' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
+type HubTab = 'specs' | 'wiki' | 'tasks' | 'tracker' | 'sessions'
 
 const TABS: Array<{ id: HubTab; label: string }> = [
-  { id: 'chat', label: 'Chat' },
+  { id: 'specs', label: 'Specs' },
   { id: 'wiki', label: 'Wiki' },
   // #379 (Mateo): Tracker and Tasks are ONE surface — the board binding +
   // intake now live in a collapsible strip atop the Tasks tab. The 'tracker'
@@ -127,9 +126,8 @@ export default function ProjectHubPage(): React.JSX.Element {
       <div className="min-h-0 flex-1">
         <Suspense fallback={null}>
           {/* key={repo.id} remounts each surface when the hub switches projects
-              so mount-time scoping (TaskPage's repo preselection, Chat's
-              transcript state) re-seeds instead of leaking across projects. */}
-          {tab === 'chat' ? <ChatPage key={repo.id} pinnedRepo={repo} /> : null}
+              so mount-time scoping cannot leak across repositories. */}
+          {tab === 'specs' ? <SddWorkspaceBar key={repo.id} repoId={repo.id} projectName={repo.displayName} presentation="page" initiallyExpanded /> : null}
           {tab === 'wiki' ? <WikiPage key={repo.id} pinnedRepoId={repo.id} /> : null}
           {tab === 'tasks' || tab === 'tracker' ? <ProjectTasksPage key={repo.id} repo={repo} /> : null}
           {tab === 'sessions' ? <ProjectSessionsList repoId={repo.id} /> : null}

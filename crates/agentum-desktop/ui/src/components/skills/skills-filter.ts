@@ -1,4 +1,4 @@
-import type { DiscoveredSkill, SkillProvider, SkillSourceKind } from '../../../../shared/skills'
+import type { DiscoveredSkill, SkillProvider, SkillSourceKind } from '@/shared/skills'
 
 export type SkillsFilterState = {
   query: string

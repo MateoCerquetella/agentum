@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import type { WorkspaceStatusDefinition } from '../../../../shared/types'
+import type { WorkspaceStatusDefinition } from '@/shared/types'
 import {
   WORKSPACE_STATUS_COLOR_OPTIONS,
   WORKSPACE_STATUS_ICON_OPTIONS,

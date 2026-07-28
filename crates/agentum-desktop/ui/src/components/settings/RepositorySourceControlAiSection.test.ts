@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { RepoSourceControlAiOverrides } from '../../../../shared/source-control-ai-types'
+import type { RepoSourceControlAiOverrides } from '@/shared/source-control-ai-types'
 import { createRepoAiDraftState, resolveRepoAiDraftState } from './RepositorySourceControlAiSection'
 
 describe('RepositorySourceControlAiSection draft state', () => {

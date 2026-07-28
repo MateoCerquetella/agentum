@@ -10,7 +10,7 @@ import type {
   ClaudeRateLimitAccountsState,
   CodexRateLimitAccountsState,
   GlobalSettings
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'

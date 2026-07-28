@@ -1,6 +1,6 @@
 import type { RefObject } from 'react'
 import { ArrowLeft, Search, Server, type LucideIcon, type LucideProps } from 'lucide-react'
-import type { RepoIcon } from '../../../../shared/repo-icon'
+import type { RepoIcon } from '@/shared/repo-icon'
 import { useShortcutLabel } from '@/hooks/useShortcutLabel'
 import { cn } from '@/lib/utils'
 import { RepoIconGlyph } from '../repo/repo-icon'

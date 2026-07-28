@@ -67,7 +67,7 @@ import type {
   PRComment,
   PRConflictSummary,
   PRMergeableState
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { useCheckDetailsResize } from './check-details-resize'
 import {
   RightPanelCommentComposer,

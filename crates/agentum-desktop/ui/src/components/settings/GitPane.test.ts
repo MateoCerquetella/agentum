@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { getDefaultSettings } from '../../../../shared/constants'
+import { getDefaultSettings } from '@/shared/constants'
 import { useAppStore } from '../../store'
 import { shouldOpenAutoRenameBranchAdvanced } from './AutoRenameBranchFromWorkSetting'
 import { GitPane, shouldShowAutoRenameBranchSetting } from './GitPane'

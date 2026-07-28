@@ -1,5 +1,5 @@
 import { api } from '@/tauri'
-import type { OnboardingState } from '../../../../shared/types'
+import type { OnboardingState } from '@/shared/types'
 
 const ONBOARDING_REOPENED_EVENT = 'agentum:onboarding-reopened'
 

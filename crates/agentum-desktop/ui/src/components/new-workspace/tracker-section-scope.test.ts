@@ -11,7 +11,7 @@ import {
   trackerSectionAfterSuccessfulUnbind,
   trackerSectionTableForScope
 } from './tracker-section-scope'
-import type { GitHubProjectTable } from '../../shared/github-project-types'
+import type { GitHubProjectTable } from '@/shared/github-project-types'
 
 function deferred<T>() {
   let resolve!: (value: T) => void

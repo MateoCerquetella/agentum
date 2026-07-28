@@ -8,7 +8,7 @@ import type {
   HostedReviewCreationEligibility,
   HostedReviewCreationEligibilityArgs,
   HostedReviewInfo
-} from '../../../../shared/hosted-review'
+} from '@/shared/hosted-review'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { findRepoByPathPreferLocal } from '@/lib/find-repo-by-path'
 import type { AppState } from '../types'

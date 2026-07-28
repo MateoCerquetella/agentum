@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Repo } from '../../../shared/types'
+import type { Repo } from '@/shared/types'
 import { useAppStore } from '@/store'
 import { getConnectionId } from './connection-context'
 

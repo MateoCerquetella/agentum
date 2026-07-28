@@ -1,4 +1,4 @@
-import type { GlobalSettings } from '../../../../shared/types'
+import type { GlobalSettings } from '@/shared/types'
 import { getHostRuntimeLabel } from '@/lib/runtime-account-labels'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { SettingsRow, SettingsSegmentedControl } from './SettingsFormControls'

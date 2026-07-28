@@ -12,8 +12,8 @@ type DefinedFeatureInteractionId = (typeof FEATURE_INTERACTIONS)[number]['id']
 type MissingFeatureInteractionId = Exclude<FeatureInteractionId, DefinedFeatureInteractionId>
 type ExtraFeatureInteractionId = Exclude<DefinedFeatureInteractionId, FeatureInteractionId>
 
-const REPO_ROOT = join(__dirname, '..', '..')
-const SOURCE_ROOTS = ['src/main', 'src/renderer/src', 'src/preload']
+const UI_ROOT = join(__dirname, '..', '..')
+const SOURCE_ROOTS = ['src']
 const PRODUCTION_FILE_PATTERN = /\.(ts|tsx)$/
 const TEST_FILE_PATTERN = /(?:^|\.)(test|spec)\.(ts|tsx)$/
 
@@ -30,21 +30,16 @@ describe('feature interactions', () => {
       'workspace-board-actions',
       'browser',
       'tasks',
-      'automations',
-      'automation-created',
-      'automation-run',
       'browser-annotations',
       'browser-grab',
       'workspace-creation',
       'agent-browser-setup',
       'agent-browser-use',
       'agent-orchestration-setup',
-      'agent-orchestration',
       'ai-commit-generation',
       'ai-pr-generation',
       'claude-account-switching',
       'computer-use-setup',
-      'computer-use',
       'codex-account-switching',
       'cookie-import',
       'floating-workspace',
@@ -73,14 +68,12 @@ describe('feature interactions', () => {
       normalizeFeatureInteractions({
         tasks: { firstInteractedAt: 100 },
         browser: { firstInteractedAt: Number.NaN },
-        automations: { firstInteractedAt: 200, interactionCount: 3 },
         'browser-grab': { firstInteractedAt: 250, interactionCount: 0 },
         unknown: { firstInteractedAt: 200 },
         'voice-dictation': { firstInteractedAt: 300 }
       })
     ).toEqual({
       tasks: { firstInteractedAt: 100, interactionCount: 1 },
-      automations: { firstInteractedAt: 200, interactionCount: 3 },
       'browser-grab': { firstInteractedAt: 250, interactionCount: 1 },
       'voice-dictation': { firstInteractedAt: 300, interactionCount: 1 }
     })
@@ -117,7 +110,7 @@ describe('feature interactions', () => {
 })
 
 function collectProductionSourceText(): string {
-  const files = SOURCE_ROOTS.flatMap((root) => collectSourceFiles(join(REPO_ROOT, root)))
+  const files = SOURCE_ROOTS.flatMap((root) => collectSourceFiles(join(UI_ROOT, root)))
   return files
     .sort()
     .map((file) => readFileSync(file, 'utf8'))
@@ -136,7 +129,7 @@ function collectSourceFiles(directory: string): string[] {
       files.push(...collectSourceFiles(path))
       continue
     }
-    const repoRelativePath = relative(REPO_ROOT, path)
+    const repoRelativePath = relative(UI_ROOT, path)
     if (!PRODUCTION_FILE_PATTERN.test(entry) || TEST_FILE_PATTERN.test(entry)) {
       continue
     }

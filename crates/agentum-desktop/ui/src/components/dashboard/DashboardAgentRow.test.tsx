@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
-import type { TerminalTab } from '../../../../shared/types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
+import type { TerminalTab } from '@/shared/types'
 import { TooltipProvider } from '../ui/tooltip'
 import DashboardAgentRow from './DashboardAgentRow'
 import type { DashboardAgentRow as DashboardAgentRowData } from './useDashboardData'
@@ -281,7 +281,7 @@ describe('DashboardAgentRow', () => {
   it('reserves a real working tool line before tool metadata arrives', () => {
     const emptyToolMarkup = renderRow(makeAgent())
     const activeToolMarkup = renderRow(
-      makeAgent({}, { toolName: 'ListDir', toolInput: '/Users/nwparker/agentum' })
+      makeAgent({}, { toolName: 'ListDir', toolInput: '/Users/developer/agentum' })
     )
 
     // Why: Antigravity emits working hooks without tool metadata between

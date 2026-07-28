@@ -1,9 +1,9 @@
-import type { TerminalQuickCommand } from '../../../../shared/types'
+import type { TerminalQuickCommand } from '@/shared/types'
 import {
   buildTerminalQuickCommandInput,
   flattenTerminalQuickCommand,
   isTerminalAgentQuickCommand
-} from '../../../../shared/terminal-quick-commands'
+} from '@/shared/terminal-quick-commands'
 
 type QuickCommandPane = {
   terminal: {

@@ -7,8 +7,8 @@ import { getWorkspaceDeleteLineage } from './workspace-delete-lineage'
 import {
   isPathInsideOrEqual,
   normalizeRuntimePathForComparison
-} from '../../../../shared/cross-platform-path'
-import type { Worktree } from '../../../../shared/types'
+} from '@/shared/cross-platform-path'
+import type { Worktree } from '@/shared/types'
 
 type WorktreeBatchDeleteOptions = {
   forceConfirm?: boolean

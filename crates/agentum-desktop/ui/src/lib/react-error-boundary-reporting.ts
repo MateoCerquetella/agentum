@@ -3,7 +3,7 @@ import type React from 'react'
 import type {
   CrashReportRecord,
   ReactErrorBoundaryReportArgs
-} from '../../../shared/crash-reporting'
+} from '@/shared/crash-reporting'
 
 type RendererErrorContext = Pick<
   ReactErrorBoundaryReportArgs,

@@ -5,14 +5,14 @@ import type {
   Worktree,
   WorktreeDefaultTabsLaunch,
   WorktreeSetupLaunch
-} from '../../../shared/types'
-import type { EventProps } from '../../../shared/telemetry-events'
+} from '@/shared/types'
+import type { EventProps } from '@/shared/telemetry-events'
 import { shouldAutoCreateInitialTerminal } from '@/components/terminal/initial-terminal'
 import { buildSetupRunnerCommand } from './setup-runner'
 import { buildAgentStartupPlan } from './tui-agent-startup'
 import { CLIENT_PLATFORM } from './new-workspace'
 import { tuiAgentToAgentKind } from './telemetry'
-import { agentKindToTuiAgent } from '../../../shared/agent-kind'
+import { agentKindToTuiAgent } from '@/shared/agent-kind'
 import { useAppStore } from '@/store'
 import type { PendingSidebarWorktreeReveal } from '@/store/slices/ui'
 import {
@@ -23,7 +23,7 @@ import {
   setWorktreeNavActivator,
   setWorktreeNavViewActivator
 } from '@/store/slices/worktree-nav-history'
-import { isTuiAgent } from '../../../shared/tui-agent-config'
+import { isTuiAgent } from '@/shared/tui-agent-config'
 
 /** Telemetry payload threaded from the launch site to `pty:spawn`. Main
  *  fires `agent_started` only after the spawn succeeds — see

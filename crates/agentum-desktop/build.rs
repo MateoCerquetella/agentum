@@ -19,5 +19,15 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
     }
 
-    tauri_build::build()
+    // Register the application ACL manifest from `permissions/`. Every command
+    // in `generate_handler!` is listed by the `main-webview-commands`
+    // permission and that permission is granted only to the trusted `main`
+    // webview. Tauri's build macro then removes any command that is not in the
+    // capability, so a newly added command fails the repository's exact-set
+    // security check instead of becoming globally callable or disappearing at
+    // runtime. In-app browser child webviews receive no application commands.
+    let attributes = tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new());
+    if let Err(error) = tauri_build::try_build(attributes) {
+        panic!("Tauri build configuration failed: {error:#}");
+    }
 }

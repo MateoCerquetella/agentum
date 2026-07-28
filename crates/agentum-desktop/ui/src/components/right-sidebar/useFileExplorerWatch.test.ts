@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { FsChangedPayload } from '../../../../shared/types'
+import type { FsChangedPayload } from '@/shared/types'
 import {
   canonicalizeFileExplorerWatchPath,
   getExternalFileChangeRelativePath,

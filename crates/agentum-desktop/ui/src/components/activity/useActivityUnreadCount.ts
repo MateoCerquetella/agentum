@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { migrationUnsupportedToAgentStatusEntry } from '@/lib/migration-unsupported-agent-entry'
 import { useAppStore } from '@/store'
 import type { AppState } from '@/store/types'
-import type { AgentStatusEntry, AgentStatusState } from '../../../../shared/agent-status-types'
+import type { AgentStatusEntry, AgentStatusState } from '@/shared/agent-status-types'
 
 type ActivityUnreadCountSource = Pick<
   AppState,

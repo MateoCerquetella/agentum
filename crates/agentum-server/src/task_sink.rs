@@ -10,13 +10,10 @@
 //! Modelled as a **closed enum**, not a plugin trait, to match the codebase's
 //! seam style (cf. `mcp_provision::BrowserMcpEngine`): every supported provider
 //! is visible in one `match`, there's no dynamic dispatch, and no new
-//! dependency (`async-trait`). v1 ships the internal board (011a) and GitHub
-//! Issues (011b); Linear (011c) slots in as a new variant.
+//! dependency (`async-trait`). The supported destinations are GitHub Issues
+//! and Linear Issues.
 
 use std::path::{Path, PathBuf};
-
-use agentum_core::NewBoardItem;
-use agentum_store::Store;
 
 /// A feature to create in a task destination. The minimal shape every provider
 /// can accept — title is required, body optional.
@@ -25,19 +22,17 @@ pub struct NewFeature {
     pub title: String,
     pub body: Option<String>,
     /// Labels to apply on creation. GitHub passes each as `--label <l>`; the
-    /// board and Linear arms currently ignore them (Linear label application is a
+    /// Linear currently ignores them (Linear label application is a
     /// documented v1 no-op — see `routes::chat`). Empty = no labels, so existing
     /// callers stay byte-for-byte unchanged.
     pub labels: Vec<String>,
 }
 
-/// Where a created feature landed. `id` is the provider's stable handle (board
-/// key like `AG-12`, a GitHub issue number, a Linear identifier) — the
-/// chat-to-features pipeline reuses it as the harness feature id so
-/// `$HARNESS_FEATURE_ID` in `verify.sh` points back at the real tracker item.
+/// Where a created feature landed. `id` is the external provider's stable
+/// handle (a GitHub issue number or Linear identifier).
 ///
-/// `Serialize` so the `/api/board/goals` handler can return it verbatim as the
-/// Chat-create response (spec 018) — `provider`/`id`/`url` are the wire contract.
+/// `Serialize` so creation routes can return it verbatim; `provider`/`id`/`url`
+/// are the wire contract.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FeatureRef {
     pub provider: &'static str,
@@ -45,30 +40,21 @@ pub struct FeatureRef {
     pub url: Option<String>,
 }
 
-/// What a sink needs to create a feature. Board uses the store + parent goal;
-/// CLI-backed providers (GitHub `gh`) run inside the repo at `workdir`.
+/// What an external sink needs to create a feature. CLI-backed providers
+/// (GitHub `gh`) run inside the repo at `workdir`.
 pub struct SinkCtx<'a> {
-    pub store: &'a Store,
     /// Repo directory for CLI-based providers; also where the goal lives.
     pub workdir: &'a Path,
-    /// Parent goal id for hierarchy-aware providers (the board nests under it).
-    pub parent_goal_id: Option<i64>,
     /// Explicit GitHub `owner/repo` target (spec 019). When `Some`, the GitHub
     /// arm files via `gh issue create --repo <slug>` run from `$HOME` — so a
     /// non-existent project `workdir` is never used as cwd (the Chat-from-
-    /// anywhere fix). When `None`, the legacy cwd-relative argv runs inside
-    /// `workdir` (harness/`plan_goal_harness` compatibility — byte-for-byte
-    /// unchanged).
+    /// anywhere fix). When `None`, the cwd-relative argv runs inside `workdir`.
     pub slug: Option<&'a str>,
 }
 
-/// The configured task destination. The internal board is also the agnostic
-/// *fallback* — it is the source of truth whenever no external manager is
-/// connected.
+/// The configured external task destination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskSink {
-    /// agentum's own kanban board (`board_items`).
-    Board,
     /// GitHub Issues via the authenticated `gh` CLI (spec 011b).
     Github,
     /// Linear via the GraphQL `issueCreate` mutation (spec 011c).
@@ -76,11 +62,8 @@ pub enum TaskSink {
 }
 
 /// A project's tracker choice as threaded through a plan request (spec 021).
-/// `Auto` (the absent-field default) keeps today's behavior — env pin +
-/// availability probe via [`TaskSink::select`]; an explicit `Github`/`Linear`
-/// pin forces the sink outright, consulting neither `AGENTUM_TASK_SINK` nor
-/// the probe (architecture D3: an explicit per-project pin outranks the env
-/// var, which keeps governing only `Auto`/absent).
+/// `Auto` is retained as the absent-field/default wire value. Creation callers
+/// resolve it from project context; only explicit external providers are sinks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackerChoice {
     Auto,
@@ -107,72 +90,13 @@ pub fn parse_tracker_choice(raw: Option<&str>) -> Result<TrackerChoice, String> 
     }
 }
 
-impl TrackerChoice {
-    /// The sink an explicit pin forces; `None` for `Auto` (the caller falls
-    /// back to [`TaskSink::select`]'s env + probe detection).
-    pub fn forced_sink(self) -> Option<TaskSink> {
-        match self {
-            TrackerChoice::Auto => None,
-            TrackerChoice::Github => Some(TaskSink::Github),
-            TrackerChoice::Linear => Some(TaskSink::Linear),
-        }
-    }
-
-    /// Resolve the destination for a plan request: an explicit pin wins
-    /// outright (D3 — no env, no probe); `Auto` defers to
-    /// [`TaskSink::select`], unchanged.
-    pub async fn resolve_sink(self, workdir: &Path) -> TaskSink {
-        match self.forced_sink() {
-            Some(sink) => sink,
-            None => TaskSink::select(workdir).await,
-        }
-    }
-}
-
 impl TaskSink {
     /// Stable provider id, surfaced to callers and stamped onto [`FeatureRef`].
     pub fn provider(self) -> &'static str {
         match self {
-            TaskSink::Board => "board",
             TaskSink::Github => "github",
             TaskSink::Linear => "linear",
         }
-    }
-
-    /// Decide the destination from which providers are available. Pure policy so
-    /// it's unit-testable; the IO that discovers availability lives in
-    /// [`TaskSink::select`].
-    ///
-    /// An external manager is the source of truth when configured; the internal
-    /// board is the agnostic fallback. GitHub takes precedence over Linear when
-    /// both are present (deterministic + documented).
-    pub fn pick_provider(github_available: bool, linear_available: bool) -> TaskSink {
-        if github_available {
-            TaskSink::Github
-        } else if linear_available {
-            TaskSink::Linear
-        } else {
-            TaskSink::Board
-        }
-    }
-
-    /// Resolve the destination for a goal's `workdir` by probing what's
-    /// configured, then delegating to [`TaskSink::pick_provider`].
-    ///
-    /// `AGENTUM_TASK_SINK=board|github|linear` forces a provider, overriding
-    /// detection — useful to pin a destination (and to keep tests hermetic).
-    /// An explicit per-project pin ([`TrackerChoice::Github`]/`Linear`) never
-    /// reaches this function at all — [`TrackerChoice::resolve_sink`] only
-    /// delegates here for `Auto`/absent, so the env var governs exactly that
-    /// case (spec 021, architecture D3).
-    pub async fn select(workdir: &Path) -> TaskSink {
-        match std::env::var("AGENTUM_TASK_SINK").as_deref() {
-            Ok("board") => return TaskSink::Board,
-            Ok("github") => return TaskSink::Github,
-            Ok("linear") => return TaskSink::Linear,
-            _ => {}
-        }
-        TaskSink::pick_provider(github_ready(workdir).await, crate::linear::available())
     }
 
     /// Create one feature in the backing task manager. Returns a [`FeatureRef`]
@@ -185,32 +109,6 @@ impl TaskSink {
         feature: &NewFeature,
     ) -> anyhow::Result<FeatureRef> {
         match self {
-            TaskSink::Board => {
-                // A feature is a `feat` card in `todo`; the board's `todo` gate
-                // requires only Title + Lbl, both present here. The card mirrors
-                // the feature on the kanban view; when later moved to `doing` the
-                // existing board flow spawns its agent session.
-                let item = ctx
-                    .store
-                    .create_board_item(NewBoardItem {
-                        title: feature.title.clone(),
-                        body: feature.body.clone(),
-                        lbl: Some("feat".into()),
-                        status: Some("todo".into()),
-                        workdir: None,
-                        parent_goal_id: ctx.parent_goal_id,
-                        tool: None,
-                        model: None,
-                        session_id: None,
-                        priority: None,
-                    })
-                    .await?;
-                Ok(FeatureRef {
-                    provider: self.provider(),
-                    id: item.key,
-                    url: None,
-                })
-            }
             TaskSink::Github => {
                 // Non-interactive create: with both --title and --body present,
                 // `gh` skips its editor and prints the new issue URL to stdout.
@@ -234,9 +132,8 @@ impl TaskSink {
                         ))
                         .current_dir(neutral_cwd());
                     }
-                    // Legacy harness path: resolve the repo from `workdir`'s
-                    // origin (cwd-relative). Unchanged behavior for callers
-                    // (e.g. `plan_goal_harness`) that pass no slug.
+                    // Resolve the repository from `workdir`'s origin for callers
+                    // that do not provide an explicit slug.
                     None => {
                         cmd.args(gh_create_argv(&feature.title, &body, &feature.labels))
                             .current_dir(ctx.workdir);
@@ -271,15 +168,15 @@ impl TaskSink {
 }
 
 /// A pipeline phase, mapped onto whatever the backing tracker calls it. The
-/// harness drives these as a feature moves Pending → Coding → green unit gate →
-/// green QA gate (spec 012).
+/// The task pipeline drives these as a feature moves from queued work through
+/// implementation and verification (spec 012).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackerPhase {
     Todo,
     InProgress,
     /// Spec 012 F3: a PR is open on the workspace's branch. Sits between
     /// InProgress and ReadyToTest in the canonical order (`tracker_sync`), so a
-    /// plain session walks InProgress → InReview → Done while a gated run's
+    /// plain session walks InProgress → InReview → Done while an SDD run's
     /// ReadyToTest (unit-green) never regresses when a PR opens.
     InReview,
     ReadyToTest,
@@ -317,7 +214,7 @@ pub fn parse_tracker_phase(s: &str) -> Option<TrackerPhase> {
     }
 }
 
-/// Outcome of a transition, for the harness log. Transitions are a side-channel:
+/// Outcome of a tracker transition. Transitions are a side-channel:
 /// a tracker hiccup must never halt the run, so even failures come back as a
 /// value the caller logs rather than an error that propagates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,21 +228,7 @@ pub enum TransitionResult {
     Skipped(String),
 }
 
-/// The board column for a phase. Pure so the mapping is unit-tested. The board
-/// ships `todo`/`doing`/`review`/`done` columns (see board_column_rule tests).
-fn board_status_for(phase: TrackerPhase) -> &'static str {
-    match phase {
-        TrackerPhase::Todo => "todo",
-        TrackerPhase::InProgress => "doing",
-        // The internal board has no distinct in-review column — InReview folds
-        // onto `review` alongside ReadyToTest (the board is a coarse mirror).
-        TrackerPhase::InReview => "review",
-        TrackerPhase::ReadyToTest => "review",
-        TrackerPhase::Done => "done",
-    }
-}
-
-/// Canonical, harness-owned status labels with fixed colors (spec 004 D3).
+/// Canonical Agentum-owned status labels with fixed colors (spec 004 D3).
 /// NOT `.github/labels.sh`'s `status/qa*` set — that is the human-QA lifecycle
 /// (architecture C4); the transition never touches foreign `status/*` labels.
 const GITHUB_STATUS_LABELS: [(TrackerPhase, &str, &str); 5] = [
@@ -674,7 +557,7 @@ fn blocked_comment_body(
     format!(
         "⛔ **Blocked** — `{feature_name}` failed the {gate_label} after {attempts} attempt(s).\n\n\
          <details><summary>Gate output (tail)</summary>\n\n```\n{gate_tail}\n```\n</details>\n\n\
-         _Posted by the agentum Harness Engine._"
+         _Posted by Agentum._"
     )
 }
 
@@ -952,22 +835,22 @@ async fn github_mark_blocked_with_board(
 pub struct TrackerEmit<'a> {
     pub bus: &'a tokio::sync::broadcast::Sender<agentum_core::Event>,
     /// The bound workspace, when the caller knows it (reactor / poller /
-    /// attention worker). `None` for tracker-coord-only callers (harness,
-    /// MCP, planning) — consumers then join on `tracker_url`.
+    /// attention worker). `None` for tracker-coordinate-only callers —
+    /// consumers then join on `tracker_url`.
     pub worktree_id: Option<&'a str>,
 }
 
 /// Drive a created feature's tracker item to `phase`, dispatching on the provider
 /// recorded when the feature was created. **Best-effort by contract**: returns
 /// `Ok(Skipped)` for providers/states that don't apply and only `Err` for a real
-/// transport failure the caller should log — never a reason to halt the harness.
+/// transport failure the caller should log — never a reason to halt local work.
 ///
-/// `tracker_id` is the provider's stable handle (board key, Linear identifier,
-/// GitHub issue number) — the same value stored as the harness feature id.
+/// `tracker_id` is the provider's stable handle (Linear identifier or GitHub
+/// issue number).
 /// `tracker_url` is the ticket's URL when known (`Feature.tracker_url`); the
 /// GitHub arm parses `owner/repo` AND the issue number from it (spec 004 — a
 /// spec-from-issue backlog derives N features from ONE issue, so `tracker_id`
-/// cannot double as the issue number). Board/Linear ignore it.
+/// cannot double as the issue number). Linear ignores it.
 ///
 /// Spec 014 F1: on — and ONLY on — `Ok(Applied)` a `tracker.phase_changed`
 /// event is emitted on the bus. `broadcast::Sender::send` is synchronous and
@@ -976,14 +859,13 @@ pub struct TrackerEmit<'a> {
 /// `tracker.phase_changed`: clients refetch GitHub and surface the retryable
 /// warning without inventing the requested phase (#399).
 pub async fn apply_tracker_transition(
-    store: &Store,
     provider: &str,
     tracker_id: &str,
     tracker_url: Option<&str>,
     phase: TrackerPhase,
     emit: TrackerEmit<'_>,
 ) -> anyhow::Result<TransitionResult> {
-    let result = transition_inner(store, provider, tracker_id, tracker_url, phase).await;
+    let result = transition_inner(provider, tracker_id, tracker_url, phase).await;
     match &result {
         Ok(TransitionResult::Applied) => {
             let _ = emit.bus.send(
@@ -1024,7 +906,6 @@ pub async fn apply_tracker_transition(
 /// The pre-014 transition body, verbatim — the wrapper above owns emission so
 /// the only-on-Applied rule is enforced at exactly one `matches!` arm.
 async fn transition_inner(
-    store: &Store,
     provider: &str,
     tracker_id: &str,
     tracker_url: Option<&str>,
@@ -1039,27 +920,6 @@ async fn transition_inner(
                     Ok(TransitionResult::Skipped(why))
                 }
             }
-        }
-        "board" => {
-            // The board key (e.g. `AG-12`) is the feature id; resolve it to the
-            // numeric row id to patch status.
-            let items = store.list_board_items().await?;
-            let Some(item) = items.into_iter().find(|i| i.key == tracker_id) else {
-                return Ok(TransitionResult::Skipped(format!(
-                    "no board card with key {tracker_id}"
-                )));
-            };
-            let status = board_status_for(phase);
-            store
-                .patch_board_item(
-                    item.id,
-                    agentum_core::BoardPatch {
-                        status: Some(status.to_string()),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            Ok(TransitionResult::Applied)
         }
         // GitHub Issues has no workflow column; the phase lives as exactly one
         // canonical `status/*` label (spec 004 D3). Unbound, `Done` is
@@ -1105,17 +965,15 @@ async fn transition_inner(
 /// The block-path sibling of [`apply_tracker_transition`] (spec 008 D6): when a
 /// feature exhausts its retries, escalate on the ISSUE with a `status/blocked`
 /// label plus a comment carrying the retry count and the gate-output tail.
-/// GitHub-only: board/linear have no blocked column, so they
-/// `Skipped("no blocked state")` (D-A — `TrackerPhase` stays four variants).
+/// GitHub-only: Linear has no blocked state and legacy providers are skipped.
 /// **Best-effort by contract**: like its sibling it returns only
 /// `Applied`/`Skipped` and NEVER `Err` for a tracker hiccup, so `drive.rs` logs
 /// the outcome and a blocked issue-update failure can never halt the
 /// (already-halted) run.
 ///
-/// `store`/`tracker_id` are accepted for signature-parity with
-/// `apply_tracker_transition` (so `drive.rs` calls both identically) but unused
-/// while blocked is GitHub-only — the GitHub arm derives owner/repo + number from
-/// `tracker_url`, and board/linear need no id to skip.
+/// `tracker_id` is accepted for signature-parity with `apply_tracker_transition`
+/// but unused while blocked is GitHub-only; that arm derives owner/repo and the
+/// issue number from `tracker_url`.
 ///
 /// Spec 014 F1: on `Ok(Applied)` a `tracker.blocked` event is emitted on the
 /// bus (fire-and-forget, same rules as the pipeline seam). `reason` in the
@@ -1123,10 +981,9 @@ async fn transition_inner(
 ///
 /// Spec 014 F4: `with_comment: false` suppresses only the explanatory comment
 /// (crash-loop cooldown); the label edit and Projects Blocked-column write are
-/// unchanged. The harness retries-exhausted caller passes `true`.
+/// unchanged. A retries-exhausted caller passes `true`.
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_blocked_transition(
-    store: &Store,
     provider: &str,
     tracker_id: &str,
     tracker_url: Option<&str>,
@@ -1138,7 +995,6 @@ pub async fn apply_blocked_transition(
     emit: TrackerEmit<'_>,
 ) -> anyhow::Result<TransitionResult> {
     let result = blocked_inner(
-        store,
         provider,
         tracker_id,
         tracker_url,
@@ -1168,7 +1024,6 @@ pub async fn apply_blocked_transition(
 /// `with_comment` thread-through.
 #[allow(clippy::too_many_arguments)]
 async fn blocked_inner(
-    store: &Store,
     provider: &str,
     tracker_id: &str,
     tracker_url: Option<&str>,
@@ -1178,7 +1033,7 @@ async fn blocked_inner(
     gate_tail: &str,
     with_comment: bool,
 ) -> anyhow::Result<TransitionResult> {
-    let _ = (store, tracker_id);
+    let _ = tracker_id;
     match provider {
         "github" => {
             let Some(url) = tracker_url.map(str::trim).filter(|u| !u.is_empty()) else {
@@ -1209,9 +1064,9 @@ async fn blocked_inner(
             )
             .await)
         }
-        // Board and Linear model no "blocked" state (D-A); the D6 label lives
-        // only on GitHub. A best-effort no-op, never an error.
-        "board" | "linear" => Ok(TransitionResult::Skipped("no blocked state".into())),
+        // Linear models no "blocked" state; the label lives only on GitHub.
+        // A best-effort no-op, never an error.
+        "linear" => Ok(TransitionResult::Skipped("no blocked state".into())),
         other => Ok(TransitionResult::Skipped(format!(
             "unknown tracker provider {other:?}"
         ))),
@@ -1311,10 +1166,8 @@ pub(crate) async fn output_with_etxtbsy_retry(
 }
 
 /// Parse the issue URL `gh issue create` prints to stdout into a [`FeatureRef`].
-/// The number (after `/issues/`) becomes the harness feature id; the full URL is
-/// surfaced to the user. `pub(crate)` so the remote (SSH) GitHub path in
-/// `routes::board_goals` can reuse it against `gh`'s stdout from `gh_in_dir`
-/// (spec 018 S3) — same parser, local or remote.
+/// The number (after `/issues/`) becomes the stable feature id; the full URL is
+/// surfaced to the user.
 pub(crate) fn parse_gh_issue_url(stdout: &str) -> anyhow::Result<FeatureRef> {
     let url = stdout
         .lines()
@@ -1333,24 +1186,6 @@ pub(crate) fn parse_gh_issue_url(stdout: &str) -> anyhow::Result<FeatureRef> {
     })
 }
 
-/// GitHub is usable as a task sink when `gh` is on PATH and `workdir` is a
-/// GitHub repo the authenticated user can see. `gh repo view` covers
-/// install + auth + repo in one cheap call (it fails outside a gh-resolvable
-/// repo or when logged out).
-async fn github_ready(workdir: &Path) -> bool {
-    if which::which("gh").is_err() {
-        return false;
-    }
-    matches!(
-        tokio::process::Command::new("gh")
-            .args(["repo", "view", "--json", "name"])
-            .current_dir(workdir)
-            .output()
-            .await,
-        Ok(o) if o.status.success()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1365,29 +1200,16 @@ mod tests {
         Store::open(&p).await.unwrap()
     }
 
-    fn ctx<'a>(store: &'a Store, workdir: &'a Path, parent: Option<i64>) -> SinkCtx<'a> {
+    fn ctx<'a>(_store: &Store, workdir: &'a Path, _parent: Option<i64>) -> SinkCtx<'a> {
         SinkCtx {
-            store,
             workdir,
-            parent_goal_id: parent,
             // Legacy cwd-relative GitHub path; the Chat path sets slug explicitly.
             slug: None,
         }
     }
 
     #[test]
-    fn pick_provider_precedence_github_then_linear_then_board() {
-        // External manager = truth when configured; board = agnostic fallback.
-        // GitHub wins over Linear when both are present (deterministic).
-        assert_eq!(TaskSink::pick_provider(true, true), TaskSink::Github);
-        assert_eq!(TaskSink::pick_provider(true, false), TaskSink::Github);
-        assert_eq!(TaskSink::pick_provider(false, true), TaskSink::Linear);
-        assert_eq!(TaskSink::pick_provider(false, false), TaskSink::Board);
-    }
-
-    #[test]
-    fn provider_ids_are_stable() {
-        assert_eq!(TaskSink::Board.provider(), "board");
+    fn only_github_and_linear_are_creation_sinks() {
         assert_eq!(TaskSink::Github.provider(), "github");
         assert_eq!(TaskSink::Linear.provider(), "linear");
     }
@@ -1412,33 +1234,6 @@ mod tests {
         assert_eq!(parse_tracker_choice(Some("board")), Err("board".into()));
         assert_eq!(parse_tracker_choice(Some("none")), Err("none".into()));
         assert_eq!(parse_tracker_choice(Some("jira")), Err("jira".into()));
-    }
-
-    #[test]
-    fn tracker_choice_forces_only_explicit_pins() {
-        assert_eq!(TrackerChoice::Auto.forced_sink(), None);
-        assert_eq!(TrackerChoice::Github.forced_sink(), Some(TaskSink::Github));
-        assert_eq!(TrackerChoice::Linear.forced_sink(), Some(TaskSink::Linear));
-    }
-
-    /// Architecture D3: an explicit pin outranks `AGENTUM_TASK_SINK`; the env
-    /// var keeps full authority over `Auto`. Env-mutating, so serialised via
-    /// the crate-wide lock (the same discipline as routes/board_goals tests).
-    #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
-    async fn explicit_pin_outranks_env_sink_auto_still_honors_it() {
-        let _guard = crate::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        // SAFETY: set_var is unsound under concurrent access; TEST_ENV_LOCK
-        // serialises every env-mutating test in this crate.
-        unsafe { std::env::set_var("AGENTUM_TASK_SINK", "github") };
-        let pinned = TrackerChoice::Linear.resolve_sink(dir.path()).await;
-        let auto = TrackerChoice::Auto.resolve_sink(dir.path()).await;
-        unsafe { std::env::remove_var("AGENTUM_TASK_SINK") };
-        assert_eq!(pinned, TaskSink::Linear, "explicit pin must bypass the env");
-        assert_eq!(auto, TaskSink::Github, "Auto must still honor the env pin");
     }
 
     #[test]
@@ -2058,82 +1853,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn board_status_mapping_covers_all_phases() {
-        assert_eq!(board_status_for(TrackerPhase::Todo), "todo");
-        assert_eq!(board_status_for(TrackerPhase::InProgress), "doing");
-        // InReview folds onto the internal board's `review` column alongside
-        // ReadyToTest (no distinct in-review board column).
-        assert_eq!(board_status_for(TrackerPhase::InReview), "review");
-        assert_eq!(board_status_for(TrackerPhase::ReadyToTest), "review");
-        assert_eq!(board_status_for(TrackerPhase::Done), "done");
-    }
-
     /// A throwaway bus for the seam's required `TrackerEmit` (spec 014 F1) —
     /// tests that don't assert emission just need a live sender to pass.
     fn test_bus() -> tokio::sync::broadcast::Sender<agentum_core::Event> {
         tokio::sync::broadcast::channel(8).0
-    }
-
-    #[tokio::test]
-    async fn board_transition_moves_card_status() {
-        let store = fresh_store().await;
-        let here = std::env::temp_dir();
-        let r = TaskSink::Board
-            .create_feature(
-                &ctx(&store, &here, None),
-                &NewFeature {
-                    title: "Add OAuth login".into(),
-                    body: None,
-                    labels: vec![],
-                },
-            )
-            .await
-            .unwrap();
-
-        let bus = test_bus();
-        let res = apply_tracker_transition(
-            &store,
-            "board",
-            &r.id,
-            None,
-            TrackerPhase::InProgress,
-            TrackerEmit {
-                bus: &bus,
-                worktree_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(res, TransitionResult::Applied);
-        let card = store
-            .list_board_items()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|c| c.key == r.id)
-            .unwrap();
-        assert_eq!(card.status, "doing");
-    }
-
-    #[tokio::test]
-    async fn board_transition_unknown_key_is_skipped() {
-        let store = fresh_store().await;
-        let bus = test_bus();
-        let res = apply_tracker_transition(
-            &store,
-            "board",
-            "AG-9999",
-            None,
-            TrackerPhase::Done,
-            TrackerEmit {
-                bus: &bus,
-                worktree_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(matches!(res, TransitionResult::Skipped(_)));
     }
 
     /// Spec 004: replaces `github_transition_is_a_logged_noop`. The GitHub arm
@@ -2141,10 +1864,8 @@ mod tests {
     /// unparseable URL → `Ok(Skipped)`, never `Err` (AC 5).
     #[tokio::test]
     async fn github_transition_without_url_is_skipped() {
-        let store = fresh_store().await;
         let bus = test_bus();
         let res = apply_tracker_transition(
-            &store,
             "github",
             "42",
             None,
@@ -2159,7 +1880,6 @@ mod tests {
         assert!(matches!(res, TransitionResult::Skipped(_)));
         // Blank and unparseable (a /pull/ link) URLs are skips too.
         let res = apply_tracker_transition(
-            &store,
             "github",
             "42",
             Some("  "),
@@ -2173,7 +1893,6 @@ mod tests {
         .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         let res = apply_tracker_transition(
-            &store,
             "github",
             "42",
             Some("https://github.com/o/r/pull/42"),
@@ -2190,79 +1909,30 @@ mod tests {
 
     // ---- Spec 014 F1: bus emission at the seam --------------------------------
 
-    /// AC 1: an `Applied` transition emits exactly one `tracker.phase_changed`
-    /// with the full payload. Driven through the hermetic board arm — the
-    /// emission choke point is upstream of provider dispatch, so this proves it
-    /// for all providers (the gh transport is covered by the fake-gh tests).
-    #[tokio::test]
-    async fn applied_transition_emits_phase_changed_on_bus() {
-        let store = fresh_store().await;
-        let here = std::env::temp_dir();
-        let r = TaskSink::Board
-            .create_feature(
-                &ctx(&store, &here, None),
-                &NewFeature {
-                    title: "Emit on applied".into(),
-                    body: None,
-                    labels: vec![],
-                },
-            )
-            .await
-            .unwrap();
-
-        let (bus, mut rx) = tokio::sync::broadcast::channel(8);
-        let res = apply_tracker_transition(
-            &store,
-            "board",
-            &r.id,
-            None,
-            TrackerPhase::InProgress,
-            TrackerEmit {
-                bus: &bus,
-                worktree_id: Some("repo-1::/tmp/wt"),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(res, TransitionResult::Applied);
-
-        let ev = rx.try_recv().expect("Applied emits one event");
-        assert_eq!(ev.kind, "tracker.phase_changed");
-        assert_eq!(ev.payload["worktree_id"], "repo-1::/tmp/wt");
-        assert_eq!(ev.payload["provider"], "board");
-        assert_eq!(ev.payload["phase"], "in_progress");
-        assert!(ev.payload["tracker_url"].is_null(), "board has no URL");
-        assert!(
-            rx.try_recv().is_err(),
-            "exactly ONE event per applied transition"
-        );
-    }
-
     /// #399: skipped lifecycle writes emit a pending warning, never a false
     /// phase_changed success. The blocked seam keeps its separate contract.
     #[tokio::test]
-    async fn skipped_transition_emits_pending_not_success() {
-        let store = fresh_store().await;
+    async fn legacy_board_provider_is_non_mutating_and_best_effort() {
         let (bus, mut rx) = tokio::sync::broadcast::channel(8);
         let emit = || TrackerEmit {
             bus: &bus,
             worktree_id: None,
         };
 
-        let res =
-            apply_tracker_transition(&store, "board", "AG-9999", None, TrackerPhase::Done, emit())
-                .await
-                .unwrap();
-        assert!(matches!(res, TransitionResult::Skipped(_)));
+        let res = apply_tracker_transition("board", "AG-9999", None, TrackerPhase::Done, emit())
+            .await
+            .unwrap();
+        assert_eq!(
+            res,
+            TransitionResult::Skipped("unknown tracker provider \"board\"".into())
+        );
 
-        let res =
-            apply_tracker_transition(&store, "github", "42", None, TrackerPhase::Done, emit())
-                .await
-                .unwrap();
+        let res = apply_tracker_transition("github", "42", None, TrackerPhase::Done, emit())
+            .await
+            .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
 
         let res = apply_blocked_transition(
-            &store,
             "github",
             "42",
             None,
@@ -2406,8 +2076,8 @@ mod tests {
     // ---- Spec 021 F4: per-project pin → provider dispatch at the seam --------
 
     /// Spec 021 F4: the per-project pin — stamped onto each planned
-    /// `Feature.tracker_provider` (F3) and passed verbatim by the harness's
-    /// `transition_tracker` — selects the matching arm at THIS public seam.
+    /// `Feature.tracker_provider` (F3) and passed verbatim to this transition
+    /// seam — selects the matching arm at THIS public seam.
     /// No live credentials: a `"github"` feature drives the `gh issue edit`
     /// transition (fake `gh` records the argv), a `"linear"` feature enters
     /// `linear::transition_issue`, proven by its token-gate error — a message
@@ -2421,7 +2091,6 @@ mod tests {
         let _guard = crate::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let store = fresh_store().await;
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("calls.log");
         let script = write_fake_gh(
@@ -2443,7 +2112,6 @@ mod tests {
 
         let bus = test_bus();
         let github = apply_tracker_transition(
-            &store,
             "github",
             "42",
             Some("https://github.com/owner/repo/issues/42"),
@@ -2455,7 +2123,6 @@ mod tests {
         )
         .await;
         let linear = apply_tracker_transition(
-            &store,
             "linear",
             "AG-12",
             None,
@@ -2797,16 +2464,13 @@ mod tests {
         }
     }
 
-    /// D-A: board and Linear have no blocked column, so `apply_blocked_transition`
-    /// skips them (never `Err`) — the D6 label is GitHub-only. A github.com URL is
-    /// passed to prove they skip on provider, not on a missing URL.
+    /// Linear has no blocked state and legacy board metadata is unsupported;
+    /// both remain best-effort skips rather than task failures.
     #[tokio::test]
     async fn apply_blocked_transition_board_and_linear_are_skipped() {
-        let store = fresh_store().await;
         let bus = test_bus();
         for provider in ["board", "linear"] {
             let res = apply_blocked_transition(
-                &store,
                 provider,
                 "AG-1",
                 Some("https://github.com/o/r/issues/1"),
@@ -2822,12 +2486,7 @@ mod tests {
             )
             .await
             .unwrap();
-            match res {
-                TransitionResult::Skipped(why) => {
-                    assert!(why.contains("no blocked state"), "got: {why}")
-                }
-                other => panic!("expected Skipped for {provider}, got {other:?}"),
-            }
+            assert!(matches!(res, TransitionResult::Skipped(_)));
         }
     }
 
@@ -2835,10 +2494,8 @@ mod tests {
     /// `Skipped`, never an `Err`, and touches no `gh` (hermetic).
     #[tokio::test]
     async fn apply_blocked_transition_github_without_url_is_skipped() {
-        let store = fresh_store().await;
         let bus = test_bus();
         let res = apply_blocked_transition(
-            &store,
             "github",
             "42",
             None,
@@ -2856,7 +2513,6 @@ mod tests {
         .unwrap();
         assert!(matches!(res, TransitionResult::Skipped(_)));
         let res = apply_blocked_transition(
-            &store,
             "github",
             "42",
             Some("https://github.com/o/r/pull/9"),
@@ -3249,81 +2905,6 @@ mod tests {
                 && !calls.contains("issue close")
                 && !calls.contains("issue reopen"),
             "no close/reopen on Blocked: {calls}"
-        );
-    }
-
-    #[tokio::test]
-    async fn board_sink_creates_a_feat_card_and_returns_its_key() {
-        let store = fresh_store().await;
-        let here = std::env::temp_dir();
-        let r = TaskSink::Board
-            .create_feature(
-                &ctx(&store, &here, None),
-                &NewFeature {
-                    title: "Add OAuth login".into(),
-                    body: Some("user can sign in with Google".into()),
-                    labels: vec![],
-                },
-            )
-            .await
-            .expect("board sink must create a card");
-
-        assert_eq!(r.provider, "board");
-        assert!(r.url.is_none(), "board cards have no external url");
-        assert!(
-            r.id.starts_with("AG-"),
-            "feature ref id must be the board key, got {}",
-            r.id
-        );
-
-        let items = store.list_board_items().await.unwrap();
-        let card = items
-            .iter()
-            .find(|c| c.key == r.id)
-            .expect("created card must be listable");
-        assert_eq!(card.title, "Add OAuth login");
-        assert_eq!(card.lbl.as_deref(), Some("feat"));
-        assert_eq!(card.status, "todo");
-    }
-
-    #[tokio::test]
-    async fn board_sink_nests_feature_under_parent_goal() {
-        let store = fresh_store().await;
-        let here = std::env::temp_dir();
-        let goal = store
-            .create_board_item(NewBoardItem {
-                title: "Ship auth".into(),
-                body: None,
-                lbl: Some("goal".into()),
-                status: Some("todo".into()),
-                workdir: None,
-                parent_goal_id: None,
-                tool: None,
-                model: None,
-                session_id: None,
-                priority: None,
-            })
-            .await
-            .unwrap();
-
-        let r = TaskSink::Board
-            .create_feature(
-                &ctx(&store, &here, Some(goal.id)),
-                &NewFeature {
-                    title: "Login screen".into(),
-                    body: None,
-                    labels: vec![],
-                },
-            )
-            .await
-            .unwrap();
-
-        let items = store.list_board_items().await.unwrap();
-        let card = items.iter().find(|c| c.key == r.id).unwrap();
-        assert_eq!(
-            card.parent_goal_id,
-            Some(goal.id),
-            "feature must nest under its goal"
         );
     }
 

@@ -1,5 +1,6 @@
 // Spec 005-C: decide whether a single pane runs in a persistent tmux session
-// (the server-backed path) or as an ephemeral local PTY.
+// (the server-backed path) or as an ephemeral native PTY. For an SSH repo the
+// native PTY owns an OpenSSH child, so "ephemeral" never means "run locally".
 //
 // The toggle is per-tab: "Run in tmux (persist)" is stamped onto the tab at
 // creation (default on) and remembered across the pane's life (it is persisted
@@ -23,13 +24,14 @@ export type PanePersistDecisionInput = {
 
 /**
  * Returns true when the pane should use the server/tmux (persistent) path,
- * false when it should use the ephemeral local PTY path.
+ * false when it should use the ephemeral native PTY path (local shell for a
+ * local repo, OpenSSH shell for an SSH repo).
  *
  * Agent tabs ALWAYS use the server path: the server launches the agent through
- * its tool adapter as one clean process, whereas the local PTY path spawns a
+ * its tool adapter as one clean process, whereas the native PTY path spawns a
  * shell and injects the launch command — which for an agent can land the
  * command itself in the agent's composer ("claude" typed into Claude) and
- * double-launch. The local PTY path is a half-ported stub; agents need the
+ * double-launch. The native PTY path is a half-ported stub; agents need the
  * proven one. For plain terminals the tab's explicit choice wins; otherwise the
  * global default decides.
  */

@@ -60,6 +60,23 @@ describe('HostGroupHeader', () => {
     expect(onToggle).toHaveBeenCalledOnce()
   })
 
+  it('keeps host reordering on the row without showing a drag grip', () => {
+    const host: SidebarHost = { key: 'ssh:conn-1', kind: 'ssh', label: 'omarchy' }
+    const markup = renderToStaticMarkup(
+      React.createElement(HostGroupHeader, {
+        host,
+        count: 2,
+        collapsed: false,
+        onToggle: () => {},
+        dragId: 'ssh:conn-1',
+        onHeaderPointerDown: () => {}
+      })
+    )
+
+    expect(markup).toContain('data-host-header-id="ssh:conn-1"')
+    expect(markup).not.toContain('lucide-grip-vertical')
+  })
+
   it('renders the tmux-sessions affordance and fires onOpenTmuxSessions without toggling', () => {
     const onToggle = vi.fn()
     const onOpenTmuxSessions = vi.fn()

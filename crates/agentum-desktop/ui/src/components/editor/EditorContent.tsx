@@ -18,8 +18,8 @@ import {
   getNextConflictNavigationIndex
 } from './ConflictComponents'
 import type { MarkdownViewMode, OpenFile, PendingEditorReveal } from '@/store/slices/editor'
-import type { GitStatusEntry, GitDiffResult } from '../../../../shared/types'
-import { RICH_MARKDOWN_MAX_SIZE_BYTES } from '../../../../shared/constants'
+import type { GitStatusEntry, GitDiffResult } from '@/shared/types'
+import { RICH_MARKDOWN_MAX_SIZE_BYTES } from '@/shared/constants'
 import { getMarkdownRenderMode } from './markdown-render-mode'
 import { getMarkdownRichModeUnsupportedMessage } from './markdown-rich-mode'
 import { extractFrontMatter, prependFrontMatter } from './markdown-frontmatter'

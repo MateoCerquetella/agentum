@@ -31,7 +31,7 @@ import type {
   GitFileStatus,
   GitStagingArea,
   GitStatusEntry
-} from '../../../../shared/types'
+} from '@/shared/types'
 import {
   getCombinedDiffFileTreeSectionKey,
   getEntryExtension,

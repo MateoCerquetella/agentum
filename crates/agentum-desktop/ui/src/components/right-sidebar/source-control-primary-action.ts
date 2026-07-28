@@ -1,8 +1,8 @@
 // Why: split from the combined primary+dropdown module because the primary and dropdown are independent derivations with different priority ladders; together they exceed the max-lines budget and tangle unrelated concerns.
 
-import type { HostedReviewCreationEligibility } from '../../../../shared/hosted-review'
-import type { GitUpstreamStatus, PRState } from '../../../../shared/types'
-import { shouldForcePushWithLeaseForUpstream } from '../../../../shared/git-upstream-status'
+import type { HostedReviewCreationEligibility } from '@/shared/hosted-review'
+import type { GitUpstreamStatus, PRState } from '@/shared/types'
+import { shouldForcePushWithLeaseForUpstream } from '@/shared/git-upstream-status'
 
 // Why: this module owns the pure state-machine logic for the Source Control
 // primary action (split button). Keeping the logic outside the React component

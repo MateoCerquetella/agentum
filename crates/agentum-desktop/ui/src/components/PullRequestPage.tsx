@@ -34,7 +34,7 @@ import {
   getGithubPrWorkspaceAttachmentLabel
 } from '@/lib/github-work-item-workspace-attachment'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import type { GitHubPRFileViewedState, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, PRCheckDetail, PRComment } from '../../../shared/types'
+import type { GitHubPRFileViewedState, GitHubWorkItem, GitHubWorkItemDetails, GitHubAssignableUser, PRCheckDetail, PRComment } from '@/shared/types'
 
 type PullRequestPageProps = {
   workItem: GitHubWorkItem | null
@@ -42,7 +42,7 @@ type PullRequestPageProps = {
   repoId?: string | null
   initialTab?: ItemDialogTab
   backLabel?: string
-  /** Called when the user clicks the primary CTA to start work from this item. */
+  /** Called when the user asks to author a spec from this item. */
   onUse: (item: GitHubWorkItem) => void
   onReviewRequestsChange?: (
     itemKey: { id: string; repoId: string },
@@ -866,14 +866,14 @@ export default function PullRequestPage({
                   aria-label={
                     attachedWorkspace
                       ? 'Resume workspace attached to PR'
-                      : 'Start workspace from PR'
+                      : 'Author spec from PR'
                   }
                 >
-                  {attachedWorkspace ? 'Resume workspace' : 'Start workspace from PR'}
+                  {attachedWorkspace ? 'Resume workspace' : 'New Spec'}
                   <ArrowRight className="size-3.5" />
                 </Button>
                 <DropdownMenuTrigger asChild>
-                  <Button type="button" size="icon-sm" aria-label="More PR workspace actions">
+                  <Button type="button" size="icon-sm" aria-label="More PR actions">
                     <ChevronDown className="size-3.5" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -882,7 +882,7 @@ export default function PullRequestPage({
                 {attachedWorkspace ? (
                   <DropdownMenuItem onSelect={handleUseWorkItem}>
                     <Plus className="size-4" />
-                    Start new workspace
+                    Author another spec
                   </DropdownMenuItem>
                 ) : null}
                 <DropdownMenuItem onSelect={() => api.shell.openUrl(workItem.url)}>

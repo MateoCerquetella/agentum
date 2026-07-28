@@ -1,8 +1,8 @@
 import type {
   ClaudeUsageDailyPoint,
   ClaudeUsageSummary
-} from '../../../../shared/claude-usage-types'
-import type { CodexUsageDailyPoint, CodexUsageSummary } from '../../../../shared/codex-usage-types'
+} from '@/shared/claude-usage-types'
+import type { CodexUsageDailyPoint, CodexUsageSummary } from '@/shared/codex-usage-types'
 import { formatTokens } from '@/lib/stats-format'
 
 export type ClaudeShareData = {

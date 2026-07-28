@@ -10,7 +10,7 @@ import type {
   LocalBaseRefRefreshResult,
   Worktree,
   WorktreeLineage
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { toast } from 'sonner'
 import {
   createCompatibleRuntimeStatusResponseIfNeeded,

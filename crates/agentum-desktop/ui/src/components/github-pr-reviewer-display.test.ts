@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { GitHubWorkItem } from '../../../shared/types'
+import type { GitHubWorkItem } from '@/shared/types'
 import {
   appendGitHubPRRequestedReviewers,
   getGitHubPRPrimaryReviewer,
@@ -30,7 +30,7 @@ describe('GitHub PR reviewer display', () => {
         item({
           reviewRequests: [
             { login: 'ExampleReviewer', name: null, avatarUrl: '' },
-            { login: 'agent-slack', name: null, avatarUrl: '' },
+            { login: 'reviewer-bot', name: null, avatarUrl: '' },
             { login: 'stably', name: null, avatarUrl: '' }
           ]
         })

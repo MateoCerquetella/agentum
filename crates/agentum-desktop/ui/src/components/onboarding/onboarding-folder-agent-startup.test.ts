@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDefaultOnboardingState, getDefaultSettings } from '../../../../shared/constants'
+import { getDefaultOnboardingState, getDefaultSettings } from '@/shared/constants'
 import {
   buildDismissedOnboardingFolderAgentStartup,
   buildOnboardingFolderAgentStartup,

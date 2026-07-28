@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { HostedReviewInfo } from '../../../../shared/hosted-review'
+import type { HostedReviewInfo } from '@/shared/hosted-review'
 import { getWorktreeCardPrDisplay } from './worktree-card-pr-display'
 
 const pr: HostedReviewInfo = {

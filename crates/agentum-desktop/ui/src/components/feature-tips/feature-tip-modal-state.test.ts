@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { getDefaultVoiceSettings } from '../../../../shared/constants'
-import type { GlobalSettings } from '../../../../shared/types'
+import { getDefaultVoiceSettings } from '@/shared/constants'
+import type { GlobalSettings } from '@/shared/types'
 import { getFeatureTipForModal } from './feature-tip-modal-state'
 
 function makeSettings(voiceEnabled = false): Pick<GlobalSettings, 'voice'> {

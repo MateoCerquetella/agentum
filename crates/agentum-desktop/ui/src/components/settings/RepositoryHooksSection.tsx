@@ -6,7 +6,7 @@ import type {
   Repo,
   RepoHookSettings,
   SetupRunPolicy
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { AlertTriangle, ChevronRight, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '../ui/button'
@@ -15,7 +15,7 @@ import { SearchableSetting } from './SearchableSetting'
 import { useAppStore } from '@/store'
 import { readRuntimeIssueCommand, writeRuntimeIssueCommand } from '@/runtime/runtime-hooks-client'
 import { DEFAULT_REPO_HOOK_SETTINGS } from './SettingsConstants'
-import { resolveHookCommandSourcePolicy } from '../../../../shared/hook-command-source-policy'
+import { resolveHookCommandSourcePolicy } from '@/shared/hook-command-source-policy'
 import { getRepositoryLocalCommandsSectionId } from './repository-settings-targets'
 import { matchesSettingsSearch } from './settings-search'
 

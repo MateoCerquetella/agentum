@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Worktree } from '../../../shared/types'
-import { isWindowsAbsolutePathLike } from '../../../shared/cross-platform-path'
+import type { Worktree } from '@/shared/types'
+import { isWindowsAbsolutePathLike } from '@/shared/cross-platform-path'
 import { getConnectionId } from '@/lib/connection-context'
 import { listRuntimeFiles } from '@/runtime/runtime-file-client'
 import { useAppStore } from '@/store'

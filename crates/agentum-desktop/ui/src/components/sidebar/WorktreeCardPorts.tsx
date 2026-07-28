@@ -17,7 +17,7 @@ import {
   shouldOpenWorkspacePortInAgentumBrowser
 } from '@/lib/workspace-port-actions'
 import { addressForPort } from '@/lib/workspace-port-urls'
-import type { WorkspacePort } from '../../../../shared/workspace-ports'
+import type { WorkspacePort } from '@/shared/workspace-ports'
 import { WORKTREE_NATIVE_CONTEXT_MENU_ATTR } from './WorktreeContextMenu'
 import {
   WorktreeCardDetailSection,

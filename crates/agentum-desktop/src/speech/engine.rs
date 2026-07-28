@@ -1,4 +1,4 @@
-//! The on-device recognizer — port of orca's `stt-worker.ts`.
+//! The on-device recognizer used by Agentum's native dictation service.
 //!
 //! sherpa-rs's *safe* API only exposes offline recognizers, so:
 //!   - Offline models (parakeet transducer, whisper) use the safe wrappers and
@@ -99,7 +99,7 @@ impl Engine {
                     // forces the *conventional* decoder and makes NeMo models like
                     // Parakeet TDT abort ("'vocab_size' does not exist in the
                     // metadata"); an empty string routes EncDecRNNTBPEModel encoders
-                    // to the NeMo impl. Matches orca's config exactly.
+                    // to the NeMo implementation.
                     model_type: String::new(),
                     ..Default::default()
                 })
@@ -243,7 +243,7 @@ impl OnlineEngine {
             cfg.hotwords_file = empty;
             cfg.rule_fsts = empty;
             cfg.rule_fars = empty;
-            // Endpointing thresholds mirror orca's worker so a pause flushes a
+            // Endpointing thresholds ensure a pause flushes a
             // final and the stream resets for the next utterance.
             cfg.enable_endpoint = 1;
             cfg.rule1_min_trailing_silence = 2.4;
@@ -351,8 +351,8 @@ impl Drop for OnlineEngine {
     }
 }
 
-/// Find a model file whose name contains `role` and ends with `.onnx`, mirroring
-/// orca's `resolveFile` (models name their ONNX files inconsistently, e.g.
+/// Find a model file whose name contains `role` and ends with `.onnx` (models
+/// name their ONNX files inconsistently, e.g.
 /// `encoder.int8.onnx` vs `tiny-encoder.onnx` vs `encoder-epoch-99-avg-1.onnx`).
 fn resolve_file(model_dir: &Path, files: &[&str], role: &str) -> Result<String> {
     let name = files

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentStatusEntry, AgentStatusState } from '../../../../shared/agent-status-types'
+import type { AgentStatusEntry, AgentStatusState } from '@/shared/agent-status-types'
 import { selectPetAnimationName } from './pet-agent-state'
 
 const NOW = 1_000

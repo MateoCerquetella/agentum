@@ -1,8 +1,8 @@
-import type { Worktree, Repo, TerminalLayoutSnapshot, TerminalTab } from '../../../../shared/types'
+import type { Worktree, Repo, TerminalLayoutSnapshot, TerminalTab } from '@/shared/types'
 import type {
   AgentStatusEntry,
   MigrationUnsupportedPtyEntry
-} from '../../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import { IDLE, buildAttentionByWorktree, type WorktreeAttention } from './smart-attention'
 

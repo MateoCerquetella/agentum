@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use agentum_core::{HostKind, SshAuth};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -41,6 +42,66 @@ fn read_targets() -> Result<Vec<SshTarget>, String> {
     }
     let raw = std::fs::read_to_string(&path).map_err(map_err)?;
     Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+/// Resolve a renderer `connectionId` to the shared host model used by the
+/// server/tmux SSH layer. Callers must fail closed when this returns an error:
+/// treating an unknown remote target as local executes commands on the desktop
+/// user's machine.
+pub(crate) fn host_kind_for_target(target_id: &str) -> Result<HostKind, String> {
+    let target = read_targets()?
+        .into_iter()
+        .find(|candidate| candidate.id == target_id)
+        .ok_or_else(|| format!("SSH target not found: {target_id}"))?;
+
+    host_kind_for_ssh_target(&target)
+}
+
+fn host_kind_for_ssh_target(target: &SshTarget) -> Result<HostKind, String> {
+    let port = u16::try_from(target.port)
+        .map_err(|_| format!("SSH target has an invalid port: {}", target.port))?;
+    if port == 0 {
+        return Err("SSH target has an invalid port: 0".to_string());
+    }
+
+    // Imported ~/.ssh/config entries need their alias so ProxyJump,
+    // ProxyCommand, IdentityAgent, and other OpenSSH options keep applying.
+    // Some old imports copied the literal host into configHost; that is not an
+    // alias and would needlessly discard the explicit host coordinate.
+    let hostname = target
+        .config_host
+        .as_deref()
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty() && *alias != target.host)
+        .unwrap_or(&target.host)
+        .to_string();
+    let password = target
+        .extra
+        .get("password")
+        .and_then(Value::as_str)
+        .filter(|password| !password.is_empty());
+    let auth = if let Some(password) = password {
+        SshAuth::Password {
+            password: password.to_string(),
+        }
+    } else if let Some(path) = target
+        .identity_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        SshAuth::Key {
+            path: path.to_string(),
+        }
+    } else {
+        SshAuth::Agent
+    };
+    Ok(HostKind::Ssh {
+        user: target.username.clone(),
+        hostname,
+        port,
+        auth,
+    })
 }
 
 fn write_targets(targets: &[SshTarget]) -> Result<(), String> {
@@ -431,5 +492,73 @@ pub fn ssh_test_connection(target_id: String) -> Value {
             })
         }
         Err(error) => serde_json::json!({ "success": false, "error": error.to_string() }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(overrides: Map<String, Value>) -> SshTarget {
+        SshTarget {
+            id: "target-1".to_string(),
+            label: "VPS".to_string(),
+            host: "203.0.113.10".to_string(),
+            port: 2222,
+            username: "deploy".to_string(),
+            config_host: Some("production-vps".to_string()),
+            identity_file: Some("/keys/id_ed25519".to_string()),
+            extra: overrides,
+        }
+    }
+
+    #[test]
+    fn target_host_preserves_alias_and_key_auth() {
+        let host = host_kind_for_ssh_target(&target(Map::new())).unwrap();
+        assert_eq!(
+            host,
+            HostKind::Ssh {
+                user: "deploy".to_string(),
+                hostname: "production-vps".to_string(),
+                port: 2222,
+                auth: SshAuth::Key {
+                    path: "/keys/id_ed25519".to_string()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn target_password_takes_precedence_without_entering_ssh_argv() {
+        let mut extra = Map::new();
+        extra.insert(
+            "password".to_string(),
+            Value::String("super-secret".to_string()),
+        );
+        let host = host_kind_for_ssh_target(&target(extra)).unwrap();
+        assert!(matches!(
+            &host,
+            HostKind::Ssh {
+                auth: SshAuth::Password { password },
+                ..
+            } if password == "super-secret"
+        ));
+
+        let command = agentum_tmux::ssh::ssh_terminal_command_for_kind(&host, "true");
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.iter().any(|arg| arg.contains("super-secret")));
+    }
+
+    #[test]
+    fn target_host_rejects_out_of_range_port() {
+        let mut invalid = target(Map::new());
+        invalid.port = u16::MAX as u32 + 1;
+        assert!(host_kind_for_ssh_target(&invalid)
+            .unwrap_err()
+            .contains("invalid port"));
     }
 }

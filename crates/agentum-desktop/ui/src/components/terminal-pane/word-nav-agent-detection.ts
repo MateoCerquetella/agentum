@@ -1,5 +1,5 @@
 import { isExplicitAgentStatusFresh, getAgentLabel } from '@/lib/agent-status'
-import { AGENT_STATUS_STALE_AFTER_MS, type AgentStatusEntry } from '../../../../shared/agent-status-types'
+import { AGENT_STATUS_STALE_AFTER_MS, type AgentStatusEntry } from '@/shared/agent-status-types'
 
 /**
  * Decide whether the active terminal pane is owned by an interactive agent CLI

@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as React from 'react'
-import type { GitPushTarget, GitStatusResult } from '../../../../shared/types'
+import type { GitPushTarget, GitStatusResult } from '@/shared/types'
+
+vi.mock('@/runtime/runtime-git-client', () => ({
+  getRuntimeGitStatus: (context: { worktreePath: string; connectionId?: string }) =>
+    (globalThis.window as unknown as { api: { git: { status: (args: unknown) => unknown } } }).api.git.status({
+      worktreePath: context.worktreePath,
+      connectionId: context.connectionId
+    })
+}))
 
 const worktree = { id: 'repo-1::/repo', repoId: 'repo-1', path: '/repo' }
 const repo = { id: 'repo-1', path: '/repo', kind: 'git', connectionId: null as string | null }

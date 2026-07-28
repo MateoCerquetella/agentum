@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   ProviderRateLimits,
   ProviderRateLimitStatus
-} from '../../../../shared/rate-limit-types'
+} from '@/shared/rate-limit-types'
 import { isProviderConfigured } from './status-bar-provider-visibility'
 
 function provider(

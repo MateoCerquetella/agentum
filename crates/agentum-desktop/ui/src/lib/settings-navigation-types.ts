@@ -23,7 +23,6 @@ export type SettingsNavTarget =
   | 'agents'
   | 'orchestration'
   | 'agents-automation'
-  | 'mobile'
   | 'repo'
 
 export type SettingsNavSection = {

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Search, X } from 'lucide-react'
-import { formatKeybindingList, type KeybindingDefinition } from '../../../../shared/keybindings'
+import { formatKeybindingList, type KeybindingDefinition } from '@/shared/keybindings'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'

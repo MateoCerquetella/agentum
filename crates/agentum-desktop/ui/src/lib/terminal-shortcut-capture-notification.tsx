@@ -7,7 +7,7 @@ import {
   isKeybindingPotentialTerminalConflict,
   type KeybindingActionId,
   type KeybindingOverrides
-} from '../../../shared/keybindings'
+} from '@/shared/keybindings'
 import { useAppStore } from '../store'
 
 const STORAGE_PREFIX = 'agentum.terminalShortcutCapturedNotice.'

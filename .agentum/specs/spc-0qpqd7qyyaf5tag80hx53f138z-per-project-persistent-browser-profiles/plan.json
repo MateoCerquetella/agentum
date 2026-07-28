@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-0QPQD7QYYAF5TAG80HX53F138Z",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "**Step 1 \u2014 scope layer**: `BrowserScope{Shared,Project,Adhoc}` +",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "**Step 2 \u2014 shared profile relocation**: `user_data_dir()` \u2192",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "**Step 3 \u2014 launch re-key**: `ensure_local_cdp_browser_for` resolves the",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "**Step 4 \u2014 teardown split (AC 2, riskiest)**: scope-aware",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [
+        "AC-002"
+      ],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "**Step 5 \u2014 boot sweep**: `sweep_legacy_profile_dirs` (top-level",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-006",
+      "objective": "**Step 6 \u2014 UI project derivation + surface verification**: traced EVERY",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-007",
+      "objective": "**Step 7 \u2014 native re-key**: `project_store_token` (`::` prefix \u2192",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-008",
+      "objective": "**Step 8 \u2014 server**: `cdp_browser::clear_project_browser_data` (bails on",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-009",
+      "objective": "**Step 9 \u2014 native**: `store_tokens()` label\u2192token registry (populated in",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-010",
+      "objective": "**Step 10 \u2014 UI**: `clearProjectCdpData` in",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

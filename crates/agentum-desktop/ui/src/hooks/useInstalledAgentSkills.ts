@@ -1,6 +1,6 @@
 import { api } from '@/tauri'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { DiscoveredSkill, SkillDiscoveryResult, SkillSourceKind } from '../../../shared/skills'
+import type { DiscoveredSkill, SkillDiscoveryResult, SkillSourceKind } from '@/shared/skills'
 import { useMountedRef } from './useMountedRef'
 
 const INSTALLED_AGENT_SKILLS_CHANGED_EVENT = 'agentum:installed-agent-skills-changed'

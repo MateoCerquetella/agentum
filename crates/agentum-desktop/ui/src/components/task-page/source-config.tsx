@@ -1,7 +1,7 @@
 import { LinearIcon } from '@/components/icons/LinearIcon'
 import React from 'react'
 import { Github, Gitlab } from 'lucide-react'
-import type { TaskProvider } from '../../../shared/types'
+import type { TaskProvider } from '@/shared/types'
 
 export type TaskSource = TaskProvider
 

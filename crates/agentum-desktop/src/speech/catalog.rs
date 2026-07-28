@@ -1,4 +1,4 @@
-//! Speech model catalog — a direct port of orca's `model-catalog.ts`.
+//! Speech model catalog for Agentum's on-device transcription.
 //!
 //! Each entry describes an on-device sherpa-onnx ASR model: where to download
 //! it, how to verify it, which ONNX files it ships, and how the recognizer must
@@ -50,7 +50,12 @@ pub const SPEECH_MODEL_CATALOG: &[SpeechModelManifest] = &[
         download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
         archive_sha256: "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
         archive_format: "tar.bz2",
-        files: &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+        files: &[
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ],
         sample_rate: 16000,
         streaming: false,
         modeling_unit: Some("bpe"),
@@ -66,7 +71,12 @@ pub const SPEECH_MODEL_CATALOG: &[SpeechModelManifest] = &[
         download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
         archive_sha256: "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
         archive_format: "tar.bz2",
-        files: &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+        files: &[
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+            "tokens.txt",
+        ],
         sample_rate: 16000,
         streaming: false,
         modeling_unit: Some("bpe"),

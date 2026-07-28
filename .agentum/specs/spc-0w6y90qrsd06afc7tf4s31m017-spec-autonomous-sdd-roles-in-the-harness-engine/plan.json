@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-0W6Y90QRSD06AFC7TF4S31M017",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "**T1 \u2014 `SpecPhase` enum + run phase state.** Add `SpecPhase`",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "**T2 \u2014 `parse_gate_verdict`.** Tolerant scan for the last `HARNESS_GATE:` line \u2192",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "**T3 \u2014 `role_prompt(role, spec_ctx)`.** Compose central `ai/roles/<role>.md` (read-only) +",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "**T4 \u2014 `run_role_gate(role, run)`.** Spawn via `spawn_agent_into_pane`, wait for settle,",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "**T5 \u2014 `drive_phases(run)`.** Sequence Authoring \u2192 Architecture \u2192 Decompose \u2192 Executing \u2192",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-006",
+      "objective": "**T6 \u2014 wire `POST /{id}/run` to `drive_phases`.** Preserve `claim_driver` double-run",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-007",
+      "objective": "**T7 \u2014 events.** Add `HarnessEvent::PhaseChanged { from, to }` and",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-008",
+      "objective": "**T8 \u2014 decisions.md as the single log.** Append a structured entry (role, verdict,",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-009",
+      "objective": "**T9 \u2014 `rebuild_phase_from_decisions`.** On `scan_board` rehydrate, re-derive current phase",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-010",
+      "objective": "**T10 \u2014 `hitl_on_block` knob.** Default `false` (fully unattended, incl. QA). When `true`,",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-011",
+      "objective": "**T11 \u2014 `PhaseStrip` in `HarnessEngine.tsx`.** Render the phase strip + latest verdict from",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-012",
+      "objective": "**T12 \u2014 full autonomy E2E + green suite.** Stub-agent fixture drives a spec",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-013",
+      "objective": "**T13 \u2014 self-review.** Re-read the diff for false-green holes, `STATE.md` leftovers, and",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

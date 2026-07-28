@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { getDefaultSettings } from '../../../../shared/constants'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
-import { resolveTerminalTabTitle } from '../../../../shared/tab-title-resolution'
+import { getDefaultSettings } from '@/shared/constants'
+import { makePaneKey } from '@/shared/stable-pane-id'
+import { resolveTerminalTabTitle } from '@/shared/tab-title-resolution'
 import { createTestStore, makeWorktree, seedStore } from './store-test-helpers'
 
 const WORKTREE_ID = 'repo1::/path/wt1'

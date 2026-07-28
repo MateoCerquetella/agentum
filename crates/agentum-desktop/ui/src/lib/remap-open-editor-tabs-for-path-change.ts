@@ -4,8 +4,8 @@ import { basename } from '@/lib/path'
 import {
   normalizeRuntimePathSeparators,
   relativePathInsideRoot
-} from '../../../shared/cross-platform-path'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
+} from '@/shared/cross-platform-path'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '@/shared/constants'
 
 function isPathInsideOrEqual(rootPath: string, candidatePath: string): boolean {
   if (candidatePath === rootPath) {

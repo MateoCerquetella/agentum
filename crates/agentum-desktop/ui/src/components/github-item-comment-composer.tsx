@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useMountedRef } from '@/hooks/useMountedRef'
 import { cn } from '@/lib/utils'
 import { GitHubMarkdownComposer } from '@/components/github/GitHubMarkdownComposer'
-import type { PRComment } from '../../../shared/types'
+import type { PRComment } from '@/shared/types'
 
 export function GHCommentComposer({
   className,

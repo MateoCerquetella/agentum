@@ -5,7 +5,7 @@ import {
   getCombinedDiffFileTreeSectionKey,
   handleCombinedDiffFileTreeNavigation
 } from './CombinedDiffFileTree'
-import type { GitBranchChangeEntry, GitStatusEntry } from '../../../../shared/types'
+import type { GitBranchChangeEntry, GitStatusEntry } from '@/shared/types'
 
 describe('CombinedDiffFileTree navigation mapping', () => {
   it('disambiguates uncommitted entries with the same path by area', () => {

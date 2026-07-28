@@ -1,11 +1,11 @@
 /* oxlint-disable max-lines */
-import { detectAgentStatusFromTitle, type AgentStatus } from '../../../../shared/agent-detection'
-import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-types'
+import { detectAgentStatusFromTitle, type AgentStatus } from '@/shared/agent-detection'
+import type { ParsedAgentStatusPayload } from '@/shared/agent-status-types'
 import {
   isRecognizedAgentType,
   recognizeAgentProcess,
   type RecognizedAgentProcess
-} from '../../../../shared/agent-process-recognition'
+} from '@/shared/agent-process-recognition'
 import {
   enqueueAgentProcessInspection,
   type InspectionPriority

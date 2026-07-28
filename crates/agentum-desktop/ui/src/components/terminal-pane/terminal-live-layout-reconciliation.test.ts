@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { planTerminalLiveLayoutInsertions } from './terminal-live-layout-reconciliation'
-import type { TerminalPaneLayoutNode } from '../../../../shared/types'
+import type { TerminalPaneLayoutNode } from '@/shared/types'
 
 describe('planTerminalLiveLayoutInsertions', () => {
   it('plans a host-added split leaf from an already-mounted source leaf', () => {

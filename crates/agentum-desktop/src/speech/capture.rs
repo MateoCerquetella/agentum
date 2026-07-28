@@ -1,7 +1,7 @@
 //! Native microphone capture for Voice dictation.
 //!
-//! The renderer's `navigator.mediaDevices.getUserMedia` path (ported from orca's
-//! Electron/Chromium build) does not exist in macOS WKWebView — `mediaDevices`
+//! The renderer's `navigator.mediaDevices.getUserMedia` path does not exist in
+//! macOS WKWebView — `mediaDevices`
 //! is `undefined`, so dictation failed with "undefined is not an object". Instead
 //! we capture the default input device natively with `cpal` and feed the samples
 //! straight into [`SttService::feed`], the same entry the old IPC `feedAudio`

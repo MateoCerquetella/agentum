@@ -1,9 +1,9 @@
 /* eslint-disable max-lines -- Why: these tests cover one reconciliation boundary
  * across ready, pending, split, and batched session snapshots. */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RuntimeMobileSessionTabsResult } from '../../../shared/runtime-types'
-import { makePaneKey } from '../../../shared/stable-pane-id'
-import type { BrowserPage, BrowserWorkspace, Tab, TerminalTab } from '../../../shared/types'
+import type { RuntimeMobileSessionTabsResult } from '@/shared/runtime-types'
+import { makePaneKey } from '@/shared/stable-pane-id'
+import type { BrowserPage, BrowserWorkspace, Tab, TerminalTab } from '@/shared/types'
 import type { OpenFile } from '../store/slices/editor'
 import {
   _getWebSessionTabsTrackingCountsForTest,

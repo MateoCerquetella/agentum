@@ -2,7 +2,7 @@ import { api } from '@/tauri'
 import type { StateCreator } from 'zustand'
 import { toast } from 'sonner'
 import type { AppState } from '../types'
-import type { SparsePreset } from '../../../../shared/types'
+import type { SparsePreset } from '@/shared/types'
 
 const ERROR_TOAST_DURATION = 60_000
 

@@ -63,7 +63,7 @@ fn mcp_instructions(has_desktop_bridge: bool) -> &'static str {
 /// the agents agentum launches. Read at provision time in `mcp_provision::provision`;
 /// written by the desktop Settings → Agent MCP toggle via `/api/mcp/settings`.
 /// When off, NO agentum tools (sessions, worktrees, browser, computer,
-/// orchestration, harness) reach any agent. Absent = on, so existing setups are
+/// orchestration) reach any agent. Absent = on, so existing setups are
 /// unchanged. (The orchestration gate still nests under this.)
 pub const MCP_ENABLED_SETTING: &str = "mcp.enabled";
 
@@ -169,11 +169,11 @@ async fn handle(
     {
         if msg.get("method").and_then(Value::as_str) == Some("tools/call") {
             if let Some(params) = msg.get_mut("params") {
-                if params.get("name").and_then(Value::as_str) == Some("agentum_browser") {
-                    if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
-                        if !a.contains_key("worktreeId") && !a.contains_key("cdpPort") {
-                            a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
-                        }
+                let is_browser =
+                    params.get("name").and_then(Value::as_str) == Some("agentum_browser");
+                if let Some(a) = params.get_mut("arguments").and_then(Value::as_object_mut) {
+                    if is_browser && !a.contains_key("worktreeId") && !a.contains_key("cdpPort") {
+                        a.insert("worktreeId".to_string(), Value::from(wt.to_string()));
                     }
                 }
             }
@@ -215,14 +215,8 @@ async fn dispatch(
                 .unwrap_or(DEFAULT_PROTOCOL_VERSION);
             Ok(json!({
                 "protocolVersion": pv,
-                // `prompts` = the server-owned SDD playbooks (crate::sdd). Agents
-                // that render MCP prompts as slash commands (Claude Code, Gemini
-                // CLI) get native /sdd-*; everyone else reaches the same bodies
-                // through the `agentum_sdd` tool — tools/call is the lowest
-                // common denominator every MCP client supports.
                 "capabilities": {
                     "tools": { "listChanged": false },
-                    "prompts": { "listChanged": false },
                 },
                 "serverInfo": { "name": "agentum", "version": state.version },
                 // Top-level guidance surfaced to every connecting agent. The browser
@@ -235,8 +229,6 @@ async fn dispatch(
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_specs(orchestration_enabled(state).await) })),
         "tools/call" => call_tool(state, params).await,
-        "prompts/list" => Ok(prompts_list()),
-        "prompts/get" => prompts_get(params),
         other => Err((-32601, format!("method not found: {other}"))),
     }
 }
@@ -497,170 +489,6 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             },
         },
         {
-            "name": "agentum_harness_scaffold",
-            "description": "Scaffold the unified `.agentum-harness/` surface into a \
-                project (spec 010). Writes ONLY `.agentum-harness/` (a small AGENTS.md \
-                router, feature_list.json, init.sh, verify.sh) into `workdir` — no \
-                generic playbooks/engine are copied in. Idempotent; the folder is \
-                committable to git.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory to scaffold" }
-                },
-                "required": ["workdir"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_harness_migrate",
-            "description": "Migrate a pre-010 project into `.agentum-harness/` without \
-                hand-rewrite: copies SDD `ai/specs/*` and any legacy `.harness/` contract \
-                files into `.agentum-harness/`. Idempotent; pass `remove_legacy: true` to \
-                delete the old `.harness/` after copying.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory to migrate" },
-                    "remove_legacy": { "type": "boolean", "description": "Delete legacy .harness/ after copying (default false)" }
-                },
-                "required": ["workdir"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_harness_board",
-            "description": "Reconstruct a project's harness board by scanning \
-                `.agentum-harness/` on disk (spec 010b) — the spec deliverables under \
-                specs/* and the active feature_list.json states. Pure read; the repo is \
-                the durable source of truth, so this rebuilds the board with no agentum \
-                store consulted (survives a store wipe). Empty when there's no surface.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory to scan" }
-                },
-                "required": ["workdir"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_harness_plan",
-            "description": "Turn an authored spec into the engine's verify-gated backlog \
-                (spec 010c): reads `.agentum-harness/specs/<spec_id>/spec.md`, maps each \
-                acceptance-criteria checkbox (`- [ ]`/`- [x]`) to a feature, and writes \
-                `.agentum-harness/feature_list.json`. Deterministic; errors if the spec \
-                has no criteria.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory" },
-                    "spec_id": { "type": "string", "description": "Spec dir under .agentum-harness/specs/ (e.g. 010a-agentum-harness-surface)" }
-                },
-                "required": ["workdir", "spec_id"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_harness_check",
-            "description": "Bootstrap-Contract readiness check (spec 010d): scan \
-                `.agentum-harness/` and report whether it can start (init.sh), can verify \
-                (verify.sh), has instructions (AGENTS.md), and has a non-empty backlog — \
-                plus an overall `ready`. Names what's missing. Pure read; the mechanized \
-                cold-start test.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory to check" }
-                },
-                "required": ["workdir"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_report_status",
-            "description": "Report a work item's pipeline phase to its tracker: GitHub = flip the status/* label, Linear = move the workflow state, board = move the card column. Best-effort by contract — a tracker hiccup returns a 'skipped' note, never a tool error — so call it freely on every phase change (todo, in_progress, in_review, ready_to_test, done).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "provider": { "type": "string", "enum": ["github", "linear", "board"] },
-                    "id": { "type": "string", "description": "The tracker's stable handle: board card key (AG-12), Linear identifier (ENG-42), or GitHub issue number. For github it may be omitted when `url` is given (derived from the URL)." },
-                    "url": { "type": "string", "description": "The ticket URL. Required for github — owner/repo and the issue number are parsed from it. Ignored by linear/board." },
-                    "phase": { "type": "string", "enum": ["todo", "in_progress", "in_review", "ready_to_test", "done"] }
-                },
-                "required": ["provider", "phase"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_sdd_loop_control",
-            "description": "Start, stop, or inspect the server-owned SDD loop for an agentum session. This is the control-plane companion to `agentum_sdd_loop`, which is only the end-of-step agent check-in. Use `agentum_list_sessions` to obtain the session UUID, then call action `start` to inject autonomous `sdd-orchestrate` steps, `status` to inspect progress, or `stop` to cancel further injections. Starting is idempotent and uses the same generation/event/step-cap machinery as the desktop Loop toggle.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": { "type": "string", "description": "Agentum session UUID (obtain from agentum_list_sessions)" },
-                    "action": { "type": "string", "enum": ["start", "stop", "status"] },
-                    "max_steps": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Optional unattended step cap for action=start (default 10)" }
-                },
-                "required": ["session", "action"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_sdd_loop",
-            "description": "Check in with the per-session SDD loop that injected the current \
-                step prompt. Call it at the END of every loop step: `done: true` when the work \
-                is complete (the spec's phase is done or there is no actionable next step) — \
-                this stops the loop so no further step prompts are injected; `done: false` to \
-                keep the loop running, with `summary` as a one-line progress note. Always safe \
-                to call: with no active loop on the session (or from an earlier activation) it \
-                returns success and stops nothing.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "session": { "type": "string", "description": "The session uuid, exactly as given in the step prompt" },
-                    "done": { "type": "boolean", "description": "true = work complete, stop the loop; false = more to do, keep looping" },
-                    "summary": { "type": "string", "description": "One-line progress note; surfaced on the next step event when done is false" },
-                    "generation": { "type": "integer", "description": "The loop generation from the step prompt; a mismatch makes the check-in a no-op" }
-                },
-                "required": ["session", "done"],
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_sdd",
-            "description": "Fetch a server-owned SDD (spec-driven development) playbook. \
-                Call with no arguments to list the available playbooks (sdd-spec, \
-                sdd-spec-socratic, sdd-orchestrate, sdd-status, sdd-handoff, sdd-init); \
-                call with `name` to fetch one — then FOLLOW the returned playbook exactly. \
-                These are the same playbooks the desktop SDD buttons and the SDD loop \
-                deliver; agentum owns the bodies so every agent gets the same procedure.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "Playbook to fetch, e.g. `sdd-spec`. Omit to list all." },
-                    "args": { "type": "string", "description": "Optional free-form arguments for the playbook (e.g. `autonomous` or a spec id for sdd-orchestrate)." }
-                },
-                "additionalProperties": false,
-            },
-        },
-        {
-            "name": "agentum_harness_log_decision",
-            "description": "Append one entry to the project's append-only decision log \
-                (`.agentum-harness/decisions.md`, spec 010e) — the durable 'why', incl. \
-                rejected alternatives. Never overwrites prior entries. Returns the updated \
-                log. Use to record a deliberate choice so a resumed session won't reverse it.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory" },
-                    "entry": { "type": "string", "description": "The decision (one line; include the why + any rejected alternative)" }
-                },
-                "required": ["workdir", "entry"],
-                "additionalProperties": false,
-            },
-        },
-        {
             "name": "agentum_stop_session",
             "description": "Stop or kill an agent session by id or name — the lifecycle \
                 END for agentum_spawn_session (#378), the same core as the desktop \
@@ -682,8 +510,8 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
             "name": "agentum_inject_prompt",
             "description": "Inject a prompt DIRECTLY into a running agent session's REPL \
                 and submit it — the push channel (#378); the mailbox is pull and needs \
-                the recipient to poll. Same robust delivery as the SDD loop / the \
-                `/submit` route: waits for the REPL to go idle (accepting Claude's \
+                the recipient to poll. The shared `/submit` delivery waits for \
+                the REPL to go idle (accepting Claude's \
                 one-time workspace-trust dialog), types the text, then submits with a \
                 SEPARATE Enter so a multi-line prompt isn't swallowed as a paste. \
                 Delivery is asynchronous — the tool returns once queued; a busy agent \
@@ -698,25 +526,6 @@ fn tool_specs(orchestration_enabled: bool) -> Value {
                 "additionalProperties": false,
             },
         },
-        {
-            "name": "agentum_harness_run",
-            "description": "Register (or reuse) a project's harness run and kick off the \
-                verify-gated drive loop in the background — the MCP equivalent of \
-                POST /api/harness + POST /{id}/run, completing the Goals surface \
-                (scaffold → plan → check → RUN, #378). Requires a ready \
-                `.agentum-harness/` (probe with agentum_harness_check). Returns \
-                {harness_id, started}: started=false means a driver is already live \
-                (not restarted). Watch progress with agentum_harness_board or the \
-                desktop Harness view.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "workdir": { "type": "string", "description": "Project directory containing .agentum-harness/" }
-                },
-                "required": ["workdir"],
-                "additionalProperties": false,
-            },
-        }
     ]);
 
     if !orchestration_enabled {
@@ -776,23 +585,12 @@ async fn call_tool(state: &AppState, params: Option<&Value>) -> Result<Value, (i
         "agentum_spawn_session" => tool_spawn_session(state, &args).await,
         "agentum_stop_session" => tool_stop_session(state, &args).await,
         "agentum_inject_prompt" => tool_inject_prompt(state, &args).await,
-        "agentum_harness_run" => tool_harness_run(state, &args).await,
         "agentum_list_worktrees" => tool_list_worktrees().await,
         "agentum_send_message" => tool_send_message(state, &args).await,
         "agentum_check_messages" => tool_check_messages(state, &args).await,
         "agentum_create_task" => tool_create_task(state, &args).await,
         "agentum_list_tasks" => tool_list_tasks(state, &args).await,
         "agentum_computer" => tool_bridge(state, "computer", &args).await,
-        "agentum_harness_scaffold" => tool_harness_scaffold(&args).await,
-        "agentum_harness_migrate" => tool_harness_migrate(&args).await,
-        "agentum_harness_board" => tool_harness_board(&args).await,
-        "agentum_harness_plan" => tool_harness_plan(&args).await,
-        "agentum_harness_check" => tool_harness_check(&args).await,
-        "agentum_harness_log_decision" => tool_harness_log_decision(&args).await,
-        "agentum_report_status" => tool_report_status(state, &args).await,
-        "agentum_sdd_loop_control" => tool_sdd_loop_control(state, &args).await,
-        "agentum_sdd_loop" => tool_sdd_loop(state, &args).await,
-        "agentum_sdd" => tool_sdd(&args),
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
 
@@ -985,7 +783,7 @@ async fn tool_stop_session(state: &AppState, args: &Value) -> anyhow::Result<Str
 
 /// Push a prompt into a running session's REPL — a thin view over
 /// [`super::sessions::submit_prompt_core`] (the `/submit` route's core), which
-/// itself reuses the harness's robust two-step `inject_prompt` delivery (#378).
+/// itself reuses the session runtime's robust two-step prompt delivery (#378).
 async fn tool_inject_prompt(state: &AppState, args: &Value) -> anyhow::Result<String> {
     let sref = args
         .get("session")
@@ -1006,59 +804,6 @@ async fn tool_inject_prompt(state: &AppState, args: &Value) -> anyhow::Result<St
         "note": "delivery is asynchronous — the prompt is typed once the REPL idles \
                  (can take tens of seconds on a busy agent) and submitted with a \
                  separate Enter",
-    }))?)
-}
-
-/// Register (or reuse) + run a project's harness — the MCP equivalent of
-/// `POST /api/harness` + `POST /{id}/run` (#378: Goals were preparable via
-/// scaffold/plan/check but not launchable). Same background kick as the route;
-/// the drive loop owns its own error handling (emits Error + Failed state).
-async fn tool_harness_run(state: &AppState, args: &Value) -> anyhow::Result<String> {
-    let raw = args
-        .get("workdir")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    // Reuse an existing registration for this project: the engine itself does
-    // NOT dedupe by workdir, and without this every MCP call would pile up a
-    // fresh run for the same project.
-    let wd = workdir.to_string_lossy().to_string();
-    let mut harness_id = None;
-    for id in state.harness.list().await {
-        if let Ok(s) = state.harness.status(id).await {
-            if s.workdir == wd {
-                harness_id = Some(id);
-                break;
-            }
-        }
-    }
-    let harness_id = match harness_id {
-        Some(id) => id,
-        None => state
-            .harness
-            .start(workdir)
-            .await
-            .map_err(|e| anyhow::anyhow!("register harness: {e}"))?,
-    };
-    let claimed = state
-        .harness
-        .claim_driver(harness_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("claim driver: {e}"))?;
-    if claimed {
-        let st = state.clone();
-        tokio::spawn(async move { crate::harness::drive(st, harness_id).await });
-    }
-    Ok(serde_json::to_string_pretty(&json!({
-        "harness_id": harness_id.to_string(),
-        "started": claimed,
-        "note": if claimed {
-            "drive loop kicked off in the background — watch agentum_harness_board \
-             (or the desktop Harness view)"
-        } else {
-            "a driver is already running this harness — not restarted"
-        },
     }))?)
 }
 
@@ -1364,397 +1109,6 @@ async fn tool_bridge(state: &AppState, kind: &str, args: &Value) -> anyhow::Resu
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-/// Scaffold the unified `.agentum-harness/` surface — a thin view over
-/// [`crate::harness::scaffold_harness`] (the only thing agentum writes into a repo).
-async fn tool_harness_scaffold(args: &Value) -> anyhow::Result<String> {
-    let raw = args
-        .get("workdir")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    let out = crate::harness::scaffold_harness(&workdir).await?;
-    Ok(serde_json::to_string_pretty(&out)?)
-}
-
-/// Migrate a pre-010 project into `.agentum-harness/` — thin view over
-/// [`crate::harness::migrate_harness`].
-async fn tool_harness_migrate(args: &Value) -> anyhow::Result<String> {
-    let raw = args
-        .get("workdir")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    let remove_legacy = args
-        .get("remove_legacy")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let out = crate::harness::migrate_harness(&workdir, remove_legacy).await?;
-    Ok(serde_json::to_string_pretty(&out)?)
-}
-
-/// Reconstruct a project's harness board by scanning `.agentum-harness/` — a thin
-/// view over [`crate::harness::scan_board`] (spec 010b; the rebuildable index).
-async fn tool_harness_board(args: &Value) -> anyhow::Result<String> {
-    let raw = args
-        .get("workdir")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    let board = crate::harness::scan_board(&workdir).await;
-    Ok(serde_json::to_string_pretty(&board)?)
-}
-
-/// Turn a spec into the engine backlog — a thin view over
-/// [`crate::harness::plan_from_spec`] (spec 010c).
-async fn tool_harness_plan(args: &Value) -> anyhow::Result<String> {
-    let raw = args
-        .get("workdir")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let spec_id = args
-        .get("spec_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `spec_id`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    let list = crate::harness::plan_from_spec(&workdir, spec_id).await?;
-    Ok(serde_json::to_string_pretty(&list)?)
-}
-
-/// Bootstrap-Contract readiness — a thin view over [`crate::harness::check_bootstrap`]
-/// (spec 010d).
-async fn tool_harness_check(args: &Value) -> anyhow::Result<String> {
-    let raw = args
-        .get("workdir")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    let report = crate::harness::check_bootstrap(&workdir).await;
-    Ok(serde_json::to_string_pretty(&report)?)
-}
-
-/// Append to the project decision log + return it — thin view over
-/// [`crate::harness::append_decision`] / [`crate::harness::read_decisions`] (010e).
-async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
-    let raw = args
-        .get("workdir")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let entry = args
-        .get("entry")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `entry`"))?;
-    let workdir =
-        super::util::expand_workdir(raw).map_err(|e| anyhow::anyhow!("invalid workdir: {e:?}"))?;
-    crate::harness::append_decision(&workdir, entry).await?;
-    Ok(crate::harness::read_decisions(&workdir).await)
-}
-
-/// Parse + validate `agentum_report_status` inputs (spec 005 F4). Pure →
-/// unit-testable without AppState. Errors here are CALLER bugs (missing/unknown
-/// args) and DO surface as `isError: true` — the best-effort contract covers
-/// tracker failures, not typos. `id` is required, EXCEPT `provider == "github"`
-/// with a parseable issue `url` (then id := the URL's number).
-fn parse_report_status_args(
-    args: &Value,
-) -> anyhow::Result<(
-    String,
-    String,
-    Option<String>,
-    crate::task_sink::TrackerPhase,
-)> {
-    let provider = args
-        .get("provider")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `provider`"))?
-        .to_string();
-    let phase_str = args
-        .get("phase")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `phase`"))?;
-    let phase = crate::task_sink::parse_tracker_phase(phase_str).ok_or_else(|| {
-        anyhow::anyhow!(
-            "unknown `phase` {phase_str:?} (todo|in_progress|in_review|ready_to_test|done)"
-        )
-    })?;
-    let url = args.get("url").and_then(Value::as_str).map(str::to_string);
-    let id = match args.get("id").and_then(Value::as_str) {
-        Some(id) => id.to_string(),
-        None if provider == "github" => {
-            let url = url
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("missing `id` (or a github issue `url`)"))?;
-            crate::task_sink::github_slug_and_number_from_issue_url(url)
-                .map(|(_slug, number)| number)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("missing `id` and `url` is not a GitHub issue URL: {url}")
-                })?
-        }
-        None => anyhow::bail!("missing `id`"),
-    };
-    Ok((provider, id, url, phase))
-}
-
-/// Map the transition seam's outcome to the tool's text. Pure. NEVER an `Err`
-/// for a tracker failure (AC 9 / the best-effort invariant): transport errors
-/// from the linear/board arms come back as a "skipped" note the agent can read.
-fn report_status_text(
-    outcome: anyhow::Result<crate::task_sink::TransitionResult>,
-    provider: &str,
-    phase: crate::task_sink::TrackerPhase,
-) -> String {
-    match outcome {
-        Ok(crate::task_sink::TransitionResult::Applied) => {
-            format!("applied: {provider} → {phase:?}")
-        }
-        Ok(crate::task_sink::TransitionResult::Skipped(w)) => format!("skipped: {w}"),
-        Err(e) => format!("skipped (tracker error, non-fatal): {e:#}"),
-    }
-}
-
-/// How long `agentum_report_status` waits for the transition seam before
-/// answering with a "still running" note (#377). A COLD first call on the
-/// github arm chains up to 7 sequential `gh` invocations (5 label
-/// ensure-creates + the edit + a Projects write), each individually bounded at
-/// 30s — worst case minutes, which outlives MCP client timeouts and surfaced
-/// to callers as a raw socket close (the best-effort contract violated at the
-/// transport layer). The work is detached, so on deadline it keeps running and
-/// the labels/state still land.
-const REPORT_STATUS_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
-
-/// #377: answer within `deadline` no matter what the seam does. Applied/Skipped
-/// map through [`report_status_text`]; a panic inside the detached transition
-/// becomes a readable note (isolated from the HTTP task, so the response can't
-/// die with it); a deadline overrun reports "still running". Pure over the
-/// JoinHandle → unit-testable with scripted tasks.
-async fn bounded_transition_text(
-    handle: tokio::task::JoinHandle<anyhow::Result<crate::task_sink::TransitionResult>>,
-    deadline: std::time::Duration,
-    provider: &str,
-    phase: crate::task_sink::TrackerPhase,
-) -> String {
-    match tokio::time::timeout(deadline, handle).await {
-        Err(_) => format!(
-            "skipped (tracker still running in the background after {}s — the {provider} \
-             update may still land; re-check the ticket rather than retrying immediately)",
-            deadline.as_secs()
-        ),
-        Ok(Err(join)) => format!("skipped (tracker crashed, non-fatal): {join}"),
-        Ok(Ok(outcome)) => report_status_text(outcome, provider, phase),
-    }
-}
-
-/// Report a work item's pipeline phase to its tracker — a thin arm over
-/// [`crate::task_sink::apply_tracker_transition`] (spec 005 F4), the same seam
-/// the harness's own transitions use. Never reimplements label/state mechanics.
-/// The seam runs DETACHED and deadline-bounded (#377) so a stalled `gh` chain
-/// or a panic can never take the MCP response down with it.
-async fn tool_report_status(state: &AppState, args: &Value) -> anyhow::Result<String> {
-    let (provider, id, url, phase) = parse_report_status_args(args)?;
-    let store = state.store.clone();
-    let bus = state.bus.clone();
-    let prov = provider.clone();
-    let handle = tokio::spawn(async move {
-        crate::task_sink::apply_tracker_transition(
-            &store,
-            &prov,
-            &id,
-            url.as_deref(),
-            phase,
-            crate::task_sink::TrackerEmit {
-                bus: &bus,
-                worktree_id: None,
-            },
-        )
-        .await
-    });
-    Ok(bounded_transition_text(handle, REPORT_STATUS_DEADLINE, &provider, phase).await)
-}
-
-/// Parse + validate `agentum_sdd_loop` inputs (spec 016 F1). Pure →
-/// unit-testable without AppState. Errors here are CALLER bugs (missing
-/// `session`/`done`, a junk uuid) and DO surface as `isError: true`; everything
-/// downstream — no live loop, a stale generation — is a SUCCESS string by
-/// contract, so the check-in can never fail an agent's turn.
-fn parse_sdd_loop_args(
-    args: &Value,
-) -> anyhow::Result<(uuid::Uuid, Option<u64>, bool, Option<String>)> {
-    let session = args
-        .get("session")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `session`"))?;
-    let session = uuid::Uuid::parse_str(session)
-        .map_err(|_| anyhow::anyhow!("`session` is not a uuid: {session}"))?;
-    let done = args
-        .get("done")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| anyhow::anyhow!("missing `done` (boolean)"))?;
-    let generation = args.get("generation").and_then(Value::as_u64);
-    let summary = args
-        .get("summary")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    Ok((session, generation, done, summary))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SddLoopControlAction {
-    Start,
-    Stop,
-    Status,
-}
-
-/// Parse the MCP control-plane shape separately from the agent check-in shape.
-/// Keeping the verbs distinct is a safety property: a controller cannot
-/// accidentally stop a loop by being interpreted as `done:true`.
-fn parse_sdd_loop_control_args(
-    args: &Value,
-) -> anyhow::Result<(uuid::Uuid, SddLoopControlAction, Option<u32>)> {
-    let session = args
-        .get("session")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("missing `session`"))?;
-    let session = uuid::Uuid::parse_str(session)
-        .map_err(|_| anyhow::anyhow!("`session` is not a uuid: {session}"))?;
-    let action = match args.get("action").and_then(Value::as_str) {
-        Some("start") => SddLoopControlAction::Start,
-        Some("stop") => SddLoopControlAction::Stop,
-        Some("status") => SddLoopControlAction::Status,
-        Some(other) => {
-            return Err(anyhow::anyhow!(
-                "unknown `action` {other:?} (expected start, stop, or status)"
-            ));
-        }
-        None => return Err(anyhow::anyhow!("missing `action`")),
-    };
-    let max_steps = match args.get("max_steps") {
-        None => None,
-        Some(value) => {
-            let raw = value
-                .as_u64()
-                .ok_or_else(|| anyhow::anyhow!("`max_steps` must be an integer from 1 to 100"))?;
-            if !(1..=100).contains(&raw) {
-                return Err(anyhow::anyhow!(
-                    "`max_steps` must be an integer from 1 to 100"
-                ));
-            }
-            Some(raw as u32)
-        }
-    };
-    if max_steps.is_some() && action != SddLoopControlAction::Start {
-        return Err(anyhow::anyhow!(
-            "`max_steps` is only valid when `action` is `start`"
-        ));
-    }
-    Ok((session, action, max_steps))
-}
-
-/// MCP start/stop/status over the same server-owned loop seam as the desktop
-/// toggle. The response is compact JSON text so agents can reliably read the
-/// authoritative active/step/max_steps tuple from a normal MCP tool result.
-async fn tool_sdd_loop_control(state: &AppState, args: &Value) -> anyhow::Result<String> {
-    let (session, action, max_steps) = parse_sdd_loop_control_args(args)?;
-    let loop_state = match action {
-        SddLoopControlAction::Status => super::sdd::read_loop_state(state, session),
-        SddLoopControlAction::Start => {
-            super::sdd::set_loop_active(state, session, true, max_steps).await?
-        }
-        SddLoopControlAction::Stop => {
-            super::sdd::set_loop_active(state, session, false, None).await?
-        }
-    };
-    Ok(json!({
-        "session": session,
-        "active": loop_state.active,
-        "step": loop_state.step,
-        "max_steps": loop_state.max_steps,
-    })
-    .to_string())
-}
-
-/// SDD-loop check-in — a thin arm over [`super::sdd::agent_checkin`] (spec 016
-/// F1); the loop mechanics stay in `routes/sdd.rs` beside the map they mutate.
-async fn tool_sdd_loop(state: &AppState, args: &Value) -> anyhow::Result<String> {
-    let (session, generation, done, summary) = parse_sdd_loop_args(args)?;
-    Ok(super::sdd::agent_checkin(state, session, generation, done, summary).await)
-}
-
-/// Fetch (or list) the server-owned SDD playbooks. This is the universal
-/// delivery path — the bootstrap line the SDD buttons/loop inject tells the
-/// agent to call this; agents whose client renders MCP prompts can use
-/// `prompts/get` instead, but `tools/call` works everywhere.
-fn tool_sdd(args: &Value) -> anyhow::Result<String> {
-    let name = args.get("name").and_then(Value::as_str);
-    let extra = args.get("args").and_then(Value::as_str);
-    match name {
-        None => {
-            let list = crate::sdd::playbooks()
-                .into_iter()
-                .map(|p| format!("- `{}` ({}): {}", p.name, p.title, p.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            Ok(format!(
-                "Available SDD playbooks (fetch one with {{\"name\": …}}):\n{list}"
-            ))
-        }
-        Some(name) => {
-            let playbook = crate::sdd::get(name).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "unknown playbook `{name}` — call agentum_sdd with no arguments to list them"
-                )
-            })?;
-            Ok(crate::sdd::full_prompt(&playbook, extra))
-        }
-    }
-}
-
-/// MCP `prompts/list`: the SDD playbooks as native prompts. Clients that
-/// surface these as slash commands (Claude Code, Gemini CLI) get `/sdd-*`
-/// with zero per-agent installation.
-fn prompts_list() -> Value {
-    let prompts: Vec<Value> = crate::sdd::playbooks()
-        .into_iter()
-        .map(|p| {
-            json!({
-                "name": p.name,
-                "title": p.title,
-                "description": p.description,
-                "arguments": [{
-                    "name": "args",
-                    "description": "Optional free-form arguments (e.g. `autonomous` or a spec id for sdd-orchestrate)",
-                    "required": false,
-                }],
-            })
-        })
-        .collect();
-    json!({ "prompts": prompts })
-}
-
-/// MCP `prompts/get`: resolve one playbook into a user-role message.
-fn prompts_get(params: Option<&Value>) -> Result<Value, (i64, String)> {
-    let name = params
-        .and_then(|p| p.get("name"))
-        .and_then(Value::as_str)
-        .ok_or((-32602, "missing prompt name".to_string()))?;
-    let playbook =
-        crate::sdd::get(name).ok_or_else(|| (-32602, format!("unknown prompt: {name}")))?;
-    let args = params
-        .and_then(|p| p.get("arguments"))
-        .and_then(|a| a.get("args"))
-        .and_then(Value::as_str);
-    Ok(json!({
-        "description": playbook.description,
-        "messages": [{
-            "role": "user",
-            "content": { "type": "text", "text": crate::sdd::full_prompt(&playbook, args) },
-        }],
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1865,62 +1219,6 @@ mod tests {
     }
 
     #[test]
-    fn agentum_sdd_is_advertised_regardless_of_the_orchestration_gate() {
-        assert!(tool_names(true).contains(&"agentum_sdd".to_string()));
-        assert!(tool_names(false).contains(&"agentum_sdd".to_string()));
-    }
-
-    #[test]
-    fn tool_sdd_lists_fetches_and_rejects_unknown_playbooks() {
-        // No name → a discoverable list of all six playbooks.
-        let list = tool_sdd(&json!({})).unwrap();
-        for name in [
-            "sdd-spec",
-            "sdd-spec-socratic",
-            "sdd-orchestrate",
-            "sdd-status",
-        ] {
-            assert!(list.contains(name), "list mentions {name}");
-        }
-        // Named fetch → the playbook body (with args appended when given).
-        let body = tool_sdd(&json!({ "name": "sdd-orchestrate", "args": "autonomous" })).unwrap();
-        assert!(
-            body.contains("validate_handoff"),
-            "carries the real procedure"
-        );
-        assert!(body.contains("Arguments: autonomous"));
-        // Unknown → an actionable error, not a silent empty result.
-        let err = tool_sdd(&json!({ "name": "sdd-nope" }))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("sdd-nope") && err.contains("list"));
-    }
-
-    #[test]
-    fn prompts_surface_serves_the_sdd_playbooks() {
-        let list = prompts_list();
-        let names: Vec<&str> = list["prompts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|p| p["name"].as_str())
-            .collect();
-        assert_eq!(names.len(), 6);
-        assert!(names.contains(&"sdd-spec"));
-
-        let got = prompts_get(Some(&json!({
-            "name": "sdd-status",
-            "arguments": { "args": "" },
-        })))
-        .unwrap();
-        let text = got["messages"][0]["content"]["text"].as_str().unwrap();
-        assert!(text.contains("STATE.md"));
-
-        let err = prompts_get(Some(&json!({ "name": "nope" }))).unwrap_err();
-        assert_eq!(err.0, -32602);
-    }
-
-    #[test]
     fn tool_catalog_is_well_formed() {
         // Every advertised tool needs name + description + object inputSchema,
         // or agents reject the listing.
@@ -1963,228 +1261,6 @@ mod tests {
         assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());
     }
 
-    // --- spec 016 F1: agentum_sdd_loop ---
-
-    #[test]
-    fn sdd_loop_tool_is_advertised_regardless_of_the_orchestration_gate() {
-        // Loop control, not the mailbox/DAG surface: deliberately NOT in
-        // ORCHESTRATION_TOOLS, so it is advertised (and callable) whenever the
-        // MCP server itself is on.
-        assert!(!is_orchestration_tool("agentum_sdd_loop"));
-        assert!(tool_names(true).contains(&"agentum_sdd_loop".to_string()));
-        assert!(tool_names(false).contains(&"agentum_sdd_loop".to_string()));
-    }
-
-    #[test]
-    fn sdd_loop_control_is_advertised_regardless_of_the_orchestration_gate() {
-        assert!(!is_orchestration_tool("agentum_sdd_loop_control"));
-        assert!(tool_names(true).contains(&"agentum_sdd_loop_control".to_string()));
-        assert!(tool_names(false).contains(&"agentum_sdd_loop_control".to_string()));
-    }
-
-    #[test]
-    fn parse_sdd_loop_control_args_separates_control_from_checkin() {
-        let u = uuid::Uuid::new_v4();
-        assert!(parse_sdd_loop_control_args(&json!({})).is_err());
-        assert!(
-            parse_sdd_loop_control_args(&json!({ "session": "nope", "action": "start" })).is_err()
-        );
-        assert!(
-            parse_sdd_loop_control_args(&json!({ "session": u.to_string(), "action": "continue" }))
-                .is_err()
-        );
-        assert!(
-            parse_sdd_loop_control_args(
-                &json!({ "session": u.to_string(), "action": "status", "max_steps": 4 })
-            )
-            .is_err(),
-            "step caps only make sense for start"
-        );
-        assert!(
-            parse_sdd_loop_control_args(
-                &json!({ "session": u.to_string(), "action": "start", "max_steps": 0 })
-            )
-            .is_err()
-        );
-
-        let (id, action, max_steps) = parse_sdd_loop_control_args(
-            &json!({ "session": u.to_string(), "action": "start", "max_steps": 12 }),
-        )
-        .unwrap();
-        assert_eq!(id, u);
-        assert_eq!(action, SddLoopControlAction::Start);
-        assert_eq!(max_steps, Some(12));
-
-        let (_, action, max_steps) =
-            parse_sdd_loop_control_args(&json!({ "session": u.to_string(), "action": "status" }))
-                .unwrap();
-        assert_eq!(action, SddLoopControlAction::Status);
-        assert_eq!(max_steps, None);
-    }
-
-    #[test]
-    fn parse_sdd_loop_args_requires_session_and_done() {
-        let u = uuid::Uuid::new_v4();
-
-        // Missing session / missing done / junk uuid → caller errors.
-        assert!(parse_sdd_loop_args(&json!({ "done": true })).is_err());
-        assert!(parse_sdd_loop_args(&json!({ "session": u.to_string() })).is_err());
-        assert!(parse_sdd_loop_args(&json!({ "session": "not-a-uuid", "done": true })).is_err());
-        // A stringly-typed `done` is a caller bug, never coerced.
-        assert!(parse_sdd_loop_args(&json!({ "session": u.to_string(), "done": "true" })).is_err());
-
-        // Minimal valid shape: generation + summary are optional.
-        let (id, generation, done, summary) =
-            parse_sdd_loop_args(&json!({ "session": u.to_string(), "done": false })).unwrap();
-        assert_eq!(id, u);
-        assert_eq!(generation, None);
-        assert!(!done);
-        assert_eq!(summary, None);
-
-        // Full shape.
-        let (_, generation, done, summary) = parse_sdd_loop_args(&json!({
-            "session": u.to_string(),
-            "done": true,
-            "generation": 7,
-            "summary": "F1 green",
-        }))
-        .unwrap();
-        assert_eq!(generation, Some(7));
-        assert!(done);
-        assert_eq!(summary.as_deref(), Some("F1 green"));
-    }
-
-    // --- spec 005 F4: agentum_report_status ---
-
-    #[test]
-    fn report_status_is_in_the_catalog() {
-        // A status verb, not the mailbox/DAG surface — present with the gate on.
-        assert!(tool_names(true).contains(&"agentum_report_status".to_string()));
-    }
-
-    #[test]
-    fn report_status_survives_orchestration_gate_off() {
-        // Deliberately NOT in ORCHESTRATION_TOOLS: advertised (and callable)
-        // regardless of that gate, like agentum_list_sessions.
-        assert!(!is_orchestration_tool("agentum_report_status"));
-        assert!(tool_names(false).contains(&"agentum_report_status".to_string()));
-    }
-
-    #[test]
-    fn report_status_args_require_id_except_github_url() {
-        use crate::task_sink::TrackerPhase;
-
-        // id-less linear → Err (caller bug).
-        let e = parse_report_status_args(&json!({ "provider": "linear", "phase": "done" }));
-        assert!(e.is_err(), "linear without id must be a caller error");
-
-        // id-less github + issue URL → Ok with the derived number.
-        let (provider, id, url, phase) = parse_report_status_args(&json!({
-            "provider": "github",
-            "url": "https://github.com/owner/repo/issues/42",
-            "phase": "in_progress",
-        }))
-        .unwrap();
-        assert_eq!(provider, "github");
-        assert_eq!(id, "42");
-        assert_eq!(
-            url.as_deref(),
-            Some("https://github.com/owner/repo/issues/42")
-        );
-        assert_eq!(phase, TrackerPhase::InProgress);
-
-        // id-less github + garbage URL → Err.
-        assert!(
-            parse_report_status_args(&json!({
-                "provider": "github",
-                "url": "https://github.com/o/r/pull/42",
-                "phase": "done",
-            }))
-            .is_err(),
-            "a PR link is not an issue URL"
-        );
-        // id-less github with NO url → Err.
-        assert!(
-            parse_report_status_args(&json!({ "provider": "github", "phase": "done" })).is_err()
-        );
-
-        // An explicit id always wins (no URL needed for linear/board).
-        let (_, id, _, _) = parse_report_status_args(&json!({
-            "provider": "board", "id": "AG-12", "phase": "todo",
-        }))
-        .unwrap();
-        assert_eq!(id, "AG-12");
-
-        // A junk phase is a caller error, never silently coerced.
-        assert!(
-            parse_report_status_args(&json!({
-                "provider": "board", "id": "AG-12", "phase": "shipped",
-            }))
-            .is_err()
-        );
-    }
-
-    /// `in_review` is a first-class phase (the SDD Reviewer step reports it) —
-    /// it must parse AND be advertised in the tool spec's enum, or a
-    /// schema-respecting client can never send it.
-    #[test]
-    fn report_status_accepts_in_review() {
-        use crate::task_sink::TrackerPhase;
-
-        let (_, _, _, phase) = parse_report_status_args(&json!({
-            "provider": "github",
-            "url": "https://github.com/owner/repo/issues/42",
-            "phase": "in_review",
-        }))
-        .unwrap();
-        assert_eq!(phase, TrackerPhase::InReview);
-
-        let specs = tool_specs(true);
-        let phase_enum = specs
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["name"] == "agentum_report_status")
-            .expect("agentum_report_status is in the catalog")["inputSchema"]["properties"]["phase"]
-            ["enum"]
-            .clone();
-        assert!(
-            phase_enum.as_array().unwrap().contains(&json!("in_review")),
-            "tool-spec phase enum must advertise in_review, got {phase_enum}"
-        );
-    }
-
-    /// The AC 9 pin: every outcome shape — including a seam `Err` — maps to a
-    /// normal text result. A tracker hiccup is a readable "skipped" note, never
-    /// a tool error.
-    #[test]
-    fn report_status_text_never_errs_on_tracker_failure() {
-        use crate::task_sink::{TrackerPhase, TransitionResult};
-
-        assert_eq!(
-            report_status_text(Ok(TransitionResult::Applied), "github", TrackerPhase::Done),
-            "applied: github → Done"
-        );
-        assert_eq!(
-            report_status_text(
-                Ok(TransitionResult::Skipped("no board card with key X".into())),
-                "board",
-                TrackerPhase::Todo,
-            ),
-            "skipped: no board card with key X"
-        );
-        let text = report_status_text(
-            Err(anyhow::anyhow!("network down")),
-            "linear",
-            TrackerPhase::ReadyToTest,
-        );
-        assert!(
-            text.starts_with("skipped (tracker error, non-fatal):"),
-            "got: {text}"
-        );
-        assert!(text.contains("network down"));
-    }
-
     /// Minimal AppState over a tempdir store (the board_sync `fresh_state`
     /// pattern) so the wire-level delegation test drives the REAL tool fn.
     async fn fresh_state() -> AppState {
@@ -2210,188 +1286,27 @@ mod tests {
             wiki_keys: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             hostname: "test".to_string(),
             no_auth: true,
+            embedded_ui_token: None,
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus: broadcast::channel(64).0,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp_token: Arc::new(String::from("test-mcp-token")),
             api_base_url: None,
             desktop_bridge: None,
-            harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
-            sdd_loops: Default::default(),
             events_ws_clients: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            sdd_credentials: std::sync::Arc::new(
+                crate::sdd::credentials::MemoryCredentialVault::default(),
+            ),
         }
     }
 
-    #[tokio::test]
-    async fn sdd_loop_control_delegates_to_the_shared_loop_state() {
-        let state = fresh_state().await;
-        let session = state
-            .store
-            .create_session(agentum_core::NewSession {
-                name: "mcp-loop-control".into(),
-                workdir: "/tmp/mcp-loop-control".into(),
-                tool: "claude".into(),
-                model: None,
-                flags: vec![],
-                card_id: None,
-                worktree_path: None,
-                worktree_branch: None,
-                worktree_base_ref: None,
-            })
-            .await
-            .unwrap();
-
-        let status = tool_sdd_loop_control(
-            &state,
-            &json!({ "session": session.id.to_string(), "action": "status" }),
-        )
-        .await
-        .unwrap();
-        let status: Value = serde_json::from_str(&status).unwrap();
-        assert_eq!(status["session"], session.id.to_string());
-        assert_eq!(status["active"], false);
-        assert_eq!(status["step"], 0);
-        assert_eq!(status["max_steps"], 0);
-
-        let stopped = tool_sdd_loop_control(
-            &state,
-            &json!({ "session": session.id.to_string(), "action": "stop" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            serde_json::from_str::<Value>(&stopped).unwrap()["active"],
-            false
-        );
-
-        let err = tool_sdd_loop_control(
-            &state,
-            &json!({ "session": session.id.to_string(), "action": "start" }),
-        )
-        .await
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("session is not running"), "got: {err}");
-    }
-
-    /// Wire-level delegation (board arm, no subprocess): the tool moves a real
-    /// board card's column through `apply_tracker_transition` — proof the arm
-    /// delegates to the seam rather than reimplementing tracker mechanics.
-    #[tokio::test]
-    async fn report_status_moves_a_board_card() {
-        let state = fresh_state().await;
-        let card = state
-            .store
-            .create_board_item(agentum_core::NewBoardItem {
-                title: "Add OAuth login".into(),
-                body: None,
-                lbl: Some("feat".into()),
-                status: Some("todo".into()),
-                workdir: None,
-                parent_goal_id: None,
-                tool: None,
-                model: None,
-                session_id: None,
-                priority: None,
-            })
-            .await
-            .unwrap();
-
-        let text = tool_report_status(
-            &state,
-            &json!({ "provider": "board", "id": card.key, "phase": "in_progress" }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(text, "applied: board → InProgress");
-
-        let moved = state
-            .store
-            .list_board_items()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|c| c.key == card.key)
-            .unwrap();
-        assert_eq!(moved.status, "doing");
-
-        // Unknown provider flows to the seam's Skipped — visible, non-fatal.
-        let text = tool_report_status(
-            &state,
-            &json!({ "provider": "jira", "id": "X-1", "phase": "done" }),
-        )
-        .await
-        .unwrap();
-        assert!(text.starts_with("skipped:"), "got: {text}");
-    }
-
-    // --- #377: the seam can stall or crash; the tool must always answer ---
-
-    /// The transport pin: a stalled tracker chain answers with a "still
-    /// running" note before the client's own timeout, a panic inside the seam
-    /// is isolated to a readable note (the old behavior killed the whole HTTP
-    /// response → the client saw a raw socket close), and a fast outcome still
-    /// reads exactly as before.
-    #[tokio::test]
-    async fn report_status_bounds_a_stalled_or_crashing_tracker() {
-        use crate::task_sink::{TrackerPhase, TransitionResult};
-
-        // Stall: outlives the deadline → note, never a hang or an Err.
-        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> = tokio::spawn(async {
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            Ok(TransitionResult::Applied)
-        });
-        let text = bounded_transition_text(
-            h,
-            std::time::Duration::from_millis(40),
-            "github",
-            TrackerPhase::InProgress,
-        )
-        .await;
-        assert!(
-            text.starts_with("skipped (tracker still running"),
-            "got: {text}"
-        );
-
-        // Panic inside the seam: isolated into the best-effort note.
-        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> =
-            tokio::spawn(async { panic!("label table hole") });
-        let text = bounded_transition_text(
-            h,
-            std::time::Duration::from_secs(5),
-            "github",
-            TrackerPhase::Done,
-        )
-        .await;
-        assert!(
-            text.starts_with("skipped (tracker crashed, non-fatal):"),
-            "got: {text}"
-        );
-
-        // Fast success is byte-identical to the pre-#377 text.
-        let h: tokio::task::JoinHandle<anyhow::Result<TransitionResult>> =
-            tokio::spawn(async { Ok(TransitionResult::Applied) });
-        let text = bounded_transition_text(
-            h,
-            std::time::Duration::from_secs(5),
-            "board",
-            TrackerPhase::Todo,
-        )
-        .await;
-        assert_eq!(text, "applied: board → Todo");
-    }
-
-    // --- #378: session lifecycle end, pane injection, harness run, bounded list ---
+    // --- #378: session lifecycle end, pane injection, bounded list ---
 
     #[test]
-    fn lifecycle_and_run_tools_are_in_the_catalog_ungated() {
+    fn session_lifecycle_tools_are_in_the_catalog() {
         // Control-plane verbs like spawn: advertised regardless of the
         // orchestration gate (they are not the mailbox/DAG surface).
-        for tool in [
-            "agentum_stop_session",
-            "agentum_inject_prompt",
-            "agentum_harness_run",
-        ] {
+        for tool in ["agentum_stop_session", "agentum_inject_prompt"] {
             assert!(!is_orchestration_tool(tool));
             assert!(tool_names(true).contains(&tool.to_string()), "{tool} on");
             assert!(tool_names(false).contains(&tool.to_string()), "{tool} off");
@@ -2474,19 +1389,5 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("no session"), "got: {err}");
-    }
-
-    #[tokio::test]
-    async fn harness_run_fails_fast_without_a_ready_surface() {
-        let state = fresh_state().await;
-        let dir = tempfile::tempdir().unwrap();
-        // No `.agentum-harness/` → the register step fails loudly (the tool
-        // points the caller at agentum_harness_check), nothing is spawned.
-        let err = tool_harness_run(&state, &json!({ "workdir": dir.path().to_string_lossy() }))
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("register harness"), "got: {err}");
-        assert!(tool_harness_run(&state, &json!({})).await.is_err());
     }
 }

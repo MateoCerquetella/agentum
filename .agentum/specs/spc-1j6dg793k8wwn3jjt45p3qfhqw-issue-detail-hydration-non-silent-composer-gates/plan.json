@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "specId": "SPC-1J6DG793K8WWN3JJT45P3QFHQW",
+  "specRevision": 1,
+  "tasks": [
+    {
+      "id": "T-001",
+      "objective": "T1: implement `gh_work_item_details` + `gh_work_item` via the `gh` CLI",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-002",
+      "objective": "T2: GitHubItemDialog/PullRequestPage: null-with-no-cache \u2192 visible error",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-003",
+      "objective": "T3: ChatPage stamps `repoId` on the detail-page hand-off.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-004",
+      "objective": "T4: pure `deriveIssueSideEffectGate` + `describeIssueSideEffectSkip`",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-005",
+      "objective": "T5: server `POST /api/github/issues/draft-body` reusing chat plumbing",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-006",
+      "objective": "T6: composer \"Generate description\" button (blank-body only, disabled",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    },
+    {
+      "id": "T-007",
+      "objective": "T7: `.agentum-harness/.gitignore` (`*`) in `scaffold_files()`.",
+      "dependencies": [],
+      "readScopes": [],
+      "writeScopes": [],
+      "acceptanceCriteria": [],
+      "verification": [],
+      "risk": "unknown",
+      "parallelSafe": false
+    }
+  ]
+}

@@ -5,11 +5,11 @@ import { api } from '@/tauri'
 import { useEffect } from 'react'
 import type { AppState } from '../store'
 import { useAppStore } from '../store'
-import type { RuntimeRpcResponse } from '../../../shared/runtime-rpc-envelope'
+import type { RuntimeRpcResponse } from '@/shared/runtime-rpc-envelope'
 import {
   AGENT_STATUS_STALE_AFTER_MS,
   type AgentStatusEntry
-} from '../../../shared/agent-status-types'
+} from '@/shared/agent-status-types'
 import type {
   RuntimeMobileSessionTabsResult,
   RuntimeMobileSessionBrowserTab,
@@ -17,7 +17,7 @@ import type {
   RuntimeMobileSessionMarkdownTab,
   RuntimeMobileSessionTabGroup,
   RuntimeMobileSessionTerminalClientTab
-} from '../../../shared/runtime-types'
+} from '@/shared/runtime-types'
 import type {
   BrowserPage,
   BrowserWorkspace,
@@ -27,9 +27,9 @@ import type {
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
   TerminalTab
-} from '../../../shared/types'
+} from '@/shared/types'
 import type { OpenFile } from '../store/slices/editor'
-import { isTerminalLeafId, makePaneKey, parsePaneKey } from '../../../shared/stable-pane-id'
+import { isTerminalLeafId, makePaneKey, parsePaneKey } from '@/shared/stable-pane-id'
 import { getRemoteRuntimePtyEnvironmentId, toRemoteRuntimePtyId } from './runtime-terminal-stream'
 import { sanitizeTerminalLayoutPaneTitlesForLabels } from '@/lib/terminal-pane-title-sanitization'
 import {
@@ -1761,28 +1761,28 @@ export function applyWebSessionTabsSnapshot(
     }
   }
 
-  const nextTabsByWorktree = withWorktreeEntry(
+  const nextTabsByWorktree = withWorktreeEntry<TerminalTab[]>(
     state.tabsByWorktree,
     worktreeId,
-    nextTerminalTabs,
+    nextTerminalTabs ? [...nextTerminalTabs] : null,
     sameTerminalTabs
   )
-  const nextBrowserTabsByWorktree = withWorktreeEntry(
+  const nextBrowserTabsByWorktree = withWorktreeEntry<BrowserWorkspace[]>(
     state.browserTabsByWorktree,
     worktreeId,
-    nextBrowserTabs,
+    nextBrowserTabs ? [...nextBrowserTabs] : null,
     sameBrowserTabs
   )
-  const nextUnifiedTabsByWorktree = withWorktreeEntry(
+  const nextUnifiedTabsByWorktree = withWorktreeEntry<Tab[]>(
     state.unifiedTabsByWorktree,
     worktreeId,
-    nextUnifiedTabs,
+    nextUnifiedTabs ? [...nextUnifiedTabs] : null,
     sameUnifiedTabs
   )
-  const nextGroupsByWorktree = withWorktreeEntry(
+  const nextGroupsByWorktree = withWorktreeEntry<TabGroup[]>(
     state.groupsByWorktree,
     worktreeId,
-    nextGroups,
+    nextGroups ? [...nextGroups] : null,
     sameGroups
   )
   const nextActiveGroupId =

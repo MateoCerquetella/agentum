@@ -2,9 +2,10 @@
 // Replaces lib/electron-bridge.ts proxy. Command/event names match the old wire contract.
 type ApiMethod = (...args: any[]) => Promise<any>
 type ApiEvent = (callback: (payload: any) => void) => () => void
+type DynamicApiNamespace = Record<string, any>
 
 export interface AgentumApi {
-  agentStatus: {
+  agentStatus: DynamicApiNamespace & {
     drop: ApiMethod
     getMigrationUnsupportedSnapshot: ApiMethod
     getSnapshot: ApiMethod
@@ -13,10 +14,10 @@ export interface AgentumApi {
     onMigrationUnsupportedClear: ApiEvent
     onSet: ApiEvent
   }
-  agentTrust: {
+  agentTrust: DynamicApiNamespace & {
     markTrusted: ApiMethod
   }
-  app: {
+  app: DynamicApiNamespace & {
     getFloatingMarkdownDirectory: ApiMethod
     getFloatingTerminalCwd: ApiMethod
     getKeyboardInputSourceId: ApiMethod
@@ -27,7 +28,7 @@ export interface AgentumApi {
     restart: ApiMethod
     setUnreadDockBadgeCount: ApiMethod
   }
-  browser: {
+  browser: DynamicApiNamespace & {
     acceptDownload: ApiMethod
     awaitGrabSelection: ApiMethod
     cancelDownload: ApiMethod
@@ -63,11 +64,11 @@ export interface AgentumApi {
     onPermissionDenied: ApiEvent
     onPopup: ApiEvent
   }
-  cache: {
+  cache: DynamicApiNamespace & {
     getGitHub: ApiMethod
     setGitHub: ApiMethod
   }
-  claudeAccounts: {
+  claudeAccounts: DynamicApiNamespace & {
     add: ApiMethod
     beginAdd: ApiMethod
     list: ApiMethod
@@ -77,7 +78,7 @@ export interface AgentumApi {
     select: ApiMethod
     syncCurrent: ApiMethod
   }
-  claudeUsage: {
+  claudeUsage: DynamicApiNamespace & {
     getBreakdown: ApiMethod
     getDaily: ApiMethod
     getRecentSessions: ApiMethod
@@ -86,7 +87,7 @@ export interface AgentumApi {
     refresh: ApiMethod
     setEnabled: ApiMethod
   }
-  cli: {
+  cli: DynamicApiNamespace & {
     getInstallStatus: ApiMethod
     getWslInstallStatus: ApiMethod
     install: ApiMethod
@@ -94,7 +95,7 @@ export interface AgentumApi {
     remove: ApiMethod
     removeWsl: ApiMethod
   }
-  codexAccounts: {
+  codexAccounts: DynamicApiNamespace & {
     add: ApiMethod
     beginAdd: ApiMethod
     list: ApiMethod
@@ -104,7 +105,7 @@ export interface AgentumApi {
     select: ApiMethod
     syncCurrent: ApiMethod
   }
-  codexUsage: {
+  codexUsage: DynamicApiNamespace & {
     getBreakdown: ApiMethod
     getDaily: ApiMethod
     getRecentSessions: ApiMethod
@@ -113,23 +114,23 @@ export interface AgentumApi {
     refresh: ApiMethod
     setEnabled: ApiMethod
   }
-  computerUsePermissions: {
+  computerUsePermissions: DynamicApiNamespace & {
     getStatus: ApiMethod
     openSetup: ApiMethod
     reset: ApiMethod
   }
-  crashReports: {
+  crashReports: DynamicApiNamespace & {
     copyLatestDiagnostics: ApiMethod
     dismiss: ApiMethod
     getLatestPending: ApiMethod
     getLatestReport: ApiMethod
     submit: ApiMethod
   }
-  developerPermissions: {
+  developerPermissions: DynamicApiNamespace & {
     getStatus: ApiMethod
     request: ApiMethod
   }
-  diagnostics: {
+  diagnostics: DynamicApiNamespace & {
     clearTraces: ApiMethod
     collectBundle: ApiMethod
     deleteBundle: ApiMethod
@@ -139,16 +140,16 @@ export interface AgentumApi {
     openTraceFolder: ApiMethod
     uploadBundle: ApiMethod
   }
-  e2e: {
+  e2e: DynamicApiNamespace & {
     getConfig: ApiMethod
   }
-  export: {
+  export: DynamicApiNamespace & {
     htmlToPdf: ApiMethod
   }
-  feedback: {
+  feedback: DynamicApiNamespace & {
     submit: ApiMethod
   }
-  fs: {
+  fs: DynamicApiNamespace & {
     authorizeExternalPath: ApiMethod
     copy: ApiMethod
     createDir: ApiMethod
@@ -168,7 +169,7 @@ export interface AgentumApi {
     writeFile: ApiMethod
     onFsChanged: ApiEvent
   }
-  gh: {
+  gh: DynamicApiNamespace & {
     addIssueComment: ApiMethod
     addIssueCommentBySlug: ApiMethod
     addPRReviewComment: ApiMethod
@@ -220,10 +221,10 @@ export interface AgentumApi {
     onPRRefreshEvent: ApiEvent
     onWorkItemMutated: ApiEvent
   }
-  gitBash: {
+  gitBash: DynamicApiNamespace & {
     isAvailable: ApiMethod
   }
-  gl: {
+  gl: DynamicApiNamespace & {
     addIssueComment: ApiMethod
     addMRComment: ApiMethod
     addMRInlineComment: ApiMethod
@@ -241,18 +242,18 @@ export interface AgentumApi {
     updateMRReviewers: ApiMethod
     workItemDetails: ApiMethod
   }
-  hooks: {
+  hooks: DynamicApiNamespace & {
     check: ApiMethod
     inspectSetupScriptImports: ApiMethod
     readIssueCommand: ApiMethod
     writeIssueCommand: ApiMethod
   }
-  hostedReview: {
+  hostedReview: DynamicApiNamespace & {
     create: ApiMethod
     forBranch: ApiMethod
     getCreationEligibility: ApiMethod
   }
-  keybindings: {
+  keybindings: DynamicApiNamespace & {
     ensureFile: ApiMethod
     get: ApiMethod
     openFile: ApiMethod
@@ -261,7 +262,7 @@ export interface AgentumApi {
     setAction: ApiMethod
     onChanged: ApiEvent
   }
-  linear: {
+  linear: DynamicApiNamespace & {
     addIssueComment: ApiMethod
     connect: ApiMethod
     createIssue: ApiMethod
@@ -288,27 +289,27 @@ export interface AgentumApi {
     testConnection: ApiMethod
     updateIssue: ApiMethod
   }
-  mobile: {
+  mobile: DynamicApiNamespace & {
     getRuntimePairingUrl: ApiMethod
     listNetworkInterfaces: ApiMethod
     listRuntimeAccessGrants: ApiMethod
     revokeRuntimeAccess: ApiMethod
   }
-  notebook: {
+  notebook: DynamicApiNamespace & {
     runPythonCell: ApiMethod
   }
-  notifications: {
+  notifications: DynamicApiNamespace & {
     dispatch: ApiMethod
     getPermissionStatus: ApiMethod
     openSystemSettings: ApiMethod
     playSound: ApiMethod
     requestPermission: ApiMethod
   }
-  onboarding: {
+  onboarding: DynamicApiNamespace & {
     get: ApiMethod
     update: ApiMethod
   }
-  openCodeUsage: {
+  openCodeUsage: DynamicApiNamespace & {
     getBreakdown: ApiMethod
     getDaily: ApiMethod
     getRecentSessions: ApiMethod
@@ -317,16 +318,16 @@ export interface AgentumApi {
     refresh: ApiMethod
     setEnabled: ApiMethod
   }
-  pet: {
+  pet: DynamicApiNamespace & {
     delete: ApiMethod
     import: ApiMethod
     importPetBundle: ApiMethod
     read: ApiMethod
   }
-  preflight: {
+  preflight: DynamicApiNamespace & {
     check: ApiMethod
   }
-  projectGroups: {
+  projectGroups: DynamicApiNamespace & {
     create: ApiMethod
     delete: ApiMethod
     importNested: ApiMethod
@@ -335,7 +336,7 @@ export interface AgentumApi {
     scanNested: ApiMethod
     update: ApiMethod
   }
-  pty: {
+  pty: DynamicApiNamespace & {
     ackColdRestore: ApiMethod
     clearPendingPaneSerializer: ApiMethod
     declarePendingPaneSerializer: ApiMethod
@@ -365,10 +366,10 @@ export interface AgentumApi {
     onReplay: ApiEvent
     onSerializeBufferRequest: ApiEvent
   }
-  pwsh: {
+  pwsh: DynamicApiNamespace & {
     isAvailable: ApiMethod
   }
-  rateLimits: {
+  rateLimits: DynamicApiNamespace & {
     fetchInactiveClaudeAccounts: ApiMethod
     fetchInactiveCodexAccounts: ApiMethod
     get: ApiMethod
@@ -377,12 +378,12 @@ export interface AgentumApi {
     refreshCodexForTarget: ApiMethod
     onUpdate: ApiEvent
   }
-  remoteWorkspace: {
+  remoteWorkspace: DynamicApiNamespace & {
     get: ApiMethod
     setForConnectedTargets: ApiMethod
     onChanged: ApiEvent
   }
-  repos: {
+  repos: DynamicApiNamespace & {
     add: ApiMethod
     addRemote: ApiMethod
     clone: ApiMethod
@@ -400,30 +401,30 @@ export interface AgentumApi {
     onChanged: ApiEvent
     onCloneProgress: ApiEvent
   }
-  runtime: {
+  runtime: DynamicApiNamespace & {
     call: ApiMethod
     syncWindowGraph: ApiMethod
   }
-  runtimeEnvironments: {
+  runtimeEnvironments: DynamicApiNamespace & {
     addFromPairingCode: ApiMethod
     call: ApiMethod
     list: ApiMethod
     remove: ApiMethod
     subscribe: ApiMethod
   }
-  session: {
+  session: DynamicApiNamespace & {
     get: ApiMethod
     patch: ApiMethod
     setSync: ApiMethod
   }
-  settings: {
+  settings: DynamicApiNamespace & {
     get: ApiMethod
     listFonts: ApiMethod
     previewGhosttyImport: ApiMethod
     set: ApiMethod
     onChanged: ApiEvent
   }
-  shell: {
+  shell: DynamicApiNamespace & {
     copyFile: ApiMethod
     openFilePath: ApiMethod
     openFileUri: ApiMethod
@@ -438,15 +439,15 @@ export interface AgentumApi {
     pickImage: ApiMethod
     pickRepoIconImage: ApiMethod
   }
-  skills: {
+  skills: DynamicApiNamespace & {
     discover: ApiMethod
   }
-  sparsePresets: {
+  sparsePresets: DynamicApiNamespace & {
     list: ApiMethod
     remove: ApiMethod
     save: ApiMethod
   }
-  speech: {
+  speech: DynamicApiNamespace & {
     feedAudio: ApiMethod
     getModelStates: ApiMethod
     startDictation: ApiMethod
@@ -457,7 +458,7 @@ export interface AgentumApi {
     onPartialTranscript: ApiEvent
     onStopped: ApiEvent
   }
-  ssh: {
+  ssh: DynamicApiNamespace & {
     addPortForward: ApiMethod
     addTarget: ApiMethod
     browseDir: ApiMethod
@@ -469,6 +470,7 @@ export interface AgentumApi {
     listPortForwards: ApiMethod
     listTargets: ApiMethod
     needsPassphrasePrompt: ApiMethod
+    removeTarget: ApiMethod
     removePortForward: ApiMethod
     resetRelay: ApiMethod
     submitCredential: ApiMethod
@@ -482,15 +484,15 @@ export interface AgentumApi {
     onPortForwardsChanged: ApiEvent
     onStateChanged: ApiEvent
   }
-  starNag: {
+  starNag: DynamicApiNamespace & {
     complete: ApiMethod
     dismiss: ApiMethod
     onShow: ApiEvent
   }
-  stats: {
+  stats: DynamicApiNamespace & {
     getSummary: ApiMethod
   }
-  ui: {
+  ui: DynamicApiNamespace & {
     confirmWindowClose: ApiMethod
     get: ApiMethod
     getZoomLevel: ApiMethod
@@ -571,7 +573,7 @@ export interface AgentumApi {
     onWindowCloseRequested: ApiEvent
     onWorktreeHistoryNavigate: ApiEvent
   }
-  updater: {
+  updater: DynamicApiNamespace & {
     check: ApiMethod
     dismissNudge: ApiMethod
     download: ApiMethod
@@ -581,17 +583,17 @@ export interface AgentumApi {
     onClearDismissal: ApiEvent
     onStatus: ApiEvent
   }
-  workspaceCleanup: {
+  workspaceCleanup: DynamicApiNamespace & {
     clearDismissals: ApiMethod
     dismiss: ApiMethod
     scan: ApiMethod
   }
-  workspacePorts: {
+  workspacePorts: DynamicApiNamespace & {
     kill: ApiMethod
     scan: ApiMethod
     onAdvertisedUrlChanged: ApiEvent
   }
-  worktrees: {
+  worktrees: DynamicApiNamespace & {
     create: ApiMethod
     forceDeletePreservedBranch: ApiMethod
     listDetected: ApiMethod
@@ -605,7 +607,7 @@ export interface AgentumApi {
     onChanged: ApiEvent
     onRemoteBranchConflict: ApiEvent
   }
-  wsl: {
+  wsl: DynamicApiNamespace & {
     isAvailable: ApiMethod
     listDistros: ApiMethod
   }

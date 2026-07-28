@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { latestFromEntries } from './worktree-latest-activity'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
 
 function entry(over: Partial<AgentStatusEntry>): AgentStatusEntry {
   return {

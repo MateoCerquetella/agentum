@@ -24,8 +24,8 @@ import {
   TextCursorInput,
   UserCog
 } from 'lucide-react'
-import type { Repo } from '../../../shared/types'
-import { getRepoKindLabel } from '../../../shared/repo-kind'
+import type { Repo } from '@/shared/types'
+import { getRepoKindLabel } from '@/shared/repo-kind'
 import { useAppStore } from '@/store'
 import { isMacUserAgent, isWindowsUserAgent } from '@/components/terminal-pane/pane-helpers'
 import type { SettingsNavSection, SettingsNavTarget } from '@/lib/settings-navigation-types'

@@ -9,10 +9,10 @@ import {
 } from '@/lib/agent-status'
 import { scheduleRuntimeGraphSync } from '@/runtime/sync-runtime-graph'
 import { useAppStore } from '@/store'
-import { getRepoMapFromState, getWorktreeMapFromState } from '@/store/selectors'
 import type { PtyConnectResult } from './pty-transport'
 import { createIpcPtyTransport } from './pty-transport'
 import { createRemoteRuntimePtyTransport } from './remote-runtime-pty-transport'
+import { getConnectionId } from '@/lib/connection-context'
 import { shouldSeedCacheTimerOnInitialTitle } from './cache-timer-seeding'
 import type { PtyConnectionDeps } from './pty-connection-types'
 import { safeFit } from '@/lib/pane-manager/pane-tree-ops'
@@ -34,7 +34,7 @@ import {
   mode2031SequenceFor,
   resolveTerminalColorSchemeMode,
   scanMode2031Sequences
-} from '../../../../shared/terminal-color-scheme-protocol'
+} from '@/shared/terminal-color-scheme-protocol'
 import { warnTerminalLifecycleAnomaly } from './terminal-lifecycle-diagnostics'
 import { registerPtySerializer, registerPtyTitleSource } from './pty-buffer-serializer'
 import { getRemoteRuntimePtyEnvironmentId } from '@/runtime/runtime-terminal-stream'
@@ -50,10 +50,10 @@ import {
 import { isLocalNativeWindowsPty } from '@/lib/pane-manager/windows-pty-compatibility'
 import { recordTerminalOutput, restoreScrollStateAfterLayout } from '@/lib/pane-manager/pane-scroll'
 import type { ScrollState } from '@/lib/pane-manager/pane-manager-types'
-import { makePaneKey } from '../../../../shared/stable-pane-id'
+import { makePaneKey } from '@/shared/stable-pane-id'
 import { createTerminalCommandLifecycle } from './terminal-command-lifecycle'
 import { e2eConfig } from '@/lib/e2e-config'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
 import { isWebTerminalSurfaceTabId } from '@/runtime/web-terminal-surface-id'
 import {
   createAgentInterruptInference,
@@ -63,7 +63,7 @@ import {
 import {
   AGENT_INTERRUPT_SETTLE_MS,
   type AgentInterruptInputIntent
-} from '../../../../shared/agent-interrupt-intent'
+} from '@/shared/agent-interrupt-intent'
 import { createAgentCompletionCoordinator } from './agent-completion-coordinator'
 import {
   markTerminalBracketedPasteInterrupted,
@@ -138,11 +138,11 @@ export type PanePtyBinding = IDisposable & {
   /** Force the pane's agent to fully repaint (server path only — a SIGWINCH
    *  nudge + fresh snapshot). Backs the "force redraw" shortcut, which heals a
    *  grid corrupted by bytes the agent never drew (an OS suspend `wall`
-   *  broadcast). Absent / no-op on the local PTY path. */
+   *  broadcast). Absent / no-op on the native PTY path. */
   forceRedraw?: () => void
   /** Send raw bytes for an intercepted keyboard chord (word-nav/erase,
    *  line-nav) on the SERVER session path, whose pane has no entry in
-   *  `paneTransportsRef`. The local PTY path sends chords through that transport
+   *  `paneTransportsRef`. The native PTY path sends chords through that transport
    *  and leaves this undefined. Without it, word-motion/erase chords were
    *  swallowed in every tmux-backed (default) terminal — see keyboard-handlers. */
   sendChordInput?: (data: string) => void
@@ -1103,12 +1103,13 @@ export function connectPanePty(
     AGENTUM_WORKTREE_ID: deps.worktreeId
   }
 
-  // Why: remote repos route PTY spawn through the SSH provider. Resolve the
-  // repo's connectionId from the store so the transport passes it to pty:spawn.
+  // Why: remote repos route PTY spawn through the SSH provider. Resolve through
+  // the shared connection-context helper rather than requiring a discovered
+  // Worktree object: restored/new SSH tabs can mount from their composite
+  // `repoId::remotePath` before worktreesByRepo contains that worktree. Losing
+  // the connection in that window makes pty:spawn silently start on localhost.
   const state = useAppStore.getState()
-  const worktree = getWorktreeMapFromState(state).get(deps.worktreeId)
-  const repo = worktree ? getRepoMapFromState(state).get(worktree.repoId) : null
-  const connectionId = repo?.connectionId ?? null
+  const connectionId = getConnectionId(deps.worktreeId) ?? null
   const tab = (state.tabsByWorktree[deps.worktreeId] ?? []).find((t) => t.id === deps.tabId)
   const shellOverride = tab?.shellOverride
   const shouldSuppressForegroundCursor = isLocalNativeWindowsPty({
@@ -1136,7 +1137,13 @@ export function connectPanePty(
   const transportOptions = {
     cwd: deps.cwd,
     env: paneEnv,
-    command: shouldDeliverStartupViaTerminalPaste ? undefined : paneStartup?.command,
+    // SSH startup has always been renderer-delivered after the first remote
+    // shell output (the relay ignored `command`). Keep that single-delivery
+    // contract now that Tauri's ephemeral path launches a real OpenSSH PTY;
+    // forwarding it into pty.spawn as well would execute the command once in
+    // the remote `-lc` shell and then type it a second time into its process.
+    command:
+      shouldDeliverStartupViaTerminalPaste || connectionId ? undefined : paneStartup?.command,
     connectionId,
     worktreeId: deps.worktreeId,
     // Why: closes the SIGKILL race documented in INVESTIGATION.md by letting

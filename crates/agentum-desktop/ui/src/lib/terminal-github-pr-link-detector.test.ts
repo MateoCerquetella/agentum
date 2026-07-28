@@ -64,4 +64,45 @@ describe('createTerminalGitHubPRLinkDetector', () => {
       )
     ).toEqual([])
   })
+
+  it('rejects deceptive URLs that only contain the GitHub hostname text', () => {
+    const observe = createTerminalGitHubPRLinkDetector()
+
+    expect(
+      observe(
+        [
+          'https://evil.test/github.com/acme/agentum/pull/42',
+          'https://github.com.evil.test/acme/agentum/pull/42',
+          'https://github.com@evil.test/acme/agentum/pull/42',
+          'https://evil.test/https://github.com/acme/agentum/pull/42'
+        ].join(' ') + '\n'
+      )
+    ).toEqual([])
+
+    const observeSplit = createTerminalGitHubPRLinkDetector()
+    expect(observeSplit('https://evil.test/https://gith')).toEqual([])
+    expect(observeSplit('ub.com/acme/agentum/pull/42\n')).toEqual([])
+
+    const observeOverlongSplit = createTerminalGitHubPRLinkDetector()
+    expect(
+      observeOverlongSplit(`https://evil.test/${'a'.repeat(600)}/https://gith`)
+    ).toEqual([])
+    expect(observeOverlongSplit('ub.com/acme/agentum/pull/42\n')).toEqual([])
+  })
+
+  it('accepts only credential-free default-port GitHub HTTPS origins', () => {
+    const observe = createTerminalGitHubPRLinkDetector()
+
+    expect(
+      observe(
+        'https://user@github.com/acme/agentum/pull/40 https://github.com:444/acme/agentum/pull/41 https://www.github.com/acme/agentum/pull/42\n'
+      )
+    ).toEqual([
+      {
+        url: 'https://www.github.com/acme/agentum/pull/42',
+        slug: { owner: 'acme', repo: 'agentum' },
+        number: 42
+      }
+    ])
+  })
 })

@@ -1,12 +1,12 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { GlobalSettings } from '../../../../shared/types'
-import type { SourceControlAiSettings } from '../../../../shared/source-control-ai-types'
+import type { GlobalSettings } from '@/shared/types'
+import type { SourceControlAiSettings } from '@/shared/source-control-ai-types'
 import {
   getCommitMessageModelDiscoveryHostKey,
   getCommitMessageModelDiscoveryHostKeyForScope
-} from '../../../../shared/commit-message-host-key'
+} from '@/shared/commit-message-host-key'
 import { useAppStore } from '../../store'
 import {
   CommitMessageAiPane,

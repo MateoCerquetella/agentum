@@ -52,6 +52,8 @@ pub enum HostRuntimeError {
     NotUtf8(#[from] std::string::FromUtf8Error),
     #[error("could not shell-quote remote command")]
     Quote,
+    #[error("unsafe contained path: {0}")]
+    UnsafePath(String),
     #[error("ssh command timed out")]
     Timeout,
     #[error("{0}")]
@@ -210,13 +212,8 @@ pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]
             if let Some(parent) = std::path::Path::new(abs_path).parent() {
                 std::fs::create_dir_all(parent).map_err(map_ssh_io)?;
             }
-            std::fs::write(abs_path, content).map_err(map_ssh_io)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(abs_path, std::fs::Permissions::from_mode(0o600))
-                    .map_err(map_ssh_io)?;
-            }
+            crate::sdd::artifacts::atomic_write(std::path::Path::new(abs_path), content, None)
+                .map_err(|error| HostRuntimeError::Io(std::io::Error::other(error)))?;
             Ok(())
         }
         HostKind::Ssh { .. } => {
@@ -274,6 +271,166 @@ pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]
     }
 }
 
+/// Write a credential-bearing file below `root` on an SSH host without
+/// following a final or in-worktree parent symlink.
+///
+/// Unlike [`write_remote_file`], this operation treats `root` as a security
+/// boundary. The target must be lexically below it. On the host, every parent
+/// component is traversed with `cd -P`, symlinks are rejected, and the physical
+/// parent is checked against the physical root before any bytes are decoded.
+/// The payload lands in a 0600 temporary file in that validated directory and
+/// is renamed over the final basename, so a final-component swap cannot make
+/// the shell follow a symlink outside the worktree.
+pub async fn write_remote_file_contained(
+    host: &Host,
+    root: &str,
+    abs_path: &str,
+    content: &str,
+) -> Result<()> {
+    let parts = contained_path_parts(root, abs_path)?;
+    match &host.kind {
+        // This API's security boundary is needed for SSH project provisioning.
+        // Preserve the established local behavior for local sessions.
+        HostKind::Local => write_remote_file(host, abs_path, content).await,
+        HostKind::Ssh { .. } => {
+            use base64::Engine;
+            use tokio::io::AsyncWriteExt;
+
+            let script = remote_contained_stdin_write_script(root, &parts)?;
+            let b64 = base64::engine::general_purpose::STANDARD
+                .encode(content.as_bytes())
+                .into_bytes();
+            let mut cmd = ssh_command_opts(host, &script, SshMux::Interactive);
+            cmd.stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true);
+            let drive = async move {
+                let mut child = cmd.spawn().map_err(map_ssh_io)?;
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(&b64).await;
+                    let _ = stdin.shutdown().await;
+                }
+                child.wait_with_output().await.map_err(map_ssh_io)
+            };
+            let output = timeout(UPLOAD_TIMEOUT, drive)
+                .await
+                .map_err(|_| HostRuntimeError::Timeout)??;
+            if output.status.success() {
+                Ok(())
+            } else {
+                Err(HostRuntimeError::NonZero {
+                    status: output.status.code(),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                })
+            }
+        }
+    }
+}
+
+/// Return the normal relative components from `root` to `abs_path`. Keeping
+/// this check on the daemon means an absolute target outside the authoritative
+/// worktree never reaches a remote shell at all.
+fn contained_path_parts(root: &str, abs_path: &str) -> Result<Vec<String>> {
+    let root = Path::new(root);
+    let target = Path::new(abs_path);
+    if !root.is_absolute() || !target.is_absolute() {
+        return Err(HostRuntimeError::UnsafePath(
+            "root and target must be absolute".to_string(),
+        ));
+    }
+    if root
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(HostRuntimeError::UnsafePath(
+            "root contains parent traversal".to_string(),
+        ));
+    }
+    let relative = target.strip_prefix(root).map_err(|_| {
+        HostRuntimeError::UnsafePath("target is outside the authoritative root".to_string())
+    })?;
+    let mut parts = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(value) => parts.push(
+                value
+                    .to_str()
+                    .ok_or_else(|| {
+                        HostRuntimeError::UnsafePath("target is not valid UTF-8".to_string())
+                    })?
+                    .to_string(),
+            ),
+            _ => {
+                return Err(HostRuntimeError::UnsafePath(
+                    "target contains traversal or a non-normal component".to_string(),
+                ));
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(HostRuntimeError::UnsafePath(
+            "target must name a file below the root".to_string(),
+        ));
+    }
+    Ok(parts)
+}
+
+/// Build the fixed-payload SSH script for [`write_remote_file_contained`].
+/// Only the root and a bounded path appear in argv; credential bytes stay on
+/// stdin. Each successful `cd -P` pins the next operation to the validated
+/// directory inode, closing parent-symlink replacement races before the write.
+fn remote_contained_stdin_write_script(root: &str, parts: &[String]) -> Result<String> {
+    let (filename, parents) = parts
+        .split_last()
+        .ok_or_else(|| HostRuntimeError::UnsafePath("target has no filename".to_string()))?;
+    let mut commands = vec![
+        "umask 077".to_string(),
+        format!(
+            "cd -P {} || {{ echo 'agentum: contained root is unavailable' >&2; exit 40; }}",
+            q(root)?
+        ),
+        "AGENTUM_WRITE_ROOT=$(pwd -P) || exit 40".to_string(),
+    ];
+    for parent in parents {
+        let component_path = format!("./{parent}");
+        let component = q(&component_path)?;
+        commands.push(format!(
+            "if [ -L {component} ]; then echo 'agentum: parent symlink rejected' >&2; exit 41; fi"
+        ));
+        commands.push(format!(
+            "if [ ! -e {component} ]; then mkdir {component} || exit 42; fi"
+        ));
+        commands.push(format!(
+            "if [ ! -d {component} ]; then echo 'agentum: parent is not a directory' >&2; exit 43; fi"
+        ));
+        commands.push(format!("cd -P {component} || exit 43"));
+        commands.push("AGENTUM_WRITE_PARENT=$(pwd -P) || exit 43".to_string());
+        commands.push(
+            "case \"$AGENTUM_WRITE_PARENT\" in \"$AGENTUM_WRITE_ROOT\"|\"$AGENTUM_WRITE_ROOT\"/*) ;; *) echo 'agentum: physical parent escaped root' >&2; exit 44 ;; esac"
+                .to_string(),
+        );
+    }
+    let target_path = format!("./{filename}");
+    let target = q(&target_path)?;
+    commands.push(format!(
+        "if [ -L {target} ]; then echo 'agentum: final symlink rejected' >&2; exit 45; fi"
+    ));
+    commands.push(format!(
+        "if [ -e {target} ] && [ ! -f {target} ]; then echo 'agentum: target is not a regular file' >&2; exit 46; fi"
+    ));
+    commands.push("AGENTUM_WRITE_TMP=$(mktemp './.agentum-write.XXXXXX') || exit 47".to_string());
+    commands.push(
+        "trap 'test -z \"$AGENTUM_WRITE_TMP\" || rm -f \"$AGENTUM_WRITE_TMP\"' 0 1 2 3 15"
+            .to_string(),
+    );
+    commands.push("base64 -d > \"$AGENTUM_WRITE_TMP\" || exit 48".to_string());
+    commands.push("chmod 600 \"$AGENTUM_WRITE_TMP\" || exit 49".to_string());
+    commands.push(format!("mv -f \"$AGENTUM_WRITE_TMP\" {target} || exit 50"));
+    commands.push("AGENTUM_WRITE_TMP=".to_string());
+    Ok(format!("sh -c {}", q(&commands.join("; "))?))
+}
+
 /// POSIX-sh script that decodes base64 from STDIN into `abs_path` (owner-only),
 /// creating the parent dir first. Pure and **fixed-size**: the payload never
 /// appears in the script — that's the whole point ([`write_remote_file_bytes`]),
@@ -292,24 +449,28 @@ fn remote_stdin_write_script(parent: &str, abs_path: &str) -> Result<String> {
 }
 
 /// Read `abs_path` from `host` (local fs or SSH), or `None` when it doesn't
-/// exist. Used to merge agentum into an existing agent config file (Cursor,
-/// Gemini, OpenCode) without clobbering the user's other servers. Only stdout is
-/// read, so the host's login-shell noise (fnm, etc.) on stderr is ignored.
+/// exist. Only stdout is read, so login-shell noise on stderr is ignored.
 pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<String>> {
     match &host.kind {
         HostKind::Local => Ok(std::fs::read_to_string(abs_path).ok()),
         HostKind::Ssh { .. } => {
-            let mut cmd =
-                ssh_command_opts(host, &format!("cat {}", q(abs_path)?), SshMux::Interactive);
-            let out = cmd.output().await.map_err(map_ssh_io)?;
-            if out.status.success() && !out.stdout.is_empty() {
-                Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
-            } else {
-                // Missing file (cat exits non-zero) → None, not an error.
-                Ok(None)
-            }
+            // Keep reads on the same bounded, stale-ControlMaster-recovering
+            // path as every other short-lived SSH operation. A raw
+            // `Command::output()` here could wait forever on a wedged pooled
+            // socket. Sequential contract reads must not strand a request when
+            // a pooled connection becomes stale.
+            let out = ssh_output(host, &format!("cat {}", q(abs_path)?), SSH_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            Ok(remote_file_read_result(out.status.success(), &out.stdout))
         }
     }
+}
+
+fn remote_file_read_result(success: bool, stdout: &[u8]) -> Option<String> {
+    // Presence is determined by `cat`'s status, not the payload length: an
+    // existing empty config must round-trip as `Some("")`, just like local fs.
+    success.then(|| String::from_utf8_lossy(stdout).into_owned())
 }
 
 mod discovery;
@@ -378,6 +539,119 @@ mod tests {
             script.len() < 512,
             "script unexpectedly large ({} chars): {script}",
             script.len()
+        );
+    }
+
+    #[test]
+    fn contained_path_rejects_outside_and_traversal_targets() {
+        let root = std::env::temp_dir().join("agentum-contained-root");
+        let inside = root.join(".cursor").join("mcp.json");
+        let outside = root
+            .with_file_name("agentum-contained-root-lookalike")
+            .join("mcp.json");
+        let traversal = root.join("..").join("outside").join("mcp.json");
+        let root = root.to_string_lossy();
+        assert_eq!(
+            contained_path_parts(&root, &inside.to_string_lossy()).unwrap(),
+            vec![".cursor", "mcp.json"]
+        );
+        assert!(contained_path_parts(&root, &outside.to_string_lossy()).is_err());
+        assert!(contained_path_parts(&root, &traversal.to_string_lossy()).is_err());
+        assert!(contained_path_parts("relative", "relative/mcp.json").is_err());
+    }
+
+    #[test]
+    fn successful_empty_remote_read_is_present() {
+        assert_eq!(remote_file_read_result(true, b""), Some(String::new()));
+        assert_eq!(
+            remote_file_read_result(true, b"settings"),
+            Some("settings".to_string())
+        );
+        assert_eq!(remote_file_read_result(false, b""), None);
+    }
+
+    #[cfg(unix)]
+    fn run_contained_write_script(
+        root: &Path,
+        target: &Path,
+        content: &str,
+    ) -> std::process::Output {
+        use base64::Engine as _;
+        use std::io::Write as _;
+        use std::process::Stdio;
+
+        let root = root.to_string_lossy();
+        let target = target.to_string_lossy();
+        let parts = contained_path_parts(&root, &target).unwrap();
+        let script = remote_contained_stdin_write_script(&root, &parts).unwrap();
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Rejection can close stdin before the payload is consumed. That
+        // expected broken pipe must not hide the child's security diagnostic.
+        let _ = child.stdin.take().unwrap().write_all(
+            base64::engine::general_purpose::STANDARD
+                .encode(content)
+                .as_bytes(),
+        );
+        child.wait_with_output().unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn contained_remote_write_rejects_parent_and_final_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let cursor = root.path().join(".cursor");
+        let target = cursor.join("mcp.json");
+        let outside_target = outside.path().join("mcp.json");
+
+        symlink(outside.path(), &cursor).unwrap();
+        let parent = run_contained_write_script(root.path(), &target, "Bearer parent-token");
+        assert!(!parent.status.success());
+        assert!(String::from_utf8_lossy(&parent.stderr).contains("parent symlink rejected"));
+        assert!(
+            !outside_target.exists(),
+            "parent symlink received the token"
+        );
+
+        std::fs::remove_file(&cursor).unwrap();
+        std::fs::create_dir(&cursor).unwrap();
+        std::fs::write(&outside_target, "keep-me").unwrap();
+        symlink(&outside_target, &target).unwrap();
+        let final_link = run_contained_write_script(root.path(), &target, "Bearer final-token");
+        assert!(!final_link.status.success());
+        assert!(String::from_utf8_lossy(&final_link.stderr).contains("final symlink rejected"));
+        assert_eq!(std::fs::read_to_string(&outside_target).unwrap(), "keep-me");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn contained_remote_write_creates_private_file_inside_root() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let target = root.path().join(".gemini/settings.json");
+        let output = run_contained_write_script(root.path(), &target, "Bearer inside-token");
+        assert!(
+            output.status.success(),
+            "contained write failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "Bearer inside-token"
+        );
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
         );
     }
 
@@ -607,16 +881,17 @@ mod tests {
     }
 
     #[test]
-    fn encode_input_hex_lines_splits_long_pastes_at_4k() {
-        // A paste bigger than 4 KiB must span multiple lines: one line is one
-        // remote `tmux send-keys`, and an oversized command trips tmux's
-        // ~16 KB message cap — swallowed remotely, i.e. a silently lost paste.
-        let paste = vec![b'a'; 4096 + 3];
+    fn encode_input_hex_lines_splits_long_pastes_at_tmux_safe_bound() {
+        // A paste bigger than the shared safe bound must span multiple lines:
+        // one line is one remote `tmux send-keys`, and an oversized command is
+        // swallowed remotely, i.e. a silently lost paste.
+        let chunk = agentum_tmux::SEND_KEYS_HEX_CHUNK_BYTES;
+        let paste = vec![b'a'; chunk + 3];
         let out = encode_input_hex_lines(&paste);
         let lines: Vec<&[u8]> = out.split(|b| *b == b'\n').collect();
         // split() yields a trailing empty slice after the final newline.
         assert_eq!(lines.len(), 3, "expected 2 lines: {}", lines.len() - 1);
-        assert_eq!(lines[0].len(), 4096 * 3 - 1); // "61 61 … 61"
+        assert_eq!(lines[0].len(), chunk * 3 - 1); // "61 61 … 61"
         assert_eq!(lines[1], b"61 61 61");
         assert_eq!(lines[2], b"");
         // Lossless: decoding every hex pair reproduces the paste.
@@ -853,6 +1128,137 @@ mod tests {
             read_file_bytes(&host, &file).await.unwrap().as_deref(),
             Some(&b"hi there"[..])
         );
+    }
+
+    #[tokio::test]
+    async fn worktree_file_access_rejects_traversal_before_touching_the_host() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let host = local_host();
+        for relative in ["", "../secret", "src/../../secret", "/etc/passwd", "./file"] {
+            assert!(matches!(
+                read_file_bytes_beneath(&host, &dir.path().to_string_lossy(), relative).await,
+                Err(HostRuntimeError::UnsafePath(_))
+            ));
+            assert!(matches!(
+                path_exists_beneath(&host, &dir.path().to_string_lossy(), relative).await,
+                Err(HostRuntimeError::UnsafePath(_))
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_file_access_never_follows_final_or_ancestor_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret"), b"outside").unwrap();
+        symlink(
+            outside.path().join("secret"),
+            root.path().join("final-link"),
+        )
+        .unwrap();
+        symlink(outside.path(), root.path().join("ancestor-link")).unwrap();
+        let host = local_host();
+        let root = root.path().to_string_lossy();
+
+        // Git may report a final symlink as an existing worktree entry, but
+        // the content reader never dereferences it.
+        assert!(
+            path_exists_beneath(&host, &root, "final-link")
+                .await
+                .unwrap()
+        );
+        assert!(
+            read_file_bytes_beneath(&host, &root, "final-link")
+                .await
+                .is_err()
+        );
+        assert!(
+            read_file_bytes_beneath(&host, &root, "ancestor-link/secret")
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn remote_worktree_access_quotes_root_and_relative_and_rejects_escape_components() {
+        let script = remote_beneath_script(
+            "/srv/repo with spaces",
+            "src/file with spaces.rs",
+            RemoteBeneathOperation::Read,
+        )
+        .unwrap();
+        assert!(script.starts_with("sh -c "));
+        assert!(script.contains("repo with spaces"));
+        assert!(script.contains("file with spaces.rs"));
+        assert!(script.contains("exec 3<"));
+        assert!(script.contains("cat <&3"));
+        assert!(script.contains("/proc/$$/fd/3"));
+        assert!(validate_beneath_relative("src/file.rs").is_ok());
+        assert!(validate_beneath_relative("src/../secret").is_err());
+        assert!(validate_beneath_relative("/etc/passwd").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn remote_read_script_opens_once_and_rejects_symlink_escape_before_reading() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/good"), b"inside").unwrap();
+        std::fs::write(outside.path().join("secret"), b"outside-secret").unwrap();
+        symlink(
+            outside.path().join("secret"),
+            root.path().join("src/escape"),
+        )
+        .unwrap();
+        symlink(outside.path(), root.path().join("ancestor-escape")).unwrap();
+
+        let run = |relative: &str| {
+            let script = remote_beneath_script(
+                &root.path().to_string_lossy(),
+                relative,
+                RemoteBeneathOperation::Read,
+            )
+            .unwrap();
+            std::process::Command::new("sh")
+                .args(["-c", &script])
+                .output()
+                .unwrap()
+        };
+
+        let good = run("src/good");
+        assert!(good.status.success());
+        assert_eq!(good.stdout, b"inside");
+        for escape in [run("src/escape"), run("ancestor-escape/secret")] {
+            assert_eq!(escape.status.code(), Some(65));
+            assert!(!String::from_utf8_lossy(&escape.stdout).contains("outside-secret"));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn remote_read_script_fails_closed_without_procfs_descriptor_resolution() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("good"), b"inside").unwrap();
+        let script = remote_beneath_script(
+            &root.path().to_string_lossy(),
+            "good",
+            RemoteBeneathOperation::Read,
+        )
+        .unwrap();
+
+        let output = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(69));
+        assert!(output.stdout.is_empty());
     }
 
     // ── CDP forward-tunnel port selection ─────────────────────────────────

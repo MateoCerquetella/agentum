@@ -3,7 +3,7 @@ import type {
   WorkspaceStatusDefinition,
   Worktree,
   WorktreeMeta
-} from '../../../../shared/types'
+} from '@/shared/types'
 import { getWorkspaceStatus } from './workspace-status'
 import {
   buildManualOrderUpdatesForGroupDrop,

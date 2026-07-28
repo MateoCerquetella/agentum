@@ -4,8 +4,8 @@ import type {
   CheckStatus,
   GitConflictOperation,
   TerminalTab
-} from '../../../../shared/types'
-import type { AgentStatusEntry } from '../../../../shared/agent-status-types'
+} from '@/shared/types'
+import type { AgentStatusEntry } from '@/shared/agent-status-types'
 
 // ── Pure helper functions ────────────────────────────────────────────
 
