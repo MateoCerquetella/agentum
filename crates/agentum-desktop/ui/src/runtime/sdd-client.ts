@@ -337,32 +337,6 @@ export type CreateSpecResult = {
   }
 }
 
-/** The intentionally narrow SDD contract used by New Workspace. The wizard
- * collects markdown and leaves profile/control policy fixed, while Run Center
- * remains the owner of the resulting run. */
-export type CreateWorkspaceSpecInput = {
-  requestId: string
-  title: string
-  description: string
-  provider?: string
-  baseRef?: string
-}
-
-export type RunCenterSelection = {
-  repoId: string
-  specId: string
-  runId: string
-  workspaceId: string
-}
-
-type RunCenterSelectionListener = (selection: RunCenterSelection) => void
-
-const runCenterSelectionListeners = new Set<{
-  repoId: string
-  listener: RunCenterSelectionListener
-}>()
-let pendingRunCenterSelection: RunCenterSelection | null = null
-
 export type CreateSpecRunInput = {
   requestId: string
   expectedRevision: number
@@ -533,55 +507,6 @@ export async function createSpec(
   input: CreateSpecInput
 ): Promise<CreateSpecResult> {
   return postJson(`/api/sdd/repos/${encodeURIComponent(repoId)}/specs`, input)
-}
-
-/** Create the markdown-backed, guarded standard run selected in New Workspace.
- * `create_spec` is the server operation that authors the spec and creates its
- * initial run, so callers must not follow it with a duplicate create-run POST. */
-export async function createWorkspaceSpec(
-  repoId: string,
-  input: CreateWorkspaceSpecInput
-): Promise<CreateSpecResult> {
-  const description = input.description.trim()
-  return createSpec(repoId, {
-    requestId: input.requestId,
-    expectedRevision: 0,
-    title: input.title.trim(),
-    goal: description,
-    profile: 'standard',
-    control: 'guarded',
-    provider: input.provider?.trim() || 'codex',
-    baseRef: input.baseRef?.trim() || 'HEAD',
-    sourceCheckout: 'require_clean',
-    source: { type: 'markdown', markdown: description }
-  })
-}
-
-/** Hand a just-created run to the Run Center belonging to its workspace repo.
- * A one-item pending slot closes the render race when workspace activation
- * mounts Run Center after the SDD request completes. */
-export function selectRunInRunCenter(selection: RunCenterSelection): void {
-  let delivered = false
-  for (const subscription of runCenterSelectionListeners) {
-    if (subscription.repoId !== selection.repoId) continue
-    delivered = true
-    subscription.listener(selection)
-  }
-  pendingRunCenterSelection = delivered ? null : selection
-}
-
-export function subscribeRunCenterSelection(
-  repoId: string,
-  listener: RunCenterSelectionListener
-): () => void {
-  const subscription = { repoId, listener }
-  runCenterSelectionListeners.add(subscription)
-  if (pendingRunCenterSelection?.repoId === repoId) {
-    const selection = pendingRunCenterSelection
-    pendingRunCenterSelection = null
-    listener(selection)
-  }
-  return () => runCenterSelectionListeners.delete(subscription)
 }
 
 export async function previewSddSource(

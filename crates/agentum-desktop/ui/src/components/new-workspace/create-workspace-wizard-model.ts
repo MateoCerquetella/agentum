@@ -17,25 +17,7 @@ export type WizardStep = 1 | 2 | 3
 // Why this order: the issue is linked/created BEFORE the worktree is named, so
 // the name can derive from the issue title (step 3 renders tracker → name →
 // agent). Step 2 only picks the repo + base branch.
-export const WIZARD_STEP_LABELS = ['Host', 'Repo & branch', 'Work & agent'] as const
-
-/** The mutually exclusive ways the wizard can seed a workspace. Tracker
- * sources remain available alongside Agentum-native SDD and a plain workspace. */
-export type WizardWorkSource = 'sdd' | 'new' | 'existing' | 'none'
-
-/** Derive the required SDD title without adding a second feature field. Prefer
- * the first meaningful markdown line and fall back to the workspace name. */
-export function deriveWizardSddTitle(description: string, workspaceName: string): string {
-  const firstLine = description
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean)
-    ?.replace(/^#{1,6}\s+/, '')
-    .replace(/^[-*+]\s+/, '')
-    .trim()
-  const title = firstLine || workspaceName.trim() || 'New workspace feature'
-  return title.length > 120 ? `${title.slice(0, 117).trimEnd()}…` : title
-}
+export const WIZARD_STEP_LABELS = ['Host', 'Repo & branch', 'Issue & agent'] as const
 
 // Fallback agent pills for when detection hasn't produced a set yet (or found
 // nothing installed) — kept small and catalog-ordered so the picker is never
