@@ -52,10 +52,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         allowlist = boundary.index('while IFS= read -r caller; do', scan)
         self.assertIn(r"| tr '\134' '/' | sort", boundary[scan:allowlist])
 
-    def test_minor_release_version_is_consistent_everywhere(self) -> None:
+    def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.97.0")
+        self.assertEqual(version, "0.98.2")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -66,7 +66,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(headings[0], version)
         previous = tuple(int(part) for part in headings[1].split("."))
         current = tuple(int(part) for part in version.split("."))
-        self.assertEqual(current, (previous[0], previous[1] + 1, 0))
+        self.assertEqual(current, (previous[0], previous[1], previous[2] + 1))
 
         release = RELEASE.read_text(encoding="utf-8")
         self.assertIn("Create the version-matched release", release)
@@ -76,6 +76,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "agentum-core",
             "agentum-desktop",
             "agentum-executor",
+            "agentum-jira-broker",
             "agentum-server",
             "agentum-store",
             "agentum-tmux",

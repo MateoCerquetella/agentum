@@ -12,7 +12,6 @@ retired_paths=(
   crates/agentum-server/src/harness
   crates/agentum-server/src/harness_roles
   crates/agentum-server/src/routes/harness.rs
-  crates/agentum-server/src/routes/sdd.rs
   crates/agentum-server/src/sdd.rs
   crates/agentum-server/src/sdd_playbooks
   crates/agentum-server/tests/harness_live_agent.rs

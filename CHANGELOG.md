@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.2] — 2026-07-28
+
+### Fixed
+
+- **New Workspace SDD now ships through the verified release pipeline.** The
+  workspace, lockfile, and desktop bundle versions stay synchronized so the
+  guarded SDD wizard can be built and published with complete release assets.
+- **The SDD cutover gate recognizes the canonical API route.** The policy still
+  rejects retired harness and playbook surfaces without mistaking the renamed
+  `/api/sdd` implementation for legacy code.
+
 ## [0.98.1] — 2026-07-28
 
 ### Added
