@@ -8,11 +8,15 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  KanbanSquare,
   Laptop,
   Loader2,
   PlugZap,
+  RefreshCw,
   Search,
   Server,
+  Sparkles,
+  WandSparkles,
   X
 } from 'lucide-react'
 import {
@@ -29,6 +33,12 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { api } from '@/tauri'
 import { toast } from 'sonner'
 import { searchRuntimeRepoBaseRefs } from '@/runtime/runtime-repo-client'
@@ -38,14 +48,16 @@ import { useMountedRef } from '@/hooks/useMountedRef'
 import { useDetectedAgents } from '@/hooks/useDetectedAgents'
 import { RemoteFileBrowser } from '@/components/sidebar/RemoteFileBrowser'
 import { useComposerState } from '@/hooks/useComposerState'
+import { IssueSpecInterviewDialog } from './IssueSpecInterviewDialog'
 import {
   pickQuickWorkspaceAgent,
   resolveQuickWorkspaceAgentSelection
 } from '@/lib/quick-workspace-agent-selection'
 import { AGENT_CATALOG, AgentIcon } from '@/lib/agent-catalog'
-import { isFolderRepo, isGitRepoKind } from '@/shared/repo-kind'
+import { isFolderRepo, isGitRepoKind } from '../../../../shared/repo-kind'
 import { filterReposForHost } from '@/hooks/composer-host-scoping'
 import { LOCAL_HOST_KEY } from '@/components/sidebar/worktree-list-groups'
+import type { LinkedWorkItemSummary } from '@/lib/new-workspace'
 import {
   REPO_LIST_COLLAPSED_CAP,
   WIZARD_STEP_LABELS,
@@ -61,16 +73,73 @@ import {
   type CreateWorkspaceWizardData,
   type WizardStep
 } from '@/components/new-workspace/create-workspace-wizard-model'
-import type { Repo, TuiAgent } from '@/shared/types'
+import {
+  buildBindPayload,
+  deriveTrackerIssueViewModel,
+  type PickerProjectRef,
+  type WorkItemOption
+} from '@/components/new-workspace/work-item-picker-model'
+import {
+  isCurrentTrackerSectionScope,
+  trackerSectionTableForScope
+} from '@/components/new-workspace/tracker-section-scope'
+import {
+  canFileIssue,
+  deriveCreateIssueIntentPhase
+} from '@/components/new-workspace/create-issue-intent-model'
+import {
+  linearCreateIssue,
+  linearListCustomViewIssues,
+  linearListIssues,
+  linearListProjectIssues,
+  linearListTeams,
+  type RuntimeLinearSettings
+} from '@/runtime/runtime-linear-client'
+import {
+  CHAT_AGENTS,
+  CHAT_MODELS,
+  pickChatAgent,
+  resolveChatModel,
+  type ChatAgentId
+} from '@/runtime/chat-client'
+import {
+  readChatModelPreference,
+  writeChatModelPreference
+} from '@/runtime/chat-preferences'
+import type { DraftIssueStyle, DraftLlmChoice } from '@/runtime/github-issue-client'
+import type {
+  GetProjectViewTableArgs,
+  GetProjectViewTableResult,
+  GitHubProjectTable
+} from '@/shared/github-project-types'
+import type {
+  GitHubWorkItem,
+  LinearIssue,
+  LinearTeam,
+  Repo,
+  TuiAgent
+} from '../../../../shared/types'
+import type {
+  ProjectTrackerConfig,
+  ProjectTrackerLinearTarget,
+  ProjectTrackerProvider
+} from '@/shared/project-tracker-config'
+import { buildLinearIssueLinkedWorkItem } from '@/lib/linear-linked-work-item'
 import {
   NEW_WORK_STAGES,
   canLaunchNewWork,
+  canSelectWorkSource,
+  deriveNewWorkEligibility,
   initialNewWorkProgress,
   isNewWorkRetryAvailable,
   newWorkBusyLabel,
   newWorkPrimaryLabel,
+  resolveLaunchIssue,
+  shouldDefaultNewWorkToManual,
   updateNewWorkProgress,
+  type ExecutionMode,
   type NewWorkCheckpoint,
+  type NewWorkEligibility,
   type NewWorkProgress,
   type WorkSource
 } from './new-work-launch-model'
@@ -82,14 +151,15 @@ import {
 
 /**
  * The "Create Workspace" wizard — a three-step front-end (Host → Repo &
- * branch → Name & agent) over the shared `useComposerState` creation engine.
- * Tracker-originated work belongs to New Spec; this wizard remains the
- * explicit, tracker-neutral path for creating a manual workspace.
+ * branch → Issue & agent) over the shared `useComposerState` creation
+ * engine. The issue is linked/created BEFORE the worktree is named — step 3
+ * renders tracker → worktree name → agent, so `applyLinkedWorkItem`'s
+ * title-derived auto-name lands in a visible, editable field.
  * Spec 013 F4: it is the SINGLE front door for `new-workspace-composer`
  * — it never becomes a state machine inside the engine, it drives the same
  * host/repo/name/baseBranch/agent state the composer card drove and calls the
- * same `submitQuick`, so agent translation, SSH gating, setup hooks, and the
- * post-create launch stay centralized (no new paths).
+ * same `submitQuick`, so YOLO translation, SSH gating, setup hooks, the gated
+ * run (`start_work`) and post-create launch stay centralized (no new paths).
  */
 export default function CreateWorkspaceWizard({
   modalData,
@@ -104,14 +174,16 @@ export default function CreateWorkspaceWizard({
   const repos = useAppStore((s) => s.repos)
   const hostMetaByKey = useAppStore((s) => s.hostMetaByKey)
   const sshConnectionStates = useAppStore((s) => s.sshConnectionStates)
+  const fetchProjectViewTable = useAppStore((s) => s.fetchProjectViewTable)
+  const getCachedProjectViewTable = useAppStore((s) => s.getCachedProjectViewTable)
   const addRepoFromStore = useAppStore((s) => s.addRepo)
   const fetchWorktrees = useAppStore((s) => s.fetchWorktrees)
-  // Seed the normal workspace fields from modal-open data. Specification
-  // authoring is deliberately deferred to Run Center.
+  // Spec 013 F4: seed the SAME `useComposerState` from the full modal-open data
+  // (pure `deriveWizardComposerSeed` — every opinionated field honored). The
+  // gate mode / issue-automation / submit path are unchanged, so the gated run
+  // is inherited byte-identically (inv. 4).
   const { cardProps, submitQuick, nameInputRef } = useComposerState({
     ...deriveWizardComposerSeed(modalData),
-    // Fail closed if a stale caller still supplies a legacy tracker payload.
-    initialLinkedWorkItem: null,
     requiredProjectTaskScope: modalData.requiredProjectTaskScope,
     initialPrompt: '',
     persistDraft: false,
@@ -138,10 +210,53 @@ export default function CreateWorkspaceWizard({
     selectedRepoRequiresConnection,
     selectedRepoConnectInProgress,
     onConnectSelectedRepo,
+    applyLinkedWorkItem,
+    linkedWorkItem,
+    onRemoveLinkedWorkItem,
+    onLinkPopoverOpenChange,
+    linkQuery,
+    onLinkQueryChange,
+    filteredLinkItems,
+    linkItemsLoading,
+    linkItemsError,
+    onRetryLinkItems,
+    linkDirectLoading,
+    onSelectLinkedItem,
+    // Spec 013 F2: the composer's EXISTING create-issue seams — the wizard
+    // shares the hook, so it renders them rather than rebuilding the flow.
+    canCreateGithubIssue,
+    createIssueTitle,
+    onCreateIssueTitleChange,
+    createIssueBody,
+    onCreateIssueBodyChange,
+    onApplyCreateIssueDraft,
+    createIssueLabels,
+    createIssueLabelOptions,
+    onToggleCreateIssueLabel,
+    createIssueGenerating,
+    onGenerateIssueBody,
+    createIssueSubmitting,
+    createIssueError,
+    onCreateIssueSubmit,
+    // Spec 013 F3: bind a filed Linear issue through the SAME composer seam the
+    // Linear @-picker uses (`setLinkedWorkItem(buildLinearIssueLinkedWorkItem)`).
+    onSmartLinearIssueSelect,
     requiresExplicitSetupChoice,
     setupDecision,
     onSetupDecisionChange,
+    // Spec 013 F4: the gated-run toggle — the SAME seams the composer card used,
+    // so `submitQuick` inherits the `start_work` precondition set unchanged.
   } = cardProps
+  const trackerConfig = useAppStore((state) =>
+    repoId ? state.projectTrackerConfigByRepo[repoId] : undefined
+  )
+  const trackerConfigLoadStatus = useAppStore((state) =>
+    repoId ? (state.projectTrackerLoadStatusByRepo[repoId] ?? 'idle') : 'idle'
+  )
+  const trackerConfigError = useAppStore((state) =>
+    repoId ? state.projectTrackerErrorByRepo[repoId] : undefined
+  )
+  const loadProjectTrackerConfig = useAppStore((state) => state.loadProjectTrackerConfig)
   const scopeLockedDisabledRepoIds = useMemo(() => {
     if (!modalData.requiredProjectTaskScope) return disabledRepoIds
     const next = new Map(disabledRepoIds)
@@ -186,13 +301,18 @@ export default function CreateWorkspaceWizard({
     startOffset: DialogOffset
     baseRect: DialogBaseRect
   } | null>(null)
-  const workSource: WorkSource = 'none'
+  const initialWorkSource: WorkSource = linkedWorkItem ? 'existing' : 'new'
+  const [workSource, setWorkSource] = useState<WorkSource>(initialWorkSource)
+  const [executionMode, setExecutionMode] = useState<ExecutionMode>('autopilot')
   const [launchCheckpoint, setLaunchCheckpoint] = useState<NewWorkCheckpoint>({})
   const [launchProgress, setLaunchProgress] = useState(() =>
-    initialNewWorkProgress({}, workSource)
+    initialNewWorkProgress(linkedWorkItem ? { linkedWorkItem } : {}, initialWorkSource)
   )
   const [launchInFlight, setLaunchInFlight] = useState(false)
   const launchInFlightRef = useRef(false)
+  const configuredIssueCreatorRef = useRef<() => Promise<LinkedWorkItemSummary | null>>(
+    onCreateIssueSubmit
+  )
   const [addingRepo, setAddingRepo] = useState(false)
   // Spec: SSH/remote "Add project" is inline in the wizard (not a separate
   // dialog) — this toggles the inline remote-add panel in step 2. Reset on host
@@ -304,6 +424,11 @@ export default function CreateWorkspaceWizard({
   )
 
   const selectedRepo = repos.find((repo) => repo.id === repoId)
+  // Creation is slug-addressed and the server resolves an SSH repo's origin
+  // through its registry id, so remote git repos support the same source card.
+  const configuredTrackerReady =
+    trackerConfigLoadStatus === 'loaded' && Boolean(trackerConfig?.provider)
+  const canStageConfiguredIssue = selectedRepoIsGit && configuredTrackerReady
   const selectedHostLabel =
     eligibleHosts.find((host) => host.key === selectedHostKey)?.label ??
     (selectedHostKey === LOCAL_HOST_KEY ? 'This machine' : 'SSH host')
@@ -327,6 +452,29 @@ export default function CreateWorkspaceWizard({
     // replacement project is being picked/registered.
     selectionPending: addingRepo || remoteAddOpen
   })
+
+  // Spec 012 F1: binding a picked issue routes through the composer's one
+  // attach seam (`applyLinkedWorkItem`) so `submitQuick` persists the tracker
+  // bind on create. Widen the picked option to a GitHubWorkItem — the seam
+  // ignores the inert fields (precedent: TaskPage / WorktreeCard stubs).
+  const onPickWorkItem = useCallback(
+    (option: WorkItemOption) => {
+      const { summary } = buildBindPayload(option)
+      const item: GitHubWorkItem = {
+        id: option.itemId,
+        type: 'issue',
+        number: summary.number,
+        title: summary.title,
+        state: 'open',
+        url: summary.url,
+        labels: [],
+        updatedAt: new Date().toISOString(),
+        author: null
+      }
+      applyLinkedWorkItem(item)
+    },
+    [applyLinkedWorkItem]
+  )
 
   const goNext = useCallback(() => {
     setStep((prev) => (prev < 3 ? ((prev + 1) as WizardStep) : prev))
@@ -392,13 +540,76 @@ export default function CreateWorkspaceWizard({
     [onRepoChange]
   )
 
+  const eligibility = deriveNewWorkEligibility({
+    isGit: selectedRepoIsGit,
+    source: workSource,
+    newIssueProvider:
+      trackerConfigLoadStatus === 'loaded' ? (trackerConfig?.provider ?? null) : undefined,
+    linkedWorkItem,
+    selectedAgentInstalled: Boolean(quickAgent && (!detectedAgentIds || detectedAgentIds.has(quickAgent))),
+    setupBlocked:
+      selectedRepoRequiresConnection || (requiresExplicitSetupChoice && !setupDecision)
+  })
+
+  const structurallyManual = shouldDefaultNewWorkToManual({
+    isGit: selectedRepoIsGit,
+    source: workSource,
+    trackerConfigLoaded: trackerConfigLoadStatus === 'loaded',
+    newIssueProvider: trackerConfig?.provider ?? null,
+    linkedWorkItem
+  })
+
+  // Demote only structural incompatibilities. A loading tracker, missing
+  // Existing selection, unavailable agent, or pending setup choice is
+  // transient and must not strand a later valid GitHub selection in Manual.
+  useEffect(() => {
+    if (step === 3 && structurallyManual && executionMode === 'autopilot') {
+      setExecutionMode('manual')
+    }
+  }, [executionMode, step, structurallyManual])
+
+  const handleWorkSourceChange = useCallback(
+    (source: WorkSource): void => {
+      if (launchCheckpoint.linkedWorkItem) return
+      setWorkSource(source)
+      setLaunchProgress(initialNewWorkProgress({}, source))
+      if (source !== 'existing') {
+        onRemoveLinkedWorkItem()
+      }
+      if (source === 'none') {
+        setExecutionMode('manual')
+      }
+    },
+    [launchCheckpoint.linkedWorkItem, onRemoveLinkedWorkItem]
+  )
+
+  useEffect(() => {
+    if (step !== 3 || !selectedRepo?.id) return
+    void loadProjectTrackerConfig(selectedRepo.id).catch(() => undefined)
+  }, [loadProjectTrackerConfig, selectedRepo?.id, step])
+
+  useEffect(() => {
+    if (
+      step === 3 &&
+      selectedRepo &&
+      !launchCheckpoint.linkedWorkItem &&
+      trackerConfigLoadStatus === 'loaded' &&
+      !trackerConfig?.provider &&
+      workSource !== 'none'
+    ) {
+      handleWorkSourceChange('none')
+    }
+  }, [handleWorkSourceChange, launchCheckpoint.linkedWorkItem, selectedRepo, step, trackerConfig?.provider, trackerConfigLoadStatus, workSource])
+
   const launchAllowed = canLaunchNewWork({
     source: workSource,
+    executionMode,
+    eligibility,
     hasSelectedAgent: Boolean(quickAgent),
-    canStageNewIssue: false,
-    hasNewIssueTitle: false,
-    hasSelectedIssue: false,
-    hasIssueCheckpoint: false
+    canStageNewIssue: canStageConfiguredIssue,
+    hasNewIssueTitle: Boolean(createIssueTitle.trim()),
+    hasSelectedIssue: Boolean(linkedWorkItem),
+    hasIssueCheckpoint: Boolean(launchCheckpoint.linkedWorkItem)
   })
 
   const handlePrimary = useCallback(async () => {
@@ -406,6 +617,7 @@ export default function CreateWorkspaceWizard({
       if (
         launchInFlightRef.current ||
         creating ||
+        createIssueSubmitting ||
         !launchAllowed
       ) {
         return
@@ -413,10 +625,31 @@ export default function CreateWorkspaceWizard({
       launchInFlightRef.current = true
       setLaunchInFlight(true)
       try {
-        setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'done'))
+        let checkpoint = launchCheckpoint
+        let issue = checkpoint.linkedWorkItem ?? null
+        if (!issue && workSource !== 'none') {
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'active'))
+          const resolved = await resolveLaunchIssue({
+            source: workSource,
+            selectedIssue: linkedWorkItem,
+            checkpoint,
+            createIssue: () => configuredIssueCreatorRef.current()
+          })
+          if (!resolved.issue) {
+            setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'error'))
+            return
+          }
+          checkpoint = resolved.checkpoint
+          issue = resolved.issue
+          setLaunchCheckpoint(checkpoint)
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'done'))
+        } else if (workSource === 'none') {
+          setLaunchProgress((current) => updateNewWorkProgress(current, 'issue', 'done'))
+        }
         await submitQuick(quickAgent, {
-          linkedWorkItem: null,
-          checkpoint: launchCheckpoint,
+          linkedWorkItem: workSource === 'none' ? null : issue,
+          executionMode,
+          checkpoint,
           onCheckpoint: setLaunchCheckpoint,
           onProgress: (stage, status) =>
             setLaunchProgress((current) => updateNewWorkProgress(current, stage, status))
@@ -431,7 +664,7 @@ export default function CreateWorkspaceWizard({
       return
     }
     goNext()
-  }, [canLeaveRepoStep, creating, goNext, launchAllowed, launchCheckpoint, quickAgent, step, submitQuick])
+  }, [canLeaveRepoStep, createIssueSubmitting, creating, executionMode, goNext, launchAllowed, launchCheckpoint, linkedWorkItem, quickAgent, step, submitQuick, workSource])
 
   // Enter advances / creates (there are no multi-line inputs here, so a bare
   // Enter is unambiguous); Radix handles Esc → close on its own.
@@ -473,8 +706,11 @@ export default function CreateWorkspaceWizard({
     [name, quickAgent, selectedHostLabel, selectedRepo, step]
   )
 
-  const launchBusy = launchInFlight || creating
-  const launchScopeLocked = launchBusy || Boolean(launchCheckpoint.worktreeResult)
+  const launchBusy = launchInFlight || creating || createIssueSubmitting
+  const launchScopeLocked =
+    launchBusy ||
+    Boolean(launchCheckpoint.linkedWorkItem) ||
+    Boolean(launchCheckpoint.worktreeResult)
   const retryAvailable = isNewWorkRetryAvailable(launchProgress, launchBusy)
   const primaryLabel = step === 3
     ? newWorkBusyLabel(launchProgress) ?? (launchBusy ? 'Preparing work…' : newWorkPrimaryLabel(workSource, retryAvailable))
@@ -514,8 +750,8 @@ export default function CreateWorkspaceWizard({
       >
         <DialogTitle className="sr-only">New workspace</DialogTitle>
         <DialogDescription className="sr-only">
-          Create a manual workspace in three steps: choose a host, a repo and base branch,
-          then its name and agent.
+          Create a workspace in three steps: choose a host, a repo and base branch, then the
+          issue, worktree name, and agent.
         </DialogDescription>
 
         {/* Native-style title bar: the whole non-interactive top surface moves the dialog. */}
@@ -606,14 +842,61 @@ export default function CreateWorkspaceWizard({
                   quickAgent={quickAgent}
                   onPick={setQuickAgentOverride}
                   selectedRepoIsGit={selectedRepoIsGit}
+                  repo={selectedRepo}
                   repoDisplayName={selectedRepo?.displayName}
                   name={name}
                   onNameValueChange={onNameValueChange}
                   nameInputRef={nameInputRef}
+                  trackerConfig={trackerConfig}
+                  trackerConfigLoadStatus={trackerConfigLoadStatus}
+                  trackerConfigError={trackerConfigError}
+                  onRetryTrackerConfig={() => selectedRepo ? void loadProjectTrackerConfig(selectedRepo.id, { force: true }).catch(() => undefined) : undefined}
+                  fetchProjectViewTable={fetchProjectViewTable}
+                  getCachedProjectViewTable={getCachedProjectViewTable}
+                  linkedWorkItem={linkedWorkItem}
+                  onPickWorkItem={onPickWorkItem}
+                  createIssue={{
+                    canCreate: canCreateGithubIssue,
+                    title: createIssueTitle,
+                    onTitleChange: onCreateIssueTitleChange,
+                    body: createIssueBody,
+                    onBodyChange: onCreateIssueBodyChange,
+                    onApplyDraft: onApplyCreateIssueDraft,
+                    labels: createIssueLabels,
+                    labelOptions: createIssueLabelOptions,
+                    onToggleLabel: onToggleCreateIssueLabel,
+                    generating: createIssueGenerating,
+                    onGenerate: onGenerateIssueBody,
+                    submitting: createIssueSubmitting,
+                    error: createIssueError,
+                    onSubmit: onCreateIssueSubmit
+                  }}
+                  linear={{ settings, onBind: onSmartLinearIssueSelect }}
+                  workSource={workSource}
+                  onWorkSourceChange={handleWorkSourceChange}
+                  executionMode={executionMode}
+                  onExecutionModeChange={setExecutionMode}
+                  eligibility={eligibility}
+                  progress={launchProgress}
                   requiresExplicitSetupChoice={requiresExplicitSetupChoice}
                   setupDecision={setupDecision}
                   onSetupDecisionChange={onSetupDecisionChange}
+                  locked={launchScopeLocked}
+                  canStageNewIssue={canStageConfiguredIssue}
+                  onRegisterIssueCreator={(creator) => {
+                    configuredIssueCreatorRef.current = creator
+                  }}
                   worktreeLocked={launchScopeLocked}
+                  repoIssuePicker={{
+                    onOpenChange: onLinkPopoverOpenChange,
+                    query: linkQuery,
+                    onQueryChange: onLinkQueryChange,
+                    items: filteredLinkItems,
+                    loading: linkItemsLoading || linkDirectLoading,
+                    error: linkItemsError,
+                    onRetry: onRetryLinkItems,
+                    onSelect: onSelectLinkedItem
+                  }}
                 />
               </fieldset>
             ) : null}
@@ -624,6 +907,7 @@ export default function CreateWorkspaceWizard({
           <NewWorkProgressPanel
             progress={launchProgress}
             workSource={workSource}
+            executionMode={executionMode}
             selectedRepoIsGit={selectedRepoIsGit}
             busy={launchBusy}
             onCancel={onClose}
@@ -635,7 +919,7 @@ export default function CreateWorkspaceWizard({
           className="flex flex-none flex-col-reverse gap-2.5 border-t border-border bg-muted/40 px-3 py-3 sm:flex-row sm:items-center sm:px-[18px]"
           aria-busy={step === 3 && launchBusy}
         >
-          {step > 1 && !launchCheckpoint.worktreeResult ? (
+          {step > 1 && !launchCheckpoint.linkedWorkItem && !launchCheckpoint.worktreeResult ? (
             <button
               type="button"
               disabled={launchBusy}
@@ -725,12 +1009,14 @@ function StepDots({
 function NewWorkProgressPanel({
   progress,
   workSource,
+  executionMode,
   selectedRepoIsGit,
   busy,
   onCancel
 }: {
   progress: NewWorkProgress
   workSource: WorkSource
+  executionMode: ExecutionMode
   selectedRepoIsGit: boolean
   busy: boolean
   onCancel: () => void
@@ -741,8 +1027,13 @@ function NewWorkProgressPanel({
         ? 'Create the tracker issue'
         : workSource === 'existing'
           ? 'Link the selected issue'
-          : 'Tracker sources use New Spec',
-    worktree: selectedRepoIsGit ? 'Create the Git worktree and open the agent' : 'Open the project workspace and agent'
+          : 'Continue without an issue',
+    worktree: selectedRepoIsGit ? 'Create the Git worktree' : 'Open the project workspace',
+    spec:
+      executionMode === 'autopilot'
+        ? 'Prepare the implementation spec'
+        : 'Prepare the agent instructions',
+    run: executionMode === 'autopilot' ? 'Start SDD Autopilot' : 'Open the selected agent'
   } satisfies Record<(typeof NEW_WORK_STAGES)[number], string>
 
   return (
@@ -1103,7 +1394,9 @@ function RepoStep({
         </button>
       ) : null}
 
-      {/* The worktree/workspace name lives in step 3 alongside agent choice. */}
+      {/* The worktree/workspace NAME deliberately lives in step 3, after the
+          tracker section — linking or creating the issue first lets the name
+          derive from the issue title instead of being fixed before it exists. */}
       {selectedRepoIsGit ? (
         <div className="flex flex-col gap-2.5">
           <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -1119,11 +1412,593 @@ function RepoStep({
             />
           </label>
           <span className="text-[11px] text-muted-foreground">
-            The worktree is named in the next step.
+            The worktree is named in the next step — from the issue you link or create.
           </span>
         </div>
       ) : null}
     </div>
+  )
+}
+
+/** Canonical repo-keyed tracker control. The provider choice, source cards,
+ * provider-specific issue list, and new-issue form are one visual/runtime
+ * unit, all driven by `/api/repos/{repoId}/tracker-config`. */
+function CanonicalTrackerSection({
+  config,
+  configLoadStatus,
+  configError,
+  onRetryConfig,
+  fetchProjectViewTable,
+  getCachedProjectViewTable,
+  linkedWorkItem,
+  repo,
+  onPickWorkItem,
+  createIssue,
+  linear,
+  source,
+  onSourceChange,
+  locked,
+  canStageNewIssue,
+  showLinkedSelection,
+  repoIssuePicker,
+  onRegisterIssueCreator
+}: {
+  config: ProjectTrackerConfig | null | undefined
+  configLoadStatus: 'idle' | 'loading' | 'loaded' | 'error'
+  configError?: string
+  onRetryConfig: () => void
+  fetchProjectViewTable: (
+    args: GetProjectViewTableArgs,
+    options?: { force?: boolean }
+  ) => Promise<GetProjectViewTableResult>
+  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
+  linkedWorkItem: LinkedWorkItemSummary | null
+  repo?: Repo
+  onPickWorkItem: (option: WorkItemOption) => void
+  createIssue: CreateIssueSeams
+  linear: LinearCreateSeams
+  source: WorkSource
+  onSourceChange: (source: WorkSource) => void
+  locked: boolean
+  canStageNewIssue: boolean
+  showLinkedSelection: boolean
+  repoIssuePicker: RepoIssuePickerSeams
+  onRegisterIssueCreator: (creator: () => Promise<LinkedWorkItemSummary | null>) => void
+}): React.JSX.Element {
+  const provider = config?.provider ?? null
+  const configured = configLoadStatus === 'loaded' && provider !== null
+  const githubTarget = provider === 'github' ? config?.github : undefined
+  const githubBinding = githubTarget?.projectBinding
+  const resolvedProject = useMemo<PickerProjectRef | null>(
+    () =>
+      githubBinding?.projectOwner &&
+      (githubBinding.projectOwnerType === 'user' ||
+        githubBinding.projectOwnerType === 'organization') &&
+      githubBinding.projectNumber != null
+        ? {
+            owner: githubBinding.projectOwner,
+            ownerType: githubBinding.projectOwnerType,
+            number: githubBinding.projectNumber
+          }
+        : null,
+    [
+      githubBinding?.projectNumber,
+      githubBinding?.projectOwner,
+      githubBinding?.projectOwnerType
+    ]
+  )
+  const usesGithubRepositoryFallback = provider === 'github' && !resolvedProject
+
+  const [projectTableState, setProjectTableState] = useState<{
+    scopeKey: string
+    table: GitHubProjectTable
+  } | null>(null)
+  const [projectStatus, setProjectStatus] = useState<
+    'idle' | 'loading' | 'refreshing' | 'failed'
+  >('idle')
+  const [query, setQuery] = useState('')
+  const projectScopeKey =
+    resolvedProject && githubBinding
+      ? JSON.stringify([
+          config?.repoId,
+          config?.revision,
+          githubTarget?.repositorySlug,
+          githubBinding.projectId
+        ])
+      : null
+  const latestProjectScopeKeyRef = useRef(projectScopeKey)
+  latestProjectScopeKeyRef.current = projectScopeKey
+  const cachedProjectTable = useMemo(
+    () =>
+      resolvedProject
+        ? getCachedProjectViewTable({
+            owner: resolvedProject.owner,
+            ownerType: resolvedProject.ownerType,
+            projectNumber: resolvedProject.number
+          })
+        : null,
+    [getCachedProjectViewTable, resolvedProject]
+  )
+  const projectTable = trackerSectionTableForScope(
+    projectTableState,
+    projectScopeKey,
+    cachedProjectTable
+  )
+
+  const readProject = useCallback(
+    (force = false): void => {
+      if (!resolvedProject || !projectScopeKey) return
+      const capturedKey = projectScopeKey
+      const args = {
+        owner: resolvedProject.owner,
+        ownerType: resolvedProject.ownerType,
+        projectNumber: resolvedProject.number
+      }
+      const cached = getCachedProjectViewTable(args)
+      setProjectStatus(cached ? 'refreshing' : 'loading')
+      if (cached) setProjectTableState({ scopeKey: capturedKey, table: cached })
+      void fetchProjectViewTable(args, force || cached ? { force: true } : undefined)
+        .then((result) => {
+          if (!isCurrentTrackerSectionScope(capturedKey, latestProjectScopeKeyRef.current)) return
+          if (result.ok) {
+            setProjectTableState({ scopeKey: capturedKey, table: result.data })
+            setProjectStatus('idle')
+          } else {
+            setProjectStatus('failed')
+          }
+        })
+        .catch(() => {
+          if (isCurrentTrackerSectionScope(capturedKey, latestProjectScopeKeyRef.current)) {
+            setProjectStatus('failed')
+          }
+        })
+    },
+    [fetchProjectViewTable, getCachedProjectViewTable, projectScopeKey, resolvedProject]
+  )
+
+  useEffect(() => {
+    setQuery('')
+    if (source === 'existing' && resolvedProject) readProject()
+    else if (!resolvedProject) {
+      setProjectStatus('idle')
+      setProjectTableState(null)
+    }
+  }, [projectScopeKey, readProject, resolvedProject, source])
+
+  useEffect(() => {
+    repoIssuePicker.onOpenChange(
+      source === 'existing' && configured && usesGithubRepositoryFallback
+    )
+  }, [configured, repoIssuePicker.onOpenChange, source, usesGithubRepositoryFallback])
+
+  const projectIssueView = useMemo(
+    () => deriveTrackerIssueViewModel(projectTable, query, githubTarget?.repositorySlug),
+    [githubTarget?.repositorySlug, projectTable, query]
+  )
+  const repoIssues = repoIssuePicker.items.filter((item) => item.type === 'issue')
+
+  const linearTarget = provider === 'linear' ? config?.linear : undefined
+  const [linearIssues, setLinearIssues] = useState<LinearIssue[]>([])
+  const [linearStatusValue, setLinearStatusValue] = useState<
+    'idle' | 'loading' | 'failed'
+  >('idle')
+  const [linearError, setLinearError] = useState<string | null>(null)
+  const [linearRefresh, setLinearRefresh] = useState(0)
+  useEffect(() => {
+    if (source !== 'existing' || provider !== 'linear' || !linearTarget) {
+      setLinearIssues([])
+      setLinearStatusValue('idle')
+      setLinearError(null)
+      return
+    }
+    let cancelled = false
+    setLinearStatusValue('loading')
+    setLinearError(null)
+    const request =
+      linearTarget.scope?.kind === 'project'
+        ? linearListProjectIssues(
+            linear.settings,
+            linearTarget.scope.id,
+            100,
+            linearTarget.workspaceId
+          ).then((result) => result.items)
+        : linearTarget.scope?.kind === 'view'
+          ? linearListCustomViewIssues(
+              linear.settings,
+              linearTarget.scope.id,
+              100,
+              linearTarget.workspaceId
+            ).then((result) => result.items)
+          : linearListIssues(linear.settings, 'all', 100, linearTarget.workspaceId)
+    void request
+      .then((issues) => {
+        if (cancelled) return
+        setLinearIssues(
+          issues.filter(
+            (issue) =>
+              issue.workspaceId === linearTarget.workspaceId &&
+              (!linearTarget.teamId || issue.team.id === linearTarget.teamId) &&
+              (linearTarget.scope?.kind !== 'project' ||
+                (issue.project?.id === linearTarget.scope.id &&
+                  issue.project.workspaceId === linearTarget.workspaceId))
+          )
+        )
+        setLinearStatusValue('idle')
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setLinearError(cause instanceof Error ? cause.message : 'Could not load Linear issues.')
+        setLinearStatusValue('failed')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [linear.settings, linearRefresh, linearTarget, provider, source])
+
+  const visibleLinearIssues = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return linearIssues
+    return linearIssues.filter(
+      (issue) =>
+        issue.title.toLowerCase().includes(needle) ||
+        issue.identifier.toLowerCase().includes(needle)
+    )
+  }, [linearIssues, query])
+
+  const openTrackerSettings = (): void => {
+    if (!repo) return
+    const store = useAppStore.getState()
+    store.openSettingsTarget({
+      pane: 'repo',
+      repoId: repo.id,
+      sectionId: 'project-integrations'
+    })
+    store.openSettingsPage()
+    // Settings replaces the wizard as the active surface. Leaving the modal
+    // active would keep this blocking dialog above the requested repo pane.
+    store.closeModal()
+  }
+
+  const targetLabel =
+    provider === 'github'
+      ? githubBinding?.projectTitle ?? githubTarget?.repositorySlug ?? 'GitHub'
+      : provider === 'linear'
+        ? linearTarget?.scope
+          ? `Linear ${linearTarget.scope.kind}`
+          : 'Linear workspace'
+        : 'Not configured'
+  const selectedUrl = linkedWorkItem?.url ?? null
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-border bg-card/30">
+      <div className="flex flex-col gap-2 border-b border-border px-3 py-2.5 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            Tracker
+          </p>
+          <p className="truncate text-[12px] font-medium text-foreground">{targetLabel}</p>
+        </div>
+        {repo ? (
+          <button
+            type="button"
+            onClick={openTrackerSettings}
+            className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground transition-colors hover:border-muted-foreground/40 hover:text-foreground"
+          >
+            <KanbanSquare className="size-3" />
+            Configure
+          </button>
+        ) : null}
+      </div>
+
+      <div className="space-y-3 p-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {(['new', 'existing', 'none'] as const).map((option) => {
+            const disabled = !canSelectWorkSource({
+              source: option,
+              trackerConfigured: configured,
+              canStageNewIssue,
+              locked
+            })
+            return (
+              <button
+                key={option}
+                type="button"
+                disabled={disabled}
+                onClick={() => onSourceChange(option)}
+                className={cn(
+                  'rounded-lg border px-3 py-2 text-left text-[12px] transition-colors',
+                  source === option
+                    ? 'border-primary/55 bg-primary/8 text-foreground'
+                    : 'border-border text-muted-foreground hover:border-muted-foreground/30',
+                  disabled && 'cursor-not-allowed opacity-45'
+                )}
+              >
+                <span className="block font-medium">
+                  {option === 'new'
+                    ? 'New issue'
+                    : option === 'existing'
+                      ? 'Existing issue'
+                      : 'No issue'}
+                </span>
+                <span className="block text-[10.5px] text-muted-foreground">
+                  {option === 'new'
+                    ? 'File with configured provider'
+                    : option === 'existing'
+                      ? 'Choose from configured provider'
+                      : 'Start untracked work'}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+
+        {!configured && source !== 'none' ? (
+          <div className="flex flex-col gap-2 rounded-md border border-dashed border-border px-3 py-2.5 text-[11.5px] text-muted-foreground sm:flex-row sm:items-center">
+            <span className="min-w-0 flex-1">
+              {configLoadStatus === 'error'
+                ? configError ?? 'Could not load this project\'s tracker.'
+                : configLoadStatus === 'loading' || configLoadStatus === 'idle'
+                  ? 'Loading this project\'s tracker configuration…'
+                  : 'Configure one tracker to create or choose an issue. No issue remains available.'}
+            </span>
+            {configLoadStatus === 'error' ? (
+              <button
+                type="button"
+                onClick={onRetryConfig}
+                className="rounded-md border border-border px-2 py-1 text-[10.5px] text-foreground"
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {configured && source === 'new' && repo && provider ? (
+          <CanonicalCreateIssuePanel
+            createIssue={createIssue}
+            linear={linear}
+            provider={provider}
+            linearTarget={linearTarget}
+            repo={repo}
+            onRegisterIssueCreator={onRegisterIssueCreator}
+          />
+        ) : null}
+
+        {configured && source === 'existing' && provider === 'github' && resolvedProject ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-background/35">
+            <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+              <Search className="size-3.5 flex-none text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Filter GitHub Project issues"
+                placeholder="Filter by title or #number"
+                className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/70"
+              />
+              <span className="font-mono text-[10.5px] text-muted-foreground">
+                {projectIssueView.issueCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => readProject(true)}
+                disabled={projectStatus === 'loading' || projectStatus === 'refreshing'}
+                aria-label="Refresh GitHub Project issues"
+                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={cn(
+                    'size-3.5',
+                    (projectStatus === 'loading' || projectStatus === 'refreshing') &&
+                      'animate-spin'
+                  )}
+                />
+              </button>
+            </div>
+            <div className="max-h-52 overflow-y-auto p-1">
+              {projectIssueView.groups.length ? (
+                projectIssueView.groups.map((group) => (
+                  <div key={group.key} className="mb-1 last:mb-0">
+                    {group.label ? (
+                      <div className="sticky top-0 z-[1] flex items-center gap-2 bg-card/95 px-2.5 py-1.5 backdrop-blur-sm">
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: trackerStatusColor(group.color) }}
+                        />
+                        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          {group.label}
+                        </span>
+                      </div>
+                    ) : null}
+                    {group.options.map((option) => (
+                      <button
+                        key={option.itemId}
+                        type="button"
+                        aria-pressed={selectedUrl === option.url}
+                        onClick={() => onPickWorkItem(option)}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                          selectedUrl === option.url
+                            ? 'bg-secondary text-foreground'
+                            : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                        )}
+                      >
+                        <Check
+                          className={cn(
+                            'size-3 flex-none',
+                            selectedUrl === option.url ? 'opacity-70' : 'opacity-0'
+                          )}
+                        />
+                        <span className="font-mono text-[11px]">#{option.number}</span>
+                        <span className="truncate">{option.title}</span>
+                      </button>
+                    ))}
+                  </div>
+                ))
+              ) : (
+                <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                  {projectStatus === 'failed'
+                    ? 'GitHub Project issues could not load. Use refresh to retry.'
+                    : projectStatus === 'loading'
+                      ? 'Loading GitHub Project issues…'
+                      : 'No matching open issues in this Project.'}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {configured && source === 'existing' && usesGithubRepositoryFallback ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-background/35">
+            <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+              <Search className="size-3.5 flex-none text-muted-foreground" />
+              <input
+                value={repoIssuePicker.query}
+                onChange={(event) => repoIssuePicker.onQueryChange(event.target.value)}
+                aria-label="Search repository issues"
+                placeholder="Search issues or paste #number / URL"
+                className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/70"
+              />
+              {repoIssuePicker.loading ? (
+                <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+              ) : (
+                <button
+                  type="button"
+                  onClick={repoIssuePicker.onRetry}
+                  disabled={locked}
+                  aria-label="Refresh repository issues"
+                  className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary disabled:opacity-50"
+                >
+                  <RefreshCw className="size-3.5" />
+                </button>
+              )}
+            </div>
+            <div className="max-h-52 overflow-y-auto p-1">
+              {repoIssues.length ? (
+                repoIssues.map((item) => (
+                  <button
+                    key={item.id ?? item.url}
+                    type="button"
+                    aria-pressed={selectedUrl === item.url}
+                    onClick={() => {
+                      repoIssuePicker.onSelect(item)
+                      repoIssuePicker.onOpenChange(true)
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                      selectedUrl === item.url
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                    )}
+                  >
+                    <Check
+                      className={cn(
+                        'size-3 flex-none',
+                        selectedUrl === item.url ? 'opacity-70' : 'opacity-0'
+                      )}
+                    />
+                    <span className="font-mono text-[11px]">#{item.number}</span>
+                    <span className="truncate">{item.title}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                  {repoIssuePicker.loading
+                    ? 'Loading repository issues…'
+                    : repoIssuePicker.error ?? 'No matching open repository issues.'}
+                </p>
+              )}
+            </div>
+            <div className="border-t border-border px-2.5 py-1.5 font-mono text-[10.5px] text-muted-foreground">
+              {githubTarget?.repositorySlug} · repository fallback
+            </div>
+          </div>
+        ) : null}
+
+        {configured && source === 'existing' && provider === 'linear' ? (
+          <div className="overflow-hidden rounded-lg border border-border bg-background/35">
+            <div className="flex items-center gap-2 border-b border-border px-2.5 py-2">
+              <Search className="size-3.5 flex-none text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                aria-label="Filter Linear issues"
+                placeholder="Filter by title or identifier"
+                className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-muted-foreground/70"
+              />
+              <span className="font-mono text-[10.5px] text-muted-foreground">
+                {visibleLinearIssues.length}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLinearRefresh((value) => value + 1)}
+                disabled={linearStatusValue === 'loading'}
+                aria-label="Refresh Linear issues"
+                className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={cn(
+                    'size-3.5',
+                    linearStatusValue === 'loading' && 'animate-spin'
+                  )}
+                />
+              </button>
+            </div>
+            <div className="max-h-52 overflow-y-auto p-1">
+              {visibleLinearIssues.length ? (
+                visibleLinearIssues.map((issue) => (
+                  <button
+                    key={issue.id}
+                    type="button"
+                    aria-pressed={selectedUrl === issue.url}
+                    onClick={() => linear.onBind(issue)}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                      selectedUrl === issue.url
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                    )}
+                  >
+                    <Check
+                      className={cn(
+                        'size-3 flex-none',
+                        selectedUrl === issue.url ? 'opacity-70' : 'opacity-0'
+                      )}
+                    />
+                    <span className="font-mono text-[11px]">{issue.identifier}</span>
+                    <span className="truncate">{issue.title}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                  {linearStatusValue === 'loading'
+                    ? 'Loading Linear issues…'
+                    : linearError ?? 'No matching Linear issues.'}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {source === 'none' ? (
+          <p className="rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-muted-foreground">
+            This workspace will start without creating or linking an external issue.
+          </p>
+        ) : null}
+
+        {linkedWorkItem && showLinkedSelection ? (
+          <div className="flex items-start gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/8 px-3 py-2">
+            <Check className="mt-0.5 size-3.5 flex-none text-emerald-500" />
+            <span className="min-w-0 text-[11.5px] text-foreground">
+              <span className="font-semibold text-emerald-500">Selected</span>
+              <span className="ml-1.5 font-mono text-muted-foreground">
+                {linkedWorkItem.linearIdentifier ?? `#${linkedWorkItem.number}`}
+              </span>{' '}
+              {linkedWorkItem.title}
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </section>
   )
 }
 
@@ -1539,49 +2414,159 @@ function BaseBranchCombobox({
   )
 }
 
-// ---------- Step 3: Workspace & agent ----------
+// ---------- Step 3: Issue & agent ----------
 
-/** Tracker-neutral manual workspace controls. */
+/** The composer's create-issue seams, bundled for threading into the tracker
+ *  section (spec 013 F2). Every field maps 1:1 onto a `useComposerState`
+ *  `cardProps` entry — no new state, no rebuilt flow. */
+type CreateIssueSeams = {
+  /** True when "Create issue" applies: nothing linked yet + a git repo. */
+  canCreate: boolean
+  title: string
+  onTitleChange: (value: string) => void
+  body: string
+  onBodyChange: (value: string) => void
+  onApplyDraft: (draft: { title: string; body: string }) => void
+  labels: string[]
+  labelOptions: string[] | null
+  onToggleLabel: (label: string) => void
+  generating: boolean
+  onGenerate: (choice?: DraftLlmChoice, style?: DraftIssueStyle) => void
+  submitting: boolean
+  error: string | null
+  onSubmit: () => Promise<LinkedWorkItemSummary | null>
+}
+
+/** Spec 013 F3: the seams the Linear create arm needs — the runtime settings
+ *  (routes the RPC to local or the active remote) and the bind callback (the
+ *  same `onSmartLinearIssueSelect` the Linear @-picker uses). */
+type LinearCreateSeams = {
+  settings: RuntimeLinearSettings
+  onBind: (issue: LinearIssue) => void
+}
+
+type RepoIssuePickerSeams = {
+  onOpenChange: (open: boolean) => void
+  query: string
+  onQueryChange: (value: string) => void
+  items: GitHubWorkItem[]
+  loading: boolean
+  error: string | null
+  onRetry: () => void
+  onSelect: (item: GitHubWorkItem) => void
+}
+
+/** Spec 013 F4: the composer's gated-run seams, migrated into the wizard. Maps
+ *  1:1 onto `cardProps` — no new state or submit path. */
 function AgentStep({
   agents,
   detectedAgentIds,
   quickAgent,
   onPick,
   selectedRepoIsGit,
+  repo,
   repoDisplayName,
   name,
   onNameValueChange,
   nameInputRef,
+  trackerConfig,
+  trackerConfigLoadStatus,
+  trackerConfigError,
+  onRetryTrackerConfig,
+  fetchProjectViewTable,
+  getCachedProjectViewTable,
+  linkedWorkItem,
+  onPickWorkItem,
+  createIssue,
+  linear,
+  workSource,
+  onWorkSourceChange,
+  executionMode,
+  onExecutionModeChange,
+  eligibility,
+  progress,
   requiresExplicitSetupChoice,
   setupDecision,
   onSetupDecisionChange,
+  locked,
+  canStageNewIssue,
+  onRegisterIssueCreator,
   worktreeLocked,
+  repoIssuePicker
 }: {
   agents: TuiAgent[]
   detectedAgentIds: Set<TuiAgent> | null
   quickAgent: TuiAgent | null
   onPick: (agent: TuiAgent) => void
   selectedRepoIsGit: boolean
+  repo?: Repo
   repoDisplayName?: string
   name: string
   onNameValueChange: (value: string) => void
   nameInputRef: React.RefObject<HTMLInputElement | null>
+  trackerConfig: ProjectTrackerConfig | null | undefined
+  trackerConfigLoadStatus: 'idle' | 'loading' | 'loaded' | 'error'
+  trackerConfigError?: string
+  onRetryTrackerConfig: () => void
+  fetchProjectViewTable: (
+    args: GetProjectViewTableArgs,
+    options?: { force?: boolean }
+  ) => Promise<GetProjectViewTableResult>
+  getCachedProjectViewTable: (args: GetProjectViewTableArgs) => GitHubProjectTable | null
+  linkedWorkItem: LinkedWorkItemSummary | null
+  onPickWorkItem: (option: WorkItemOption) => void
+  createIssue: CreateIssueSeams
+  linear: LinearCreateSeams
+  workSource: WorkSource
+  onWorkSourceChange: (source: WorkSource) => void
+  executionMode: ExecutionMode
+  onExecutionModeChange: (mode: ExecutionMode) => void
+  eligibility: NewWorkEligibility
+  progress: NewWorkProgress
   requiresExplicitSetupChoice: boolean
   setupDecision: 'run' | 'skip' | null
   onSetupDecisionChange: (value: 'run' | 'skip') => void
+  locked: boolean
+  canStageNewIssue: boolean
+  onRegisterIssueCreator: (creator: () => Promise<LinkedWorkItemSummary | null>) => void
   worktreeLocked: boolean
+  repoIssuePicker: RepoIssuePickerSeams
 }): React.JSX.Element {
   return (
     <div className="flex animate-in flex-col gap-[18px] fade-in-0 slide-in-from-bottom-1">
       <div className="flex flex-col gap-0.5">
         <span className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
-          Name the workspace — and choose its agent
+          What&apos;s the work — and who drives it?
         </span>
         <span className="text-[12px] text-muted-foreground">
-          This manual path creates a {selectedRepoIsGit ? 'worktree' : 'workspace'} without a
-          tracker source. Use New Spec for GitHub, Linear, Jira, or imported work.
+          Link or create the issue first — the {selectedRepoIsGit ? 'worktree' : 'workspace'} is
+          named after it. Then pick the agent.
         </span>
       </div>
+
+      {/* The single tracker control sits immediately below the step heading.
+          Source selection and the provider-specific list/form live inside it,
+          so there is no second repository picker that can disagree. */}
+      <CanonicalTrackerSection
+        config={trackerConfig}
+        configLoadStatus={trackerConfigLoadStatus}
+        configError={trackerConfigError}
+        onRetryConfig={onRetryTrackerConfig}
+        fetchProjectViewTable={fetchProjectViewTable}
+        getCachedProjectViewTable={getCachedProjectViewTable}
+        linkedWorkItem={linkedWorkItem}
+        repo={repo}
+        onPickWorkItem={onPickWorkItem}
+        createIssue={createIssue}
+        linear={linear}
+        source={workSource}
+        onSourceChange={onWorkSourceChange}
+        locked={locked}
+        canStageNewIssue={canStageNewIssue}
+        showLinkedSelection={workSource === 'existing' || locked}
+        repoIssuePicker={repoIssuePicker}
+        onRegisterIssueCreator={onRegisterIssueCreator}
+      />
 
       <div className="flex flex-col gap-2.5">
         <span className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
@@ -1683,9 +2668,401 @@ function AgentStep({
         ) : null}
       </div>
 
-      <p className="rounded-lg border border-border bg-muted/25 px-3 py-2 text-[11px] text-muted-foreground">
-        This opens one agent in the workspace. Specification authoring starts explicitly from Run Center.
-      </p>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button type="button" disabled={!eligibility.eligible || progress.worktree === 'done'} onClick={() => onExecutionModeChange('autopilot')}
+          className={cn('rounded-lg border px-3 py-2 text-left', executionMode === 'autopilot' ? 'border-primary/55 bg-primary/8' : 'border-border', !eligibility.eligible && 'opacity-50')}>
+          <span className="block text-[12px] font-medium">SDD Autopilot</span>
+          <span className="block text-[10.5px] text-muted-foreground">PM → Architect → Build → Verify → Review</span>
+        </button>
+        <button type="button" disabled={progress.worktree === 'done'} onClick={() => onExecutionModeChange('manual')}
+          className={cn('rounded-lg border px-3 py-2 text-left', executionMode === 'manual' ? 'border-primary/55 bg-primary/8' : 'border-border')}>
+          <span className="block text-[12px] font-medium">Open manually</span>
+          <span className="block text-[10.5px] text-muted-foreground">
+            {eligibility.eligible
+              ? 'Prepare the spec, then open one agent'
+              : 'Open one agent · no generated SDD spec'}
+          </span>
+        </button>
+      </div>
+      {'message' in eligibility ? <span className="text-[11px] text-amber-500">{eligibility.message}</span> : null}
     </div>
   )
+}
+
+/** Deferred issue form for the canonical provider. The final wizard CTA owns
+ * filing, so this component registers exactly one provider-specific creator
+ * instead of rendering a second provider toggle or submit path. */
+function CanonicalCreateIssuePanel({
+  createIssue,
+  linear,
+  provider,
+  linearTarget,
+  repo,
+  onRegisterIssueCreator
+}: {
+  createIssue: CreateIssueSeams
+  linear: LinearCreateSeams
+  provider: ProjectTrackerProvider
+  linearTarget?: ProjectTrackerLinearTarget
+  repo: Repo
+  onRegisterIssueCreator: (creator: () => Promise<LinkedWorkItemSummary | null>) => void
+}): React.JSX.Element {
+  const savedChatAgent = useAppStore((state) => state.settings?.chatAgent)
+  const updateSettings = useAppStore((state) => state.updateSettings)
+  const { detectedIds: detectedChatAgentIds } = useDetectedAgents()
+  const preferredDraftAgent = pickChatAgent(savedChatAgent, detectedChatAgentIds)
+  const [draftAgent, setDraftAgent] = useState<ChatAgentId>(preferredDraftAgent)
+  const [draftModel, setDraftModel] = useState(
+    () => resolveChatModel(readChatModelPreference()).id
+  )
+  const [teams, setTeams] = useState<LinearTeam[]>([])
+  const [teamId, setTeamId] = useState<string | null>(linearTarget?.teamId ?? null)
+  const [linearFiling, setLinearFiling] = useState(false)
+  const [linearError, setLinearError] = useState<string | null>(null)
+  const [specOpen, setSpecOpen] = useState(false)
+  const [specResetVersion, setSpecResetVersion] = useState(0)
+  const draftPreferenceTouched = useRef(false)
+
+  useEffect(() => {
+    if (!draftPreferenceTouched.current) setDraftAgent(preferredDraftAgent)
+  }, [preferredDraftAgent])
+
+  const availableDraftAgents = useMemo(
+    () =>
+      detectedChatAgentIds === null
+        ? CHAT_AGENTS
+        : CHAT_AGENTS.filter((agent) => detectedChatAgentIds.includes(agent.id)),
+    [detectedChatAgentIds]
+  )
+  const effectiveDraftAgent =
+    availableDraftAgents.find((agent) => agent.id === draftAgent)?.id ??
+    availableDraftAgents[0]?.id ??
+    draftAgent
+
+  useEffect(() => {
+    setTeams([])
+    setTeamId(linearTarget?.teamId ?? null)
+    setLinearError(null)
+    if (provider !== 'linear' || !linearTarget) return
+    let cancelled = false
+    void linearListTeams(linear.settings, linearTarget.workspaceId)
+      .then((items) => {
+        if (cancelled) return
+        const exact = items.filter(
+          (team) => !team.workspaceId || team.workspaceId === linearTarget.workspaceId
+        )
+        setTeams(exact)
+        if (!linearTarget.teamId && exact.length === 1) setTeamId(exact[0].id)
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setLinearError(cause instanceof Error ? cause.message : 'Could not load Linear teams.')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [linear.settings, linearTarget, provider])
+
+  const busy = createIssue.generating || createIssue.submitting || linearFiling
+  const phase = deriveCreateIssueIntentPhase({
+    generating: createIssue.generating,
+    submitting: createIssue.submitting || linearFiling,
+    error: provider === 'linear' ? linearError : createIssue.error,
+    hasBody: createIssue.body.trim().length > 0
+  })
+
+  const createLinear = useCallback(async (): Promise<LinkedWorkItemSummary | null> => {
+    const title = createIssue.title.trim()
+    if (!linearTarget) {
+      setLinearError('The configured Linear target is incomplete.')
+      return null
+    }
+    if (!teamId) {
+      setLinearError('Pick a Linear team to file into.')
+      return null
+    }
+    if (!canFileIssue(title, busy)) return null
+    const team = teams.find((candidate) => candidate.id === teamId)
+    setLinearFiling(true)
+    setLinearError(null)
+    try {
+      const result = await linearCreateIssue(linear.settings, {
+        teamId,
+        title,
+        description: createIssue.body.trim() || undefined,
+        workspaceId: linearTarget.workspaceId,
+        projectId:
+          linearTarget.scope?.kind === 'project' ? linearTarget.scope.id : undefined
+      })
+      if (!result.ok) {
+        setLinearError(
+          ('error' in result ? result.error : null) || 'Could not create the Linear issue.'
+        )
+        return null
+      }
+      if (result.teamId !== teamId) {
+        setLinearError('Linear returned an issue outside the configured team.')
+        return null
+      }
+      if (
+        linearTarget.scope?.kind === 'project' &&
+        result.projectId !== linearTarget.scope.id
+      ) {
+        setLinearError('Linear returned an issue outside the configured project.')
+        return null
+      }
+      const issue: LinearIssue = {
+        id: result.id,
+        workspaceId: linearTarget.workspaceId,
+        identifier: result.identifier,
+        title: result.title,
+        description: createIssue.body.trim() || undefined,
+        url: result.url,
+        state: { name: 'Todo', type: 'unstarted', color: '#9ca3af' },
+        team: team
+          ? { id: team.id, name: team.name, key: team.key }
+          : { id: teamId, name: teamId, key: teamId },
+        ...(linearTarget.scope?.kind === 'project'
+          ? {
+              project: {
+                id: linearTarget.scope.id,
+                workspaceId: linearTarget.workspaceId,
+                name: linearTarget.scope.id
+              }
+            }
+          : {}),
+        labels: [],
+        labelIds: [],
+        priority: 0,
+        updatedAt: new Date().toISOString()
+      }
+      linear.onBind(issue)
+      return buildLinearIssueLinkedWorkItem(issue)
+    } catch (cause) {
+      setLinearError(cause instanceof Error ? cause.message : 'Could not create the Linear issue.')
+      return null
+    } finally {
+      setLinearFiling(false)
+    }
+  }, [busy, createIssue.body, createIssue.title, linear, linearTarget, teamId, teams])
+
+  useEffect(() => {
+    onRegisterIssueCreator(provider === 'linear' ? createLinear : createIssue.onSubmit)
+  }, [createIssue.onSubmit, createLinear, onRegisterIssueCreator, provider])
+
+  const handleDraft = useCallback(() => {
+    if (!canFileIssue(createIssue.title, busy)) return
+    setLinearError(null)
+    const choice: DraftLlmChoice = {
+      agent: effectiveDraftAgent,
+      ...(effectiveDraftAgent === 'claude' ? { model: draftModel } : {})
+    }
+    createIssue.onGenerate(choice, 'concise')
+  }, [busy, createIssue, draftModel, effectiveDraftAgent])
+
+  const handleOpenSpec = useCallback(() => {
+    if (!canFileIssue(createIssue.title, busy)) return
+    setSpecResetVersion((value) => value + 1)
+    setSpecOpen(true)
+  }, [busy, createIssue.title])
+
+  const inlineError = provider === 'linear' ? linearError : createIssue.error
+  const specSeed = [createIssue.title.trim(), createIssue.body.trim()].filter(Boolean).join('\n\n')
+
+  return (
+    <>
+      <div
+        className="flex flex-col gap-2.5 rounded-lg border border-border bg-background/35 p-3"
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) event.stopPropagation()
+        }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-[12px] font-medium text-foreground">
+            New {provider === 'linear' ? 'Linear' : 'GitHub'} issue
+          </span>
+          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[9.5px] uppercase text-muted-foreground">
+            configured provider
+          </span>
+        </div>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[11px] text-muted-foreground">Title</span>
+          <input
+            value={createIssue.title}
+            onChange={(event) => createIssue.onTitleChange(event.target.value)}
+            placeholder="What needs doing?"
+            className="h-[34px] rounded-md border border-input bg-secondary px-2.5 text-[12.5px] outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+          />
+        </label>
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <span className="text-[11px] text-muted-foreground">Description (optional)</span>
+            <div className="flex flex-wrap items-end gap-1.5">
+              <select
+                aria-label="Drafting engine"
+                value={effectiveDraftAgent}
+                disabled={availableDraftAgents.length === 0 || busy}
+                onChange={(event) => {
+                  const agent = event.target.value as ChatAgentId
+                  draftPreferenceTouched.current = true
+                  setDraftAgent(agent)
+                  void updateSettings({ chatAgent: agent })
+                }}
+                className="h-6 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] outline-none"
+              >
+                {availableDraftAgents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.label}
+                  </option>
+                ))}
+              </select>
+              {effectiveDraftAgent === 'claude' ? (
+                <select
+                  aria-label="Drafting model"
+                  value={draftModel}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setDraftModel(event.target.value)
+                    writeChatModelPreference(event.target.value)
+                  }}
+                  className="h-6 max-w-44 rounded-md border border-border bg-secondary px-1.5 text-[10.5px] outline-none"
+                >
+                  {CHAT_MODELS.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.label}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <div className="flex">
+                <button
+                  type="button"
+                  onClick={handleDraft}
+                  disabled={!canFileIssue(createIssue.title, busy) || availableDraftAgents.length === 0}
+                  className="inline-flex h-6 items-center gap-1 rounded-l-md border border-border px-2 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  {phase === 'drafting' ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3" />
+                  )}
+                  {phase === 'drafting' ? 'Drafting…' : 'Draft simple issue'}
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={!canFileIssue(createIssue.title, busy)}
+                      aria-label="More drafting options"
+                      className="-ml-px inline-flex h-6 w-6 items-center justify-center rounded-r-md border border-border text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      <ChevronDown className="size-3" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-60">
+                    <DropdownMenuItem onSelect={handleDraft}>
+                      <Sparkles className="size-3.5" />
+                      <span>Draft simple issue</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={handleOpenSpec}>
+                      <WandSparkles className="size-3.5" />
+                      <span>Shape into spec…</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
+          </div>
+          <textarea
+            value={createIssue.body}
+            onChange={(event) => createIssue.onBodyChange(event.target.value)}
+            rows={createIssue.body.trim() ? 6 : 3}
+            placeholder="Add details or draft an SDD-shaped description."
+            className="resize-none rounded-md border border-input bg-secondary px-2.5 py-2 font-mono text-[11.5px] leading-relaxed outline-none placeholder:text-muted-foreground/70 focus-visible:border-ring"
+          />
+        </div>
+
+        {provider === 'github' && createIssue.labelOptions?.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {createIssue.labelOptions.map((label) => {
+              const selected = createIssue.labels.includes(label)
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => createIssue.onToggleLabel(label)}
+                  className={cn(
+                    'rounded-full border px-2 py-0.5 text-[10.5px]',
+                    selected
+                      ? 'border-primary/50 bg-primary/10 text-foreground'
+                      : 'border-border text-muted-foreground'
+                  )}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+
+        {provider === 'linear' && (teams.length > 1 || !teamId) ? (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-muted-foreground">Linear team</span>
+            <select
+              value={teamId ?? ''}
+              onChange={(event) => setTeamId(event.target.value || null)}
+              className="h-[34px] rounded-md border border-input bg-secondary px-2 text-[12.5px] outline-none"
+            >
+              <option value="">Select a configured workspace team…</option>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name} ({team.key})
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
+        <p className="text-[10.5px] text-muted-foreground">
+          The issue is filed once when you start work; a failed later stage retries from its
+          checkpoint without filing a duplicate.
+        </p>
+        {inlineError ? <span className="text-[11px] text-destructive">{inlineError}</span> : null}
+      </div>
+      <IssueSpecInterviewDialog
+        open={specOpen}
+        onOpenChange={setSpecOpen}
+        repo={repo}
+        seedIntent={specSeed}
+        resetVersion={specResetVersion}
+        onApplyDraft={(draft) => {
+          createIssue.onApplyDraft(draft)
+          setSpecOpen(false)
+        }}
+      />
+    </>
+  )
+}
+
+const TRACKER_STATUS_COLORS: Record<string, string> = {
+  GRAY: '#8b949e',
+  RED: '#f85149',
+  ORANGE: '#db6d28',
+  YELLOW: '#d29922',
+  GREEN: '#3fb950',
+  BLUE: '#58a6ff',
+  PURPLE: '#bc8cff',
+  PINK: '#db61a2'
+}
+
+function trackerStatusColor(color: string | null): string {
+  if (!color) return 'var(--muted-foreground)'
+  const keyword = TRACKER_STATUS_COLORS[color.toUpperCase()]
+  if (keyword) return keyword
+  if (/^#?[0-9a-fA-F]{6}$/.test(color)) return color.startsWith('#') ? color : `#${color}`
+  return 'var(--muted-foreground)'
 }
