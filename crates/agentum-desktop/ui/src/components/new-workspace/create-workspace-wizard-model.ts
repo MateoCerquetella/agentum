@@ -27,8 +27,7 @@ export type WizardWorkSource = 'sdd' | 'new' | 'existing' | 'none'
  * the first meaningful markdown line and fall back to the workspace name. */
 export function deriveWizardSddTitle(description: string, workspaceName: string): string {
   const firstLine = description
-    .split(/?
-/)
+    .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean)
     ?.replace(/^#{1,6}\s+/, '')

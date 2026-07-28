@@ -3,6 +3,7 @@ import {
   buildWizardRecap,
   canLeaveRepoStep,
   capRepoList,
+  deriveWizardSddTitle,
   deriveTrackerBindingTarget,
   deriveUnifiedTrackerStatus,
   linkedWorkItemAfterRepoChange,
@@ -26,6 +27,21 @@ const LINKED_ITEM: LinkedWorkItemSummary = {
   title: 'Selected issue',
   url: 'https://github.com/acme/a/issues/42'
 }
+
+describe('deriveWizardSddTitle', () => {
+  it('uses the first meaningful markdown line for LF and CRLF descriptions', () => {
+    expect(deriveWizardSddTitle('\n## Ship SDD workspace flow\nDetails', 'fallback')).toBe(
+      'Ship SDD workspace flow'
+    )
+    expect(deriveWizardSddTitle('\r\n- Fix release publishing\r\nDetails', 'fallback')).toBe(
+      'Fix release publishing'
+    )
+  })
+
+  it('falls back to the workspace name when the description is blank', () => {
+    expect(deriveWizardSddTitle('  \n  ', 'release-workspace')).toBe('release-workspace')
+  })
+})
 
 describe('linkedWorkItemAfterRepoChange', () => {
   it('clears a selected issue on a real repo switch and preserves it for a no-op selection', () => {
