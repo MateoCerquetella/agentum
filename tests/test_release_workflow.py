@@ -55,7 +55,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.3")
+        self.assertEqual(version, "0.98.4")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -225,9 +225,16 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(ci.count("report_size <= 2097152"), 1)
         self.assertGreaterEqual(release.count("report_size <= 2097152"), 1)
         authority = release.index("Validate version and publication authority")
+        verifier_dependencies = release.index(
+            "Install trusted evidence verifier system dependencies"
+        )
         build_verifier = release.index("Build evidence verifier from authority-checked source")
         download = release.index("actions/download-artifact")
         verify_data = release.index("Verify untrusted source-bound provider evidence as data")
+        self.assertLess(authority, verifier_dependencies)
+        self.assertLess(verifier_dependencies, build_verifier)
+        self.assertIn("libdbus-1-dev", release[verifier_dependencies:build_verifier])
+        self.assertIn("pkg-config", release[verifier_dependencies:build_verifier])
         self.assertLess(authority, build_verifier)
         self.assertLess(build_verifier, download)
         self.assertLess(download, verify_data)

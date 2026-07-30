@@ -4,6 +4,15 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.4] — 2026-07-30
+
+### Fixed
+
+- **Verified release preflight declares its Linux system dependencies.** The
+  trusted source-bound evidence verifier now installs DBus development metadata
+  and `pkg-config` before compiling, so a clean hosted runner can validate the
+  provider report and proceed to signed installer publication.
+
 ## [0.98.3] — 2026-07-30
 
 ### Fixed

@@ -127,6 +127,13 @@ jobs:
           else
             test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
           fi
+      - name: Install trusted evidence verifier system dependencies
+        if: inputs.publish
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libdbus-1-dev \
+            pkg-config
       - name: Install pinned Rust toolchain for trusted evidence verifier
         if: inputs.publish
         run: |
