@@ -213,15 +213,12 @@ run_as_root() {
 verify_macos_bundle() {
     _app="$1"
     [ -d "$_app" ] && [ ! -L "$_app" ] || die "the DMG does not contain a real Agentum.app"
-    command -v codesign >/dev/null 2>&1 || die "codesign is required"
-    command -v spctl >/dev/null 2>&1 || die "spctl is required"
-    command -v xcrun >/dev/null 2>&1 || die "xcrun is required"
-    codesign --verify --deep --strict --verbose=2 "$_app" \
-        || die "Agentum.app has an invalid Developer ID signature"
-    spctl --assess --type execute --verbose=4 "$_app" \
-        || die "Gatekeeper rejected Agentum.app"
-    xcrun stapler validate "$_app" \
-        || die "Agentum.app has no valid notarization ticket"
+    _info_plist="$_app/Contents/Info.plist"
+    _executables="$_app/Contents/MacOS"
+    [ -f "$_info_plist" ] && [ ! -L "$_info_plist" ] \
+        || die "Agentum.app has no regular Info.plist"
+    [ -d "$_executables" ] && [ ! -L "$_executables" ] \
+        || die "Agentum.app has no real executable directory"
 }
 
 mac_file_operation() {
@@ -271,8 +268,6 @@ install_macos() {
     _asset="$(asset_name dmg)" || die "no macOS asset for $PLATFORM"
     _dmg="$(download_asset "$_asset")"
     command -v hdiutil >/dev/null 2>&1 || die "hdiutil is required"
-    command -v xcrun >/dev/null 2>&1 || die "xcrun is required"
-    xcrun stapler validate "$_dmg" || die "the DMG has no valid notarization ticket"
     MOUNT_POINT="$TEMP_DIR/mount"
     mkdir "$MOUNT_POINT"
     hdiutil attach "$_dmg" -readonly -nobrowse -quiet -mountpoint "$MOUNT_POINT" \

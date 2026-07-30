@@ -23,24 +23,6 @@ on:
         required: true
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
         required: true
-      APPLE_CERTIFICATE:
-        required: true
-      APPLE_CERTIFICATE_PASSWORD:
-        required: true
-      APPLE_SIGNING_IDENTITY:
-        required: true
-      APPLE_ID:
-        required: true
-      APPLE_PASSWORD:
-        required: true
-      APPLE_TEAM_ID:
-        required: true
-      WINDOWS_CERTIFICATE:
-        required: true
-      WINDOWS_CERTIFICATE_PASSWORD:
-        required: true
-      WINDOWS_CERTIFICATE_THUMBPRINT:
-        required: true
       HOMEBREW_TAP_DEPLOY_KEY:
         required: true
       AGENTUM_RESTRICTED_PATTERNS:
@@ -297,37 +279,6 @@ jobs:
         shell: bash
         run: echo "CC=cl" >> "$GITHUB_ENV"
 
-      - name: Import Authenticode certificate (Windows)
-        if: ${{ contains(matrix.target, 'windows') }}
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $certificateDirectory = Join-Path $env:RUNNER_TEMP 'agentum-code-signing'
-          $certificatePath = Join-Path $certificateDirectory 'certificate.pfx'
-          New-Item -ItemType Directory -Path $certificateDirectory -Force | Out-Null
-          $encoded = $env:WINDOWS_CERTIFICATE `
-            -replace '-----BEGIN CERTIFICATE-----', '' `
-            -replace '-----END CERTIFICATE-----', '' `
-            -replace '\s', ''
-          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($encoded))
-          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-          $expected = ($env:WINDOWS_CERTIFICATE_THUMBPRINT -replace '\s', '').ToUpperInvariant()
-          if ($expected -notmatch '^[0-9A-F]{40}$') {
-            throw 'WINDOWS_CERTIFICATE_THUMBPRINT must be exactly 40 hexadecimal characters.'
-          }
-          $certificate = Import-PfxCertificate `
-            -FilePath $certificatePath `
-            -CertStoreLocation 'Cert:\CurrentUser\My' `
-            -Password $password
-          $actual = ($certificate.Thumbprint -replace '\s', '').ToUpperInvariant()
-          if ($actual -ne $expected) {
-            throw "Imported Authenticode certificate thumbprint does not match the release secret."
-          }
-
       # --- Desktop installers (Tauri 2) -------------------------------------
       # cargo tauri build produces native installers (.dmg on macOS, .deb +
       # .AppImage on Linux x86_64). The dashboard built above is embedded via
@@ -353,57 +304,6 @@ jobs:
         uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
           tool: tauri-cli@2.11.2
-      - name: Import Developer ID certificate into an isolated keychain (macOS)
-        if: ${{ contains(matrix.target, 'apple') }}
-        shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-          test -n "$APPLE_CERTIFICATE"
-          test -n "$APPLE_CERTIFICATE_PASSWORD"
-          test -n "$APPLE_SIGNING_IDENTITY"
-          signing_dir="$RUNNER_TEMP/agentum-signing-$BUILD_TARGET"
-          certificate_path="$signing_dir/developer-id.p12"
-          keychain_path="$signing_dir/agentum.keychain-db"
-          password_file="$signing_dir/keychain-password"
-          original_keychains="$signing_dir/original-keychains"
-          mkdir -m 700 "$signing_dir"
-          {
-            echo "AGENTUM_SIGNING_KEYCHAIN=$keychain_path"
-            echo "AGENTUM_SIGNING_KEYCHAIN_PASSWORD_FILE=$password_file"
-            echo "AGENTUM_ORIGINAL_KEYCHAINS_FILE=$original_keychains"
-            echo "AGENTUM_SIGNING_DIR=$signing_dir"
-          } >> "$GITHUB_ENV"
-          security list-keychains -d user > "$original_keychains"
-          keychain_password="$(openssl rand -hex 32)"
-          printf '%s' "$keychain_password" > "$password_file"
-          chmod 600 "$password_file"
-          printf '%s' "$APPLE_CERTIFICATE" \
-            | tr -d '\r\n ' \
-            | openssl base64 -d -A -out "$certificate_path"
-          test -s "$certificate_path"
-          security create-keychain -p "$keychain_password" "$keychain_path"
-          security set-keychain-settings -lut 21600 "$keychain_path"
-          security unlock-keychain -p "$keychain_password" "$keychain_path"
-          security import "$certificate_path" \
-            -k "$keychain_path" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s -k "$keychain_password" "$keychain_path"
-          prior_keychains=()
-          while IFS= read -r keychain; do
-            prior_keychains+=("$keychain")
-          done < <(sed -E 's/^[[:space:]]*"(.*)"$/\1/' "$original_keychains")
-          security list-keychains -d user -s "$keychain_path" "${prior_keychains[@]}"
-          security find-identity -v -p codesigning "$keychain_path" \
-            | grep -F -- "$APPLE_SIGNING_IDENTITY" >/dev/null
       - name: Build desktop installers
         if: ${{ matrix.desktop != '' }}
         working-directory: crates/agentum-desktop
@@ -417,13 +317,6 @@ jobs:
           BUNDLE_FORMATS: ${{ matrix.desktop }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Tauri signs and notarizes macOS bundles when these Apple credentials
-          # are configured. They are intentionally kept in the repository vault.
-          APPLE_SIGNING_IDENTITY: ${{ contains(matrix.target, 'apple') && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ contains(matrix.target, 'apple') && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ contains(matrix.target, 'apple') && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ contains(matrix.target, 'apple') && secrets.APPLE_TEAM_ID || '' }}
-          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ contains(matrix.target, 'windows') && secrets.WINDOWS_CERTIFICATE_THUMBPRINT || '' }}
           # AppImage tooling must run without FUSE on hosted runners. AppImage
           # is release-critical because it is also Linux's updater artifact.
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -454,18 +347,6 @@ jobs:
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
           test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
           if [[ "$BUILD_TARGET" == *apple-darwin* ]]; then
-            test -n "$APPLE_SIGNING_IDENTITY"
-            test -n "$APPLE_ID"
-            test -n "$APPLE_PASSWORD"
-            test -n "$APPLE_TEAM_ID"
-            test -n "${AGENTUM_SIGNING_KEYCHAIN:-}"
-            test -n "${AGENTUM_SIGNING_KEYCHAIN_PASSWORD_FILE:-}"
-            keychain_password="$(cat "$AGENTUM_SIGNING_KEYCHAIN_PASSWORD_FILE")"
-            security unlock-keychain -p "$keychain_password" "$AGENTUM_SIGNING_KEYCHAIN"
-            security find-identity -v -p codesigning "$AGENTUM_SIGNING_KEYCHAIN" \
-              | grep -F -- "$APPLE_SIGNING_IDENTITY" >/dev/null
-          fi
-          if [[ "$BUILD_TARGET" == *apple-darwin* ]]; then
             cargo build --locked --release --target "$BUILD_TARGET" -p sherpa-rs
             mkdir -p ../../target/release
             for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.1.17.1.dylib; do
@@ -478,21 +359,10 @@ jobs:
             # Remove it so cargo uses MSVC's link.exe (msvc-dev-cmd set the path).
             rm -f "/c/Program Files/Git/usr/bin/link.exe" || true
           fi
-          if [[ "$BUILD_TARGET" == *windows* ]]; then
-            normalized_thumbprint="${WINDOWS_CERTIFICATE_THUMBPRINT//[[:space:]]/}"
-            [[ "$normalized_thumbprint" =~ ^[0-9A-Fa-f]{40}$ ]] || {
-              echo "WINDOWS_CERTIFICATE_THUMBPRINT must be exactly 40 hexadecimal characters." >&2
-              exit 1
-            }
-            normalized_thumbprint="${normalized_thumbprint^^}"
-            WINDOWS_CONFIG="{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"${normalized_thumbprint}\"}}}"
-            # tauri-cli 2.11.2 has no top-level --locked option. Arguments after
-            # `--` are inserted into its Cargo runner immediately after
-            # `cargo build`, so this becomes a lockfile-enforced build.
-            cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" --config "$WINDOWS_CONFIG" -- --locked
-          else
-            cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" -- --locked
-          fi
+          # tauri-cli 2.11.2 has no top-level --locked option. Arguments after
+          # `--` are inserted into its Cargo runner immediately after
+          # `cargo build`, so this becomes a lockfile-enforced build.
+          cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" -- --locked
 
       - name: Build version-matched SDD SSH worker (Linux x64)
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
@@ -502,73 +372,11 @@ jobs:
           cargo build --locked --release --target "$BUILD_TARGET"
           -p agentum-server --bin agentum-sdd-worker
 
-      - name: Remove isolated signing keychain (macOS)
-        if: ${{ always() && contains(matrix.target, 'apple') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${AGENTUM_ORIGINAL_KEYCHAINS_FILE:-}" && -f "$AGENTUM_ORIGINAL_KEYCHAINS_FILE" ]]; then
-            prior_keychains=()
-            while IFS= read -r keychain; do
-              prior_keychains+=("$keychain")
-            done < <(sed -E 's/^[[:space:]]*"(.*)"$/\1/' "$AGENTUM_ORIGINAL_KEYCHAINS_FILE")
-            if [[ ${#prior_keychains[@]} -gt 0 ]]; then
-              security list-keychains -d user -s "${prior_keychains[@]}"
-            fi
-          fi
-          if [[ -n "${AGENTUM_SIGNING_KEYCHAIN:-}" && -e "$AGENTUM_SIGNING_KEYCHAIN" ]]; then
-            security delete-keychain "$AGENTUM_SIGNING_KEYCHAIN" || true
-          fi
-          if [[ -n "${AGENTUM_SIGNING_DIR:-}" && "$AGENTUM_SIGNING_DIR" == "$RUNNER_TEMP"/agentum-signing-* ]]; then
-            rm -rf -- "$AGENTUM_SIGNING_DIR"
-          fi
-
-      - name: Verify Authenticode signatures (Windows)
-        if: ${{ contains(matrix.target, 'windows') }}
-        shell: pwsh
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $bundleDirectory = "target/$env:BUILD_TARGET/release/bundle"
-          $executables = @(Get-ChildItem -Path $bundleDirectory -Recurse -File -Filter '*.exe')
-          if ($executables.Count -eq 0) {
-            throw 'No Windows executables were produced.'
-          }
-          foreach ($executable in $executables) {
-            $signature = Get-AuthenticodeSignature -FilePath $executable.FullName
-            if ($signature.Status -ne 'Valid') {
-              throw "Invalid Authenticode signature ($($signature.Status)): $($executable.FullName)"
-            }
-            if (-not $signature.TimeStamperCertificate) {
-              throw "Missing Authenticode timestamp: $($executable.FullName)"
-            }
-          }
-
-      - name: Remove Authenticode certificate material (Windows)
-        if: ${{ always() && contains(matrix.target, 'windows') }}
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
-        run: |
-          $certificateDirectory = Join-Path $env:RUNNER_TEMP 'agentum-code-signing'
-          if (Test-Path -LiteralPath $certificateDirectory) {
-            Remove-Item -LiteralPath $certificateDirectory -Recurse -Force
-          }
-          $thumbprint = ($env:WINDOWS_CERTIFICATE_THUMBPRINT -replace '\s', '').ToUpperInvariant()
-          if ($thumbprint -match '^[0-9A-F]{40}$') {
-            $storePath = "Cert:\CurrentUser\My\$thumbprint"
-            if (Test-Path -LiteralPath $storePath) {
-              Remove-Item -LiteralPath $storePath -Force
-            }
-          }
-
       - name: Stage release
         shell: bash
         env:
           BUILD_TARGET: ${{ matrix.target }}
           BUNDLE_FORMATS: ${{ matrix.desktop }}
-          APPLE_TEAM_ID: ${{ contains(matrix.target, 'apple') && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
           # Stable asset label: <os>-<arch>. The raw Rust triple was
@@ -651,7 +459,6 @@ jobs:
                 "agentum-sdd-worker ${VER} protocol=1"
               ;;
             *-apple-darwin)
-              test -n "$APPLE_TEAM_ID"
               test -s "dist/${STEM}.dmg"
               test -s "dist/${STEM}.app.tar.gz"
               test -s "dist/${STEM}.app.tar.gz.sig"
@@ -664,31 +471,6 @@ jobs:
               test "$APP_PATH" = "$BUNDLE_DIR/macos/Agentum.app"
               PACKAGED_INFO="$APP_PATH/Contents/Info.plist"
               test -f "$PACKAGED_INFO"
-              codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-              ENTITLEMENTS_PATH="$(mktemp)"
-              SIGNATURE_INFO="$(mktemp)"
-              cleanup_macos_inspection() {
-                rm -f -- "$ENTITLEMENTS_PATH" "$SIGNATURE_INFO"
-              }
-              trap cleanup_macos_inspection EXIT
-              codesign --display --entitlements "$ENTITLEMENTS_PATH" "$APP_PATH"
-              test "$(plutil -extract com.apple.security.device.audio-input raw "$ENTITLEMENTS_PATH")" = "true"
-              for forbidden_entitlement in \
-                com.apple.security.cs.allow-jit \
-                com.apple.security.cs.allow-unsigned-executable-memory \
-                com.apple.security.cs.disable-executable-page-protection \
-                com.apple.security.cs.disable-library-validation \
-                com.apple.security.cs.allow-dyld-environment-variables \
-                com.apple.security.get-task-allow; do
-                if plutil -extract "$forbidden_entitlement" raw "$ENTITLEMENTS_PATH" >/dev/null 2>&1; then
-                  echo "forbidden macOS entitlement: $forbidden_entitlement" >&2
-                  exit 1
-                fi
-              done
-              codesign --display --verbose=4 "$APP_PATH" 2>"$SIGNATURE_INFO"
-              grep -Fqx 'Identifier=dev.agentum.app' "$SIGNATURE_INFO"
-              grep -Fqx "TeamIdentifier=$APPLE_TEAM_ID" "$SIGNATURE_INFO"
-              grep -Eq '^CodeDirectory .*flags=.*\(runtime\)' "$SIGNATURE_INFO"
               test "$(plutil -extract CFBundleIdentifier raw "$PACKAGED_INFO")" = "dev.agentum.app"
               test -n "$(plutil -extract NSMicrophoneUsageDescription raw "$PACKAGED_INFO")"
               test "$(plutil -extract NSAppTransportSecurity.NSAllowsLocalNetworking raw "$PACKAGED_INFO")" = "true"
@@ -698,13 +480,8 @@ jobs:
                   exit 1
                 fi
               done
-              spctl --assess --type execute --verbose=4 "$APP_PATH"
-              xcrun stapler validate "$APP_PATH"
-              xcrun stapler validate "dist/${STEM}.dmg"
               tar -tzf "dist/${STEM}.app.tar.gz" >/dev/null
               hdiutil verify "dist/${STEM}.dmg"
-              cleanup_macos_inspection
-              trap - EXIT
               ;;
             *-windows-msvc)
               test -s "dist/${STEM}-setup.exe"
