@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-core"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -38,7 +38,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-desktop"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "agentum-core",
  "agentum-server",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-executor"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "agentum-core",
  "thiserror 2.0.18",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-jira-broker"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-server"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "agentum-core",
  "agentum-executor",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-store"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "agentum-core",
  "anyhow",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-tmux"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "agentum-core",
  "shlex",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-watchdog"
-version = "0.98.5"
+version = "0.98.6"
 dependencies = [
  "agentum-core",
  "agentum-executor",

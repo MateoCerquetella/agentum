@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.6] — 2026-07-30
+
+### Fixed
+
+- **Linux AppImage releases run the Tauri bundler with diagnostics enabled.**
+  This avoids the silent `linuxdeploy` failure that blocked the v0.98.5
+  publication after the source, macOS, Windows, DEB, and RPM builds succeeded.
+- **Releases remain manually publishable after CI removal.** The release
+  workflow reads the explicitly configured `AGENTUM_RELEASE_PROVIDER`
+  repository variable and never chooses Claude or Codex by default.
+
 ## [0.98.5] — 2026-07-30
 
 ### Changed

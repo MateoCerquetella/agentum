@@ -27,25 +27,15 @@ on:
         required: true
       AGENTUM_RESTRICTED_PATTERNS:
         required: true
-  # Manual dispatch is a non-publishing cross-platform bundle rehearsal.
+  # With CI removed, maintainers can run this workflow directly against a
+  # signed release tag. The configured repository provider is selected instead
+  # of silently defaulting to a provider in this workflow.
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Reserved for the CI caller; manual runs never publish'
+        description: 'Create the version-matched release after every bundle validates'
         type: boolean
         default: false
-      provider_id:
-        description: 'Bundled provider to bind to the rehearsal'
-        required: true
-        type: choice
-        options:
-          - claude
-          - codex
-          - agent
-          - gemini
-          - hermes
-          - opencode
-          - aider
 
 permissions:
   contents: read
@@ -74,7 +64,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-          PROVIDER_ID: ${{ inputs.provider_id }}
+          PROVIDER_ID: ${{ github.event_name == 'workflow_call' && inputs.provider_id || vars.AGENTUM_RELEASE_PROVIDER }}
         run: |
           set -euo pipefail
           case "$PROVIDER_ID" in
@@ -110,29 +100,29 @@ jobs:
             test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
           fi
       - name: Install trusted evidence verifier system dependencies
-        if: inputs.publish
+        if: inputs.publish && github.event_name == 'workflow_call'
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             libdbus-1-dev \
             pkg-config
       - name: Install pinned Rust toolchain for trusted evidence verifier
-        if: inputs.publish
+        if: inputs.publish && github.event_name == 'workflow_call'
         run: |
           rustup toolchain install 1.94.1 --profile minimal
           rustup default 1.94.1
       - name: Build evidence verifier from authority-checked source
-        if: inputs.publish
+        if: inputs.publish && github.event_name == 'workflow_call'
         run: >-
           cargo build --locked --release -p agentum-server
           --bin agentum-sdd-provider-conformance
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: inputs.publish
+        if: inputs.publish && github.event_name == 'workflow_call'
         with:
           name: ${{ inputs.provider_report_artifact }}
           path: provider-conformance
       - name: Verify untrusted source-bound provider evidence as data
-        if: inputs.publish
+        if: inputs.publish && github.event_name == 'workflow_call'
         shell: bash
         env:
           PROVIDER_REPORT_ARTIFACT: ${{ inputs.provider_report_artifact }}
@@ -362,7 +352,7 @@ jobs:
           # tauri-cli 2.11.2 has no top-level --locked option. Arguments after
           # `--` are inserted into its Cargo runner immediately after
           # `cargo build`, so this becomes a lockfile-enforced build.
-          cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" -- --locked
+          cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" --verbose -- --locked
 
       - name: Build version-matched SDD SSH worker (Linux x64)
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
@@ -528,8 +518,7 @@ jobs:
 
   release:
     name: stage github release draft
-    # Only ci.yml can call this workflow on a tag with publish=true. A manual
-    # dispatch always stops after the bundle rehearsal.
+    # Publication is allowed only for an explicitly requested signed tag run.
     if: inputs.publish && startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
