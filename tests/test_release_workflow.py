@@ -55,7 +55,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.2")
+        self.assertEqual(version, "0.98.3")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -176,12 +176,29 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("~/.ssh", release)
         self.assertIn("StrictHostKeyChecking=yes", release)
 
-    def test_release_is_blocked_on_real_source_bound_provider_lifecycle(self) -> None:
+    def test_release_is_blocked_on_selected_source_bound_provider_lifecycle(self) -> None:
         ci = CI.read_text(encoding="utf-8")
         release = RELEASE.read_text(encoding="utf-8")
         providers = ["claude", "codex", "agent", "gemini", "hermes", "opencode", "aider"]
+        provider_pattern = "|".join(providers)
+        selected_provider = "${{ vars.AGENTUM_RELEASE_PROVIDER }}"
 
         self.assertIn("runs-on: [self-hosted, linux, x64, agentum-provider-conformance]", ci)
+        self.assertIn(f"RELEASE_PROVIDER: {selected_provider}", ci)
+        self.assertIn(f"provider_id: {selected_provider}", ci)
+        self.assertNotIn("AGENTUM_RELEASE_PROVIDER ||", ci)
+        self.assertNotIn("default: codex", release)
+        self.assertIn(
+            "configure AGENTUM_RELEASE_PROVIDER as a bundled provider before releasing",
+            ci,
+        )
+        self.assertIn(f"{provider_pattern})", ci)
+        self.assertIn(f"{provider_pattern})", release)
+        self.assertEqual(ci.count('--provider "$RELEASE_PROVIDER"'), 1)
+        self.assertEqual(ci.count('--require-provider "$RELEASE_PROVIDER"'), 1)
+        self.assertEqual(release.count('--require-provider "$PROVIDER_ID"'), 1)
+        self.assertIn("PROVIDER_ID: ${{ inputs.provider_id }}", release)
+        self.assertIn("Bundled provider proven by the source-bound lifecycle report", release)
         self.assertIn("provider-authority:", ci)
         self.assertIn("runs-on: ubuntu-latest", ci)
         self.assertIn("needs: [provider-authority, rust]", ci)
@@ -193,9 +210,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('--source-revision "$GITHUB_SHA"', ci)
         self.assertIn("provider-conformance-${{ github.sha }}", ci)
         for provider in providers:
-            self.assertEqual(ci.count(f"--provider {provider}"), 1)
-            self.assertIn(f"--require-provider {provider}", ci)
-            self.assertIn(f"--require-provider {provider}", release)
+            self.assertNotIn(f"--provider {provider}", ci)
+            self.assertNotIn(f"--require-provider {provider}", ci)
+            self.assertNotIn(f"--require-provider {provider}", release)
         self.assertIn("Build evidence verifier from authority-checked source", release)
         self.assertIn("Verify untrusted source-bound provider evidence as data", release)
         self.assertIn("sha256sum -c SHA256SUMS", release)

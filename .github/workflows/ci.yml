@@ -318,8 +318,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          RELEASE_PROVIDER: ${{ vars.AGENTUM_RELEASE_PROVIDER }}
         run: |
           set -euo pipefail
+          case "$RELEASE_PROVIDER" in
+            claude|codex|agent|gemini|hermes|opencode|aider) ;;
+            *)
+              echo "configure AGENTUM_RELEASE_PROVIDER as a bundled provider before releasing" >&2
+              exit 1
+              ;;
+          esac
           [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           test "$GITHUB_REF" = "refs/tags/$TAG"
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
@@ -343,6 +351,8 @@ jobs:
     needs: [provider-authority, rust]
     runs-on: [self-hosted, linux, x64, agentum-provider-conformance]
     timeout-minutes: 360
+    env:
+      RELEASE_PROVIDER: ${{ vars.AGENTUM_RELEASE_PROVIDER }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -362,10 +372,17 @@ jobs:
         run: >-
           cargo build --locked --release -p agentum-server
           --bin agentum-sdd-provider-conformance
-      - name: Run every bundled provider through the real lifecycle
+      - name: Run the selected bundled provider through the real lifecycle
         shell: bash
         run: |
           set -euo pipefail
+          case "$RELEASE_PROVIDER" in
+            claude|codex|agent|gemini|hermes|opencode|aider) ;;
+            *)
+              echo "unsupported release provider: $RELEASE_PROVIDER" >&2
+              exit 1
+              ;;
+          esac
           report_dir="$RUNNER_TEMP/agentum-provider-conformance-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           if [[ -e "$report_dir" ]]; then
             echo "stale provider-conformance directory exists; refusing mixed evidence" >&2
@@ -376,23 +393,11 @@ jobs:
           "$runner" run-bundled \
             --source-revision "$GITHUB_SHA" \
             --output "$report_dir/provider-conformance.json" \
-            --provider claude \
-            --provider codex \
-            --provider agent \
-            --provider gemini \
-            --provider hermes \
-            --provider opencode \
-            --provider aider
+            --provider "$RELEASE_PROVIDER"
           "$runner" verify-report \
             --report "$report_dir/provider-conformance.json" \
             --source-revision "$GITHUB_SHA" \
-            --require-provider claude \
-            --require-provider codex \
-            --require-provider agent \
-            --require-provider gemini \
-            --require-provider hermes \
-            --require-provider opencode \
-            --require-provider aider
+            --require-provider "$RELEASE_PROVIDER"
           report_size="$(stat -c '%s' "$report_dir/provider-conformance.json")"
           (( report_size > 0 && report_size <= 2097152 ))
           (
@@ -415,6 +420,7 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       publish: true
+      provider_id: ${{ vars.AGENTUM_RELEASE_PROVIDER }}
       provider_report_artifact: provider-conformance-${{ github.sha }}
     secrets:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
