@@ -25,8 +25,12 @@ Run, attempt, event, approval, task, lease, patch, and outbox state is durable a
 ## Provider qualification and platform isolation
 
 Release tags cannot publish until a hardened self-hosted runner executes
-`agentum-sdd-provider-conformance` against all seven bundled provider CLIs with
-real authentication. For each provider the runner copies the zero-pollution
+`agentum-sdd-provider-conformance` against the maintainer-selected bundled
+provider CLI with real authentication. The repository Actions variable
+`AGENTUM_RELEASE_PROVIDER` selects `claude`, `codex`, `agent`, `gemini`,
+`hermes`, `opencode`, or `aider`; maintainers must configure it before tagging,
+and an unset or unsupported value blocks the release at the hosted authority
+gate. For the selected provider the runner copies the zero-pollution
 demo fixture, proves cancellation before save, authors and validates `spec.md`,
 recovers the hash-bound Guarded approval checkpoint in a fresh process, creates
 design and typed plan artifacts, accepts and applies a scoped diff, proves the
@@ -34,7 +38,7 @@ acceptance test failed before and passes after implementation, runs independent
 review in a separate provider process, rejects malformed output, and stops at
 Ready without delivery. The uploaded report contains only source-bound hashes
 and stable statuses; the reusable release workflow verifies its checksum,
-source SHA, exact provider set, cases, and Ready/no-delivery state.
+source SHA, exact selected provider, cases, and Ready/no-delivery state.
 
 Custom manifests run through the same executable and lifecycle. A passing
 receipt is signed with an installation-owned Ed25519 key in Agentum's secure
@@ -51,6 +55,10 @@ only the selected provider runtime, its provider-specific authentication file,
 the read-only attempt, and the fixed writable staging/runtime paths. Symlinked
 Node launchers are resolved through the canonical read-only runtime rather than
 re-exposing the host runtime directory.
+Verification sandboxes likewise resolve version-managed commands to their
+canonical executable and remount only that exact file after masking the account
+directory; package-manager configuration and unrelated account files remain
+unavailable.
 macOS uses the system Seatbelt launcher with repository read-only/provider
 staging-only policy and a network-disabled verification policy. Windows has no
 Agentum-enforced restricted-token/AppContainer filesystem sandbox in this

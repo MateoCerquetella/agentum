@@ -10,8 +10,12 @@ on:
         description: 'Create the version-matched release after every gate and bundle validates'
         required: true
         type: boolean
+      provider_id:
+        description: 'Bundled provider proven by the source-bound lifecycle report'
+        required: true
+        type: string
       provider_report_artifact:
-        description: 'Source-bound artifact produced by the live seven-provider lifecycle gate'
+        description: 'Source-bound artifact produced by the selected-provider lifecycle gate'
         required: true
         type: string
     secrets:
@@ -48,6 +52,18 @@ on:
         description: 'Reserved for the CI caller; manual runs never publish'
         type: boolean
         default: false
+      provider_id:
+        description: 'Bundled provider to bind to the rehearsal'
+        required: true
+        type: choice
+        options:
+          - claude
+          - codex
+          - agent
+          - gemini
+          - hermes
+          - opencode
+          - aider
 
 permissions:
   contents: read
@@ -76,8 +92,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          PROVIDER_ID: ${{ inputs.provider_id }}
         run: |
           set -euo pipefail
+          case "$PROVIDER_ID" in
+            claude|codex|agent|gemini|hermes|opencode|aider) ;;
+            *)
+              echo "unsupported release provider: $PROVIDER_ID" >&2
+              exit 1
+              ;;
+          esac
           version="$(jq -r '.version' crates/agentum-desktop/tauri.conf.json)"
           workspace_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -123,6 +147,7 @@ jobs:
         shell: bash
         env:
           PROVIDER_REPORT_ARTIFACT: ${{ inputs.provider_report_artifact }}
+          PROVIDER_ID: ${{ inputs.provider_id }}
         run: |
           set -euo pipefail
           test -n "$PROVIDER_REPORT_ARTIFACT"
@@ -142,13 +167,7 @@ jobs:
           "$runner" verify-report \
             --report "$GITHUB_WORKSPACE/provider-conformance/provider-conformance.json" \
             --source-revision "$GITHUB_SHA" \
-            --require-provider claude \
-            --require-provider codex \
-            --require-provider agent \
-            --require-provider gemini \
-            --require-provider hermes \
-            --require-provider opencode \
-            --require-provider aider
+            --require-provider "$PROVIDER_ID"
       - name: Validate restricted-content release policy availability
         shell: bash
         env:

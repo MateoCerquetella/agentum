@@ -2849,6 +2849,11 @@ fn isolate_verification_command(
             command.program
         ))
     })?;
+    let executable = executable.canonicalize().map_err(|error| {
+        LifecycleError::Invalid(format!(
+            "verification executable could not be resolved: {error}"
+        ))
+    })?;
     let attempt = attempt.canonicalize()?;
     let git_metadata = linked_worktree_git_metadata(&attempt)?;
     let requested_cwd = if command.cwd == "." {
@@ -2894,6 +2899,18 @@ fn isolate_verification_command(
         "/dev".into(),
     ];
     add_verification_runtime_mounts(&mut args, &account_root);
+    // Version managers commonly expose a command through /run while its real
+    // executable lives below HOME. HOME is intentionally replaced with an
+    // empty tmpfs, so restore only that exact canonical executable instead of
+    // exposing the version manager, its configuration, or the rest of HOME.
+    if executable.starts_with(&account_root) {
+        add_sandbox_parents(&mut args, &executable);
+        args.extend([
+            "--ro-bind".into(),
+            executable.to_string_lossy().into_owned(),
+            executable.to_string_lossy().into_owned(),
+        ]);
+    }
     add_sandbox_parents(&mut args, &attempt);
     if let Some((_, common_dir)) = &git_metadata {
         add_sandbox_parents(&mut args, common_dir);
@@ -3518,6 +3535,84 @@ mod tests {
         assert_eq!(result.status, "succeeded");
         assert!(result.output_excerpt.starts_with("[redacted]"));
         assert!(!result.output_hash.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn verification_restores_only_a_home_managed_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if which::which("bwrap").is_err() {
+            return;
+        }
+        let _environment_lock = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let original_home = std::env::var_os("HOME");
+        let original_path = std::env::var_os("PATH");
+        let account_parent = original_home
+            .as_ref()
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+            .expect("test HOME is an existing directory");
+        let account = tempfile::Builder::new()
+            .prefix(".agentum-verification-home.")
+            .tempdir_in(account_parent)
+            .unwrap();
+        let bin = account.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let tool = bin.join("agentum-home-verification-tool");
+        std::fs::write(&tool, "#!/bin/sh\nprintf 'home-tool-ok\\n'\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            original_path
+                .as_deref()
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
+        // SAFETY: TEST_ENV_LOCK serializes every process-wide environment
+        // override in this crate, and both values are restored before unlock.
+        unsafe {
+            std::env::set_var("HOME", account.path());
+            std::env::set_var("PATH", path);
+        }
+
+        let attempt = tempfile::tempdir().unwrap();
+        let command = CommandSpec {
+            program: "agentum-home-verification-tool".into(),
+            args: Vec::new(),
+            cwd: ".".into(),
+            env_allowlist: vec!["PATH".into()],
+            timeout_ms: 10_000,
+            output_limit: 32 * 1024,
+        };
+        let result = run_verification_command(
+            "test:home-managed-verification",
+            attempt.path(),
+            &command,
+            0,
+        )
+        .await;
+
+        // SAFETY: the same lock and restoration contract described above
+        // remains in force until these original values are restored.
+        unsafe {
+            match original_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match original_path {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        let result = result.unwrap();
+        assert_eq!(result.status, "succeeded");
+        assert_eq!(result.exit_code, Some(0));
     }
 
     #[cfg(target_os = "linux")]

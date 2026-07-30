@@ -4,6 +4,23 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.3] — 2026-07-30
+
+### Fixed
+
+- **Verified releases qualify one explicitly selected SDD provider.** Set the
+  `AGENTUM_RELEASE_PROVIDER` repository Actions variable to any bundled
+  provider before tagging; an unset or unsupported value blocks the release.
+  Publication still requires a source-bound full Standard + Guarded lifecycle
+  report for that exact provider.
+- **The New Workspace SDD fix can reach downloadable builds.** A stale login
+  for an unrelated bundled provider no longer blocks publication after the
+  selected provider completes the release qualification lifecycle.
+- **Version-managed verification commands survive the Linux sandbox boundary.**
+  Agentum resolves tools such as an `fnm`-managed Node binary and remounts only
+  the exact executable after masking the account directory, so valid SDD tests
+  no longer report false failures without exposing user configuration.
+
 ## [0.98.2] — 2026-07-28
 
 ### Fixed

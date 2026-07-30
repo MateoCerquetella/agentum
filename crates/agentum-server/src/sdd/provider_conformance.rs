@@ -564,7 +564,7 @@ async fn run_provider_suite(
     );
 
     let review_prompt = format!(
-        "This is an independent review in a new isolated provider session. Read {}, {}, {}, and the current repository diff. Verification succeeded with evidence hash {}. Do not edit files or change Git. Review RQ/AC traceability, active-session preservation, regressions, and scope. If and only if ready, include one line exactly `Verdict: PASS`; otherwise `Verdict: FAIL`. Return only Markdown between literal lines {} and {}.",
+        "This is an independent review in a new isolated provider session. Read {}, {}, {}, and the current repository diff. Verification succeeded with evidence hash {}. Do not edit files or change Git. Review RQ/AC traceability, active-session preservation, regressions, and scope. Explicitly name AC-001 in the review. If and only if ready, include one line exactly `Verdict: PASS`; otherwise `Verdict: FAIL`. Return only Markdown between literal lines {} and {}.",
         spec_path.display(),
         artifact_root.spec_dir.join("design.md").display(),
         artifact_root.spec_dir.join("plan.json").display(),
