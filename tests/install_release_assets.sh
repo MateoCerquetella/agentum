@@ -99,16 +99,14 @@ if (install_linux_file "$test_tmp/new") >/dev/null 2>&1; then
 fi
 test "$(cat "$outside")" = "outside"
 
-signature_log="$test_tmp/signature.log"
-codesign() { printf 'codesign:%s\n' "${*: -1}" >> "$signature_log"; }
-spctl() { printf 'spctl:%s\n' "${*: -1}" >> "$signature_log"; }
-xcrun() { printf 'xcrun:%s\n' "${*: -1}" >> "$signature_log"; }
 app="$test_tmp/Agentum.app"
-mkdir "$app"
+mkdir -p "$app/Contents/MacOS"
+printf 'bundle metadata\n' > "$app/Contents/Info.plist"
 verify_macos_bundle "$app"
-test "$(wc -l < "$signature_log")" -eq 3
-grep -Fqx "codesign:$app" "$signature_log"
-grep -Fqx "spctl:$app" "$signature_log"
-grep -Fqx "xcrun:$app" "$signature_log"
+rm "$app/Contents/Info.plist"
+if (verify_macos_bundle "$app") >/dev/null 2>&1; then
+  echo "macOS bundle without Info.plist was accepted" >&2
+  exit 1
+fi
 
 echo "install release asset tests: PASS"

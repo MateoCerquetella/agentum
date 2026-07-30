@@ -55,7 +55,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.4")
+        self.assertEqual(version, "0.98.5")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -91,12 +91,20 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(set(locked_versions), owned_packages)
         self.assertEqual(set(locked_versions.values()), {version})
 
-    def test_publication_requires_every_external_signing_secret(self) -> None:
+    def test_publication_requires_available_secrets_without_os_certificates(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
         ci = CI.read_text(encoding="utf-8")
         required = {
             "TAURI_SIGNING_PRIVATE_KEY",
             "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+            "HOMEBREW_TAP_DEPLOY_KEY",
+            "AGENTUM_RESTRICTED_PATTERNS",
+        }
+        for secret in required:
+            self.assertIn(f"      {secret}:\n        required: true", release)
+            self.assertIn(f"      {secret}: ${{{{ secrets.{secret} }}}}", ci)
+
+        removed = {
             "APPLE_CERTIFICATE",
             "APPLE_CERTIFICATE_PASSWORD",
             "APPLE_SIGNING_IDENTITY",
@@ -106,44 +114,35 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "WINDOWS_CERTIFICATE",
             "WINDOWS_CERTIFICATE_PASSWORD",
             "WINDOWS_CERTIFICATE_THUMBPRINT",
-            "HOMEBREW_TAP_DEPLOY_KEY",
-            "AGENTUM_RESTRICTED_PATTERNS",
         }
-        for secret in required:
-            self.assertIn(f"      {secret}:\n        required: true", release)
-            self.assertIn(f"      {secret}: ${{{{ secrets.{secret} }}}}", ci)
+        combined = f"{release}\n{ci}"
+        for secret in removed:
+            self.assertNotIn(secret, combined)
 
         self.assertIn('test "$GITHUB_REF" = "refs/tags/v${version}"', release)
         self.assertIn('test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"', release)
         self.assertIn('test "$(git cat-file -t "refs/tags/$TAG")" = "tag"', release)
         self.assertIn("'.verification.verified'", release)
 
-    def test_signing_keychain_is_imported_validated_and_always_removed(self) -> None:
+    def test_updater_signing_remains_required_without_platform_signing_steps(self) -> None:
         workflow = RELEASE.read_text(encoding="utf-8")
-        imported = workflow.index("Import Developer ID certificate into an isolated keychain")
-        built = workflow.index("Build desktop installers")
-        removed = workflow.index("Remove isolated signing keychain")
-        self.assertLess(imported, built)
-        self.assertLess(built, removed)
-        self.assertIn("security import", workflow)
-        self.assertIn("security set-key-partition-list", workflow)
-        self.assertIn("security find-identity", workflow)
         self.assertIn("tool: tauri-cli@2.11.2", workflow)
-        self.assertIn("always() && contains(matrix.target, 'apple')", workflow)
-        self.assertNotIn('echo "HOME=', workflow)
-        self.assertEqual(workflow.count("-CertStoreLocation 'Cert:\\CurrentUser\\My'"), 1)
-        self.assertIn("-notmatch '^[0-9A-F]{40}$'", workflow)
-        self.assertIn('[[ "$normalized_thumbprint" =~ ^[0-9A-Fa-f]{40}$ ]]', workflow)
-        self.assertNotIn("${WINDOWS_CERTIFICATE_THUMBPRINT}\"}}}", workflow)
-
-        cleanup = workflow.index("Remove Authenticode certificate material (Windows)")
-        cleanup_guard = workflow.index(
-            "if ($thumbprint -match '^[0-9A-F]{40}$')", cleanup
-        )
-        cleanup_store_path = workflow.index(
-            '$storePath = "Cert:\\CurrentUser\\My\\$thumbprint"', cleanup
-        )
-        self.assertLess(cleanup_guard, cleanup_store_path)
+        self.assertIn('test -n "$TAURI_SIGNING_PRIVATE_KEY"', workflow)
+        self.assertIn('test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"', workflow)
+        self.assertIn("Verify every updater signature against the embedded key", workflow)
+        self.assertIn("agentum-updater-verify", workflow)
+        for removed in (
+            "Import Developer ID certificate",
+            "Remove isolated signing keychain",
+            "Import Authenticode certificate",
+            "Verify Authenticode signatures",
+            "Remove Authenticode certificate material",
+            "certificateThumbprint",
+            "codesign",
+            "spctl",
+            "stapler",
+        ):
+            self.assertNotIn(removed, workflow)
 
     def test_release_rust_dependency_resolution_is_lockfile_bound(self) -> None:
         workflow = RELEASE.read_text(encoding="utf-8")
@@ -151,8 +150,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             'cargo build --locked --release --target "$BUILD_TARGET" -p sherpa-rs',
             workflow,
         )
-        self.assertEqual(workflow.count("cargo tauri build --target"), 2)
-        self.assertEqual(workflow.count("-- --locked"), 2)
+        self.assertEqual(workflow.count("cargo tauri build --target"), 1)
+        self.assertEqual(workflow.count("-- --locked"), 1)
         self.assertNotIn("cargo tauri build --locked", workflow)
 
     def test_every_release_stage_receives_required_restricted_policy(self) -> None:
@@ -261,11 +260,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('agentum-sdd-worker ${VER} protocol=1', release)
         self.assertIn("dist/agentum-sdd-worker-*", release)
 
-    def test_macos_hardened_runtime_carries_and_verifies_microphone_entitlement(self) -> None:
+    def test_macos_bundle_configuration_preserves_runtime_boundaries(self) -> None:
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         macos = config["bundle"]["macOS"]
         self.assertTrue(macos["hardenedRuntime"])
         self.assertEqual(macos["entitlements"], "Entitlements.plist")
+        self.assertNotIn("windows", config["bundle"])
 
         entitlements = MACOS_ENTITLEMENTS.read_text(encoding="utf-8")
         self.assertIn("com.apple.security.device.audio-input", entitlements)
@@ -273,16 +273,15 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("allow-unsigned-executable-memory", entitlements)
 
         release = RELEASE.read_text(encoding="utf-8")
-        self.assertIn('codesign --display --entitlements "$ENTITLEMENTS_PATH" "$APP_PATH"', release)
-        self.assertIn(
-            "plutil -extract com.apple.security.device.audio-input raw",
-            release,
-        )
         self.assertIn('test "$APP_PATH" = "$BUNDLE_DIR/macos/Agentum.app"', release)
-        self.assertIn("TeamIdentifier=$APPLE_TEAM_ID", release)
-        self.assertIn(r"flags=.*\(runtime\)", release)
-        self.assertIn("com.apple.security.cs.disable-library-validation", release)
+        self.assertIn("CFBundleIdentifier", release)
+        self.assertIn("NSMicrophoneUsageDescription", release)
         self.assertIn("NSAppTransportSecurity.NSAllowsLocalNetworking", release)
+        self.assertIn('tar -tzf "dist/${STEM}.app.tar.gz"', release)
+        self.assertIn('hdiutil verify "dist/${STEM}.dmg"', release)
+        self.assertNotIn("TeamIdentifier", release)
+        self.assertNotIn("codesign", release)
+        self.assertNotIn("stapler", release)
 
 
 if __name__ == "__main__":

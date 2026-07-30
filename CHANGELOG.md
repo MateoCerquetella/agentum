@@ -4,6 +4,15 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.5] — 2026-07-30
+
+### Changed
+
+- **Desktop releases no longer require unavailable platform certificates.**
+  macOS bundles ship without Apple Developer ID signing or notarization, and
+  Windows installers ship without Authenticode signing. Tauri updater artifacts
+  remain cryptographically signed and verified before publication.
+
 ## [0.98.4] — 2026-07-30
 
 ### Fixed
