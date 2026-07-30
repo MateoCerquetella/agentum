@@ -4,6 +4,14 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.8] — 2026-07-30
+
+### Fixed
+
+- **Linux updater staging matches Tauri 2.11 output.** Publication now verifies
+  and stages the generated `AppImage` and its detached `.sig` directly instead
+  of requiring the obsolete `AppImage.tar.gz` artifact shape.
+
 ## [0.98.7] — 2026-07-30
 
 ### Fixed

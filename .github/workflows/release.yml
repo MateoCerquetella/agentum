@@ -412,15 +412,14 @@ jobs:
           # Updater artifacts (signed) for the Tauri auto-updater. With
           # createUpdaterArtifacts the build emits, next to each installer:
           #   macOS   → <app>.app.tar.gz            (+ .sig)
-          #   Linux   → <app>_<ver>_*.AppImage.tar.gz (+ .sig)  [best-effort target]
+          #   Linux   → <app>_<ver>_*.AppImage        (+ .sig)
           #   Windows → <app>_<ver>_*-setup.exe.sig  (sidecar to the NSIS .exe)
           # Stage them with the same clean <stem> names so latest.json can point
           # at predictable release-asset URLs. The setup.exe itself was copied above.
           if [ -d "$BUNDLE_DIR" ]; then
             while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz" ;     done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz' -print0)
             while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz.sig' -print0)
-            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.AppImage.tar.gz" ;     done < <(find "$BUNDLE_DIR" -type f -name '*.AppImage.tar.gz' -print0)
-            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.AppImage.tar.gz.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.AppImage.tar.gz.sig' -print0)
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.AppImage.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.AppImage.sig' -print0)
             while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}-setup.exe.sig" ;   done < <(find "$BUNDLE_DIR" -type f -name '*-setup.exe.sig' -print0)
           fi
 
@@ -441,13 +440,11 @@ jobs:
               test -s "dist/${STEM}.deb"
               test -s "dist/${STEM}.rpm"
               test -s "dist/${STEM}.AppImage"
-              test -s "dist/${STEM}.AppImage.tar.gz"
-              test -s "dist/${STEM}.AppImage.tar.gz.sig"
+              test -s "dist/${STEM}.AppImage.sig"
               test -s "dist/agentum-desktop-${VER}-${OSARCH}"
               test -x "dist/agentum-sdd-worker-${VER}-${OSARCH}"
               dpkg-deb --info "dist/${STEM}.deb" >/dev/null
               rpm -qpl "dist/${STEM}.rpm" >/dev/null
-              tar -tzf "dist/${STEM}.AppImage.tar.gz" >/dev/null
               file "dist/${STEM}.AppImage" | grep -q 'ELF'
               file "dist/agentum-desktop-${VER}-${OSARCH}" | grep -q 'ELF'
               file "dist/agentum-sdd-worker-${VER}-${OSARCH}" | grep -q 'ELF'
@@ -578,8 +575,7 @@ jobs:
             "agentum-${ver}-linux-x64.deb" \
             "agentum-${ver}-linux-x64.rpm" \
             "agentum-${ver}-linux-x64.AppImage" \
-            "agentum-${ver}-linux-x64.AppImage.tar.gz" \
-            "agentum-${ver}-linux-x64.AppImage.tar.gz.sig" \
+            "agentum-${ver}-linux-x64.AppImage.sig" \
             "agentum-desktop-${ver}-linux-x64" \
             "agentum-sdd-worker-${ver}-linux-x64" \
             "agentum-${ver}-source.tar.gz" \
@@ -615,7 +611,7 @@ jobs:
             "agentum-${ver}-macos-arm64.app.tar.gz" \
             "agentum-${ver}-macos-x64.app.tar.gz" \
             "agentum-${ver}-windows-x64-setup.exe" \
-            "agentum-${ver}-linux-x64.AppImage.tar.gz"; do
+            "agentum-${ver}-linux-x64.AppImage"; do
             cargo run --locked --quiet -p agentum-core \
               --bin agentum-updater-verify -- \
               crates/agentum-desktop/tauri.conf.json \
@@ -681,7 +677,7 @@ jobs:
           emit darwin-aarch64 "agentum-${ver}-macos-arm64.app.tar.gz"
           emit darwin-x86_64  "agentum-${ver}-macos-x64.app.tar.gz"
           emit windows-x86_64 "agentum-${ver}-windows-x64-setup.exe"
-          emit linux-x86_64   "agentum-${ver}-linux-x64.AppImage.tar.gz"
+          emit linux-x86_64   "agentum-${ver}-linux-x64.AppImage"
           jq -n --arg v "$ver" --arg d "$pubdate" --rawfile n release-notes.md --argjson p "$platforms" \
             '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > dist/latest.json
           cat dist/latest.json
