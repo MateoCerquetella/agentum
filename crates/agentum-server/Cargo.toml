@@ -27,27 +27,27 @@ uuid           = { workspace = true }
 time           = { workspace = true }
 bytes          = "1"
 rayon          = "1"
-axum-server    = { version = "0.7", features = ["tls-rustls"] }
-rcgen          = "0.13"
-rand           = "0.9"
-base64         = "0.22"
+axum-server    = { version = "0.8", features = ["tls-rustls"] }
+rcgen          = "0.14"
+rand           = "0.10"
+base64         = "0.23"
 argon2         = "0.5"
-password-hash  = { version = "0.5", features = ["getrandom"] }
-sha2           = "0.10"
+password-hash  = { version = "0.6", features = ["getrandom"] }
+sha2           = "0.11"
 ulid           = { workspace = true }
 libc           = "0.2"
 tempfile       = "3"
 rustls         = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 notify         = "8"
-sysinfo        = { version = "0.32", default-features = false, features = ["system"] }
-which          = "7"
-shlex          = "1"
+sysinfo        = { version = "0.39", default-features = false, features = ["system"] }
+which          = "8"
+shlex          = "2"
 cap-primitives = "4.0.2"
 # CDP-over-WebSocket client for the in-agentum screencast bridge (009c-3): connect
 # to the headless CDP-Chromium, drive Page.startScreencast, dispatch Input.*/Page.*.
 # Same version + features agentum-tui already pins (ws:// to loopback CDP; the TLS
 # feature is shared so the lockfile carries no new transitive deps).
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util   = "0.3"
 # Used by usage::claude_oauth to fetch `GET /api/oauth/usage` from
 # Anthropic (spec 001). rustls (no native-tls) so release binaries
@@ -75,7 +75,7 @@ ring           = "0.17"
 zeroize        = "1"
 
 [dev-dependencies]
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], default-features = false }
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"], default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # Apply a protected, owner-only DACL to credential-bearing temporary files

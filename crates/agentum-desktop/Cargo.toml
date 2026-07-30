@@ -48,21 +48,21 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 thiserror = "2"
 portable-pty = "0.9"
-base64 = "0.22"
+base64 = "0.23"
 # PNG-encode the clipboard's RGBA pixels when a screenshot is pasted into an
 # agent terminal (commands/ui.rs). A lean encoder is all we need — RGBA8 → PNG,
 # not the full `image` crate's codec zoo.
 png = "0.18"
-notify = "7"
+notify = "8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
-which = "7"
+which = "8"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
-shlex = "1"
+shlex = "2"
 
 # On-device speech-to-text (Voice dictation). sherpa-rs wraps libsherpa-onnx;
 # `download-binaries` fetches prebuilt onnxruntime/sherpa libs at build time and
@@ -75,11 +75,11 @@ sherpa-rs = { version = "0.6", default-features = false, features = ["download-b
 # Native microphone capture for dictation. macOS WKWebView does not expose
 # navigator.mediaDevices/getUserMedia, so audio is captured in Rust (CoreAudio
 # via cpal) and fed straight into the STT engine instead of through the webview.
-cpal = "0.15"
+cpal = "0.18"
 # Model archive download + integrity + extraction (sherpa models ship as tar.bz2).
-sha2 = "0.10"
+sha2 = "0.11"
 tar = "0.4"
-bzip2 = "0.4"
+bzip2 = "0.6"
 futures-util = "0.3"
 
 # macOS Computer Use permission probing: CGPreflight/RequestScreenCaptureAccess
