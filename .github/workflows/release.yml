@@ -343,6 +343,12 @@ jobs:
               cp -f "../../target/$BUILD_TARGET/release/$lib" "../../target/release/$lib"
             done
           fi
+          if [[ "$BUILD_TARGET" == *linux* ]]; then
+            # sherpa-rs-sys copies its shared objects beside the release binary.
+            # linuxdeploy does not search that target directory by default, so
+            # make it discoverable while AppImage dependencies are collected.
+            export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/$BUILD_TARGET/release${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
           if [[ "$BUILD_TARGET" == *windows* ]]; then
             # git-bash ships /usr/bin/link.exe (GNU coreutils `link`), which under
             # shell: bash shadows the MSVC linker → "linking with link.exe failed".
