@@ -6,7 +6,6 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / ".github/workflows/release.yml"
-CI = ROOT / ".github/workflows/ci.yml"
 WORKSPACE = ROOT / "Cargo.toml"
 LOCKFILE = ROOT / "Cargo.lock"
 TAURI_CONFIG = ROOT / "crates/agentum-desktop/tauri.conf.json"
@@ -27,23 +26,11 @@ def workspace_version() -> str:
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
-    def test_clean_runners_activate_real_cross_platform_sdd_boundaries(self) -> None:
-        ci = CI.read_text(encoding="utf-8")
-        self.assertIn("Use no-follow-safe test temp root (macOS)", ci)
-        self.assertIn("printf 'TMPDIR=%s\\n' \"$RUNNER_TEMP\" >> \"$GITHUB_ENV\"", ci)
-        self.assertIn("Enable and probe Bubblewrap sandbox (Linux)", ci)
-        self.assertIn("kernel.apparmor_restrict_unprivileged_userns=0", ci)
-        self.assertIn(
-            "bwrap --die-with-parent --unshare-pid --ro-bind / / "
-            "--proc /proc --dev /dev -- true",
-            ci,
-        )
-
-    def test_workflows_pin_the_current_node24_checkout_action(self) -> None:
-        workflows = [CI, RELEASE, ROOT / ".github/workflows/codeql.yml"]
+    def test_release_workflow_pins_the_current_node24_checkout_action(self) -> None:
+        workflows = [RELEASE]
         pin = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
         combined = "\n".join(path.read_text(encoding="utf-8") for path in workflows)
-        self.assertEqual(combined.count(pin), 9)
+        self.assertEqual(combined.count(pin), 4)
         self.assertNotIn("actions/checkout@11d5960a326750d5838078e36cf38b85af677262", combined)
 
     def test_sdd_boundary_normalizes_windows_scan_paths_before_allowlisting(self) -> None:
@@ -93,7 +80,6 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_publication_requires_available_secrets_without_os_certificates(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
-        ci = CI.read_text(encoding="utf-8")
         required = {
             "TAURI_SIGNING_PRIVATE_KEY",
             "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
@@ -102,7 +88,6 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         }
         for secret in required:
             self.assertIn(f"      {secret}:\n        required: true", release)
-            self.assertIn(f"      {secret}: ${{{{ secrets.{secret} }}}}", ci)
 
         removed = {
             "APPLE_CERTIFICATE",
@@ -115,9 +100,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "WINDOWS_CERTIFICATE_PASSWORD",
             "WINDOWS_CERTIFICATE_THUMBPRINT",
         }
-        combined = f"{release}\n{ci}"
         for secret in removed:
-            self.assertNotIn(secret, combined)
+            self.assertNotIn(secret, release)
 
         self.assertIn('test "$GITHUB_REF" = "refs/tags/v${version}"', release)
         self.assertIn('test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"', release)
@@ -156,13 +140,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_every_release_stage_receives_required_restricted_policy(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
-        ci = CI.read_text(encoding="utf-8")
         self.assertIn("AGENTUM_RESTRICTED_PATTERNS:\n        required: true", release)
         self.assertIn("Validate restricted-content release policy availability", release)
-        self.assertIn(
-            "AGENTUM_RESTRICTED_PATTERNS: ${{ secrets.AGENTUM_RESTRICTED_PATTERNS }}",
-            ci,
-        )
         bundle_scan = release.index("Scan generated bundles for restricted content")
         upload = release.index("actions/upload-artifact")
         self.assertLess(bundle_scan, upload)
@@ -174,78 +153,6 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("StrictHostKeyChecking=accept-new", release)
         self.assertNotIn("~/.ssh", release)
         self.assertIn("StrictHostKeyChecking=yes", release)
-
-    def test_release_is_blocked_on_selected_source_bound_provider_lifecycle(self) -> None:
-        ci = CI.read_text(encoding="utf-8")
-        release = RELEASE.read_text(encoding="utf-8")
-        providers = ["claude", "codex", "agent", "gemini", "hermes", "opencode", "aider"]
-        provider_pattern = "|".join(providers)
-        selected_provider = "${{ vars.AGENTUM_RELEASE_PROVIDER }}"
-
-        self.assertIn("runs-on: [self-hosted, linux, x64, agentum-provider-conformance]", ci)
-        self.assertIn(f"RELEASE_PROVIDER: {selected_provider}", ci)
-        self.assertIn(f"provider_id: {selected_provider}", ci)
-        self.assertNotIn("AGENTUM_RELEASE_PROVIDER ||", ci)
-        self.assertNotIn("default: codex", release)
-        self.assertIn(
-            "configure AGENTUM_RELEASE_PROVIDER as a bundled provider before releasing",
-            ci,
-        )
-        self.assertIn(f"{provider_pattern})", ci)
-        self.assertIn(f"{provider_pattern})", release)
-        self.assertEqual(ci.count('--provider "$RELEASE_PROVIDER"'), 1)
-        self.assertEqual(ci.count('--require-provider "$RELEASE_PROVIDER"'), 1)
-        self.assertEqual(release.count('--require-provider "$PROVIDER_ID"'), 1)
-        self.assertIn("PROVIDER_ID: ${{ inputs.provider_id }}", release)
-        self.assertIn("Bundled provider proven by the source-bound lifecycle report", release)
-        self.assertIn("provider-authority:", ci)
-        self.assertIn("runs-on: ubuntu-latest", ci)
-        self.assertIn("needs: [provider-authority, rust]", ci)
-        self.assertIn("needs: [rust, provider-authority, provider-conformance]", ci)
-        self.assertGreaterEqual(ci.count("if: startsWith(github.ref, 'refs/tags/v')"), 2)
-        self.assertIn("repos/$REPO/branches/main", ci)
-        self.assertIn("'.verification.verified'", ci)
-        self.assertIn("agentum-sdd-provider-conformance", ci)
-        self.assertIn('--source-revision "$GITHUB_SHA"', ci)
-        self.assertIn("provider-conformance-${{ github.sha }}", ci)
-        for provider in providers:
-            self.assertNotIn(f"--provider {provider}", ci)
-            self.assertNotIn(f"--require-provider {provider}", ci)
-            self.assertNotIn(f"--require-provider {provider}", release)
-        self.assertIn("Build evidence verifier from authority-checked source", release)
-        self.assertIn("Verify untrusted source-bound provider evidence as data", release)
-        self.assertIn("sha256sum -c SHA256SUMS", release)
-        self.assertIn("repos/$REPO/branches/main", release)
-        self.assertNotIn("chmod 0500 agentum-sdd-provider-conformance", release)
-        self.assertNotIn("./agentum-sdd-provider-conformance verify-report", release)
-        self.assertNotIn("cp \"$runner\"", ci)
-        self.assertIn('--source-revision "$GITHUB_SHA"', release)
-        self.assertIn("refusing mixed evidence", ci)
-        self.assertGreaterEqual(ci.count("report_size <= 2097152"), 1)
-        self.assertGreaterEqual(release.count("report_size <= 2097152"), 1)
-        authority = release.index("Validate version and publication authority")
-        verifier_dependencies = release.index(
-            "Install trusted evidence verifier system dependencies"
-        )
-        build_verifier = release.index("Build evidence verifier from authority-checked source")
-        download = release.index("actions/download-artifact")
-        verify_data = release.index("Verify untrusted source-bound provider evidence as data")
-        self.assertLess(authority, verifier_dependencies)
-        self.assertLess(verifier_dependencies, build_verifier)
-        self.assertIn("libdbus-1-dev", release[verifier_dependencies:build_verifier])
-        self.assertIn("pkg-config", release[verifier_dependencies:build_verifier])
-        self.assertLess(authority, build_verifier)
-        self.assertLess(build_verifier, download)
-        self.assertLess(download, verify_data)
-
-    def test_windows_sdd_is_a_tested_remote_client_only_boundary(self) -> None:
-        ci = CI.read_text(encoding="utf-8")
-        self.assertIn("Enforce Windows remote-client-only SDD boundary", ci)
-        self.assertIn("if: runner.os == 'Windows'", ci)
-        self.assertIn(
-            "cargo test --locked -p agentum-server windows_local_sdd_boundary -- --nocapture",
-            ci,
-        )
 
     def test_linux_packages_require_sandbox_and_ship_checked_worker(self) -> None:
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))

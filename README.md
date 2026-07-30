@@ -11,7 +11,6 @@ Run Claude, Codex, Gemini & Cursor in tmux on a host you own — they survive a 
 Then use one durable, approval-aware workflow to move a local specification to Ready.
 
 [![release](https://img.shields.io/github/v/release/mateocerquetella/agentum?display_name=tag&color=111)](https://github.com/mateocerquetella/agentum/releases)
-[![ci](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml/badge.svg)](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml)
 [![license](https://img.shields.io/github/license/mateocerquetella/agentum?color=111)](LICENSE)
 ![platforms](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux-111)
 
