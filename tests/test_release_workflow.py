@@ -42,7 +42,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.7")
+        self.assertEqual(version, "0.98.8")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -137,6 +137,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(workflow.count("cargo tauri build --target"), 1)
         self.assertEqual(workflow.count("--verbose -- --locked"), 1)
         self.assertIn('LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/$BUILD_TARGET/release', workflow)
+        self.assertIn('"agentum-${ver}-linux-x64.AppImage.sig"', workflow)
+        self.assertNotIn("AppImage.tar.gz", workflow)
         self.assertEqual(workflow.count("-- --locked"), 1)
         self.assertNotIn("cargo tauri build --locked", workflow)
 
