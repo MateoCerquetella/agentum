@@ -42,7 +42,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.5")
+        self.assertEqual(version, "0.98.6")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -135,6 +135,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             workflow,
         )
         self.assertEqual(workflow.count("cargo tauri build --target"), 1)
+        self.assertEqual(workflow.count("--verbose -- --locked"), 1)
         self.assertEqual(workflow.count("-- --locked"), 1)
         self.assertNotIn("cargo tauri build --locked", workflow)
 
