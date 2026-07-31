@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Verify that the exact macOS release payload is correctly packaged, trusted by
-# Gatekeeper, and able to launch on a native runner. This script intentionally
-# adds quarantine metadata to its temporary install; it never removes a user's
-# quarantine attributes or weakens system policy.
+# Verify the exact certificate-free macOS release payload. Agentum deliberately
+# uses an ad-hoc signature for bundle integrity, so Gatekeeper rejection is an
+# expected distribution property and the native executable is tested separately.
 
 set -euo pipefail
 
@@ -43,8 +42,7 @@ WORK_DIR="$(mktemp -d "$WORK_PARENT/agentum-macos-release.XXXXXX")"
 MOUNT_DIR="$WORK_DIR/mount"
 INSTALL_DIR="$WORK_DIR/install"
 INSTALLED_APP="$INSTALL_DIR/Agentum.app"
-OPEN_LOG="$WORK_DIR/open.log"
-OPEN_PID=""
+RUNTIME_LOG="$WORK_DIR/runtime.log"
 APP_PID=""
 MOUNTED=false
 
@@ -54,10 +52,7 @@ cleanup() {
 
   if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
     kill -TERM "$APP_PID" 2>/dev/null || true
-  fi
-  if [[ -n "$OPEN_PID" ]] && kill -0 "$OPEN_PID" 2>/dev/null; then
-    kill -TERM "$OPEN_PID" 2>/dev/null || true
-    wait "$OPEN_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
   fi
   if [[ "$MOUNTED" == true ]]; then
     if hdiutil detach "$MOUNT_DIR" -quiet \
@@ -75,6 +70,19 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT INT TERM
+
+verify_adhoc_signature() {
+  local candidate="$1"
+  local signature
+  codesign --verify --strict --verbose=4 "$candidate"
+  signature="$(codesign --display --verbose=4 "$candidate" 2>&1)"
+  grep -Fq 'Signature=adhoc' <<<"$signature"
+  grep -Fq 'TeamIdentifier=not set' <<<"$signature"
+  if grep -q '^Authority=' <<<"$signature"; then
+    echo "certificate-backed signature is forbidden for this release: $candidate" >&2
+    exit 1
+  fi
+}
 
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
 EXECUTABLE="$APP_PATH/Contents/MacOS/agentum-desktop"
@@ -118,24 +126,15 @@ otool -L "$EXECUTABLE" | grep -Fq '@rpath/libsherpa-onnx-c-api.dylib'
 otool -l "$EXECUTABLE" | grep -A2 LC_RPATH | grep -Eq '@(loader_path|executable_path)/../Frameworks'
 
 codesign --verify --deep --strict --verbose=4 "$APP_PATH"
+verify_adhoc_signature "$APP_PATH"
 APP_SIGNATURE="$(codesign --display --verbose=4 "$APP_PATH" 2>&1)"
-grep -Fq 'Authority=Developer ID Application:' <<<"$APP_SIGNATURE"
-grep -Eq '^TeamIdentifier=[A-Z0-9]+$' <<<"$APP_SIGNATURE"
-grep -Eq '^Timestamp=.+' <<<"$APP_SIGNATURE"
 grep -Eq '^flags=.*\(runtime\)' <<<"$APP_SIGNATURE"
-TEAM_ID="$(sed -n 's/^TeamIdentifier=//p' <<<"$APP_SIGNATURE")"
-test -n "$TEAM_ID"
-test "$TEAM_ID" != "not set"
 
 MACHO_COUNT=0
 while IFS= read -r -d '' candidate; do
   if file -b "$candidate" | grep -Fq 'Mach-O'; then
     MACHO_COUNT=$((MACHO_COUNT + 1))
-    codesign --verify --strict --verbose=4 "$candidate"
-    CANDIDATE_SIGNATURE="$(codesign --display --verbose=4 "$candidate" 2>&1)"
-    grep -Fq 'Authority=Developer ID Application:' <<<"$CANDIDATE_SIGNATURE"
-    grep -Fq "TeamIdentifier=$TEAM_ID" <<<"$CANDIDATE_SIGNATURE"
-    grep -Eq '^Timestamp=.+' <<<"$CANDIDATE_SIGNATURE"
+    verify_adhoc_signature "$candidate"
   fi
 done < <(find "$APP_PATH/Contents/MacOS" "$FRAMEWORKS" -type f -print0)
 test "$MACHO_COUNT" -ge 4
@@ -155,17 +154,19 @@ for forbidden_entitlement in \
   fi
 done
 
-codesign --verify --strict --verbose=4 "$DMG_PATH"
-DMG_SIGNATURE="$(codesign --display --verbose=4 "$DMG_PATH" 2>&1)"
-grep -Fq 'Authority=Developer ID Application:' <<<"$DMG_SIGNATURE"
-grep -Fq "TeamIdentifier=$TEAM_ID" <<<"$DMG_SIGNATURE"
-grep -Eq '^Timestamp=.+' <<<"$DMG_SIGNATURE"
-
-xcrun stapler validate "$APP_PATH"
-xcrun stapler validate "$DMG_PATH"
-spctl --assess --type execute --verbose=4 "$APP_PATH"
-spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
 hdiutil verify "$DMG_PATH"
+if DMG_SIGNATURE="$(codesign --display --verbose=4 "$DMG_PATH" 2>&1)"; then
+  grep -Fq 'Signature=adhoc' <<<"$DMG_SIGNATURE"
+  if grep -q '^Authority=' <<<"$DMG_SIGNATURE"; then
+    echo "certificate-backed DMG signature is forbidden for this release" >&2
+    exit 1
+  fi
+fi
+
+if spctl --assess --type execute --verbose=4 "$APP_PATH"; then
+  echo "ad-hoc application unexpectedly passed Gatekeeper assessment" >&2
+  exit 1
+fi
 
 mkdir -p "$MOUNT_DIR" "$INSTALL_DIR"
 hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DMG_PATH" >/dev/null
@@ -181,34 +182,29 @@ test -L "$MOUNT_DIR/Applications"
 test "$(readlink "$MOUNT_DIR/Applications")" = "/Applications"
 
 ditto --rsrc --extattr "$MOUNT_DIR/Agentum.app" "$INSTALLED_APP"
-test -x "$INSTALLED_APP/Contents/MacOS/agentum-desktop"
-test "$(lipo -archs "$INSTALLED_APP/Contents/MacOS/agentum-desktop")" = "$EXPECTED_BINARY_ARCH"
+INSTALLED_EXECUTABLE="$INSTALLED_APP/Contents/MacOS/agentum-desktop"
+test -x "$INSTALLED_EXECUTABLE"
+test "$(lipo -archs "$INSTALLED_EXECUTABLE")" = "$EXPECTED_BINARY_ARCH"
+codesign --verify --deep --strict --verbose=4 "$INSTALLED_APP"
+verify_adhoc_signature "$INSTALLED_APP"
 
 QUARANTINE_VALUE="0081;$(printf '%x' "$(date +%s)");GitHub_Actions;Agentum_Release_Gate"
 xattr -w com.apple.quarantine "$QUARANTINE_VALUE" "$INSTALLED_APP"
 test -n "$(xattr -p com.apple.quarantine "$INSTALLED_APP")"
-codesign --verify --deep --strict --verbose=4 "$INSTALLED_APP"
-xcrun stapler validate "$INSTALLED_APP"
-spctl --assess --type execute --verbose=4 "$INSTALLED_APP"
+if spctl --assess --type execute --verbose=4 "$INSTALLED_APP"; then
+  echo "quarantined ad-hoc application unexpectedly passed Gatekeeper assessment" >&2
+  exit 1
+fi
 
-open -n -W "$INSTALLED_APP" >"$OPEN_LOG" 2>&1 &
-OPEN_PID=$!
+"$INSTALLED_EXECUTABLE" >"$RUNTIME_LOG" 2>&1 &
+APP_PID=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if ! kill -0 "$OPEN_PID" 2>/dev/null; then
-    wait "$OPEN_PID" || true
-    cat "$OPEN_LOG" >&2
-    echo "Agentum exited during macOS launch smoke" >&2
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    wait "$APP_PID" || true
+    cat "$RUNTIME_LOG" >&2
+    echo "Agentum exited during native macOS runtime smoke" >&2
     exit 1
   fi
-  APP_PID="$(pgrep -x agentum-desktop | head -1 || true)"
-  [[ -n "$APP_PID" ]] && break
-  sleep 1
-done
-test -n "$APP_PID"
-
-for _ in 1 2 3 4 5; do
-  kill -0 "$OPEN_PID"
-  kill -0 "$APP_PID"
   sleep 1
 done
 
@@ -222,17 +218,7 @@ done
 if kill -0 "$APP_PID" 2>/dev/null; then
   kill -KILL "$APP_PID"
 fi
+wait "$APP_PID" 2>/dev/null || true
 APP_PID=""
-for _ in 1 2 3 4 5; do
-  if ! kill -0 "$OPEN_PID" 2>/dev/null; then
-    break
-  fi
-  sleep 1
-done
-if kill -0 "$OPEN_PID" 2>/dev/null; then
-  kill -TERM "$OPEN_PID"
-fi
-wait "$OPEN_PID" 2>/dev/null || true
-OPEN_PID=""
 
-echo "macOS release trust and native launch checks passed for $TARGET_TRIPLE"
+echo "ad-hoc macOS integrity and native runtime checks passed for $TARGET_TRIPLE"

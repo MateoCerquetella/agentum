@@ -27,16 +27,6 @@ on:
         required: true
       AGENTUM_RESTRICTED_PATTERNS:
         required: true
-      APPLE_CERTIFICATE:
-        required: true
-      APPLE_CERTIFICATE_PASSWORD:
-        required: true
-      APPLE_ID:
-        required: true
-      APPLE_PASSWORD:
-        required: true
-      APPLE_TEAM_ID:
-        required: true
   # With CI removed, maintainers can run this workflow directly against a
   # signed release tag. The configured repository provider is selected instead
   # of silently defaulting to a provider in this workflow.
@@ -162,28 +152,6 @@ jobs:
         env:
           RESTRICTED_PATTERNS: ${{ secrets.AGENTUM_RESTRICTED_PATTERNS }}
         run: test -n "$RESTRICTED_PATTERNS"
-      - name: Validate Apple distribution credentials
-        if: inputs.publish
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          missing=()
-          for required_name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            if [[ -z "${!required_name:-}" ]]; then
-              missing+=("$required_name")
-            fi
-          done
-          if (( ${#missing[@]} > 0 )); then
-            printf 'publishing requires Apple distribution secret: %s\n' "${missing[@]}" >&2
-            exit 1
-          fi
-
   build:
     name: build ${{ matrix.target }}
     needs: preflight
@@ -329,82 +297,6 @@ jobs:
         if: ${{ matrix.desktop != '' && contains(matrix.target, 'linux') }}
         shell: bash
         run: scripts/install-linuxdeploy.sh "$GITHUB_WORKSPACE/target/.tauri"
-      - name: Determine macOS signing mode
-        id: macos_signing
-        if: ${{ contains(matrix.target, 'apple-darwin') }}
-        shell: bash
-        env:
-          PUBLISH: ${{ inputs.publish }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          missing=()
-          for required_name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            if [[ -z "${!required_name:-}" ]]; then
-              missing+=("$required_name")
-            fi
-          done
-          if (( ${#missing[@]} > 0 )); then
-            if [[ "$PUBLISH" == "true" ]]; then
-              printf 'publishing requires Apple distribution secret: %s\n' "${missing[@]}" >&2
-              exit 1
-            fi
-            echo "::warning::Unsigned macOS branch rehearsal; trusted release checks are unavailable."
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Prepare isolated Developer ID keychain
-        if: ${{ contains(matrix.target, 'apple-darwin') && steps.macos_signing.outputs.enabled == 'true' }}
-        shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          umask 077
-          signing_dir="$RUNNER_TEMP/agentum-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BUILD_TARGET}"
-          keychain="$signing_dir/agentum.keychain-db"
-          certificate="$signing_dir/developer-id.p12"
-          keychain_password="$(openssl rand -hex 32)"
-          notary_profile="agentum-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BUILD_TARGET}"
-          mkdir -p "$signing_dir"
-          echo "::add-mask::$keychain_password"
-          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$certificate"
-          test -s "$certificate"
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$keychain_password" "$keychain"
-          identities="$(security find-identity -v -p codesigning "$keychain" \
-            | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p')"
-          identity_count="$(printf '%s\n' "$identities" | sed '/^$/d' | wc -l | tr -d ' ')"
-          test "$identity_count" -eq 1
-          signing_identity="$(printf '%s\n' "$identities" | sed -n '1p')"
-          test -n "$signing_identity"
-          xcrun notarytool store-credentials "$notary_profile" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --keychain "$keychain"
-          rm -f -- "$certificate"
-          {
-            echo "MACOS_SIGNING_DIR=$signing_dir"
-            echo "MACOS_KEYCHAIN_PATH=$keychain"
-            echo "APPLE_SIGNING_IDENTITY=$signing_identity"
-            echo "APPLE_NOTARY_PROFILE=$notary_profile"
-          } >> "$GITHUB_ENV"
       - name: Build desktop installers
         if: ${{ matrix.desktop != '' }}
         working-directory: crates/agentum-desktop
@@ -418,17 +310,6 @@ jobs:
           BUNDLE_FORMATS: ${{ matrix.desktop }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          MACOS_SIGNING_ENABLED: ${{ steps.macos_signing.outputs.enabled || 'false' }}
-          PUBLISH: ${{ inputs.publish }}
-          # Tauri imports the certificate into its own short-lived keychain and
-          # passes that exact keychain to codesign. The separately prepared
-          # keychain above holds the notarytool profile for the final DMG and is
-          # removed explicitly by this workflow.
-          APPLE_CERTIFICATE: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_ID: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
           # AppImage tooling must run without FUSE on hosted runners. AppImage
           # is release-critical because it is also Linux's updater artifact.
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -462,16 +343,6 @@ jobs:
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
           test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
           if [[ "$BUILD_TARGET" == *apple-darwin* ]]; then
-            if [[ "$MACOS_SIGNING_ENABLED" == "true" ]]; then
-              test -n "$APPLE_CERTIFICATE"
-              test -n "$APPLE_CERTIFICATE_PASSWORD"
-              test -n "$APPLE_SIGNING_IDENTITY"
-              test -n "$APPLE_ID"
-              test -n "$APPLE_PASSWORD"
-              test -n "$APPLE_TEAM_ID"
-            else
-              test "$PUBLISH" != "true"
-            fi
             cargo build --locked --release --target "$BUILD_TARGET" -p sherpa-rs
             mkdir -p ../../target/release
             for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.1.17.1.dylib; do
@@ -500,28 +371,6 @@ jobs:
           # `cargo build`, so this becomes a lockfile-enforced build.
           cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" \
             "${TAURI_CONFIG_ARGS[@]}" --verbose -- --locked
-
-      - name: Notarize and staple exact macOS DMG
-        if: ${{ contains(matrix.target, 'apple-darwin') && steps.macos_signing.outputs.enabled == 'true' }}
-        shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          BUNDLE_DIR="target/$BUILD_TARGET/release/bundle"
-          DMG_PATHS=()
-          while IFS= read -r -d '' candidate_dmg; do
-            DMG_PATHS+=("$candidate_dmg")
-          done < <(find "$BUNDLE_DIR/dmg" -maxdepth 1 -type f -name '*.dmg' -print0)
-          test "${#DMG_PATHS[@]}" -eq 1
-          DMG_PATH="${DMG_PATHS[0]}"
-          codesign --verify --strict --verbose=4 "$DMG_PATH"
-          xcrun notarytool submit "$DMG_PATH" \
-            --keychain-profile "$APPLE_NOTARY_PROFILE" \
-            --keychain "$MACOS_KEYCHAIN_PATH" \
-            --wait --timeout 30m
-          xcrun stapler staple "$DMG_PATH"
-          xcrun stapler validate "$DMG_PATH"
 
       - name: Build version-matched SDD SSH worker (Linux x64)
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
@@ -648,8 +497,8 @@ jobs:
           esac
           ls -la dist/
 
-      - name: Verify trusted macOS release
-        if: ${{ contains(matrix.target, 'apple-darwin') && steps.macos_signing.outputs.enabled == 'true' }}
+      - name: Verify ad-hoc macOS release
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
         shell: bash
         env:
           BUILD_TARGET: ${{ matrix.target }}
@@ -665,58 +514,6 @@ jobs:
           APP_PATH="$BUNDLE_DIR/macos/Agentum.app"
           STEM="agentum-${VER}-${OSARCH}"
           scripts/check-macos-release.sh "$APP_PATH" "dist/${STEM}.dmg" "$BUILD_TARGET" "$VER"
-
-      # A branch rehearsal without protected Apple credentials cannot prove
-      # Gatekeeper trust, but it can still separate a loader/runtime crash from
-      # the expected unsigned-distribution rejection. Publishing never reaches
-      # this path because preflight requires every Apple secret.
-      - name: Diagnose unsigned macOS rehearsal runtime
-        if: ${{ contains(matrix.target, 'apple-darwin') && steps.macos_signing.outputs.enabled != 'true' && !inputs.publish }}
-        shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          APP_PATH="target/$BUILD_TARGET/release/bundle/macos/Agentum.app"
-          EXECUTABLE="$APP_PATH/Contents/MacOS/agentum-desktop"
-          case "$BUILD_TARGET" in
-            aarch64-apple-darwin) EXPECTED_ARCH="arm64" ;;
-            x86_64-apple-darwin) EXPECTED_ARCH="x86_64" ;;
-            *) exit 2 ;;
-          esac
-          test "$(uname -m)" = "$EXPECTED_ARCH"
-          test "$(lipo -archs "$EXECUTABLE")" = "$EXPECTED_ARCH"
-          if codesign --verify --deep --strict --verbose=4 "$APP_PATH"; then
-            echo "unsigned rehearsal unexpectedly passed strict code-signing validation" >&2
-            exit 1
-          fi
-          if spctl --assess --type execute --verbose=4 "$APP_PATH"; then
-            echo "unsigned rehearsal unexpectedly passed Gatekeeper assessment" >&2
-            exit 1
-          fi
-          codesign --display --verbose=4 "$APP_PATH" 2>&1 || true
-          runtime_log="$RUNNER_TEMP/agentum-unsigned-runtime-${BUILD_TARGET}.log"
-          "$EXECUTABLE" >"$runtime_log" 2>&1 &
-          app_pid=$!
-          cleanup_runtime() {
-            if kill -0 "$app_pid" 2>/dev/null; then
-              kill -TERM "$app_pid" 2>/dev/null || true
-              wait "$app_pid" 2>/dev/null || true
-            fi
-          }
-          trap cleanup_runtime EXIT INT TERM
-          for _ in 1 2 3 4 5 6 7 8 9 10; do
-            if ! kill -0 "$app_pid" 2>/dev/null; then
-              wait "$app_pid" || true
-              cat "$runtime_log" >&2
-              echo "unsigned rehearsal has an independent macOS runtime failure" >&2
-              exit 1
-            fi
-            sleep 1
-          done
-          cleanup_runtime
-          trap - EXIT INT TERM
-          echo "native runtime stayed alive; Gatekeeper rejection is the isolated failure"
 
       - name: Verify canonical Linux AppImage installation
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
@@ -754,21 +551,6 @@ jobs:
           bundle_dir="target/$BUILD_TARGET/release/bundle"
           test -d "$bundle_dir"
           scripts/check-restricted-content.sh "$patterns" dist "$bundle_dir"
-
-      - name: Remove isolated signing keychain
-        if: ${{ always() && contains(matrix.target, 'apple-darwin') && steps.macos_signing.outputs.enabled == 'true' }}
-        shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          expected_prefix="$RUNNER_TEMP/agentum-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BUILD_TARGET}"
-          keychain="$expected_prefix/agentum.keychain-db"
-          security lock-keychain "$keychain" 2>/dev/null || true
-          security delete-keychain "$keychain" 2>/dev/null || true
-          if [[ -d "$expected_prefix" ]]; then
-            find "$expected_prefix" -depth -delete
-          fi
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

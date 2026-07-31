@@ -245,8 +245,9 @@ Use the `directories` crate. CLI mode on Linux server uses `/var/lib/agentum` vi
 - `ubuntu-22.04`: .AppImage + .deb
 - `windows-latest`: .msi
 
-macOS apps and DMGs are Developer ID signed, notarized, stapled, assessed by
-Gatekeeper, and launch-smoked on matching native runners before publication.
+macOS apps are signed inside-out with a certificate-free ad-hoc identity and
+launch-smoked on matching native runners before publication. They are not Apple
+notarized, so first launch may require explicit approval in macOS.
 
 ### 6.7 Updates
 

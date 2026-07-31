@@ -55,6 +55,7 @@
       "infoPlist": "Info.plist",
       "entitlements": "Entitlements.plist",
       "hardenedRuntime": true,
+      "signingIdentity": "-",
       "minimumSystemVersion": "11.0",
       "frameworks": [
         "../../target/release/libsherpa-onnx-c-api.dylib",

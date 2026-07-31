@@ -81,64 +81,55 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(set(locked_versions), owned_packages)
         self.assertEqual(set(locked_versions.values()), {version})
 
-    def test_publication_requires_apple_distribution_credentials(self) -> None:
+    def test_publication_requires_available_secrets_without_platform_certificates(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
         required = {
             "TAURI_SIGNING_PRIVATE_KEY",
             "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
             "HOMEBREW_TAP_DEPLOY_KEY",
             "AGENTUM_RESTRICTED_PATTERNS",
-            "APPLE_CERTIFICATE",
-            "APPLE_CERTIFICATE_PASSWORD",
-            "APPLE_ID",
-            "APPLE_PASSWORD",
-            "APPLE_TEAM_ID",
         }
         for secret in required:
             self.assertIn(f"      {secret}:\n        required: true", release)
 
-        unsupported = {
+        removed = {
+            "APPLE_CERTIFICATE",
+            "APPLE_CERTIFICATE_PASSWORD",
+            "APPLE_SIGNING_IDENTITY",
+            "APPLE_ID",
+            "APPLE_PASSWORD",
+            "APPLE_TEAM_ID",
             "WINDOWS_CERTIFICATE",
             "WINDOWS_CERTIFICATE_PASSWORD",
             "WINDOWS_CERTIFICATE_THUMBPRINT",
         }
-        for secret in unsupported:
+        for secret in removed:
             self.assertNotIn(secret, release)
 
-        self.assertIn("Validate Apple distribution credentials", release)
-        self.assertIn('for required_name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID', release)
         self.assertIn('test "$GITHUB_REF" = "refs/tags/v${version}"', release)
         self.assertIn('test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"', release)
         self.assertIn('test "$(git cat-file -t "refs/tags/$TAG")" = "tag"', release)
         self.assertIn("'.verification.verified'", release)
 
-    def test_updater_and_macos_platform_signing_are_both_required(self) -> None:
+    def test_updater_signing_and_adhoc_macos_validation_are_required(self) -> None:
         workflow = RELEASE.read_text(encoding="utf-8")
+        config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertIn("tool: tauri-cli@2.11.2", workflow)
         self.assertIn('test -n "$TAURI_SIGNING_PRIVATE_KEY"', workflow)
         self.assertIn('test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"', workflow)
         self.assertIn("Verify every updater signature against the embedded key", workflow)
         self.assertIn("agentum-updater-verify", workflow)
-        self.assertIn("Prepare isolated Developer ID keychain", workflow)
-        self.assertIn("Notarize and staple exact macOS DMG", workflow)
-        self.assertIn("Verify trusted macOS release", workflow)
-        self.assertIn("Diagnose unsigned macOS rehearsal runtime", workflow)
-        self.assertIn("Remove isolated signing keychain", workflow)
-        self.assertIn("APPLE_SIGNING_IDENTITY", workflow)
-        self.assertIn("Tauri imports the certificate into its own short-lived keychain", workflow)
-        self.assertIn("xcrun notarytool store-credentials", workflow)
-        self.assertIn("xcrun notarytool submit", workflow)
-        self.assertIn("xcrun stapler staple", workflow)
+        self.assertEqual(config["bundle"]["macOS"]["signingIdentity"], "-")
+        self.assertIn("Verify ad-hoc macOS release", workflow)
         self.assertIn('scripts/check-macos-release.sh "$APP_PATH" "dist/${STEM}.dmg"', workflow)
         self.assertLess(
-            workflow.index("Notarize and staple exact macOS DMG"),
-            workflow.index("Stage release"),
-        )
-        self.assertLess(
-            workflow.index("Verify trusted macOS release"),
+            workflow.index("Verify ad-hoc macOS release"),
             workflow.index("actions/upload-artifact"),
         )
         for unsupported in (
+            "Developer ID",
+            "notarytool",
+            "stapler",
             "Import Authenticode certificate",
             "Verify Authenticode signatures",
             "Remove Authenticode certificate material",
@@ -275,23 +266,20 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             release,
             r"target: aarch64-apple-darwin\s+runner: macos-14",
         )
-        self.assertIn('test "$(uname -m)" = "$EXPECTED_HOST_ARCH"', MACOS_RELEASE_AUDIT.read_text(encoding="utf-8"))
-        self.assertIn('open -n -W "$INSTALLED_APP"', MACOS_RELEASE_AUDIT.read_text(encoding="utf-8"))
-        self.assertIn('test "$(uname -m)" = "$EXPECTED_ARCH"', release)
-        self.assertIn("native runtime stayed alive; Gatekeeper rejection is the isolated failure", release)
+        audit = MACOS_RELEASE_AUDIT.read_text(encoding="utf-8")
+        self.assertIn('test "$(uname -m)" = "$EXPECTED_HOST_ARCH"', audit)
+        self.assertIn('"$INSTALLED_EXECUTABLE" >"$RUNTIME_LOG"', audit)
+        self.assertIn("native runtime checks passed", audit)
 
-    def test_macos_release_audit_enforces_trust_without_gatekeeper_bypasses(self) -> None:
+    def test_macos_release_audit_enforces_adhoc_integrity_without_bypasses(self) -> None:
         audit = MACOS_RELEASE_AUDIT.read_text(encoding="utf-8")
 
         for required in (
             "codesign --verify --deep --strict",
-            "Developer ID Application:",
-            "TeamIdentifier=",
-            "Timestamp=",
+            "Signature=adhoc",
+            "TeamIdentifier=not set",
             "runtime",
-            "xcrun stapler validate",
             "spctl --assess --type execute",
-            "spctl --assess --type open --context context:primary-signature",
             "hdiutil attach",
             "com.apple.quarantine",
             "Contents/Frameworks",
@@ -303,7 +291,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "xattr -cr",
             "spctl --master-disable",
             "codesign --force --deep",
-            "codesign --sign -",
+            "Developer ID Application:",
+            "notarytool",
+            "stapler",
         ):
             self.assertNotIn(bypass, audit)
 

@@ -11,7 +11,8 @@ brew install --cask agentum
 ```
 
 **Direct `.dmg` download:** Open the disk image and move **Agentum.app** into
-Applications, then open it normally. Both Apple Silicon and Intel bundles are
-signed with an Apple Developer ID certificate, notarized by Apple, and shipped
-with stapled tickets for offline Gatekeeper validation. Updater archives are
-separately cryptographically signed and validated before publication.
+Applications. These builds use certificate-free ad-hoc code signatures and are
+not Apple-notarized. On first launch, control-click **Agentum.app**, choose
+**Open**, then confirm **Open**; alternatively use **System Settings → Privacy &
+Security → Open Anyway**. Updater archives remain separately cryptographically
+signed and validated before publication.

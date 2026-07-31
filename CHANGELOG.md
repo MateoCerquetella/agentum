@@ -8,15 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **macOS downloads open under Gatekeeper.** Apple Silicon and Intel apps now
-  receive inside-out Developer ID signatures, hardened runtime, secure
-  timestamps, Apple notarization, and stapled tickets for both the app and DMG.
+- **macOS bundles receive consistent ad-hoc signatures.** Apple Silicon and
+  Intel apps now sign the executable and bundled native libraries inside-out
+  without requiring an Apple certificate.
 - **macOS release validation exercises the bytes users install.** Each target is
-  built on matching native hardware, then its staged DMG is mounted, assessed
-  under download quarantine, and launch-smoked before publication.
-- **Unsigned macOS releases fail closed.** Publishing now requires Apple
-  certificate and notarization credentials and removes its isolated signing
-  keychain even when a build fails.
+  built on matching native hardware, then its staged DMG is mounted and its
+  native executable is launch-smoked before publication.
+- **Gatekeeper behavior is explicit.** Certificate-free builds are expected to
+  require control-click → Open or Privacy & Security → Open Anyway on first
+  launch; updater archives remain cryptographically signed.
 
 ## [0.98.10] — 2026-07-31
 
