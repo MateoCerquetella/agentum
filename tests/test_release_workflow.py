@@ -125,6 +125,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("Diagnose unsigned macOS rehearsal runtime", workflow)
         self.assertIn("Remove isolated signing keychain", workflow)
         self.assertIn("APPLE_SIGNING_IDENTITY", workflow)
+        self.assertIn("Tauri imports the certificate into its own short-lived keychain", workflow)
         self.assertIn("xcrun notarytool store-credentials", workflow)
         self.assertIn("xcrun notarytool submit", workflow)
         self.assertIn("xcrun stapler staple", workflow)

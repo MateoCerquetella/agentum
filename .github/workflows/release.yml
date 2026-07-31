@@ -421,6 +421,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           MACOS_SIGNING_ENABLED: ${{ steps.macos_signing.outputs.enabled || 'false' }}
           PUBLISH: ${{ inputs.publish }}
+          # Tauri imports the certificate into its own short-lived keychain and
+          # passes that exact keychain to codesign. The separately prepared
+          # keychain above holds the notarytool profile for the final DMG and is
+          # removed explicitly by this workflow.
+          APPLE_CERTIFICATE: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_ID: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ steps.macos_signing.outputs.enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
@@ -458,6 +464,8 @@ jobs:
           test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
           if [[ "$BUILD_TARGET" == *apple-darwin* ]]; then
             if [[ "$MACOS_SIGNING_ENABLED" == "true" ]]; then
+              test -n "$APPLE_CERTIFICATE"
+              test -n "$APPLE_CERTIFICATE_PASSWORD"
               test -n "$APPLE_SIGNING_IDENTITY"
               test -n "$APPLE_ID"
               test -n "$APPLE_PASSWORD"
