@@ -4,6 +4,17 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.10] — 2026-07-31
+
+### Fixed
+
+- **The verified Linux update becomes the app users actually reopen.** AppImage
+  installation now registers the canonical `agentum-desktop` executable, its
+  desktop entry, and its bundled icon in the user's XDG data directories, so a
+  stale manual launcher no longer bypasses the repaired release.
+- **Release checksum manifests contain only payload entries.** `SHA256SUMS` no
+  longer records the empty manifest file while it is being generated.
+
 ## [0.98.9] — 2026-07-30
 
 ### Fixed
