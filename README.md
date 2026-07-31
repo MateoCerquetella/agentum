@@ -78,11 +78,13 @@ curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/
 
 All native installers live on the [latest release](https://github.com/mateocerquetella/agentum/releases/latest).
 The release installer requires the published SHA-256 manifest and validates the
-macOS bundle structure before replacing the app. macOS and Windows bundles are
-not OS-signed, so Gatekeeper or SmartScreen may warn on first launch; in-app
-updater artifacts remain cryptographically signed. The release `uninstall.sh`
-preserves user data by default; pass `--purge-data` explicitly to remove
-Agentum's known desktop data roots.
+macOS bundle structure before replacing the app. macOS bundles use ad-hoc code
+signatures rather than an Apple Developer ID certificate and are not notarized,
+so Gatekeeper may require control-click → Open or Privacy & Security → Open
+Anyway on first launch. Windows bundles are not Authenticode-signed, so
+SmartScreen may also warn. In-app updater artifacts remain cryptographically
+signed. The release `uninstall.sh` preserves user data by default; pass
+`--purge-data` explicitly to remove Agentum's known desktop data roots.
 
 ### Terminal UI / CLI
 

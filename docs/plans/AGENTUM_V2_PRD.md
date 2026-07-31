@@ -239,13 +239,15 @@ Use the `directories` crate. CLI mode on Linux server uses `/var/lib/agentum` vi
 
 ### 6.6 Build pipeline
 
-`desktop-release.yml` on tags `v*-desktop`:
+`release.yml` on verified version tags:
 - `macos-14`: arm64 dmg + .app
-- `macos-13`: amd64 dmg + .app
+- `macos-15-intel`: amd64 dmg + .app
 - `ubuntu-22.04`: .AppImage + .deb
 - `windows-latest`: .msi
 
-No signing/notarization yet. Right-click → Open the first time on Mac.
+macOS apps are signed inside-out with a certificate-free ad-hoc identity and
+launch-smoked on matching native runners before publication. They are not Apple
+notarized, so first launch may require explicit approval in macOS.
 
 ### 6.7 Updates
 

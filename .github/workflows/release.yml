@@ -1,9 +1,9 @@
 name: release
 
 on:
-  # Tag publication is invoked only by ci.yml after every validation job passes.
-  # This prevents a tag from racing an independent release workflow and
-  # publishing binaries while CI is red.
+  # Reusable callers may invoke tag publication only after their validation
+  # jobs pass. This prevents a tag from racing an independent release workflow
+  # and publishing binaries while upstream validation is red.
   workflow_call:
     inputs:
       publish:
@@ -152,7 +152,6 @@ jobs:
         env:
           RESTRICTED_PATTERNS: ${{ secrets.AGENTUM_RESTRICTED_PATTERNS }}
         run: test -n "$RESTRICTED_PATTERNS"
-
   build:
     name: build ${{ matrix.target }}
     needs: preflight
@@ -181,7 +180,7 @@ jobs:
           # "platform not found" (silently broken since the updater landed in
           # v0.15.0). The dmg is still built for first-time downloads.
           - target: x86_64-apple-darwin
-            runner: macos-14
+            runner: macos-15-intel
             cross: false
             desktop: app,dmg
           - target: aarch64-apple-darwin
@@ -231,11 +230,11 @@ jobs:
         working-directory: crates/agentum-desktop/ui
         run: bun install --frozen-lockfile && bun audit
 
-      # Pin to 1.94.1 to match rust-toolchain.toml (and ci.yml). @stable sets
+      # Pin to 1.94.1 to match rust-toolchain.toml. @stable sets
       # RUSTUP_TOOLCHAIN=stable and would add the matrix target to *stable* —
-      # but rust-toolchain.toml forces 1.94.1 for the actual build, leaving the
-      # cross-target (x86_64-apple-darwin on the arm64 mac runner) without a std
-      # and failing with "can't find crate for `core`" (broke v0.9.0/v0.9.1).
+      # but rust-toolchain.toml forces 1.94.1 for the actual build, leaving that
+      # toolchain's matrix target without a std and failing with "can't find
+      # crate for `core`" (broke v0.9.0/v0.9.1).
       # Installing the target onto the pinned toolchain cargo actually uses fixes it.
       - name: Install pinned Rust toolchain
         env:
@@ -330,7 +329,7 @@ jobs:
         # macOS dylib staging (the blocker that failed v0.14.0/.1/.2): tauri.conf's
         # macOS `frameworks` AND build.rs's `tauri_build::build()` validate the
         # paths ../../target/release/libsherpa-*.dylib (+ libonnxruntime), but a
-        # `--target` cross-build emits those dylibs into target/<triple>/release/,
+        # target-qualified build emits those dylibs into target/<triple>/release/,
         # so the frameworks check aborts with "Library not found".
         #
         # Produce the dylibs first by building ONLY the `sherpa-rs` dep: that runs
@@ -497,6 +496,24 @@ jobs:
               ;;
           esac
           ls -la dist/
+
+      - name: Verify ad-hoc macOS release
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="target/$BUILD_TARGET/release/bundle"
+          VER="$(jq -r '.version' crates/agentum-desktop/tauri.conf.json)"
+          case "$BUILD_TARGET" in
+            x86_64-apple-darwin) OSARCH="macos-x64" ;;
+            aarch64-apple-darwin) OSARCH="macos-arm64" ;;
+            *) exit 2 ;;
+          esac
+          APP_PATH="$BUNDLE_DIR/macos/Agentum.app"
+          STEM="agentum-${VER}-${OSARCH}"
+          scripts/check-macos-release.sh "$APP_PATH" "dist/${STEM}.dmg" "$BUILD_TARGET" "$VER"
 
       - name: Verify canonical Linux AppImage installation
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}

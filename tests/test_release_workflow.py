@@ -14,6 +14,7 @@ CHANGELOG = ROOT / "CHANGELOG.md"
 SDD_BOUNDARY = ROOT / "scripts/check-sdd-boundary.sh"
 LINUXDEPLOY_INSTALLER = ROOT / "scripts/install-linuxdeploy.sh"
 APPIMAGE_AUDIT = ROOT / "scripts/check-appimage-libraries.sh"
+MACOS_RELEASE_AUDIT = ROOT / "scripts/check-macos-release.sh"
 
 
 def workspace_version() -> str:
@@ -44,7 +45,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.10")
+        self.assertEqual(version, "0.98.11")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -80,7 +81,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(set(locked_versions), owned_packages)
         self.assertEqual(set(locked_versions.values()), {version})
 
-    def test_publication_requires_available_secrets_without_os_certificates(self) -> None:
+    def test_publication_requires_available_secrets_without_platform_certificates(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
         required = {
             "TAURI_SIGNING_PRIVATE_KEY",
@@ -110,25 +111,31 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('test "$(git cat-file -t "refs/tags/$TAG")" = "tag"', release)
         self.assertIn("'.verification.verified'", release)
 
-    def test_updater_signing_remains_required_without_platform_signing_steps(self) -> None:
+    def test_updater_signing_and_adhoc_macos_validation_are_required(self) -> None:
         workflow = RELEASE.read_text(encoding="utf-8")
+        config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertIn("tool: tauri-cli@2.11.2", workflow)
         self.assertIn('test -n "$TAURI_SIGNING_PRIVATE_KEY"', workflow)
         self.assertIn('test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"', workflow)
         self.assertIn("Verify every updater signature against the embedded key", workflow)
         self.assertIn("agentum-updater-verify", workflow)
-        for removed in (
-            "Import Developer ID certificate",
-            "Remove isolated signing keychain",
+        self.assertEqual(config["bundle"]["macOS"]["signingIdentity"], "-")
+        self.assertIn("Verify ad-hoc macOS release", workflow)
+        self.assertIn('scripts/check-macos-release.sh "$APP_PATH" "dist/${STEM}.dmg"', workflow)
+        self.assertLess(
+            workflow.index("Verify ad-hoc macOS release"),
+            workflow.index("actions/upload-artifact"),
+        )
+        for unsupported in (
+            "Developer ID",
+            "notarytool",
+            "stapler",
             "Import Authenticode certificate",
             "Verify Authenticode signatures",
             "Remove Authenticode certificate material",
             "certificateThumbprint",
-            "codesign",
-            "spctl",
-            "stapler",
         ):
-            self.assertNotIn(removed, workflow)
+            self.assertNotIn(unsupported, workflow)
 
     def test_release_rust_dependency_resolution_is_lockfile_bound(self) -> None:
         workflow = RELEASE.read_text(encoding="utf-8")
@@ -246,9 +253,51 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("NSAppTransportSecurity.NSAllowsLocalNetworking", release)
         self.assertIn('tar -tzf "dist/${STEM}.app.tar.gz"', release)
         self.assertIn('hdiutil verify "dist/${STEM}.dmg"', release)
-        self.assertNotIn("TeamIdentifier", release)
-        self.assertNotIn("codesign", release)
-        self.assertNotIn("stapler", release)
+        self.assertIn("scripts/check-macos-release.sh", release)
+
+    def test_macos_targets_build_and_launch_on_matching_native_runners(self) -> None:
+        release = RELEASE.read_text(encoding="utf-8")
+
+        self.assertRegex(
+            release,
+            r"target: x86_64-apple-darwin\s+runner: macos-15-intel",
+        )
+        self.assertRegex(
+            release,
+            r"target: aarch64-apple-darwin\s+runner: macos-14",
+        )
+        audit = MACOS_RELEASE_AUDIT.read_text(encoding="utf-8")
+        self.assertIn('test "$(uname -m)" = "$EXPECTED_HOST_ARCH"', audit)
+        self.assertIn('"$INSTALLED_EXECUTABLE" >"$RUNTIME_LOG"', audit)
+        self.assertIn("native runtime checks passed", audit)
+
+    def test_macos_release_audit_enforces_adhoc_integrity_without_bypasses(self) -> None:
+        audit = MACOS_RELEASE_AUDIT.read_text(encoding="utf-8")
+
+        for required in (
+            "codesign --verify --deep --strict",
+            "Signature=adhoc",
+            "TeamIdentifier=not set",
+            "runtime",
+            "flags=[^[:space:]]*[(,]runtime[),]",
+            "spctl --assess --type execute",
+            "hdiutil attach",
+            "com.apple.quarantine",
+            "Contents/Frameworks",
+            'lipo "$FRAMEWORKS/$library" -verify_arch x86_64 arm64',
+            "otool -L",
+        ):
+            self.assertIn(required, audit)
+        for bypass in (
+            "xattr -d com.apple.quarantine",
+            "xattr -cr",
+            "spctl --master-disable",
+            "codesign --force --deep",
+            "Developer ID Application:",
+            "notarytool",
+            "stapler",
+        ):
+            self.assertNotIn(bypass, audit)
 
 
 if __name__ == "__main__":
