@@ -149,6 +149,7 @@ require(
         "core:default",
         "core:window:allow-start-dragging",
         "main-webview-commands",
+        "notification:allow-is-permission-granted",
     ],
     "desktop capability permissions changed without review",
 )

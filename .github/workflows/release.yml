@@ -287,13 +287,17 @@ jobs:
           # search path" (broke v0.14.1 on Linux).
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
-            libgtk-3-dev librsvg2-dev patchelf libfuse2 file rpm \
+            libgtk-3-dev librsvg2-dev patchelf libfuse2 file rpm binutils \
             libayatana-appindicator3-dev libasound2-dev
       - name: Install tauri-cli
         if: ${{ matrix.desktop != '' }}
         uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
           tool: tauri-cli@2.11.2
+      - name: Install pinned linuxdeploy (Linux)
+        if: ${{ matrix.desktop != '' && contains(matrix.target, 'linux') }}
+        shell: bash
+        run: scripts/install-linuxdeploy.sh "$GITHUB_WORKSPACE/target/.tauri"
       - name: Build desktop installers
         if: ${{ matrix.desktop != '' }}
         working-directory: crates/agentum-desktop
@@ -310,6 +314,9 @@ jobs:
           # AppImage tooling must run without FUSE on hosted runners. AppImage
           # is release-critical because it is also Linux's updater artifact.
           APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Keep compositor-facing libraries aligned with the host EGL/Mesa
+          # stack. The pinned linuxdeploy inherits this list in plugin subprocesses.
+          LINUXDEPLOY_EXCLUDED_LIBRARIES: ${{ contains(matrix.target, 'linux') && 'libwayland-client.so*;libwayland-cursor.so*;libwayland-egl.so*;libwayland-server.so*' || '' }}
           NO_STRIP: "true"
         # shell: bash so this multi-line script runs under bash on Windows too —
         # the default Windows shell is PowerShell, which can't parse the bash
@@ -348,6 +355,11 @@ jobs:
             # linuxdeploy does not search that target directory by default, so
             # make it discoverable while AppImage dependencies are collected.
             export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/$BUILD_TARGET/release${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            # Tauri otherwise downloads its older linuxdeploy build into the
+            # account cache. Select the checksum-pinned tool staged above.
+            TAURI_CONFIG_ARGS=(--config '{"bundle":{"useLocalToolsDir":true}}')
+          else
+            TAURI_CONFIG_ARGS=()
           fi
           if [[ "$BUILD_TARGET" == *windows* ]]; then
             # git-bash ships /usr/bin/link.exe (GNU coreutils `link`), which under
@@ -358,7 +370,8 @@ jobs:
           # tauri-cli 2.11.2 has no top-level --locked option. Arguments after
           # `--` are inserted into its Cargo runner immediately after
           # `cargo build`, so this becomes a lockfile-enforced build.
-          cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" --verbose -- --locked
+          cargo tauri build --target "$BUILD_TARGET" --bundles "$BUNDLE_FORMATS" \
+            "${TAURI_CONFIG_ARGS[@]}" --verbose -- --locked
 
       - name: Build version-matched SDD SSH worker (Linux x64)
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
@@ -446,6 +459,7 @@ jobs:
               dpkg-deb --info "dist/${STEM}.deb" >/dev/null
               rpm -qpl "dist/${STEM}.rpm" >/dev/null
               file "dist/${STEM}.AppImage" | grep -q 'ELF'
+              scripts/check-appimage-libraries.sh "dist/${STEM}.AppImage"
               file "dist/agentum-desktop-${VER}-${OSARCH}" | grep -q 'ELF'
               file "dist/agentum-sdd-worker-${VER}-${OSARCH}" | grep -q 'ELF'
               test "$("dist/agentum-sdd-worker-${VER}-${OSARCH}" --version)" = \
@@ -632,6 +646,13 @@ jobs:
           test -s dist/SHA256SUMS
           cat dist/SHA256SUMS
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-homebrew-checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Extract release notes
         id: notes
         shell: bash
@@ -731,14 +752,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-homebrew-checksums
+          path: .
       - name: Update the Agentum cask in the tap
         # GITHUB_TOKEN cannot push to another repository, so the tap is written
         # with a deploy key scoped to the tap. This is release-critical.
         env:
           DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
         run: |
           set -eu
           if [ -z "${DEPLOY_KEY:-}" ]; then
@@ -746,9 +769,10 @@ jobs:
             exit 1
           fi
           ver="${TAG#v}"
-          # The release job published SHA256SUMS (sha + filename per asset). Pull
-          # the two macOS .dmg digests from it instead of re-downloading the dmgs.
-          gh release download "$TAG" --repo "$REPO" --pattern SHA256SUMS --dir . --clobber
+          # The release job passes its generated checksum manifest directly as a
+          # workflow artifact. The GitHub release is intentionally still private
+          # until this cask update succeeds.
+          test -s SHA256SUMS
           arm_sha="$(awk -v f="agentum-${ver}-macos-arm64.dmg" '$2 == f {print $1}' SHA256SUMS)"
           x64_sha="$(awk -v f="agentum-${ver}-macos-x64.dmg"  '$2 == f {print $1}' SHA256SUMS)"
           if [ -z "$arm_sha" ] || [ -z "$x64_sha" ]; then
