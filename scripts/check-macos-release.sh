@@ -117,7 +117,7 @@ EXPECTED_DYLIBS=(
 )
 for library in "${EXPECTED_DYLIBS[@]}"; do
   test -f "$FRAMEWORKS/$library"
-  lipo -verify_arch x86_64 arm64 "$FRAMEWORKS/$library"
+  lipo "$FRAMEWORKS/$library" -verify_arch x86_64 arm64
 done
 test "$(find "$FRAMEWORKS" -maxdepth 1 -type f -name '*.dylib' | wc -l | tr -d ' ')" -eq 3
 

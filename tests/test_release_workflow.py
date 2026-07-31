@@ -283,6 +283,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "hdiutil attach",
             "com.apple.quarantine",
             "Contents/Frameworks",
+            'lipo "$FRAMEWORKS/$library" -verify_arch x86_64 arm64',
             "otool -L",
         ):
             self.assertIn(required, audit)
