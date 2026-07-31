@@ -44,7 +44,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.9")
+        self.assertEqual(version, "0.98.10")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -197,6 +197,21 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('scripts/check-appimage-libraries.sh "dist/${STEM}.AppImage"', release)
         self.assertIn("libsherpa-onnx-c-api.so", audit)
         self.assertIn("libonnxruntime.so", audit)
+
+    def test_linux_appimage_installs_a_canonical_desktop_launcher(self) -> None:
+        release = RELEASE.read_text(encoding="utf-8")
+
+        install_check = release.index("Verify canonical Linux AppImage installation")
+        restricted_scan = release.index("Scan generated bundles for restricted content")
+        self.assertLess(install_check, restricted_scan)
+        self.assertIn("install_linux_appimage", release[install_check:restricted_scan])
+        self.assertIn("dev.agentum.app.desktop", release[install_check:restricted_scan])
+        self.assertIn("agentum-desktop.png", release[install_check:restricted_scan])
+
+    def test_checksum_manifest_does_not_hash_itself(self) -> None:
+        release = RELEASE.read_text(encoding="utf-8")
+
+        self.assertIn("! -name SHA256SUMS", release)
 
     def test_homebrew_consumes_checksums_without_reading_the_private_draft(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")

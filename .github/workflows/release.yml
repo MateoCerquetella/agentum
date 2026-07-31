@@ -498,6 +498,27 @@ jobs:
           esac
           ls -la dist/
 
+      - name: Verify canonical Linux AppImage installation
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export AGENTUM_INSTALL_SOURCE_ONLY=1
+          source scripts/install.sh
+          install_root="$RUNNER_TEMP/agentum-linux-install-contract"
+          TEMP_DIR="$install_root/temp"
+          INSTALL_DIR="$install_root/bin"
+          LINUX_APPLICATIONS_DIR="$install_root/share/applications"
+          LINUX_ICON_DIR="$install_root/share/icons/hicolor/256x256/apps"
+          mkdir -p "$TEMP_DIR"
+          ver="$(jq -r '.version' crates/agentum-desktop/tauri.conf.json)"
+          appimage="$GITHUB_WORKSPACE/dist/agentum-${ver}-linux-x64.AppImage"
+          install_linux_appimage "$appimage"
+          cmp "$appimage" "$INSTALL_DIR/agentum-desktop"
+          test -s "$LINUX_ICON_DIR/agentum-desktop.png"
+          grep -Fqx "Exec=\"$INSTALL_DIR/agentum-desktop\"" \
+            "$LINUX_APPLICATIONS_DIR/dev.agentum.app.desktop"
+
       - name: Scan generated bundles for restricted content
         shell: bash
         env:
@@ -639,7 +660,7 @@ jobs:
           set -euo pipefail
           (
             cd dist
-            find . -maxdepth 1 -type f ! -name '*.sig' -printf '%f\0' \
+            find . -maxdepth 1 -type f ! -name '*.sig' ! -name SHA256SUMS -printf '%f\0' \
               | sort -z \
               | xargs -0 sha256sum > SHA256SUMS
           )
