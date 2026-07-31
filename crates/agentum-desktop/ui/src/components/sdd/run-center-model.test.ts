@@ -4,8 +4,10 @@ import type { SddEvent, SddSnapshot } from '@/runtime/sdd-client'
 import {
   appendDurableEvent,
   availableRunActions,
+  SOURCE_OPTIONS,
   snapshotBelongsToRepository,
-  sourceGoal
+  sourceGoal,
+  sourceNeedsReference
 } from './run-center-model'
 
 function snapshot(overrides: Partial<SddSnapshot['run']> = {}): SddSnapshot {
@@ -125,6 +127,19 @@ describe('Run Center state model', () => {
 
   it('derives a non-empty authoring goal from an external source only', () => {
     expect(sourceGoal('github', '', 'https://github.com/a/b/issues/1')).toContain('https://')
+    expect(
+      sourceGoal('empirical', '', '.empirical/specs/add-report-export')
+    ).toContain('.empirical/specs/add-report-export')
     expect(sourceGoal('description', '', '')).toBe('')
+  })
+
+  it('models Empirical as a canonical reference-backed source', () => {
+    expect(sourceNeedsReference('empirical')).toBe(true)
+    expect(SOURCE_OPTIONS.find((option) => option.id === 'empirical')).toMatchObject({
+      label: 'Empirical',
+      valueLabel: 'Feature path',
+      valuePlaceholder: '.empirical/specs/example',
+      requiresIntegration: 'empirical'
+    })
   })
 })

@@ -4,6 +4,16 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Run Center imports Empirical SDD features as immutable New Spec sources.**
+  Local Empirical 0.20 schema-4 contracts, capability deltas, optional design,
+  and explicit plan actions now have a previewable, revision-bound Rust adapter.
+  The integration is artifact-intake only: Agentum keeps lifecycle and delivery
+  authority and never executes or mutates the Empirical runtime.
+
 ## [0.98.10] — 2026-07-31
 
 ### Fixed
