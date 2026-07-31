@@ -4,6 +4,22 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.9] — 2026-07-30
+
+### Fixed
+
+- **The production desktop mounts instead of opening a blank window.** A missing
+  E2E harness configuration is normalized before the application store reads it,
+  and the trusted webview can run the notification plugin's startup permission
+  query without an ACL rejection.
+- **Linux AppImages keep the host graphics stack coherent.** Release packaging
+  no longer combines Ubuntu Wayland client libraries with the target machine's
+  EGL/Mesa stack, while an artifact gate preserves Sherpa ONNX dictation
+  libraries and rejects future dependency regressions.
+- **Verified releases complete the Homebrew gate automatically.** The cask job
+  consumes checksums from its workflow run instead of trying to read a private
+  GitHub release draft.
+
 ## [0.98.8] — 2026-07-30
 
 ### Fixed

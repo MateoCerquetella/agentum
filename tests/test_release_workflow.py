@@ -12,6 +12,8 @@ TAURI_CONFIG = ROOT / "crates/agentum-desktop/tauri.conf.json"
 MACOS_ENTITLEMENTS = ROOT / "crates/agentum-desktop/Entitlements.plist"
 CHANGELOG = ROOT / "CHANGELOG.md"
 SDD_BOUNDARY = ROOT / "scripts/check-sdd-boundary.sh"
+LINUXDEPLOY_INSTALLER = ROOT / "scripts/install-linuxdeploy.sh"
+APPIMAGE_AUDIT = ROOT / "scripts/check-appimage-libraries.sh"
 
 
 def workspace_version() -> str:
@@ -42,7 +44,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.8")
+        self.assertEqual(version, "0.98.9")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -170,6 +172,45 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('"agentum-sdd-worker-${ver}-linux-x64"', release)
         self.assertIn('agentum-sdd-worker ${VER} protocol=1', release)
         self.assertIn("dist/agentum-sdd-worker-*", release)
+
+    def test_linux_appimage_uses_pinned_exclusions_and_audits_the_final_bundle(self) -> None:
+        release = RELEASE.read_text(encoding="utf-8")
+        installer = LINUXDEPLOY_INSTALLER.read_text(encoding="utf-8")
+        audit = APPIMAGE_AUDIT.read_text(encoding="utf-8")
+
+        self.assertIn('version="1-alpha-20251107-1"', installer)
+        self.assertIn(
+            'binary_sha256="c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"',
+            installer,
+        )
+        self.assertIn("Install pinned linuxdeploy (Linux)", release)
+        self.assertIn('"useLocalToolsDir":true', release)
+        self.assertIn("LINUXDEPLOY_EXCLUDED_LIBRARIES", release)
+        for library in (
+            "libwayland-client.so*",
+            "libwayland-cursor.so*",
+            "libwayland-egl.so*",
+            "libwayland-server.so*",
+        ):
+            self.assertIn(library, release)
+            self.assertIn(library, audit)
+        self.assertIn('scripts/check-appimage-libraries.sh "dist/${STEM}.AppImage"', release)
+        self.assertIn("libsherpa-onnx-c-api.so", audit)
+        self.assertIn("libonnxruntime.so", audit)
+
+    def test_homebrew_consumes_checksums_without_reading_the_private_draft(self) -> None:
+        release = RELEASE.read_text(encoding="utf-8")
+
+        self.assertEqual(release.count("name: release-homebrew-checksums"), 2)
+        checksum_upload = release.index("name: release-homebrew-checksums")
+        draft = release.index("Create private GitHub release draft")
+        homebrew = release.index("name: bump homebrew cask")
+        checksum_download = release.index("name: release-homebrew-checksums", homebrew)
+        publish = release.index("name: publish verified release")
+        self.assertLess(checksum_upload, draft)
+        self.assertLess(homebrew, checksum_download)
+        self.assertLess(checksum_download, publish)
+        self.assertNotIn('gh release download "$TAG"', release)
 
     def test_macos_bundle_configuration_preserves_runtime_boundaries(self) -> None:
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
