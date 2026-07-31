@@ -343,6 +343,7 @@ describe('SddWorkspaceBar interaction workflow', () => {
     mocks.getRun.mockImplementation(async () => structuredClone(serverSnapshot))
     mocks.getArtifacts.mockImplementation(async () => structuredClone(serverArtifacts))
     mocks.getEvents.mockImplementation(async () => structuredClone(serverEvents))
+    mocks.subscribeRunCenterSelection.mockReturnValue(vi.fn())
     mocks.subscribeSddEvents.mockImplementation((next: EventSubscription) => {
       subscription = next
       next.onOpen?.()

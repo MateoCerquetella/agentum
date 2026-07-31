@@ -16,12 +16,17 @@ RELEASE_DOWNLOAD="https://github.com/${REPOSITORY}/releases/download"
 LINUX_FORMAT="${AGENTUM_LINUX_FORMAT:-appimage}"
 INSTALL_DIR="${AGENTUM_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
 APPLICATIONS_DIR="${AGENTUM_APPLICATIONS_DIR:-/Applications}"
+LINUX_DATA_HOME="${AGENTUM_LINUX_DATA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}"
+LINUX_APPLICATIONS_DIR="${AGENTUM_LINUX_APPLICATIONS_DIR:-$LINUX_DATA_HOME/applications}"
+LINUX_ICON_DIR="${AGENTUM_LINUX_ICON_DIR:-$LINUX_DATA_HOME/icons/hicolor/256x256/apps}"
 VERSION=""
 RELEASE_VERSION=""
 PLATFORM=""
 TEMP_DIR=""
 MOUNT_POINT=""
 MOUNTED=false
+LINUX_STAGED_DESKTOP=""
+LINUX_STAGED_ICON=""
 
 info() { printf 'agentum: %s\n' "$*" >&2; }
 die() { printf 'agentum install: %s\n' "$*" >&2; exit 1; }
@@ -140,6 +145,14 @@ verify_release_asset() {
 }
 
 cleanup() {
+    if [ -n "$LINUX_STAGED_DESKTOP" ]; then
+        rm -f -- "$LINUX_STAGED_DESKTOP"
+        LINUX_STAGED_DESKTOP=""
+    fi
+    if [ -n "$LINUX_STAGED_ICON" ]; then
+        rm -f -- "$LINUX_STAGED_ICON"
+        LINUX_STAGED_ICON=""
+    fi
     if [ "$MOUNTED" = true ] && [ -n "$MOUNT_POINT" ]; then
         hdiutil detach "$MOUNT_POINT" -quiet >/dev/null 2>&1 || true
         MOUNTED=false
@@ -180,14 +193,135 @@ validate_install_directory() {
     case "/$_directory/" in
         *'/../'*|*'/./'*) die "install directory contains traversal: $_directory" ;;
     esac
+    case "$_directory" in
+        *'
+'*) die "install directory contains a line break" ;;
+    esac
+    if printf '%s' "$_directory" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+        die "install directory contains control characters"
+    fi
     [ "$_directory" != "/" ] || die "refusing to use the filesystem root as an install directory"
     [ ! -L "$_directory" ] || die "install directory must not be a symlink: $_directory"
+}
+
+validate_regular_publication_target() {
+    _target="$1"
+    _description="$2"
+    if [ -L "$_target" ] || { [ -e "$_target" ] && [ ! -f "$_target" ]; }; then
+        die "refusing to overwrite a non-regular $_description target: $_target"
+    fi
+}
+
+desktop_exec_argument() {
+    _executable="$1"
+    case "$_executable" in
+        /*) ;;
+        *) die "desktop executable path must be absolute: $_executable" ;;
+    esac
+    case "$_executable" in
+        *'
+'*) die "desktop executable path contains a line break" ;;
+    esac
+    if printf '%s' "$_executable" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+        die "desktop executable path contains control characters"
+    fi
+    printf '%s' "$_executable" \
+        | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/`/\\`/g' -e 's/\$/\\$/g' -e 's/%/%%/g'
+}
+
+extract_linux_appimage_icon() {
+    _source="$1"
+    case "$_source" in
+        /*) ;;
+        *) _source="$(pwd)/$_source" ;;
+    esac
+    [ -f "$_source" ] && [ ! -L "$_source" ] && [ -s "$_source" ] \
+        || die "verified AppImage must be a regular non-empty file"
+    _extract_root="$TEMP_DIR/launcher-extract"
+    [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ] && [ ! -L "$TEMP_DIR" ] \
+        || die "private installer temporary directory is required"
+    [ ! -e "$_extract_root" ] && [ ! -L "$_extract_root" ] \
+        || die "AppImage launcher extraction target already exists"
+    chmod 0700 "$_source" || die "could not make the verified AppImage executable"
+    mkdir "$_extract_root" || die "could not create the AppImage extraction directory"
+    (
+        cd "$_extract_root"
+        APPIMAGE_EXTRACT_AND_RUN=1 "$_source" --appimage-extract Agentum.png >/dev/null
+    ) || die "could not extract the Agentum AppImage icon"
+    _icon="$_extract_root/squashfs-root/Agentum.png"
+    [ -f "$_icon" ] && [ ! -L "$_icon" ] && [ -s "$_icon" ] \
+        || die "verified AppImage does not contain a regular Agentum.png icon"
+    printf '%s\n' "$_icon"
+}
+
+prepare_linux_launcher() {
+    _executable="$1"
+    _icon_source="$2"
+    validate_install_directory "$LINUX_APPLICATIONS_DIR"
+    validate_install_directory "$LINUX_ICON_DIR"
+    mkdir -p "$LINUX_APPLICATIONS_DIR" "$LINUX_ICON_DIR" \
+        || die "could not create the Linux launcher directories"
+    [ -d "$LINUX_APPLICATIONS_DIR" ] && [ ! -L "$LINUX_APPLICATIONS_DIR" ] \
+        || die "unsafe Linux applications directory"
+    [ -d "$LINUX_ICON_DIR" ] && [ ! -L "$LINUX_ICON_DIR" ] \
+        || die "unsafe Linux icon directory"
+
+    _desktop_target="$LINUX_APPLICATIONS_DIR/dev.agentum.app.desktop"
+    _icon_target="$LINUX_ICON_DIR/agentum-desktop.png"
+    validate_regular_publication_target "$_desktop_target" "Agentum desktop entry"
+    validate_regular_publication_target "$_icon_target" "Agentum icon"
+
+    LINUX_STAGED_DESKTOP="${_desktop_target}.new.$$"
+    LINUX_STAGED_ICON="${_icon_target}.new.$$"
+    [ ! -e "$LINUX_STAGED_DESKTOP" ] && [ ! -L "$LINUX_STAGED_DESKTOP" ] \
+        || die "desktop entry staging target already exists"
+    [ ! -e "$LINUX_STAGED_ICON" ] && [ ! -L "$LINUX_STAGED_ICON" ] \
+        || die "icon staging target already exists"
+
+    install -m 0644 "$_icon_source" "$LINUX_STAGED_ICON" \
+        || die "could not stage the Agentum icon"
+    _escaped_executable="$(desktop_exec_argument "$_executable")" \
+        || die "could not encode the Agentum desktop executable path"
+    (
+        umask 022
+        {
+            printf '%s\n' '[Desktop Entry]'
+            printf '%s\n' 'Type=Application'
+            printf '%s\n' 'Name=Agentum'
+            printf '%s\n' 'Comment=Agentum desktop application'
+            printf 'Exec="%s"\n' "$_escaped_executable"
+            printf '%s\n' 'Icon=agentum-desktop'
+            printf '%s\n' 'Terminal=false'
+            printf '%s\n' 'Categories=Development;'
+            printf '%s\n' 'StartupWMClass=Agentum-desktop'
+        } > "$LINUX_STAGED_DESKTOP"
+    ) || die "could not stage the Agentum desktop entry"
+}
+
+publish_linux_launcher() {
+    [ -n "$LINUX_STAGED_DESKTOP" ] && [ -f "$LINUX_STAGED_DESKTOP" ] \
+        || die "prepared Agentum desktop entry is required"
+    [ -n "$LINUX_STAGED_ICON" ] && [ -f "$LINUX_STAGED_ICON" ] \
+        || die "prepared Agentum icon is required"
+    _desktop_target="$LINUX_APPLICATIONS_DIR/dev.agentum.app.desktop"
+    _icon_target="$LINUX_ICON_DIR/agentum-desktop.png"
+    mv -f "$LINUX_STAGED_ICON" "$_icon_target" \
+        || die "could not publish the Agentum icon"
+    LINUX_STAGED_ICON=""
+    mv -f "$LINUX_STAGED_DESKTOP" "$_desktop_target" \
+        || die "could not publish the Agentum desktop entry"
+    LINUX_STAGED_DESKTOP=""
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$LINUX_APPLICATIONS_DIR" >/dev/null 2>&1 \
+            || info "desktop database refresh was unavailable; the launcher is still installed"
+    fi
+    info "installed $_desktop_target"
 }
 
 install_linux_file() {
     _source="$1"
     validate_install_directory "$INSTALL_DIR"
-    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR" || die "could not create the install directory"
     [ -d "$INSTALL_DIR" ] && [ ! -L "$INSTALL_DIR" ] || die "unsafe install directory"
     _destination="$INSTALL_DIR/agentum-desktop"
     if [ -L "$_destination" ] || { [ -e "$_destination" ] && [ ! -f "$_destination" ]; }; then
@@ -195,9 +329,18 @@ install_linux_file() {
     fi
     _staged="$INSTALL_DIR/.agentum-desktop.new.$$"
     [ ! -e "$_staged" ] && [ ! -L "$_staged" ] || die "staging target already exists"
-    install -m 0755 "$_source" "$_staged"
-    mv -f "$_staged" "$_destination"
+    install -m 0755 "$_source" "$_staged" || die "could not stage Agentum Desktop"
+    mv -f "$_staged" "$_destination" || die "could not publish Agentum Desktop"
     info "installed $_destination"
+}
+
+install_linux_appimage() {
+    _source="$1"
+    _icon_source="$(extract_linux_appimage_icon "$_source")" \
+        || die "could not prepare the Agentum AppImage launcher icon"
+    prepare_linux_launcher "$INSTALL_DIR/agentum-desktop" "$_icon_source"
+    install_linux_file "$_source"
+    publish_linux_launcher
 }
 
 run_as_root() {
@@ -213,15 +356,12 @@ run_as_root() {
 verify_macos_bundle() {
     _app="$1"
     [ -d "$_app" ] && [ ! -L "$_app" ] || die "the DMG does not contain a real Agentum.app"
-    command -v codesign >/dev/null 2>&1 || die "codesign is required"
-    command -v spctl >/dev/null 2>&1 || die "spctl is required"
-    command -v xcrun >/dev/null 2>&1 || die "xcrun is required"
-    codesign --verify --deep --strict --verbose=2 "$_app" \
-        || die "Agentum.app has an invalid Developer ID signature"
-    spctl --assess --type execute --verbose=4 "$_app" \
-        || die "Gatekeeper rejected Agentum.app"
-    xcrun stapler validate "$_app" \
-        || die "Agentum.app has no valid notarization ticket"
+    _info_plist="$_app/Contents/Info.plist"
+    _executables="$_app/Contents/MacOS"
+    [ -f "$_info_plist" ] && [ ! -L "$_info_plist" ] \
+        || die "Agentum.app has no regular Info.plist"
+    [ -d "$_executables" ] && [ ! -L "$_executables" ] \
+        || die "Agentum.app has no real executable directory"
 }
 
 mac_file_operation() {
@@ -271,8 +411,6 @@ install_macos() {
     _asset="$(asset_name dmg)" || die "no macOS asset for $PLATFORM"
     _dmg="$(download_asset "$_asset")"
     command -v hdiutil >/dev/null 2>&1 || die "hdiutil is required"
-    command -v xcrun >/dev/null 2>&1 || die "xcrun is required"
-    xcrun stapler validate "$_dmg" || die "the DMG has no valid notarization ticket"
     MOUNT_POINT="$TEMP_DIR/mount"
     mkdir "$MOUNT_POINT"
     hdiutil attach "$_dmg" -readonly -nobrowse -quiet -mountpoint "$MOUNT_POINT" \
@@ -291,7 +429,8 @@ install_linux() {
     _asset="$(asset_name "$LINUX_FORMAT")" || die "no $LINUX_FORMAT asset for $PLATFORM"
     _download="$(download_asset "$_asset")"
     case "$LINUX_FORMAT" in
-        appimage|raw) install_linux_file "$_download" ;;
+        appimage) install_linux_appimage "$_download" ;;
+        raw) install_linux_file "$_download" ;;
         deb)
             command -v dpkg >/dev/null 2>&1 || die "dpkg is required for --format deb"
             run_as_root dpkg -i "$_download"

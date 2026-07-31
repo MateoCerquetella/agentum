@@ -528,7 +528,10 @@ export default function CreateWorkspaceWizard({
   const launchScopeLocked = launchBusy || Boolean(launchCheckpoint.worktreeResult)
   const retryAvailable = isNewWorkRetryAvailable(launchProgress, launchBusy)
   const primaryLabel = step === 3
-    ? newWorkBusyLabel(launchProgress) ?? (launchBusy ? 'Preparing work…' : newWorkPrimaryLabel(workSource, retryAvailable))
+    ? newWorkBusyLabel(launchProgress) ??
+      (launchBusy
+        ? 'Preparing work…'
+        : newWorkPrimaryLabel(useSdd ? 'sdd' : workSource, retryAvailable))
     : wizardPrimaryLabel(step, creating)
   const primaryDisabled =
     step === 3
@@ -678,7 +681,7 @@ export default function CreateWorkspaceWizard({
         {step === 3 ? (
           <NewWorkProgressPanel
             progress={launchProgress}
-            workSource={workSource}
+            workSource={useSdd ? 'sdd' : workSource}
             selectedRepoIsGit={selectedRepoIsGit}
             busy={launchBusy}
             onCancel={onClose}

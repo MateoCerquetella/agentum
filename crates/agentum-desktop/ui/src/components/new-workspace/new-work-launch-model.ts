@@ -17,8 +17,8 @@ export type NewWorkCheckpoint = {
 
 export const NEW_WORK_STAGES: readonly NewWorkStage[] = [
   'issue',
-  'worktree',
-  'sdd'
+  'sdd',
+  'worktree'
 ];
 
 /** Stable footer copy for each durable launch checkpoint. Keeping these labels
