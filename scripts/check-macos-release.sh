@@ -60,9 +60,16 @@ cleanup() {
     wait "$OPEN_PID" 2>/dev/null || true
   fi
   if [[ "$MOUNTED" == true ]]; then
-    hdiutil detach "$MOUNT_DIR" -quiet || hdiutil detach "$MOUNT_DIR" -force -quiet || true
+    if hdiutil detach "$MOUNT_DIR" -quiet \
+      || hdiutil detach "$MOUNT_DIR" -force -quiet; then
+      MOUNTED=false
+    else
+      echo "warning: could not detach temporary release-audit image at $MOUNT_DIR" >&2
+    fi
   fi
-  if [[ "$WORK_DIR" == "$WORK_PARENT"/agentum-macos-release.* && -d "$WORK_DIR" ]]; then
+  if [[ "$MOUNTED" != true \
+    && "$WORK_DIR" == "$WORK_PARENT"/agentum-macos-release.* \
+    && -d "$WORK_DIR" ]]; then
     find "$WORK_DIR" -depth -delete
   fi
   exit "$status"
@@ -206,6 +213,15 @@ for _ in 1 2 3 4 5; do
 done
 
 kill -TERM "$APP_PID"
+for _ in 1 2 3 4 5; do
+  if ! kill -0 "$APP_PID" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+if kill -0 "$APP_PID" 2>/dev/null; then
+  kill -KILL "$APP_PID"
+fi
 APP_PID=""
 for _ in 1 2 3 4 5; do
   if ! kill -0 "$OPEN_PID" 2>/dev/null; then
