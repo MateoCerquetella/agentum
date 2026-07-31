@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 4,
+  "revision": 6,
+  "previousRevision": 5,
+  "actor": "agent",
+  "summary": "Verified all eight backend/policy criteria and the UI criterion with passing Rust, Python, TypeScript, full React, production-build, boundary, Chromium interaction, and screenshot evidence.",
+  "createdAt": "2026-07-31T21:52:38.871Z",
+  "state": {
+    "schemaVersion": 4,
+    "revision": 6,
+    "activeFeature": "implement-the-empirical-sdd-specification-from-https-github-com-mateocer",
+    "request": "Implement the Empirical SDD specification from https://github.com/MateoCerquetella/empirical-sdd into Agentum\n\nApproved Socratic discovery:\n- Primary user and problem: Agentum users and development teams who already author repository-local Empirical SDD features cannot bring those contracts into Agentum without pasting or rewriting them, which loses capability-delta, design, plan, revision, and provenance information. They need Agentum to consume an Empirical feature as a first-class source while retaining Agentum-owned execution, approvals, evidence, and delivery.\n- Smallest observable outcome: In Run Center, a user selects Empirical as the New Spec source, enters a repository-relative .empirical/specs/<feature> path, previews the exact source revision with title, diagnostics, design availability, capability count, and imported task count, then creates and authors an Agentum specification from that immutable snapshot. If the source changes between preview and creation, Agentum returns a source_revision_changed conflict before allocating any specification, worktree, attempt, or run.\n- Scope, non-goals, and constraints: The first version must provide a local, read-only, dependency-free Rust importer for Empirical protocol 0.20 schema 4 feature directories; preserve spec.md, ADDED/MODIFIED/REMOVED capability requirements and scenarios, optional design.md, and actionable plan.md items; expose preview/create API and desktop UI support; and document pinned upstream provenance. It must not execute the Empirical CLI or Node.js, install skills, mutate .empirical state, import journals or private runtime state, replace Agentum's database-backed lifecycle, add remote-source support, or publish an Empirical export. Agentum's existing sandbox, hash-bound approvals, no-side-effect-before-Deliver policy, and source-checkout policy cannot change.\n- Failure cases and risks: Traversal, symlink substitution, repository races, oversized trees, malformed capability deltas, unsupported schema versions, invalid UTF-8, and an active Empirical feature changing during preview are the principal risks. The importer must deny unsafe or unknown input, use anchored no-follow reads and bounded deterministic snapshots, emit actionable typed diagnostics, and leave the repository and Agentum database unchanged on every preview or validation failure. A creation re-read that does not match the previewed revision must fail with HTTP 409 and no fallback or partial allocation.\n- Required verification: Automated Rust unit and route integration tests must prove canonical import, capability/scenario preservation, task extraction, size and schema validation, traversal and symlink rejection, stable revision hashing, read-only preview, and conflict-before-allocation behavior against a fixture pinned to the upstream commit. React model and integration tests must prove the Empirical option, source payload, capability gating, preview summary, and error state. A production desktop build plus a real-browser interaction will open New Spec, choose Empirical, enter a fixture path, render the immutable preview summary and diagnostics, and capture a repository-relative screenshot of that visible state. Workspace tests, formatting, linting, restricted-content checks, and independent diff review must also pass.",
+    "profile": "complex",
+    "phase": "review",
+    "status": "waiting",
+    "repairAttempts": 0,
+    "message": "Verified all eight backend/policy criteria and the UI criterion with passing Rust, Python, TypeScript, full React, production-build, boundary, Chromium interaction, and screenshot evidence.",
+    "implementationActor": "agent",
+    "specDigest": "60837542a96b5b1f1a3e1a0a679c13392b85cef4f1e6ae972bc60c6b25bde739",
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "b12032f1045b12246b1b7a345acc0e205c7b72ec9db2ef565ba9623b421b6dee",
+    "evidence": [
+      {
+        "criterionId": "AC-1",
+        "kind": "test",
+        "passed": true,
+        "summary": "Server route tests prove capabilities advertise an available, previewable Empirical adapter and golden-policy tests prove no Empirical executable or package dependency exists.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-2",
+        "kind": "test",
+        "passed": true,
+        "summary": "Canonical fixture and route tests prove schema-4 preview fields, deterministic sha256 revision, sorted capabilities, design/task counts, and diagnostics.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-3",
+        "kind": "test",
+        "passed": true,
+        "summary": "Importer tests cover stable rendering and preservation of every ADDED, MODIFIED, and REMOVED Requirement and Scenario with capability provenance.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-4",
+        "kind": "test",
+        "passed": true,
+        "summary": "Importer and route tests prove optional design and serial plan-task extraction while evidence, decisions, events, locks, and runtime state are excluded from normalized content and revision material.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-5",
+        "kind": "test",
+        "passed": true,
+        "summary": "Route integration proves preview is read-only and a changed expected revision returns source_revision_changed before any Agentum aggregate or repository artifact is allocated.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-6",
+        "kind": "test",
+        "passed": true,
+        "summary": "Adversarial importer tests pass for unsafe paths, schema/state/delta errors, UTF-8, unknown shapes, limits, symlinks, locks, and parent replacement races.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-UI-1",
+        "kind": "test",
+        "passed": true,
+        "summary": "Focused component/model tests and the complete 6,472-test UI suite prove source gating, typed payload, preview fields, diagnostics, and revision-bound creation.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-UI-1",
+        "kind": "browser",
+        "passed": true,
+        "summary": "Chromium interaction with the exported production NewSpecDialog passed all nine Empirical selection, path, preview-summary, capability, design, and diagnostic assertions with zero console errors.",
+        "artifact": ".empirical/evidence/empirical-new-spec-preview.json"
+      },
+      {
+        "criterionId": "AC-UI-1",
+        "kind": "screenshot",
+        "passed": true,
+        "summary": "The captured 1440x1200 dialog visibly shows Empirical selected, the canonical feature path, immutable sha256 revision, one capability, three tasks, design availability, and both boundary diagnostics.",
+        "artifact": ".empirical/evidence/empirical-new-spec-preview.png"
+      },
+      {
+        "criterionId": "AC-7",
+        "kind": "test",
+        "passed": true,
+        "summary": "Golden-policy tests bind fixture hashes and the upstream commit and assert the documented local artifact-intake, immutable preview/create, dependency-free, non-runtime, and non-export boundary.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      },
+      {
+        "criterionId": "AC-8",
+        "kind": "test",
+        "passed": true,
+        "summary": "Existing source tests, repository boundary/policy tests, server clippy, full UI typecheck and 6,472-test suite, and production build pass without changing provider, approval, evidence, or Deliver boundaries.",
+        "artifact": ".empirical/evidence/verification-report.md"
+      }
+    ],
+    "updatedAt": "2026-07-31T21:52:38.871Z"
+  }
+}

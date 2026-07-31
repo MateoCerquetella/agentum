@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 4,
+  "revision": 4,
+  "activeFeature": "add-report-export",
+  "request": "Add a durable report export capability",
+  "profile": "complex",
+  "phase": "implement",
+  "status": "waiting",
+  "repairAttempts": 0,
+  "message": "Plan approved",
+  "implementationActor": null,
+  "specDigest": "fixture-spec-digest",
+  "capabilityArchiveRequired": true,
+  "capabilityDeltaDigest": "fixture-delta-digest",
+  "evidence": [],
+  "updatedAt": "2026-07-31T00:00:00.000Z"
+}

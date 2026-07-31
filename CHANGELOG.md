@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.98.11] — 2026-07-31
 
+### Added
+
+- **Run Center imports Empirical SDD features as immutable New Spec sources.**
+  Local Empirical 0.20 schema-4 contracts, capability deltas, optional design,
+  and explicit plan actions now have a previewable, revision-bound Rust adapter.
+  The integration is artifact-intake only: Agentum keeps lifecycle and delivery
+  authority and never executes or mutates the Empirical runtime.
+
 ### Fixed
 
 - **macOS bundles receive consistent ad-hoc signatures.** Apple Silicon and

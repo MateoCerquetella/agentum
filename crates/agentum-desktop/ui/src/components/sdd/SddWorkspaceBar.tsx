@@ -343,6 +343,8 @@ function sourceFromDraft(
     }
     case 'openspec':
       return { type: 'openspec', path: reference, expectedSourceRevision }
+    case 'empirical':
+      return { type: 'empirical', path: reference, expectedSourceRevision }
   }
 }
 
@@ -2749,8 +2751,16 @@ export function NewSpecDialog({
               <p className="mt-1 text-muted-foreground">
                 Immutable {sourcePreview.kind} snapshot · {sourcePreview.taskCount} imported task
                 {sourcePreview.taskCount === 1 ? '' : 's'}
+                {sourcePreview.capabilityCount > 0
+                  ? ` · ${sourcePreview.capabilityCount} ${sourcePreview.capabilityCount === 1 ? 'capability' : 'capabilities'}`
+                  : ''}
                 {sourcePreview.designAvailable ? ' · design available' : ''}
               </p>
+              {sourcePreview.capabilities.length > 0 ? (
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  {sourcePreview.capabilities.join(', ')}
+                </p>
+              ) : null}
               {sourcePreview.diagnostics.map((diagnostic) => (
                 <p
                   key={`${diagnostic.code}:${diagnostic.path ?? ''}`}

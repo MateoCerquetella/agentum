@@ -20,6 +20,7 @@ const MAX_SOURCE_TOTAL_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SOURCE_FILES: usize = 256;
 const MAX_SOURCE_DIRECTORIES: usize = 512;
 const MAX_SOURCE_DEPTH: usize = 16;
+const EMPIRICAL_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +54,8 @@ pub struct NormalizedSource {
     pub design: Option<String>,
     #[serde(default)]
     pub tasks: Vec<ImportedTask>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     #[serde(default)]
     pub diagnostics: Vec<SourceDiagnostic>,
 }
@@ -145,7 +148,7 @@ pub enum SourceError {
     Artifact(#[from] artifacts::ArtifactError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SourceFile {
     relative: String,
     content: String,
@@ -214,6 +217,7 @@ pub fn normalize_markdown_intake(
         external_reference: None,
         design: None,
         tasks: Vec::new(),
+        capabilities: Vec::new(),
         diagnostics: Vec::new(),
     })
 }
@@ -612,6 +616,7 @@ pub fn normalize_work_item(input: WorkItemSource<'_>) -> Result<NormalizedSource
         }),
         design: None,
         tasks: Vec::new(),
+        capabilities: Vec::new(),
         diagnostics: Vec::new(),
     })
 }
@@ -633,6 +638,503 @@ pub fn import_openspec(
     reference: &str,
 ) -> Result<NormalizedSource, SourceError> {
     import_openspec_with_hook(repository, reference, || {})
+}
+
+/// Import one repository-local Empirical 0.20 feature as read-only authoring
+/// context. Agentum deliberately consumes only the contract artifact set: the
+/// Empirical runtime, journal, locks, evidence, and capability archive remain
+/// outside Agentum's authority.
+pub fn import_empirical(
+    repository: &Path,
+    reference: &str,
+) -> Result<NormalizedSource, SourceError> {
+    import_empirical_with_hook(repository, reference, || {})
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmpiricalConfigHeader {
+    schema_version: u32,
+    profile: String,
+    #[serde(default)]
+    setup_complete: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmpiricalStateHeader {
+    schema_version: u32,
+    active_feature: Option<String>,
+    profile: String,
+    phase: String,
+    status: String,
+}
+
+fn import_empirical_with_hook<F>(
+    repository: &Path,
+    reference: &str,
+    after_open: F,
+) -> Result<NormalizedSource, SourceError>
+where
+    F: FnOnce(),
+{
+    let relative = validate_empirical_reference(reference)?;
+    let feature = change_name(&relative).to_owned();
+    let repository = artifacts::AnchoredDirectory::open(repository)?;
+    let (empirical, feature_root) = open_empirical_feature(&repository, &feature)?;
+    let first_config = read_empirical_file(&empirical, "config.json", ".empirical/config.json")?;
+    let first = collect_empirical_feature_files(&feature_root)?;
+    after_open();
+    let second_config = read_empirical_file(&empirical, "config.json", ".empirical/config.json")?;
+    let second = collect_empirical_feature_files(&feature_root)?;
+    if first_config.hash != second_config.hash || first != second {
+        return Err(SourceError::Changed(
+            "Empirical configuration or imported feature artifacts changed during the snapshot"
+                .into(),
+        ));
+    }
+
+    // A held handle protects the reads. Reopening and comparing the final
+    // directory identity additionally rejects an ambient parent replacement
+    // instead of accepting a now-detached snapshot.
+    let (_, rebound_root) = open_empirical_feature(&repository, &feature)?;
+    if !feature_root.same_identity(&rebound_root)? {
+        return Err(SourceError::Changed(
+            "Empirical feature directory was replaced during import".into(),
+        ));
+    }
+
+    let config: EmpiricalConfigHeader =
+        serde_json::from_str(&first_config.content).map_err(|error| {
+            SourceError::Malformed(format!("invalid .empirical/config.json: {error}"))
+        })?;
+    if config.schema_version != EMPIRICAL_SCHEMA_VERSION || !config.setup_complete {
+        return Err(SourceError::Unsupported(format!(
+            "Empirical configuration must be completed schema {EMPIRICAL_SCHEMA_VERSION}"
+        )));
+    }
+    if !matches!(config.profile.as_str(), "fast" | "complex" | "quick") {
+        return Err(SourceError::Unsupported(format!(
+            "Empirical configuration uses unknown profile {:?}",
+            config.profile
+        )));
+    }
+    let state_file = required_file(&first, "state.json")?;
+    let state: EmpiricalStateHeader =
+        serde_json::from_str(&state_file.content).map_err(|error| {
+            SourceError::Malformed(format!("invalid Empirical state.json: {error}"))
+        })?;
+    if state.schema_version != EMPIRICAL_SCHEMA_VERSION {
+        return Err(SourceError::Unsupported(format!(
+            "Empirical feature state uses schema {}; only schema {EMPIRICAL_SCHEMA_VERSION} is supported",
+            state.schema_version
+        )));
+    }
+    if state.active_feature.as_deref() != Some(feature.as_str()) {
+        return Err(SourceError::Malformed(format!(
+            "Empirical state activeFeature does not match {feature:?}"
+        )));
+    }
+    if !valid_empirical_state(&state) {
+        return Err(SourceError::Unsupported(
+            "Empirical state contains a profile, phase, or status combination that is invalid for schema 4".into(),
+        ));
+    }
+
+    let spec = required_file(&first, "spec.md")?;
+    let normalized_spec = normalize_markdown(&spec.content)?;
+    let title = first_heading(&normalized_spec)
+        .unwrap_or_else(|| feature.replace('-', " "))
+        .trim()
+        .chars()
+        .take(160)
+        .collect::<String>();
+
+    let mut requirements = Vec::new();
+    let mut requirement_index = 1usize;
+    let mut scenario_index = 1usize;
+    let mut capabilities = Vec::new();
+    for (path, file) in first.iter().filter(|(path, _)| path.starts_with("deltas/")) {
+        let capability = path
+            .strip_prefix("deltas/")
+            .and_then(|value| value.strip_suffix(".md"))
+            .ok_or_else(|| SourceError::Unsupported(format!("unknown Empirical delta: {path}")))?;
+        capabilities.push(capability.to_owned());
+        requirements.extend(parse_empirical_delta(
+            capability,
+            &file.content,
+            &mut requirement_index,
+            &mut scenario_index,
+        )?);
+    }
+    capabilities.sort();
+    capabilities.dedup();
+    if state.profile == "complex" && capabilities.is_empty() {
+        return Err(SourceError::Malformed(
+            "Complex Empirical features require at least one deltas/<capability>.md artifact"
+                .into(),
+        ));
+    }
+
+    let design = first
+        .get("design.md")
+        .map(|file| normalize_markdown(&file.content))
+        .transpose()?;
+    let tasks = first
+        .get("plan.md")
+        .map(|file| parse_empirical_plan(&file.content))
+        .transpose()?
+        .unwrap_or_default();
+    let mut diagnostics = vec![SourceDiagnostic {
+        severity: SourceDiagnosticSeverity::Info,
+        code: "empirical_artifact_intake_only".into(),
+        message: "Agentum imports Empirical contract artifacts only; Agentum remains authoritative for execution, approvals, evidence, and delivery.".into(),
+        path: None,
+    }];
+    if state.phase != "done" || state.status != "done" {
+        diagnostics.push(SourceDiagnostic {
+            severity: SourceDiagnosticSeverity::Warning,
+            code: "empirical_feature_in_progress".into(),
+            message: format!(
+                "The Empirical feature is currently {}/{}; creation is bound to this exact artifact revision.",
+                state.phase, state.status
+            ),
+            path: Some("state.json".into()),
+        });
+    }
+    if first.contains_key("plan.md") && tasks.is_empty() {
+        diagnostics.push(SourceDiagnostic {
+            severity: SourceDiagnosticSeverity::Info,
+            code: "empirical_plan_without_actions".into(),
+            message:
+                "plan.md has no checklist or ordered-list actions, so it creates no imported tasks."
+                    .into(),
+            path: Some("plan.md".into()),
+        });
+    } else if !tasks.is_empty() {
+        diagnostics.push(SourceDiagnostic {
+            severity: SourceDiagnosticSeverity::Warning,
+            code: "empirical_plan_untyped".into(),
+            message: "Empirical Markdown plan items are imported as serial intent without inferred commands, scopes, or parallel-safety claims.".into(),
+            path: Some("plan.md".into()),
+        });
+    }
+
+    let markdown = render_imported_empirical(&normalized_spec, &requirements);
+    let source_revision =
+        empirical_source_revision(&first, &first_config.hash, &state, feature.as_str());
+    Ok(NormalizedSource {
+        kind: "empirical".into(),
+        title,
+        markdown,
+        source_revision,
+        source_path: relative.to_string_lossy().replace('\\', "/"),
+        external_reference: None,
+        design,
+        tasks,
+        capabilities,
+        diagnostics,
+    })
+}
+
+fn open_empirical_feature(
+    repository: &artifacts::AnchoredDirectory,
+    feature: &str,
+) -> Result<(artifacts::AnchoredDirectory, artifacts::AnchoredDirectory), SourceError> {
+    let empirical = repository.open_child(".empirical")?;
+    let specs = empirical.open_child("specs")?;
+    let feature_root = specs.open_child(feature)?;
+    Ok((empirical, feature_root))
+}
+
+fn validate_empirical_reference(reference: &str) -> Result<PathBuf, SourceError> {
+    let normalized = reference.trim().replace('\\', "/");
+    let path = Path::new(&normalized);
+    if normalized.is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Err(SourceError::UnsafeReference(normalized));
+    }
+    let parts = path
+        .components()
+        .filter_map(|part| match part {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts[0] != ".empirical"
+        || parts[1] != "specs"
+        || !valid_change_name(parts[2])
+    {
+        return Err(SourceError::UnsafeReference(normalized));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn collect_empirical_feature_files(
+    feature_root: &artifacts::AnchoredDirectory,
+) -> Result<BTreeMap<String, SourceFile>, SourceError> {
+    let entries = feature_root.entries()?;
+    if entries.len() > MAX_SOURCE_FILES {
+        return Err(SourceError::TooLarge(format!(
+            "Empirical feature has more than {MAX_SOURCE_FILES} top-level entries"
+        )));
+    }
+    let mut files = BTreeMap::new();
+    let mut total = 0usize;
+    let mut has_events = false;
+    for entry in entries {
+        match (entry.name.as_str(), entry.kind) {
+            (
+                "state.json" | "spec.md" | "design.md" | "plan.md",
+                artifacts::AnchoredEntryKind::File,
+            ) => {
+                let file = read_empirical_file(feature_root, &entry.name, &entry.name)?;
+                total = bounded_empirical_total(total, file.content.len(), &entry.name)?;
+                files.insert(entry.name, file);
+            }
+            ("decisions.md" | "evidence.json", artifacts::AnchoredEntryKind::File) => {
+                // Decision and evidence records remain Empirical runtime/design
+                // provenance. Validate only their shape; do not read, import,
+                // or hash their body.
+            }
+            ("events", artifacts::AnchoredEntryKind::Directory) => has_events = true,
+            ("deltas", artifacts::AnchoredEntryKind::Directory) => {
+                let deltas = feature_root.open_child("deltas")?;
+                let entries = deltas.entries()?;
+                if entries.len() > MAX_SOURCE_FILES {
+                    return Err(SourceError::TooLarge(format!(
+                        "Empirical feature has more than {MAX_SOURCE_FILES} capability deltas"
+                    )));
+                }
+                for delta in entries {
+                    if delta.kind != artifacts::AnchoredEntryKind::File
+                        || !delta.name.ends_with(".md")
+                    {
+                        return Err(SourceError::Unsupported(format!(
+                            "unsupported Empirical delta entry: {}",
+                            delta.name
+                        )));
+                    }
+                    let capability = delta.name.trim_end_matches(".md");
+                    if !valid_change_name(capability) {
+                        return Err(SourceError::UnsafeReference(format!(
+                            "invalid Empirical capability delta name: {}",
+                            delta.name
+                        )));
+                    }
+                    let relative = format!("deltas/{}", delta.name);
+                    let file = read_empirical_file(&deltas, &delta.name, &relative)?;
+                    total = bounded_empirical_total(total, file.content.len(), &relative)?;
+                    files.insert(relative, file);
+                }
+            }
+            ("state.lock", _) => {
+                return Err(SourceError::Changed(
+                    "Empirical feature is locked by an active transition; retry after it completes"
+                        .into(),
+                ));
+            }
+            (known, _)
+                if matches!(
+                    known,
+                    "state.json"
+                        | "spec.md"
+                        | "design.md"
+                        | "plan.md"
+                        | "decisions.md"
+                        | "evidence.json"
+                        | "events"
+                        | "deltas"
+                ) =>
+            {
+                return Err(SourceError::Unsupported(format!(
+                    "Empirical artifact has the wrong file type: {known}"
+                )));
+            }
+            (unknown, _) => {
+                return Err(SourceError::Unsupported(format!(
+                    "unknown Empirical feature entry: {unknown}"
+                )));
+            }
+        }
+    }
+    if !has_events {
+        return Err(SourceError::Malformed(
+            "Empirical feature is missing its events journal directory".into(),
+        ));
+    }
+    required_file(&files, "state.json")?;
+    required_file(&files, "spec.md")?;
+    Ok(files)
+}
+
+fn valid_empirical_state(state: &EmpiricalStateHeader) -> bool {
+    let phase_is_valid = match state.profile.as_str() {
+        "fast" => matches!(state.phase.as_str(), "implement" | "done"),
+        "complex" => matches!(
+            state.phase.as_str(),
+            "specify" | "design" | "plan" | "implement" | "verify" | "review" | "archive" | "done"
+        ),
+        "quick" => matches!(
+            state.phase.as_str(),
+            "shape" | "implement" | "verify" | "review" | "done"
+        ),
+        _ => false,
+    };
+    let status_is_valid = if state.phase == "done" {
+        state.status == "done"
+    } else {
+        matches!(
+            state.status.as_str(),
+            "waiting" | "awaiting_human" | "blocked"
+        )
+    };
+    phase_is_valid && status_is_valid
+}
+
+fn read_empirical_file(
+    directory: &artifacts::AnchoredDirectory,
+    name: &str,
+    relative: &str,
+) -> Result<SourceFile, SourceError> {
+    let (bytes, hash) = directory.read_file(name)?;
+    if bytes.len() > MAX_SOURCE_FILE_BYTES {
+        return Err(SourceError::TooLarge(relative.into()));
+    }
+    let content = String::from_utf8(bytes)
+        .map_err(|_| SourceError::Malformed(format!("{relative} is not UTF-8")))?;
+    reject_controls(relative, &content)?;
+    Ok(SourceFile {
+        relative: relative.into(),
+        content,
+        hash,
+    })
+}
+
+fn bounded_empirical_total(
+    current: usize,
+    added: usize,
+    relative: &str,
+) -> Result<usize, SourceError> {
+    let total = current.saturating_add(added);
+    if total > MAX_SOURCE_TOTAL_BYTES {
+        return Err(SourceError::TooLarge(format!(
+            "Empirical imported artifacts exceed {MAX_SOURCE_TOTAL_BYTES} bytes at {relative}"
+        )));
+    }
+    Ok(total)
+}
+
+fn parse_empirical_delta(
+    capability: &str,
+    markdown: &str,
+    requirement_index: &mut usize,
+    scenario_index: &mut usize,
+) -> Result<Vec<Requirement>, SourceError> {
+    parse_delta_spec(capability, markdown, requirement_index, scenario_index).map_err(|error| {
+        match error {
+            SourceError::Malformed(message) => SourceError::Malformed(message.replace(
+                &format!("specs/{capability}/spec.md"),
+                &format!("deltas/{capability}.md"),
+            )),
+            other => other,
+        }
+    })
+}
+
+fn render_imported_empirical(spec: &str, requirements: &[Requirement]) -> String {
+    let mut output = String::from("# Imported Empirical feature\n\n## Feature contract\n\n");
+    output.push_str(spec.trim());
+    if !requirements.is_empty() {
+        output.push_str("\n\n## Capability requirements\n\n");
+        for requirement in requirements {
+            output.push_str(&format!(
+                "- {} [{} / {}] **{}:** {}\n",
+                requirement.id,
+                requirement.capability,
+                requirement.operation,
+                requirement.name,
+                requirement.statement
+            ));
+        }
+        output.push_str("\n## Capability acceptance criteria\n\n");
+        for requirement in requirements {
+            for scenario in &requirement.scenarios {
+                output.push_str(&format!(
+                    "- {} [{} / {}] **{}:** {}\n",
+                    scenario.id,
+                    requirement_marker(&requirement.id),
+                    requirement.capability,
+                    scenario.name,
+                    scenario.body
+                ));
+            }
+        }
+    }
+    normalize_markdown(&output).expect("generated Empirical Markdown has no forbidden controls")
+}
+
+fn parse_empirical_plan(markdown: &str) -> Result<Vec<ImportedTask>, SourceError> {
+    let mut tasks = parse_tasks(markdown)?;
+    let mut seen = tasks
+        .iter()
+        .map(|task| task.objective.clone())
+        .collect::<BTreeSet<_>>();
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        let Some((prefix, rest)) = trimmed
+            .split_once(". ")
+            .or_else(|| trimmed.split_once(") "))
+        else {
+            continue;
+        };
+        if prefix.is_empty() || !prefix.chars().all(|character| character.is_ascii_digit()) {
+            continue;
+        }
+        let objective = rest.trim();
+        if objective.is_empty() {
+            return Err(SourceError::Malformed(
+                "plan.md has an empty ordered-list action".into(),
+            ));
+        }
+        let objective = objective.chars().take(500).collect::<String>();
+        if seen.insert(objective.clone()) {
+            tasks.push(ImportedTask {
+                acceptance_criteria: stable_references(&objective, "AC-"),
+                objective,
+            });
+        }
+    }
+    Ok(tasks)
+}
+
+fn empirical_source_revision(
+    files: &BTreeMap<String, SourceFile>,
+    config_hash: &str,
+    state: &EmpiricalStateHeader,
+    feature: &str,
+) -> String {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(b".empirical/config.json\0");
+    payload.extend_from_slice(config_hash.as_bytes());
+    payload.push(b'\n');
+    payload.extend_from_slice(b"state-identity\0");
+    payload.extend_from_slice(
+        format!("{}\0{}\0{}", state.schema_version, feature, state.profile).as_bytes(),
+    );
+    payload.push(b'\n');
+    for file in files.values().filter(|file| file.relative != "state.json") {
+        payload.extend_from_slice(file.relative.as_bytes());
+        payload.push(0);
+        payload.extend_from_slice(file.hash.as_bytes());
+        payload.push(b'\n');
+    }
+    format!("sha256:{}", sha256(payload))
 }
 
 fn import_openspec_with_hook<F>(
@@ -730,6 +1232,12 @@ where
     }
 
     let source_revision = source_revision(&files, schema_dependency.as_deref());
+    let capabilities = requirements
+        .iter()
+        .map(|requirement| requirement.capability.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     Ok(NormalizedSource {
         kind: "openspec".into(),
         title: title.trim().chars().take(160).collect(),
@@ -739,6 +1247,7 @@ where
         external_reference: None,
         design,
         tasks,
+        capabilities,
         diagnostics,
     })
 }
@@ -1299,6 +1808,7 @@ mod tests {
 
     const OFFICIAL_FIXTURE_REFERENCE: &str =
         "openspec/changes/archive/2025-10-14-update-cli-init-enter-selection";
+    const OFFICIAL_EMPIRICAL_REFERENCE: &str = ".empirical/specs/add-report-export";
 
     fn official_fixture() -> tempfile::TempDir {
         let repository = tempfile::tempdir().unwrap();
@@ -1337,6 +1847,312 @@ mod tests {
         )
         .unwrap();
         repository
+    }
+
+    fn empirical_fixture() -> tempfile::TempDir {
+        let repository = tempfile::tempdir().unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empirical/official");
+        for relative in [
+            "config.json",
+            "specs/add-report-export/state.json",
+            "specs/add-report-export/spec.md",
+            "specs/add-report-export/design.md",
+            "specs/add-report-export/decisions.md",
+            "specs/add-report-export/plan.md",
+            "specs/add-report-export/deltas/report-export.md",
+            "specs/add-report-export/events/00000001.json",
+        ] {
+            let source = fixture.join(relative);
+            let target = repository.path().join(".empirical").join(relative);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::copy(source, target).unwrap();
+        }
+        repository
+    }
+
+    #[test]
+    fn empirical_official_fixture_import_is_deterministic_and_preserves_intent() {
+        let fixture_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empirical/official");
+        let provenance: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture_root.join("provenance.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            provenance["commit"],
+            "d8ee7e1bdaa53bfc92e278524a40e61d16125f64"
+        );
+        assert_eq!(provenance["protocol"], "0.20");
+        assert_eq!(provenance["schemaVersion"], 4);
+        assert_eq!(provenance["license"], "MIT");
+        for (relative, expected) in provenance["files"].as_object().unwrap() {
+            let bytes = std::fs::read(fixture_root.join(relative)).unwrap();
+            assert_eq!(sha256(bytes), expected.as_str().unwrap(), "{relative}");
+        }
+
+        let repository = empirical_fixture();
+        let first = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        let second = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.kind, "empirical");
+        assert_eq!(first.title, "Durable report export");
+        assert_eq!(first.capabilities, ["report-export"]);
+        assert_eq!(first.tasks.len(), 3);
+        assert_eq!(first.tasks[0].acceptance_criteria, ["AC-001"]);
+        assert_eq!(first.tasks[1].acceptance_criteria, ["AC-002"]);
+        assert_eq!(
+            first.design.as_deref(),
+            Some(
+                "# Design\n\nUse a deterministic export boundary and an atomic destination replacement.\n"
+            )
+        );
+        assert!(
+            first
+                .markdown
+                .contains("[report-export / ADDED] **A report can be exported:**")
+        );
+        assert!(first.markdown.contains("**Observable export result:**"));
+        assert!(first.markdown.contains("# Durable report export"));
+        assert!(first.source_revision.starts_with("sha256:"));
+        assert!(
+            first
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == "empirical_artifact_intake_only" })
+        );
+        assert!(
+            first
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == "empirical_plan_untyped" })
+        );
+        assert!(!repository.path().join(".agentum").exists());
+    }
+
+    #[test]
+    fn empirical_revision_ignores_journals_but_binds_imported_artifacts() {
+        let repository = empirical_fixture();
+        let feature = repository.path().join(".empirical/specs/add-report-export");
+        let first = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        std::fs::write(
+            feature.join("events/00000002.json"),
+            "{\"schemaVersion\":4,\"revision\":2}\n",
+        )
+        .unwrap();
+        let event_only = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        assert_eq!(first.source_revision, event_only.source_revision);
+
+        std::fs::write(
+            feature.join("evidence.json"),
+            "[{\"kind\":\"test\",\"secret\":\"must-not-import\"}]\n",
+        )
+        .unwrap();
+        let evidence_only =
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        assert_eq!(first.source_revision, evidence_only.source_revision);
+        assert!(
+            !serde_json::to_string(&evidence_only)
+                .unwrap()
+                .contains("must-not-import")
+        );
+
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(feature.join("state.json")).unwrap()).unwrap();
+        state["phase"] = serde_json::Value::String("review".into());
+        state["status"] = serde_json::Value::String("waiting".into());
+        std::fs::write(
+            feature.join("state.json"),
+            serde_json::to_vec_pretty(&state).unwrap(),
+        )
+        .unwrap();
+        let state_only = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        assert_eq!(first.source_revision, state_only.source_revision);
+
+        std::fs::write(feature.join("design.md"), "# Design\n\nChanged.\n").unwrap();
+        let changed = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        assert_ne!(first.source_revision, changed.source_revision);
+    }
+
+    #[test]
+    fn empirical_rejects_unsafe_schema_state_delta_and_shape_inputs() {
+        let repository = empirical_fixture();
+        assert!(matches!(
+            import_empirical(repository.path(), "../outside"),
+            Err(SourceError::UnsafeReference(_))
+        ));
+        assert!(matches!(
+            import_empirical(repository.path(), "/tmp/.empirical/specs/add-report-export"),
+            Err(SourceError::UnsafeReference(_))
+        ));
+
+        let config = repository.path().join(".empirical/config.json");
+        let valid_config = std::fs::read(&config).unwrap();
+        std::fs::write(
+            &config,
+            "{\"schemaVersion\":3,\"profile\":\"complex\",\"setupComplete\":true}\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Unsupported(_))
+        ));
+        std::fs::write(&config, valid_config).unwrap();
+
+        let valid_config = std::fs::read(&config).unwrap();
+        std::fs::write(
+            &config,
+            "{\"schemaVersion\":4,\"profile\":\"future\",\"setupComplete\":true}\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Unsupported(_))
+        ));
+        std::fs::write(&config, valid_config).unwrap();
+
+        let feature = repository.path().join(".empirical/specs/add-report-export");
+        let state = feature.join("state.json");
+        let valid_state = std::fs::read(&state).unwrap();
+        let mut wrong_state: serde_json::Value = serde_json::from_slice(&valid_state).unwrap();
+        wrong_state["activeFeature"] = serde_json::Value::String("another-feature".into());
+        std::fs::write(&state, serde_json::to_vec_pretty(&wrong_state).unwrap()).unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Malformed(_))
+        ));
+        std::fs::write(&state, valid_state).unwrap();
+
+        let valid_state = std::fs::read(&state).unwrap();
+        let mut impossible_state: serde_json::Value = serde_json::from_slice(&valid_state).unwrap();
+        impossible_state["profile"] = serde_json::Value::String("fast".into());
+        impossible_state["phase"] = serde_json::Value::String("design".into());
+        std::fs::write(
+            &state,
+            serde_json::to_vec_pretty(&impossible_state).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Unsupported(_))
+        ));
+        std::fs::write(&state, valid_state).unwrap();
+
+        let delta = feature.join("deltas/report-export.md");
+        let valid_delta = std::fs::read(&delta).unwrap();
+        std::fs::write(
+            &delta,
+            "## ADDED Requirements\n\n### Requirement: Missing scenario\nMUST fail.\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Malformed(_))
+        ));
+        std::fs::write(&delta, valid_delta).unwrap();
+
+        let design = feature.join("design.md");
+        let valid_design = std::fs::read(&design).unwrap();
+        std::fs::write(&design, [0xff]).unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Malformed(_))
+        ));
+        std::fs::write(&design, valid_design).unwrap();
+
+        std::fs::write(feature.join("unexpected.json"), "{}\n").unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn empirical_supports_all_delta_operations_and_optional_fast_artifacts() {
+        let repository = empirical_fixture();
+        let feature = repository.path().join(".empirical/specs/add-report-export");
+        std::fs::write(
+            feature.join("deltas/alpha.md"),
+            "## ADDED Requirements\n\n### Requirement: Alphabetical capability\nThe system MUST sort capabilities.\n\n#### Scenario: Sorted preview\n- **THEN** alpha appears before report-export\n",
+        )
+        .unwrap();
+        std::fs::write(
+            feature.join("deltas/report-export.md"),
+            "## ADDED Requirements\n\n### Requirement: Added behavior\nThe system MUST add behavior.\n\n#### Scenario: Added result\n- **THEN** added behavior is visible\n\n## MODIFIED Requirements\n\n### Requirement: Modified behavior\nThe system MUST modify behavior.\n\n#### Scenario: Modified result\n- **THEN** modified behavior is visible\n\n## REMOVED Requirements\n\n### Requirement: Removed behavior\nThe system MUST remove behavior.\n\n#### Scenario: Removed result\n- **THEN** removed behavior is absent\n",
+        )
+        .unwrap();
+        let imported = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        assert_eq!(imported.capabilities, ["alpha", "report-export"]);
+        for operation in ["ADDED", "MODIFIED", "REMOVED"] {
+            assert!(
+                imported
+                    .markdown
+                    .contains(&format!("report-export / {operation}"))
+            );
+        }
+
+        std::fs::remove_file(feature.join("design.md")).unwrap();
+        std::fs::remove_file(feature.join("plan.md")).unwrap();
+        std::fs::remove_file(feature.join("deltas/alpha.md")).unwrap();
+        std::fs::remove_file(feature.join("deltas/report-export.md")).unwrap();
+        let state_path = feature.join("state.json");
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        state["profile"] = serde_json::Value::String("fast".into());
+        state["phase"] = serde_json::Value::String("implement".into());
+        std::fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
+        let imported = import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).unwrap();
+        assert!(imported.capabilities.is_empty());
+        assert!(imported.design.is_none());
+        assert!(imported.tasks.is_empty());
+    }
+
+    #[test]
+    fn empirical_rejects_active_locks_and_oversized_artifacts() {
+        let repository = empirical_fixture();
+        let feature = repository.path().join(".empirical/specs/add-report-export");
+        std::fs::write(feature.join("state.lock"), "locked\n").unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::Changed(_))
+        ));
+        std::fs::remove_file(feature.join("state.lock")).unwrap();
+        std::fs::write(
+            feature.join("spec.md"),
+            "x".repeat(MAX_SOURCE_FILE_BYTES + 1),
+        )
+        .unwrap();
+        assert!(matches!(
+            import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE),
+            Err(SourceError::TooLarge(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empirical_rejects_linked_artifacts_and_parent_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let repository = empirical_fixture();
+        let feature = repository.path().join(".empirical/specs/add-report-export");
+        let spec = feature.join("spec.md");
+        let outside = repository.path().join("outside.md");
+        std::fs::write(&outside, "# Outside\n").unwrap();
+        std::fs::remove_file(&spec).unwrap();
+        symlink(&outside, &spec).unwrap();
+        assert!(import_empirical(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE).is_err());
+
+        std::fs::remove_file(&spec).unwrap();
+        std::fs::write(&spec, "# Restored\n").unwrap();
+        let empirical = repository.path().join(".empirical");
+        let original = repository.path().join(".empirical-original");
+        let result =
+            import_empirical_with_hook(repository.path(), OFFICIAL_EMPIRICAL_REFERENCE, || {
+                std::fs::rename(&empirical, &original).unwrap();
+                symlink(&original, &empirical).unwrap();
+            });
+        assert!(result.is_err());
+        std::fs::remove_file(&empirical).unwrap();
+        std::fs::rename(&original, &empirical).unwrap();
     }
 
     #[test]

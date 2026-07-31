@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-31T21:42:15Z",
+  "surface": "crates/agentum-desktop/ui/src/components/sdd/SddWorkspaceBar.tsx#NewSpecDialog",
+  "environment": {
+    "browser": "Chromium 149.0.7827.55",
+    "viewport": "1440x1200",
+    "entry": "temporary Vite mount of the production NewSpecDialog export"
+  },
+  "interaction": [
+    "Selected the enabled Empirical source card",
+    "Entered title Durable report export",
+    "Entered canonical path .empirical/specs/add-report-export",
+    "Activated Preview source",
+    "Waited for the Source preview region"
+  ],
+  "assertions": {
+    "empiricalSelected": true,
+    "canonicalPathEntered": true,
+    "immutableRevisionVisible": true,
+    "taskCountVisible": true,
+    "capabilityVisible": true,
+    "capabilityNameVisible": true,
+    "designVisible": true,
+    "boundaryDiagnosticVisible": true,
+    "untypedPlanDiagnosticVisible": true,
+    "consoleErrors": 0
+  },
+  "screenshot": {
+    "path": ".empirical/evidence/empirical-new-spec-preview.png",
+    "mediaType": "image/png",
+    "width": 1440,
+    "height": 1200,
+    "byteLength": 85988,
+    "sha256": "3002346a01acbed975c879e59814bc3d48d8caa2c11310b7d4e3e3c3d3cf1d52"
+  }
+}
