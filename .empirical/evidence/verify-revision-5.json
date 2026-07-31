@@ -1,0 +1,79 @@
+[
+  {
+    "criterionId": "AC-1",
+    "kind": "test",
+    "passed": true,
+    "summary": "Server route tests prove capabilities advertise an available, previewable Empirical adapter and golden-policy tests prove no Empirical executable or package dependency exists.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-2",
+    "kind": "test",
+    "passed": true,
+    "summary": "Canonical fixture and route tests prove schema-4 preview fields, deterministic sha256 revision, sorted capabilities, design/task counts, and diagnostics.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-3",
+    "kind": "test",
+    "passed": true,
+    "summary": "Importer tests cover stable rendering and preservation of every ADDED, MODIFIED, and REMOVED Requirement and Scenario with capability provenance.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-4",
+    "kind": "test",
+    "passed": true,
+    "summary": "Importer and route tests prove optional design and serial plan-task extraction while evidence, decisions, events, locks, and runtime state are excluded from normalized content and revision material.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-5",
+    "kind": "test",
+    "passed": true,
+    "summary": "Route integration proves preview is read-only and a changed expected revision returns source_revision_changed before any Agentum aggregate or repository artifact is allocated.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-6",
+    "kind": "test",
+    "passed": true,
+    "summary": "Adversarial importer tests pass for unsafe paths, schema/state/delta errors, UTF-8, unknown shapes, limits, symlinks, locks, and parent replacement races.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-UI-1",
+    "kind": "test",
+    "passed": true,
+    "summary": "Focused component/model tests and the complete 6,472-test UI suite prove source gating, typed payload, preview fields, diagnostics, and revision-bound creation.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-UI-1",
+    "kind": "browser",
+    "passed": true,
+    "summary": "Chromium interaction with the exported production NewSpecDialog passed all nine Empirical selection, path, preview-summary, capability, design, and diagnostic assertions with zero console errors.",
+    "artifact": ".empirical/evidence/empirical-new-spec-preview.json"
+  },
+  {
+    "criterionId": "AC-UI-1",
+    "kind": "screenshot",
+    "passed": true,
+    "summary": "The captured 1440x1200 dialog visibly shows Empirical selected, the canonical feature path, immutable sha256 revision, one capability, three tasks, design availability, and both boundary diagnostics.",
+    "artifact": ".empirical/evidence/empirical-new-spec-preview.png"
+  },
+  {
+    "criterionId": "AC-7",
+    "kind": "test",
+    "passed": true,
+    "summary": "Golden-policy tests bind fixture hashes and the upstream commit and assert the documented local artifact-intake, immutable preview/create, dependency-free, non-runtime, and non-export boundary.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  },
+  {
+    "criterionId": "AC-8",
+    "kind": "test",
+    "passed": true,
+    "summary": "Existing source tests, repository boundary/policy tests, server clippy, full UI typecheck and 6,472-test suite, and production build pass without changing provider, approval, evidence, or Deliver boundaries.",
+    "artifact": ".empirical/evidence/verification-report.md"
+  }
+]

@@ -11,7 +11,6 @@ Run Claude, Codex, Gemini & Cursor in tmux on a host you own — they survive a 
 Then use one durable, approval-aware workflow to move a local specification to Ready.
 
 [![release](https://img.shields.io/github/v/release/mateocerquetella/agentum?display_name=tag&color=111)](https://github.com/mateocerquetella/agentum/releases)
-[![ci](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml/badge.svg)](https://github.com/mateocerquetella/agentum/actions/workflows/ci.yml)
 [![license](https://img.shields.io/github/license/mateocerquetella/agentum?color=111)](LICENSE)
 ![platforms](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux-111)
 
@@ -64,7 +63,7 @@ arm64 and x86_64 builds; Windows and Linux currently ship x86_64 builds.
 > **The CLI/TUI (`agentum terminal`) now lives in a separate repo:** [`github.com/mateocerquetella/agentum-tui`](https://github.com/mateocerquetella/agentum-tui). This repo is the **desktop app** plus the shared backend crates. CLI install/run commands below point at that repo.
 
 ```sh
-# macOS — Homebrew (Developer ID signed and notarized)
+# macOS — Homebrew (first launch may require control-click → Open)
 brew install --cask mateocerquetella/tap/agentum
 
 # Linux — verified AppImage (use --format deb, rpm, or raw if preferred)
@@ -78,10 +77,12 @@ curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/
 | **Linux** | `.AppImage`, `.deb`, `.rpm`, or the standalone desktop executable |
 
 All native installers live on the [latest release](https://github.com/mateocerquetella/agentum/releases/latest).
-The release installer requires the published SHA-256 manifest; macOS also
-validates Developer ID signing, Gatekeeper acceptance, and notarization before
-replacing the app. The release `uninstall.sh` preserves user data by default;
-pass `--purge-data` explicitly to remove Agentum's known desktop data roots.
+The release installer requires the published SHA-256 manifest and validates the
+macOS bundle structure before replacing the app. macOS and Windows bundles are
+not OS-signed, so Gatekeeper or SmartScreen may warn on first launch; in-app
+updater artifacts remain cryptographically signed. The release `uninstall.sh`
+preserves user data by default; pass `--purge-data` explicitly to remove
+Agentum's known desktop data roots.
 
 ### Terminal UI / CLI
 

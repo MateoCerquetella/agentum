@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => ({
   redeemJiraOauth: vi.fn(),
   selectJiraSite: vi.fn(),
   startJiraOauth: vi.fn(),
-  subscribeRunCenterSelection: vi.fn(),
+  subscribeRunCenterSelection: vi.fn(() => () => undefined),
   subscribeSddEvents: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn()
@@ -152,7 +152,8 @@ const fullCapabilities: SddCapabilities = {
       available: false,
       reason: 'OAuth broker required'
     },
-    { id: 'openspec', label: 'OpenSpec', available: true, preview: true }
+    { id: 'openspec', label: 'OpenSpec', available: true, preview: true },
+    { id: 'empirical', label: 'Empirical', available: true, preview: true }
   ],
   remoteLifecycle: false,
   remoteLifecycleReason: 'desktop_projection_unavailable',
@@ -328,6 +329,8 @@ describe('SddWorkspaceBar interaction workflow', () => {
       sourcePath: 'openspec/changes/refresh-sessions',
       designAvailable: true,
       taskCount: 2,
+      capabilities: ['auth'],
+      capabilityCount: 1,
       diagnostics: [],
       previewDigest: 'sha256:preview'
     })
@@ -638,7 +641,8 @@ describe('SddWorkspaceBar interaction workflow', () => {
       'github',
       'linear',
       'jira',
-      'openspec'
+      'openspec',
+      'empirical'
     ])
     expect(sourceInputs.map((entry) => entry.props.disabled)).toEqual([
       false,
@@ -647,6 +651,7 @@ describe('SddWorkspaceBar interaction workflow', () => {
       false,
       true,
       true,
+      false,
       false
     ])
     expect(textOf(renderer!.root)).toContain('OAuth broker required')
@@ -898,6 +903,78 @@ describe('SddWorkspaceBar interaction workflow', () => {
         type: 'openspec',
         path: 'openspec/changes/refresh-sessions',
         expectedSourceRevision: 'sha256:source-revision'
+      }
+    })
+    await act(async () => renderer!.unmount())
+  })
+
+  it('previews and revision-binds an Empirical feature with visible capability metadata', async () => {
+    mocks.previewSddSource.mockResolvedValue({
+      kind: 'empirical',
+      title: 'Durable report export',
+      markdown: '# Imported Empirical feature',
+      sourceRevision: 'sha256:empirical-source-revision',
+      sourcePath: '.empirical/specs/add-report-export',
+      designAvailable: true,
+      taskCount: 3,
+      capabilities: ['report-export'],
+      capabilityCount: 1,
+      diagnostics: [
+        {
+          severity: 'info',
+          code: 'empirical_artifact_intake_only',
+          message: 'Agentum remains authoritative for execution and delivery.'
+        }
+      ],
+      previewDigest: 'sha256:empirical-preview'
+    })
+    const { default: SddWorkspaceBar } = await import('./SddWorkspaceBar')
+    let renderer: ReactTestRenderer
+    await act(async () => {
+      renderer = create(
+        <SddWorkspaceBar repoId="repo-1" projectName="demo-shop" presentation="page" />
+      )
+    })
+    await settle()
+    await act(async () => button(renderer!.root, 'New Spec', 0).props.onClick())
+    const empirical = renderer!.root
+      .findAllByType('input')
+      .find((entry) => entry.props.name === 'sdd-source' && entry.props.value === 'empirical')
+    expect(empirical).toBeDefined()
+    expect(empirical!.props.disabled).toBe(false)
+    await act(async () => empirical!.props.onChange())
+    await act(async () =>
+      labeledControl(renderer!.root, 'Title', 'input').props.onChange({
+        target: { value: 'Durable report export' }
+      })
+    )
+    await act(async () =>
+      labeledControl(renderer!.root, 'Feature path', 'input').props.onChange({
+        target: { value: '.empirical/specs/add-report-export' }
+      })
+    )
+    await act(async () => button(renderer!.root, 'Preview source').props.onClick())
+    await settle()
+    expect(mocks.previewSddSource).toHaveBeenCalledWith('repo-1', 'Durable report export', {
+      type: 'empirical',
+      path: '.empirical/specs/add-report-export',
+      expectedSourceRevision: undefined
+    })
+    const previewText = textOf(renderer!.root)
+    expect(previewText).toContain('Immutable empirical snapshot')
+    expect(previewText).toContain('3 imported tasks')
+    expect(previewText).toContain('1 capability')
+    expect(previewText).toContain('report-export')
+    expect(previewText).toContain('design available')
+    expect(previewText).toContain('Agentum remains authoritative for execution and delivery.')
+
+    await act(async () => button(renderer!.root, 'Create & Author').props.onClick())
+    await settle()
+    expect(mocks.createSpec.mock.calls[0][1]).toMatchObject({
+      source: {
+        type: 'empirical',
+        path: '.empirical/specs/add-report-export',
+        expectedSourceRevision: 'sha256:empirical-source-revision'
       }
     })
     await act(async () => renderer!.unmount())
@@ -1326,6 +1403,8 @@ describe('SddWorkspaceBar interaction workflow', () => {
       sourcePath: 'ENG-1',
       designAvailable: false,
       taskCount: 0,
+      capabilities: [],
+      capabilityCount: 0,
       diagnostics: [],
       previewDigest: 'sha256:preview'
     })

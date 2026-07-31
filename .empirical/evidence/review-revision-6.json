@@ -1,0 +1,65 @@
+[
+  {
+    "criterionId": "AC-1",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed the static capabilities declaration and dependency/process boundary; Empirical availability needs no Empirical binary, Node package, network fetch, MCP server, or skill.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-2",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed schema validation, deterministic snapshot/revision construction, sorted capabilities, preview serialization, diagnostics bound, and explicit route assertions for every required field.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-3",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed shared delta parsing and stable global RQ/AC numbering; capability, operation, requirement, and scenario provenance are retained for ADDED, MODIFIED, and REMOVED blocks.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-4",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed design normalization and conservative serial task extraction; decisions, evidence, events, locks, and volatile state bodies are deliberately excluded from imported output.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-5",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed create ordering and route integration: revision revalidation precedes ID creation, workspace planning/materialization, provider attempts, approvals, runs, and aggregate persistence.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-6",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed exact path grammar, anchored no-follow handles, double snapshots, identity rebound, shape/schema/text checks, file/count/byte bounds, and adversarial tests; unsafe input fails closed.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-UI-1",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed the closed TypeScript union, source card and capability gate, canonical path payload, immutable preview rendering, diagnostic output, and revision-bound create request against component and browser evidence.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-7",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed documentation, golden policy, exact upstream pin, provenance hashes, and bundled MIT license; wording is explicitly local artifact-intake and disclaims runtime/export compatibility.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  },
+  {
+    "criterionId": "AC-8",
+    "kind": "review",
+    "passed": true,
+    "summary": "Reviewed the full diff and passing regression gates; provider isolation, approval/evidence digests, existing sources, browser evidence, and Deliver-only side effects are unchanged.",
+    "artifact": ".empirical/evidence/review-revision-6.md"
+  }
+]

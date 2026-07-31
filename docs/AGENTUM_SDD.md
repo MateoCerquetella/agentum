@@ -25,8 +25,12 @@ Run, attempt, event, approval, task, lease, patch, and outbox state is durable a
 ## Provider qualification and platform isolation
 
 Release tags cannot publish until a hardened self-hosted runner executes
-`agentum-sdd-provider-conformance` against all seven bundled provider CLIs with
-real authentication. For each provider the runner copies the zero-pollution
+`agentum-sdd-provider-conformance` against the maintainer-selected bundled
+provider CLI with real authentication. The repository Actions variable
+`AGENTUM_RELEASE_PROVIDER` selects `claude`, `codex`, `agent`, `gemini`,
+`hermes`, `opencode`, or `aider`; maintainers must configure it before tagging,
+and an unset or unsupported value blocks the release at the hosted authority
+gate. For the selected provider the runner copies the zero-pollution
 demo fixture, proves cancellation before save, authors and validates `spec.md`,
 recovers the hash-bound Guarded approval checkpoint in a fresh process, creates
 design and typed plan artifacts, accepts and applies a scoped diff, proves the
@@ -34,7 +38,7 @@ acceptance test failed before and passes after implementation, runs independent
 review in a separate provider process, rejects malformed output, and stops at
 Ready without delivery. The uploaded report contains only source-bound hashes
 and stable statuses; the reusable release workflow verifies its checksum,
-source SHA, exact provider set, cases, and Ready/no-delivery state.
+source SHA, exact selected provider, cases, and Ready/no-delivery state.
 
 Custom manifests run through the same executable and lifecycle. A passing
 receipt is signed with an installation-owned Ed25519 key in Agentum's secure
@@ -51,6 +55,10 @@ only the selected provider runtime, its provider-specific authentication file,
 the read-only attempt, and the fixed writable staging/runtime paths. Symlinked
 Node launchers are resolved through the canonical read-only runtime rather than
 re-exposing the host runtime directory.
+Verification sandboxes likewise resolve version-managed commands to their
+canonical executable and remount only that exact file after masking the account
+directory; package-manager configuration and unrelated account files remain
+unavailable.
 macOS uses the system Seatbelt launcher with repository read-only/provider
 staging-only policy and a network-disabled verification policy. Windows has no
 Agentum-enforced restricted-token/AppContainer filesystem sandbox in this
@@ -85,13 +93,16 @@ Source intake uses a closed, versioned request shape. Callers cannot submit arbi
 { type: "linear", connectionId?, identifier, expectedSourceRevision? }
 { type: "jira", connectionId, siteId, key, expectedSourceRevision? }
 { type: "openspec", path, expectedSourceRevision? }
+{ type: "empirical", path, expectedSourceRevision? }
 ```
 
 Use `POST /api/sdd/repos/{repo_id}/sources/preview` before creating a reference-backed spec. Preview is read-only and returns normalized Markdown, diagnostics, imported task/design availability, a source revision, and a deterministic digest. Creation re-reads and re-normalizes the source. If `expectedSourceRevision` no longer matches, Agentum returns `409 source_revision_changed` before allocating a spec, worktree, or durable run.
 
-Markdown and conventional OpenSpec imports are enabled. OpenSpec paths must identify an active or archived change below the repository's `openspec/changes/` tree; traversal, symlinks, unknown files, malformed deltas, unstable reads, and oversized input fail closed. GitHub import is enabled only when Agentum verifies an authenticated `gh` session for `github.com`; the server derives external identity and revision from the provider response. Linear import uses the selected connection from Agentum's secure vault and never reads the retired plaintext token field. Jira import uses the selected, revision-bound Cloud connection and site.
+Markdown, conventional OpenSpec, and Empirical imports are enabled. OpenSpec paths must identify an active or archived change below the repository's `openspec/changes/` tree; traversal, symlinks, unknown files, malformed deltas, unstable reads, and oversized input fail closed. Empirical paths must identify exactly one local `.empirical/specs/<feature>` directory. The independent Rust adapter accepts protocol 0.20 schema-4 state, preserves `spec.md` plus ADDED/MODIFIED/REMOVED capability Requirement and Scenario provenance, exposes optional `design.md`, and converts explicit checklist or ordered `plan.md` actions to serial untyped task intent. It reads through bounded no-follow handles, hashes only the imported artifact set and schema dependency, and never executes Empirical, Node.js, MCP, or installed skills. Runtime journals, locks, decisions, evidence, discovery/context state, living capability archives, handoff, remote intake, mutation, and export are not supported; Agentum remains authoritative for execution, approvals, verification, review, Ready, and Deliver. GitHub import is enabled only when Agentum verifies an authenticated `gh` session for `github.com`; the server derives external identity and revision from the provider response. Linear import uses the selected connection from Agentum's secure vault and never reads the retired plaintext token field. Jira import uses the selected, revision-bound Cloud connection and site.
 
 The OpenSpec adapter is an independent Rust implementation; Agentum neither invokes nor depends on the OpenSpec CLI. It accepts the documented conventional `proposal.md`, `specs/<capability>/spec.md`, optional `design.md`, `tasks.md`, and `spec-driven` metadata shape. Explicit export preserves imported capability, ADDED/MODIFIED/REMOVED operation, requirement name, scenario name, design, and checklist intent when their normalized provenance is still present; native Agentum-only intent receives deterministic output plus a warning wherever the conventional format cannot carry typed scopes, commands, or AC mapping. CI validates import/export round trips against an official MIT-licensed OpenSpec fixture pinned to upstream commit [`c33fcb3fdb729455b114bdcfad84df01b3531bfe`](https://github.com/Fission-AI/OpenSpec/commit/c33fcb3fdb729455b114bdcfad84df01b3531bfe). Exact file hashes and license provenance live beside the fixture in `crates/agentum-server/tests/fixtures/openspec/official/`; release tests never fetch or execute upstream code.
+
+Empirical artifact-intake compatibility is pinned to upstream commit [`d8ee7e1bdaa53bfc92e278524a40e61d16125f64`](https://github.com/MateoCerquetella/empirical-sdd/commit/d8ee7e1bdaa53bfc92e278524a40e61d16125f64). The minimal MIT-licensed protocol-shape fixture and provenance record live in `crates/agentum-server/tests/fixtures/empirical/official/`. This pin does not claim compatibility with Empirical's runtime, archive, handoff, or future schemas, and release tests do not fetch or execute upstream code.
 
 New Spec requires an explicit source-checkout policy. `require_clean` refuses a dirty checkout, `committed_base` intentionally excludes uncommitted changes and uses the selected commit, and `snapshot` validates supported dirty content and creates a recoverable hashed snapshot outside the repository.
 
@@ -126,7 +137,7 @@ After a desktop restart, an interrupted local action claim becomes
 dependencies. Delivery can never manufacture a green lifecycle transition or
 downgrade to local Git/filesystem execution.
 
-Only sanitized provenance is placed in `spec.md` frontmatter and `sdd_specs`. Provider-derived work-item identity is recorded in `sdd_external_links`; immutable normalized Markdown/OpenSpec snapshots are recorded in `sdd_import_jobs` in the same transaction as the spec, run, approval, event, and outbox. Raw caller objects and credentials are not persisted.
+Only sanitized provenance is placed in `spec.md` frontmatter and `sdd_specs`. Provider-derived work-item identity is recorded in `sdd_external_links`; immutable normalized Markdown/OpenSpec/Empirical snapshots are recorded in `sdd_import_jobs` in the same transaction as the spec, run, approval, event, and outbox. Raw caller objects and credentials are not persisted.
 
 The hard cutover includes a hash-accounted migration tool for this repository's retired SDD roots. Preview is read-only. Apply refuses dirty, active, symlinked, special, or unaccounted legacy content; archives every source outside the repository; publishes `.agentum` atomically; and then removes only verified inventoried files.
 

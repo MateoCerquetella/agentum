@@ -125,8 +125,10 @@ require(
     "RPM package must require the SDD process sandbox",
 )
 windows = bundle.get("windows", {})
-require(windows.get("digestAlgorithm") == "sha256", "Windows signing must use SHA-256")
-require(str(windows.get("timestampUrl", "")).startswith("http://timestamp.digicert.com"), "unexpected Windows timestamp authority")
+require(
+    not {"certificateThumbprint", "digestAlgorithm", "timestampUrl"}.intersection(windows),
+    "Windows Authenticode configuration must remain absent without a certificate",
+)
 
 with INFO_PLIST.open("rb") as handle:
     plist = plistlib.load(handle)
@@ -147,6 +149,7 @@ require(
         "core:default",
         "core:window:allow-start-dragging",
         "main-webview-commands",
+        "notification:allow-is-permission-granted",
     ],
     "desktop capability permissions changed without review",
 )

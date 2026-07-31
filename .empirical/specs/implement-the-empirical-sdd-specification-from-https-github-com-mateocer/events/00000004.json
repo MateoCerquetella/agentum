@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 4,
+  "revision": 4,
+  "previousRevision": 3,
+  "actor": "agent",
+  "summary": "Planned fixture provenance, importer and route implementation, desktop integration, documentation, comprehensive verification, independent review, archive, and release",
+  "createdAt": "2026-07-31T21:07:20.645Z",
+  "state": {
+    "schemaVersion": 4,
+    "revision": 4,
+    "activeFeature": "implement-the-empirical-sdd-specification-from-https-github-com-mateocer",
+    "request": "Implement the Empirical SDD specification from https://github.com/MateoCerquetella/empirical-sdd into Agentum\n\nApproved Socratic discovery:\n- Primary user and problem: Agentum users and development teams who already author repository-local Empirical SDD features cannot bring those contracts into Agentum without pasting or rewriting them, which loses capability-delta, design, plan, revision, and provenance information. They need Agentum to consume an Empirical feature as a first-class source while retaining Agentum-owned execution, approvals, evidence, and delivery.\n- Smallest observable outcome: In Run Center, a user selects Empirical as the New Spec source, enters a repository-relative .empirical/specs/<feature> path, previews the exact source revision with title, diagnostics, design availability, capability count, and imported task count, then creates and authors an Agentum specification from that immutable snapshot. If the source changes between preview and creation, Agentum returns a source_revision_changed conflict before allocating any specification, worktree, attempt, or run.\n- Scope, non-goals, and constraints: The first version must provide a local, read-only, dependency-free Rust importer for Empirical protocol 0.20 schema 4 feature directories; preserve spec.md, ADDED/MODIFIED/REMOVED capability requirements and scenarios, optional design.md, and actionable plan.md items; expose preview/create API and desktop UI support; and document pinned upstream provenance. It must not execute the Empirical CLI or Node.js, install skills, mutate .empirical state, import journals or private runtime state, replace Agentum's database-backed lifecycle, add remote-source support, or publish an Empirical export. Agentum's existing sandbox, hash-bound approvals, no-side-effect-before-Deliver policy, and source-checkout policy cannot change.\n- Failure cases and risks: Traversal, symlink substitution, repository races, oversized trees, malformed capability deltas, unsupported schema versions, invalid UTF-8, and an active Empirical feature changing during preview are the principal risks. The importer must deny unsafe or unknown input, use anchored no-follow reads and bounded deterministic snapshots, emit actionable typed diagnostics, and leave the repository and Agentum database unchanged on every preview or validation failure. A creation re-read that does not match the previewed revision must fail with HTTP 409 and no fallback or partial allocation.\n- Required verification: Automated Rust unit and route integration tests must prove canonical import, capability/scenario preservation, task extraction, size and schema validation, traversal and symlink rejection, stable revision hashing, read-only preview, and conflict-before-allocation behavior against a fixture pinned to the upstream commit. React model and integration tests must prove the Empirical option, source payload, capability gating, preview summary, and error state. A production desktop build plus a real-browser interaction will open New Spec, choose Empirical, enter a fixture path, render the immutable preview summary and diagnostics, and capture a repository-relative screenshot of that visible state. Workspace tests, formatting, linting, restricted-content checks, and independent diff review must also pass.",
+    "profile": "complex",
+    "phase": "implement",
+    "status": "waiting",
+    "repairAttempts": 0,
+    "message": "Planned fixture provenance, importer and route implementation, desktop integration, documentation, comprehensive verification, independent review, archive, and release",
+    "implementationActor": null,
+    "specDigest": "60837542a96b5b1f1a3e1a0a679c13392b85cef4f1e6ae972bc60c6b25bde739",
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "b12032f1045b12246b1b7a345acc0e205c7b72ec9db2ef565ba9623b421b6dee",
+    "evidence": [],
+    "updatedAt": "2026-07-31T21:07:20.645Z"
+  }
+}

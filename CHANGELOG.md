@@ -4,6 +4,106 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Run Center imports Empirical SDD features as immutable New Spec sources.**
+  Local Empirical 0.20 schema-4 contracts, capability deltas, optional design,
+  and explicit plan actions now have a previewable, revision-bound Rust adapter.
+  The integration is artifact-intake only: Agentum keeps lifecycle and delivery
+  authority and never executes or mutates the Empirical runtime.
+
+## [0.98.10] — 2026-07-31
+
+### Fixed
+
+- **The verified Linux update becomes the app users actually reopen.** AppImage
+  installation now registers the canonical `agentum-desktop` executable, its
+  desktop entry, and its bundled icon in the user's XDG data directories, so a
+  stale manual launcher no longer bypasses the repaired release.
+- **Release checksum manifests contain only payload entries.** `SHA256SUMS` no
+  longer records the empty manifest file while it is being generated.
+
+## [0.98.9] — 2026-07-30
+
+### Fixed
+
+- **The production desktop mounts instead of opening a blank window.** A missing
+  E2E harness configuration is normalized before the application store reads it,
+  and the trusted webview can run the notification plugin's startup permission
+  query without an ACL rejection.
+- **Linux AppImages keep the host graphics stack coherent.** Release packaging
+  no longer combines Ubuntu Wayland client libraries with the target machine's
+  EGL/Mesa stack, while an artifact gate preserves Sherpa ONNX dictation
+  libraries and rejects future dependency regressions.
+- **Verified releases complete the Homebrew gate automatically.** The cask job
+  consumes checksums from its workflow run instead of trying to read a private
+  GitHub release draft.
+
+## [0.98.8] — 2026-07-30
+
+### Fixed
+
+- **Linux updater staging matches Tauri 2.11 output.** Publication now verifies
+  and stages the generated `AppImage` and its detached `.sig` directly instead
+  of requiring the obsolete `AppImage.tar.gz` artifact shape.
+
+## [0.98.7] — 2026-07-30
+
+### Fixed
+
+- **Linux AppImage packaging can resolve bundled speech libraries.** The
+  release exposes the target directory containing Sherpa ONNX shared objects
+  to `linuxdeploy`, allowing it to collect the desktop binary's native
+  dependencies instead of failing on `libsherpa-onnx-c-api.so`.
+
+## [0.98.6] — 2026-07-30
+
+### Fixed
+
+- **Linux AppImage releases run the Tauri bundler with diagnostics enabled.**
+  This avoids the silent `linuxdeploy` failure that blocked the v0.98.5
+  publication after the source, macOS, Windows, DEB, and RPM builds succeeded.
+- **Releases remain manually publishable after CI removal.** The release
+  workflow reads the explicitly configured `AGENTUM_RELEASE_PROVIDER`
+  repository variable and never chooses Claude or Codex by default.
+
+## [0.98.5] — 2026-07-30
+
+### Changed
+
+- **Desktop releases no longer require unavailable platform certificates.**
+  macOS bundles ship without Apple Developer ID signing or notarization, and
+  Windows installers ship without Authenticode signing. Tauri updater artifacts
+  remain cryptographically signed and verified before publication.
+
+## [0.98.4] — 2026-07-30
+
+### Fixed
+
+- **Verified release preflight declares its Linux system dependencies.** The
+  trusted source-bound evidence verifier now installs DBus development metadata
+  and `pkg-config` before compiling, so a clean hosted runner can validate the
+  provider report and proceed to signed installer publication.
+
+## [0.98.3] — 2026-07-30
+
+### Fixed
+
+- **Verified releases qualify one explicitly selected SDD provider.** Set the
+  `AGENTUM_RELEASE_PROVIDER` repository Actions variable to any bundled
+  provider before tagging; an unset or unsupported value blocks the release.
+  Publication still requires a source-bound full Standard + Guarded lifecycle
+  report for that exact provider.
+- **The New Workspace SDD fix can reach downloadable builds.** A stale login
+  for an unrelated bundled provider no longer blocks publication after the
+  selected provider completes the release qualification lifecycle.
+- **Version-managed verification commands survive the Linux sandbox boundary.**
+  Agentum resolves tools such as an `fnm`-managed Node binary and remounts only
+  the exact executable after masking the account directory, so valid SDD tests
+  no longer report false failures without exposing user configuration.
+
 ## [0.98.2] — 2026-07-28
 
 ### Fixed
