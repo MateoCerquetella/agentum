@@ -197,7 +197,14 @@ export type CreateSpecInput = {
 }
 
 export type SddSourceKind =
-  'description' | 'socratic' | 'markdown' | 'github' | 'linear' | 'jira' | 'openspec'
+  | 'description'
+  | 'socratic'
+  | 'markdown'
+  | 'github'
+  | 'linear'
+  | 'jira'
+  | 'openspec'
+  | 'empirical'
 
 export type SddSourceReference =
   | { type: 'socratic'; context: string }
@@ -217,6 +224,7 @@ export type SddSourceReference =
       expectedSourceRevision?: string
     }
   | { type: 'openspec'; path: string; expectedSourceRevision?: string }
+  | { type: 'empirical'; path: string; expectedSourceRevision?: string }
 
 export type SddSourcePreview = {
   kind: Exclude<SddSourceKind, 'description'>
@@ -235,6 +243,8 @@ export type SddSourcePreview = {
   }
   designAvailable: boolean
   taskCount: number
+  capabilities: string[]
+  capabilityCount: number
   diagnostics: Array<{
     severity: 'info' | 'warning' | 'error'
     code: string

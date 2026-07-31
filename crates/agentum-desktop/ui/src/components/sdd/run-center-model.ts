@@ -122,7 +122,7 @@ export type SourceOption = {
   hint: string
   valueLabel?: string
   valuePlaceholder?: string
-  requiresIntegration?: 'github' | 'linear' | 'jira' | 'openspec'
+  requiresIntegration?: 'github' | 'linear' | 'jira' | 'openspec' | 'empirical'
 }
 
 export const SOURCE_OPTIONS: SourceOption[] = [
@@ -132,11 +132,12 @@ export const SOURCE_OPTIONS: SourceOption[] = [
   { id: 'github', label: 'GitHub', hint: 'Import a GitHub work item.', valueLabel: 'GitHub URL', valuePlaceholder: 'https://github.com/org/repo/issues/123', requiresIntegration: 'github' },
   { id: 'linear', label: 'Linear', hint: 'Import a Linear issue.', valueLabel: 'Linear URL or key', valuePlaceholder: 'ENG-123', requiresIntegration: 'linear' },
   { id: 'jira', label: 'Jira Cloud', hint: 'Import an authorized Jira issue.', valueLabel: 'Jira URL or key', valuePlaceholder: 'ENG-123', requiresIntegration: 'jira' },
-  { id: 'openspec', label: 'OpenSpec', hint: 'Import a conventional change.', valueLabel: 'Change path', valuePlaceholder: 'openspec/changes/example', requiresIntegration: 'openspec' }
+  { id: 'openspec', label: 'OpenSpec', hint: 'Import a conventional change.', valueLabel: 'Change path', valuePlaceholder: 'openspec/changes/example', requiresIntegration: 'openspec' },
+  { id: 'empirical', label: 'Empirical', hint: 'Import an Empirical 0.20 feature.', valueLabel: 'Feature path', valuePlaceholder: '.empirical/specs/example', requiresIntegration: 'empirical' }
 ]
 
 export function sourceNeedsReference(kind: SddSourceKind): boolean {
-  return ['github', 'linear', 'jira', 'openspec'].includes(kind)
+  return ['github', 'linear', 'jira', 'openspec', 'empirical'].includes(kind)
 }
 
 export function sourceGoal(kind: SddSourceKind, goal: string, reference: string): string {

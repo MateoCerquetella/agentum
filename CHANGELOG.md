@@ -4,6 +4,28 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.11] — 2026-07-31
+
+### Added
+
+- **Run Center imports Empirical SDD features as immutable New Spec sources.**
+  Local Empirical 0.20 schema-4 contracts, capability deltas, optional design,
+  and explicit plan actions now have a previewable, revision-bound Rust adapter.
+  The integration is artifact-intake only: Agentum keeps lifecycle and delivery
+  authority and never executes or mutates the Empirical runtime.
+
+### Fixed
+
+- **macOS bundles receive consistent ad-hoc signatures.** Apple Silicon and
+  Intel apps now sign the executable and bundled native libraries inside-out
+  without requiring an Apple certificate.
+- **macOS release validation exercises the bytes users install.** Each target is
+  built on matching native hardware, then its staged DMG is mounted and its
+  native executable is launch-smoked before publication.
+- **Gatekeeper behavior is explicit.** Certificate-free builds are expected to
+  require control-click → Open or Privacy & Security → Open Anyway on first
+  launch; updater archives remain cryptographically signed.
+
 ## [0.98.10] — 2026-07-31
 
 ### Fixed

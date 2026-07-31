@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/MateoCerquetella/empirical-sdd",
+  "commit": "d8ee7e1bdaa53bfc92e278524a40e61d16125f64",
+  "protocol": "0.20",
+  "schemaVersion": 4,
+  "license": "MIT",
+  "licenseUrl": "https://github.com/MateoCerquetella/empirical-sdd/blob/d8ee7e1bdaa53bfc92e278524a40e61d16125f64/LICENSE",
+  "note": "The fixture is a minimal protocol-shape derivative of the upstream public tests and templates; Agentum does not execute or vendor the upstream package.",
+  "files": {
+    "LICENSE": "1794687c291852aec63afe055288ff3d59742d091aaf35dad3e5ad5750429121",
+    "config.json": "a3ef201335f8504f11c64317166d055b3ef5323b3f3a8643675a94414a7abdf4",
+    "specs/add-report-export/state.json": "cf9765fa2521a50abb786e82c4c3a8908e4b75464ab69302035b361dd7f9f69a",
+    "specs/add-report-export/spec.md": "25b7c54caebe03415e9e883420fe618c0f593b9430dcc190dc0067e73574e7c6",
+    "specs/add-report-export/design.md": "019e3f1ea08e6d4868018e3a96ec7d549c4119cd7dd662c0f9dffb7611d9b75e",
+    "specs/add-report-export/decisions.md": "3e6cfe5b000cdc4dca6cea5c8cde6a0e793e616fbea996efd5580e78bdda07ed",
+    "specs/add-report-export/plan.md": "c519de5d3eb587d2c580e57f95684fb5f79eb4608a3ffd2442a6ddd9f4ae4ab5",
+    "specs/add-report-export/deltas/report-export.md": "9e4e19871c4a43ba99cf217d69a289d4c5e79e7b23533655f3fcf7ded40c90bf",
+    "specs/add-report-export/events/00000001.json": "78d0397ac3487ce551f36e881873593be063df4a81b4ed8e8da2f57c0446d52d"
+  }
+}

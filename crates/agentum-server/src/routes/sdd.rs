@@ -53,8 +53,8 @@ use crate::sdd::remote::{
 };
 use crate::sdd::sha256;
 use crate::sdd::sources::{
-    NormalizedSource, SourceError, WorkItemSource, import_openspec, normalize_markdown_intake,
-    normalize_work_item,
+    NormalizedSource, SourceError, WorkItemSource, import_empirical, import_openspec,
+    normalize_markdown_intake, normalize_work_item,
 };
 use crate::sdd::workspace::{self, WorkspaceError};
 
@@ -302,7 +302,8 @@ async fn capabilities(State(state): State<AppState>) -> Json<Value> {
                 "apiTokenFallbackEnabled": jira_api_token_fallback,
                 "reason": jira_reason
             },
-            { "id": "openspec", "available": true, "preview": true }
+            { "id": "openspec", "available": true, "preview": true },
+            { "id": "empirical", "available": true, "preview": true }
         ],
         "remoteLifecycle": true,
         "remoteWorker": {
@@ -551,6 +552,11 @@ enum CreateSpecSource {
         #[serde(default, rename = "expectedSourceRevision")]
         expected_source_revision: Option<String>,
     },
+    Empirical {
+        path: String,
+        #[serde(default, rename = "expectedSourceRevision")]
+        expected_source_revision: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -705,6 +711,7 @@ async fn preview_source(
             "markdownHash": sha256(normalized.markdown.as_bytes()),
             "designHash": normalized.design.as_deref().map(|value| sha256(value.as_bytes())),
             "tasks": normalized.tasks,
+            "capabilities": normalized.capabilities,
             "diagnostics": normalized.diagnostics
         }))
         .map_err(|error| ApiError::Internal(error.to_string()))?,
@@ -718,6 +725,8 @@ async fn preview_source(
         "externalReference": normalized.external_reference,
         "designAvailable": normalized.design.is_some(),
         "taskCount": normalized.tasks.len(),
+        "capabilities": normalized.capabilities,
+        "capabilityCount": normalized.capabilities.len(),
         "diagnostics": normalized.diagnostics,
         "previewDigest": preview_digest
     })))
@@ -902,6 +911,26 @@ async fn prepare_source(
                     .map_err(source_error)?;
             require_expected_source_revision(
                 "openspec",
+                expected_source_revision.as_deref(),
+                &normalized.source_revision,
+            )?;
+            normalized
+        }
+        CreateSpecSource::Empirical {
+            path,
+            expected_source_revision,
+        } => {
+            let repository = repository.to_path_buf();
+            let path = path.clone();
+            let normalized =
+                tokio::task::spawn_blocking(move || import_empirical(&repository, &path))
+                    .await
+                    .map_err(|error| {
+                        ApiError::Internal(format!("Empirical importer failed: {error}"))
+                    })?
+                    .map_err(source_error)?;
+            require_expected_source_revision(
+                "empirical",
                 expected_source_revision.as_deref(),
                 &normalized.source_revision,
             )?;
@@ -1489,7 +1518,12 @@ async fn create_spec(
     let import_preview_json = prepared_source
         .normalized
         .as_ref()
-        .filter(|source| matches!(source.kind.as_str(), "markdown" | "openspec" | "socratic"))
+        .filter(|source| {
+            matches!(
+                source.kind.as_str(),
+                "markdown" | "openspec" | "empirical" | "socratic"
+            )
+        })
         .map(serde_json::to_string)
         .transpose()
         .map_err(|error| ApiError::Internal(error.to_string()))?;
@@ -1497,7 +1531,12 @@ async fn create_spec(
         .normalized
         .as_ref()
         .zip(import_preview_json.as_deref())
-        .filter(|(source, _)| matches!(source.kind.as_str(), "markdown" | "openspec" | "socratic"))
+        .filter(|(source, _)| {
+            matches!(
+                source.kind.as_str(),
+                "markdown" | "openspec" | "empirical" | "socratic"
+            )
+        })
         .map(|(source, preview_json)| NewSddImportJob {
             source_kind: &source.kind,
             source_hash: &source.source_revision,
@@ -1605,6 +1644,7 @@ async fn create_remote_spec(
                 CreateSpecSource::Linear { .. } => "linear",
                 CreateSpecSource::Jira { .. } => "jira",
                 CreateSpecSource::Openspec { .. } => "openspec",
+                CreateSpecSource::Empirical { .. } => "empirical",
                 CreateSpecSource::Socratic { .. } | CreateSpecSource::Markdown { .. } => {
                     unreachable!("handled above")
                 }
@@ -7003,9 +7043,25 @@ mod tests {
             "source": { "type": "markdown", "markdown": "# Context" }
         });
         assert!(serde_json::from_value::<CreateSpecBody>(valid).is_ok());
+        assert!(
+            serde_json::from_value::<CreateSpecBody>(json!({
+                "requestId": "typed-empirical-source",
+                "expectedRevision": 0,
+                "title": "Example",
+                "goal": "Example",
+                "provider": "codex",
+                "source": {
+                    "type": "empirical",
+                    "path": ".empirical/specs/example",
+                    "expectedSourceRevision": "sha256:preview"
+                }
+            }))
+            .is_ok()
+        );
         for invalid_source in [
             json!({ "provider": "description", "type": "jira", "url": "secret" }),
             json!({ "type": "markdown", "markdown": "# Context", "token": "secret" }),
+            json!({ "type": "empirical", "path": ".empirical/specs/example", "token": "secret" }),
             json!({ "type": "github", "url": "https://github.com/o/r/issues/1", "sourceRevision": "caller-controlled" }),
             json!({ "value": "untyped" }),
         ] {
@@ -7022,6 +7078,272 @@ mod tests {
                 "accepted unsafe source input"
             );
         }
+    }
+
+    fn install_empirical_source_fixture(repository: &FsPath) {
+        let fixture =
+            FsPath::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empirical/official");
+        for relative in [
+            "config.json",
+            "specs/add-report-export/state.json",
+            "specs/add-report-export/spec.md",
+            "specs/add-report-export/design.md",
+            "specs/add-report-export/decisions.md",
+            "specs/add-report-export/plan.md",
+            "specs/add-report-export/deltas/report-export.md",
+            "specs/add-report-export/events/00000001.json",
+        ] {
+            let target = repository.join(".empirical").join(relative);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::copy(fixture.join(relative), target).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)] // serializes provider capability environment
+    async fn empirical_preview_and_create_are_revision_bound_before_allocation() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let repository = tempfile::tempdir().unwrap();
+        let agentum_home = tempfile::tempdir().unwrap();
+        install_empirical_source_fixture(repository.path());
+        git(repository.path(), &["init", "-q"]);
+        git(
+            repository.path(),
+            &["config", "user.email", "fixture@example.invalid"],
+        );
+        git(repository.path(), &["config", "user.name", "SDD Fixture"]);
+        git(repository.path(), &["add", "."]);
+        git(repository.path(), &["commit", "-qm", "fixture"]);
+        let _provider_probe = CodexProbeFixture::install(agentum_home.path());
+        let _registration = crate::routes::repos::register_test_repo(
+            "repo-empirical-preview",
+            repository.path().to_string_lossy(),
+        );
+        let store = agentum_store::Store::open(&agentum_home.path().join("preview.sqlite"))
+            .await
+            .unwrap();
+        let app = test_app(store.clone());
+
+        let capabilities = app
+            .clone()
+            .oneshot(get_request("/api/sdd/capabilities"))
+            .await
+            .unwrap();
+        assert_eq!(capabilities.status(), StatusCode::OK);
+        let capabilities = response_json(capabilities).await;
+        assert!(
+            capabilities["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|source| {
+                    source["id"] == "empirical"
+                        && source["available"] == true
+                        && source["preview"] == true
+                })
+        );
+
+        let preview = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/api/sdd/repos/repo-empirical-preview/sources/preview",
+                &json!({
+                    "title": "Durable report export",
+                    "source": {
+                        "type": "empirical",
+                        "path": ".empirical/specs/add-report-export"
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(preview.status(), StatusCode::OK);
+        let preview = response_json(preview).await;
+        assert_eq!(preview["kind"], "empirical");
+        assert_eq!(preview["title"], "Durable report export");
+        assert_eq!(preview["sourcePath"], ".empirical/specs/add-report-export");
+        assert!(
+            preview["markdown"]
+                .as_str()
+                .unwrap()
+                .contains("[report-export / ADDED]")
+        );
+        assert_eq!(preview["capabilityCount"], 1);
+        assert_eq!(preview["capabilities"], json!(["report-export"]));
+        assert_eq!(preview["taskCount"], 3);
+        assert_eq!(preview["designAvailable"], true);
+        let diagnostics = preview["diagnostics"].as_array().unwrap();
+        assert!(diagnostics.len() <= 3);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|entry| entry["code"] == "empirical_artifact_intake_only")
+        );
+        let revision = preview["sourceRevision"].as_str().unwrap().to_owned();
+        assert!(revision.starts_with("sha256:"));
+        assert!(
+            store
+                .sdd_list_specs("repo-empirical-preview")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        std::fs::write(
+            repository
+                .path()
+                .join(".empirical/specs/add-report-export/spec.md"),
+            "# Durable report export\n\nChanged after preview.\n",
+        )
+        .unwrap();
+        let conflict = app
+            .clone()
+            .oneshot(json_request(
+                "POST",
+                "/api/sdd/repos/repo-empirical-preview/specs",
+                &json!({
+                    "requestId": "create-from-stale-empirical-preview",
+                    "expectedRevision": 0,
+                    "title": "Durable report export",
+                    "goal": "Import the exact Empirical contract",
+                    "profile": "standard",
+                    "control": "guarded",
+                    "provider": "codex",
+                    "baseRef": "HEAD",
+                    "sourceCheckout": "require_clean",
+                    "source": {
+                        "type": "empirical",
+                        "path": ".empirical/specs/add-report-export",
+                        "expectedSourceRevision": revision
+                    },
+                    "specMarkdown": "# Durable report export\n\n- RQ-001 Export the report.\n- AC-001 The report is exported."
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response_json(conflict).await["error"],
+            "source_revision_changed"
+        );
+        assert!(
+            store
+                .sdd_list_specs("repo-empirical-preview")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!repository.path().join(".agentum").exists());
+
+        git(repository.path(), &["add", ".empirical"]);
+        git(
+            repository.path(),
+            &["commit", "-qm", "update empirical source"],
+        );
+        let current =
+            import_empirical(repository.path(), ".empirical/specs/add-report-export").unwrap();
+        let created = app
+            .oneshot(json_request(
+                "POST",
+                "/api/sdd/repos/repo-empirical-preview/specs",
+                &json!({
+                    "requestId": "create-from-current-empirical-preview",
+                    "expectedRevision": 0,
+                    "title": "Durable report export",
+                    "goal": "Import the exact Empirical contract",
+                    "profile": "standard",
+                    "control": "guarded",
+                    "provider": "codex",
+                    "baseRef": "HEAD",
+                    "sourceCheckout": "require_clean",
+                    "source": {
+                        "type": "empirical",
+                        "path": ".empirical/specs/add-report-export",
+                        "expectedSourceRevision": current.source_revision
+                    },
+                    "specMarkdown": "# Durable report export\n\n- RQ-001 Export the report.\n- AC-001 The report is exported."
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let import = store
+            .sdd_import_job(
+                "repo-empirical-preview",
+                "empirical",
+                &current.source_revision,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let stored: NormalizedSource = serde_json::from_str(&import.preview_json).unwrap();
+        assert_eq!(stored.capabilities, ["report-export"]);
+        assert_eq!(stored.tasks.len(), 3);
+        assert!(stored.design.is_some());
+        assert!(git_output(repository.path(), &["status", "--porcelain"]).is_empty());
+        assert!(!repository.path().join(".agentum").exists());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn remote_empirical_source_fails_closed_without_local_fallback() {
+        let repository = tempfile::tempdir().unwrap();
+        let database = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&database.path().join("remote-empirical.sqlite"))
+            .await
+            .unwrap();
+        let host = store
+            .create_host(NewHost {
+                name: "remote-empirical-test".into(),
+                kind: HostKind::Ssh {
+                    user: "agentum".into(),
+                    hostname: "fixture.invalid".into(),
+                    port: 22,
+                    auth: SshAuth::Agent,
+                },
+            })
+            .await
+            .unwrap();
+        let _registration = crate::routes::repos::register_test_remote_repo(
+            "repo-remote-empirical",
+            repository.path().to_string_lossy(),
+            host.id,
+        );
+        let response = test_app(store.clone())
+            .oneshot(json_request(
+                "POST",
+                "/api/sdd/repos/repo-remote-empirical/specs",
+                &json!({
+                    "requestId": "remote-empirical-rejected",
+                    "expectedRevision": 0,
+                    "title": "Remote Empirical import",
+                    "goal": "Import the source",
+                    "provider": "codex",
+                    "baseRef": "HEAD",
+                    "source": {
+                        "type": "empirical",
+                        "path": ".empirical/specs/example"
+                    }
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response_json(response).await;
+        assert_eq!(body["error"], "remote_source_capability_unavailable");
+        assert_eq!(body["source"], "empirical");
+        assert_eq!(body["localFallback"], false);
+        assert!(
+            store
+                .sdd_list_specs("repo-remote-empirical")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!repository.path().join(".agentum").exists());
     }
 
     #[tokio::test(flavor = "current_thread")]
