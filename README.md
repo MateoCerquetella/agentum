@@ -63,7 +63,7 @@ arm64 and x86_64 builds; Windows and Linux currently ship x86_64 builds.
 > **The CLI/TUI (`agentum terminal`) now lives in a separate repo:** [`github.com/mateocerquetella/agentum-tui`](https://github.com/mateocerquetella/agentum-tui). This repo is the **desktop app** plus the shared backend crates. CLI install/run commands below point at that repo.
 
 ```sh
-# macOS — Homebrew (first launch may require control-click → Open)
+# macOS — Homebrew (Developer ID signed and Apple notarized)
 brew install --cask mateocerquetella/tap/agentum
 
 # Linux — verified AppImage (use --format deb, rpm, or raw if preferred)
@@ -78,11 +78,12 @@ curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/
 
 All native installers live on the [latest release](https://github.com/mateocerquetella/agentum/releases/latest).
 The release installer requires the published SHA-256 manifest and validates the
-macOS bundle structure before replacing the app. macOS and Windows bundles are
-not OS-signed, so Gatekeeper or SmartScreen may warn on first launch; in-app
-updater artifacts remain cryptographically signed. The release `uninstall.sh`
-preserves user data by default; pass `--purge-data` explicitly to remove
-Agentum's known desktop data roots.
+macOS bundle structure before replacing the app. macOS bundles are Developer ID
+signed and Apple notarized; Windows bundles are not Authenticode-signed, so
+SmartScreen may warn on first launch. In-app updater artifacts remain
+cryptographically signed. The release `uninstall.sh` preserves user data by
+default; pass `--purge-data` explicitly to remove Agentum's known desktop data
+roots.
 
 ### Terminal UI / CLI
 

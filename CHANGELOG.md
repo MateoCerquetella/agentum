@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.11] — 2026-07-31
+
+### Fixed
+
+- **macOS downloads open under Gatekeeper.** Apple Silicon and Intel apps now
+  receive inside-out Developer ID signatures, hardened runtime, secure
+  timestamps, Apple notarization, and stapled tickets for both the app and DMG.
+- **macOS release validation exercises the bytes users install.** Each target is
+  built on matching native hardware, then its staged DMG is mounted, assessed
+  under download quarantine, and launch-smoked before publication.
+- **Unsigned macOS releases fail closed.** Publishing now requires Apple
+  certificate and notarization credentials and removes its isolated signing
+  keychain even when a build fails.
+
 ## [0.98.10] — 2026-07-31
 
 ### Fixed
