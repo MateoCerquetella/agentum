@@ -796,7 +796,10 @@ function NewWorkProgressPanel({
         ? 'Create the tracker issue'
         : workSource === 'existing'
           ? 'Link the selected issue'
-          : 'Tracker sources use New Spec',
+          : workSource === 'sdd'
+            ? 'No tracker issue required'
+            : 'No tracker issue requested',
+    sdd: workSource === 'sdd' ? 'Create the spec and start its guarded run' : 'No SDD run requested',
     worktree: selectedRepoIsGit ? 'Create the Git worktree and open the agent' : 'Open the project workspace and agent'
   } satisfies Record<(typeof NEW_WORK_STAGES)[number], string>
 

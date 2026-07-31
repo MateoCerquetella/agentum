@@ -65,7 +65,8 @@ export function initialNewWorkProgress(
   source: WorkSource = 'new'
 ): NewWorkProgress {
   return {
-    issue: source === 'none' || checkpoint.linkedWorkItem ? 'done' : 'pending',
+    issue: source === 'none' || source === 'sdd' || checkpoint.linkedWorkItem ? 'done' : 'pending',
+    sdd: source !== 'sdd' || checkpoint.sddResult ? 'done' : 'pending',
     worktree: checkpoint.worktreeResult ? 'done' : 'pending'
   };
 }

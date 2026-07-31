@@ -84,6 +84,7 @@ jobs:
           tests.test_sdd_migration
           tests.test_sdd_demo_fixture
           tests.test_openspec_golden
+          tests.test_empirical_golden
           tests.test_release_workflow
           tests.test_restricted_content_scan
 
