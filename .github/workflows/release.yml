@@ -387,7 +387,6 @@ jobs:
             -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
-          security default-keychain -d user -s "$keychain"
           identities="$(security find-identity -v -p codesigning "$keychain" \
             | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p')"
           identity_count="$(printf '%s\n' "$identities" | sed '/^$/d' | wc -l | tr -d ' ')"
