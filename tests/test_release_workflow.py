@@ -122,6 +122,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("Prepare isolated Developer ID keychain", workflow)
         self.assertIn("Notarize and staple exact macOS DMG", workflow)
         self.assertIn("Verify trusted macOS release", workflow)
+        self.assertIn("Diagnose unsigned macOS rehearsal runtime", workflow)
         self.assertIn("Remove isolated signing keychain", workflow)
         self.assertIn("APPLE_SIGNING_IDENTITY", workflow)
         self.assertIn("xcrun notarytool store-credentials", workflow)
@@ -275,6 +276,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         )
         self.assertIn('test "$(uname -m)" = "$EXPECTED_HOST_ARCH"', MACOS_RELEASE_AUDIT.read_text(encoding="utf-8"))
         self.assertIn('open -n -W "$INSTALLED_APP"', MACOS_RELEASE_AUDIT.read_text(encoding="utf-8"))
+        self.assertIn('test "$(uname -m)" = "$EXPECTED_ARCH"', release)
+        self.assertIn("native runtime stayed alive; Gatekeeper rejection is the isolated failure", release)
 
     def test_macos_release_audit_enforces_trust_without_gatekeeper_bypasses(self) -> None:
         audit = MACOS_RELEASE_AUDIT.read_text(encoding="utf-8")

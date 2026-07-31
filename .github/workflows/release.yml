@@ -659,6 +659,58 @@ jobs:
           STEM="agentum-${VER}-${OSARCH}"
           scripts/check-macos-release.sh "$APP_PATH" "dist/${STEM}.dmg" "$BUILD_TARGET" "$VER"
 
+      # A branch rehearsal without protected Apple credentials cannot prove
+      # Gatekeeper trust, but it can still separate a loader/runtime crash from
+      # the expected unsigned-distribution rejection. Publishing never reaches
+      # this path because preflight requires every Apple secret.
+      - name: Diagnose unsigned macOS rehearsal runtime
+        if: ${{ contains(matrix.target, 'apple-darwin') && steps.macos_signing.outputs.enabled != 'true' && !inputs.publish }}
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          APP_PATH="target/$BUILD_TARGET/release/bundle/macos/Agentum.app"
+          EXECUTABLE="$APP_PATH/Contents/MacOS/agentum-desktop"
+          case "$BUILD_TARGET" in
+            aarch64-apple-darwin) EXPECTED_ARCH="arm64" ;;
+            x86_64-apple-darwin) EXPECTED_ARCH="x86_64" ;;
+            *) exit 2 ;;
+          esac
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          test "$(lipo -archs "$EXECUTABLE")" = "$EXPECTED_ARCH"
+          if codesign --verify --deep --strict --verbose=4 "$APP_PATH"; then
+            echo "unsigned rehearsal unexpectedly passed strict code-signing validation" >&2
+            exit 1
+          fi
+          if spctl --assess --type execute --verbose=4 "$APP_PATH"; then
+            echo "unsigned rehearsal unexpectedly passed Gatekeeper assessment" >&2
+            exit 1
+          fi
+          codesign --display --verbose=4 "$APP_PATH" 2>&1 || true
+          runtime_log="$RUNNER_TEMP/agentum-unsigned-runtime-${BUILD_TARGET}.log"
+          "$EXECUTABLE" >"$runtime_log" 2>&1 &
+          app_pid=$!
+          cleanup_runtime() {
+            if kill -0 "$app_pid" 2>/dev/null; then
+              kill -TERM "$app_pid" 2>/dev/null || true
+              wait "$app_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_runtime EXIT INT TERM
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              wait "$app_pid" || true
+              cat "$runtime_log" >&2
+              echo "unsigned rehearsal has an independent macOS runtime failure" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          cleanup_runtime
+          trap - EXIT INT TERM
+          echo "native runtime stayed alive; Gatekeeper rejection is the isolated failure"
+
       - name: Verify canonical Linux AppImage installation
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
         shell: bash
