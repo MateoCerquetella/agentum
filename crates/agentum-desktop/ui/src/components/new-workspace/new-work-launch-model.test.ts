@@ -11,15 +11,29 @@ import {
 } from './new-work-launch-model'
 
 describe('new workspace launch model', () => {
-  it('tracks only issue and worktree creation; specs start later in Run Center', () => {
-    expect(initialNewWorkProgress({}, 'new')).toEqual({ issue: 'pending', worktree: 'pending' })
-    expect(initialNewWorkProgress({}, 'none')).toEqual({ issue: 'done', worktree: 'pending' })
+  it('tracks issue, SDD, and worktree creation for each launch source', () => {
+    expect(initialNewWorkProgress({}, 'new')).toEqual({
+      issue: 'pending',
+      sdd: 'done',
+      worktree: 'pending'
+    })
+    expect(initialNewWorkProgress({}, 'none')).toEqual({
+      issue: 'done',
+      sdd: 'done',
+      worktree: 'pending'
+    })
+    expect(initialNewWorkProgress({}, 'sdd')).toEqual({
+      issue: 'done',
+      sdd: 'pending',
+      worktree: 'pending'
+    })
   })
 
   it('does not advertise tracker-to-workspace launch copy', () => {
     expect(newWorkPrimaryLabel('none')).toBe('Create workspace')
     expect(newWorkPrimaryLabel('existing')).toBe('Create worktree')
     expect(newWorkPrimaryLabel('new')).toBe('Create issue')
+    expect(newWorkPrimaryLabel('sdd')).toBe('Create workspace & start SDD')
   })
 
   it('reports durable workspace progress and retry state', () => {

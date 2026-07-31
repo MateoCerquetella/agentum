@@ -528,7 +528,10 @@ export default function CreateWorkspaceWizard({
   const launchScopeLocked = launchBusy || Boolean(launchCheckpoint.worktreeResult)
   const retryAvailable = isNewWorkRetryAvailable(launchProgress, launchBusy)
   const primaryLabel = step === 3
-    ? newWorkBusyLabel(launchProgress) ?? (launchBusy ? 'Preparing work…' : newWorkPrimaryLabel(workSource, retryAvailable))
+    ? newWorkBusyLabel(launchProgress) ??
+      (launchBusy
+        ? 'Preparing work…'
+        : newWorkPrimaryLabel(useSdd ? 'sdd' : workSource, retryAvailable))
     : wizardPrimaryLabel(step, creating)
   const primaryDisabled =
     step === 3
@@ -678,7 +681,7 @@ export default function CreateWorkspaceWizard({
         {step === 3 ? (
           <NewWorkProgressPanel
             progress={launchProgress}
-            workSource={workSource}
+            workSource={useSdd ? 'sdd' : workSource}
             selectedRepoIsGit={selectedRepoIsGit}
             busy={launchBusy}
             onCancel={onClose}
@@ -796,7 +799,10 @@ function NewWorkProgressPanel({
         ? 'Create the tracker issue'
         : workSource === 'existing'
           ? 'Link the selected issue'
-          : 'Tracker sources use New Spec',
+          : workSource === 'sdd'
+            ? 'No tracker issue required'
+            : 'No tracker issue requested',
+    sdd: workSource === 'sdd' ? 'Create the spec and start its guarded run' : 'No SDD run requested',
     worktree: selectedRepoIsGit ? 'Create the Git worktree and open the agent' : 'Open the project workspace and agent'
   } satisfies Record<(typeof NEW_WORK_STAGES)[number], string>
 

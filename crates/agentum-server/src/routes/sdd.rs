@@ -7442,11 +7442,7 @@ mod tests {
             .unwrap();
         let app = test_app(store.clone());
         for legacy_path in ["/api/sdd/playbooks", "/api/harness"] {
-            let retired = app
-                .clone()
-                .oneshot(get_request(legacy_path))
-                .await
-                .unwrap();
+            let retired = app.clone().oneshot(get_request(legacy_path)).await.unwrap();
             assert_eq!(retired.status(), StatusCode::NOT_FOUND, "{legacy_path}");
         }
         let create_body = json!({

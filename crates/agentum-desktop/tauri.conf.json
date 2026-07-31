@@ -1,6 +1,6 @@
 {
   "productName": "Agentum",
-  "version": "0.97.0",
+  "version": "0.98.10",
   "identifier": "dev.agentum.app",
   "build": {
     "frontendDist": "ui/dist",
@@ -73,10 +73,6 @@
           "bubblewrap"
         ]
       }
-    },
-    "windows": {
-      "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.digicert.com"
     }
   }
 }

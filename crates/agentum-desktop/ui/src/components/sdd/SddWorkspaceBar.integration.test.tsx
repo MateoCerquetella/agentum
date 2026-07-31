@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   redeemJiraOauth: vi.fn(),
   selectJiraSite: vi.fn(),
   startJiraOauth: vi.fn(),
+  subscribeRunCenterSelection: vi.fn(),
   subscribeSddEvents: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn()
@@ -53,6 +54,7 @@ vi.mock('@/runtime/sdd-client', () => ({
   redeemJiraOauth: mocks.redeemJiraOauth,
   selectJiraSite: mocks.selectJiraSite,
   startJiraOauth: mocks.startJiraOauth,
+  subscribeRunCenterSelection: mocks.subscribeRunCenterSelection,
   subscribeSddEvents: mocks.subscribeSddEvents
 }))
 
@@ -338,6 +340,7 @@ describe('SddWorkspaceBar interaction workflow', () => {
     mocks.getRun.mockImplementation(async () => structuredClone(serverSnapshot))
     mocks.getArtifacts.mockImplementation(async () => structuredClone(serverArtifacts))
     mocks.getEvents.mockImplementation(async () => structuredClone(serverEvents))
+    mocks.subscribeRunCenterSelection.mockReturnValue(vi.fn())
     mocks.subscribeSddEvents.mockImplementation((next: EventSubscription) => {
       subscription = next
       next.onOpen?.()
