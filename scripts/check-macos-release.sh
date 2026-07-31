@@ -128,7 +128,7 @@ otool -l "$EXECUTABLE" | grep -A2 LC_RPATH | grep -Eq '@(loader_path|executable_
 codesign --verify --deep --strict --verbose=4 "$APP_PATH"
 verify_adhoc_signature "$APP_PATH"
 APP_SIGNATURE="$(codesign --display --verbose=4 "$APP_PATH" 2>&1)"
-if ! grep -Eq '^flags=.*[(,]runtime[),]' <<<"$APP_SIGNATURE"; then
+if ! grep -Eq 'flags=[^[:space:]]*[(,]runtime[),]' <<<"$APP_SIGNATURE"; then
   echo "hardened runtime flag is missing from app signature" >&2
   exit 1
 fi

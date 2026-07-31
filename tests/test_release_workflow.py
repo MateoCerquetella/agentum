@@ -279,7 +279,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "Signature=adhoc",
             "TeamIdentifier=not set",
             "runtime",
-            "[(,]runtime[),]",
+            "flags=[^[:space:]]*[(,]runtime[),]",
             "spctl --assess --type execute",
             "hdiutil attach",
             "com.apple.quarantine",
