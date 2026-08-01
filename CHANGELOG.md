@@ -4,6 +4,16 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.13] — 2026-08-01
+
+### Fixed
+
+- **Release binary policy scans are deterministic.** Generated installers are
+  checked through printable ASCII and PE-scoped Windows UTF-16 strings instead of
+  applying text regexes to nondeterministic compressed bytes. Explicit bundle
+  directories are now scanned even when they live below `target`, preserving
+  the fail-closed restricted-content gate without random binary matches.
+
 ## [0.98.12] — 2026-08-01
 
 ### Fixed
