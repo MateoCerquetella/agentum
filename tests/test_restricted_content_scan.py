@@ -59,6 +59,36 @@ class RestrictedContentScanTests(unittest.TestCase):
         self.assertIn(str(leaked), result.stderr)
         self.assertNotIn("PRIVATE-MARKER-42", result.stderr)
 
+    def test_utf16le_binary_match_is_detected(self) -> None:
+        leaked = self.staging / "windows-resource.bin"
+        leaked.write_bytes("PRIVATE-MARKER-42".encode("utf-16-le"))
+        result = self.run_scan()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(leaked), result.stderr)
+        self.assertNotIn("PRIVATE-MARKER-42", result.stderr)
+
+    def test_regex_does_not_match_across_non_printable_binary_bytes(self) -> None:
+        self.patterns.write_text("PRIVATE.MARKER\n", encoding="utf-8")
+        (self.staging / "compressed-installer.bin").write_bytes(
+            b"header\x00PRIVATE\x01MARKER\x00payload"
+        )
+        result = self.run_scan()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_explicit_bundle_under_target_directory_is_scanned(self) -> None:
+        bundle = self.root / "target" / "release" / "bundle"
+        bundle.mkdir(parents=True)
+        leaked = bundle / "installer.exe"
+        leaked.write_bytes(b"prefix\x00PRIVATE-MARKER-42\x00suffix")
+        result = subprocess.run(
+            ["bash", SCRIPT, self.patterns, bundle],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(leaked), result.stderr)
+
     @unittest.skipIf(os.name == "nt", "symlink creation requires elevated privileges on Windows")
     def test_symlink_scan_target_is_rejected(self) -> None:
         outside = self.root / "outside"
