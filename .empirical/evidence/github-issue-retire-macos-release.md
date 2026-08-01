@@ -58,3 +58,11 @@ GitHub reports v0.98.11 `immutable: true`. The authorized replacement attempt
 returned HTTP 422: `Cannot delete asset from an immutable release`; the public
 manifest SHA-256 remained unchanged. The corrective patch release is therefore
 the supported containment mechanism.
+
+## Publication follow-up
+
+The first v0.98.12 publication run stopped before aggregation, draft creation,
+or publication when the Windows installer triggered a nondeterministic raw
+compressed-byte restricted-content match. The issue was reopened, the signed
+v0.98.12 tag was preserved rather than rewritten, and the corrected release
+version advanced to v0.98.13.

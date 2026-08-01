@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "443bab8cc7f3ca6e11430cc9904a62fbf7e7357c1870f638ab05686773fb95cc",
+  "digest": "b605aa73637e03a2095dc3e24cac93c95b80f8b3d7530fe32d40f08715510993",
   "files": [
     {
       "path": ".agentum/manifest.json",
@@ -854,8 +854,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "size": 210516,
-      "digest": "93ed82ff09a90198101f3b6ce98e2d424e9ea4b57bd16ad5efab76944d917dc8"
+      "size": 210935,
+      "digest": "0e63968c3ce6f21ee87518c8fcaf5a762867e98524d02a19785d169f67b46d2f"
     },
     {
       "path": "CLAUDE.md",
@@ -865,12 +865,12 @@
     {
       "path": "Cargo.lock",
       "size": 222131,
-      "digest": "ad3bf064f6e4f05fdaae8e59ae6ca01262a087ac73921221c99bfa20c2651895"
+      "digest": "e3ce4e606e3342e1c8b60175829237147b950ef30d8cc3dc61169562860c02d5"
     },
     {
       "path": "Cargo.toml",
       "size": 2286,
-      "digest": "5de6e6cb3eecfd3cba250678bf80fdd232a48d0d3f17c849b0ed7d164b5d7318"
+      "digest": "7d97370505622080d133cd2b0430a6744b369f54b0a0527f09cae22d1d66fc5a"
     },
     {
       "path": "LICENSE",
@@ -1340,7 +1340,7 @@
     {
       "path": "crates/agentum-desktop/tauri.conf.json",
       "size": 2294,
-      "digest": "5af689e03a667f6a333617bf25f92286ff486f725afedd2f14101e48e6613e0f"
+      "digest": "79fb5fd997742037a71797fb43b35ddc76eb888b4f659355fadb72c2cba2cb2c"
     },
     {
       "path": "crates/agentum-desktop/ui/bun.lock",
