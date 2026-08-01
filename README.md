@@ -12,7 +12,7 @@ Then use one durable, approval-aware workflow to move a local specification to R
 
 [![release](https://img.shields.io/github/v/release/mateocerquetella/agentum?display_name=tag&color=111)](https://github.com/mateocerquetella/agentum/releases)
 [![license](https://img.shields.io/github/license/mateocerquetella/agentum?color=111)](LICENSE)
-![platforms](https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux-111)
+![platforms](https://img.shields.io/badge/Windows%20·%20Linux-111)
 
 [**Download**](https://github.com/mateocerquetella/agentum/releases/latest) · [Documentation](docs/) · [Website](https://agentum.sh) · [Changelog](CHANGELOG.md)
 
@@ -57,33 +57,27 @@ Two ways to run it — pick one or use both. On the same machine they boot `agen
 
 ### Desktop app
 
-Native **Tauri 2** (no Electron), with signed in-app auto-update. macOS ships
-arm64 and x86_64 builds; Windows and Linux currently ship x86_64 builds.
+Native **Tauri 2** (no Electron), with signed in-app auto-update. Packaged
+desktop releases currently support x86_64 Windows and Linux.
 
 > **The CLI/TUI (`agentum terminal`) now lives in a separate repo:** [`github.com/mateocerquetella/agentum-tui`](https://github.com/mateocerquetella/agentum-tui). This repo is the **desktop app** plus the shared backend crates. CLI install/run commands below point at that repo.
 
 ```sh
-# macOS — Homebrew (first launch may require control-click → Open)
-brew install --cask mateocerquetella/tap/agentum
-
 # Linux — verified AppImage (use --format deb, rpm, or raw if preferred)
 curl -fsSL https://github.com/mateocerquetella/agentum/releases/latest/download/install.sh | sh
 ```
 
 | Platform | Get it |
 |----------|--------|
-| **macOS** | `brew install --cask mateocerquetella/tap/agentum` · or the `.dmg` |
 | **Windows** | `agentum-<ver>-windows-x64-setup.exe` |
 | **Linux** | `.AppImage`, `.deb`, `.rpm`, or the standalone desktop executable |
 
 All native installers live on the [latest release](https://github.com/mateocerquetella/agentum/releases/latest).
-The release installer requires the published SHA-256 manifest and validates the
-macOS bundle structure before replacing the app. macOS bundles use ad-hoc code
-signatures rather than an Apple Developer ID certificate and are not notarized,
-so Gatekeeper may require control-click → Open or Privacy & Security → Open
-Anyway on first launch. Windows bundles are not Authenticode-signed, so
-SmartScreen may also warn. In-app updater artifacts remain cryptographically
-signed. The release `uninstall.sh` preserves user data by default; pass
+The Linux release installer rejects unsupported operating systems before making
+any network request and validates every downloaded asset against the published
+SHA-256 manifest. Windows bundles are not Authenticode-signed, so SmartScreen
+may warn. In-app updater artifacts remain cryptographically signed. The release
+`uninstall.sh` preserves user data by default; pass
 `--purge-data` explicitly to remove Agentum's known desktop data roots.
 
 ### Terminal UI / CLI

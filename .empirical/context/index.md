@@ -3,8 +3,8 @@
 Generated from repository metadata. Topic pages are maintained by the current
 agent from inspected evidence; refresh never overwrites them.
 
-- Repository: spiderfish
-- Inventory digest: 33b6bea396b5bb6e34216e28d265ae8f03fa988d3625c08b1986828e7501149a
+- Repository: agentum-retire-macos-release-and-optimize-supported-platforms
+- Inventory digest: bb4c507809d9bf446f37701294da81e9ab19dee7435de602f5be60a06ace0b42
 - Included files: 1200 (bounded/truncated)
 - Roots: .agentum, .cargo, .claude, ., .github, .planning, crates
 - Manifests: Cargo.toml, crates/agentum-core/Cargo.toml, crates/agentum-desktop/Cargo.toml, crates/agentum-desktop/ui/package.json

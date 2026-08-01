@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "33b6bea396b5bb6e34216e28d265ae8f03fa988d3625c08b1986828e7501149a",
+  "digest": "bb4c507809d9bf446f37701294da81e9ab19dee7435de602f5be60a06ace0b42",
   "files": [
     {
       "path": ".agentum/manifest.json",
@@ -818,16 +818,6 @@
       "digest": "252464c0b20557b1e554061f5d7b4e02afdeecda89c1506d090cc0e257ab1231"
     },
     {
-      "path": ".github/agentum.cask.tmpl",
-      "size": 815,
-      "digest": "068baae67ee030130087c733633afaf45576303785a6647ae95106fa011d6ca9"
-    },
-    {
-      "path": ".github/dependabot.yml",
-      "size": 620,
-      "digest": "d14601af459043defeccaffa52746360bca2c4d4898b74aeb47abec7b13ff33a"
-    },
-    {
       "path": ".github/labels.sh",
       "size": 2182,
       "digest": "434e904d6a7554f76a826ffe3446d4318cc1be93c471b3f0a9c86d4f36e84c6c"
@@ -838,24 +828,9 @@
       "digest": "ac72c2403ae1bf0953f4fe21b4eb3bceaf1edd71be7d894a5e9a3c406c10ec78"
     },
     {
-      "path": ".github/release-macos-note.md",
-      "size": 344,
-      "digest": "b622bcc78cfe4e67a3509d69bc74c5e96086cb8350fb45d62b440be82ebb60fd"
-    },
-    {
-      "path": ".github/workflows/ci.yml",
-      "size": 20248,
-      "digest": "d0f4d512b6dddff5e9e819e8d8f3ab6b617e38bf2e90b509af6af021f3bfdef1"
-    },
-    {
-      "path": ".github/workflows/codeql.yml",
-      "size": 1442,
-      "digest": "231a327f6772e1fa5cb2c69f8c46890ece114f9de33d64a08a243935b4a61e7a"
-    },
-    {
       "path": ".github/workflows/release.yml",
-      "size": 49111,
-      "digest": "8badde9fc1a0136f4ad2839e7e99ce905e9d1fbc02330a1f1218cab8ea6e5821"
+      "size": 32311,
+      "digest": "ffe02291bd7209ebd2f9736f6c73341de38d7fa2fcf4581c32d0eaa3059ee09c"
     },
     {
       "path": ".gitignore",
@@ -879,8 +854,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "size": 204237,
-      "digest": "5ee762d5f7379b1af44877cc852a426d35080469c083ed7f5580c2964f0699d2"
+      "size": 210282,
+      "digest": "f1975e41c0d89744509a1520c518a7b161cf340166c3a9c32f1b3215ece4431f"
     },
     {
       "path": "CLAUDE.md",
@@ -889,13 +864,13 @@
     },
     {
       "path": "Cargo.lock",
-      "size": 222123,
-      "digest": "092291c673b1fb3a8b32467cbfb47481872569a1240a400fc246a2413c553e09"
+      "size": 222131,
+      "digest": "ad3bf064f6e4f05fdaae8e59ae6ca01262a087ac73921221c99bfa20c2651895"
     },
     {
       "path": "Cargo.toml",
-      "size": 2285,
-      "digest": "b5efa3cb7cea6099a28fa580d7d9f38881248a7fdde2d2aeaa0fed8f208d914a"
+      "size": 2286,
+      "digest": "5de6e6cb3eecfd3cba250678bf80fdd232a48d0d3f17c849b0ed7d164b5d7318"
     },
     {
       "path": "LICENSE",
@@ -904,8 +879,8 @@
     },
     {
       "path": "README.md",
-      "size": 10709,
-      "digest": "8a7301e45f69c97d14a6d2cb0e2b3224f0a1a6d5a7d3ee06d370bb7cf1108bdd"
+      "size": 10465,
+      "digest": "06f0704aa1539e97eab739226e7d92fe4e136841ede8ef2483eb123a68431f93"
     },
     {
       "path": "crates/agentum-core/Cargo.toml",
@@ -969,8 +944,8 @@
     },
     {
       "path": "crates/agentum-desktop/capabilities/default.json",
-      "size": 277,
-      "digest": "6d726c9f87736962f99fc8ce1975dedad54724e30b0866b2e260e54517e4082d"
+      "size": 325,
+      "digest": "67eabc63c0d0c9e54fd13e65445c8b4e6866d49e2c7d9a172319cd3b87067b2a"
     },
     {
       "path": "crates/agentum-desktop/icons/icon.icns",
@@ -1364,8 +1339,8 @@
     },
     {
       "path": "crates/agentum-desktop/tauri.conf.json",
-      "size": 2406,
-      "digest": "1a97be0573e0d5f3ab10c56027f0f3122b31496dd959ea4d9f1bdb0fb95a71b0"
+      "size": 2294,
+      "digest": "5af689e03a667f6a333617bf25f92286ff486f725afedd2f14101e48e6613e0f"
     },
     {
       "path": "crates/agentum-desktop/ui/bun.lock",
@@ -3769,8 +3744,8 @@
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/new-workspace/CreateWorkspaceWizard.tsx",
-      "size": 68873,
-      "digest": "e20cf22d15ba04523d2b84664f511f67942c02b007016b8e4353c6f585ecd999"
+      "size": 68929,
+      "digest": "b668f6ea90bc7604b0275e4786774464c44f3899fdddd476b5133ffdf15d4f75"
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/new-workspace/SmartWorkspaceNameField.tsx",
@@ -3789,8 +3764,8 @@
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/new-workspace/create-workspace-wizard-model.test.ts",
-      "size": 15591,
-      "digest": "38c7214d670347b1c1c92c04153df937298e0bbd0e10e43257a885d2482b4a6e"
+      "size": 16186,
+      "digest": "43b9f778bfdc3656bd277cf226aa4a3a924ae8a17e13f5a0965cbea7d6198c95"
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/new-workspace/create-workspace-wizard-model.ts",
@@ -3809,13 +3784,13 @@
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/new-workspace/new-work-launch-model.test.ts",
-      "size": 2244,
-      "digest": "6d26bfb36977b1838f621a6cd0689c7906ee5d7511e12010c6dff1cf7394e618"
+      "size": 2513,
+      "digest": "657ff9e006579587d59664ca3928d144d358550d4a1e1fa66097904264097b24"
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/new-workspace/new-work-launch-model.ts",
       "size": 4811,
-      "digest": "2865a3c7d239fbd8de7897f2b37391257f67ed76bc1c589299c656defbef1b92"
+      "digest": "183cb307784770a1374eecd9b90b24cf6f7c243800368732bf575c36d4e7d15e"
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/new-workspace/smart-workspace-command-value.test.ts",
@@ -4999,8 +4974,8 @@
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/sdd/SddWorkspaceBar.integration.test.tsx",
-      "size": 52358,
-      "digest": "921e6d2a5fc77fe3db61ebc393aa3224c0590211d76553accd4ec55011336880"
+      "size": 52421,
+      "digest": "770839f2f6579dca781cdc0e44554f7ec6fc72dfcd497f8ec8092e4e94ef0cd4"
     },
     {
       "path": "crates/agentum-desktop/ui/src/components/sdd/SddWorkspaceBar.test.tsx",
@@ -6001,6 +5976,31 @@
       "path": "crates/agentum-desktop/ui/src/components/sidebar/SidebarHeader.tsx",
       "size": 6786,
       "digest": "c8de1a6e539407ab89ff302e7db136fb0cba6bab44ddcd97407ca5caff491ec5"
+    },
+    {
+      "path": "crates/agentum-desktop/ui/src/components/sidebar/SidebarNav.test.tsx",
+      "size": 4999,
+      "digest": "38609fd780a5c0a157deafe21f28f999e30dfade64140727d8052658a2e36b93"
+    },
+    {
+      "path": "crates/agentum-desktop/ui/src/components/sidebar/SidebarNav.tsx",
+      "size": 6257,
+      "digest": "fd310a2e35dcc622355da7a1cb3cbbec05b2c1fc47e27684234fefe3ac9b09f6"
+    },
+    {
+      "path": "crates/agentum-desktop/ui/src/components/sidebar/SidebarRepositoryFilterSection.tsx",
+      "size": 8525,
+      "digest": "a3f83b784fd2961dd266c1433732fec7755a815f823232858c452e87d9b056d0"
+    },
+    {
+      "path": "crates/agentum-desktop/ui/src/components/sidebar/SidebarToolbar.tsx",
+      "size": 5440,
+      "digest": "af0bfb44e3e60777cfa320a00a4a54fe336b687f1f5a21134ad95ac9fe846ae8"
+    },
+    {
+      "path": "crates/agentum-desktop/ui/src/components/sidebar/SidebarWorkspaceFilterSection.tsx",
+      "size": 1352,
+      "digest": "668e65dd694d82100f354b46492bd0752309e4b513d75778b74dc7b9ff3666c1"
     }
   ],
   "truncated": true

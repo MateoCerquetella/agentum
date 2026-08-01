@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 4,
+  "revision": 5,
+  "activeFeature": "retire-macos-release-and-optimize-supported-platforms",
+  "request": "Immediately remove darwin-aarch64 and darwin-x86_64 from the live v0.98.11 updater manifest so no additional Macs receive the broken update. Retire macOS from all future Agentum releases because the owner will not use or support it: remove macOS build matrix jobs, DMGs, app updater artifacts, macOS signing/notarization and release verification paths, macOS release documentation and Homebrew cask publication assumptions, while preserving source compatibility where feasible. Optimize the remaining supported Linux and Windows release pipeline for correctness, reliability, and avoidable work without broad unrelated application rewrites. Add regression tests proving no macOS artifact or updater entry can be published and that Linux/Windows artifact, updater, checksum, restricted-content, and publication gates remain intact. Bump to the next patch version, verify all feasible repository checks, review the release diff, merge through the protected branch flow, publish the new release, and audit its public artifacts and updater manifest.",
+  "profile": "complex",
+  "phase": "verify",
+  "status": "waiting",
+  "repairAttempts": 0,
+  "message": "Removed macOS and Homebrew release/install paths, reduced the release matrix to Linux x64 and Windows x64, enforced an exact supported asset roster plus retired-payload rejection, generated an exact two-key updater manifest, removed forced ad-hoc signing, hardened unsupported-host installer ordering, bumped all owned versions to 0.98.12, updated current documentation, and added regression coverage. Focused and full Python suites, shell installer contracts, actionlint, formatting, security config, lockfile metadata, backend Clippy, UI production build, and dependency audit pass. The v0.98.11 in-place updater repair was attempted and GitHub returned immutable-release HTTP 422; evidence is recorded. Public release and live endpoint criteria remain for later release/audit phases.",
+  "implementationActor": "codex",
+  "specDigest": "f1909e94087021ed75b9a61cfe334097a35bffd8895a84f9378ffd19051a93e1",
+  "capabilityArchiveRequired": true,
+  "capabilityDeltaDigest": "80ccf12063a07a6ec16f09a40b0f9b107a399e34a665ca94b94831c35c660895",
+  "evidence": [],
+  "updatedAt": "2026-08-01T19:48:51.442Z"
+}
