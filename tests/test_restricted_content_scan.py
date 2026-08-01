@@ -59,13 +59,19 @@ class RestrictedContentScanTests(unittest.TestCase):
         self.assertIn(str(leaked), result.stderr)
         self.assertNotIn("PRIVATE-MARKER-42", result.stderr)
 
-    def test_utf16le_binary_match_is_detected(self) -> None:
-        leaked = self.staging / "windows-resource.bin"
-        leaked.write_bytes("PRIVATE-MARKER-42".encode("utf-16-le"))
+    def test_utf16le_windows_pe_match_is_detected(self) -> None:
+        leaked = self.staging / "windows-resource.exe"
+        leaked.write_bytes(b"MZ" + "PRIVATE-MARKER-42".encode("utf-16-le"))
         result = self.run_scan()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(str(leaked), result.stderr)
         self.assertNotIn("PRIVATE-MARKER-42", result.stderr)
+
+    def test_non_pe_binary_is_not_reinterpreted_as_windows_utf16(self) -> None:
+        archive = self.staging / "linux-package.tar.gz"
+        archive.write_bytes("PRIVATE-MARKER-42".encode("utf-16-le"))
+        result = self.run_scan()
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_regex_does_not_match_across_non_printable_binary_bytes(self) -> None:
         self.patterns.write_text("PRIVATE.MARKER\n", encoding="utf-8")

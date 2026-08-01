@@ -35,7 +35,7 @@ for target in "$@"; do
   fi
 done
 
-for required_command in find grep rg strings; do
+for required_command in find grep head rg strings; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "restricted-content scan requires $required_command" >&2
     exit 2
@@ -68,9 +68,15 @@ while IFS= read -r -d '' candidate; do
       echo "restricted-content scan failed while extracting strings from $candidate" >&2
       exit 2
     fi
-    if ! LC_ALL=C strings -a -n 1 -e l -- "$candidate" >> "$printable_strings"; then
-      echo "restricted-content scan failed while extracting UTF-16 strings from $candidate" >&2
+    if ! binary_magic="$(LC_ALL=C head -c 2 -- "$candidate")"; then
+      echo "restricted-content scan failed while identifying $candidate" >&2
       exit 2
+    fi
+    if [[ "$binary_magic" == "MZ" ]]; then
+      if ! LC_ALL=C strings -a -n 1 -e l -- "$candidate" >> "$printable_strings"; then
+        echo "restricted-content scan failed while extracting UTF-16 strings from $candidate" >&2
+        exit 2
+      fi
     fi
     scan_input="$printable_strings"
   fi

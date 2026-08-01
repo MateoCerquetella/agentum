@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Release binary policy scans are deterministic.** Generated installers are
-  checked through printable ASCII and Windows UTF-16 strings instead of
+  checked through printable ASCII and PE-scoped Windows UTF-16 strings instead of
   applying text regexes to nondeterministic compressed bytes. Explicit bundle
   directories are now scanned even when they live below `target`, preserving
   the fail-closed restricted-content gate without random binary matches.
