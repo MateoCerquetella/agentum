@@ -24,6 +24,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The release workflow has one supported-platform path.** Redundant macOS
   verification, signing, Homebrew synchronization, and indirect publication
   dependencies are removed while Tauri updater signatures remain mandatory.
+- **Branch rehearsals verify the complete staged release.** Non-publishing runs
+  now exercise the exact roster, updater signatures, checksums, manifest, and
+  restricted-content gates while draft creation retains tag-only authority.
 
 ## [0.98.11] — 2026-07-31
 

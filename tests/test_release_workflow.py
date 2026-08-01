@@ -231,10 +231,24 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_publication_depends_directly_on_the_verified_draft(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
 
+        aggregate_start = release.index("\n  aggregate:\n")
+        release_start = release.index("\n  release:\n")
+        publish_start = release.index("\n  publish:\n")
+        aggregate_job = release[aggregate_start:release_start]
+        self.assertIn("name: verify complete release staging", aggregate_job)
+        self.assertIn("name: verified-release-staging", aggregate_job)
+        self.assertNotIn("contents: write", aggregate_job)
+        self.assertNotIn(
+            "if: inputs.publish && startsWith(github.ref, 'refs/tags/')",
+            aggregate_job,
+        )
         draft = release.index("Create private GitHub release draft")
         publish = release.index("name: publish verified release")
         self.assertLess(draft, publish)
-        publish_job = release[release.index("  publish:"):]
+        draft_job = release[release_start:publish_start]
+        self.assertIn("    needs: aggregate", draft_job)
+        self.assertIn("      contents: write", draft_job)
+        publish_job = release[publish_start:]
         self.assertIn("    needs: release", publish_job)
         for retired in (
             "release-homebrew-checksums",

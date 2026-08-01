@@ -472,14 +472,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  release:
-    name: stage github release draft
-    # Publication is allowed only for an explicitly requested signed tag run.
-    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
+  aggregate:
+    name: verify complete release staging
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Creates the private draft and uploads verified artifacts.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -493,6 +489,21 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
+      - name: Resolve version-matched release identity
+        shell: bash
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' crates/agentum-desktop/tauri.conf.json)"
+          tag="v${version}"
+          if [[ "$PUBLISH" == "true" ]]; then
+            test "$GITHUB_REF_NAME" = "$tag"
+            tag="$GITHUB_REF_NAME"
+          fi
+          printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'RELEASE_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
+
       - name: Stage installer + uninstaller
         run: |
           set -eux
@@ -505,7 +516,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$RELEASE_VERSION"
           git archive --format=tar --prefix="agentum-${ver}/" HEAD \
             | gzip -n > "dist/agentum-${ver}-source.tar.gz"
           test -s "dist/agentum-${ver}-source.tar.gz"
@@ -515,7 +526,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$RELEASE_VERSION"
           expected="$(mktemp)"
           actual="$(mktemp)"
           trap 'rm -f -- "$expected" "$actual"' EXIT
@@ -576,7 +587,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$RELEASE_VERSION"
           for artifact in \
             "agentum-${ver}-windows-x64-setup.exe" \
             "agentum-${ver}-linux-x64.AppImage"; do
@@ -605,8 +616,7 @@ jobs:
         shell: bash
         run: |
           set -eux
-          tag="${GITHUB_REF_NAME}"
-          ver="${tag#v}"
+          ver="$RELEASE_VERSION"
           # Pull the section for this version out of CHANGELOG.md
           awk -v ver="$ver" '
             $0 ~ "^## \\[" ver "\\]" { found=1; next }
@@ -626,11 +636,10 @@ jobs:
         # required; a missing updater blocks publication.
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -eux
-          ver="${TAG#v}"
-          base="https://github.com/${REPO}/releases/download/${TAG}"
+          ver="$RELEASE_VERSION"
+          base="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
           pubdate="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           platforms='{}'
           emit() {
@@ -657,7 +666,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$RESTRICTED_PATTERNS"
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$RELEASE_VERSION"
           patterns="$(mktemp)"
           source_scan="$(mktemp -d)"
           chmod 600 "$patterns"
@@ -669,6 +678,29 @@ jobs:
           gitleaks dir --no-banner --redact --exit-code 1 "$source_scan"
           gitleaks dir --no-banner --redact --exit-code 1 dist
 
+      - name: Upload verified release staging
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-staging
+          path: |
+            dist
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: create private GitHub release draft
+    # Publication authority exists only for an explicitly requested signed tag.
+    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
+    needs: aggregate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-release-staging
+          path: verified
       - name: Create private GitHub release draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -676,13 +708,15 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          test -s verified/release-notes.md
+          test -s verified/dist/latest.json
           gh release create "$TAG" \
             --repo "$REPO" \
             --verify-tag \
             --draft \
             --title "$TAG" \
-            --notes-file release-notes.md \
-            dist/*
+            --notes-file verified/release-notes.md \
+            verified/dist/*
 
   publish:
     name: publish verified release

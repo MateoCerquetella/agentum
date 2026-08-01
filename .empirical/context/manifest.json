@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "bb4c507809d9bf446f37701294da81e9ab19dee7435de602f5be60a06ace0b42",
+  "digest": "443bab8cc7f3ca6e11430cc9904a62fbf7e7357c1870f638ab05686773fb95cc",
   "files": [
     {
       "path": ".agentum/manifest.json",
@@ -829,8 +829,8 @@
     },
     {
       "path": ".github/workflows/release.yml",
-      "size": 32311,
-      "digest": "ffe02291bd7209ebd2f9736f6c73341de38d7fa2fcf4581c32d0eaa3059ee09c"
+      "size": 33443,
+      "digest": "f1ab9a3d3b86b88c53d4908fa6578f0b5e7dcc2816da01b6e9fb43bba689c35a"
     },
     {
       "path": ".gitignore",
@@ -854,8 +854,8 @@
     },
     {
       "path": "CHANGELOG.md",
-      "size": 210282,
-      "digest": "f1975e41c0d89744509a1520c518a7b161cf340166c3a9c32f1b3215ece4431f"
+      "size": 210516,
+      "digest": "93ed82ff09a90198101f3b6ce98e2d424e9ea4b57bd16ad5efab76944d917dc8"
     },
     {
       "path": "CLAUDE.md",
