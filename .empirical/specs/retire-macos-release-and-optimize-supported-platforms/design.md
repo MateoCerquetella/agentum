@@ -66,12 +66,13 @@ not claim that local source compilation on macOS is supported or tested.
 
 ## Version and promotion
 
-Advance the workspace, owned lockfile packages, Tauri config, and changelog
-from 0.98.11 to 0.98.12 without changing the bundle identifier or updater
-public key. Follow the issue-first repository flow and reconcile protected
-branch history as needed, then promote the reviewed change through `develop`,
-`staging`, and `main`. Create a verified signed annotated `v0.98.12` tag from
-the exact `main` tip and invoke the publishing release workflow once.
+The initial correction advanced the workspace, owned lockfile packages, Tauri
+config, and changelog from 0.98.11 to 0.98.12 without changing the bundle
+identifier or updater public key. Its signed tag remains an unpublished record
+because the publication workflow stopped safely on a nondeterministic raw-byte
+binary scan. Advance the correction to 0.98.13, promote it through `develop`,
+`staging`, and `main`, create a verified signed annotated `v0.98.13` tag from
+the exact protected `main` tip, and invoke publication from that tag.
 
 ## Regression contract
 
@@ -90,11 +91,12 @@ Focused tests must prove:
 ## Failure handling
 
 - Immutable v0.98.11 mutation rejection: record it; do not delete the release,
-  retarget its tag, or bypass immutability. Complete containment with v0.98.12.
+  retarget its tag, or bypass immutability. Complete containment with v0.98.13.
 - Missing supported artifact/signature: fail aggregation before draft creation.
 - Retired payload residue: fail aggregation even if the required allow-list is
   otherwise complete.
-- Rehearsal failure: repair on the feature branch; never tag or publish.
+- Rehearsal or publication-gate failure: preserve the failed run and any pushed
+  signed tag, repair on a new reviewed commit, and use a new patch version.
 - Promotion drift: revalidate the exact commit after each protected-branch
   merge and publish only the current main tip.
 - Public audit mismatch: do not report completion; preserve immutable evidence
@@ -102,7 +104,7 @@ Focused tests must prove:
 
 ## Acceptance trace
 
-- AC-1: immutable response plus post-v0.98.12 live endpoint audit.
+- AC-1: immutable response plus post-v0.98.13 live endpoint audit.
 - AC-2, AC-3: two-target matrix and fail-closed aggregation allow/deny lists.
 - AC-4: exact two-key manifest and updater-signature verification.
 - AC-5: Homebrew removal and direct verified-draft publication dependency.

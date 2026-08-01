@@ -50,13 +50,15 @@ platforms while removing avoidable macOS and Homebrew work.
   and no release, installer, updater, documentation, or CI contract claims
   macOS support.
 - [ ] [AC-8] Workspace packages, the Tauri config, lockfile-owned packages, and
-  changelog all report the next patch version after 0.98.11, with no bundle ID
-  or updater public-key rotation.
+  changelog all report v0.98.13, with no bundle ID or updater public-key
+  rotation. The signed v0.98.12 tag remains an unpublished record of the
+  fail-closed publication attempt and is not rewritten.
 - [ ] [AC-9] Focused release/install/security tests and the broader feasible
   repository suite pass; regression tests prove the two supported targets and
   reject reintroduction of macOS release artifacts or updater metadata.
-- [ ] [AC-10] A reviewed patch is promoted through `develop` and `staging` to
-  protected `main`, then an annotated version tag publishes a public release
+- [ ] [AC-10] The reviewed release changes and deterministic scanner correction
+  are promoted through `develop` and `staging` to protected `main`, then a
+  verified signed annotated v0.98.13 tag publishes a public release
   whose checksums, required asset roster, updater signatures, updater URLs, and
   absence of macOS payloads pass a post-publication audit.
 
@@ -67,8 +69,10 @@ platforms while removing avoidable macOS and Homebrew work.
   release notes, Homebrew dependency, publication graph, and regression tests.
 - Remove release-only macOS scripts and documentation that would otherwise
   advertise or validate an unsupported binary distribution.
-- Advance release metadata by exactly one patch and publish it through the
-  repository's issue, PR, promotion, tag, and release conventions.
+- Advance release metadata through the unused corrective patch required after
+  the v0.98.12 workflow stopped before publication, without rewriting its
+  pushed signed tag, and publish v0.98.13 through the repository's issue, PR,
+  promotion, tag, and release conventions.
 - Make only evidence-backed release optimizations created by removing retired
   targets and their exclusive steps; preserve supported-platform security
   checks.
@@ -99,6 +103,8 @@ platforms while removing avoidable macOS and Homebrew work.
   Linux/Windows drift, secret exposure, unsafe deletion, and weakened gates.
 - Run a non-publishing GitHub rehearsal on the feature head and require both
   supported native jobs and release aggregation to pass.
+- Prove compressed binary control bytes cannot satisfy textual restricted
+  patterns while printable ASCII and Windows UTF-16 leaks still fail closed.
 - After promotion and publication, independently download `latest.json`,
   `SHA256SUMS`, and every supported artifact; verify the roster, checksums,
   updater signatures, URLs, version metadata, and absence of Darwin/macOS data.

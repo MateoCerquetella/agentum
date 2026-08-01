@@ -55,8 +55,9 @@
      unrelated runtime branches.
    - Covers AC-6 and AC-7.
 
-6. Prepare v0.98.12 consistently.
-   - Advance the workspace and Tauri versions to 0.98.12 and mechanically
+6. Prepare the corrective patch consistently.
+   - Advance the workspace and Tauri versions through 0.98.12 to the unused
+     v0.98.13 correction and mechanically
      update only workspace-owned lockfile package versions.
    - Add a focused changelog entry describing macOS retirement, updater
      containment, supported-platform release hardening, and Homebrew removal.
@@ -83,7 +84,10 @@
      revalidating the exact commit and required checks at each boundary.
    - Covers AC-9 and the promotion portion of AC-10.
 
-9. Tag, publish, and audit v0.98.12.
+9. Tag, publish, and audit v0.98.13.
+   - Preserve the failed v0.98.12 workflow and signed tag as evidence; replace
+     raw compressed-byte regex scanning with printable ASCII and Windows
+     UTF-16 scanning, add regression coverage, and re-run local/native gates.
    - Create and push a signed annotated version tag at the exact protected main
      tip and invoke the publishing release workflow once.
    - Require private draft creation and successful public transition.

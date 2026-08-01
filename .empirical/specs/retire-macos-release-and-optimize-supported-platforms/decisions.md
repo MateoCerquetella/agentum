@@ -50,13 +50,14 @@ immutable-release endpoint reports `enabled: true`.
 ### Chosen approach
 
 Attempt only the authorized supported API replacement so the rejection is
-recorded, then choose option 3: preserve v0.98.11 and make v0.98.12 the
-containment boundary. Never circumvent release immutability.
+recorded, then choose option 3: preserve v0.98.11 and make the next successfully
+published supported-platform patch the containment boundary. Never circumvent
+release immutability or rewrite a pushed signed corrective tag.
 
 ### Trade-offs and risks
 
 Historical direct v0.98.11 URLs remain available, but active clients using
-`/releases/latest` stop receiving Darwin metadata after v0.98.12.
+`/releases/latest` stop receiving Darwin metadata after v0.98.13.
 
 ### Verification
 
@@ -117,7 +118,7 @@ dependency. Publication depends directly on verified release aggregation.
 
 ### Trade-offs and risks
 
-Existing Homebrew cask history is not updated to v0.98.12, which matches
+Existing Homebrew cask history is not updated for corrective patches, which matches
 retiring Mac distribution and shortens release latency.
 
 ### Verification
@@ -186,3 +187,43 @@ that is explicit and preferable to accidental public binaries.
 
 Tauri identity/public-key assertions and repository diff review distinguish
 source metadata from release claims.
+
+## D-007: Scan textual binary content instead of compressed bytes
+
+Status: Accepted
+
+### Evidence
+
+The exact v0.98.12 source passed the Windows native rehearsal but a second
+build failed when a restricted-content regular expression matched the
+nondeterministic compressed bytes of the NSIS installer. The workflow stopped
+before aggregation, draft creation, or publication.
+
+### Options
+
+1. Retry until the compressed bytes happen not to match.
+2. Exclude generated installers from restricted-content scanning.
+3. Scan printable ASCII strings universally and Windows UTF-16 strings only
+   for PE files, retaining fail-closed policy, enumeration, and error handling.
+
+### Chosen approach
+
+Choose option 3. Classify binary inputs, extract printable single-byte strings
+universally and UTF-16LE strings only from PE files, apply the same externally
+supplied regex policy to those textual views, and scan explicit bundles below
+`target`. Preserve the failed run and signed v0.98.12 tag, then release the
+reviewed correction as v0.98.13.
+
+### Trade-offs and risks
+
+Compressed byte coincidences no longer block a release. Actual printable
+restricted strings in generated binaries continue to fail, including PE-scoped
+Windows resource strings, while non-PE archives are not reinterpreted as
+Windows text and extraction/tool failures remain fatal.
+
+### Verification
+
+Regression tests cover compressed control-byte false positives, printable
+ASCII matches, PE-scoped UTF-16LE matches, non-PE binary handling, explicit
+bundle enumeration, and safe error reporting; both native targets and the
+aggregate must pass before promotion.
