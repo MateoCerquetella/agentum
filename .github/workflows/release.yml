@@ -23,8 +23,6 @@ on:
         required: true
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
         required: true
-      HOMEBREW_TAP_DEPLOY_KEY:
-        required: true
       AGENTUM_RESTRICTED_PATTERNS:
         required: true
   # With CI removed, maintainers can run this workflow directly against a
@@ -170,29 +168,12 @@ jobs:
           # aarch64-linux cross target was removed with the CLI.)
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
-            cross: false
             desktop: deb,rpm,appimage
-          # macOS MUST build `app` alongside `dmg`: the Tauri auto-updater
-          # artifact (the signed `*.app.tar.gz` + `.sig`) is emitted by the `app`
-          # bundler, NOT `dmg`. With `dmg` alone the installer shipped but no
-          # update bundle, so the release step's `emit` dropped both darwin
-          # platforms from latest.json and every macOS auto-update failed with
-          # "platform not found" (silently broken since the updater landed in
-          # v0.15.0). The dmg is still built for first-time downloads.
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
-            cross: false
-            desktop: app,dmg
-          - target: aarch64-apple-darwin
-            runner: macos-14
-            cross: false
-            desktop: app,dmg
           # Windows x64. NSIS produces the signed .exe installer. The daemon shells out to tmux (no native
           # Windows port), so this ships as a remote client; local sessions need
           # WSL — but the app installs and drives remote SSH hosts.
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
-            cross: false
             desktop: nsis
           # NOTE: aarch64-pc-windows-msvc is intentionally NOT built yet. aws-lc-sys
           # (the rustls crypto backend) fails to assemble its ARM64 .S files when
@@ -220,13 +201,11 @@ jobs:
       # parent, i.e. ui/), but the deps must be installed first — hence the
       # explicit `bun install`.
       - name: Install pinned Bun
-        if: ${{ matrix.desktop != '' }}
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14
           no-cache: true
       - name: Install desktop UI deps
-        if: ${{ matrix.desktop != '' }}
         working-directory: crates/agentum-desktop/ui
         run: bun install --frozen-lockfile && bun audit
 
@@ -258,8 +237,7 @@ jobs:
         if: ${{ contains(matrix.target, 'windows') }}
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
-          # Cross to ARM64 from the x64 runner for aarch64-pc-windows-msvc.
-          arch: ${{ contains(matrix.target, 'aarch64') && 'amd64_arm64' || 'amd64' }}
+          arch: amd64
       - name: Install nasm (Windows)
         if: ${{ contains(matrix.target, 'windows') }}
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
@@ -269,12 +247,11 @@ jobs:
         run: echo "CC=cl" >> "$GITHUB_ENV"
 
       # --- Desktop installers (Tauri 2) -------------------------------------
-      # cargo tauri build produces native installers (.dmg on macOS, .deb +
-      # .AppImage on Linux x86_64). The dashboard built above is embedded via
-      # agentum-server, so the window has a UI. Only runs for targets whose
-      # matrix entry sets `desktop`.
+      # cargo tauri build produces the Linux and Windows native installers. The
+      # dashboard built above is embedded via agentum-server, so the window has
+      # a UI. Every supported release matrix entry is a desktop target.
       - name: Install desktop build deps (Linux)
-        if: ${{ matrix.desktop != '' && contains(matrix.target, 'linux') }}
+        if: ${{ contains(matrix.target, 'linux') }}
         run: |
           sudo apt-get update
           # libayatana-appindicator3-dev is required by Tauri's `tray-icon`
@@ -289,16 +266,14 @@ jobs:
             libgtk-3-dev librsvg2-dev patchelf libfuse2 file rpm binutils \
             libayatana-appindicator3-dev libasound2-dev
       - name: Install tauri-cli
-        if: ${{ matrix.desktop != '' }}
         uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:
           tool: tauri-cli@2.11.2
       - name: Install pinned linuxdeploy (Linux)
-        if: ${{ matrix.desktop != '' && contains(matrix.target, 'linux') }}
+        if: ${{ contains(matrix.target, 'linux') }}
         shell: bash
         run: scripts/install-linuxdeploy.sh "$GITHUB_WORKSPACE/target/.tauri"
       - name: Build desktop installers
-        if: ${{ matrix.desktop != '' }}
         working-directory: crates/agentum-desktop
         # Signing keys for the updater. createUpdaterArtifacts (tauri.conf.json)
         # makes the build emit a signed updater archive + .sig per bundle; without
@@ -325,30 +300,9 @@ jobs:
         # target/<triple>/release/bundle/ (consumed by the staging step).
         # Linux builds the .deb here (reliable); the AppImage is a separate
         # best-effort step below since its toolchain is finicky on CI.
-        #
-        # macOS dylib staging (the blocker that failed v0.14.0/.1/.2): tauri.conf's
-        # macOS `frameworks` AND build.rs's `tauri_build::build()` validate the
-        # paths ../../target/release/libsherpa-*.dylib (+ libonnxruntime), but a
-        # target-qualified build emits those dylibs into target/<triple>/release/,
-        # so the frameworks check aborts with "Library not found".
-        #
-        # Produce the dylibs first by building ONLY the `sherpa-rs` dep: that runs
-        # sherpa-rs-sys's build script (which drops the dylibs in the target dir)
-        # WITHOUT compiling agentum-desktop — whose build.rs would hit the same
-        # frameworks check, and whose generate_context! needs ui/dist (not built
-        # until `cargo tauri build` runs beforeBuildCommand). Then copy the dylibs
-        # to where the frameworks expect them and bundle. Linux has no frameworks
-        # and beforeBuildCommand builds ui/dist, so it just runs the bundle.
         run: |
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
           test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
-          if [[ "$BUILD_TARGET" == *apple-darwin* ]]; then
-            cargo build --locked --release --target "$BUILD_TARGET" -p sherpa-rs
-            mkdir -p ../../target/release
-            for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.1.17.1.dylib; do
-              cp -f "../../target/$BUILD_TARGET/release/$lib" "../../target/release/$lib"
-            done
-          fi
           if [[ "$BUILD_TARGET" == *linux* ]]; then
             # sherpa-rs-sys copies its shared objects beside the release binary.
             # linuxdeploy does not search that target directory by default, so
@@ -387,17 +341,14 @@ jobs:
           BUNDLE_FORMATS: ${{ matrix.desktop }}
         run: |
           set -euo pipefail
-          # Stable asset label: <os>-<arch>. The raw Rust triple was
-          # redundant — the tauri bundle name already carries an arch, which made
-          # names like agentum_0.14.3_aarch64-aarch64-apple-darwin.dmg.
+          # Stable supported asset label: <os>-<arch>.
           case "$BUILD_TARGET" in
-            x86_64-apple-darwin)       OSARCH="macos-x64" ;;
-            aarch64-apple-darwin)      OSARCH="macos-arm64" ;;
             x86_64-pc-windows-msvc)    OSARCH="windows-x64" ;;
-            aarch64-pc-windows-msvc)   OSARCH="windows-arm64" ;;
             x86_64-unknown-linux-gnu)  OSARCH="linux-x64" ;;
-            aarch64-unknown-linux-gnu) OSARCH="linux-arm64" ;;
-            *)                         OSARCH="$BUILD_TARGET" ;;
+            *)
+              echo "unsupported release target: $BUILD_TARGET" >&2
+              exit 2
+              ;;
           esac
           # Use the bundle's declared version even during a branch rehearsal.
           # Publication preflight proves an actual tag is exactly v<version>.
@@ -411,7 +362,7 @@ jobs:
           # installer keeps a -setup suffix). Clean + versioned, no triple.
           BUNDLE_DIR="target/$BUILD_TARGET/release/bundle"
           if [ -d "$BUNDLE_DIR" ]; then
-            find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' -o -name '*.msi' \) -print0 \
+            find "$BUNDLE_DIR" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' \) -print0 \
               | while IFS= read -r -d '' f; do
                   base="$(basename "$f")"; ext="${base##*.}"
                   case "$base" in
@@ -423,21 +374,17 @@ jobs:
 
           # Updater artifacts (signed) for the Tauri auto-updater. With
           # createUpdaterArtifacts the build emits, next to each installer:
-          #   macOS   → <app>.app.tar.gz            (+ .sig)
           #   Linux   → <app>_<ver>_*.AppImage        (+ .sig)
           #   Windows → <app>_<ver>_*-setup.exe.sig  (sidecar to the NSIS .exe)
           # Stage them with the same clean <stem> names so latest.json can point
           # at predictable release-asset URLs. The setup.exe itself was copied above.
           if [ -d "$BUNDLE_DIR" ]; then
-            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz" ;     done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz' -print0)
-            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz.sig' -print0)
             while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.AppImage.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.AppImage.sig' -print0)
             while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}-setup.exe.sig" ;   done < <(find "$BUNDLE_DIR" -type f -name '*-setup.exe.sig' -print0)
           fi
 
           # Raw Linux desktop binary — runs on Arch and other non-deb distros
-          # (install.sh falls back to it when no AppImage). macOS users get the
-          # .app inside the .dmg, so only ship it for Linux.
+          # (install.sh offers it as the explicit raw format).
           DESK_BIN="target/$BUILD_TARGET/release/agentum-desktop"
           if [ -n "$BUNDLE_FORMATS" ] && [ -f "$DESK_BIN" ] && [[ "$BUILD_TARGET" == *linux* ]]; then
             cp "$DESK_BIN" "dist/agentum-desktop-${VER}-${OSARCH}"
@@ -464,56 +411,13 @@ jobs:
               test "$("dist/agentum-sdd-worker-${VER}-${OSARCH}" --version)" = \
                 "agentum-sdd-worker ${VER} protocol=1"
               ;;
-            *-apple-darwin)
-              test -s "dist/${STEM}.dmg"
-              test -s "dist/${STEM}.app.tar.gz"
-              test -s "dist/${STEM}.app.tar.gz.sig"
-              APP_PATHS=()
-              while IFS= read -r -d '' candidate_app; do
-                APP_PATHS+=("$candidate_app")
-              done < <(find "$BUNDLE_DIR" -type d -name '*.app' -prune -print0)
-              test "${#APP_PATHS[@]}" -eq 1
-              APP_PATH="${APP_PATHS[0]}"
-              test "$APP_PATH" = "$BUNDLE_DIR/macos/Agentum.app"
-              PACKAGED_INFO="$APP_PATH/Contents/Info.plist"
-              test -f "$PACKAGED_INFO"
-              test "$(plutil -extract CFBundleIdentifier raw "$PACKAGED_INFO")" = "dev.agentum.app"
-              test -n "$(plutil -extract NSMicrophoneUsageDescription raw "$PACKAGED_INFO")"
-              test "$(plutil -extract NSAppTransportSecurity.NSAllowsLocalNetworking raw "$PACKAGED_INFO")" = "true"
-              for forbidden_ats in NSAllowsArbitraryLoads NSAllowsArbitraryLoadsInWebContent; do
-                if plutil -extract "NSAppTransportSecurity.$forbidden_ats" raw "$PACKAGED_INFO" >/dev/null 2>&1; then
-                  echo "forbidden packaged ATS exception: $forbidden_ats" >&2
-                  exit 1
-                fi
-              done
-              tar -tzf "dist/${STEM}.app.tar.gz" >/dev/null
-              hdiutil verify "dist/${STEM}.dmg"
-              ;;
-            *-windows-msvc)
+            x86_64-pc-windows-msvc)
               test -s "dist/${STEM}-setup.exe"
               test -s "dist/${STEM}-setup.exe.sig"
               file "dist/${STEM}-setup.exe" | grep -Eq 'PE32\+? executable'
               ;;
           esac
           ls -la dist/
-
-      - name: Verify ad-hoc macOS release
-        if: ${{ contains(matrix.target, 'apple-darwin') }}
-        shell: bash
-        env:
-          BUILD_TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          BUNDLE_DIR="target/$BUILD_TARGET/release/bundle"
-          VER="$(jq -r '.version' crates/agentum-desktop/tauri.conf.json)"
-          case "$BUILD_TARGET" in
-            x86_64-apple-darwin) OSARCH="macos-x64" ;;
-            aarch64-apple-darwin) OSARCH="macos-arm64" ;;
-            *) exit 2 ;;
-          esac
-          APP_PATH="$BUNDLE_DIR/macos/Agentum.app"
-          STEM="agentum-${VER}-${OSARCH}"
-          scripts/check-macos-release.sh "$APP_PATH" "dist/${STEM}.dmg" "$BUILD_TARGET" "$VER"
 
       - name: Verify canonical Linux AppImage installation
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
@@ -555,30 +459,23 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ matrix.target }}
-          # tar.gz is always present; installer globs match only on targets
-          # that built them. The combined set is never empty, so `error` is safe.
+          # Installer globs match only on targets that built them. The combined
+          # set is never empty, so `error` is safe.
           path: |
-            dist/*.tar.gz
-            dist/*.dmg
             dist/*.deb
             dist/*.rpm
             dist/*.AppImage
             dist/*.exe
-            dist/*.msi
             dist/*.sig
             dist/agentum-desktop-*
             dist/agentum-sdd-worker-*
           if-no-files-found: error
           retention-days: 7
 
-  release:
-    name: stage github release draft
-    # Publication is allowed only for an explicitly requested signed tag run.
-    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
+  aggregate:
+    name: verify complete release staging
     needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Creates the private draft and uploads verified artifacts.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -592,6 +489,21 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
+      - name: Resolve version-matched release identity
+        shell: bash
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          version="$(jq -r '.version' crates/agentum-desktop/tauri.conf.json)"
+          tag="v${version}"
+          if [[ "$PUBLISH" == "true" ]]; then
+            test "$GITHUB_REF_NAME" = "$tag"
+            tag="$GITHUB_REF_NAME"
+          fi
+          printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'RELEASE_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
+
       - name: Stage installer + uninstaller
         run: |
           set -eux
@@ -604,7 +516,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$RELEASE_VERSION"
           git archive --format=tar --prefix="agentum-${ver}/" HEAD \
             | gzip -n > "dist/agentum-${ver}-source.tar.gz"
           test -s "dist/agentum-${ver}-source.tar.gz"
@@ -614,14 +526,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
-          for asset in \
-            "agentum-${ver}-macos-arm64.dmg" \
-            "agentum-${ver}-macos-arm64.app.tar.gz" \
-            "agentum-${ver}-macos-arm64.app.tar.gz.sig" \
-            "agentum-${ver}-macos-x64.dmg" \
-            "agentum-${ver}-macos-x64.app.tar.gz" \
-            "agentum-${ver}-macos-x64.app.tar.gz.sig" \
+          ver="$RELEASE_VERSION"
+          expected="$(mktemp)"
+          actual="$(mktemp)"
+          trap 'rm -f -- "$expected" "$actual"' EXIT
+          printf '%s\n' \
             "agentum-${ver}-windows-x64-setup.exe" \
             "agentum-${ver}-windows-x64-setup.exe.sig" \
             "agentum-${ver}-linux-x64.deb" \
@@ -631,12 +540,32 @@ jobs:
             "agentum-desktop-${ver}-linux-x64" \
             "agentum-sdd-worker-${ver}-linux-x64" \
             "agentum-${ver}-source.tar.gz" \
-            install.sh uninstall.sh; do
+            install.sh uninstall.sh | LC_ALL=C sort > "$expected"
+          find dist -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+            | LC_ALL=C sort > "$actual"
+          if ! diff -u "$expected" "$actual"; then
+            echo "unexpected release asset roster" >&2
+            exit 1
+          fi
+          while IFS= read -r asset; do
             test -s "dist/$asset" || {
-              echo "missing required release asset: $asset" >&2
+              echo "empty required release asset: $asset" >&2
               exit 1
             }
-          done
+          done < "$expected"
+
+      - name: Reject retired release payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          retired="$(find dist -mindepth 1 -maxdepth 1 \
+            \( -name '*.dmg' -o -name '*.app' -o -name '*.app.tar.gz' \
+               -o -name '*.app.tar.gz.sig' -o -name '*apple-darwin*' \
+               -o -name 'macos-*' -o -name '*-macos-*' \) -print)"
+          if [[ -n "$retired" ]]; then
+            printf 'retired release payload detected:\n%s\n' "$retired" >&2
+            exit 1
+          fi
 
       - name: Install pinned Rust toolchain
         run: |
@@ -658,10 +587,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$RELEASE_VERSION"
           for artifact in \
-            "agentum-${ver}-macos-arm64.app.tar.gz" \
-            "agentum-${ver}-macos-x64.app.tar.gz" \
             "agentum-${ver}-windows-x64-setup.exe" \
             "agentum-${ver}-linux-x64.AppImage"; do
             cargo run --locked --quiet -p agentum-core \
@@ -684,20 +611,12 @@ jobs:
           test -s dist/SHA256SUMS
           cat dist/SHA256SUMS
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-homebrew-checksums
-          path: dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 1
-
       - name: Extract release notes
         id: notes
         shell: bash
         run: |
           set -eux
-          tag="${GITHUB_REF_NAME}"
-          ver="${tag#v}"
+          ver="$RELEASE_VERSION"
           # Pull the section for this version out of CHANGELOG.md
           awk -v ver="$ver" '
             $0 ~ "^## \\[" ver "\\]" { found=1; next }
@@ -705,8 +624,6 @@ jobs:
             found { print }
           ' CHANGELOG.md > release-notes.md
           grep -q '[^[:space:]]' release-notes.md
-          # Append the macOS desktop install instructions and signing status.
-          cat .github/release-macos-note.md >> release-notes.md
           echo "----"
           cat release-notes.md
 
@@ -719,11 +636,10 @@ jobs:
         # required; a missing updater blocks publication.
         env:
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
         run: |
           set -eux
-          ver="${TAG#v}"
-          base="https://github.com/${REPO}/releases/download/${TAG}"
+          ver="$RELEASE_VERSION"
+          base="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
           pubdate="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           platforms='{}'
           emit() {
@@ -733,15 +649,15 @@ jobs:
             platforms="$(jq --arg k "$key" --arg url "${base}/${asset}" --rawfile sig "$sigf" \
               '. + {($k): {signature: ($sig | rtrimstr("\n")), url: $url}}' <<<"$platforms")"
           }
-          emit darwin-aarch64 "agentum-${ver}-macos-arm64.app.tar.gz"
-          emit darwin-x86_64  "agentum-${ver}-macos-x64.app.tar.gz"
           emit windows-x86_64 "agentum-${ver}-windows-x64-setup.exe"
           emit linux-x86_64   "agentum-${ver}-linux-x64.AppImage"
           jq -n --arg v "$ver" --arg d "$pubdate" --rawfile n release-notes.md --argjson p "$platforms" \
             '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > dist/latest.json
           cat dist/latest.json
 
-          test "$(jq '.platforms | length' dist/latest.json)" -eq 4
+          test "$(jq '.platforms | length' dist/latest.json)" -eq 2
+          test "$(jq -r '.platforms | keys | sort | join(",")' dist/latest.json)" = \
+            "linux-x86_64,windows-x86_64"
 
       - name: Scan source package and final release staging
         shell: bash
@@ -750,7 +666,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$RESTRICTED_PATTERNS"
-          ver="${GITHUB_REF_NAME#v}"
+          ver="$RELEASE_VERSION"
           patterns="$(mktemp)"
           source_scan="$(mktemp -d)"
           chmod 600 "$patterns"
@@ -762,6 +678,29 @@ jobs:
           gitleaks dir --no-banner --redact --exit-code 1 "$source_scan"
           gitleaks dir --no-banner --redact --exit-code 1 dist
 
+      - name: Upload verified release staging
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-staging
+          path: |
+            dist
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: create private GitHub release draft
+    # Publication authority exists only for an explicitly requested signed tag.
+    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
+    needs: aggregate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-release-staging
+          path: verified
       - name: Create private GitHub release draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -769,93 +708,20 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          test -s verified/release-notes.md
+          test -s verified/dist/latest.json
           gh release create "$TAG" \
             --repo "$REPO" \
             --verify-tag \
             --draft \
             --title "$TAG" \
-            --notes-file release-notes.md \
-            dist/*
-
-  # Keep the Homebrew cask in lockstep before making the draft public. A tap
-  # authentication or push failure leaves the GitHub release safely in draft.
-  homebrew:
-    name: bump homebrew cask
-    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
-    needs: release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-homebrew-checksums
-          path: .
-      - name: Update the Agentum cask in the tap
-        # GITHUB_TOKEN cannot push to another repository, so the tap is written
-        # with a deploy key scoped to the tap. This is release-critical.
-        env:
-          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -eu
-          if [ -z "${DEPLOY_KEY:-}" ]; then
-            echo "HOMEBREW_TAP_DEPLOY_KEY is required" >&2
-            exit 1
-          fi
-          ver="${TAG#v}"
-          # The release job passes its generated checksum manifest directly as a
-          # workflow artifact. The GitHub release is intentionally still private
-          # until this cask update succeeds.
-          test -s SHA256SUMS
-          arm_sha="$(awk -v f="agentum-${ver}-macos-arm64.dmg" '$2 == f {print $1}' SHA256SUMS)"
-          x64_sha="$(awk -v f="agentum-${ver}-macos-x64.dmg"  '$2 == f {print $1}' SHA256SUMS)"
-          if [ -z "$arm_sha" ] || [ -z "$x64_sha" ]; then
-            echo "macOS .dmg checksums are required" >&2
-            exit 1
-          fi
-          # Route Git through an isolated deploy key and GitHub's published
-          # Ed25519 host key. A key rotation must be reviewed and updated here;
-          # first-use trust is never accepted during release publication.
-          ssh_dir="$RUNNER_TEMP/agentum-homebrew-ssh"
-          deploy_key="$ssh_dir/tap-deploy-key"
-          known_hosts="$ssh_dir/known-hosts"
-          install -m 700 -d "$ssh_dir"
-          printf '%s\n' "$DEPLOY_KEY" > "$deploy_key"
-          chmod 600 "$deploy_key"
-          ssh-keygen -y -f "$deploy_key" >/dev/null
-          printf '%s\n' \
-            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
-            > "$known_hosts"
-          chmod 600 "$known_hosts"
-          export GIT_SSH_COMMAND="ssh -i $deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes"
-          tap="$(mktemp -d)"
-          trap 'rm -f -- "$deploy_key" "$known_hosts"; rmdir "$ssh_dir" 2>/dev/null || true; rm -rf -- "$tap"' EXIT
-          git clone --depth 1 git@github.com:MateoCerquetella/homebrew-tap.git "$tap"
-          mkdir -p "$tap/Casks"
-          sed -e "s|__VERSION__|${ver}|g" \
-              -e "s|__ARM_SHA__|${arm_sha}|g" \
-              -e "s|__X64_SHA__|${x64_sha}|g" \
-              .github/agentum.cask.tmpl > "$tap/Casks/agentum.rb"
-          cd "$tap"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/agentum.rb
-          if git diff --cached --quiet; then
-            echo "Homebrew cask already at ${ver} — nothing to push."
-          else
-            git commit -m "agentum ${ver}"
-            git push origin HEAD
-            echo "Pushed Homebrew cask bump to ${ver}."
-          fi
+            --notes-file verified/release-notes.md \
+            verified/dist/*
 
   publish:
     name: publish verified release
     if: inputs.publish && startsWith(github.ref, 'refs/tags/')
-    needs: homebrew
+    needs: release
     runs-on: ubuntu-latest
     permissions:
       contents: write # Changes the verified draft to a public release.

@@ -108,6 +108,10 @@ require(
     "macOS hardened-runtime entitlements changed",
 )
 require(macos.get("hardenedRuntime") is True, "macOS hardened runtime is required")
+require(
+    "signingIdentity" not in macos,
+    "source-only macOS metadata must not force an ad-hoc signing identity",
+)
 require(macos.get("minimumSystemVersion") == "11.0", "unexpected macOS deployment target")
 with ENTITLEMENTS_PLIST.open("rb") as handle:
     entitlements = plistlib.load(handle)
