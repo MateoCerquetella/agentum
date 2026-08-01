@@ -4,6 +4,30 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.12] — 2026-08-01
+
+### Fixed
+
+- **Packaged releases now match the platforms we can support safely.** The
+  release matrix, updater manifest, installer, documentation, and asset gates
+  publish only x86_64 Windows and Linux artifacts; macOS and Homebrew release
+  paths are retired after the unsigned v0.98.11 app failed Gatekeeper checks.
+- **Unsupported installer hosts fail closed before network access.** The shell
+  installer rejects macOS and unsupported architectures before querying GitHub
+  or creating installation state.
+- **Release aggregation rejects retired payloads.** A two-platform manifest and
+  an exact supported asset roster are enforced before draft publication, with
+  explicit failure gates for macOS artifacts.
+
+### Changed
+
+- **The release workflow has one supported-platform path.** Redundant macOS
+  verification, signing, Homebrew synchronization, and indirect publication
+  dependencies are removed while Tauri updater signatures remain mandatory.
+- **Branch rehearsals verify the complete staged release.** Non-publishing runs
+  now exercise the exact roster, updater signatures, checksums, manifest, and
+  restricted-content gates while draft creation retains tag-only authority.
+
 ## [0.98.11] — 2026-07-31
 
 ### Added

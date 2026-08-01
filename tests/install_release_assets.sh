@@ -21,10 +21,6 @@ done
 
 VERSION=v0.97.0
 RELEASE_VERSION=0.97.0
-PLATFORM=macos-x64
-test "$(asset_name dmg)" = "agentum-0.97.0-macos-x64.dmg"
-PLATFORM=macos-arm64
-test "$(asset_name dmg)" = "agentum-0.97.0-macos-arm64.dmg"
 PLATFORM=linux-x64
 test "$(asset_name appimage)" = "agentum-0.97.0-linux-x64.AppImage"
 test "$(asset_name deb)" = "agentum-0.97.0-linux-x64.deb"
@@ -199,15 +195,5 @@ if (install_linux_appimage "$missing_icon") >/dev/null 2>&1; then
   exit 1
 fi
 cmp "$fake_v2" "$INSTALL_DIR/agentum-desktop"
-
-app="$test_tmp/Agentum.app"
-mkdir -p "$app/Contents/MacOS"
-printf 'bundle metadata\n' > "$app/Contents/Info.plist"
-verify_macos_bundle "$app"
-rm "$app/Contents/Info.plist"
-if (verify_macos_bundle "$app") >/dev/null 2>&1; then
-  echo "macOS bundle without Info.plist was accepted" >&2
-  exit 1
-fi
 
 echo "install release asset tests: PASS"

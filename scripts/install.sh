@@ -15,7 +15,6 @@ RELEASE_API="https://api.github.com/repos/${REPOSITORY}/releases/latest"
 RELEASE_DOWNLOAD="https://github.com/${REPOSITORY}/releases/download"
 LINUX_FORMAT="${AGENTUM_LINUX_FORMAT:-appimage}"
 INSTALL_DIR="${AGENTUM_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
-APPLICATIONS_DIR="${AGENTUM_APPLICATIONS_DIR:-/Applications}"
 LINUX_DATA_HOME="${AGENTUM_LINUX_DATA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}"
 LINUX_APPLICATIONS_DIR="${AGENTUM_LINUX_APPLICATIONS_DIR:-$LINUX_DATA_HOME/applications}"
 LINUX_ICON_DIR="${AGENTUM_LINUX_ICON_DIR:-$LINUX_DATA_HOME/icons/hicolor/256x256/apps}"
@@ -23,8 +22,6 @@ VERSION=""
 RELEASE_VERSION=""
 PLATFORM=""
 TEMP_DIR=""
-MOUNT_POINT=""
-MOUNTED=false
 LINUX_STAGED_DESKTOP=""
 LINUX_STAGED_ICON=""
 
@@ -90,20 +87,17 @@ detect_latest_version() {
 }
 
 detect_platform() {
-    case "$(uname -s)-$(uname -m)" in
-        Darwin-x86_64|Darwin-amd64) PLATFORM="macos-x64" ;;
-        Darwin-arm64|Darwin-aarch64) PLATFORM="macos-arm64" ;;
+    _platform_os="$(uname -s)"
+    _platform_arch="$(uname -m)"
+    case "$_platform_os-$_platform_arch" in
         Linux-x86_64|Linux-amd64) PLATFORM="linux-x64" ;;
-        Linux-*) die "Agentum does not currently publish a Linux bundle for $(uname -m)" ;;
-        *) die "unsupported platform: $(uname -s) $(uname -m)" ;;
+        *) die "unsupported platform: $_platform_os $_platform_arch" ;;
     esac
 }
 
 asset_name() {
     _format="$1"
     case "$PLATFORM:$_format" in
-        macos-x64:dmg|macos-arm64:dmg)
-            printf 'agentum-%s-%s.dmg\n' "$RELEASE_VERSION" "$PLATFORM" ;;
         linux-x64:appimage)
             printf 'agentum-%s-linux-x64.AppImage\n' "$RELEASE_VERSION" ;;
         linux-x64:deb)
@@ -152,10 +146,6 @@ cleanup() {
     if [ -n "$LINUX_STAGED_ICON" ]; then
         rm -f -- "$LINUX_STAGED_ICON"
         LINUX_STAGED_ICON=""
-    fi
-    if [ "$MOUNTED" = true ] && [ -n "$MOUNT_POINT" ]; then
-        hdiutil detach "$MOUNT_POINT" -quiet >/dev/null 2>&1 || true
-        MOUNTED=false
     fi
     if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ] && [ ! -L "$TEMP_DIR" ]; then
         case "$TEMP_DIR" in
@@ -353,74 +343,6 @@ run_as_root() {
     fi
 }
 
-verify_macos_bundle() {
-    _app="$1"
-    [ -d "$_app" ] && [ ! -L "$_app" ] || die "the DMG does not contain a real Agentum.app"
-    _info_plist="$_app/Contents/Info.plist"
-    _executables="$_app/Contents/MacOS"
-    [ -f "$_info_plist" ] && [ ! -L "$_info_plist" ] \
-        || die "Agentum.app has no regular Info.plist"
-    [ -d "$_executables" ] && [ ! -L "$_executables" ] \
-        || die "Agentum.app has no real executable directory"
-}
-
-mac_file_operation() {
-    if [ -w "$APPLICATIONS_DIR" ]; then
-        "$@"
-    else
-        command -v sudo >/dev/null 2>&1 || die "installing into $APPLICATIONS_DIR requires sudo"
-        sudo "$@"
-    fi
-}
-
-install_macos_app() {
-    _source="$1"
-    validate_install_directory "$APPLICATIONS_DIR"
-    [ -d "$APPLICATIONS_DIR" ] && [ ! -L "$APPLICATIONS_DIR" ] \
-        || die "Applications directory is unsafe"
-    _destination="$APPLICATIONS_DIR/Agentum.app"
-    _staged="$APPLICATIONS_DIR/.Agentum.app.new.$$"
-    _backup="$APPLICATIONS_DIR/.Agentum.app.backup.$$"
-    [ ! -e "$_staged" ] && [ ! -L "$_staged" ] || die "application staging target exists"
-    [ ! -e "$_backup" ] && [ ! -L "$_backup" ] || die "application backup target exists"
-    [ ! -L "$_destination" ] || die "refusing to replace a symlinked Agentum.app"
-    if [ -e "$_destination" ] && [ ! -d "$_destination" ]; then
-        die "refusing to replace a non-application target at $_destination"
-    fi
-
-    mac_file_operation ditto "$_source" "$_staged"
-    verify_macos_bundle "$_staged"
-    _had_previous=false
-    if [ -d "$_destination" ]; then
-        mac_file_operation mv "$_destination" "$_backup"
-        _had_previous=true
-    fi
-    if ! mac_file_operation mv "$_staged" "$_destination"; then
-        if [ "$_had_previous" = true ]; then
-            mac_file_operation mv "$_backup" "$_destination" || true
-        fi
-        die "could not publish Agentum.app"
-    fi
-    if [ "$_had_previous" = true ]; then
-        mac_file_operation rm -rf -- "$_backup"
-    fi
-    info "installed $_destination"
-}
-
-install_macos() {
-    _asset="$(asset_name dmg)" || die "no macOS asset for $PLATFORM"
-    _dmg="$(download_asset "$_asset")"
-    command -v hdiutil >/dev/null 2>&1 || die "hdiutil is required"
-    MOUNT_POINT="$TEMP_DIR/mount"
-    mkdir "$MOUNT_POINT"
-    hdiutil attach "$_dmg" -readonly -nobrowse -quiet -mountpoint "$MOUNT_POINT" \
-        || die "could not mount the Agentum DMG"
-    MOUNTED=true
-    _app="$MOUNT_POINT/Agentum.app"
-    verify_macos_bundle "$_app"
-    install_macos_app "$_app"
-}
-
 install_linux() {
     case "$LINUX_FORMAT" in
         appimage|deb|rpm|raw) ;;
@@ -445,14 +367,10 @@ install_linux() {
 }
 
 main() {
-    detect_latest_version
     detect_platform
+    detect_latest_version
     make_temp_dir
-    case "$PLATFORM" in
-        macos-*) install_macos ;;
-        linux-x64) install_linux ;;
-        *) die "unsupported release platform: $PLATFORM" ;;
-    esac
+    install_linux
     info "Agentum Desktop $VERSION is ready"
 }
 
