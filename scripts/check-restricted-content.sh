@@ -61,6 +61,15 @@ for target in "$@"; do
 done
 
 while IFS= read -r -d '' candidate; do
+  # A DMG is a compressed disk-image container. Treating its encoded bytes as
+  # text can synthesize false regex matches that do not exist in the installed
+  # application. Release callers must also pass the native bundle directory;
+  # the macOS release gate mounts the same DMG and launch-smokes its app before
+  # this scan runs, while the unpacked bundle contents are scanned normally.
+  if [[ "$candidate" == *.dmg ]]; then
+    continue
+  fi
+
   scan_input="$candidate"
   if ! LC_ALL=C grep -Iq . -- "$candidate"; then
     : > "$printable_strings"

@@ -177,6 +177,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         draft = release.index("Create private GitHub release draft")
         self.assertLess(final_scan, draft)
         self.assertIn("agentum-${ver}-source.tar.gz", release)
+        self.assertIn('scripts/check-restricted-content.sh "$patterns" dist "$bundle_dir"', release)
         self.assertIn("gitleaks dir --no-banner --redact --exit-code 1 dist", release)
         self.assertNotIn("StrictHostKeyChecking", release)
         self.assertNotIn("GIT_SSH_COMMAND", release)

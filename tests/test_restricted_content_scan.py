@@ -81,6 +81,25 @@ class RestrictedContentScanTests(unittest.TestCase):
         result = self.run_scan()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_dmg_container_bytes_are_not_scanned_as_text(self) -> None:
+        (self.staging / "Agentum.dmg").write_bytes(
+            b"compressed-random-bytes\x00PRIVATE-MARKER-42\xff"
+        )
+        unpacked = self.staging / "Agentum.app" / "Contents" / "MacOS"
+        unpacked.mkdir(parents=True)
+        (unpacked / "agentum-desktop").write_bytes(b"\x00clean-app-payload\xff")
+        self.assertEqual(self.run_scan().returncode, 0)
+
+    def test_unpacked_macos_bundle_content_is_still_scanned(self) -> None:
+        (self.staging / "Agentum.dmg").write_bytes(b"opaque-container")
+        unpacked = self.staging / "Agentum.app" / "Contents" / "Resources"
+        unpacked.mkdir(parents=True)
+        leaked = unpacked / "configuration.txt"
+        leaked.write_text("PRIVATE-MARKER-42\n", encoding="utf-8")
+        result = self.run_scan()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(str(leaked), result.stderr)
+
     def test_explicit_bundle_under_target_directory_is_scanned(self) -> None:
         bundle = self.root / "target" / "release" / "bundle"
         bundle.mkdir(parents=True)
