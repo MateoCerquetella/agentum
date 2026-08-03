@@ -125,7 +125,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"', workflow)
         self.assertIn("Verify every updater signature against the embedded key", workflow)
         self.assertIn("agentum-updater-verify", workflow)
-        self.assertNotIn("signingIdentity", config["bundle"]["macOS"])
+        self.assertEqual(config["bundle"]["macOS"]["signingIdentity"], "-")
         self.assertFalse(config["bundle"]["macOS"]["hardenedRuntime"])
         self.assertTrue(MACOS_RELEASE_AUDIT.exists())
         self.assertFalse(MACOS_RELEASE_NOTE.exists())
@@ -270,7 +270,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         macos = config["bundle"]["macOS"]
         self.assertFalse(macos["hardenedRuntime"])
         self.assertEqual(macos["entitlements"], "Entitlements.plist")
-        self.assertNotIn("signingIdentity", macos)
+        self.assertEqual(macos["signingIdentity"], "-")
         self.assertNotIn("windows", config["bundle"])
 
         entitlements = MACOS_ENTITLEMENTS.read_text(encoding="utf-8")
