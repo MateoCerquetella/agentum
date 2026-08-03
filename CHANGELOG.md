@@ -4,6 +4,23 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.98.14] — 2026-08-03
+
+### Fixed
+
+- **macOS apps launch reliably on Intel and Apple Silicon.** Certificate-free
+  builds no longer enable Hardened Runtime, which caused macOS 26 to reject the
+  separately ad-hoc-signed ONNX libraries before Agentum could start.
+- **macOS release validation now exercises the installed app.** Both native
+  architectures are mounted from their DMGs, checked for the expected signing
+  policy and bundled libraries, and launch-smoked before publication.
+
+### Changed
+
+- **macOS downloads and updater artifacts are restored.** The release matrix,
+  exact asset roster, updater manifest, and Homebrew cask can once again ship
+  native Intel and Apple Silicon builds.
+
 ## [0.98.13] — 2026-08-01
 
 ### Fixed

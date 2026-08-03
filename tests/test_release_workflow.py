@@ -46,7 +46,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_patch_release_version_is_consistent_everywhere(self) -> None:
         version = workspace_version()
         self.assertRegex(version, r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-        self.assertEqual(version, "0.98.13")
+        self.assertEqual(version, "0.98.14")
 
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(config["version"], version)
@@ -117,7 +117,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('test "$(git cat-file -t "refs/tags/$TAG")" = "tag"', release)
         self.assertIn("'.verification.verified'", release)
 
-    def test_updater_signing_remains_without_retired_release_paths(self) -> None:
+    def test_macos_updater_signing_and_runtime_audit_are_release_gates(self) -> None:
         workflow = RELEASE.read_text(encoding="utf-8")
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         self.assertIn("tool: tauri-cli@2.11.2", workflow)
@@ -126,32 +126,38 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("Verify every updater signature against the embedded key", workflow)
         self.assertIn("agentum-updater-verify", workflow)
         self.assertNotIn("signingIdentity", config["bundle"]["macOS"])
-        self.assertFalse(MACOS_RELEASE_AUDIT.exists())
+        self.assertFalse(config["bundle"]["macOS"]["hardenedRuntime"])
+        self.assertTrue(MACOS_RELEASE_AUDIT.exists())
         self.assertFalse(MACOS_RELEASE_NOTE.exists())
-        for retired in (
+        audit = MACOS_RELEASE_AUDIT.read_text(encoding="utf-8")
+        self.assertIn("verify_adhoc_without_runtime", audit)
+        self.assertIn("flags=.*runtime", audit)
+        self.assertIn("Agentum exited during native macOS runtime smoke", audit)
+        for required in (
             "x86_64-apple-darwin",
             "aarch64-apple-darwin",
             "macos-15-intel",
             "macos-14",
             "check-macos-release.sh",
-            "release-macos-note.md",
             "darwin-aarch64",
             "darwin-x86_64",
-            "Homebrew",
-            "HOMEBREW",
-            "Developer ID",
+        ):
+            self.assertIn(required, workflow)
+        for unavailable_signing_path in (
+            "APPLE_CERTIFICATE",
+            "APPLE_SIGNING_IDENTITY",
             "notarytool",
             "stapler",
-            "Import Authenticode certificate",
-            "Verify Authenticode signatures",
-            "Remove Authenticode certificate material",
-            "certificateThumbprint",
         ):
-            self.assertNotIn(retired, workflow)
+            self.assertNotIn(unavailable_signing_path, workflow)
 
     def test_release_rust_dependency_resolution_is_lockfile_bound(self) -> None:
         workflow = RELEASE.read_text(encoding="utf-8")
-        self.assertNotIn('if [[ "$BUILD_TARGET" == *apple-darwin* ]]', workflow)
+        self.assertIn('if [[ "$BUILD_TARGET" == *apple-darwin* ]]', workflow)
+        self.assertIn(
+            'cargo build --locked --release --target "$BUILD_TARGET" -p sherpa-rs',
+            workflow,
+        )
         self.assertEqual(workflow.count("cargo tauri build --target"), 1)
         self.assertEqual(workflow.count("--verbose -- --locked"), 1)
         self.assertIn('LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/$BUILD_TARGET/release', workflow)
@@ -259,10 +265,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ):
             self.assertNotIn(retired, release)
 
-    def test_retired_distribution_preserves_safe_source_only_macos_config(self) -> None:
+    def test_certificate_free_macos_distribution_disables_hardened_runtime(self) -> None:
         config = json.loads(TAURI_CONFIG.read_text(encoding="utf-8"))
         macos = config["bundle"]["macOS"]
-        self.assertTrue(macos["hardenedRuntime"])
+        self.assertFalse(macos["hardenedRuntime"])
         self.assertEqual(macos["entitlements"], "Entitlements.plist")
         self.assertNotIn("signingIdentity", macos)
         self.assertNotIn("windows", config["bundle"])
@@ -273,9 +279,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("allow-unsigned-executable-memory", entitlements)
 
         release = RELEASE.read_text(encoding="utf-8")
-        self.assertNotIn("CFBundleIdentifier", release)
-        self.assertNotIn("NSMicrophoneUsageDescription", release)
-        self.assertNotIn("NSAppTransportSecurity.NSAllowsLocalNetworking", release)
+        self.assertIn("CFBundleIdentifier", release)
+        self.assertIn("NSMicrophoneUsageDescription", release)
+        self.assertIn("NSAppTransportSecurity.NSAllowsLocalNetworking", release)
 
     def test_release_matrix_contains_exactly_supported_native_targets(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
@@ -283,7 +289,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         targets = re.findall(r"^\s+- target: (\S+)$", release, re.MULTILINE)
         self.assertEqual(
             targets,
-            ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+            [
+                "x86_64-unknown-linux-gnu",
+                "x86_64-apple-darwin",
+                "aarch64-apple-darwin",
+                "x86_64-pc-windows-msvc",
+            ],
         )
         self.assertRegex(
             release,
@@ -293,11 +304,25 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             release,
             r"target: x86_64-pc-windows-msvc\s+runner: windows-latest",
         )
+        self.assertRegex(
+            release,
+            r"target: x86_64-apple-darwin\s+runner: macos-15-intel",
+        )
+        self.assertRegex(
+            release,
+            r"target: aarch64-apple-darwin\s+runner: macos-14",
+        )
 
-    def test_aggregation_and_updater_fail_closed_on_retired_payloads(self) -> None:
+    def test_aggregation_and_updater_require_complete_macos_payloads(self) -> None:
         release = RELEASE.read_text(encoding="utf-8")
 
         for required in (
+            '"agentum-${ver}-macos-arm64.dmg"',
+            '"agentum-${ver}-macos-arm64.app.tar.gz"',
+            '"agentum-${ver}-macos-arm64.app.tar.gz.sig"',
+            '"agentum-${ver}-macos-x64.dmg"',
+            '"agentum-${ver}-macos-x64.app.tar.gz"',
+            '"agentum-${ver}-macos-x64.app.tar.gz.sig"',
             '"agentum-${ver}-windows-x64-setup.exe"',
             '"agentum-${ver}-windows-x64-setup.exe.sig"',
             '"agentum-${ver}-linux-x64.deb"',
@@ -307,26 +332,18 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             '"agentum-desktop-${ver}-linux-x64"',
             '"agentum-sdd-worker-${ver}-linux-x64"',
             '"agentum-${ver}-source.tar.gz"',
-            "Reject retired release payloads",
-            "retired release payload",
             "unexpected release asset roster",
             'find dist -mindepth 1 -maxdepth 1 -type f',
-            "*.dmg",
-            "*.app",
-            "*apple-darwin*",
-            "macos-*",
+            'emit darwin-aarch64 "agentum-${ver}-macos-arm64.app.tar.gz"',
+            'emit darwin-x86_64  "agentum-${ver}-macos-x64.app.tar.gz"',
             'emit windows-x86_64 "agentum-${ver}-windows-x64-setup.exe"',
             'emit linux-x86_64   "agentum-${ver}-linux-x64.AppImage"',
-            "test \"$(jq '.platforms | length' dist/latest.json)\" -eq 2",
-            'linux-x86_64,windows-x86_64',
+            "test \"$(jq '.platforms | length' dist/latest.json)\" -eq 4",
+            'darwin-aarch64,darwin-x86_64,linux-x86_64,windows-x86_64',
         ):
             self.assertIn(required, release)
-        for retired in (
-            "agentum-${ver}-macos-arm64",
-            "agentum-${ver}-macos-x64",
-            "emit darwin-",
-        ):
-            self.assertNotIn(retired, release)
+        self.assertNotIn("Reject retired release payloads", release)
+        self.assertNotIn("retired release payload", release)
 
 
 if __name__ == "__main__":

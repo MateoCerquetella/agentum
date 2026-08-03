@@ -169,6 +169,16 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
             desktop: deb,rpm,appimage
+          # Native runners are required because the bundled ONNX libraries are
+          # architecture-specific. Certificate-free macOS bundles deliberately
+          # disable Hardened Runtime; otherwise dyld rejects independently
+          # ad-hoc-signed frameworks as having a different Team ID.
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            desktop: app,dmg
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            desktop: app,dmg
           # Windows x64. NSIS produces the signed .exe installer. The daemon shells out to tmux (no native
           # Windows port), so this ships as a remote client; local sessions need
           # WSL — but the app installs and drives remote SSH hosts.
@@ -303,6 +313,16 @@ jobs:
         run: |
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
           test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          if [[ "$BUILD_TARGET" == *apple-darwin* ]]; then
+            # Tauri validates framework paths before building the desktop app.
+            # sherpa-rs stages them in the target-qualified directory, while
+            # tauri.conf references the shared release directory.
+            cargo build --locked --release --target "$BUILD_TARGET" -p sherpa-rs
+            mkdir -p ../../target/release
+            for lib in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib libonnxruntime.1.17.1.dylib; do
+              cp -f "../../target/$BUILD_TARGET/release/$lib" "../../target/release/$lib"
+            done
+          fi
           if [[ "$BUILD_TARGET" == *linux* ]]; then
             # sherpa-rs-sys copies its shared objects beside the release binary.
             # linuxdeploy does not search that target directory by default, so
@@ -343,6 +363,8 @@ jobs:
           set -euo pipefail
           # Stable supported asset label: <os>-<arch>.
           case "$BUILD_TARGET" in
+            x86_64-apple-darwin)       OSARCH="macos-x64" ;;
+            aarch64-apple-darwin)      OSARCH="macos-arm64" ;;
             x86_64-pc-windows-msvc)    OSARCH="windows-x64" ;;
             x86_64-unknown-linux-gnu)  OSARCH="linux-x64" ;;
             *)
@@ -362,7 +384,7 @@ jobs:
           # installer keeps a -setup suffix). Clean + versioned, no triple.
           BUNDLE_DIR="target/$BUILD_TARGET/release/bundle"
           if [ -d "$BUNDLE_DIR" ]; then
-            find "$BUNDLE_DIR" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' \) -print0 \
+            find "$BUNDLE_DIR" -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*-setup.exe' \) -print0 \
               | while IFS= read -r -d '' f; do
                   base="$(basename "$f")"; ext="${base##*.}"
                   case "$base" in
@@ -374,11 +396,14 @@ jobs:
 
           # Updater artifacts (signed) for the Tauri auto-updater. With
           # createUpdaterArtifacts the build emits, next to each installer:
+          #   macOS   → <app>.app.tar.gz            (+ .sig)
           #   Linux   → <app>_<ver>_*.AppImage        (+ .sig)
           #   Windows → <app>_<ver>_*-setup.exe.sig  (sidecar to the NSIS .exe)
           # Stage them with the same clean <stem> names so latest.json can point
           # at predictable release-asset URLs. The setup.exe itself was copied above.
           if [ -d "$BUNDLE_DIR" ]; then
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz" ;     done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz' -print0)
+            while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.app.tar.gz.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.app.tar.gz.sig' -print0)
             while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}.AppImage.sig" ; done < <(find "$BUNDLE_DIR" -type f -name '*.AppImage.sig' -print0)
             while IFS= read -r -d '' f; do cp "$f" "dist/${STEM}-setup.exe.sig" ;   done < <(find "$BUNDLE_DIR" -type f -name '*-setup.exe.sig' -print0)
           fi
@@ -411,6 +436,19 @@ jobs:
               test "$("dist/agentum-sdd-worker-${VER}-${OSARCH}" --version)" = \
                 "agentum-sdd-worker ${VER} protocol=1"
               ;;
+            *-apple-darwin)
+              test -s "dist/${STEM}.dmg"
+              test -s "dist/${STEM}.app.tar.gz"
+              test -s "dist/${STEM}.app.tar.gz.sig"
+              APP_PATH="$BUNDLE_DIR/macos/Agentum.app"
+              test -d "$APP_PATH"
+              PACKAGED_INFO="$APP_PATH/Contents/Info.plist"
+              test "$(plutil -extract CFBundleIdentifier raw "$PACKAGED_INFO")" = "dev.agentum.app"
+              test -n "$(plutil -extract NSMicrophoneUsageDescription raw "$PACKAGED_INFO")"
+              test "$(plutil -extract NSAppTransportSecurity.NSAllowsLocalNetworking raw "$PACKAGED_INFO")" = "true"
+              tar -tzf "dist/${STEM}.app.tar.gz" >/dev/null
+              hdiutil verify "dist/${STEM}.dmg"
+              ;;
             x86_64-pc-windows-msvc)
               test -s "dist/${STEM}-setup.exe"
               test -s "dist/${STEM}-setup.exe.sig"
@@ -418,6 +456,24 @@ jobs:
               ;;
           esac
           ls -la dist/
+
+      - name: Verify certificate-free macOS release
+        if: ${{ contains(matrix.target, 'apple-darwin') }}
+        shell: bash
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          VER="$(jq -r '.version' crates/agentum-desktop/tauri.conf.json)"
+          case "$BUILD_TARGET" in
+            x86_64-apple-darwin) OSARCH="macos-x64" ;;
+            aarch64-apple-darwin) OSARCH="macos-arm64" ;;
+            *) exit 2 ;;
+          esac
+          scripts/check-macos-release.sh \
+            "target/$BUILD_TARGET/release/bundle/macos/Agentum.app" \
+            "dist/agentum-${VER}-${OSARCH}.dmg" \
+            "$BUILD_TARGET" "$VER"
 
       - name: Verify canonical Linux AppImage installation
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
@@ -462,6 +518,8 @@ jobs:
           # Installer globs match only on targets that built them. The combined
           # set is never empty, so `error` is safe.
           path: |
+            dist/*.tar.gz
+            dist/*.dmg
             dist/*.deb
             dist/*.rpm
             dist/*.AppImage
@@ -531,6 +589,12 @@ jobs:
           actual="$(mktemp)"
           trap 'rm -f -- "$expected" "$actual"' EXIT
           printf '%s\n' \
+            "agentum-${ver}-macos-arm64.dmg" \
+            "agentum-${ver}-macos-arm64.app.tar.gz" \
+            "agentum-${ver}-macos-arm64.app.tar.gz.sig" \
+            "agentum-${ver}-macos-x64.dmg" \
+            "agentum-${ver}-macos-x64.app.tar.gz" \
+            "agentum-${ver}-macos-x64.app.tar.gz.sig" \
             "agentum-${ver}-windows-x64-setup.exe" \
             "agentum-${ver}-windows-x64-setup.exe.sig" \
             "agentum-${ver}-linux-x64.deb" \
@@ -554,19 +618,6 @@ jobs:
             }
           done < "$expected"
 
-      - name: Reject retired release payloads
-        shell: bash
-        run: |
-          set -euo pipefail
-          retired="$(find dist -mindepth 1 -maxdepth 1 \
-            \( -name '*.dmg' -o -name '*.app' -o -name '*.app.tar.gz' \
-               -o -name '*.app.tar.gz.sig' -o -name '*apple-darwin*' \
-               -o -name 'macos-*' -o -name '*-macos-*' \) -print)"
-          if [[ -n "$retired" ]]; then
-            printf 'retired release payload detected:\n%s\n' "$retired" >&2
-            exit 1
-          fi
-
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.94.1 --profile minimal
@@ -589,6 +640,8 @@ jobs:
           set -euo pipefail
           ver="$RELEASE_VERSION"
           for artifact in \
+            "agentum-${ver}-macos-arm64.app.tar.gz" \
+            "agentum-${ver}-macos-x64.app.tar.gz" \
             "agentum-${ver}-windows-x64-setup.exe" \
             "agentum-${ver}-linux-x64.AppImage"; do
             cargo run --locked --quiet -p agentum-core \
@@ -602,12 +655,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          manifest="$(mktemp)"
+          trap 'rm -f -- "$manifest"' EXIT
           (
             cd dist
             find . -maxdepth 1 -type f ! -name '*.sig' ! -name SHA256SUMS -printf '%f\0' \
               | sort -z \
-              | xargs -0 sha256sum > SHA256SUMS
-          )
+              | xargs -0 sha256sum
+          ) > "$manifest"
+          mv "$manifest" dist/SHA256SUMS
+          trap - EXIT
           test -s dist/SHA256SUMS
           cat dist/SHA256SUMS
 
@@ -649,15 +706,17 @@ jobs:
             platforms="$(jq --arg k "$key" --arg url "${base}/${asset}" --rawfile sig "$sigf" \
               '. + {($k): {signature: ($sig | rtrimstr("\n")), url: $url}}' <<<"$platforms")"
           }
+          emit darwin-aarch64 "agentum-${ver}-macos-arm64.app.tar.gz"
+          emit darwin-x86_64  "agentum-${ver}-macos-x64.app.tar.gz"
           emit windows-x86_64 "agentum-${ver}-windows-x64-setup.exe"
           emit linux-x86_64   "agentum-${ver}-linux-x64.AppImage"
           jq -n --arg v "$ver" --arg d "$pubdate" --rawfile n release-notes.md --argjson p "$platforms" \
             '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > dist/latest.json
           cat dist/latest.json
 
-          test "$(jq '.platforms | length' dist/latest.json)" -eq 2
+          test "$(jq '.platforms | length' dist/latest.json)" -eq 4
           test "$(jq -r '.platforms | keys | sort | join(",")' dist/latest.json)" = \
-            "linux-x86_64,windows-x86_64"
+            "darwin-aarch64,darwin-x86_64,linux-x86_64,windows-x86_64"
 
       - name: Scan source package and final release staging
         shell: bash

@@ -1,6 +1,6 @@
 {
   "productName": "Agentum",
-  "version": "0.98.13",
+  "version": "0.98.14",
   "identifier": "dev.agentum.app",
   "build": {
     "frontendDist": "ui/dist",
@@ -54,7 +54,7 @@
     "macOS": {
       "infoPlist": "Info.plist",
       "entitlements": "Entitlements.plist",
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "minimumSystemVersion": "11.0",
       "frameworks": [
         "../../target/release/libsherpa-onnx-c-api.dylib",
