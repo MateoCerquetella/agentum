@@ -16,7 +16,7 @@ label "type/chore"    "ededed" "Tooling, deps, CI, release plumbing"
 
 # --- area/* : which part of the system (mirrors the crate map) -----------
 label "area/desktop"   "5319e7" "Tauri desktop app (crates/agentum-desktop)"
-label "area/tui"       "5319e7" "Terminal UI / CLI (crates/agentum-tui)"
+label "area/tui"       "5319e7" "Terminal UI (crates/agentum-tui)"
 label "area/server"    "5319e7" "HTTP+WS API (crates/agentum-server)"
 label "area/executor"  "5319e7" "Tool adapters / YOLO translation (crates/agentum-executor)"
 label "area/store"     "5319e7" "SQLite persistence (crates/agentum-store)"

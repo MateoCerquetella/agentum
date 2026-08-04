@@ -11,7 +11,6 @@
 //!   every connected dashboard so the UI gets a smooth real-time
 //!   stream without each tab opening its own poller.
 
-use std::sync::Mutex;
 use std::time::Duration;
 
 use agentum_core::Event;
@@ -96,46 +95,64 @@ fn sample_now() -> HostMetrics {
 /// the bus. Call once from `serve()`. The ticker holds its own
 /// long-lived `System` to avoid re-allocating the per-CPU buffers each
 /// tick — sysinfo's whole reason for being a stateful type.
-pub fn spawn_ticker(bus: broadcast::Sender<Event>) {
-    tokio::task::spawn_blocking(move || {
+pub fn spawn_ticker(bus: broadcast::Sender<Event>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
         let refresh = RefreshKind::new()
             .with_cpu(CpuRefreshKind::new().with_cpu_usage())
             .with_memory(MemoryRefreshKind::new().with_ram().with_swap());
-        let sys = Mutex::new(System::new_with_specifics(refresh));
+        let mut sys = System::new_with_specifics(refresh);
         // Prime CPU counters once so the first emitted tick has %.
-        if let Ok(mut s) = sys.lock() {
-            s.refresh_cpu_specifics(CpuRefreshKind::new().with_cpu_usage());
-        }
+        sys.refresh_cpu_specifics(CpuRefreshKind::new().with_cpu_usage());
 
         loop {
-            std::thread::sleep(HOST_METRICS_INTERVAL);
+            // An async sleep makes the long-lived ticker cancellable when an
+            // embedded server's runtime shuts down. A blocking infinite loop
+            // here prevented the terminal application from exiting because
+            // Tokio waits for spawn_blocking tasks during runtime teardown.
+            tokio::time::sleep(HOST_METRICS_INTERVAL).await;
             // No subscribers → don't bother sampling. `receiver_count`
             // is cheap (atomic load); skipping the syscall when no
             // dashboards are open keeps the daemon at zero idle cost.
             if bus.receiver_count() == 0 {
                 continue;
             }
-            let snap = {
-                let Ok(mut s) = sys.lock() else { continue };
-                s.refresh_cpu_specifics(CpuRefreshKind::new().with_cpu_usage());
-                s.refresh_memory();
-                let cores: Vec<f32> = s.cpus().iter().map(|c| c.cpu_usage()).collect();
-                let cpu_pct = if cores.is_empty() {
-                    0.0
-                } else {
-                    cores.iter().sum::<f32>() / cores.len() as f32
-                };
-                HostMetrics {
-                    cpu_pct,
-                    cpu_count: cores.len(),
-                    cores,
-                    mem_used: s.used_memory(),
-                    mem_total: s.total_memory(),
-                    swap_used: s.used_swap(),
-                    swap_total: s.total_swap(),
-                }
+            sys.refresh_cpu_specifics(CpuRefreshKind::new().with_cpu_usage());
+            sys.refresh_memory();
+            let cores: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
+            let cpu_pct = if cores.is_empty() {
+                0.0
+            } else {
+                cores.iter().sum::<f32>() / cores.len() as f32
+            };
+            let snap = HostMetrics {
+                cpu_pct,
+                cpu_count: cores.len(),
+                cores,
+                mem_used: sys.used_memory(),
+                mem_total: sys.total_memory(),
+                swap_used: sys.used_swap(),
+                swap_total: sys.total_swap(),
             };
             let _ = bus.send(Event::new("host.metrics").with_payload(json!(snap)));
         }
-    });
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ticker_task_is_cancellable() {
+        let (bus, _) = broadcast::channel(1);
+        let handle = spawn_ticker(bus);
+        tokio::task::yield_now().await;
+
+        handle.abort();
+        let result = tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("ticker cancellation timed out")
+            .expect_err("aborted ticker unexpectedly completed normally");
+        assert!(result.is_cancelled());
+    }
 }

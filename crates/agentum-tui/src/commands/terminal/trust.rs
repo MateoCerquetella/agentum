@@ -1,4 +1,4 @@
-//! SSH-style trust-on-first-use for the agentum CLI / TUI.
+//! SSH-style trust-on-first-use for the agentum TUI.
 //!
 //! The server's TLS cert is self-signed by default. Rather than ship a
 //! third-party tunnel or force users into a CA flow, we pin the SHA-256
@@ -254,19 +254,6 @@ fn creds_path() -> Result<PathBuf> {
     Ok(dir.join("credentials.toml"))
 }
 
-/// Look up the bearer token stored for the daemon at `url`.
-///
-/// The key is derived from the URL's `host:port` pair (the same format used
-/// when `agentum auth login` persists the token). Returns `None` when
-/// `credentials.toml` exists but has no entry for this host — the caller is
-/// responsible for surfacing the "run `agentum auth login`" hint.
-pub(crate) fn token_for_url(url: &str) -> Result<Option<String>> {
-    let parsed = url::Url::parse(url).with_context(|| format!("invalid profile URL: {url}"))?;
-    let key = host_key(&parsed)?;
-    let creds = Credentials::load()?;
-    Ok(creds.token(&key).map(|t| t.to_owned()))
-}
-
 /// Open a TLS connection to `url`, accepting any cert just long enough to
 /// capture the leaf, and return its SHA-256 fingerprint formatted as
 /// `AB:CD:…`. Used during the TOFU prompt.
@@ -303,56 +290,6 @@ pub async fn fetch_fingerprint(url: &Url) -> Result<String> {
         .and_then(|mut g| g.take())
         .ok_or_else(|| anyhow!("server did not present a certificate"))?;
     Ok(format_fingerprint(&Sha256::digest(&der)))
-}
-
-/// Build a rustls `ClientConfig` that accepts any certificate without
-/// verification. Only used when a profile has `insecure = true` — an
-/// explicit, user-authored opt-in. Never the default.
-///
-/// Uses `use_preconfigured_tls` in reqwest rather than
-/// `danger_accept_invalid_certs` so the code path is identical to the
-/// fingerprint-pinned case (same builder pattern, just with a NoVerify
-/// verifier instead of PinningVerifier).
-pub(crate) fn accept_any_tls_config() -> Arc<ClientConfig> {
-    install_default_provider();
-    #[derive(Debug)]
-    struct NoVerify;
-    impl ServerCertVerifier for NoVerify {
-        fn verify_server_cert(
-            &self,
-            _: &CertificateDer<'_>,
-            _: &[CertificateDer<'_>],
-            _: &ServerName<'_>,
-            _: &[u8],
-            _: UnixTime,
-        ) -> Result<ServerCertVerified, rustls::Error> {
-            Ok(ServerCertVerified::assertion())
-        }
-        fn verify_tls12_signature(
-            &self,
-            _: &[u8],
-            _: &CertificateDer<'_>,
-            _: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn verify_tls13_signature(
-            &self,
-            _: &[u8],
-            _: &CertificateDer<'_>,
-            _: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, rustls::Error> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-            all_schemes()
-        }
-    }
-    let cfg = ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoVerify))
-        .with_no_client_auth();
-    Arc::new(cfg)
 }
 
 /// Build a rustls `ClientConfig` that accepts only certs whose SHA-256

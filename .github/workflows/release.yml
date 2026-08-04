@@ -41,8 +41,7 @@ jobs:
             runner: macos-14
             cross: false
           # Windows x64. The daemon shells out to tmux (no native Windows port),
-          # so this ships as a remote client; local sessions need WSL — but the
-          # CLI installs and drives remote SSH hosts.
+          # so this ships as a remote terminal client; local sessions need WSL.
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             cross: false
@@ -115,10 +114,10 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"   # v0.14.4 -> 0.14.4 on a tag; the branch on dispatch
           STEM="agentum-${VER}-${OSARCH}"
 
-          # CLI tarball.
+          # Terminal application tarball.
           OUT="dist/${STEM}"
           mkdir -p "$OUT"
-          # The CLI binary is `agentum` on unix, `agentum.exe` on Windows.
+          # The terminal binary is `agentum` on unix, `agentum.exe` on Windows.
           BIN="target/${{ matrix.target }}/release/${BIN_NAME}"
           [ -f "$BIN" ] || BIN="${BIN}.exe"
           cp "$BIN" "$OUT/"
@@ -129,7 +128,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          # The CLI tarball is always present, so `error` is safe.
+          # The terminal tarball is always present, so `error` is safe.
           path: |
             dist/*.tar.gz
           if-no-files-found: error
@@ -188,7 +187,7 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
-          # The required CLI tarballs are gated by the build jobs, which must
+          # The required terminal tarballs are gated by the build jobs, which must
           # succeed to reach here.
           fail_on_unmatched_files: false
           files: |
