@@ -430,7 +430,7 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
 
     // Host-metrics ticker: publishes CPU+RAM onto the bus so one sampler feeds
     // every connected client over the events WS.
-    routes::host::spawn_ticker(bus.clone());
+    let _host_metrics = routes::host::spawn_ticker(bus.clone());
 
     // SSH ControlMaster warmer: a no-op exec per known SSH host opens the
     // pooled master at boot (interval's first tick is immediate) and refreshes

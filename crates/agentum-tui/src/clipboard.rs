@@ -1,9 +1,7 @@
-//! Shared clipboard helpers used by both the TUI's Ctrl-V image paste
-//! flow and the `agentum clip-agent` subcommand.
+//! Clipboard helpers used by the TUI's Ctrl-V image paste flow.
 //!
-//! Lives outside `commands/` so the clip-agent (which is a sibling of
-//! the TUI, not a child) can reuse the same PNG encoder without
-//! pulling in `commands::terminal::app`'s 8000-line cone of context.
+//! Kept outside the terminal module so image encoding remains small and
+//! independently testable.
 
 /// Encode an RGBA pixel buffer as PNG bytes. `arboard` hands us raw
 /// pixels; the daemon's upload route expects a real image file format

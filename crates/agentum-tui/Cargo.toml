@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "agentum terminal UI (TUI) + CLI for AI coding agents. Installs the `agentum` command."
+description = "Terminal UI for managing AI coding agents. Installs the `agentum` command."
 
 [lib]
 name = "agentum"
@@ -16,10 +16,6 @@ path = "src/lib.rs"
 name = "agentum"
 path = "src/main.rs"
 
-[[bin]]
-name = "lazyagentum"
-path = "src/bin/lazyagentum.rs"
-
 [dependencies]
 agentum-core      = { workspace = true }
 agentum-store     = { workspace = true }
@@ -28,7 +24,6 @@ agentum-tmux      = { workspace = true }
 agentum-executor  = { workspace = true }
 anyhow          = { workspace = true }
 thiserror       = { workspace = true }
-clap            = { workspace = true }
 tokio           = { workspace = true }
 tracing         = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -36,10 +31,9 @@ serde           = { workspace = true }
 serde_json      = { workspace = true }
 time            = { workspace = true }
 toml            = { workspace = true }
-toml_edit       = { workspace = true }
 uuid            = { workspace = true }
 
-# Terminal dashboard (`agentum terminal`, alias `tui`, bin `lazyagentum`)
+# Terminal dashboard (`agentum`)
 ratatui            = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm          = { version = "0.28", features = ["event-stream"] }
 tui-term           = "0.2"
@@ -57,9 +51,7 @@ sha2               = "0.10"
 base64             = "0.22"
 getrandom          = "0.2"   # OS CSPRNG for the loopback bootstrap password
 
-# Workdir picker (`agentum new --pick`)
 which              = "7"
-tempfile           = "3"
 
 # Cross-platform local clipboard reader for Ctrl-V image paste. The
 # default feature set on arboard 3 already pulls `image-data`; we
@@ -74,11 +66,3 @@ arboard            = { version = "3", default-features = false, features = ["ima
 # Pinning the same major series arboard 3 already depends on
 # transitively keeps the dep graph from duplicating `image`.
 image              = { version = "0.25", default-features = false, features = ["png"] }
-
-# Detach the auto-spawned `agentum serve` sidecar from the TUI's
-# controlling terminal so it survives the user closing the alt-screen.
-[target.'cfg(unix)'.dependencies]
-libc               = "0.2"
-# execvp (process replacement) is unix-only; `agentum open` execs into
-# `tmux attach`, which doesn't exist on Windows.
-exec               = { workspace = true }

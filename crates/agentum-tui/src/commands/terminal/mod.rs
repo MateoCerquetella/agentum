@@ -1,5 +1,4 @@
-//! `agentum terminal` — interactive terminal dashboard (also reachable as
-//! the `lazyagentum` shim binary, and aliased as `agentum tui`).
+//! `agentum` — interactive terminal dashboard.
 //!
 //! Self-contained. For the local machine the TUI boots `agentum-server`
 //! in-process on an ephemeral loopback port (the same embedded server the
@@ -352,7 +351,7 @@ async fn obtain_token(base: &Url, trust_setting: &TlsTrust) -> Result<String> {
     // log in interactively anyway, auto-create a `local` account with
     // a random password and cache the resulting token. This is what
     // turns the auto-spawned sidecar into a zero-prompt experience —
-    // the user just runs `agentum terminal` and lands in the TUI
+    // the user just runs `agentum` and lands in the TUI
     // without ever seeing a login screen. We only do this for the
     // loopback host because anonymous register on a remote daemon
     // would be a security footgun.
@@ -441,7 +440,7 @@ fn is_local_loopback(base: &Url) -> bool {
 /// stash in credentials.toml. The user never types this; it's
 /// generated, written to the loopback daemon's user DB, and the
 /// resulting bearer token is what's cached. Re-runs of
-/// `agentum terminal` use the cached token, not this password.
+/// `agentum` uses the cached token, not this password.
 fn generate_random_password() -> String {
     // This password is a real credential — it's registered as the
     // loopback `local` user's password — so it must come from the OS
@@ -573,14 +572,13 @@ async fn apply_profile(mut opts: Options) -> Result<Options> {
     if opts.fingerprint.is_none() {
         opts.fingerprint = profile.fingerprint.clone();
     }
-    // The profile's `insecure` is opt-in; we OR it with the CLI flag
-    // so an --insecure on the command line is never quietly discarded.
+    // The profile's `insecure` setting remains opt-in.
     opts.insecure = opts.insecure || profile.insecure;
     // Write the resolved profile name back to `opts.profile` so the
     // rest of the TUI knows *which named profile* this connection
     // belongs to — not just "we connected to some URL". This matters
-    // for the default-profile path (`agentum terminal` with no
-    // `--profile` flag but a `default = "omarchy"` in profiles.toml):
+    // for the default-profile path (`agentum` with a
+    // `default = "omarchy"` entry in profiles.toml):
     // without this writeback, `current_opts.profile` stays `None`,
     // `active_key` ends up `""` in the session-list-tagging in
     // `mod.rs` (the `merge_sessions_dedup` call site), and every
@@ -647,10 +645,8 @@ async fn resolve_base(override_url: Option<String>) -> Result<Url> {
         }
     }
     Err(anyhow!(
-        "no agentum daemon found on local machine ({DEFAULT_HTTP} or {DEFAULT_HTTPS}). \
-         Start one with `agentum serve` or connect to a remote server. \
-         Run `agentum profiles add <name> <url>` to save a remote endpoint, \
-         then `agentum terminal --profile <name>`."
+        "no agentum server found on local machine ({DEFAULT_HTTP} or {DEFAULT_HTTPS}). \
+         Open the server switcher in `agentum` to configure a remote endpoint."
     ))
 }
 
@@ -683,7 +679,7 @@ enum UnreachableAction {
 }
 
 /// Stdin and stdout both have to be on a TTY for the prompt to make
-/// sense — `agentum terminal | tee log` would otherwise hang waiting
+/// sense — `agentum | tee log` would otherwise hang waiting
 /// on input that never comes. Plain non-TTY callers fall back to the
 /// pre-existing bail behaviour.
 fn is_interactive_tty() -> bool {

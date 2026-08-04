@@ -3458,7 +3458,7 @@ fn strip_data_uri(text: &str) -> Option<(&'static str, &str)> {
 /// image/png -o` both succeed cleanly when an image is on the
 /// clipboard and fail without consuming it when it's text — and
 /// falls back to plain text otherwise. Runs the helper *on whatever
-/// host the TUI is running on*: on a remote `agentum terminal`
+/// host the TUI is running on*: on a remote `agentum`
 /// over SSH that means the SSH host, which is almost never useful;
 /// the status message names the helper that ran so users can tell
 /// they didn't get the local clipboard they expected.

@@ -1413,7 +1413,7 @@ fn toast_widget<'a>(n: &'a Notification, p: &Palette) -> Paragraph<'a> {
 
 fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Palette) {
     let mut lines = vec![
-        head("agentum terminal — keys", p),
+        head("agentum — keys", p),
         Line::from(""),
         head("  Universal (work even inside the terminal pane)", p),
         body("  Ctrl-P / Ctrl-Shift-P  command palette", p),

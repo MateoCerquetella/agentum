@@ -464,7 +464,7 @@ pub async fn navigate(id: &str, url: &str) -> Result<()> {
         .map_err(|e| HostRuntimeError::Bootstrap(format!("CDP connect for navigate: {e}")))?;
     let (mut sink, _src) = cdp_ws.split();
     sink.send(CdpMessage::Text(
-        cdp_command(1, "Page.navigate", serde_json::json!({ "url": url })).into(),
+        cdp_command(1, "Page.navigate", serde_json::json!({ "url": url })),
     ))
     .await
     .map_err(|e| HostRuntimeError::Bootstrap(format!("CDP navigate send: {e}")))?;
@@ -560,7 +560,7 @@ async fn run_screencast_bridge(
     let (cdp_tx, mut cdp_rx) = mpsc::unbounded_channel::<String>();
     let writer = tokio::spawn(async move {
         while let Some(cmd) = cdp_rx.recv().await {
-            if cdp_sink.send(CdpMessage::Text(cmd.into())).await.is_err() {
+            if cdp_sink.send(CdpMessage::Text(cmd)).await.is_err() {
                 break;
             }
         }
