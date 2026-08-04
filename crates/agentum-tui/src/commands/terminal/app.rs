@@ -1870,11 +1870,41 @@ impl App {
         if !prev_filter.is_empty() {
             self.tree.set_filter(&prev_filter);
         }
-        if let Some(sel) = self.selected
-            && !self.sessions.iter().any(|s| s.id == sel)
-        {
-            self.selected = first_visible_session(&self.tree, &self.sessions);
+        let selected_disappeared = self
+            .selected
+            .is_some_and(|sel| !self.sessions.iter().any(|s| s.id == sel));
+        if selected_disappeared {
+            // A refresh can race a selected remote tmux target's teardown.
+            // Do not silently move the selected id to another row while the
+            // stream still belongs to the vanished target: that paints a blank
+            // pane under the survivor's title and keeps sending stale resizes.
+            // Clear both halves of the selection/stream pair atomically; the
+            // user can then choose the next session explicitly.
+            self.selected = None;
+            self.term_in = None;
+            if let Some(handle) = self.stream_handle_left.take() {
+                handle.abort();
+            }
             self.term.reset();
+            self.term_size = (0, 0);
+            self.term_reconnect_pending = false;
+        }
+        let right_selection_disappeared = self
+            .split_right
+            .as_ref()
+            .and_then(|slot| slot.selected)
+            .is_some_and(|sel| !self.sessions.iter().any(|s| s.id == sel));
+        if right_selection_disappeared {
+            if let Some(handle) = self.stream_handle_right.take() {
+                handle.abort();
+            }
+            if let Some(slot) = self.split_right.as_mut() {
+                slot.selected = None;
+                slot.term_in = None;
+                slot.term.reset();
+                slot.term_size = (0, 0);
+                slot.term_reconnect_pending = false;
+            }
         }
         // Make sure cursor still points at a valid row.
         self.tree.clamp_cursor();
@@ -9209,6 +9239,28 @@ mod merge_dedup_tests {
         let owners = HashMap::new();
         assert_eq!(pick_initial_selection(&[], &owners, Some("vps")), None);
         assert_eq!(pick_initial_selection(&[], &owners, None), None);
+    }
+
+    #[test]
+    fn refresh_clears_removed_selection_and_stale_terminal_sender() {
+        let removed = Uuid::new_v4();
+        let survivor = Uuid::new_v4();
+        let mut app = App::new(vec![sess(removed, "alpha"), sess(survivor, "beta")]);
+        app.selected = Some(removed);
+        app.tree.select_session(removed);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        app.term_in = Some(tx);
+
+        app.refresh_sessions(vec![sess(survivor, "beta")]);
+
+        assert_eq!(
+            app.selected, None,
+            "an async refresh must not silently point the selection at a different session while the old stream is still attached"
+        );
+        assert!(
+            app.term_in.is_none(),
+            "the sender for the vanished tmux target must be detached"
+        );
     }
 }
 

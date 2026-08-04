@@ -52,6 +52,36 @@ pub enum HostRuntimeError {
     Tmux(#[from] agentum_tmux::TmuxError),
 }
 
+impl HostRuntimeError {
+    /// Whether tmux rejected an operation because its target disappeared.
+    ///
+    /// A selected session can be removed between a client's layout pass and
+    /// the resize command reaching the host. That race is expected lifecycle
+    /// churn, unlike an SSH transport, auth, or command failure. Keep the
+    /// classifier narrow so callers can suppress only the stale-target case.
+    pub fn is_tmux_target_missing(&self) -> bool {
+        fn stderr_says_target_missing(stderr: &str) -> bool {
+            let stderr = stderr.to_ascii_lowercase();
+            [
+                "can't find window:",
+                "can't find session:",
+                "can't find pane:",
+                "no server running on ",
+            ]
+            .iter()
+            .any(|needle| stderr.contains(needle))
+        }
+
+        match self {
+            Self::NonZero { stderr, .. } => stderr_says_target_missing(stderr),
+            Self::Tmux(agentum_tmux::TmuxError::NonZero { stderr, .. }) => {
+                stderr_says_target_missing(stderr)
+            }
+            _ => false,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, HostRuntimeError>;
 
 /// Map [`ssh_output`]'s `io::Error` to a [`HostRuntimeError`], preserving the
@@ -1822,6 +1852,40 @@ fn q(s: &str) -> Result<std::borrow::Cow<'_, str>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_missing_classifies_only_tmux_disappearance_errors() {
+        for stderr in [
+            "can't find window: agentum-alpha",
+            "can't find session: agentum-alpha",
+            "can't find pane: agentum-alpha.0",
+            "no server running on /tmp/tmux-1000/default",
+        ] {
+            let error = HostRuntimeError::NonZero {
+                status: Some(1),
+                stderr: stderr.to_string(),
+            };
+            assert!(
+                error.is_tmux_target_missing(),
+                "expected target-missing classification for: {stderr}"
+            );
+        }
+
+        for stderr in [
+            "ssh: connect to host box port 22: Connection refused",
+            "tmux: command not found",
+            "permission denied",
+        ] {
+            let error = HostRuntimeError::NonZero {
+                status: Some(1),
+                stderr: stderr.to_string(),
+            };
+            assert!(
+                !error.is_tmux_target_missing(),
+                "must preserve actionable resize error: {stderr}"
+            );
+        }
+    }
 
     #[test]
     fn probe_binaries_dedups_and_orders_required_first() {

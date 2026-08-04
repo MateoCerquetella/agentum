@@ -1889,10 +1889,29 @@ async fn stream_remote_session(
                 }
                 Some(Ok(Message::Text(t))) => {
                     if let Some((cols, rows)) = parse_resize(&t) {
-                        if let Err(e) = crate::host_runtime::resize_window(&host, &target, cols, rows).await
-                            && socket.send(Message::Text(format!("[resize dropped: {e}]").into())).await.is_err()
-                        {
-                            break;
+                        match crate::host_runtime::resize_window(&host, &target, cols, rows).await {
+                            Ok(()) => {}
+                            // Teardown can win the race with a resize already
+                            // queued by the selected client. The event/session
+                            // refresh path owns recovery; reporting this as a
+                            // terminal error only opens a fatal-looking modal
+                            // for expected lifecycle churn.
+                            Err(e) if e.is_tmux_target_missing() => {
+                                tracing::debug!(
+                                    target = %target,
+                                    error = %e,
+                                    "ignored resize for vanished remote tmux target"
+                                );
+                            }
+                            Err(e) => {
+                                if socket
+                                    .send(Message::Text(format!("[resize dropped: {e}]").into()))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
                         }
                     } else if parse_refresh(&t) {
                         // Re-paint the current screen on demand (same shape as the
