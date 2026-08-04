@@ -4,6 +4,20 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.3] — 2026-08-03
+
+### Changed
+- **Terminal-only agentum.** Running `agentum` now opens the terminal UI
+  directly. The legacy command surface and `lazyagentum` binary were removed,
+  and the release installer now ships only the terminal application.
+
+### Fixed
+- **Remote tmux teardown races.** A remote window disappearing during resize
+  no longer opens an error modal or leaves a stale stream attached under a
+  different session. Actionable SSH and tmux failures remain visible.
+- **Clean terminal shutdown.** The embedded host-metrics task is cancellable,
+  allowing `Ctrl-Q` to restore the terminal and exit normally.
+
 ## [0.17.2] — 2026-06-18
 
 ### Added
