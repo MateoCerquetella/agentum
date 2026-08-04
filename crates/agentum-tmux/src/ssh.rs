@@ -366,12 +366,13 @@ pub fn ssh_control_forward_cmd(host: &Host, host_port: u16, mac_port: u16) -> Op
     Some(cmd)
 }
 
-/// `ssh -O cancel -R 127.0.0.1:<host_port>` — tears down a reverse forward on the
-/// host's master, matched by its loopback bind side only (so it cancels a stale
-/// forward regardless of what Mac port it used to target). Best-effort cleanup
-/// run before re-arming, so the tunnel always points at the *current* Mac port
-/// and a leftover forward from a prior app instance can't block the new bind.
-pub fn ssh_control_cancel_cmd(host: &Host, host_port: u16) -> Option<Command> {
+/// `ssh -O cancel -R 127.0.0.1:<host_port>:127.0.0.1:<mac_port>` — tears down a
+/// reverse forward on the host's master. OpenSSH requires the same full forward
+/// specification used to arm it; a listen-side-only `-R 127.0.0.1:<host_port>`
+/// is rejected as "port not forwarded" and silently leaves the tunnel behind.
+/// Best-effort cleanup runs before re-arming so repeated starts in one embedded
+/// server instance reuse the same remote port instead of leaking one per start.
+pub fn ssh_control_cancel_cmd(host: &Host, host_port: u16, mac_port: u16) -> Option<Command> {
     let HostKind::Ssh {
         user,
         hostname,
@@ -390,7 +391,7 @@ pub fn ssh_control_cancel_cmd(host: &Host, host_port: u16) -> Option<Command> {
         .arg("-O")
         .arg("cancel")
         .arg("-R")
-        .arg(format!("127.0.0.1:{host_port}"))
+        .arg(format!("127.0.0.1:{host_port}:127.0.0.1:{mac_port}"))
         .arg(format!("{user}@{hostname}"));
     Some(cmd)
 }
@@ -441,10 +442,10 @@ pub fn ssh_control_local_forward_cmd(
 }
 
 /// `ssh -O cancel -L 127.0.0.1:<mac_port>:127.0.0.1:<host_port>` — tears down a
-/// local forward on the host's master. Unlike the reverse [`ssh_control_cancel_cmd`]
-/// (which cancels by listen side alone), OpenSSH rejects a listen-side-only
-/// `-O cancel -L` ("Bad local forwarding specification"); a local-forward cancel
-/// must pass the SAME full spec used to arm it (verified on OpenSSH 10.0p2).
+/// local forward on the host's master. OpenSSH rejects a listen-side-only
+/// `-O cancel -L` ("Bad local forwarding specification"); like
+/// [`ssh_control_cancel_cmd`], this must pass the SAME full spec used to arm it
+/// (verified on OpenSSH 10.0p2).
 /// Best-effort cleanup run before re-arming so a re-attach refreshes the forward
 /// instead of colliding with its own still-present one.
 pub fn ssh_control_local_cancel_cmd(host: &Host, mac_port: u16, host_port: u16) -> Option<Command> {
@@ -1172,10 +1173,48 @@ mod tests {
     }
 
     #[test]
+    fn reverse_forward_and_cancel_use_the_same_full_spec() {
+        let host = ssh_host(SshAuth::Agent);
+        let forward =
+            ssh_control_forward_cmd(&host, 8990, 50736).expect("ssh host yields a forward command");
+        let cancel =
+            ssh_control_cancel_cmd(&host, 8990, 50736).expect("ssh host yields a cancel command");
+        let spec = "127.0.0.1:8990:127.0.0.1:50736".to_string();
+
+        let forward_args = arg_strings(&forward);
+        assert!(
+            forward_args.contains(&"forward".to_string()),
+            "missing forward operation: {forward_args:?}"
+        );
+        assert!(
+            forward_args.contains(&"-R".to_string()),
+            "missing reverse-forward flag: {forward_args:?}"
+        );
+        assert!(
+            forward_args.contains(&spec),
+            "forward must pass the full reverse-forward spec: {forward_args:?}"
+        );
+
+        let cancel_args = arg_strings(&cancel);
+        assert!(
+            cancel_args.contains(&"cancel".to_string()),
+            "missing cancel operation: {cancel_args:?}"
+        );
+        assert!(
+            cancel_args.contains(&"-R".to_string()),
+            "missing reverse-forward flag: {cancel_args:?}"
+        );
+        assert!(
+            cancel_args.contains(&spec),
+            "OpenSSH rejects a listen-side-only reverse cancel: {cancel_args:?}"
+        );
+    }
+
+    #[test]
     fn local_cancel_cmd_uses_full_local_forward_spec() {
         // OpenSSH rejects a listen-side-only `-O cancel -L` ("Bad local
-        // forwarding specification") — unlike `-R`, a local-forward cancel needs
-        // the SAME full spec used to arm it. Verified against OpenSSH 10.0p2.
+        // forwarding specification"); both forward directions need the SAME
+        // full spec used to arm them. Verified against OpenSSH 10.0p2.
         let cmd = ssh_control_local_cancel_cmd(&ssh_host(SshAuth::Agent), 7000, 9222)
             .expect("ssh host yields a command");
         let args = arg_strings(&cmd);
@@ -1198,6 +1237,8 @@ mod tests {
     #[test]
     fn local_forward_and_cancel_none_for_local_host() {
         // No tunnel for a local host — there is no ssh master to attach to.
+        assert!(ssh_control_forward_cmd(&local_host(), 8990, 50736).is_none());
+        assert!(ssh_control_cancel_cmd(&local_host(), 8990, 50736).is_none());
         assert!(ssh_control_local_forward_cmd(&local_host(), 7000, 9222).is_none());
         assert!(ssh_control_local_cancel_cmd(&local_host(), 7000, 9222).is_none());
     }

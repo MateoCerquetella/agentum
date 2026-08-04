@@ -148,11 +148,6 @@ pub async fn write_agent_project_config(
     }
 }
 
-/// Fixed loopback port the reverse SSH tunnel binds on each host. A remote
-/// agent reaches agentum's MCP at `http://127.0.0.1:<REMOTE_MCP_PORT>/mcp`,
-/// which tunnels back to the Mac's embedded server.
-pub const REMOTE_MCP_PORT: u16 = 8990;
-
 /// The Mac-side embedded-server port to reverse-tunnel to, parsed from
 /// `api_base_url` (e.g. `http://127.0.0.1:60102` → `60102`). `None` for a
 /// standalone daemon that didn't set its own URL (then remote wiring is skipped).
