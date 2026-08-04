@@ -869,24 +869,22 @@ pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     Ok(())
 }
 
-/// First port of the loopback range scanned for the reverse tunnel on a host.
-pub const REMOTE_MCP_PORT_BASE: u16 = 8990;
-/// How many consecutive ports to try before giving up (host services or stale
-/// forwards may already hold some).
-const REMOTE_MCP_PORT_TRIES: u16 = 24;
-
 /// Ensure a **reverse** SSH tunnel so this host can reach the Mac's embedded
 /// agentum MCP server: on the host, `127.0.0.1:<port>` → (over SSH) → Mac's
 /// `127.0.0.1:<mac_port>`. Returns the **host port** that was armed (the caller
 /// writes it into the agent's MCP URL).
 ///
-/// Scans a small loopback-port range — a fixed port collides with whatever the
-/// host already runs there (verified: a real service held the first choice on a
-/// live host) or with a stale forward from a prior app instance that the current
-/// master can't cancel. We cancel-then-arm each candidate and take the first that
-/// binds, so the tunnel always points at THIS server's live port. Rides the warm
-/// interactive ControlMaster via `-O forward` (no extra connection). Loopback-
-/// bound both ends; the per-server bearer token guards on-host access.
+/// The host port mirrors the embedded server's ephemeral Mac port. That makes
+/// each embedded instance's reverse-forward spec unique without scanning a
+/// fixed range polluted by prior instances. If macOS later reuses an ephemeral
+/// port, the old and new full specs are identical, so OpenSSH can cancel it
+/// correctly before re-arming. Rides the warm interactive ControlMaster via
+/// `-O forward` (no extra connection). Loopback-bound both ends; the per-server
+/// bearer token guards on-host access.
+fn reverse_tunnel_host_port(mac_port: u16) -> u16 {
+    mac_port
+}
+
 pub async fn ensure_reverse_tunnel(host: &Host, mac_port: u16) -> Result<u16> {
     if !matches!(host.kind, HostKind::Ssh { .. }) {
         return Err(HostRuntimeError::Unsupported);
@@ -894,39 +892,31 @@ pub async fn ensure_reverse_tunnel(host: &Host, mac_port: u16) -> Result<u16> {
     // `-O forward` attaches to an existing master, so the master must be up first.
     warm_ssh_master(host).await?;
 
-    let mut last_err = String::new();
-    for host_port in
-        REMOTE_MCP_PORT_BASE..REMOTE_MCP_PORT_BASE.saturating_add(REMOTE_MCP_PORT_TRIES)
-    {
-        // Cancel any forward already bound to this port (e.g. a stale one from a
-        // prior app instance pointing at a now-dead Mac port), then arm fresh so
-        // the tunnel always targets the current Mac port. No-op when none exists.
-        if let Some(mut cancel) = ssh_control_cancel_cmd(host, host_port) {
-            let _ = cancel.output().await;
-        }
-        let Some(mut cmd) = ssh_control_forward_cmd(host, host_port, mac_port) else {
-            return Err(HostRuntimeError::Bootstrap(
-                "no ControlPath available for the reverse MCP tunnel".into(),
-            ));
-        };
-        let out = cmd.output().await.map_err(map_ssh_io)?;
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let s = stderr.to_ascii_lowercase();
-        if out.status.success() || s.contains("already") || s.contains("exists") {
-            return Ok(host_port);
-        }
-        // Port busy (host service or unreachable stale forward) → try the next.
-        last_err = stderr.trim().to_string();
+    let host_port = reverse_tunnel_host_port(mac_port);
+    // Best-effort exact cleanup. OpenSSH requires the same full spec used to
+    // arm the tunnel; this succeeds for repeated starts in this process and for
+    // a reused ephemeral port, and harmlessly reports "port not forwarded" on
+    // the first start.
+    if let Some(mut cancel) = ssh_control_cancel_cmd(host, host_port, mac_port) {
+        let _ = cancel.output().await;
     }
-    Err(HostRuntimeError::Bootstrap(format!(
-        "no free reverse-tunnel port on host in {REMOTE_MCP_PORT_BASE}..; last: {last_err}"
-    )))
+    let Some(mut cmd) = ssh_control_forward_cmd(host, host_port, mac_port) else {
+        return Err(HostRuntimeError::Bootstrap(
+            "no ControlPath available for the reverse MCP tunnel".into(),
+        ));
+    };
+    let out = cmd.output().await.map_err(map_ssh_io)?;
+    if out.status.success() {
+        Ok(host_port)
+    } else {
+        Err(HostRuntimeError::Bootstrap(format!(
+            "reverse MCP tunnel could not bind host loopback port {host_port}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
+    }
 }
 
 /// First Mac-loopback port scanned for the **forward** (CDP screencast) tunnel.
-/// A SEPARATE range from [`REMOTE_MCP_PORT_BASE`] (8990) so the reverse MCP
-/// tunnel and this forward CDP tunnel can coexist on the one Interactive
-/// ControlMaster without one cancel/arm clobbering the other.
 pub const REMOTE_CDP_PORT_BASE: u16 = 9200;
 /// How many consecutive Mac ports to try before giving up (another local app
 /// may already hold some, or a stale forward may linger).
@@ -1888,6 +1878,12 @@ mod tests {
     }
 
     #[test]
+    fn reverse_tunnel_port_tracks_the_embedded_ephemeral_port() {
+        assert_eq!(reverse_tunnel_host_port(50_736), 50_736);
+        assert_eq!(reverse_tunnel_host_port(61_002), 61_002);
+    }
+
+    #[test]
     fn probe_binaries_dedups_and_orders_required_first() {
         let bins = probe_binaries();
         assert_eq!(bins[0], "tmux");
@@ -2322,10 +2318,10 @@ mod tests {
     // The forward (-L) tunnel binds a Mac loopback port; these pure helpers are
     // the moving parts of `ensure_forward_tunnel`'s scan. A live host validates
     // the I/O, but the range + bind-criterion are pure and tested here so a
-    // regression can't silently collide with the MCP range or mis-read ssh.
+    // regression can't silently move the scan or mis-read ssh.
 
     #[test]
-    fn cdp_forward_range_is_24_ports_at_9200_disjoint_from_mcp() {
+    fn cdp_forward_range_is_24_ports_at_9200() {
         let ports: Vec<u16> = forward_tunnel_ports().collect();
         assert_eq!(REMOTE_CDP_PORT_BASE, 9200, "CDP base moved");
         assert_eq!(ports.len(), 24, "must scan 24 candidate Mac ports");
@@ -2334,16 +2330,6 @@ mod tests {
             "scan must start at the base"
         );
         assert_eq!(*ports.last().unwrap(), REMOTE_CDP_PORT_BASE + 23);
-        // The reverse MCP tunnel and this forward CDP tunnel ride one
-        // ControlMaster — their port ranges must not overlap or arming one would
-        // cancel/clobber the other.
-        let mcp: std::collections::HashSet<u16> = (REMOTE_MCP_PORT_BASE
-            ..REMOTE_MCP_PORT_BASE.saturating_add(REMOTE_MCP_PORT_TRIES))
-            .collect();
-        assert!(
-            ports.iter().all(|p| !mcp.contains(p)),
-            "CDP forward range overlaps the MCP reverse range"
-        );
     }
 
     #[test]

@@ -28,6 +28,15 @@ use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::M
 use url::Url;
 use uuid::Uuid;
 
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+// Starting an SSH-hosted session is a lifecycle operation, not an ordinary API
+// read: the embedded server may need to warm two ControlMasters, refresh the
+// reverse MCP tunnel, write a remote Claude config, create tmux, and arm its
+// pane pipe. Each SSH stage is independently bounded at 12 seconds server-side,
+// so the generic 15-second client deadline can cancel a healthy start halfway
+// through. Keep a finite outer bound, but leave enough room for that sequence.
+const SESSION_START_TIMEOUT: Duration = Duration::from_secs(90);
+
 use super::trust;
 
 /// Mirrors the server's `/api/fs/list` response. Used by the TUI's
@@ -268,7 +277,7 @@ pub struct Client {
 }
 
 fn build_http(trust: &TlsTrust) -> Result<HttpClient> {
-    let mut b = HttpClient::builder().timeout(Duration::from_secs(15));
+    let mut b = HttpClient::builder().timeout(DEFAULT_HTTP_TIMEOUT);
     if let Some(cfg) = trust.rustls_config() {
         // We pass an owned ClientConfig (reqwest expects the unwrapped form
         // because it stuffs it into a `dyn Any`).
@@ -1021,7 +1030,13 @@ impl Client {
 
     async fn post_session_action(&self, id: Uuid, action: &str) -> Result<()> {
         let url = self.base.join(&format!("/api/sessions/{id}/{action}"))?;
-        let resp = self.http.post(url).bearer_auth(&self.token).send().await?;
+        let mut request = self.http.post(url).bearer_auth(&self.token);
+        if let Some(timeout) = session_action_timeout(action) {
+            // RequestBuilder::timeout overrides the client's default for this
+            // request only; ordinary reads and quick mutations retain 15 s.
+            request = request.timeout(timeout);
+        }
+        let resp = request.send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -1303,6 +1318,10 @@ impl Client {
     }
 }
 
+fn session_action_timeout(action: &str) -> Option<Duration> {
+    (action == "start").then_some(SESSION_START_TIMEOUT)
+}
+
 #[derive(Debug)]
 pub enum TerminalMsg {
     /// A successful WS upgrade completed. After a `Reconnecting` cycle
@@ -1420,7 +1439,10 @@ fn backoff_delay(attempt: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_upload_url, ws_url};
+    use super::{
+        DEFAULT_HTTP_TIMEOUT, SESSION_START_TIMEOUT, build_upload_url, session_action_timeout,
+        ws_url,
+    };
     use url::Url;
     use uuid::Uuid;
 
@@ -1438,6 +1460,20 @@ mod tests {
         let u = build_upload_url(&b, id).unwrap();
         assert_eq!(u.scheme(), "https");
         assert_eq!(u.path(), format!("/api/sessions/{id}/uploads"));
+    }
+
+    #[test]
+    fn session_start_overrides_the_ordinary_http_timeout() {
+        assert_eq!(session_action_timeout("start"), Some(SESSION_START_TIMEOUT));
+        assert!(
+            SESSION_START_TIMEOUT > DEFAULT_HTTP_TIMEOUT,
+            "remote start must outlive the generic API deadline"
+        );
+        assert_eq!(
+            session_action_timeout("stop"),
+            None,
+            "quick lifecycle operations retain the client default"
+        );
     }
 
     #[test]
