@@ -37,7 +37,10 @@ fn assert_valid_frame(bytes: &[u8]) -> usize {
         "reserved must be 0 or the pane drops the frame"
     );
     let image = &bytes[16 + md_len..];
-    assert!(!image.is_empty(), "a real screencast frame carries image bytes");
+    assert!(
+        !image.is_empty(),
+        "a real screencast frame carries image bytes"
+    );
     image.len()
 }
 

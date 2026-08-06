@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "feature": "fix-the-agentum-tui-input-regression-where-text-the-user",
+  "claimId": "fix-the-agentum-tui-input-regression-where-text-the-user-5a48ce1f8c8d",
+  "repositoryId": "sha256:cec1f0afd1d6f5688524ada3ceadd5d49822ab7e2e3bfb711714f992211af4ad",
+  "baseCommit": "95d7f93f35b32088e578e30a3fad93023fc2dc0f",
+  "baseTree": "02e5fe04b18a2f18b275dce84b45bd091aead55d",
+  "featureTree": "sha256:aa8e11ac7406f40c3e0c7341420d7f0f568cc29ebb3b19b965a07e2b68898249",
+  "targetCommit": "95d7f93f35b32088e578e30a3fad93023fc2dc0f",
+  "targetTree": "02e5fe04b18a2f18b275dce84b45bd091aead55d",
+  "capabilityBaseDigests": {
+    "remote-session-reliability": "sha256:2fbc4d504b481df54e3d8698b37892da5a4986daefdbdddf945fe0511db5e771"
+  },
+  "deltaDigest": "sha256:6745371e08121566937ec51e1dc9f7314a2cbffbaf6cde3fec12de0f9a899584",
+  "resultDigests": {
+    "remote-session-reliability": "sha256:3c787ee4e5e99b7a5fe0592dc33c3c1796c4c7c709c6c3381b25de351bbf6e4b"
+  },
+  "verificationReceiptDigests": [
+    "sha256:6bbc0f3d4932c1c89801412f36c4cbfe9c2442fbf9766c0f28f4a1305e8c4229"
+  ],
+  "integratedAt": "2026-08-05T19:41:31.857Z",
+  "digest": "sha256:ad339f0085983483eba5a36c40442700e0392ebf67c75532723eaf7b468231ff"
+}

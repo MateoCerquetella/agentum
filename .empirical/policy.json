@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "context": [],
+  "phases": {},
+  "verification": {
+    "evidence": {
+      "required": true,
+      "browserForUi": true,
+      "screenshotForUi": true,
+      "codeReview": true
+    },
+    "commands": [
+      {
+        "id": "package-test-checkpoints",
+        "argv": [
+          "/usr/bin/env",
+          "RUST_TEST_THREADS=1",
+          "/bin/sh",
+          "-c",
+          "HOME=$(CDPATH= cd -P ~ 2>/dev/null && pwd) || exit 10\nexport HOME\ncargo test -p agentum-core --all-targets || exit 11\ncargo test -p agentum-executor --all-targets || exit 12\ncargo test -p agentum-server --all-targets || exit 13\ncargo test -p agentum-store --all-targets || exit 14\ncargo test -p agentum-tmux --all-targets || exit 15\ncargo test -p agentum-tui --all-targets || exit 16\ncargo test -p agentum-watchdog --all-targets || exit 17"
+        ],
+        "cwd": ".",
+        "timeoutMs": 600000,
+        "maxOutputBytes": 50000,
+        "evidenceKinds": [
+          "test"
+        ],
+        "criteria": [
+          "AC-1",
+          "AC-2",
+          "AC-3",
+          "AC-4",
+          "AC-5",
+          "AC-6",
+          "AC-7",
+          "AC-8",
+          "AC-9"
+        ]
+      }
+    ]
+  },
+  "delivery": null,
+  "preferredAgent": null
+}

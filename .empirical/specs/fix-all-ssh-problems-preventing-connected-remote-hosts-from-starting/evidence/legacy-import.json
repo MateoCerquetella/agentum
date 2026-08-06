@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "kind": "collected-legacy",
+  "satisfiesVerification": false,
+  "artifacts": [],
+  "importedAssertions": 9,
+  "summary": "Schema-4 evidence lacked executable provenance and is retained for history only.",
+  "digest": "sha256:8cde8a161ed9b7e053a0d65157b22d19acd47cafecbd786a6cec149d8ec329c7"
+}

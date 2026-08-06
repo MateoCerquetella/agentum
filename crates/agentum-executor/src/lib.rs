@@ -8,6 +8,8 @@
 //! Unknown tools fall through to [`PassthroughAdapter`]: agentum trusts
 //! whatever's on PATH and forwards `--model=…` plus the user-provided flags.
 
+use std::borrow::Cow;
+
 use agentum_core::Session;
 
 mod adapters;
@@ -33,6 +35,31 @@ impl LaunchCommand {
     }
 }
 
+/// Host-specific facts needed to build a command for an SSH-owned session.
+///
+/// These values must be resolved on the target host. In particular, using the
+/// daemon's `$SHELL` or checking its local Claude transcript directory is wrong
+/// when the session's workdir lives on another machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteLaunchContext<'a> {
+    /// The target host's resolved `${SHELL:-/bin/sh}` command. [`Cow`] lets a
+    /// server call site borrow a preflight result or move an owned value.
+    pub shell: Cow<'a, str>,
+    /// Whether the deterministic Claude transcript exists on the target host.
+    pub claude_transcript_exists: bool,
+}
+
+impl RemoteLaunchContext<'_> {
+    /// A defensive POSIX fallback for a remote account with an empty `$SHELL`.
+    pub fn shell(&self) -> &str {
+        if self.shell.trim().is_empty() {
+            "/bin/sh"
+        } else {
+            &self.shell
+        }
+    }
+}
+
 /// Inputs for wiring one or more streamable-HTTP MCP servers into an agent
 /// **at launch** (agentum's own MCP server, the shared Playwright server, …).
 ///
@@ -40,8 +67,9 @@ impl LaunchCommand {
 /// in-session reload), so the launch site must (a) ensure each HTTP server is up
 /// → [`Self::servers`] and (b) for tools that load MCP from a file, pre-write a
 /// combined config → [`Self::config_file`]. Each adapter turns these into the
-/// right startup flags via [`ToolAdapter::mcp_args`] — the only tool-specific
-/// part. Servers are shared per machine/host, not one per session.
+/// right startup flags and environment via [`ToolAdapter::apply_mcp`] — the
+/// only tool-specific part. Server processes may be shared per machine/host;
+/// bearer credentials and their environment handles are session/launch scoped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpProvision {
     /// Every streamable-HTTP MCP server to register with this agent. Tools that
@@ -64,6 +92,15 @@ pub struct McpServer {
     /// request to this server. `Some` for agentum's own MCP (which requires it);
     /// `None` for servers that don't authenticate (e.g. a local Playwright).
     pub auth_token: Option<String>,
+    /// Launch-scoped environment variable holding [`Self::auth_token`].
+    ///
+    /// Authenticated servers must receive a fresh, unpredictable, shell-safe
+    /// name from the provisioning layer. Codex references this name from argv
+    /// and receives the token only through its child environment. Keeping the
+    /// name on the provisioned server prevents the argv and environment halves
+    /// from independently deriving (and potentially disagreeing on) a name.
+    /// Unauthenticated servers use `None`.
+    pub auth_env_var: Option<String>,
 }
 
 /// A first-class tool integration. Trait methods are deliberately small so a
@@ -75,7 +112,20 @@ pub trait ToolAdapter: Send + Sync {
     /// Build the argv (and any env) tmux should spawn for this session.
     fn launch(&self, session: &Session) -> LaunchCommand;
 
-    /// Extra startup args that register a Playwright MCP server with this agent.
+    /// Build a launch command using facts resolved on an SSH target.
+    ///
+    /// Most tools have no host-specific argv and use [`Self::launch`]. Claude
+    /// and terminal override this so remote transcript state and the remote
+    /// login shell never get confused with state on the daemon machine.
+    fn launch_remote(
+        &self,
+        session: &Session,
+        _context: &RemoteLaunchContext<'_>,
+    ) -> LaunchCommand {
+        self.launch(session)
+    }
+
+    /// Extra startup args that register the provisioned MCP servers.
     ///
     /// Default: none — most tools (and shells) get no browser MCP. First-class
     /// agents that support launch-time MCP override this:
@@ -83,10 +133,30 @@ pub trait ToolAdapter: Send + Sync {
     ///   pass `--strict-mcp-config`, which would disable the user's own servers).
     /// - Codex: repeated `-c mcp_servers.playwright.*` overrides (no file flag).
     ///
-    /// Returns args to append to [`LaunchCommand::argv`]; the launch site is
-    /// responsible for having started the server and written `p.config_file`.
+    /// Returns args to append to [`LaunchCommand::argv`]. Launch sites should
+    /// normally call [`Self::apply_mcp`] so any accompanying environment is
+    /// included too; they remain responsible for having started the servers
+    /// and written `p.config_file`.
     fn mcp_args(&self, _p: &McpProvision) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Per-process environment needed by [`Self::mcp_args`].
+    ///
+    /// Authentication secrets belong here, never in argv. The default is
+    /// empty; Codex overrides it for authenticated streamable-HTTP servers.
+    fn mcp_env(&self, _p: &McpProvision) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    /// Apply all launch-time MCP configuration to one command.
+    ///
+    /// Keeping argv and environment application together prevents a caller
+    /// from adding Codex's `bearer_token_env_var` reference but forgetting the
+    /// referenced child environment value.
+    fn apply_mcp(&self, launch: &mut LaunchCommand, p: &McpProvision) {
+        launch.argv.extend(self.mcp_args(p));
+        launch.env.extend(self.mcp_env(p));
     }
 
     /// Tool-specific watchdog "compact context" command, if any. Watchdog

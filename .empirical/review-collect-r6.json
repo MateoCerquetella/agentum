@@ -1,0 +1,28 @@
+{
+  "criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7",
+    "AC-8",
+    "AC-9"
+  ],
+  "evidenceKinds": [
+    "review"
+  ],
+  "summary": "Independent integrated security review found no remaining actionable High or Medium findings after three static sweeps; final tests, lint, formatting, and live SSH terminal/Codex verification are green.",
+  "collector": "independent-review-agent:Kuhn",
+  "artifacts": [
+    {
+      "path": ".empirical/final-security-review-r6.md",
+      "mediaType": "text/markdown"
+    },
+    {
+      "path": ".empirical/review-evidence-r6.json",
+      "mediaType": "application/json"
+    }
+  ]
+}

@@ -4,6 +4,35 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-08-06
+
+### Added
+- **Agentum-native spec-driven orchestration foundation.** Durable SDD specs,
+  revisions, runs, tasks, attempts, approvals, capability grants, patch ledgers,
+  verification results, browser evidence, integration connections, and remote
+  worker projections now have ordered SQLite migrations and server/store
+  support. Run creation is protected by resumable sagas and scoped worktree,
+  repository, host, and path identity.
+- **Richer board and tracker persistence.** Board items can retain external
+  links and two-way tracker state, projects can store tracker configuration,
+  sessions can retain provisioned endpoints, and high-traffic event/session
+  lookups have dedicated indexes.
+
+### Fixed
+- **Lossless terminal input.** Printable keys, Unicode, control bytes, and large
+  bracketed pastes are delivered as the user's exact ordered bytes instead of
+  leaking transport labels such as `BYTES`. Remote input is split into safe
+  tmux-sized frames, with bounded persistent-writer recovery and fallback.
+- **Faster, self-healing SSH sessions.** Healthy interactive and streaming SSH
+  pools are reused independently; stale masters are detected with real remote
+  probes and evicted without disrupting busy shared sessions. Idle sessions
+  avoid unnecessary title-poll round trips, and remote stream recovery remains
+  bounded and host-aware.
+- **Safer remote tmux lifecycle.** Session operations resolve exact tmux
+  identities, pane logging is re-armed without duplicate sinks, child processes
+  are killed and reaped on timeout, and user SSH configuration is skipped only
+  when addressing a verified private control socket.
+
 ## [0.17.4] — 2026-08-03
 
 ### Fixed

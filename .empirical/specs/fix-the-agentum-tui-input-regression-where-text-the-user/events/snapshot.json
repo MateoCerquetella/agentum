@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "feature": "fix-the-agentum-tui-input-regression-where-text-the-user",
+  "lastSequence": 10,
+  "lastEventDigest": "sha256:338cad8ecc39d5790d3e236dfac7d112a8dd31635db6c3cd19ba9039cff18355",
+  "stateDigest": "sha256:723809386d5866437cd82071e4dfaecdc9014b8d1e7478ae8fe9cbdbce52b6db",
+  "state": {
+    "schemaVersion": 5,
+    "revision": 10,
+    "activeFeature": "fix-the-agentum-tui-input-regression-where-text-the-user",
+    "request": "Fix the Agentum TUI input regression where text the user sends to a session is transmitted or rendered as the literal token BYTES instead of the actual typed text. Reproduce the failure, trace the complete TUI-to-API/WebSocket-to-session/SSH/tmux serialization path, preserve the user exact UTF-8 payload without debug or type-name substitution, add focused regression coverage, and verify the fix in the real TUI without losing or corrupting input.",
+    "profile": "complex",
+    "workflow": "complex",
+    "mode": "normal",
+    "phase": "done",
+    "status": "done",
+    "repairAttempts": 0,
+    "message": "Integrated capability changes: remote-session-reliability",
+    "implementationActor": "agent",
+    "specDigest": "sha256:7df42b7fd4c0412b6fdfb56fe5b556ca74579e98b49a22f0ef3e349bba87b9cb",
+    "approvedSpecRevision": 2,
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "sha256:ba568b5a800e49a0a69f5bd97287e38ec89a098c94809c31c34a89804a65105d",
+    "impactDigest": "sha256:1181d2cc2cc500ae089c70f6654b55396bbe8f1db9a9832e81a8f052a9708e2e",
+    "capabilityClaimId": "fix-the-agentum-tui-input-regression-where-text-the-user-5a48ce1f8c8d",
+    "authorizationDigest": null,
+    "evidence": [],
+    "evidenceReceiptIds": [
+      "executed-4cda98f86cb87377e2a36a78",
+      "collected-d419aa597b81e9d3f2eabaf0",
+      "collected-860529d5b16e1bea9de3560f"
+    ],
+    "legacyEvidenceCount": 0,
+    "completion": {
+      "implemented": true,
+      "verified": true,
+      "integrated": true,
+      "delivered": false,
+      "published": false,
+      "highest": "integrated",
+      "reasons": {
+        "delivered": "delivered has not been proven by a durable receipt.",
+        "published": "published has not been proven by a durable receipt."
+      }
+    },
+    "updatedAt": "2026-08-05T19:41:32.030Z"
+  },
+  "compactedAt": "2026-08-05T19:41:32.141Z",
+  "digest": "sha256:6df979ae054c3c25102be6a522dd51343bc50507496e2fe8a9f2dacb5c9cb481"
+}

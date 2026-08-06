@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "executed-b42ce14f5d21ca85f1365376",
+  "criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5"
+  ],
+  "evidenceKinds": [
+    "test"
+  ],
+  "summary": "Affected input, SSH, tmux, WebSocket, control-frame, and regression test suites pass after the pooled-SSH latency and lossless remote-input fixes.",
+  "passed": false,
+  "startedAt": "2026-08-05T18:37:48.411Z",
+  "completedAt": "2026-08-05T18:37:48.478Z",
+  "provenance": {
+    "repositoryId": "sha256:cec1f0afd1d6f5688524ada3ceadd5d49822ab7e2e3bfb711714f992211af4ad",
+    "feature": "fix-the-agentum-tui-input-regression-where-text-the-user",
+    "specRevision": 2,
+    "specDigest": "sha256:7df42b7fd4c0412b6fdfb56fe5b556ca74579e98b49a22f0ef3e349bba87b9cb",
+    "treeDigest": "sha256:aa8e11ac7406f40c3e0c7341420d7f0f568cc29ebb3b19b965a07e2b68898249",
+    "policyDigest": "sha256:71497651deeb33319a57edae7599a50eaf0d14ffaaa3b6a25e110a4fc313288d"
+  },
+  "digest": "sha256:58c1ad750961c32393e2b6a48f79a8b640b931d3a1649ef9e3e9ec7d387192c3",
+  "kind": "executed",
+  "command": {
+    "argv": [
+      "/usr/bin/env",
+      "RUST_TEST_THREADS=1",
+      "/bin/sh",
+      "-c",
+      "HOME=$(CDPATH= cd -P ~ 2>/dev/null && pwd) || exit 10\nexport HOME\ncargo test -p agentum-core --all-targets || exit 11\ncargo test -p agentum-executor --all-targets || exit 12\ncargo test -p agentum-server --all-targets || exit 13\ncargo test -p agentum-store --all-targets || exit 14\ncargo test -p agentum-tmux --all-targets || exit 15\ncargo test -p agentum-tui --all-targets || exit 16\ncargo test -p agentum-watchdog --all-targets || exit 17"
+    ],
+    "cwd": ".",
+    "timeoutMs": 600000,
+    "maxOutputBytes": 50000,
+    "environmentKeys": [
+      "NO_COLOR",
+      "PATH",
+      "TMPDIR"
+    ]
+  },
+  "result": {
+    "exitCode": 11,
+    "signal": null,
+    "timedOut": false,
+    "stdoutDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderrDigest": "sha256:70ac9ed1701bad1f682545d260c14e758b287dc70813efe5380f8d4c3b60a28e",
+    "stdoutTail": "",
+    "stderrTail": "/bin/sh: line 2: cargo: command not found\n",
+    "stdoutTruncated": false,
+    "stderrTruncated": false
+  }
+}

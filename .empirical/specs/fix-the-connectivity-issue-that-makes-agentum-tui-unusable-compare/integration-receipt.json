@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "feature": "fix-the-connectivity-issue-that-makes-agentum-tui-unusable-compare",
+  "claimId": "fix-the-connectivity-issue-that-makes-agentum-tui-unusable-compare-6d9b38d7a378",
+  "repositoryId": "sha256:8c3d97a07336bc3e1116b7a83a32df4bb0376cf8ab78a9ba852a47d220317676",
+  "baseCommit": "ebdf0acce4e6b7717676809be2b721db0d0517c3",
+  "baseTree": "0e6b3ce0da439deba9951fddc6c4f9030a3273b3",
+  "featureTree": "sha256:f4deaf798bf9d215b349ef43461583b1c2dbf1167e0c043249a3c8a89dc1c6e0",
+  "targetCommit": "ebdf0acce4e6b7717676809be2b721db0d0517c3",
+  "targetTree": "0e6b3ce0da439deba9951fddc6c4f9030a3273b3",
+  "capabilityBaseDigests": {
+    "remote-session-reliability": "sha256:1739cda5957063935298b958e4571bf7b80316591a6273d5e89bf626eb5225fe"
+  },
+  "deltaDigest": "sha256:82481b0da742b1af837ee73d4da16de71d64b25361c6920b2a9438c47f2dde81",
+  "resultDigests": {
+    "remote-session-reliability": "sha256:2fbc4d504b481df54e3d8698b37892da5a4986daefdbdddf945fe0511db5e771"
+  },
+  "verificationReceiptDigests": [
+    "sha256:760a1c1fc4b2de3c7afd52207ba8ef5370e30971f52d4bec79c30ff5281336f8"
+  ],
+  "integratedAt": "2026-08-04T12:32:49.598Z",
+  "digest": "sha256:83a279cfaa34ce516b728f96b12d0cc4ba0d1e6ca52ee98ee7edbcc822442af1"
+}

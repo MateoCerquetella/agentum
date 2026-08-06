@@ -55,6 +55,7 @@ async fn read_file(
     Query(q): Query<ReadQuery>,
 ) -> Result<Json<ReadResp>, ApiError> {
     let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    let _host_guard = super::sessions::acquire_host_lifecycle(host_id).await;
     let host = state
         .store
         .get_host(host_id)
@@ -114,6 +115,7 @@ async fn list_entries(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<EntriesResp>, ApiError> {
     let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    let _host_guard = super::sessions::acquire_host_lifecycle(host_id).await;
     let host = state
         .store
         .get_host(host_id)
@@ -222,6 +224,7 @@ async fn list_dir(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<ListResp>, ApiError> {
     let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    let _host_guard = super::sessions::acquire_host_lifecycle(host_id).await;
     let host = state
         .store
         .get_host(host_id)

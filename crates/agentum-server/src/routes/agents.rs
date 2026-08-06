@@ -58,6 +58,11 @@ async fn list_agents(
     Query(q): Query<AgentsQuery>,
 ) -> Result<Json<Vec<AgentInfo>>, ApiError> {
     let host_id = q.host_id.unwrap_or(LOCAL_HOST_ID);
+    // Serialize with Host PUT/DELETE before loading the connection revision,
+    // then retain the lease through every remote probe. Otherwise this request
+    // could keep revision A across a PUT that closes A/commits B and recreate
+    // A's ControlMaster with the stale Host value.
+    let _host_guard = super::sessions::acquire_host_lifecycle(host_id).await;
     let host = state
         .store
         .get_host(host_id)

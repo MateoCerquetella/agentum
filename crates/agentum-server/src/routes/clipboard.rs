@@ -350,6 +350,7 @@ mod tests {
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp_token: Arc::new(String::from("test-mcp-token")),
             api_base_url: None,
+            mcp_base_url: None,
             desktop_bridge: None,
             harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
         }

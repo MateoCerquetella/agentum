@@ -362,18 +362,25 @@ pub(crate) fn resolve_repo_host_id(repo_id: &str) -> Result<Option<Uuid>, ApiErr
         .ok_or_else(|| ApiError::NotFound(format!("repo not found: {repo_id}")))
 }
 
-/// Load the [`Host`] a repo's git/worktree ops run on. Mirrors
+/// Acquire the host lifecycle lease and then load the [`Host`] a repo's
+/// git/worktree ops run on. Mirrors
 /// `sessions::load_host_for_session`: the repo's `host_id` (or the local
 /// host when absent) → `store.get_host`. `pub(crate)` so the worktrees
 /// route resolves the same host. A repo whose recorded host has since been
-/// deleted surfaces a clear error rather than silently running locally.
-pub(crate) async fn load_host_for_repo(state: &AppState, repo_id: &str) -> Result<Host, ApiError> {
+/// deleted surfaces a clear error rather than silently running locally. The
+/// returned guard must remain live through every operation that uses `Host`.
+pub(crate) async fn load_host_for_repo(
+    state: &AppState,
+    repo_id: &str,
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, Host), ApiError> {
     let host_id = resolve_repo_host_id(repo_id)?.unwrap_or(LOCAL_HOST_ID);
-    state
+    let host_guard = super::sessions::acquire_host_lifecycle(host_id).await;
+    let host = state
         .store
         .get_host(host_id)
         .await?
-        .ok_or_else(|| ApiError::BadRequest(format!("repo host is missing: {host_id}")))
+        .ok_or_else(|| ApiError::BadRequest(format!("repo host is missing: {host_id}")))?;
+    Ok((host_guard, host))
 }
 
 /// Run `git <args>` with `path` as the working dir on `host`; stdout on
@@ -393,7 +400,7 @@ async fn base_ref_default(
     Path(repo_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let path = resolve_repo_path(&repo_id)?;
-    let host = load_host_for_repo(&state, &repo_id).await?;
+    let (_host_guard, host) = load_host_for_repo(&state, &repo_id).await?;
     let remote_count = git_out(&host, &path, &["remote"])
         .await
         .map(|out| out.lines().filter(|line| !line.trim().is_empty()).count())
@@ -484,7 +491,7 @@ async fn base_refs(
     Query(query): Query<RefSearchQuery>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     let path = resolve_repo_path(&repo_id)?;
-    let host = load_host_for_repo(&state, &repo_id).await?;
+    let (_host_guard, host) = load_host_for_repo(&state, &repo_id).await?;
     let needle = query.q.to_lowercase();
     Ok(Json(
         collect_refs(&host, &path)
@@ -504,7 +511,7 @@ async fn base_ref_details(
     Query(query): Query<RefSearchQuery>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     let path = resolve_repo_path(&repo_id)?;
-    let host = load_host_for_repo(&state, &repo_id).await?;
+    let (_host_guard, host) = load_host_for_repo(&state, &repo_id).await?;
     let needle = query.q.to_lowercase();
     Ok(Json(
         collect_refs(&host, &path)

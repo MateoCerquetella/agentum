@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "mode": "yolo",
+  "repositoryId": "sha256:e6baa3e1ee4b79a8685c43b98040ce299f79f5094a8fcf4d87066f86d84decee",
+  "feature": "fix-the-connectivity-issue-that-makes-agentum-tui-unusable-compare",
+  "requestDigest": "sha256:fddb09727c8acea27b0e9fcf8a2fc981f82cf7a84c43de991df86a9eccac35f8",
+  "ceiling": "integrated",
+  "targetBranch": null,
+  "allowExternalAgent": false,
+  "createdAt": "2026-08-04T11:54:03.619Z",
+  "expiresAt": null,
+  "digest": "sha256:259a3a21a664dca85c4920035a5b37ad384570264df0ec77be55789fefeccf29"
+}

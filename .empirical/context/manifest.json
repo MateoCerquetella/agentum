@@ -1,0 +1,982 @@
+{
+  "schemaVersion": 2,
+  "generator": "empirical-0.22.0",
+  "sourceDigest": "sha256:cfa788632d9b82444990b61e586dd9c6c7b2ecb0a15571cf1a5fc69cb98af69e",
+  "files": [
+    {
+      "path": ".codex/config.toml",
+      "size": 111,
+      "digest": "sha256:f5740bba08f992d4a5fe9f5b9f8a2c191f6922a16b5f9ac61695da88b6131d82"
+    },
+    {
+      "path": ".cursor/mcp.json",
+      "size": 119,
+      "digest": "sha256:a4d50e5110c610d398e04657e81a2c2db9328cd131f5c28995aaf4e213a9c90b"
+    },
+    {
+      "path": ".gemini/settings.json",
+      "size": 137,
+      "digest": "sha256:58b7bc1fef265b214425ef17eeb67f9f9ad687e049cc8d65c368c01ef5bb8780"
+    },
+    {
+      "path": ".gitattributes",
+      "size": 26,
+      "digest": "sha256:410e87880b254a500730526020d28cf1525b3b7b7f3804294174977f2945cfed"
+    },
+    {
+      "path": ".github/FUNDING.yml",
+      "size": 27,
+      "digest": "sha256:966e1203473f0765d64ea7b4b998c117616f9a3909aea971d6f7542a3f36e982"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
+      "size": 1121,
+      "digest": "sha256:c6ee37652aef4e3ee89e44cb2442319de883c648f010fe81e62a93ce5aa4ab5c"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/config.yml",
+      "size": 111,
+      "digest": "sha256:53fef618066b0385e38c76999a1bdb442b8f06b0b99e1b419cc5c8c66e6528f8"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/feature_request.yml",
+      "size": 1662,
+      "digest": "sha256:1d22c8c9d465983d48b235fb30ce8896ca0dcf2cee138481e2e1c3aa44f5e165"
+    },
+    {
+      "path": ".github/labels.sh",
+      "size": 2141,
+      "digest": "sha256:91e1e3d27dc7a68b81279c8157e84523fba75512523b872df644a1e505158eeb"
+    },
+    {
+      "path": ".github/pull_request_template.md",
+      "size": 1093,
+      "digest": "sha256:ac72c2403ae1bf0953f4fe21b4eb3bceaf1edd71be7d894a5e9a3c406c10ec78"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "size": 3605,
+      "digest": "sha256:6f4668a86fd50d4120b5e299d95212368c91c70246cd03c7fdb629e9c89c7647"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "size": 7331,
+      "digest": "sha256:7d59cff9e9d7bcf20817779ac6bd277934f72ad5b32b92f8ad1df8459b09db3a"
+    },
+    {
+      "path": ".gitignore",
+      "size": 677,
+      "digest": "sha256:a8cf07197d51ffd3bf77f2fc8ccf5954444a1fc1f4a7ef70d6424b715c72fc91"
+    },
+    {
+      "path": ".mcp.json",
+      "size": 119,
+      "digest": "sha256:a4d50e5110c610d398e04657e81a2c2db9328cd131f5c28995aaf4e213a9c90b"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "size": 165250,
+      "digest": "sha256:efae43977f65b0e0235ca275007c683f62723dac50f6d3a27f0caa64c7972598"
+    },
+    {
+      "path": "Cargo.lock",
+      "size": 114374,
+      "digest": "sha256:80f5f9c626929fa62a80e00b38dcee669b7b21d19b4c59ce608867173e3abce5"
+    },
+    {
+      "path": "Cargo.toml",
+      "size": 2070,
+      "digest": "sha256:c15360e9d1c6d480094f56918a7b1b76de51333381f6e6206273a2f47619e154"
+    },
+    {
+      "path": "LICENSE",
+      "size": 1074,
+      "digest": "sha256:d73e86b0d180da7359d03c23a6378eca5177f6a9ffc0e2c51c5b4a1dcf17391c"
+    },
+    {
+      "path": "README.md",
+      "size": 360,
+      "digest": "sha256:419bf075a2e2f18725f7d8d4bb2e8d1fd97e211b2660dbde81f62adc8e892a3d"
+    },
+    {
+      "path": "crates/agentum-core/Cargo.toml",
+      "size": 554,
+      "digest": "sha256:ba0e82ff5668b18d9922f2d8ef5061b4ee294898d0ef5a9bd95acbd0479ddeb8"
+    },
+    {
+      "path": "crates/agentum-core/src/board_schema.rs",
+      "size": 10614,
+      "digest": "sha256:1b6bf153a03c3cab7ffe9f78bc844afd5bd5d7ed31f2e9b20cd958b192fd6c0e"
+    },
+    {
+      "path": "crates/agentum-core/src/lib.rs",
+      "size": 37057,
+      "digest": "sha256:37602a9c10da3ccc7f7e80753149638f8751e1eb411ce2ded83b68914bab65fd"
+    },
+    {
+      "path": "crates/agentum-core/src/profiles.rs",
+      "size": 19622,
+      "digest": "sha256:29c0ad12f355ed614ec5c6bfc61830a12f90de2e2126ea766c73f7f43759b432"
+    },
+    {
+      "path": "crates/agentum-core/src/transcript.rs",
+      "size": 35230,
+      "digest": "sha256:41077f35c03c02ae620a46c74d32ad03425ff4e1257a686cf301ac2dbd68bcee"
+    },
+    {
+      "path": "crates/agentum-executor/Cargo.toml",
+      "size": 517,
+      "digest": "sha256:67bf79c19d3fc710d726b7e7cfb12de55cbec334082ab8673fcc6dbe294559d2"
+    },
+    {
+      "path": "crates/agentum-executor/src/adapters.rs",
+      "size": 33581,
+      "digest": "sha256:66562824e1523f5ab46223140515cc20e603f4998b32a6630fbdece0289f04b9"
+    },
+    {
+      "path": "crates/agentum-executor/src/lib.rs",
+      "size": 12166,
+      "digest": "sha256:6c73ac6ad254cce39e8a4f84bfaa83235ccba65cdbf8cc29bd41307405bdcc70"
+    },
+    {
+      "path": "crates/agentum-server/Cargo.toml",
+      "size": 2993,
+      "digest": "sha256:39335f90436b63a2a9784595e594ec7ffe3fc74a76a374d00d7fbe8cd458b680"
+    },
+    {
+      "path": "crates/agentum-server/src/auth.rs",
+      "size": 7504,
+      "digest": "sha256:f9b6b8b1c360050c5849bb9e0187a37af2bbd61df47f8a63245c321092d765db"
+    },
+    {
+      "path": "crates/agentum-server/src/bridge.rs",
+      "size": 1766,
+      "digest": "sha256:e068a489ca40c637ac621694d3c9e071e09949e0d8a9abad2c4ea752ce778714"
+    },
+    {
+      "path": "crates/agentum-server/src/cdp_browser.rs",
+      "size": 18800,
+      "digest": "sha256:94502272c46e01f737785ff0102780ee7bf692810fc4aff88cac6f201fa8f704"
+    },
+    {
+      "path": "crates/agentum-server/src/cdp_screencast.rs",
+      "size": 30440,
+      "digest": "sha256:2cd96de1c88f5a201937e26a1424c5f13b45de601df95874cb5e85e584b5fde4"
+    },
+    {
+      "path": "crates/agentum-server/src/error.rs",
+      "size": 6336,
+      "digest": "sha256:7857eabcdd2e0227c2d2e41741f9f8528440a78c23a841907a725c926a37f617"
+    },
+    {
+      "path": "crates/agentum-server/src/git.rs",
+      "size": 11988,
+      "digest": "sha256:6c2da93f26d2c4bc307a82f065c636b6c41844615e9113d6153457eca8501112"
+    },
+    {
+      "path": "crates/agentum-server/src/harness.rs",
+      "size": 148116,
+      "digest": "sha256:659a83bcddada7d41058439fd64d88c53d3539b06c78bf368cfb66a5601ae384"
+    },
+    {
+      "path": "crates/agentum-server/src/harness_roles/architect.md",
+      "size": 1357,
+      "digest": "sha256:3c1b063b69d18c15cd45c05b038f51591b0066052be343c52c95273411a7c7bc"
+    },
+    {
+      "path": "crates/agentum-server/src/harness_roles/pm.md",
+      "size": 1244,
+      "digest": "sha256:88dde8cb446344ae46613086c0e2dbfd9eae9a25b2aba3a318dba3044e7216ac"
+    },
+    {
+      "path": "crates/agentum-server/src/harness_roles/reviewer.md",
+      "size": 1306,
+      "digest": "sha256:b44e48abd331f313e82c7180b96a92970f7998df6c64690b598c07bd8fe164dd"
+    },
+    {
+      "path": "crates/agentum-server/src/headers.rs",
+      "size": 3357,
+      "digest": "sha256:df3666cfc8342daa8e2390f003cc095fd7f4d55ab3a36a32ac08f94040a1d769"
+    },
+    {
+      "path": "crates/agentum-server/src/host_browser.rs",
+      "size": 37167,
+      "digest": "sha256:c6a4606804ea69579eb2773c5e22e2fc3dd109a3b316b2e6a663487c173e84c0"
+    },
+    {
+      "path": "crates/agentum-server/src/host_install_hints.rs",
+      "size": 8290,
+      "digest": "sha256:10d5987a4d59a454724e3ee52d35482aaeb59b5d4503670c9641262025c0a700"
+    },
+    {
+      "path": "crates/agentum-server/src/host_runtime.rs",
+      "size": 143208,
+      "digest": "sha256:4808be3fe8ba2355470339f061c5805d8d532cb308b92d8299d8b5f88ba368ea"
+    },
+    {
+      "path": "crates/agentum-server/src/lib.rs",
+      "size": 28738,
+      "digest": "sha256:b4dbfa56d77ae4892eabb5f5b74979fc125808e24b78a9d76a8630aa60193ced"
+    },
+    {
+      "path": "crates/agentum-server/src/linear.rs",
+      "size": 17063,
+      "digest": "sha256:f3ac08a91a4d47ad3df3989d9cb3f78fc912a8443b958c314da1130ef60cf67a"
+    },
+    {
+      "path": "crates/agentum-server/src/logging.rs",
+      "size": 2618,
+      "digest": "sha256:53c4a89be63799a04f34825c62016a11db4a1ffaf82dba2541be5c74a1e07bdd"
+    },
+    {
+      "path": "crates/agentum-server/src/mcp_provision.rs",
+      "size": 18874,
+      "digest": "sha256:2d152d63f344e58edd24fd4f35cb42e0d8cc5dddca4fad26f7c413938ca6845b"
+    },
+    {
+      "path": "crates/agentum-server/src/planner.rs",
+      "size": 10358,
+      "digest": "sha256:82b0f6c91fbd95b2c0be3991b952cec05927ae246c5f60a803bec41038ea2727"
+    },
+    {
+      "path": "crates/agentum-server/src/planner_prompt.md",
+      "size": 2841,
+      "digest": "sha256:f64f3b28989875b1814b49eccc71be49b4ec27c33bf22e6c29ddfd555093290b"
+    },
+    {
+      "path": "crates/agentum-server/src/playwright_mcp.rs",
+      "size": 16123,
+      "digest": "sha256:3f5566af22acf1d1b62bc901a7ca11eef9becc899650e821e3e92c6bdcfd241f"
+    },
+    {
+      "path": "crates/agentum-server/src/ratelimit.rs",
+      "size": 3186,
+      "digest": "sha256:237342fc4a628f7dce30a682aab43f49e69e089b5370b8a83b900bb07c025aa7"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/agent_tasks.rs",
+      "size": 2387,
+      "digest": "sha256:3740755c25565d87ff7575b0ccf9a197dd0549b70d35f1033ca4ca102ece1662"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/agents.rs",
+      "size": 3624,
+      "digest": "sha256:d7189b305d0144161b61bcd7d496e1bf1d09ce54f98713ff64c4c2e8d954ff45"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/auth.rs",
+      "size": 6366,
+      "digest": "sha256:755ddcbcf930479d9e629737e55d2d2595cc189b9382dde6abbb4b89105c3e53"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/board.rs",
+      "size": 68289,
+      "digest": "sha256:54e87d64eee20badaaf868216aef3c23a4d91f80ce6d703034fbd44d91b726f1"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/board_goals.rs",
+      "size": 39920,
+      "digest": "sha256:336cb710f03b88bf08a9605a988d7a231090ec2875e649284b688c927d528874"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/board_links.rs",
+      "size": 16375,
+      "digest": "sha256:b3f65e65e4a70e57885b80eccb25af2eaafe5bb2371d2d50ba85852088604635"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/board_rules.rs",
+      "size": 18415,
+      "digest": "sha256:c008e3ae5d9ebb799af361ced9f26e6ea074f6696fdabfb7522e7650f95ff3e4"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/browser.rs",
+      "size": 4137,
+      "digest": "sha256:ae60ef54d558ab900f00042cfc63293d0c4c941596d0251ba1adb54b33701e8d"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/cdp_browser.rs",
+      "size": 2778,
+      "digest": "sha256:95af896acf800577b60d2f54307cc380541b6d5fc68f5f3f0623cd0302464c77"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/cdp_screencast.rs",
+      "size": 7368,
+      "digest": "sha256:2c3cb671f856439c0423af41c039286252394f847de40769f5e56d801a4c8175"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/cert.rs",
+      "size": 1023,
+      "digest": "sha256:38c18b3d5599f35fa64d67c74b2f72c2b7712c29bc4966315e8d06514d505af9"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/channels.rs",
+      "size": 3514,
+      "digest": "sha256:2f5a0d8c6b0582f2dffc4c81d99435a9b35e4589266e469a38a288720751e23d"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/clipboard.rs",
+      "size": 22655,
+      "digest": "sha256:2cadfc6ec159a0f49b7753fa1d776aa7e5602628fa484f5c0309e36214980682"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/computer.rs",
+      "size": 4798,
+      "digest": "sha256:025bdb46a98d2dfe1f6712150fd24be8828a4586498bf76dbb1b9b3b06ccd87a"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/doctor.rs",
+      "size": 4521,
+      "digest": "sha256:0d08ebb91df1e5aa40e191857af8eea1925a6f56c483506b86da21002389c7c7"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/events.rs",
+      "size": 3995,
+      "digest": "sha256:d3e083057d85a8544a2eb2d16cfe6766833ae032d688ce4837d1814af241a0dd"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/forge.rs",
+      "size": 26882,
+      "digest": "sha256:b3886facf091f1e5c4d7c0801c3062a8ea89bf1d068686725f43cdaa2481354e"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/fs.rs",
+      "size": 21079,
+      "digest": "sha256:2530810c0654a079dfb74ccb5230c099dcb858cd09a53cec39887557473b8299"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/git.rs",
+      "size": 64387,
+      "digest": "sha256:a147812d9c0ac9b3cda0df40f98aded61e606ef7c8333779860f724a466daf86"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/harness.rs",
+      "size": 7816,
+      "digest": "sha256:faabb835bd13ad14605a652fa3792bdb73e8e869cc28fb3e380e09ba5ed46bd5"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/health.rs",
+      "size": 2692,
+      "digest": "sha256:9b70ceaf0fcf006038f24658c6da41e44e7bbcacfe5c81ca8e1d79f93968300a"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/host.rs",
+      "size": 6177,
+      "digest": "sha256:9513fb8fa00d70ac3e077908ea9b3da8b919b0f74f94345592243b7fe4bc5296"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/host_browser.rs",
+      "size": 4028,
+      "digest": "sha256:91c3e6a82a310a4439499c049a1808898c136ba8398f2049200c32dc539dd587"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/hosts.rs",
+      "size": 25509,
+      "digest": "sha256:8eb741b18844b2a34a1c66700b1dba38291777c1b51c0c538df4cec8b0ab1a69"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/mcp.rs",
+      "size": 37144,
+      "digest": "sha256:6271000a5f1453fcf6d396ebf0ac6a566edc924573863747198166c6810848fb"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/mod.rs",
+      "size": 641,
+      "digest": "sha256:a593bee3b542e783f0b8c4947b039132b979829e00194532ea1d8243e9a2e53d"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/notes.rs",
+      "size": 1493,
+      "digest": "sha256:48ec077ca8aee3b094abd24dcfd0b2ce7ece52306fdf904cf952fb10b58c50db"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/orchestration.rs",
+      "size": 14188,
+      "digest": "sha256:8919f48de74440f9fb8f50077f0ffd5bdc14f1d45e6a06d91f0b2a2bbbadd79d"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/preferences.rs",
+      "size": 3800,
+      "digest": "sha256:5f67e117ad8b782c49eb744dbb7cdbae22b1c9e9de8b73f6828b78081e243345"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/preflight.rs",
+      "size": 4558,
+      "digest": "sha256:54fcc4266ff37df8c6a86920ec111e1b8e03368414ca3e22937c750d96855af0"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/profiles.rs",
+      "size": 10128,
+      "digest": "sha256:33634d006b123d143918c488bc319ac75b80014e4b686cacbf1ee6b20292e6b0"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/repos.rs",
+      "size": 20039,
+      "digest": "sha256:650c33b43419559e2aa8cfcc3abe7a7b7fd15dad831d7a446967740a4b76a34c"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/sessions.rs",
+      "size": 112848,
+      "digest": "sha256:e2ff614468ef1ae1c43b78b16c09efce1cacbf3151803b6b5e309b9a1e519682"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/uploads.rs",
+      "size": 11859,
+      "digest": "sha256:13af6cc60cd77014baf8776ea9af6cc09d3f2cb14e5d853a5714fb9439b47987"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/usage.rs",
+      "size": 3208,
+      "digest": "sha256:13553706ea7380988f6e32880b8f67585aef1a6ac2cb7b9842876426af454cb6"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/util.rs",
+      "size": 3273,
+      "digest": "sha256:636e9b053245feb117d6edfc9f87d0a621fe2e98e4dd3a21687c9b24a60a18b4"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/watchdog.rs",
+      "size": 1107,
+      "digest": "sha256:90761ed62b6cbd4b56d198a54117bbd695f4eff9eef68980d03cfd215240c87c"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/worktrees.rs",
+      "size": 37902,
+      "digest": "sha256:844408601caa93f8d163eb9aa73a0810b79c14fa3bf02e3fca827e6602b44b48"
+    },
+    {
+      "path": "crates/agentum-server/src/rules.rs",
+      "size": 2009,
+      "digest": "sha256:64fc8bfec40fb0b448127691ce07f424ab641d862fcb967a237804361dd63edc"
+    },
+    {
+      "path": "crates/agentum-server/src/task_sink.rs",
+      "size": 19564,
+      "digest": "sha256:8704c1747c01ad81c7d04c3801eecb21235ae2fcafa084148bfa067a1069b24d"
+    },
+    {
+      "path": "crates/agentum-server/src/tls.rs",
+      "size": 4172,
+      "digest": "sha256:2c56f4872ea39b5ef06fa4816ee82c11560c03c1796ddd882d9b992e1ca08616"
+    },
+    {
+      "path": "crates/agentum-server/src/transcript_store.rs",
+      "size": 15712,
+      "digest": "sha256:d5ae80dac5372ba99b255cc1f12b7db292523fa83f7f20fa3c479b7a76c19fbc"
+    },
+    {
+      "path": "crates/agentum-server/src/usage.rs",
+      "size": 40449,
+      "digest": "sha256:c84b4ff0112d921ce81475a7656a410135493241991128e4e045e6292aed540f"
+    },
+    {
+      "path": "crates/agentum-server/tests/card_session_binding_e2e.rs",
+      "size": 42145,
+      "digest": "sha256:3818cae8fbae5add7bdea829635ae6fc9904720e69c58feb4012195455ebecc6"
+    },
+    {
+      "path": "crates/agentum-server/tests/cdp_screencast_live.rs",
+      "size": 4232,
+      "digest": "sha256:32b4bdb6a9c6fde2f8b8abe39c312147b628b4fcffd3048ecb6986b8517939e8"
+    },
+    {
+      "path": "crates/agentum-server/tests/goal_cards_end_to_end.rs",
+      "size": 28091,
+      "digest": "sha256:c959da2eff69cc4c80ebea4217bbc8978af0bb3804176521a14d5b3f249928aa"
+    },
+    {
+      "path": "crates/agentum-server/tests/harness_live_agent.rs",
+      "size": 7775,
+      "digest": "sha256:a3e6b40cc6f1cb4aa5b75dbea0e1350ed15424811138ac88d5e6494280fb2146"
+    },
+    {
+      "path": "crates/agentum-server/tests/harness_mcp_e2e.rs",
+      "size": 5933,
+      "digest": "sha256:ba69f5eaee1bc591fb7b59f6b85c90ef52f95b187ebc32acc6a99b0aa5b08e61"
+    },
+    {
+      "path": "crates/agentum-server/tests/host_browser_live.rs",
+      "size": 11225,
+      "digest": "sha256:74ed0669082e245e718e964043d6828fd1869a2cded03b74a68dafc848dd9c0b"
+    },
+    {
+      "path": "crates/agentum-store/Cargo.toml",
+      "size": 825,
+      "digest": "sha256:5db6e0ce41e5e3e16e89f74da0a3e8404ef06d3801b6a12fb703b0bb7644d02d"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0001_initial.sql",
+      "size": 596,
+      "digest": "sha256:457705896aa4bc5c3b749cb6fe8a98e99063154f5345dbeaeb47117d5302bdef"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0002_events.sql",
+      "size": 408,
+      "digest": "sha256:079316d89395ad0801b7f90094bcc7e683b598e31d4a1e4c287ec503d3aaf26f"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0003_board.sql",
+      "size": 788,
+      "digest": "sha256:922d056b26b72a2d0b6ba50c8d3e19fe73c489150ea86bdc70c867325734c67b"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0004_notes_channels.sql",
+      "size": 1186,
+      "digest": "sha256:0f7e908d69caa8b0f66765904d576b6ec785baa6ba1e3d351b96294fcb8c0c7b"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0005_users.sql",
+      "size": 541,
+      "digest": "sha256:e87f689048f185a1d5bf3ea7148277b0222071cf21261bd5c5b135ca9eaa28ab"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0006_auth_session_expiry.sql",
+      "size": 592,
+      "digest": "sha256:26b0f0b18d430556fde9cd713bdcea2692aed81a68216152f87a84d96b31f449"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0007_session_metrics.sql",
+      "size": 869,
+      "digest": "sha256:fb0270dfcbe3e0f5af2dd994fd7195029488f71202902f3e230ecf323202807a"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0008_board_lbl_tool.sql",
+      "size": 409,
+      "digest": "sha256:d0ddd51dff4d47925cadc6ce8806ca9c2913299cc5496c06064688c5acc19f86"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0009_session_pinned.sql",
+      "size": 507,
+      "digest": "sha256:5191b46d2df2492bbc6ecaf463bc0eb39aad66a33990b6b582c5db60cd049703"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0010_board_workdir_model.sql",
+      "size": 541,
+      "digest": "sha256:6ce1fffce1d12c42e51c8631d44c53814521438bb042b70171fe4bccd941a450"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0011_board_session_id.sql",
+      "size": 611,
+      "digest": "sha256:0847e2874995017136199e58a2102649fc26e17e4eff93ed43d8fed524b221e6"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0012_board_priority.sql",
+      "size": 608,
+      "digest": "sha256:ec681ac1c08307f2fc273013b9b65823f18504f1bbeaef0dec2258423a7d8cd9"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0013_board_comments.sql",
+      "size": 771,
+      "digest": "sha256:3703e4c7e1fddce3dd4fda645a80c5529384211b765c03da91989c347883a50d"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0014_board_column_rules.sql",
+      "size": 1036,
+      "digest": "sha256:62bcc2dc49f633f66f315dc629bcf14ac8d0fdb4ebf7c10f91c4534cefc4f67d"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0015_orchestrator.sql",
+      "size": 1954,
+      "digest": "sha256:26da4b7005d440252bee96387986ad475c015f0268c685a876404b6d29ad4234"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0016_session_worktrees.sql",
+      "size": 1274,
+      "digest": "sha256:8889685252629d603bb3f6e3c832aef716b9e68157eeb70d7b10e2414edfe4f0"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0018_hosts.sql",
+      "size": 1031,
+      "digest": "sha256:b8b50e64aca669f5157e964ed5dbc0ff6a5482c1feaefc6f2219be181bd4f95c"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0020_orchestration.sql",
+      "size": 2712,
+      "digest": "sha256:f07686cef5d5775cad9c16007b9c7749ea2ca36514abbc25392a63e9e588a71a"
+    },
+    {
+      "path": "crates/agentum-store/migrations/0021_settings.sql",
+      "size": 629,
+      "digest": "sha256:a7f09a86bc9ba15c3599f539b0a22143113258cafd8e205ee1c78c2e38326cc4"
+    },
+    {
+      "path": "crates/agentum-store/src/lib.rs",
+      "size": 130884,
+      "digest": "sha256:3ee109db29f2729e0f9bd1c3d71cd0317d4311c6e3c9da37ea23a5851a2e4fdc"
+    },
+    {
+      "path": "crates/agentum-store/src/orchestration.rs",
+      "size": 15727,
+      "digest": "sha256:5f74f85e7fe310dd6acfcf306ee6d2d9f1198823cb89087076dda8bde3bbb83c"
+    },
+    {
+      "path": "crates/agentum-store/src/paths.rs",
+      "size": 4127,
+      "digest": "sha256:e172624fee91387f833f42ee68a2dd752eff77b3ed3097feeed3831888654cdd"
+    },
+    {
+      "path": "crates/agentum-tmux/Cargo.toml",
+      "size": 613,
+      "digest": "sha256:4cb974b842d306d7d02ded7b4bb3ef289c24f95738797ed4e0276dcd9cfeded9"
+    },
+    {
+      "path": "crates/agentum-tmux/src/lib.rs",
+      "size": 23381,
+      "digest": "sha256:e4b557190787975ce3e409c60eb0d10c186a026608090447e994e428ef347170"
+    },
+    {
+      "path": "crates/agentum-tmux/src/ssh.rs",
+      "size": 67124,
+      "digest": "sha256:8e0f02d00fffb2c4a9e93fdbef119339a1659ac00e5c7bfcfcee0436e4cb6107"
+    },
+    {
+      "path": "crates/agentum-tui/Cargo.toml",
+      "size": 2871,
+      "digest": "sha256:68b5612ccbc308268c1701ba89609547a781ffe492a8b48c7d3bb2d287c22a7a"
+    },
+    {
+      "path": "crates/agentum-tui/src/clipboard.rs",
+      "size": 2881,
+      "digest": "sha256:f1ec1584a8a59a5122db278a2ce753935ba53156c5703640574b49ff6e49300f"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/mod.rs",
+      "size": 279,
+      "digest": "sha256:5bdbc2785289592f9526feb12fe6c716700bde24a1c8b0b589bdde891a14dc44"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/api.rs",
+      "size": 62800,
+      "digest": "sha256:e9062e45e8598366d765674f640235e41d009b45e1d6c5e84562dedc24938410"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/app.rs",
+      "size": 433733,
+      "digest": "sha256:49fc2e47fddad28b820205f2d61083d022f728664de5ec667d69e9aec2550993"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/extensions.rs",
+      "size": 3888,
+      "digest": "sha256:15c59104e47c4c723905f395a489c62833f64ad49d611af87a709193579d3954"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/iometer.rs",
+      "size": 8271,
+      "digest": "sha256:eb6a27813e56d677be63574a0b26918cba54e798cd850719aa7250b3df170792"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/mod.rs",
+      "size": 29848,
+      "digest": "sha256:b4523f0e017c1fd95ecba20085b95f4646b3f78522007341f3c2d257cddf2b7c"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/palette.rs",
+      "size": 20808,
+      "digest": "sha256:0e01f47a8107946dbdc89aef9392fec2a449f84007800f00f314db8262eb171e"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/prefs.rs",
+      "size": 14024,
+      "digest": "sha256:0256e4a66c2760727cdea6a52681fbe85104544ab96aeb66bb105b8c5466b3a6"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/profiles.rs",
+      "size": 1233,
+      "digest": "sha256:c698bff214f5bb0da9cf236509fb0f2ef8cd69b7605daeffb27d8e401651653f"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/pty.rs",
+      "size": 6192,
+      "digest": "sha256:a792738103c4a71b61f1703bffcbbbe9a36a783ef7e6c84f80681659db5ee7dd"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/sound.rs",
+      "size": 3819,
+      "digest": "sha256:24784f63de783c83873f5aadeaf25f23d9e6413292fc6db53c150ded4bfb22a4"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/term.rs",
+      "size": 4434,
+      "digest": "sha256:154ca7b04dc237e4e623a16f45853dd43d3967d237dd153dca21373f6d50b4a1"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/theme.rs",
+      "size": 10366,
+      "digest": "sha256:810336e947378a4799f136e73a0da0f4c13b003339116767fb75b500bd8567e7"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/trust.rs",
+      "size": 13898,
+      "digest": "sha256:27e1907c22cde09e1737ac65d89ba83ba20b704d6901c299f5f76d8c0568e6c3"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/ui.rs",
+      "size": 151342,
+      "digest": "sha256:ca100d32004586d0951ca827529539cf9d91a509d358d54f74258262fc145e68"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/up.rs",
+      "size": 1875,
+      "digest": "sha256:2414e88f9f3bcc4173ed7c0bc0d750b4236e148c3536b4393afa12d181dd964a"
+    },
+    {
+      "path": "crates/agentum-tui/src/lib.rs",
+      "size": 1706,
+      "digest": "sha256:c564cd6b1090970aa014a3f852a38bd7ec4c2655adb839e23e6b481b5e271cab"
+    },
+    {
+      "path": "crates/agentum-tui/src/main.rs",
+      "size": 313,
+      "digest": "sha256:3a242eb44ec6137a01d3cd76b64a09029f234ea7b4944899212bb6baa96457bf"
+    },
+    {
+      "path": "crates/agentum-watchdog/Cargo.toml",
+      "size": 790,
+      "digest": "sha256:e5cb75402b864eb522eae4764dabcc1c14c8ea1676eaa0cad45ace58e854643f"
+    },
+    {
+      "path": "crates/agentum-watchdog/src/lib.rs",
+      "size": 86740,
+      "digest": "sha256:3eed039e28653f7b96375f6df27d7809c7ad503404c99cf67f119f81068eccb8"
+    },
+    {
+      "path": "justfile",
+      "size": 385,
+      "digest": "sha256:dd5ce4610b959cfe26df44b4677d3d0187076f9a37d640ff202fe5db05606ec1"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "size": 444,
+      "digest": "sha256:ad3c3632e0b26f4774a4d66572b731f24ddf072a9bec81a75f6149ad72c1d840"
+    },
+    {
+      "path": "scripts/install.sh",
+      "size": 3413,
+      "digest": "sha256:fc9f5855b42a042a2eea2d0c394f5be0e55f76c9dcaa382ce863e074a2315436"
+    },
+    {
+      "path": "scripts/uninstall.sh",
+      "size": 5145,
+      "digest": "sha256:a45ca76d45cedb8b4ba0cc56d7a3fb196f63ebbf7103c03ce820de888d375cb7"
+    }
+  ],
+  "pages": [
+    {
+      "path": ".empirical/context/index.md",
+      "generator": "empirical-0.22.0",
+      "managed": false,
+      "dependencies": [
+        ".codex/config.toml",
+        ".cursor/mcp.json",
+        ".gemini/settings.json",
+        ".gitattributes",
+        ".github/FUNDING.yml",
+        ".github/ISSUE_TEMPLATE/bug_report.yml",
+        ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/ISSUE_TEMPLATE/feature_request.yml",
+        ".github/labels.sh",
+        ".github/pull_request_template.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        ".gitignore",
+        ".mcp.json",
+        "CHANGELOG.md",
+        "Cargo.lock",
+        "Cargo.toml",
+        "LICENSE",
+        "README.md",
+        "crates/agentum-core/Cargo.toml",
+        "crates/agentum-core/src/board_schema.rs",
+        "crates/agentum-core/src/lib.rs",
+        "crates/agentum-core/src/profiles.rs",
+        "crates/agentum-core/src/transcript.rs",
+        "crates/agentum-executor/Cargo.toml",
+        "crates/agentum-executor/src/adapters.rs",
+        "crates/agentum-executor/src/lib.rs",
+        "crates/agentum-server/Cargo.toml",
+        "crates/agentum-server/src/auth.rs",
+        "crates/agentum-server/src/bridge.rs",
+        "crates/agentum-server/src/cdp_browser.rs",
+        "crates/agentum-server/src/cdp_screencast.rs",
+        "crates/agentum-server/src/error.rs",
+        "crates/agentum-server/src/git.rs",
+        "crates/agentum-server/src/harness.rs",
+        "crates/agentum-server/src/harness_roles/architect.md",
+        "crates/agentum-server/src/harness_roles/pm.md",
+        "crates/agentum-server/src/harness_roles/reviewer.md",
+        "crates/agentum-server/src/headers.rs",
+        "crates/agentum-server/src/host_browser.rs",
+        "crates/agentum-server/src/host_install_hints.rs",
+        "crates/agentum-server/src/host_runtime.rs",
+        "crates/agentum-server/src/lib.rs",
+        "crates/agentum-server/src/linear.rs",
+        "crates/agentum-server/src/logging.rs",
+        "crates/agentum-server/src/mcp_provision.rs",
+        "crates/agentum-server/src/planner.rs",
+        "crates/agentum-server/src/planner_prompt.md",
+        "crates/agentum-server/src/playwright_mcp.rs",
+        "crates/agentum-server/src/ratelimit.rs",
+        "crates/agentum-server/src/routes/agent_tasks.rs",
+        "crates/agentum-server/src/routes/agents.rs",
+        "crates/agentum-server/src/routes/auth.rs",
+        "crates/agentum-server/src/routes/board.rs",
+        "crates/agentum-server/src/routes/board_goals.rs",
+        "crates/agentum-server/src/routes/board_links.rs",
+        "crates/agentum-server/src/routes/board_rules.rs",
+        "crates/agentum-server/src/routes/browser.rs",
+        "crates/agentum-server/src/routes/cdp_browser.rs",
+        "crates/agentum-server/src/routes/cdp_screencast.rs",
+        "crates/agentum-server/src/routes/cert.rs",
+        "crates/agentum-server/src/routes/channels.rs",
+        "crates/agentum-server/src/routes/clipboard.rs",
+        "crates/agentum-server/src/routes/computer.rs",
+        "crates/agentum-server/src/routes/doctor.rs",
+        "crates/agentum-server/src/routes/events.rs",
+        "crates/agentum-server/src/routes/forge.rs",
+        "crates/agentum-server/src/routes/fs.rs",
+        "crates/agentum-server/src/routes/git.rs",
+        "crates/agentum-server/src/routes/harness.rs",
+        "crates/agentum-server/src/routes/health.rs",
+        "crates/agentum-server/src/routes/host.rs",
+        "crates/agentum-server/src/routes/host_browser.rs",
+        "crates/agentum-server/src/routes/hosts.rs",
+        "crates/agentum-server/src/routes/mcp.rs",
+        "crates/agentum-server/src/routes/mod.rs",
+        "crates/agentum-server/src/routes/notes.rs",
+        "crates/agentum-server/src/routes/orchestration.rs",
+        "crates/agentum-server/src/routes/preferences.rs",
+        "crates/agentum-server/src/routes/preflight.rs",
+        "crates/agentum-server/src/routes/profiles.rs",
+        "crates/agentum-server/src/routes/repos.rs",
+        "crates/agentum-server/src/routes/sessions.rs",
+        "crates/agentum-server/src/routes/uploads.rs",
+        "crates/agentum-server/src/routes/usage.rs",
+        "crates/agentum-server/src/routes/util.rs",
+        "crates/agentum-server/src/routes/watchdog.rs",
+        "crates/agentum-server/src/routes/worktrees.rs",
+        "crates/agentum-server/src/rules.rs",
+        "crates/agentum-server/src/task_sink.rs",
+        "crates/agentum-server/src/tls.rs",
+        "crates/agentum-server/src/transcript_store.rs",
+        "crates/agentum-server/src/usage.rs",
+        "crates/agentum-server/tests/card_session_binding_e2e.rs",
+        "crates/agentum-server/tests/cdp_screencast_live.rs",
+        "crates/agentum-server/tests/goal_cards_end_to_end.rs",
+        "crates/agentum-server/tests/harness_live_agent.rs",
+        "crates/agentum-server/tests/harness_mcp_e2e.rs",
+        "crates/agentum-server/tests/host_browser_live.rs",
+        "crates/agentum-store/Cargo.toml",
+        "crates/agentum-store/migrations/0001_initial.sql",
+        "crates/agentum-store/migrations/0002_events.sql",
+        "crates/agentum-store/migrations/0003_board.sql",
+        "crates/agentum-store/migrations/0004_notes_channels.sql",
+        "crates/agentum-store/migrations/0005_users.sql",
+        "crates/agentum-store/migrations/0006_auth_session_expiry.sql",
+        "crates/agentum-store/migrations/0007_session_metrics.sql",
+        "crates/agentum-store/migrations/0008_board_lbl_tool.sql",
+        "crates/agentum-store/migrations/0009_session_pinned.sql",
+        "crates/agentum-store/migrations/0010_board_workdir_model.sql",
+        "crates/agentum-store/migrations/0011_board_session_id.sql",
+        "crates/agentum-store/migrations/0012_board_priority.sql",
+        "crates/agentum-store/migrations/0013_board_comments.sql",
+        "crates/agentum-store/migrations/0014_board_column_rules.sql",
+        "crates/agentum-store/migrations/0015_orchestrator.sql",
+        "crates/agentum-store/migrations/0016_session_worktrees.sql",
+        "crates/agentum-store/migrations/0018_hosts.sql",
+        "crates/agentum-store/migrations/0020_orchestration.sql",
+        "crates/agentum-store/migrations/0021_settings.sql",
+        "crates/agentum-store/src/lib.rs",
+        "crates/agentum-store/src/orchestration.rs",
+        "crates/agentum-store/src/paths.rs",
+        "crates/agentum-tmux/Cargo.toml",
+        "crates/agentum-tmux/src/lib.rs",
+        "crates/agentum-tmux/src/ssh.rs",
+        "crates/agentum-tui/Cargo.toml",
+        "crates/agentum-tui/src/clipboard.rs",
+        "crates/agentum-tui/src/commands/mod.rs",
+        "crates/agentum-tui/src/commands/terminal/api.rs",
+        "crates/agentum-tui/src/commands/terminal/app.rs",
+        "crates/agentum-tui/src/commands/terminal/extensions.rs",
+        "crates/agentum-tui/src/commands/terminal/iometer.rs",
+        "crates/agentum-tui/src/commands/terminal/mod.rs",
+        "crates/agentum-tui/src/commands/terminal/palette.rs",
+        "crates/agentum-tui/src/commands/terminal/prefs.rs",
+        "crates/agentum-tui/src/commands/terminal/profiles.rs",
+        "crates/agentum-tui/src/commands/terminal/pty.rs",
+        "crates/agentum-tui/src/commands/terminal/sound.rs",
+        "crates/agentum-tui/src/commands/terminal/term.rs",
+        "crates/agentum-tui/src/commands/terminal/theme.rs",
+        "crates/agentum-tui/src/commands/terminal/trust.rs",
+        "crates/agentum-tui/src/commands/terminal/ui.rs",
+        "crates/agentum-tui/src/commands/up.rs",
+        "crates/agentum-tui/src/lib.rs",
+        "crates/agentum-tui/src/main.rs",
+        "crates/agentum-watchdog/Cargo.toml",
+        "crates/agentum-watchdog/src/lib.rs",
+        "justfile",
+        "rust-toolchain.toml",
+        "scripts/install.sh",
+        "scripts/uninstall.sh"
+      ],
+      "sourceDigest": "sha256:cfa788632d9b82444990b61e586dd9c6c7b2ecb0a15571cf1a5fc69cb98af69e",
+      "digest": "sha256:8caf1e1eceb0089e1ea68332e3e97bcbf9765a0c388ac04f9a6ae9ddc61fdd3e",
+      "freshness": "fresh"
+    },
+    {
+      "path": ".empirical/context/overview.md",
+      "generator": "empirical-0.22.0",
+      "managed": false,
+      "dependencies": [
+        "README.md"
+      ],
+      "sourceDigest": "sha256:c25cf667ce91b729e570b1c84e9dc54b3bc260a694ef50aba0278a2b7c966855",
+      "digest": "sha256:e3a59a91cfc5e7733375bb7bbc8cef54e8939564497faf82f917b0b16aecdae2",
+      "freshness": "fresh"
+    },
+    {
+      "path": ".empirical/context/architecture.md",
+      "generator": "empirical-0.22.0",
+      "managed": false,
+      "dependencies": [
+        "Cargo.toml",
+        "crates/agentum-core/Cargo.toml",
+        "crates/agentum-executor/Cargo.toml",
+        "crates/agentum-server/Cargo.toml",
+        "crates/agentum-store/Cargo.toml",
+        "crates/agentum-tmux/Cargo.toml",
+        "crates/agentum-tui/Cargo.toml",
+        "crates/agentum-watchdog/Cargo.toml"
+      ],
+      "sourceDigest": "sha256:caaf7d23cdd94cdd046e701f674ff44c7e4fa3d3a292faddf55f262bf03ff35f",
+      "digest": "sha256:0459b080dc3767e439330bb69b1042a2b8e208ad15e51812111652ff5f3a6330",
+      "freshness": "fresh"
+    },
+    {
+      "path": ".empirical/context/commands.md",
+      "generator": "empirical-0.22.0",
+      "managed": false,
+      "dependencies": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        "justfile",
+        "scripts/install.sh",
+        "scripts/uninstall.sh"
+      ],
+      "sourceDigest": "sha256:977309cac6a19cdb53ad68f24174b010f56983079ddbfb68056a1f246bbaf35d",
+      "digest": "sha256:11d55f2453b87b365cf3fc1425ba6dbc3846e00943911fb467af5d3b3e53aaf2",
+      "freshness": "fresh"
+    },
+    {
+      "path": ".empirical/context/conventions.md",
+      "generator": "empirical-0.22.0",
+      "managed": false,
+      "dependencies": [
+        "crates/agentum-server/src/routes/agents.rs"
+      ],
+      "sourceDigest": "sha256:a98b3494f142393edcade8b7c533cb3bd9d7cc6f21e37b05fd1eae0d15e3a1ac",
+      "digest": "sha256:553c0aa578ff24db065d56f6bd37b02a4786798d931a2d5c200ab1d3114eeb6f",
+      "freshness": "fresh"
+    }
+  ],
+  "truncated": false,
+  "digest": "sha256:ac205261af17e703d9870c95d7227b182989857dafe268cb8692e3af96b5882a"
+}

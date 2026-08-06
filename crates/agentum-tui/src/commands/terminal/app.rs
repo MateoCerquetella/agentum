@@ -1474,6 +1474,16 @@ pub struct App {
     /// Entries older than [`HOST_READINESS_TTL`] are treated as stale.
     /// See SSH_HOST_READINESS_PRD §7.6.
     pub host_readiness_cache: HashMap<Uuid, (Instant, agentum_core::HostReadiness)>,
+    /// Result channel for New Session's potentially slow remote work
+    /// (host readiness/HOME discovery and create+start). The HTTP/SSH futures
+    /// run in detached tasks so the sole crossterm/render loop can keep
+    /// redrawing and accept Esc while a remote host is slow.
+    new_session_task_tx: Option<mpsc::UnboundedSender<NewSessionTaskResult>>,
+    /// Correlation id for the form operation currently shown as `submitting`.
+    /// A stale result may still update the session list/toasts, but must never
+    /// overwrite a newer form the user opened meanwhile.
+    new_session_active_op: Option<u64>,
+    new_session_next_op: u64,
     /// Which sidebar section the cursor is on. Two sections share one
     /// pane: an Servers list at the top, then the Sessions tree.
     /// `j`/`k` flips between them at the boundaries.
@@ -1545,6 +1555,37 @@ pub struct UploadOutcome {
     /// upload failed, etc.).
     pub ok: bool,
     pub message: String,
+}
+
+/// Completion message from New Session's background SSH/API work. Results are
+/// correlated with the currently visible form so Esc can dismiss immediately
+/// and a later/stale completion cannot scribble over a newly-opened form.
+enum NewSessionTaskResult {
+    HomeResolved {
+        op_id: u64,
+        host_name: String,
+        result: Result<String, String>,
+    },
+    HostPrepared {
+        op_id: u64,
+        host_id: Option<Uuid>,
+        host_name: String,
+        readiness: Box<Option<Result<agentum_core::HostReadiness, String>>>,
+        fallback_agents: Option<Result<Vec<api::AgentInfo>, String>>,
+        home: Result<String, String>,
+    },
+    CreateFinished {
+        op_id: u64,
+        profile: String,
+        result: Box<Result<NewSessionCreated, String>>,
+    },
+}
+
+struct NewSessionCreated {
+    session: Session,
+    /// `None` when Start immediately was disabled; otherwise the result of
+    /// the start request. Create success is retained even when start fails.
+    start_result: Option<Result<(), String>>,
 }
 
 /// One slot in [`App::clients`]. Tracks whether the server is
@@ -1694,6 +1735,9 @@ impl App {
             profiles: Vec::new(),
             hosts: Vec::new(),
             host_readiness_cache: HashMap::new(),
+            new_session_task_tx: None,
+            new_session_active_op: None,
+            new_session_next_op: 0,
             tree_section: TreeSection::Sessions,
             servers_cursor: 0,
             clients: HashMap::new(),
@@ -1791,6 +1835,58 @@ impl App {
             Some(set) => set.contains(trimmed),
             None => true,
         }
+    }
+
+    /// Host-aware availability for the New Session form. The daemon-wide
+    /// `/api/agents` snapshot describes the daemon's own PATH and must never
+    /// reject an SSH-hosted tool. For a remote host, use that host's fresh
+    /// readiness report when it has agent data; otherwise fail open and let
+    /// the create route's authoritative remote preflight produce a typed
+    /// diagnostic.
+    pub fn tool_available_on_host(&self, tool: &str, host_id: Option<Uuid>) -> bool {
+        let trimmed = tool.trim();
+        if !is_probed_tool(trimmed) {
+            return true;
+        }
+
+        let Some(host_id) = host_id.filter(|id| *id != agentum_core::LOCAL_HOST_ID) else {
+            return self.tool_available(trimmed);
+        };
+        let Some(report) = self.cached_readiness(host_id) else {
+            return true;
+        };
+        if report.agents.is_empty() {
+            return true;
+        }
+        report
+            .agents
+            .iter()
+            .find(|agent| agent.id == trimmed)
+            .map(|agent| agent.installed)
+            .unwrap_or(true)
+    }
+
+    fn agent_availability_for_host(&self, host_id: Option<Uuid>) -> Option<HashSet<String>> {
+        let Some(host_id) = host_id.filter(|id| *id != agentum_core::LOCAL_HOST_ID) else {
+            return self.agent_availability.clone();
+        };
+        let report = self.cached_readiness(host_id)?;
+        (!report.agents.is_empty()).then(|| {
+            TOOL_SUGGESTIONS
+                .iter()
+                .copied()
+                .filter(|tool| {
+                    !is_probed_tool(tool)
+                        || report
+                            .agents
+                            .iter()
+                            .find(|agent| agent.id.as_str() == *tool)
+                            .map(|agent| agent.installed)
+                            .unwrap_or(true)
+                })
+                .map(str::to_string)
+                .collect()
+        })
     }
 
     /// Drop notifications whose TTL has elapsed. Called on every run-loop
@@ -2867,6 +2963,11 @@ pub async fn run_loop(
     // or error toast. Mirrors `agent_tasks_tx` exactly so the
     // surrounding code stays consistent.
     let (upload_outcome_tx, mut upload_outcome_rx) = mpsc::unbounded_channel::<UploadOutcome>();
+    // Remote New Session preparation/create results. Keeping these futures
+    // outside the input branch is what lets the renderer tick and Esc dismiss
+    // the form while SSH preflight is still in progress.
+    let (new_session_task_tx, mut new_session_task_rx) =
+        mpsc::unbounded_channel::<NewSessionTaskResult>();
     // Result channel for the background Claude-usage poll (spec 001). The
     // spawned task posts one `Option<ClaudeUsage>` per poll; the `select!`
     // arm below stores it on `App`. Mirrors `agent_tasks_tx`.
@@ -2881,6 +2982,7 @@ pub async fn run_loop(
     app.lg_tx = Some(lg_tx.clone());
     app.agent_tasks_tx = Some(agent_tasks_tx);
     app.upload_outcome_tx = Some(upload_outcome_tx);
+    app.new_session_task_tx = Some(new_session_task_tx);
     app.usage_tx = Some(usage_tx);
     // Kick off the first usage poll immediately so the readout populates
     // without waiting a full interval. Subsequent polls are tick-driven.
@@ -3139,6 +3241,10 @@ pub async fn run_loop(
                 } else {
                     app.push_error(outcome.message);
                 }
+            }
+
+            Some(result) = new_session_task_rx.recv() => {
+                apply_new_session_task_result(&mut app, result, &client);
             }
 
             Some(maybe_usage) = usage_rx.recv() => {
@@ -4158,9 +4264,12 @@ fn capture_screen_tail(screen: &vt100::Screen, max_lines: usize) -> String {
 /// for this to actually escape — but that's a one-line tmux config,
 /// not something agentum can paper over from the inside.
 fn build_osc52_sequence(text: &str) -> Vec<u8> {
+    build_osc52_sequence_for_tmux(text, std::env::var_os("TMUX").is_some())
+}
+
+fn build_osc52_sequence_for_tmux(text: &str, in_tmux: bool) -> Vec<u8> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let encoded = STANDARD.encode(text.as_bytes());
-    let in_tmux = std::env::var_os("TMUX").is_some();
     let inner = format!("\x1b]52;c;{encoded}\x07");
     let seq = if in_tmux {
         // Each `\x1b` inside the passthrough must be doubled per
@@ -4342,7 +4451,12 @@ async fn handle_key(
                 if let Some(tx) = tx
                     && cols > 0
                     && rows > 1
-                    && tx.send(TermOut::Resize { cols, rows: rows - 1 }).is_ok()
+                    && tx
+                        .send(TermOut::Resize {
+                            cols,
+                            rows: rows - 1,
+                        })
+                        .is_ok()
                 {
                     let tx2 = tx.clone();
                     tokio::spawn(async move {
@@ -5367,6 +5481,7 @@ async fn handle_key(
 
         // Session lifecycle ------------------------------------------------
         KeyCode::Char('n') => {
+            let resolve_home_in_background = app.selected_session().is_none();
             // Default the workdir to the selected session's workdir if any,
             // else the *daemon's* $HOME (not the laptop's). When the user
             // is driving a remote profile from macOS, `std::env::var("HOME")`
@@ -5409,14 +5524,20 @@ async fn handle_key(
                 // the folder picker then tried to list a Mac path on the
                 // SSH box and 400'd. Targeting a host is one explicit Tab
                 // away in the merged Host field instead.
-                let home = match client.list_dir_on(None, None).await {
-                    Ok(listing) => listing.path,
-                    Err(_) => std::env::var("HOME").unwrap_or_default(),
-                };
+                let home = std::env::var("HOME").unwrap_or_default();
                 (active, home, String::new())
             };
             let mut form = NewSessionForm::with_profile(profile, workdir);
             form.host_id = host_id;
+            if resolve_home_in_background {
+                spawn_new_session_home_resolution(
+                    app,
+                    &mut form,
+                    client.clone(),
+                    None,
+                    local_machine_label(),
+                );
+            }
             app.overlay = Overlay::NewSession(Box::new(form));
         }
         KeyCode::Char('u') => {
@@ -5822,12 +5943,382 @@ fn reopen_hosts_overlay_at(app: &mut App, id: Uuid) {
     }
 }
 
+/// Reserve a correlation id and mark the form busy before spawning one of the
+/// New Session background operations. In production the sender is installed by
+/// `run_loop`; returning `None` keeps pure/unit-test `App::new` values usable.
+fn begin_new_session_operation(
+    app: &mut App,
+    form: &mut NewSessionForm,
+    status: String,
+) -> Option<(u64, mpsc::UnboundedSender<NewSessionTaskResult>)> {
+    let tx = app.new_session_task_tx.clone()?;
+    app.new_session_next_op = app.new_session_next_op.wrapping_add(1).max(1);
+    let op_id = app.new_session_next_op;
+    app.new_session_active_op = Some(op_id);
+    form.submitting = true;
+    form.error = None;
+    app.status_msg = Some(status);
+    Some((op_id, tx))
+}
+
+/// Resolve the selected host's HOME without awaiting the request in the
+/// crossterm input branch. The form opens immediately with its editable local
+/// fallback and is patched when this result lands.
+fn spawn_new_session_home_resolution(
+    app: &mut App,
+    form: &mut NewSessionForm,
+    target: Client,
+    host_id: Option<Uuid>,
+    host_name: String,
+) {
+    let Some((op_id, tx)) = begin_new_session_operation(
+        app,
+        form,
+        format!("resolving `{host_name}` home… (Esc hides)"),
+    ) else {
+        return;
+    };
+    tokio::spawn(async move {
+        let result = target
+            .list_dir_on(None, host_id)
+            .await
+            .map(|listing| listing.path)
+            .map_err(|error| error.to_string());
+        let _ = tx.send(NewSessionTaskResult::HomeResolved {
+            op_id,
+            host_name,
+            result,
+        });
+    });
+}
+
+/// Probe readiness/tool connectivity and HOME together after the Host field is
+/// cycled. All SSH work stays in this task; the result handler alone mutates
+/// form/cache state on the UI task.
+fn spawn_new_session_host_prepare(
+    app: &mut App,
+    form: &mut NewSessionForm,
+    target: Client,
+    host_id: Option<Uuid>,
+    host_name: String,
+) {
+    let Some((op_id, tx)) =
+        begin_new_session_operation(app, form, format!("checking `{host_name}`… (Esc hides)"))
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let (readiness, fallback_agents, home) = if let Some(id) = host_id {
+            let (readiness, home) = tokio::join!(
+                target.host_readiness(id),
+                target.list_dir_on(None, Some(id))
+            );
+            let readiness = readiness.map_err(|error| error.to_string());
+            let fallback_agents = if readiness.is_err() {
+                Some(
+                    target
+                        .list_agents_on(Some(id))
+                        .await
+                        .map_err(|error| error.to_string()),
+                )
+            } else {
+                None
+            };
+            (
+                Some(readiness),
+                fallback_agents,
+                home.map(|listing| listing.path)
+                    .map_err(|error| error.to_string()),
+            )
+        } else {
+            let (agents, home) =
+                tokio::join!(target.list_agents_on(None), target.list_dir_on(None, None));
+            (
+                None,
+                Some(agents.map_err(|error| error.to_string())),
+                home.map(|listing| listing.path)
+                    .map_err(|error| error.to_string()),
+            )
+        };
+        let _ = tx.send(NewSessionTaskResult::HostPrepared {
+            op_id,
+            host_id,
+            host_name,
+            readiness: Box::new(readiness),
+            fallback_agents,
+            home,
+        });
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_new_session_create(
+    app: &mut App,
+    form: &mut NewSessionForm,
+    target: Client,
+    profile: String,
+    model: Option<String>,
+    flags: Vec<String>,
+) {
+    let name = form.name.trim().to_string();
+    let workdir = form.workdir.trim().to_string();
+    let tool = form.tool.trim().to_string();
+    let host_id = form.host_uuid();
+    let worktree = form.worktree_requested();
+    let up_after = form.up_after;
+    let Some((op_id, tx)) =
+        begin_new_session_operation(app, form, format!("creating `{name}`… (Esc hides)"))
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let result = match target
+            .create_session_on(
+                &name,
+                &workdir,
+                &tool,
+                model.as_deref(),
+                flags,
+                host_id,
+                worktree,
+            )
+            .await
+        {
+            Ok(session) => {
+                let start_result = if up_after {
+                    Some(
+                        target
+                            .start_session(session.id)
+                            .await
+                            .map_err(|error| error.to_string()),
+                    )
+                } else {
+                    None
+                };
+                Ok(NewSessionCreated {
+                    session,
+                    start_result,
+                })
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        let _ = tx.send(NewSessionTaskResult::CreateFinished {
+            op_id,
+            profile,
+            result: Box::new(result),
+        });
+    });
+}
+
+/// Apply one background result on the UI task. Preparation results are ignored
+/// when their form was dismissed/replaced. A successful create is always
+/// reconciled into the tree (the server may already have committed it), but a
+/// canceled form is never reopened and focus is never stolen.
+fn apply_new_session_task_result(app: &mut App, result: NewSessionTaskResult, client: &Client) {
+    match result {
+        NewSessionTaskResult::HomeResolved {
+            op_id,
+            host_name,
+            result,
+        } => {
+            if app.new_session_active_op != Some(op_id) {
+                return;
+            }
+            app.new_session_active_op = None;
+            let error = match &mut app.overlay {
+                Overlay::NewSession(form) => {
+                    form.submitting = false;
+                    match result {
+                        Ok(path) => {
+                            form.workdir = path;
+                            form.error = None;
+                            app.status_msg = Some(format!("`{host_name}` home ready"));
+                            None
+                        }
+                        Err(error) => {
+                            let message = format!("couldn't list `{host_name}` home: {error}");
+                            form.error = Some(message.clone());
+                            Some(message)
+                        }
+                    }
+                }
+                _ => None,
+            };
+            if let Some(error) = error {
+                app.push_error(error);
+            }
+        }
+        NewSessionTaskResult::HostPrepared {
+            op_id,
+            host_id,
+            host_name,
+            readiness,
+            fallback_agents,
+            home,
+        } => {
+            // A completed readiness report remains useful to Ctrl-H and later
+            // submits even if the user dismissed the New Session form.
+            let mut readiness_ok = true;
+            let mut primary_error: Option<String> = None;
+            if let Some(readiness) = *readiness {
+                match readiness {
+                    Ok(report) => {
+                        readiness_ok = report.ok;
+                        if !report.ok {
+                            primary_error = Some(format!(
+                                "{host_name} not ready — {} (fix via Ctrl-H)",
+                                report.message
+                            ));
+                        }
+                        if let Some(id) = host_id {
+                            app.host_readiness_cache
+                                .insert(id, (Instant::now(), report));
+                        }
+                    }
+                    Err(readiness_error) => match fallback_agents {
+                        Some(Ok(_)) => {}
+                        Some(Err(agent_error)) => {
+                            readiness_ok = false;
+                            primary_error = Some(format!(
+                                "check `{host_name}`: {readiness_error}; agent probe: {agent_error}"
+                            ));
+                        }
+                        None => {}
+                    },
+                }
+            } else if let Some(Ok(agents)) = fallback_agents {
+                // Empty host id is the daemon's local host, so this is the
+                // daemon-wide availability snapshot (never assign a remote
+                // host's agents to this field).
+                app.agent_availability = Some(
+                    agents
+                        .into_iter()
+                        .filter(|agent| agent.available)
+                        .map(|agent| agent.name)
+                        .collect(),
+                );
+            }
+
+            if app.new_session_active_op != Some(op_id) {
+                return;
+            }
+            app.new_session_active_op = None;
+            let mut extra_error: Option<String> = None;
+            match home {
+                Ok(path) => {
+                    if let Overlay::NewSession(form) = &mut app.overlay {
+                        form.workdir = path;
+                    }
+                }
+                Err(error) => {
+                    let message = format!("couldn't list `{host_name}` home: {error}");
+                    if readiness_ok && primary_error.is_none() {
+                        primary_error = Some(message);
+                    } else {
+                        extra_error = Some(message);
+                    }
+                }
+            }
+            if let Overlay::NewSession(form) = &mut app.overlay {
+                form.submitting = false;
+                form.error = primary_error.clone();
+            }
+            if let Some(error) = primary_error {
+                app.push_error(error);
+            }
+            if let Some(error) = extra_error {
+                app.push_error(error);
+            }
+            if readiness_ok {
+                app.status_msg = Some(format!("`{host_name}` checked"));
+            }
+        }
+        NewSessionTaskResult::CreateFinished {
+            op_id,
+            profile,
+            result,
+        } => {
+            let active = app.new_session_active_op == Some(op_id);
+            if active {
+                app.new_session_active_op = None;
+            }
+            match *result {
+                Err(error) => {
+                    let message = format!("create session: {error}");
+                    if active && let Overlay::NewSession(form) = &mut app.overlay {
+                        form.submitting = false;
+                        form.error = Some(message.clone());
+                    }
+                    app.push_error(message);
+                }
+                Ok(mut created) => {
+                    let id = created.session.id;
+                    let name = created.session.name.clone();
+                    let start_failed = match created.start_result {
+                        Some(Ok(())) => {
+                            created.session.status = Status::Running;
+                            None
+                        }
+                        Some(Err(error)) => Some(error),
+                        None => None,
+                    };
+                    app.session_profile.insert(id, profile);
+                    let mut sessions = app.sessions.clone();
+                    if let Some(existing) = sessions.iter_mut().find(|session| session.id == id) {
+                        *existing = created.session;
+                    } else {
+                        sessions.push(created.session);
+                    }
+                    app.refresh_sessions(sessions);
+
+                    let (label, kind) = if let Some(error) = start_failed {
+                        app.push_error(format!("start `{name}`: {error}"));
+                        (format!("created `{name}` (start failed)"), NotifKind::Warn)
+                    } else if app
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == id)
+                        .is_some_and(|session| session.status == Status::Running)
+                    {
+                        (format!("created + started `{name}`"), NotifKind::Info)
+                    } else {
+                        (format!("created `{name}` (idle)"), NotifKind::Info)
+                    };
+                    app.status_msg = Some(label.clone());
+                    let body = (kind == NotifKind::Warn)
+                        .then(|| "see error log (!) for details".to_string());
+                    push_notification(app, label, body, kind);
+
+                    if active {
+                        app.overlay = Overlay::None;
+                        app.tree.select_session(id);
+                        let side = app.target_side();
+                        update_selection(app, client, side);
+                        if app.selected == Some(id) {
+                            app.set_focus(Focus::Term);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
     let Overlay::NewSession(mut form) = std::mem::replace(&mut app.overlay, Overlay::None) else {
         return;
     };
     if form.submitting {
-        app.overlay = Overlay::NewSession(form);
+        if key.code == KeyCode::Esc {
+            // Do not await or synchronously abort an SSH request from the
+            // input loop. Detach the form from its correlation id so a late
+            // preparation result is ignored; a create that already committed
+            // will still reconcile into the tree and toast on completion.
+            app.new_session_active_op = None;
+            app.status_msg = Some("New Session hidden; remote work continues in background".into());
+        } else {
+            app.overlay = Overlay::NewSession(form);
+        }
         return;
     }
 
@@ -5877,84 +6368,17 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                     let host_name = host_id
                         .and_then(|id| app.hosts.iter().find(|h| h.id == id))
                         .map(|h| h.name.clone())
-                        .unwrap_or_else(|| "host".to_string());
+                        .unwrap_or_else(local_machine_label);
                     let target_client = app
                         .clients
                         .get(form.profile.as_str())
                         .and_then(|e| e.client.clone());
-                    let target_ref = target_client.as_ref().unwrap_or(client);
-
-                    // Prefer a single readiness round trip per host: it
-                    // reports agent availability *and* required-dep gaps,
-                    // so we derive the tool picker's availability set from
-                    // it and surface a blocking hint when tmux/git are
-                    // missing. Caching feeds the submit guard. PRD §7.6.
-                    let mut readiness_ok = true;
-                    match host_id {
-                        Some(id) => match target_ref.host_readiness(id).await {
-                            Ok(report) => {
-                                app.agent_availability = Some(
-                                    report
-                                        .agents
-                                        .iter()
-                                        .filter(|a| a.installed)
-                                        .map(|a| a.id.clone())
-                                        .collect(),
-                                );
-                                readiness_ok = report.ok;
-                                if !report.ok {
-                                    form.error = Some(format!(
-                                        "{host_name} not ready — {} (fix via Ctrl-H)",
-                                        report.message
-                                    ));
-                                }
-                                app.host_readiness_cache
-                                    .insert(id, (Instant::now(), report));
-                            }
-                            // Old daemon without `/readiness`, or a
-                            // transient failure: fall back to the agents
-                            // probe so the picker still gates correctly.
-                            Err(_) => {
-                                app.agent_availability =
-                                    target_ref.list_agents_on(host_id).await.ok().map(|list| {
-                                        list.into_iter()
-                                            .filter(|a| a.available)
-                                            .map(|a| a.name)
-                                            .collect()
-                                    });
-                            }
-                        },
-                        // Local host (empty id): instant probe, no SSH.
-                        None => {
-                            app.agent_availability =
-                                target_ref.list_agents_on(host_id).await.ok().map(|list| {
-                                    list.into_iter()
-                                        .filter(|a| a.available)
-                                        .map(|a| a.name)
-                                        .collect()
-                                });
-                        }
-                    }
-
-                    // Default the workdir to the host's home. Don't clear
-                    // a readiness error if one is already blocking.
-                    match target_ref.list_dir_on(None, host_id).await {
-                        Ok(listing) => {
-                            form.workdir = listing.path;
-                            if readiness_ok {
-                                form.error = None;
-                            }
-                        }
-                        Err(e) => {
-                            if readiness_ok {
-                                form.error = Some(format!("couldn't list host home: {e}"));
-                            }
-                        }
-                    }
+                    let target = target_client.unwrap_or_else(|| client.clone());
+                    spawn_new_session_host_prepare(app, &mut form, target, host_id, host_name);
                 }
             }
             NewSessionField::Tool => {
-                let avail = app.agent_availability.clone();
+                let avail = app.agent_availability_for_host(form.host_uuid());
                 form.cycle_tool(|t| match &avail {
                     // Mirrors `App::tool_available`. Inlined to sidestep
                     // the borrow conflict between the App-owned overlay
@@ -6035,7 +6459,7 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
         // cycles for muscle-memory parity with older versions and the
         // dashboard's keyboard nav.
         KeyCode::Enter if matches!(form.field, NewSessionField::Tool) => {
-            let avail = app.agent_availability.clone();
+            let avail = app.agent_availability_for_host(form.host_uuid());
             form.tool_picker = Some(open_tool_picker(&form.tool, avail.as_ref()));
         }
 
@@ -6066,7 +6490,7 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
             // disables those tiles outright; the TUI text field will
             // still let the user type the name, so we bounce here
             // before sending a request the executor will fail later.
-            if !app.tool_available(form.tool.trim()) {
+            if !app.tool_available_on_host(form.tool.trim(), form.host_uuid()) {
                 // Mirror `agentum_executor::binary_for` so the error
                 // names the actual missing binary (cursor → cursor-agent)
                 // instead of the friendly tool id.
@@ -6074,7 +6498,12 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                     "cursor" => "cursor-agent",
                     other => other,
                 };
-                form.error = Some(format!("{bin} not installed on the daemon"));
+                let location = if form.host_uuid().is_some() {
+                    "selected host"
+                } else {
+                    "daemon"
+                };
+                form.error = Some(format!("{bin} not installed on the {location}"));
                 app.overlay = Overlay::NewSession(form);
                 return;
             }
@@ -6119,79 +6548,30 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                 }
             };
             let Some(target_client) = target_client else {
-                form.error = Some(format!(
-                    "profile `{target_profile}` is not currently reachable"
-                ));
+                record_new_session_error(
+                    app,
+                    &mut form,
+                    format!("profile `{target_profile}` is not currently reachable"),
+                );
                 app.overlay = Overlay::NewSession(form);
                 return;
             };
-            match target_client
-                .create_session_on(
-                    form.name.trim(),
-                    form.workdir.trim(),
-                    form.tool.trim(),
-                    model.as_deref(),
-                    flags,
-                    form.host_uuid(),
-                    form.worktree_requested(),
-                )
-                .await
-            {
-                Ok(created) => {
-                    let id = created.id;
-                    let name = created.name.clone();
-                    // Tag the new session with its owning profile so
-                    // the tree groups it under the right server
-                    // header on the next refresh.
-                    app.session_profile.insert(id, target_profile.clone());
-                    if form.up_after {
-                        if let Err(e) = target_client.start_session(id).await {
-                            let msg = format!("created `{name}` (start failed)");
-                            app.status_msg = Some(msg.clone());
-                            app.push_error(format!("start `{name}`: {e}"));
-                            push_notification(
-                                app,
-                                msg,
-                                Some("see error log (!) for details".to_string()),
-                                NotifKind::Warn,
-                            );
-                        } else {
-                            let msg = format!("created + started `{name}`");
-                            app.status_msg = Some(msg.clone());
-                            push_notification(app, msg, None, NotifKind::Info);
-                        }
-                    } else {
-                        let msg = format!("created `{name}` (idle)");
-                        app.status_msg = Some(msg.clone());
-                        push_notification(app, msg, None, NotifKind::Info);
-                    }
-                    // Aggregating refresh so the new session shows
-                    // up regardless of which server it landed on
-                    // (cross-profile spawn just took the soft-restart
-                    // path; same-profile lands here directly).
-                    refresh_all(app).await;
-                    app.tree.select_session(id);
-                    {
-                        let side = app.target_side();
-                        update_selection(app, client, side);
-                    }
-                    // Jump straight into the new terminal so the user
-                    // can start typing — matches Space-from-tree.
-                    if app.selected == Some(id) {
-                        app.set_focus(Focus::Term);
-                    }
-                    return;
-                }
-                Err(e) => {
-                    form.error = Some(format!("{e}"));
-                    app.overlay = Overlay::NewSession(form);
-                    return;
-                }
-            }
+            spawn_new_session_create(app, &mut form, target_client, target_profile, model, flags);
+            app.overlay = Overlay::NewSession(form);
+            return;
         }
         _ => {}
     }
     app.overlay = Overlay::NewSession(form);
+}
+
+/// Keep New Session failures visible in both places the user looks: inline in
+/// the still-open form for immediate correction, and in the persistent,
+/// wrapped Errors overlay for full SSH stderr and multiline diagnostics.
+fn record_new_session_error(app: &mut App, form: &mut NewSessionForm, message: impl Into<String>) {
+    let message = message.into();
+    form.error = Some(message.clone());
+    app.push_error(message);
 }
 
 // ── Goal overlay helpers ──────────────────────────────────────────────────────
@@ -6567,7 +6947,7 @@ fn handle_tool_picker_key(form: &mut NewSessionForm, key: KeyEvent) {
                         "cursor" => "cursor-agent",
                         other => other,
                     };
-                    Some(format!("{bin} not installed on the daemon"))
+                    Some(format!("{bin} not installed on the selected host"))
                 };
             }
             form.tool_picker = None;
@@ -7799,6 +8179,7 @@ async fn run_palette_action(
 
         // ── Session CRUD from palette ─────────────────────────────
         ActionKind::NewSession => {
+            let resolve_home_in_background = app.selected_session().is_none();
             // Mirror the tree `n` handler: seed the target host from the
             // selected session, or from the highlighted sidebar host when
             // the cursor is in the Hosts section.
@@ -7820,15 +8201,25 @@ async fn run_palette_action(
                 } else {
                     String::new()
                 };
-                let host_uuid = Uuid::parse_str(host_id.trim()).ok();
-                let home = match client.list_dir_on(None, host_uuid).await {
-                    Ok(listing) => listing.path,
-                    Err(_) => std::env::var("HOME").unwrap_or_default(),
-                };
+                let home = std::env::var("HOME").unwrap_or_default();
                 (active, home, host_id)
             };
             let mut form = NewSessionForm::with_profile(profile, workdir);
             form.host_id = host_id;
+            if resolve_home_in_background {
+                let host_id = form.host_uuid();
+                let host_name = host_id
+                    .and_then(|id| app.hosts.iter().find(|host| host.id == id))
+                    .map(|host| host.name.clone())
+                    .unwrap_or_else(local_machine_label);
+                spawn_new_session_home_resolution(
+                    app,
+                    &mut form,
+                    client.clone(),
+                    host_id,
+                    host_name,
+                );
+            }
             app.overlay = Overlay::NewSession(Box::new(form));
         }
         ActionKind::RenameSession(id) => {
@@ -9016,6 +9407,40 @@ fn next_shell_name(sessions: &[Session]) -> String {
     format!("shell-{}", max_n + 1)
 }
 
+/// Routing metadata for the `t` / command-palette plain-terminal shortcut.
+/// A shell spawned while a session is selected belongs beside that session:
+/// same daemon profile, same host, same workdir. Keeping this decision in a
+/// small pure helper makes it harder for the shortcut to drift back to the
+/// default local client while the full New Session form remains host-aware.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlainTerminalTarget {
+    selected_id: Option<Uuid>,
+    profile: String,
+    workdir: String,
+    host_id: Option<Uuid>,
+}
+
+fn plain_terminal_target(app: &App) -> PlainTerminalTarget {
+    if let Some(session) = app.selected_session() {
+        return PlainTerminalTarget {
+            selected_id: Some(session.id),
+            profile: app.profile_for_session(session.id).to_string(),
+            workdir: session.workdir.clone(),
+            host_id: session.host_id,
+        };
+    }
+
+    PlainTerminalTarget {
+        selected_id: None,
+        profile: app.active_profile.clone().unwrap_or_default(),
+        workdir: std::env::var("HOME")
+            .ok()
+            .filter(|home| !home.is_empty())
+            .unwrap_or_else(|| ".".into()),
+        host_id: None,
+    }
+}
+
 /// Spawn a plain interactive shell as a session. Uses the `terminal`
 /// adapter so the server picks the user's `$SHELL` (fish / zsh / bash)
 /// rather than hard-coding bash — matching what the user gets when they
@@ -9024,18 +9449,45 @@ fn next_shell_name(sessions: &[Session]) -> String {
 /// agent.
 async fn spawn_plain_terminal(app: &mut App, client: &Client) {
     let name = next_shell_name(&app.sessions);
-    let workdir = app
-        .selected_session()
-        .map(|s| s.workdir.clone())
-        .or_else(|| std::env::var("HOME").ok())
-        .unwrap_or_else(|| ".".into());
-    match client
-        .create_session(&name, &workdir, "terminal", None, vec![])
+    let target = plain_terminal_target(app);
+    // A selected peer/SSH session must never silently fall back to the
+    // default client: that would create a local shell using a remote path.
+    // With no selection, `client` remains the active/default connection.
+    let target_client = match target.selected_id {
+        Some(id) => match app.client_for_session(id).cloned() {
+            Some(owner) => owner,
+            None => {
+                let owner = if target.profile.is_empty() {
+                    "the selected session's server".to_string()
+                } else {
+                    format!("profile `{}`", target.profile)
+                };
+                app.push_error(format!(
+                    "shell create failed: {owner} is not currently reachable"
+                ));
+                return;
+            }
+        },
+        None => client.clone(),
+    };
+    match target_client
+        .create_session_on(
+            &name,
+            &target.workdir,
+            "terminal",
+            None,
+            vec![],
+            target.host_id,
+            false,
+        )
         .await
     {
         Ok(created) => {
             let id = created.id;
-            if let Err(e) = client.start_session(id).await {
+            // Record ownership before refresh/stream selection so every
+            // follow-up operation routes to the same client immediately.
+            app.session_profile.insert(id, target.profile);
+            if let Err(e) = target_client.start_session(id).await {
                 app.push_error(format!("shell start failed: {e}"));
             } else {
                 push_notification(app, format!("shell: {name}"), None, NotifKind::Info);
@@ -9044,7 +9496,7 @@ async fn spawn_plain_terminal(app: &mut App, client: &Client) {
             app.tree.select_session(id);
             {
                 let side = app.target_side();
-                update_selection(app, client, side);
+                update_selection(app, &target_client, side);
             }
             app.set_focus(Focus::Term);
         }
@@ -9239,6 +9691,45 @@ mod merge_dedup_tests {
         let owners = HashMap::new();
         assert_eq!(pick_initial_selection(&[], &owners, Some("vps")), None);
         assert_eq!(pick_initial_selection(&[], &owners, None), None);
+    }
+
+    #[test]
+    fn plain_terminal_inherits_selected_ssh_route() {
+        let session_id = Uuid::new_v4();
+        let host_id = Uuid::new_v4();
+        let mut remote = sess(session_id, "remote-agent");
+        remote.workdir = "/srv/projects/agentum".to_string();
+        remote.host_id = Some(host_id);
+        remote.host_kind = Some("ssh".to_string());
+
+        let mut app = App::new(vec![remote]);
+        app.active_profile = Some("local".to_string());
+        app.session_profile
+            .insert(session_id, "omarchy".to_string());
+        app.selected = Some(session_id);
+
+        assert_eq!(
+            plain_terminal_target(&app),
+            PlainTerminalTarget {
+                selected_id: Some(session_id),
+                profile: "omarchy".to_string(),
+                workdir: "/srv/projects/agentum".to_string(),
+                host_id: Some(host_id),
+            }
+        );
+    }
+
+    #[test]
+    fn plain_terminal_without_selection_uses_active_profile_locally() {
+        let mut app = App::new(Vec::new());
+        app.active_profile = Some("omarchy".to_string());
+        app.selected = None;
+
+        let target = plain_terminal_target(&app);
+        assert_eq!(target.selected_id, None);
+        assert_eq!(target.profile, "omarchy");
+        assert_eq!(target.host_id, None);
+        assert!(!target.workdir.is_empty());
     }
 
     #[test]
@@ -9465,6 +9956,291 @@ mod worktree_tests {
 }
 
 #[cfg(test)]
+mod new_session_remote_tests {
+    use super::*;
+    use time::OffsetDateTime;
+    use url::Url;
+
+    fn client() -> Client {
+        Client::new(
+            Url::parse("http://127.0.0.1:9/").unwrap(),
+            "test-token".into(),
+            api::TlsTrust::Plain,
+        )
+        .unwrap()
+    }
+
+    fn session(id: Uuid, name: &str) -> Session {
+        let now = OffsetDateTime::now_utc();
+        Session {
+            id,
+            name: name.into(),
+            workdir: "/srv/project".into(),
+            tool: "codex".into(),
+            model: None,
+            flags: Vec::new(),
+            status: Status::Idle,
+            tmux_target: None,
+            host_id: Some(Uuid::new_v4()),
+            host_label: Some("ssh-box".into()),
+            host_kind: Some("ssh".into()),
+            created_at: now,
+            updated_at: now,
+            last_activity_at: None,
+            tokens: None,
+            cost_usd: None,
+            ctx: None,
+            last_log: None,
+            uptime_seconds: None,
+            state: None,
+            pinned: false,
+            card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
+        }
+    }
+
+    fn readiness_with_codex(installed: bool) -> agentum_core::HostReadiness {
+        agentum_core::HostReadiness {
+            ok: true,
+            message: "ready".into(),
+            system: agentum_core::HostSystemInfo {
+                uname: None,
+                pkg_manager: "unknown".into(),
+                sudo_nopasswd: None,
+            },
+            required: Vec::new(),
+            agents: vec![agentum_core::AgentDepCheck {
+                id: "codex".into(),
+                binary: "codex".into(),
+                installed,
+                path: installed.then(|| "/usr/bin/codex".into()),
+                install_hint: None,
+                bootstrapable: false,
+            }],
+            skills: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn remote_tool_does_not_inherit_daemon_local_unavailability() {
+        let mut app = App::new(Vec::new());
+        app.agent_availability = Some(HashSet::new());
+
+        assert!(
+            !app.tool_available_on_host("codex", None),
+            "the daemon-local probe still gates local sessions"
+        );
+        assert!(
+            app.tool_available_on_host("codex", Some(Uuid::new_v4())),
+            "an unprobed SSH target must fail open to server preflight"
+        );
+    }
+
+    #[test]
+    fn remote_tool_uses_only_that_hosts_fresh_readiness() {
+        let installed_host = Uuid::new_v4();
+        let missing_host = Uuid::new_v4();
+        let unprobed_host = Uuid::new_v4();
+        let mut app = App::new(Vec::new());
+        app.host_readiness_cache
+            .insert(installed_host, (Instant::now(), readiness_with_codex(true)));
+        app.host_readiness_cache
+            .insert(missing_host, (Instant::now(), readiness_with_codex(false)));
+
+        assert!(app.tool_available_on_host("codex", Some(installed_host)));
+        assert!(!app.tool_available_on_host("codex", Some(missing_host)));
+        assert!(app.tool_available_on_host("codex", Some(unprobed_host)));
+        assert!(
+            app.tool_available_on_host("claude", Some(missing_host)),
+            "an agent absent from an older partial report must fail open"
+        );
+        let picker_availability = app
+            .agent_availability_for_host(Some(missing_host))
+            .expect("fresh readiness should feed the picker");
+        assert!(!picker_availability.contains("codex"));
+        assert!(picker_availability.contains("claude"));
+    }
+
+    #[test]
+    fn create_failure_stays_inline_and_is_persisted_in_error_log() {
+        let mut app = App::new(Vec::new());
+        let mut form = NewSessionForm::with_profile(String::new(), "/srv/project".into());
+        let diagnostic =
+            "create session: 502 Bad Gateway — SSH preflight failed\nstderr: codex missing";
+
+        record_new_session_error(&mut app, &mut form, diagnostic);
+
+        assert_eq!(form.error.as_deref(), Some(diagnostic));
+        assert_eq!(app.errors.len(), 1);
+        assert_eq!(app.errors[0].text, diagnostic);
+        assert_eq!(app.error_count, 1);
+    }
+
+    #[test]
+    fn background_home_result_preserves_form_and_clears_submitting() {
+        let mut app = App::new(Vec::new());
+        let mut form = NewSessionForm::with_profile(String::new(), "/fallback".into());
+        form.name = "typed-name".into();
+        form.submitting = true;
+        app.new_session_active_op = Some(7);
+        app.overlay = Overlay::NewSession(Box::new(form));
+
+        apply_new_session_task_result(
+            &mut app,
+            NewSessionTaskResult::HomeResolved {
+                op_id: 7,
+                host_name: "ssh-box".into(),
+                result: Ok("/home/remote".into()),
+            },
+            &client(),
+        );
+
+        let Overlay::NewSession(form) = &app.overlay else {
+            panic!("form should remain open");
+        };
+        assert_eq!(form.name, "typed-name");
+        assert_eq!(form.workdir, "/home/remote");
+        assert!(!form.submitting);
+        assert!(form.error.is_none());
+    }
+
+    #[test]
+    fn beginning_background_work_sets_submitting_and_a_correlation_id() {
+        let mut app = App::new(Vec::new());
+        let (tx, _rx) = mpsc::unbounded_channel();
+        app.new_session_task_tx = Some(tx);
+        let mut form = NewSessionForm::with_profile(String::new(), "/fallback".into());
+
+        let (op_id, _) =
+            begin_new_session_operation(&mut app, &mut form, "checking remote…".into())
+                .expect("run-loop channel is installed");
+
+        assert!(form.submitting);
+        assert_eq!(app.new_session_active_op, Some(op_id));
+        assert_eq!(app.status_msg.as_deref(), Some("checking remote…"));
+    }
+
+    #[tokio::test]
+    async fn esc_dismisses_a_submitting_form_without_waiting_for_remote_work() {
+        let mut app = App::new(Vec::new());
+        let mut form = NewSessionForm::with_profile(String::new(), "/fallback".into());
+        form.name = "still-in-flight".into();
+        form.submitting = true;
+        app.new_session_active_op = Some(44);
+        app.overlay = Overlay::NewSession(Box::new(form));
+
+        handle_new_session_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &client(),
+        )
+        .await;
+
+        assert!(matches!(&app.overlay, Overlay::None));
+        assert_eq!(app.new_session_active_op, None);
+        assert!(
+            app.status_msg
+                .as_deref()
+                .is_some_and(|message| message.contains("continues in background"))
+        );
+    }
+
+    #[test]
+    fn stale_preparation_result_cannot_overwrite_a_newer_form() {
+        let mut app = App::new(Vec::new());
+        let mut form = NewSessionForm::with_profile(String::new(), "/newer".into());
+        form.name = "newer-form".into();
+        app.new_session_active_op = Some(9);
+        app.overlay = Overlay::NewSession(Box::new(form));
+
+        apply_new_session_task_result(
+            &mut app,
+            NewSessionTaskResult::HomeResolved {
+                op_id: 8,
+                host_name: "old-host".into(),
+                result: Ok("/stale".into()),
+            },
+            &client(),
+        );
+
+        let Overlay::NewSession(form) = &app.overlay else {
+            panic!("newer form should remain open");
+        };
+        assert_eq!(form.name, "newer-form");
+        assert_eq!(form.workdir, "/newer");
+        assert_eq!(app.new_session_active_op, Some(9));
+    }
+
+    #[tokio::test]
+    async fn canceled_create_success_reconciles_without_reopening_or_stealing_focus() {
+        let id = Uuid::new_v4();
+        let mut app = App::new(Vec::new());
+        app.sound_muted_cli = true;
+        app.overlay = Overlay::Help;
+        app.new_session_active_op = None; // Esc detached op 12.
+        app.focus = Focus::Tree;
+
+        apply_new_session_task_result(
+            &mut app,
+            NewSessionTaskResult::CreateFinished {
+                op_id: 12,
+                profile: "remote".into(),
+                result: Box::new(Ok(NewSessionCreated {
+                    session: session(id, "created-late"),
+                    start_result: Some(Ok(())),
+                })),
+            },
+            &client(),
+        );
+
+        assert!(matches!(&app.overlay, Overlay::Help));
+        assert!(app.focus == Focus::Tree);
+        assert_eq!(app.sessions.len(), 1);
+        assert_eq!(app.sessions[0].status, Status::Running);
+        assert_eq!(
+            app.session_profile.get(&id).map(String::as_str),
+            Some("remote")
+        );
+    }
+
+    #[test]
+    fn matching_create_failure_keeps_all_typed_fields_inline() {
+        let mut app = App::new(Vec::new());
+        let mut form = NewSessionForm::with_profile("remote".into(), "/srv/project".into());
+        form.name = "keep-me".into();
+        form.args = "resume=true".into();
+        form.submitting = true;
+        app.new_session_active_op = Some(21);
+        app.overlay = Overlay::NewSession(Box::new(form));
+
+        apply_new_session_task_result(
+            &mut app,
+            NewSessionTaskResult::CreateFinished {
+                op_id: 21,
+                profile: "remote".into(),
+                result: Box::new(Err("SSH preflight failed\nstderr: codex missing".into())),
+            },
+            &client(),
+        );
+
+        let Overlay::NewSession(form) = &app.overlay else {
+            panic!("failed create must keep the form open");
+        };
+        assert_eq!(form.name, "keep-me");
+        assert_eq!(form.args, "resume=true");
+        assert!(!form.submitting);
+        assert!(
+            form.error
+                .as_deref()
+                .is_some_and(|error| error.contains("codex missing"))
+        );
+        assert_eq!(app.errors.len(), 1);
+    }
+}
+
+#[cfg(test)]
 mod tool_picker_tests {
     //! v0.7.46 surfaces the New-Session Tool field as a modal picker
     //! (mirroring the dir-picker). These tests pin the contract:
@@ -9609,36 +10385,12 @@ mod osc52_tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::STANDARD};
 
-    /// Save/restore the `$TMUX` env var around a single test body.
-    /// Tests assert by inspecting bytes, so a stray parallel test
-    /// flipping the env wouldn't *corrupt* the buffer — it'd just
-    /// build the other branch's bytes. Cheap to be conservative.
-    fn with_tmux_env<R>(value: Option<&str>, body: impl FnOnce() -> R) -> R {
-        let saved = std::env::var_os("TMUX");
-        unsafe {
-            match value {
-                Some(v) => std::env::set_var("TMUX", v),
-                None => std::env::remove_var("TMUX"),
-            }
-        }
-        let out = body();
-        unsafe {
-            match saved {
-                Some(v) => std::env::set_var("TMUX", v),
-                None => std::env::remove_var("TMUX"),
-            }
-        }
-        out
-    }
-
     #[test]
     fn plain_terminal_uses_bare_osc52() {
-        with_tmux_env(None, || {
-            let seq = build_osc52_sequence("hello");
-            let s = std::str::from_utf8(&seq).unwrap();
-            let payload = STANDARD.encode(b"hello");
-            assert_eq!(s, format!("\x1b]52;c;{payload}\x07"));
-        });
+        let seq = build_osc52_sequence_for_tmux("hello", false);
+        let s = std::str::from_utf8(&seq).unwrap();
+        let payload = STANDARD.encode(b"hello");
+        assert_eq!(s, format!("\x1b]52;c;{payload}\x07"));
     }
 
     #[test]
@@ -9647,14 +10399,12 @@ mod osc52_tests {
         // the outer tmux strips one layer and the host terminal sees
         // the OSC-52 intact. Failure mode if we get this wrong: tmux
         // echoes parts of the sequence as visible chars in the pane.
-        with_tmux_env(Some("/tmp/tmux-fake,1234,0"), || {
-            let seq = build_osc52_sequence("hi");
-            let s = std::str::from_utf8(&seq).unwrap();
-            let payload = STANDARD.encode(b"hi");
-            let inner = format!("\x1b]52;c;{payload}\x07");
-            let expected = format!("\x1bPtmux;{}\x1b\\", inner.replace('\x1b', "\x1b\x1b"));
-            assert_eq!(s, expected);
-        });
+        let seq = build_osc52_sequence_for_tmux("hi", true);
+        let s = std::str::from_utf8(&seq).unwrap();
+        let payload = STANDARD.encode(b"hi");
+        let inner = format!("\x1b]52;c;{payload}\x07");
+        let expected = format!("\x1bPtmux;{}\x1b\\", inner.replace('\x1b', "\x1b\x1b"));
+        assert_eq!(s, expected);
     }
 }
 

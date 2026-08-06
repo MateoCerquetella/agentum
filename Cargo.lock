@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agentum-core"
-version = "0.17.4"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-executor"
-version = "0.17.4"
+version = "0.18.0"
 dependencies = [
  "agentum-core",
  "thiserror 2.0.18",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-server"
-version = "0.17.4"
+version = "0.18.0"
 dependencies = [
  "agentum-core",
  "agentum-executor",
@@ -50,6 +50,7 @@ dependencies = [
  "bytes",
  "dirs",
  "futures-util",
+ "hmac",
  "notify",
  "password-hash",
  "rand 0.9.4",
@@ -76,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-store"
-version = "0.17.4"
+version = "0.18.0"
 dependencies = [
  "agentum-core",
  "anyhow",
@@ -94,19 +95,21 @@ dependencies = [
 
 [[package]]
 name = "agentum-tmux"
-version = "0.17.4"
+version = "0.18.0"
 dependencies = [
  "agentum-core",
+ "sha2",
  "shlex",
  "thiserror 2.0.18",
  "time",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "agentum-tui"
-version = "0.17.4"
+version = "0.18.0"
 dependencies = [
  "agentum-core",
  "agentum-executor",
@@ -146,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "agentum-watchdog"
-version = "0.17.4"
+version = "0.18.0"
 dependencies = [
  "agentum-core",
  "agentum-executor",

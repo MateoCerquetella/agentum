@@ -22,7 +22,7 @@ use agentum_store::Store;
 use regex::Regex;
 use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
-use tokio::time::interval;
+use tokio::time::{interval, sleep};
 use uuid::Uuid;
 
 /// How often each session's pane is sampled for activity / crash
@@ -132,52 +132,45 @@ impl Watchdog {
             if tasks.contains_key(&id) {
                 continue;
             }
-            // Resolve the session's host once, up front. The local host row is
-            // seeded by migration 0018, so this is almost always `Some`; fall
-            // back to a synthesized `Local` host if it's somehow absent (or a
-            // remote host row was deleted out from under a running session) so
-            // the task still samples *something* rather than silently dropping.
+            // Pass only the immutable host id into the long-lived task. Each
+            // sample reloads the host row while holding the process-wide host
+            // lifecycle lease, so a host PUT cannot leave this task using a
+            // stale endpoint, key, or password on later ticks.
             let host_id = sess.host_id.unwrap_or(LOCAL_HOST_ID);
-            let host = match self.store.get_host(host_id).await {
-                Ok(Some(h)) => h,
-                Ok(None) => {
-                    tracing::warn!(
-                        name = %sess.name,
-                        %id,
-                        %host_id,
-                        "watchdog: host row missing; falling back to local pane sampling"
-                    );
-                    local_host_fallback(host_id)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        name = %sess.name,
-                        %id,
-                        %host_id,
-                        error = ?e,
-                        "watchdog: get_host failed; skipping watch task this tick"
-                    );
-                    continue;
-                }
-            };
             tracing::info!(name = %sess.name, %id, "watchdog: starting watch task");
             let bus = self.bus.clone();
             let store = self.store.clone();
-            tasks.insert(id, tokio::spawn(watch_session(sess, host, bus, store)));
+            tasks.insert(id, tokio::spawn(watch_session(sess, host_id, bus, store)));
         }
 
         Ok(())
     }
 }
 
-/// Synthesize a `Local` host when the store has no row for `id`. Defensive:
-/// the local host is seeded by migration 0018, but a deleted remote-host row
-/// (or a fresh DB mid-migration) shouldn't leave a running session unwatched.
-/// `created_at`/`updated_at` are placeholders — the watchdog only reads
-/// `kind` to pick the local-vs-SSH branch.
-fn local_host_fallback(id: Uuid) -> agentum_core::Host {
+/// Load the current host revision for one watchdog tick. The caller must hold
+/// [`agentum_tmux::ssh::acquire_host_lifecycle`] while awaiting this read and
+/// while using the returned value.
+///
+/// The built-in local row is seeded by migration 0018, but can be synthesized
+/// defensively if a database is mid-migration. A missing *remote* UUID returns
+/// `None`: silently treating it as local could sample or send `/compact` to an
+/// unrelated same-named local tmux session after that remote host was deleted.
+async fn load_current_host(
+    store: &Store,
+    host_id: Uuid,
+) -> Result<Option<agentum_core::Host>, agentum_store::StoreError> {
+    match store.get_host(host_id).await? {
+        Some(host) => Ok(Some(host)),
+        None if host_id == LOCAL_HOST_ID => Ok(Some(local_host_fallback())),
+        None => Ok(None),
+    }
+}
+
+/// Synthesize only the immutable built-in `Local` host. Keeping the id fixed
+/// makes it impossible for a deleted remote UUID to cross into local tmux.
+fn local_host_fallback() -> agentum_core::Host {
     agentum_core::Host {
-        id,
+        id: LOCAL_HOST_ID,
         name: "local".to_string(),
         kind: agentum_core::HostKind::Local,
         created_at: time::OffsetDateTime::UNIX_EPOCH,
@@ -188,12 +181,13 @@ fn local_host_fallback(id: Uuid) -> agentum_core::Host {
 
 /// One session's watch loop. Returns when the pane is gone or a crash
 /// signature is hit (which marks the session crashed and emits an event).
-/// Pane sampling is host-aware: `host` is `Local` (tmux run directly) or
-/// `Ssh` (tmux run over the session's ssh connection) — see
-/// `agentum_tmux::ssh`.
+/// Pane sampling is host-aware: the current host row is reloaded under the
+/// shared host lifecycle lease on every tick, then the pane sample and any
+/// `/compact` keystroke run before that lease is released. This makes a host
+/// credential/endpoint PUT an atomic boundary for the watchdog too.
 async fn watch_session(
     sess: Session,
-    host: agentum_core::Host,
+    host_id: Uuid,
     bus: broadcast::Sender<Event>,
     store: Arc<Store>,
 ) {
@@ -201,6 +195,12 @@ async fn watch_session(
         .tmux_target
         .clone()
         .unwrap_or_else(|| agentum_tmux::target_for(&sess.name));
+    // Runtime generation captured by this watch task. Crash observations are
+    // committed with an optimistic CAS against all three fields so a stale
+    // sample cannot overwrite a concurrent stop or a freshly restarted pane
+    // (including a restart that deliberately reuses the same tmux target).
+    let expected_tmux_target = sess.tmux_target.clone();
+    let mut expected_updated_at = sess.updated_at;
 
     let adapter = agentum_executor::adapter_for(&sess.tool);
     let compact_cmd = adapter.compact_trigger();
@@ -260,14 +260,46 @@ async fn watch_session(
     // unaffected — its busy_signature still drives classification.
     let mut last_bottom_hash: Option<u64> = None;
     let mut last_change_at = Instant::now();
-    // Slower sample cadence on SSH hosts: the per-tick `sample_pane` is a remote
-    // `ssh` exec, so 1 s × N sessions flooded the host (see REMOTE_TICK).
-    let mut tick = interval(sample_tick(&host.kind));
-    // Drop the immediate first tick so we don't fire before the pane is alive.
-    tick.tick().await;
+    // The first sample keeps the local cadence. Every successful host reload
+    // updates the following delay (SSH remains slower to avoid flooding the
+    // remote tmux server). Keeping only a Duration between iterations ensures
+    // no stale Host/credentials survive a tick boundary.
+    let mut next_sample_after = TICK;
 
     loop {
-        tick.tick().await;
+        sleep(next_sample_after).await;
+
+        // Host PUT/delete and all managed session lifecycle routes share this
+        // exact process-wide lease. Reload only after acquiring it and keep it
+        // through both the sample and a possible `/compact` send, so neither
+        // operation can authenticate with the pre-PUT host revision.
+        let host_guard = agentum_tmux::ssh::acquire_host_lifecycle(host_id).await;
+        let host = match load_current_host(&store, host_id).await {
+            Ok(Some(host)) => host,
+            Ok(None) => {
+                tracing::warn!(
+                    name = %sess.name,
+                    %host_id,
+                    "watchdog: remote host row missing; ending watch task without local fallback"
+                );
+                drop(host_guard);
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    name = %sess.name,
+                    %host_id,
+                    error = ?e,
+                    "watchdog: get_host failed; skipping pane sample this tick"
+                );
+                // Never fall back to a host cached by an earlier tick. Retry
+                // the store at the bounded local cadence instead.
+                next_sample_after = TICK;
+                drop(host_guard);
+                continue;
+            }
+        };
+        next_sample_after = sample_tick(&host.kind);
 
         // One sample per tick: existence + both captures + foreground command
         // in a single round trip (on SSH hosts, one exec instead of four —
@@ -285,21 +317,42 @@ async fn watch_session(
         let sample = match agentum_tmux::ssh::sample_pane(&host, &target, 100).await {
             Ok(Some(s)) => s,
             Ok(None) => {
-                // Pane is gone. Distinguish "user killed it" from "it
-                // crashed": if the DB already reflects Stopped (set by the
-                // /stop or /kill API route), the disappearance was
-                // intentional — exit silently rather than emit a misleading
-                // `session.crashed` toast and overwrite the status.
-                if intentionally_stopped(&store, sess.id).await {
-                    return;
-                }
-                let _ = store
-                    .update_status_and_target(sess.id, Status::Crashed, None)
-                    .await;
-                let ev = Event::new("session.crashed")
+                drop(host);
+                drop(host_guard);
+                // Pane is gone. Commit only if this task still owns the exact
+                // Running generation it sampled. A stop/restart may have
+                // committed after `sample_pane` returned, so a separate
+                // read-then-write guard would still be racy here.
+                let event = Event::new("session.crashed")
                     .with_session(sess.id, &sess.name)
                     .with_payload(serde_json::json!({"reason": "pane_exited"}));
-                let _ = emit(&bus, &store, ev).await;
+                let transitioned = match commit_crash_observation(
+                    &bus,
+                    &store,
+                    &sess,
+                    expected_tmux_target.as_deref(),
+                    expected_updated_at,
+                    event,
+                )
+                .await
+                {
+                    Ok(transitioned) => transitioned,
+                    Err(e) => {
+                        tracing::warn!(
+                            name = %sess.name,
+                            error = ?e,
+                            "watchdog: failed to commit pane-exit crash observation"
+                        );
+                        return;
+                    }
+                };
+                if !transitioned {
+                    tracing::debug!(
+                        name = %sess.name,
+                        "watchdog: discarded stale pane-exit observation"
+                    );
+                    return;
+                }
                 return;
             }
             Err(e) => {
@@ -312,24 +365,44 @@ async fn watch_session(
 
         // Crash signatures first — exiting wins over compacting.
         if let Some(sig) = crash_sigs.iter().find(|s| pane.contains(*s)) {
-            // Same intentional-stop guard as the pane_exited branch: a
-            // crash signature seen during a /stop or /kill flow is just
-            // residue from the dying process, not a real crash.
-            if intentionally_stopped(&store, sess.id).await {
-                return;
-            }
             tracing::warn!(name = %sess.name, signature = sig, "crash signature matched");
-            let _ = store
-                .update_status_and_target(sess.id, Status::Crashed, None)
-                .await;
-            let ev = Event::new("session.crashed")
+            drop(host);
+            drop(host_guard);
+            let event = Event::new("session.crashed")
                 .with_session(sess.id, &sess.name)
                 .with_payload(serde_json::json!({"signature": sig}));
-            let _ = emit(&bus, &store, ev).await;
+            let transitioned = match commit_crash_observation(
+                &bus,
+                &store,
+                &sess,
+                expected_tmux_target.as_deref(),
+                expected_updated_at,
+                event,
+            )
+            .await
+            {
+                Ok(transitioned) => transitioned,
+                Err(e) => {
+                    tracing::warn!(
+                        name = %sess.name,
+                        error = ?e,
+                        "watchdog: failed to commit crash-signature observation"
+                    );
+                    return;
+                }
+            };
+            if !transitioned {
+                tracing::debug!(
+                    name = %sess.name,
+                    "watchdog: discarded stale crash-signature observation"
+                );
+                return;
+            }
             return;
         }
 
         // Context-low → /compact (cooldown 5 min)
+        let mut compact_event = None;
         if let Some(cmd) = compact_cmd {
             if context_low.is_match(&pane) {
                 let now = Instant::now();
@@ -341,15 +414,23 @@ async fn watch_session(
                     if let Err(e) = agentum_tmux::ssh::send_keys(&host, &target, cmd, true).await {
                         tracing::warn!(error = ?e, "watchdog: send_keys /compact failed");
                     }
-                    let ev = Event::new("watchdog.compact")
-                        .with_session(sess.id, &sess.name)
-                        .with_payload(serde_json::json!({
-                            "trigger": "context_low",
-                            "command": cmd,
-                        }));
-                    let _ = emit(&bus, &store, ev).await;
+                    compact_event = Some(
+                        Event::new("watchdog.compact")
+                            .with_session(sess.id, &sess.name)
+                            .with_payload(serde_json::json!({
+                                "trigger": "context_low",
+                                "command": cmd,
+                            })),
+                    );
                 }
             }
+        }
+        // Prove the host value cannot accidentally be reused below the lease
+        // boundary; all remaining work is local classification/store updates.
+        drop(host);
+        drop(host_guard);
+        if let Some(ev) = compact_event {
+            let _ = emit(&bus, &store, ev).await;
         }
 
         // Tool drift → `session.tool_changed`. The foreground command rides
@@ -366,6 +447,7 @@ async fn watch_session(
                 match store.patch_session_tool(sess.id, detected).await {
                     Ok(updated) => {
                         let prev = std::mem::replace(&mut current_tool, detected.to_string());
+                        expected_updated_at = updated.updated_at;
                         tool_candidate = None;
                         let ev = Event::new("session.tool_changed")
                             .with_session(updated.id, &updated.name)
@@ -516,16 +598,34 @@ async fn watch_session(
     }
 }
 
-/// `true` if the session's current persisted status is `Stopped`, meaning
-/// the API `/stop` or `/kill` route already retired it. Used to suppress
-/// the `session.crashed` event the watchdog would otherwise fire on the
-/// next tick when it sees the pane gone — that disappearance is the user's
-/// own doing, not an actual crash.
-async fn intentionally_stopped(store: &Store, id: Uuid) -> bool {
-    matches!(
-        store.get_session_by_id(id).await,
-        Ok(Some(s)) if s.status == Status::Stopped
-    )
+/// Atomically retire the exact running generation observed by one watchdog
+/// task and publish its crash event only when that CAS succeeds.
+///
+/// Keeping the event behind the same success bit is important: a stale task
+/// that loses to `/stop` or a restart must neither overwrite the newer row nor
+/// leave behind a misleading durable/broadcast `session.crashed` event.
+async fn commit_crash_observation(
+    bus: &broadcast::Sender<Event>,
+    store: &Store,
+    sess: &Session,
+    expected_tmux_target: Option<&str>,
+    expected_updated_at: time::OffsetDateTime,
+    event: Event,
+) -> Result<bool, WatchdogError> {
+    let transitioned = store
+        .compare_and_set_status_and_target(
+            sess.id,
+            Status::Running,
+            expected_tmux_target,
+            expected_updated_at,
+            Status::Crashed,
+            None,
+        )
+        .await?;
+    if transitioned {
+        let _ = emit(bus, store, event).await;
+    }
+    Ok(transitioned)
 }
 
 /// Map a tmux `pane_current_command` value to the adapter id we store
@@ -993,6 +1093,80 @@ async fn emit(bus: &broadcast::Sender<Event>, store: &Store, ev: Event) -> Resul
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn watchdog_tick_reload_observes_host_put_and_never_falls_back_remote_to_local() {
+        use agentum_core::{HostKind, NewHost, SshAuth};
+
+        let store = tmp_store_for_reconciler().await;
+        let created = store
+            .create_host(NewHost {
+                name: "watchdog-remote".into(),
+                kind: HostKind::Ssh {
+                    user: "old-user".into(),
+                    hostname: "old.example".into(),
+                    port: 22,
+                    auth: SshAuth::Agent,
+                },
+            })
+            .await
+            .unwrap();
+
+        let first = load_current_host(&store, created.id)
+            .await
+            .unwrap()
+            .expect("created host missing");
+        assert!(matches!(
+            first.kind,
+            HostKind::Ssh { ref hostname, .. } if hostname == "old.example"
+        ));
+
+        store
+            .update_host(
+                created.id,
+                NewHost {
+                    name: "watchdog-remote".into(),
+                    kind: HostKind::Ssh {
+                        user: "new-user".into(),
+                        hostname: "new.example".into(),
+                        port: 2222,
+                        auth: SshAuth::Agent,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let refreshed = load_current_host(&store, created.id)
+            .await
+            .unwrap()
+            .expect("updated host missing");
+        assert!(matches!(
+            refreshed.kind,
+            HostKind::Ssh {
+                ref user,
+                ref hostname,
+                port: 2222,
+                ..
+            } if user == "new-user" && hostname == "new.example"
+        ));
+
+        assert!(store.delete_host(created.id).await.unwrap());
+        assert!(
+            load_current_host(&store, created.id)
+                .await
+                .unwrap()
+                .is_none(),
+            "a missing remote host must never become a local fallback"
+        );
+
+        let local = load_current_host(&store, LOCAL_HOST_ID)
+            .await
+            .unwrap()
+            .expect("local host should remain available");
+        assert_eq!(local.id, LOCAL_HOST_ID);
+        assert!(matches!(local.kind, HostKind::Local));
+        assert_eq!(local_host_fallback().id, LOCAL_HOST_ID);
+    }
+
     #[test]
     fn remote_sessions_sample_slower_than_local() {
         use agentum_core::{HostKind, SshAuth};
@@ -1294,6 +1468,118 @@ mod tests {
         let p = dir.path().join("test.sqlite");
         std::mem::forget(dir);
         Arc::new(agentum_store::Store::open(&p).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn crash_event_is_published_only_for_successful_runtime_cas() {
+        let store = tmp_store_for_reconciler().await;
+        let session = store
+            .create_session(agentum_core::NewSession {
+                name: "watchdog-generation".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_status_and_target(session.id, Status::Running, Some("reused-pane"))
+            .await
+            .unwrap();
+        let stale_generation = store.get_session_by_id(session.id).await.unwrap().unwrap();
+        let (bus, _keep_alive) = tokio::sync::broadcast::channel::<Event>(16);
+
+        // A user stop wins the race. The stale observation must perform no
+        // write and publish neither a broadcast nor a durable event.
+        store
+            .update_status_and_target(session.id, Status::Stopped, None)
+            .await
+            .unwrap();
+        let observer = bus.subscribe();
+        let stale_event = Event::new("session.crashed")
+            .with_session(session.id, &session.name)
+            .with_payload(serde_json::json!({"reason": "pane_exited"}));
+        assert!(
+            !commit_crash_observation(
+                &bus,
+                &store,
+                &stale_generation,
+                stale_generation.tmux_target.as_deref(),
+                stale_generation.updated_at,
+                stale_event,
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            try_wait_for_event(observer, "session.crashed", 30)
+                .await
+                .is_err()
+        );
+        assert!(store.list_watchdog_events(10).await.unwrap().is_empty());
+
+        // A restart may intentionally reuse the same target. The old
+        // timestamp still prevents the old task from retiring the new pane.
+        store
+            .update_status_and_target(session.id, Status::Running, Some("reused-pane"))
+            .await
+            .unwrap();
+        let current_generation = store.get_session_by_id(session.id).await.unwrap().unwrap();
+        assert_ne!(current_generation.updated_at, stale_generation.updated_at);
+        let observer = bus.subscribe();
+        let stale_event = Event::new("session.crashed")
+            .with_session(session.id, &session.name)
+            .with_payload(serde_json::json!({"reason": "pane_exited"}));
+        assert!(
+            !commit_crash_observation(
+                &bus,
+                &store,
+                &stale_generation,
+                stale_generation.tmux_target.as_deref(),
+                stale_generation.updated_at,
+                stale_event,
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            try_wait_for_event(observer, "session.crashed", 30)
+                .await
+                .is_err()
+        );
+        assert!(store.list_watchdog_events(10).await.unwrap().is_empty());
+
+        // The watcher for the current generation can retire it, and only
+        // then does the event become visible on both channels.
+        let observer = bus.subscribe();
+        let current_event = Event::new("session.crashed")
+            .with_session(session.id, &session.name)
+            .with_payload(serde_json::json!({"reason": "pane_exited"}));
+        assert!(
+            commit_crash_observation(
+                &bus,
+                &store,
+                &current_generation,
+                current_generation.tmux_target.as_deref(),
+                current_generation.updated_at,
+                current_event,
+            )
+            .await
+            .unwrap()
+        );
+        let broadcast = wait_for_event(observer, "session.crashed", 100).await;
+        assert_eq!(broadcast.session_id, Some(session.id));
+        let persisted = store.list_watchdog_events(10).await.unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].kind, "session.crashed");
+        let retired = store.get_session_by_id(session.id).await.unwrap().unwrap();
+        assert_eq!(retired.status, Status::Crashed);
+        assert_eq!(retired.tmux_target, None);
     }
 
     async fn make_goal_item(store: &agentum_store::Store) -> agentum_core::BoardItem {

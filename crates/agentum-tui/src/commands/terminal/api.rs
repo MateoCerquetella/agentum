@@ -29,13 +29,23 @@ use url::Url;
 use uuid::Uuid;
 
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
-// Starting an SSH-hosted session is a lifecycle operation, not an ordinary API
-// read: the embedded server may need to warm two ControlMasters, refresh the
-// reverse MCP tunnel, write a remote Claude config, create tmux, and arm its
-// pane pipe. Each SSH stage is independently bounded at 12 seconds server-side,
-// so the generic 15-second client deadline can cancel a healthy start halfway
-// through. Keep a finite outer bound, but leave enough room for that sequence.
-const SESSION_START_TIMEOUT: Duration = Duration::from_secs(90);
+// SSH readiness is a serialized, multi-stage operation: it may first wait
+// behind another lifecycle task for the same host, then run separate SSH
+// probes for required tools and agent CLIs. Keep a finite client deadline,
+// but do not cancel a healthy readiness check at the ordinary read timeout.
+const HOST_READINESS_TIMEOUT: Duration = Duration::from_secs(60);
+// Creating an SSH-hosted session performs a remote launch preflight before the
+// row is persisted (HOME/workdir/tool/shell/transcript checks). That is the
+// same class of bounded multi-stage operation as start, so it must not inherit
+// the ordinary 15-second read deadline.
+const REMOTE_SESSION_CREATE_TIMEOUT: Duration = Duration::from_secs(90);
+// SSH-hosted lifecycle mutations are not ordinary API reads: start may need to
+// warm ControlMasters and the reverse MCP tunnel, while stop/force-delete may
+// need the bounded graceful-shutdown + ownership-check path. Each SSH stage is
+// independently bounded server-side, so the generic 15-second client deadline
+// can cancel a healthy mutation halfway through. Keep a finite outer bound,
+// but leave enough room for the complete lifecycle transaction.
+const SESSION_LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 use super::trust;
 
@@ -287,6 +297,30 @@ fn build_http(trust: &TlsTrust) -> Result<HttpClient> {
     b.build().context("build reqwest client")
 }
 
+/// Turn the daemon's standard `{"error":"..."}` envelope into a message
+/// suitable for a toast or the errors overlay. Keeping this at the HTTP
+/// boundary prevents escaped JSON (and escaped newlines in SSH stderr) from
+/// leaking into every caller that records the error.
+fn format_api_error(status: reqwest::StatusCode, body: &str) -> String {
+    #[derive(Deserialize)]
+    struct ErrorEnvelope {
+        error: String,
+    }
+
+    let body = body.trim();
+    let detail = serde_json::from_str::<ErrorEnvelope>(body)
+        .ok()
+        .map(|envelope| envelope.error)
+        .filter(|error| !error.trim().is_empty())
+        .unwrap_or_else(|| body.to_string());
+
+    if detail.is_empty() {
+        status.to_string()
+    } else {
+        format!("{status} — {detail}")
+    }
+}
+
 /// Standalone POST /api/auth/login. Returns the bearer token.
 pub async fn login(base: &Url, trust: &TlsTrust, username: &str, password: &str) -> Result<String> {
     let url = base.join("/api/auth/login")?;
@@ -305,7 +339,7 @@ pub async fn login(base: &Url, trust: &TlsTrust, username: &str, password: &str)
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        bail!("{} — {}", status, body);
+        bail!("{}", format_api_error(status, &body));
     }
     #[derive(serde::Deserialize)]
     struct Resp {
@@ -330,7 +364,7 @@ pub async fn auth_needs_setup(base: &Url, trust: &TlsTrust) -> Result<bool> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        bail!("{} — {}", status, body);
+        bail!("{}", format_api_error(status, &body));
     }
     #[derive(serde::Deserialize)]
     struct Resp {
@@ -389,7 +423,7 @@ pub async fn register(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        bail!("{} — {}", status, body);
+        bail!("{}", format_api_error(status, &body));
     }
     #[derive(serde::Deserialize)]
     struct Resp {
@@ -485,7 +519,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<Host>().await?)
     }
@@ -506,7 +540,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<Host>().await?)
     }
@@ -517,7 +551,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<HostProbe>().await?)
     }
@@ -528,8 +562,7 @@ impl Client {
     /// "update the daemon" message rather than a bare error so the user
     /// knows the gap is the server, not their host.
     pub async fn host_readiness(&self, id: Uuid) -> Result<HostReadiness> {
-        let url = self.base.join(&format!("/api/hosts/{id}/readiness"))?;
-        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
+        let resp = self.host_readiness_request(id)?.send().await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             // Ambiguous between "old daemon, no route" and "unknown host
             // id". An empty body means the route itself is missing; a
@@ -543,9 +576,18 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<HostReadiness>().await?)
+    }
+
+    fn host_readiness_request(&self, id: Uuid) -> Result<reqwest::RequestBuilder> {
+        let url = self.base.join(&format!("/api/hosts/{id}/readiness"))?;
+        Ok(self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .timeout(HOST_READINESS_TIMEOUT))
     }
 
     /// `POST /api/hosts/{id}/bootstrap` — install `tmux`/`git` on the host
@@ -572,7 +614,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<HostReadiness>().await?)
     }
@@ -601,7 +643,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<HostReadiness>().await?)
     }
@@ -617,7 +659,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(())
     }
@@ -729,7 +771,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(())
     }
@@ -759,7 +801,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<UploadResponse>().await?)
     }
@@ -823,7 +865,8 @@ impl Client {
         }
         let body = resp.text().await.unwrap_or_default();
         Err(ClipboardRequestError::Other(anyhow!(
-            "clipboard request HTTP {status}: {body}"
+            "clipboard request: {}",
+            format_api_error(status, &body)
         )))
     }
 
@@ -853,7 +896,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<DirListing>().await?)
     }
@@ -909,28 +952,31 @@ impl Client {
             worktree: Option<WorktreeSpec>,
         }
         let url = self.base.join("/api/sessions")?;
-        let resp = self
-            .http
-            .post(url)
-            .bearer_auth(&self.token)
-            .json(&Body {
-                name,
-                workdir,
-                tool,
-                model,
-                flags,
-                host_id,
-                worktree: worktree.then_some(WorktreeSpec {
-                    branch: None,
-                    base_ref: None,
-                }),
-            })
+        let mut request = self.http.post(url).bearer_auth(&self.token).json(&Body {
+            name,
+            workdir,
+            tool,
+            model,
+            flags,
+            host_id,
+            worktree: worktree.then_some(WorktreeSpec {
+                branch: None,
+                base_ref: None,
+            }),
+        });
+        if let Some(timeout) = session_create_timeout(host_id) {
+            // RequestBuilder::timeout overrides the client's default for this
+            // remote lifecycle request only. Local creates remain fast-fail.
+            request = request.timeout(timeout);
+        }
+        let resp = request
             .send()
-            .await?;
+            .await
+            .context("create session request failed")?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<Session>().await?)
     }
@@ -952,7 +998,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<SubmitGoalResponse>().await?)
     }
@@ -967,7 +1013,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<BoardItemSummary>().await?)
     }
@@ -992,7 +1038,7 @@ impl Client {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(resp.json::<Session>().await?)
     }
@@ -1014,16 +1060,15 @@ impl Client {
             format!("/api/sessions/{id}")
         };
         let url = self.base.join(&path)?;
-        let resp = self
-            .http
-            .delete(url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?;
+        let mut request = self.http.delete(url).bearer_auth(&self.token);
+        if let Some(timeout) = session_delete_timeout(force) {
+            request = request.timeout(timeout);
+        }
+        let resp = request.send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(())
     }
@@ -1033,14 +1078,14 @@ impl Client {
         let mut request = self.http.post(url).bearer_auth(&self.token);
         if let Some(timeout) = session_action_timeout(action) {
             // RequestBuilder::timeout overrides the client's default for this
-            // request only; ordinary reads and quick mutations retain 15 s.
+            // lifecycle request only; ordinary reads/mutations retain 15 s.
             request = request.timeout(timeout);
         }
         let resp = request.send().await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("{status} — {body}");
+            bail!("{}", format_api_error(status, &body));
         }
         Ok(())
     }
@@ -1194,12 +1239,7 @@ impl Client {
                                 // input is coming; close the WS politely.
                                 break DropReason::CallerClosed;
                             };
-                            let msg = match out {
-                                TermOut::Bytes(b) => WsMsg::Binary(b),
-                                TermOut::Resize { cols, rows } => WsMsg::Text(format!(
-                                    "{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}"
-                                )),
-                            };
+                            let msg = term_out_to_ws_message(out);
                             if sink.send(msg).await.is_err() {
                                 break DropReason::SinkErr;
                             }
@@ -1319,7 +1359,17 @@ impl Client {
 }
 
 fn session_action_timeout(action: &str) -> Option<Duration> {
-    (action == "start").then_some(SESSION_START_TIMEOUT)
+    matches!(action, "start" | "stop" | "kill").then_some(SESSION_LIFECYCLE_TIMEOUT)
+}
+
+fn session_delete_timeout(force: bool) -> Option<Duration> {
+    force.then_some(SESSION_LIFECYCLE_TIMEOUT)
+}
+
+fn session_create_timeout(host_id: Option<Uuid>) -> Option<Duration> {
+    host_id
+        .filter(|id| *id != agentum_core::LOCAL_HOST_ID)
+        .map(|_| REMOTE_SESSION_CREATE_TIMEOUT)
 }
 
 #[derive(Debug)]
@@ -1358,6 +1408,18 @@ enum DropReason {
 pub enum TermOut {
     Bytes(Vec<u8>),
     Resize { cols: u16, rows: u16 },
+}
+
+/// Preserve terminal input as an opaque byte stream on the wire. In
+/// particular, never format `TermOut::Bytes` with `Debug`: doing so would send
+/// the enum/type representation instead of the user's UTF-8 and control bytes.
+fn term_out_to_ws_message(out: TermOut) -> WsMsg {
+    match out {
+        TermOut::Bytes(bytes) => WsMsg::Binary(bytes),
+        TermOut::Resize { cols, rows } => WsMsg::Text(format!(
+            "{{\"resize\":{{\"cols\":{cols},\"rows\":{rows}}}}}"
+        )),
+    }
 }
 
 #[derive(Debug)]
@@ -1440,14 +1502,43 @@ fn backoff_delay(attempt: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_HTTP_TIMEOUT, SESSION_START_TIMEOUT, build_upload_url, session_action_timeout,
-        ws_url,
+        Client, DEFAULT_HTTP_TIMEOUT, HOST_READINESS_TIMEOUT, REMOTE_SESSION_CREATE_TIMEOUT,
+        SESSION_LIFECYCLE_TIMEOUT, TermOut, TlsTrust, build_upload_url, format_api_error,
+        session_action_timeout, session_create_timeout, session_delete_timeout,
+        term_out_to_ws_message, ws_url,
     };
+    use reqwest::StatusCode;
+    use tokio_tungstenite::tungstenite::Message as WsMsg;
     use url::Url;
     use uuid::Uuid;
 
     fn base(scheme: &str) -> Url {
         Url::parse(&format!("{scheme}://127.0.0.1:8822/")).unwrap()
+    }
+
+    #[test]
+    fn terminal_input_is_an_exact_binary_websocket_payload() {
+        let input = "empirical-λ-🛠-BYTES-check\n".as_bytes().to_vec();
+
+        let message = term_out_to_ws_message(TermOut::Bytes(input.clone()));
+
+        assert_eq!(message, WsMsg::Binary(input));
+    }
+
+    #[test]
+    fn terminal_control_envelopes_cannot_capture_input_that_looks_like_json() {
+        let input = br#"{"resize":{"cols":1,"rows":1}}"#.to_vec();
+
+        let message = term_out_to_ws_message(TermOut::Bytes(input.clone()));
+
+        assert_eq!(message, WsMsg::Binary(input));
+        assert_eq!(
+            term_out_to_ws_message(TermOut::Resize {
+                cols: 120,
+                rows: 40
+            }),
+            WsMsg::Text(r#"{"resize":{"cols":120,"rows":40}}"#.into())
+        );
     }
 
     #[test]
@@ -1463,16 +1554,90 @@ mod tests {
     }
 
     #[test]
-    fn session_start_overrides_the_ordinary_http_timeout() {
-        assert_eq!(session_action_timeout("start"), Some(SESSION_START_TIMEOUT));
+    fn host_readiness_overrides_the_ordinary_http_timeout() {
+        let client = Client::new(base("http"), "token".into(), TlsTrust::Plain).unwrap();
+        let id = Uuid::nil();
+        let request = client.host_readiness_request(id).unwrap().build().unwrap();
+
+        assert_eq!(request.url().path(), format!("/api/hosts/{id}/readiness"));
+        assert_eq!(request.timeout(), Some(&HOST_READINESS_TIMEOUT));
         assert!(
-            SESSION_START_TIMEOUT > DEFAULT_HTTP_TIMEOUT,
-            "remote start must outlive the generic API deadline"
+            HOST_READINESS_TIMEOUT > DEFAULT_HTTP_TIMEOUT,
+            "SSH readiness must outlive the generic API deadline"
+        );
+    }
+
+    #[test]
+    fn remote_lifecycle_actions_override_the_ordinary_http_timeout() {
+        assert_eq!(
+            session_action_timeout("start"),
+            Some(SESSION_LIFECYCLE_TIMEOUT)
         );
         assert_eq!(
             session_action_timeout("stop"),
+            Some(SESSION_LIFECYCLE_TIMEOUT)
+        );
+        assert_eq!(
+            session_action_timeout("kill"),
+            Some(SESSION_LIFECYCLE_TIMEOUT)
+        );
+        assert!(
+            SESSION_LIFECYCLE_TIMEOUT > DEFAULT_HTTP_TIMEOUT,
+            "remote lifecycle mutations must outlive the generic API deadline"
+        );
+        assert_eq!(
+            session_action_timeout("rename"),
             None,
-            "quick lifecycle operations retain the client default"
+            "ordinary mutations retain the client default"
+        );
+        assert_eq!(
+            session_delete_timeout(true),
+            Some(SESSION_LIFECYCLE_TIMEOUT),
+            "force-delete includes remote tmux teardown"
+        );
+        assert_eq!(session_delete_timeout(false), None);
+    }
+
+    #[test]
+    fn remote_session_create_uses_a_lifecycle_timeout() {
+        assert_eq!(
+            session_create_timeout(Some(Uuid::new_v4())),
+            Some(REMOTE_SESSION_CREATE_TIMEOUT)
+        );
+        assert!(
+            REMOTE_SESSION_CREATE_TIMEOUT > DEFAULT_HTTP_TIMEOUT,
+            "SSH preflight must outlive the generic API deadline"
+        );
+        assert_eq!(
+            session_create_timeout(None),
+            None,
+            "local creates retain the client default"
+        );
+        assert_eq!(
+            session_create_timeout(Some(agentum_core::LOCAL_HOST_ID)),
+            None,
+            "an explicit local-host id is still a local create"
+        );
+    }
+
+    #[test]
+    fn api_error_decodes_standard_json_envelope() {
+        let body = r#"{"error":"ssh/tmux exited with status 1\nstderr: permission denied"}"#;
+        assert_eq!(
+            format_api_error(StatusCode::INTERNAL_SERVER_ERROR, body),
+            "500 Internal Server Error — ssh/tmux exited with status 1\nstderr: permission denied"
+        );
+    }
+
+    #[test]
+    fn api_error_preserves_plain_text_and_handles_empty_bodies() {
+        assert_eq!(
+            format_api_error(StatusCode::BAD_GATEWAY, "  upstream unavailable\n  "),
+            "502 Bad Gateway — upstream unavailable"
+        );
+        assert_eq!(
+            format_api_error(StatusCode::NO_CONTENT, "  "),
+            "204 No Content"
         );
     }
 

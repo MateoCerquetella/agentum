@@ -1,0 +1,56 @@
+[
+  {
+    "criterionId": "AC-1",
+    "kind": "test",
+    "passed": true,
+    "summary": "The ignored live SSH smoke used a fresh, UUID-isolated SSH-agent connection to dyaus@100.83.96.141 and the saved empirical-forge workdir, launched the resolved remote Codex binary in a new exact tmux target, observed it alive after the startup window, cleaned up only that target, and verified that every pre-existing tmux session remained present."
+  },
+  {
+    "criterionId": "AC-2",
+    "kind": "test",
+    "passed": true,
+    "summary": "The live Codex smoke supplied a randomized supported bearer_token_env_var reference and kept the scoped bearer only in the staged child environment; executor, provisioning, runtime, and security-review evidence confirm that literal tokens are absent from argv, remote shell commands, REST exposure, and rendered diagnostics."
+  },
+  {
+    "criterionId": "AC-3",
+    "kind": "test",
+    "passed": true,
+    "summary": "Server/runtime regressions pass for SSH transport/auth/timeout, remote prerequisite, incompatible tmux, missing workdir/binary, setup, canonical target absence, tunnel, and early-exit classifications; actionable prerequisites map to 400 and remote runtime failures map to 502 with bounded diagnostics."
+  },
+  {
+    "criterionId": "AC-4",
+    "kind": "test",
+    "passed": true,
+    "summary": "The prior isolated fast-exit smoke preserved the remote program's diagnostic and exit status before cleanup, while current deterministic launch-transaction tests verify pipe-before-respawn ordering, bounded output capture, exact-target cleanup, timeout kill/reap, and protection against later target-missing errors replacing the root cause."
+  },
+  {
+    "criterionId": "AC-5",
+    "kind": "test",
+    "passed": true,
+    "summary": "Startup reconciliation, watchdog, route, stream, and lifecycle tests pass: only Idle rows resume, Stopped rows remain stopped, every remote operation acquires the shared per-host lock and reloads the current saved host, persisted exact tmux targets survive rename, and no missing remote host can fall back to local execution."
+  },
+  {
+    "criterionId": "AC-6",
+    "kind": "test",
+    "passed": true,
+    "summary": "The live plain-terminal smoke resolved the SSH account's shell during remote preflight, launched it in an isolated tmux target, sent an interactive printf command, observed its marker in the remote pane, and removed only the smoke target; executor and TUI routing tests also preserve the selected host and workdir."
+  },
+  {
+    "criterionId": "AC-7",
+    "kind": "test",
+    "passed": true,
+    "summary": "All 110 TUI tests pass, including standard JSON error-envelope decoding, multiline and narrow-width wrapping without truncation, visual-row scrolling and bottom navigation, clear/close behavior, asynchronous remote preparation/create, stale-result rejection, and preservation of typed form fields after failure."
+  },
+  {
+    "criterionId": "AC-8",
+    "kind": "test",
+    "passed": true,
+    "summary": "All 73 agentum-tmux tests pass for agent, key-file, password/keyboard-interactive askpass, explicit no-TTY behavior, safe quoting, owner-private helpers, exact host-revision ControlPaths, stale-mux replay, bounded child cleanup, and exact tmux selection; a fresh BatchMode SSH-agent probe and the full live agent smoke both passed on the saved host."
+  },
+  {
+    "criterionId": "AC-9",
+    "kind": "test",
+    "passed": true,
+    "summary": "cargo test --workspace --all-targets passed all 751 non-ignored tests, cargo clippy --workspace --all-targets -- -D warnings passed, cargo fmt --all -- --check and git diff --check passed, the live terminal/Codex smoke passed, and the final independent security review reported no actionable High/Medium findings."
+  }
+]

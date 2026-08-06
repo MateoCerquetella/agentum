@@ -4,7 +4,7 @@ use std::path::Path;
 
 use agentum_core::{Session, transcript};
 
-use crate::{LaunchCommand, McpProvision, ToolAdapter, translate_yolo_marker};
+use crate::{LaunchCommand, McpProvision, RemoteLaunchContext, ToolAdapter, translate_yolo_marker};
 
 /// Append `--model=<v>` to argv if the session has a model set.
 fn push_model(argv: &mut Vec<String>, session: &Session) {
@@ -36,6 +36,19 @@ fn claude_transcript_exists(session: &Session) -> bool {
         .unwrap_or(false)
 }
 
+fn launch_claude(session: &Session, resume: bool) -> LaunchCommand {
+    let mut argv = vec!["claude".to_string()];
+    push_model(&mut argv, session);
+    argv.push(if resume {
+        "--resume".to_string()
+    } else {
+        "--session-id".to_string()
+    });
+    argv.push(session.id.to_string());
+    push_user_flags(&mut argv, session, Some("--dangerously-skip-permissions"));
+    LaunchCommand::argv_only(argv)
+}
+
 // ---------- claude ----------
 
 pub struct ClaudeAdapter;
@@ -46,8 +59,6 @@ impl ToolAdapter for ClaudeAdapter {
     }
 
     fn launch(&self, session: &Session) -> LaunchCommand {
-        let mut argv = vec!["claude".to_string()];
-        push_model(&mut argv, session);
         // Pin Claude's session UUID to the agentum session UUID so its
         // transcript lands at `~/.claude/projects/<enc-cwd>/<id>.jsonl`
         // — the agent-tasks watcher reads that exact path. Without
@@ -63,14 +74,13 @@ impl ToolAdapter for ClaudeAdapter {
         // ID fresh. Stop/start cycles, orphan-tmux respawns, and
         // daemon restarts all funnel through `start()` with the same
         // agentum UUID, so without this every re-launch crashed.
-        if claude_transcript_exists(session) {
-            argv.push("--resume".to_string());
-        } else {
-            argv.push("--session-id".to_string());
-        }
-        argv.push(session.id.to_string());
-        push_user_flags(&mut argv, session, self.yolo_flag());
-        LaunchCommand::argv_only(argv)
+        launch_claude(session, claude_transcript_exists(session))
+    }
+
+    fn launch_remote(&self, session: &Session, context: &RemoteLaunchContext<'_>) -> LaunchCommand {
+        // The local transcript path is meaningless for an SSH-owned session.
+        // Use the existence check performed against the target host instead.
+        launch_claude(session, context.claude_transcript_exists)
     }
 
     // Claude loads MCP servers from a file at startup; point it at the
@@ -155,6 +165,12 @@ impl ToolAdapter for ClaudeAdapter {
 
 pub struct CodexAdapter;
 
+fn valid_env_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
 impl ToolAdapter for CodexAdapter {
     fn name(&self) -> &'static str {
         "codex"
@@ -169,21 +185,46 @@ impl ToolAdapter for CodexAdapter {
 
     // Codex has no `--mcp-config`; inject each server with `-c` TOML overrides at
     // launch. Values are quoted so the URL parses as a TOML string. One block per
-    // server (agentum, playwright, …); a server with an `auth_token` also gets a
-    // `bearer_token` override so Codex authenticates to it.
+    // server (agentum, playwright, …); an authenticated server references its
+    // launch-scoped environment variable. The token itself never enters argv.
     fn mcp_args(&self, p: &McpProvision) -> Vec<String> {
         let mut args = Vec::with_capacity(p.servers.len() * 6);
         for s in &p.servers {
+            let auth_env_var = match (&s.auth_token, s.auth_env_var.as_deref()) {
+                (Some(_), Some(name)) if valid_env_name(name) => Some(name),
+                // A malformed authenticated entry must not degrade into an
+                // unauthenticated endpoint. Provisioning always supplies a
+                // valid random name; fail closed if another caller does not.
+                (Some(_), _) => continue,
+                (None, _) => None,
+            };
             args.push("-c".to_string());
             args.push(format!("mcp_servers.{}.type=\"http\"", s.name));
             args.push("-c".to_string());
             args.push(format!("mcp_servers.{}.url=\"{}\"", s.name, s.url));
-            if let Some(token) = &s.auth_token {
+            if let Some(env_name) = auth_env_var {
                 args.push("-c".to_string());
-                args.push(format!("mcp_servers.{}.bearer_token=\"{}\"", s.name, token));
+                args.push(format!(
+                    "mcp_servers.{}.bearer_token_env_var=\"{}\"",
+                    s.name, env_name
+                ));
             }
         }
         args
+    }
+
+    fn mcp_env(&self, p: &McpProvision) -> Vec<(String, String)> {
+        p.servers
+            .iter()
+            .filter_map(|server| {
+                let token = server.auth_token.as_ref()?;
+                let env_name = server
+                    .auth_env_var
+                    .as_deref()
+                    .filter(|name| valid_env_name(name))?;
+                Some((env_name.to_string(), token.to_string()))
+            })
+            .collect()
     }
 
     // Codex CLI uses `/compact` too as of late 2025.
@@ -337,6 +378,12 @@ impl ToolAdapter for TerminalAdapter {
         push_user_flags(&mut argv, session, self.yolo_flag());
         LaunchCommand::argv_only(argv)
     }
+
+    fn launch_remote(&self, session: &Session, context: &RemoteLaunchContext<'_>) -> LaunchCommand {
+        let mut argv = vec![context.shell().to_string()];
+        push_user_flags(&mut argv, session, self.yolo_flag());
+        LaunchCommand::argv_only(argv)
+    }
 }
 
 // ---------- passthrough ----------
@@ -446,13 +493,14 @@ mod tests {
                 name: "playwright".to_string(),
                 url: "http://127.0.0.1:8931/mcp".to_string(),
                 auth_token: None,
+                auth_env_var: None,
             }],
             config_file: std::path::PathBuf::from("/tmp/agentum/playwright-mcp.json"),
         }
     }
 
     /// Two servers: agentum (token-guarded) + playwright (none) → Codex must emit
-    /// a `-c` block for each, plus a `bearer_token` for agentum.
+    /// a `-c` block for each, plus an env-var reference for agentum.
     fn provision_two() -> McpProvision {
         McpProvision {
             servers: vec![
@@ -460,11 +508,15 @@ mod tests {
                     name: "agentum".to_string(),
                     url: "http://127.0.0.1:8822/mcp".to_string(),
                     auth_token: Some("secret-tok".to_string()),
+                    auth_env_var: Some(
+                        "AGENTUM_MCP_AUTH_4C93E467EE78486DA5B0DAF165408874".to_string(),
+                    ),
                 },
                 McpServer {
                     name: "playwright".to_string(),
                     url: "http://127.0.0.1:8931/mcp".to_string(),
                     auth_token: None,
+                    auth_env_var: None,
                 },
             ],
             config_file: std::path::PathBuf::from("/tmp/agentum/mcp.json"),
@@ -501,9 +553,10 @@ mod tests {
 
     #[test]
     fn codex_mcp_args_emit_one_block_per_server() {
-        // N servers in order; the token-guarded agentum server also gets a
-        // `bearer_token` override, the unauthenticated playwright one doesn't.
-        let args = CodexAdapter.mcp_args(&provision_two());
+        // N servers in order; the token-guarded agentum server references a
+        // bearer-token environment variable, while playwright stays unauthenticated.
+        let p = provision_two();
+        let args = CodexAdapter.mcp_args(&p);
         assert_eq!(
             args,
             vec![
@@ -512,13 +565,67 @@ mod tests {
                 "-c".to_string(),
                 "mcp_servers.agentum.url=\"http://127.0.0.1:8822/mcp\"".to_string(),
                 "-c".to_string(),
-                "mcp_servers.agentum.bearer_token=\"secret-tok\"".to_string(),
+                "mcp_servers.agentum.bearer_token_env_var=\"AGENTUM_MCP_AUTH_4C93E467EE78486DA5B0DAF165408874\"".to_string(),
                 "-c".to_string(),
                 "mcp_servers.playwright.type=\"http\"".to_string(),
                 "-c".to_string(),
                 "mcp_servers.playwright.url=\"http://127.0.0.1:8931/mcp\"".to_string(),
             ]
         );
+        assert!(
+            args.iter().all(|arg| !arg.contains("secret-tok")),
+            "literal MCP tokens must never be passed in argv: {args:?}"
+        );
+        assert_eq!(
+            CodexAdapter.mcp_env(&p),
+            vec![(
+                "AGENTUM_MCP_AUTH_4C93E467EE78486DA5B0DAF165408874".to_string(),
+                "secret-tok".to_string(),
+            )]
+        );
+    }
+
+    #[test]
+    fn apply_mcp_keeps_codex_token_only_in_launch_environment() {
+        let p = provision_two();
+        let mut launch = LaunchCommand::argv_only(vec!["codex".to_string()]);
+
+        CodexAdapter.apply_mcp(&mut launch, &p);
+
+        assert!(
+            launch
+                .argv
+                .iter()
+                .any(|arg| arg.contains("bearer_token_env_var"))
+        );
+        assert!(launch.argv.iter().all(|arg| !arg.contains("secret-tok")));
+        assert_eq!(
+            launch.env,
+            vec![(
+                "AGENTUM_MCP_AUTH_4C93E467EE78486DA5B0DAF165408874".to_string(),
+                "secret-tok".to_string(),
+            )]
+        );
+    }
+
+    #[test]
+    fn codex_uses_only_valid_provisioned_environment_names() {
+        assert!(valid_env_name(
+            "AGENTUM_MCP_AUTH_4C93E467EE78486DA5B0DAF165408874"
+        ));
+        for invalid in ["", "1TOKEN", "BAD-NAME", "HAS SPACE", "ümlaut"] {
+            assert!(!valid_env_name(invalid), "{invalid}");
+        }
+
+        let mut p = provision_two();
+        p.servers[0].auth_env_var = Some("BAD-NAME".into());
+        assert!(
+            CodexAdapter
+                .mcp_args(&p)
+                .iter()
+                .all(|arg| !arg.contains("mcp_servers.agentum"))
+        );
+        assert!(CodexAdapter.mcp_env(&p).is_empty());
     }
 
     #[test]
@@ -544,7 +651,52 @@ mod tests {
                 adapter_for(tool).mcp_args(&p).is_empty(),
                 "{tool} must not inject browser MCP by default"
             );
+            assert!(
+                adapter_for(tool).mcp_env(&p).is_empty(),
+                "{tool} must not inject browser MCP environment by default"
+            );
         }
+    }
+
+    #[test]
+    fn remote_claude_launch_uses_host_supplied_transcript_state() {
+        let session = fixture("claude", None, &[]);
+        let context = RemoteLaunchContext {
+            shell: "/bin/sh".into(),
+            claude_transcript_exists: true,
+        };
+
+        let argv = ClaudeAdapter.launch_remote(&session, &context).argv;
+
+        assert_eq!(argv, vec!["claude", "--resume", &session.id.to_string()]);
+        assert!(!argv.iter().any(|arg| arg == "--session-id"));
+    }
+
+    #[test]
+    fn remote_terminal_launch_uses_target_shell_not_daemon_shell() {
+        let session = fixture("terminal", None, &["--login"]);
+        let context = RemoteLaunchContext {
+            shell: "/usr/bin/fish".into(),
+            claude_transcript_exists: false,
+        };
+
+        let cmd = TerminalAdapter.launch_remote(&session, &context);
+
+        assert_eq!(cmd.argv, vec!["/usr/bin/fish", "--login"]);
+    }
+
+    #[test]
+    fn remote_terminal_launch_has_posix_fallback_for_empty_shell() {
+        let session = fixture("terminal", None, &[]);
+        let context = RemoteLaunchContext {
+            shell: "".into(),
+            claude_transcript_exists: false,
+        };
+
+        assert_eq!(
+            TerminalAdapter.launch_remote(&session, &context).argv,
+            vec!["/bin/sh"]
+        );
     }
 
     #[test]

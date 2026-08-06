@@ -89,10 +89,8 @@ pub async fn run(opts: Options) -> Result<()> {
     // machines are reached as SSH hosts, not as remote daemons.
     let embedded_api: Option<String> = if opts.api.is_none() && opts.profile.is_none() {
         let (store, _db) = crate::commands::open_store().await?;
-        // Preserve the old daemon's startup behaviour: bring idle/stopped
-        // sessions back up. `resume_sessions` drives tmux + the store
-        // directly, so it needs no running server.
-        resume_sessions(&store).await;
+        // Embedded server boot owns the host-aware resume/reprovision pass
+        // before watchdogs start. Callers must not trigger a second pass.
         let addr = agentum_server::serve_embedded_loopback(store)
             .await
             .context("boot embedded agentum-server")?;
@@ -480,39 +478,6 @@ pub struct ProfileConnect {
     /// expose the field. The sidebar uses this to surface fleet
     /// version drift so the user can spot peers behind the local CLI.
     pub version: Option<String>,
-}
-
-/// Bring up any sessions that aren't currently running. Ported from the
-/// removed `agentum serve` boot path: now that the TUI embeds the server it
-/// owns startup resume. Drives tmux + the store directly (no API), so it
-/// works before/without any server listening.
-async fn resume_sessions(store: &agentum_store::Store) {
-    let sessions = match store.list_sessions(None).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("could not list sessions for auto-resume: {e}");
-            return;
-        }
-    };
-    let to_resume: Vec<_> = sessions
-        .into_iter()
-        .filter(|s| {
-            matches!(
-                s.status,
-                agentum_core::Status::Idle | agentum_core::Status::Stopped
-            )
-        })
-        .collect();
-    if to_resume.is_empty() {
-        return;
-    }
-    tracing::info!(count = to_resume.len(), "resuming sessions");
-    for session in to_resume {
-        let name = session.name.clone();
-        if let Err(e) = crate::commands::up::run(name.clone()).await {
-            tracing::warn!(session = %name, "could not resume: {e}");
-        }
-    }
 }
 
 /// Layer profile defaults under any explicit CLI flags. Returns the

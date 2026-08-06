@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "id": "collected-297f2c5ddee60bc2843a0641",
+  "criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7",
+    "AC-8",
+    "AC-9"
+  ],
+  "evidenceKinds": [
+    "review"
+  ],
+  "summary": "Independent diff and decision review found no blocking correctness, safety, or scope issues; each acceptance criterion maps to concrete code and the successful workspace receipt. Live SSH remains conditionally unavailable because no redacted test seam is configured.",
+  "passed": true,
+  "startedAt": "2026-08-04T12:29:59.794Z",
+  "completedAt": "2026-08-04T12:29:59.794Z",
+  "provenance": {
+    "repositoryId": "sha256:8c3d97a07336bc3e1116b7a83a32df4bb0376cf8ab78a9ba852a47d220317676",
+    "feature": "fix-the-connectivity-issue-that-makes-agentum-tui-unusable-compare",
+    "specRevision": 3,
+    "specDigest": "sha256:8e0f399fa4c0d94d539c94eeb3142331bb6f1ddebac0c7900be138f89a337d5e",
+    "treeDigest": "sha256:f4deaf798bf9d215b349ef43461583b1c2dbf1167e0c043249a3c8a89dc1c6e0",
+    "policyDigest": "sha256:71497651deeb33319a57edae7599a50eaf0d14ffaaa3b6a25e110a4fc313288d"
+  },
+  "digest": "sha256:0372a5307e4febc32248ad056382ffee33fe5daed6886cb9bf277f5fc68ebbfc",
+  "kind": "collected",
+  "collector": "codex-independent-contract-review",
+  "artifacts": [
+    {
+      "path": ".empirical/specs/fix-the-connectivity-issue-that-makes-agentum-tui-unusable-compare/review.md",
+      "mediaType": "text/markdown",
+      "bytes": 4465,
+      "digest": "sha256:65a195da11acc2df9179289282e7c798fda75a280dac5dc368da4d39b535eb50"
+    }
+  ]
+}

@@ -24,10 +24,7 @@ use crate::error::ApiError;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/api/cdp-browser",
-            get(status).post(launch).delete(stop),
-        )
+        .route("/api/cdp-browser", get(status).post(launch).delete(stop))
         // A bare DELETE alias is handy for clients that prefer it explicit.
         .route("/api/cdp-browser/stop", post(stop))
 }

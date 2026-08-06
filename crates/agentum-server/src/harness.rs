@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentum_core::{Event, HostKind, LOCAL_HOST_ID, NewSession, Status};
+use agentum_core::{Event, HostKind, LOCAL_HOST_ID, NewSession};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tokio::sync::{RwLock, broadcast};
@@ -2193,12 +2193,6 @@ async fn spawn_feature_agent(
     config: &HarnessConfig,
     feature: &Feature,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
-
     // A unique, tmux-safe session name per feature+run.
     let short = harness_id.simple().to_string();
     let name = format!("harness-{}-{}", sanitize(&feature.id), &short[..8]);
@@ -2224,20 +2218,31 @@ async fn spawn_feature_agent(
         worktree_branch: None,
         worktree_base_ref: None,
     };
-    let session = state
-        .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
-        .await?;
+    // Use the canonical create+launch transaction. It owns the session's
+    // lifecycle lock before the row is visible to another lifecycle caller,
+    // derives the collision-safe UUID target, and rolls the pane back if the
+    // final Running/target persistence step fails.
+    let session =
+        crate::routes::sessions::create_and_spawn_session(state, new, Some(LOCAL_HOST_ID))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
 
-    state
+    // Do not publish the active harness binding until the canonical session
+    // transaction owns a live, persisted pane. If harness persistence fails,
+    // delete the just-created session through the same locked lifecycle path
+    // so neither a pane nor an unowned session row is left behind.
+    if let Err(error) = state
         .harness
         .set_session(harness_id, session.id, &feature.id)
-        .await?;
-
-    let target = agentum_tmux::target_for(&session.name);
-    crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
         .await
-        .map_err(|e| anyhow::anyhow!("failed to spawn agent: {e}"))?;
+    {
+        if let Err(cleanup_error) =
+            crate::routes::sessions::delete_session_by_id(state, session.id).await
+        {
+            warn!(session = %session.id, %cleanup_error, "failed to roll back harness session after binding persistence failure");
+        }
+        return Err(error);
+    }
 
     info!(%harness_id, feature = %feature.id, session = %session.id, "harness spawned agent");
     Ok(session)
@@ -2275,11 +2280,6 @@ async fn spawn_qa_agent(
     config: &HarnessConfig,
     feature: &Feature,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
     let short = harness_id.simple().to_string();
     let name = format!("harness-qa-{}-{}", sanitize(&feature.id), &short[..8]);
     let flags = if config.features.agent_yolo {
@@ -2303,14 +2303,10 @@ async fn spawn_qa_agent(
         worktree_branch: None,
         worktree_base_ref: None,
     };
-    let session = state
-        .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
-        .await?;
-    let target = agentum_tmux::target_for(&session.name);
-    crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to spawn QA agent: {e}"))?;
+    let session =
+        crate::routes::sessions::create_and_spawn_session(state, new, Some(LOCAL_HOST_ID))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to spawn QA agent: {e}"))?;
     info!(%harness_id, feature = %feature.id, session = %session.id, "harness spawned QA agent");
     Ok(session)
 }
@@ -2405,11 +2401,6 @@ async fn spawn_role_agent(
     config: &HarnessConfig,
     role: RoleKind,
 ) -> anyhow::Result<agentum_core::Session> {
-    let host = state
-        .store
-        .get_host(LOCAL_HOST_ID)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("local host missing"))?;
     let short = harness_id.simple().to_string();
     let name = format!("harness-{}-{}", role.as_str(), &short[..8]);
     let flags = if config.features.agent_yolo {
@@ -2428,14 +2419,10 @@ async fn spawn_role_agent(
         worktree_branch: None,
         worktree_base_ref: None,
     };
-    let session = state
-        .store
-        .create_session_on_host(new, Some(LOCAL_HOST_ID))
-        .await?;
-    let target = agentum_tmux::target_for(&session.name);
-    crate::routes::sessions::spawn_agent_into_pane(state, &session, &host, &target, workdir)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to spawn role agent: {e}"))?;
+    let session =
+        crate::routes::sessions::create_and_spawn_session(state, new, Some(LOCAL_HOST_ID))
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to spawn role agent: {e}"))?;
     info!(%harness_id, role = %role.as_str(), session = %session.id, "harness spawned role agent");
     Ok(session)
 }
@@ -2750,9 +2737,15 @@ async fn inject_prompt(
     prompt: &str,
 ) -> anyhow::Result<()> {
     await_repl_ready(state, session).await;
+    let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    // Keep the host revision stable across the deliberately separated paste +
+    // Enter sequence. A credential PUT shares this lease, so it cannot retire
+    // revision A between the two sends and then have the delayed Enter recreate
+    // A's ControlMaster after revision B commits.
+    let _host_guard = crate::routes::sessions::acquire_host_lifecycle(host_id).await;
     let host = state
         .store
-        .get_host(session.host_id.unwrap_or(LOCAL_HOST_ID))
+        .get_host(host_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("session host missing"))?;
     let target = session
@@ -2773,24 +2766,8 @@ async fn inject_prompt(
 
 /// Gracefully stop an agent's pane + mark the session stopped. Best-effort.
 async fn teardown_session(state: &AppState, session: &agentum_core::Session) {
-    let host = match state
-        .store
-        .get_host(session.host_id.unwrap_or(LOCAL_HOST_ID))
-        .await
-    {
-        Ok(Some(h)) => h,
-        _ => return,
-    };
-    if matches!(host.kind, HostKind::Local | HostKind::Ssh { .. }) {
-        let target = session
-            .tmux_target
-            .clone()
-            .unwrap_or_else(|| agentum_tmux::target_for(&session.name));
-        let _ = crate::host_runtime::kill_session(&host, &target).await;
-        let _ = state
-            .store
-            .update_status_and_target(session.id, Status::Stopped, None)
-            .await;
+    if let Err(error) = crate::routes::sessions::kill_session_by_id(state, session.id).await {
+        warn!(session = %session.id, %error, "failed to tear down harness session");
     }
 }
 

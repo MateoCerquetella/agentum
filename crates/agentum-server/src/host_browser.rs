@@ -11,13 +11,14 @@
 //! headless Chromium ignores `C-c`, so a graceful stop never reaps it.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use agentum_core::Host;
+use agentum_core::{Host, HostKind};
+use agentum_store::Store;
 use axum::extract::ws::{Message as DesktopMessage, WebSocket as DesktopWebSocket};
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
@@ -38,8 +39,7 @@ const BROWSER_CANDIDATES: &[&str] = &[
 
 /// Stated reason when no browser is found — names the install path so the failure
 /// is actionable (the UI offers to run it), never a silent `await_cdp_port` hang.
-const MISSING_BROWSER_MSG: &str =
-    "No Chromium found on the host PATH (tried chromium, chromium-browser, google-chrome). \
+const MISSING_BROWSER_MSG: &str = "No Chromium found on the host PATH (tried chromium, chromium-browser, google-chrome). \
      Install it — e.g. `npx playwright install chromium` — and retry.";
 
 /// How long to wait for headless Chromium to bind its CDP port and write the
@@ -47,6 +47,10 @@ const MISSING_BROWSER_MSG: &str =
 /// a second or two; allow generous slack on a distant host).
 const CDP_READY_TIMEOUT: Duration = Duration::from_secs(20);
 const CDP_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Bound work performed while a host lifecycle lease is held. In particular,
+/// a listener on a reused loopback port must not stall PUT/delete forever by
+/// accepting TCP but never completing the WebSocket upgrade.
+const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A host-resident browser launched (or re-attached) for one worktree.
 #[derive(Debug, Clone)]
@@ -381,13 +385,54 @@ pub async fn teardown_host_browser(host: &Host, workdir: &Path) -> Result<()> {
 
 #[derive(Clone)]
 struct BridgeEntry {
-    host: Host,
-    workdir: PathBuf,
+    /// Distinguishes replacement launches that happen to reuse the same slug,
+    /// endpoint and ports while an older operation is waiting for its lease.
+    generation: uuid::Uuid,
+    /// Stable store identity only. A bridge must never retain SSH credentials:
+    /// doing so would let a later status/stop call recreate the pre-PUT
+    /// ControlMaster after the host row changed.
+    host_id: uuid::Uuid,
+    destination: HostDestination,
+    /// Present for bridges created by the HTTP route. The legacy low-level
+    /// `&Host` entrypoint remains available to integration tests, but remote
+    /// follow-up operations are deliberately refused without a store resolver.
+    store: Option<Arc<Store>>,
     tmux_target: String,
     /// CDP port Chromium bound on the host loopback.
     cdp_host_port: u16,
     /// Mac loopback port the `-L` tunnel forwards to that CDP port.
     mac_port: u16,
+}
+
+/// Connection identity to which the deterministic tmux target belongs.
+/// Authentication is intentionally excluded: password/key changes on the same
+/// destination are safe because every later operation reloads the fresh Host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HostDestination {
+    Local,
+    Ssh {
+        user: String,
+        hostname: String,
+        port: u16,
+    },
+}
+
+impl HostDestination {
+    fn from_host(host: &Host) -> Self {
+        match &host.kind {
+            HostKind::Local => Self::Local,
+            HostKind::Ssh {
+                user,
+                hostname,
+                port,
+                ..
+            } => Self::Ssh {
+                user: user.clone(),
+                hostname: hostname.clone(),
+                port: *port,
+            },
+        }
+    }
 }
 
 fn registry() -> &'static Mutex<HashMap<String, BridgeEntry>> {
@@ -417,6 +462,25 @@ pub struct HostBrowserStatus {
 /// Start (or re-attach to) the host browser for `workdir` and forward-tunnel its
 /// CDP port, registering it for later screencast/navigate/status/stop by id.
 pub async fn start_host_browser(host: &Host, workdir: &Path) -> Result<StartedHostBrowser> {
+    start_host_browser_inner(host, None, workdir).await
+}
+
+/// Store-backed bridge start used by the HTTP route while it holds this host's
+/// lifecycle guard. Retaining the Store—not the resolved Host—means subsequent
+/// SSH operations can resolve the current credential revision safely.
+pub(crate) async fn start_host_browser_from_store(
+    host: &Host,
+    store: Arc<Store>,
+    workdir: &Path,
+) -> Result<StartedHostBrowser> {
+    start_host_browser_inner(host, Some(store), workdir).await
+}
+
+async fn start_host_browser_inner(
+    host: &Host,
+    store: Option<Arc<Store>>,
+    workdir: &Path,
+) -> Result<StartedHostBrowser> {
     let browser = launch_host_browser(host, workdir).await?;
     let mac_port = host_runtime::ensure_forward_tunnel(host, browser.cdp_port).await?;
     // Block "ready" on a reachable CDP port so a client never connects a dead WS.
@@ -429,8 +493,10 @@ pub async fn start_host_browser(host: &Host, workdir: &Path) -> Result<StartedHo
     registry().lock().await.insert(
         id.clone(),
         BridgeEntry {
-            host: host.clone(),
-            workdir: workdir.to_path_buf(),
+            generation: uuid::Uuid::new_v4(),
+            host_id: host.id,
+            destination: HostDestination::from_host(host),
+            store,
             tmux_target: browser.tmux_target,
             cdp_host_port: browser.cdp_port,
             mac_port,
@@ -447,25 +513,51 @@ pub async fn start_host_browser(host: &Host, workdir: &Path) -> Result<StartedHo
 /// Drive the screencast for a registered browser onto `desktop_ws` (frames out,
 /// input in). Returns when either side closes; a no-op if the id is unknown.
 pub async fn run_screencast(id: &str, desktop_ws: DesktopWebSocket) {
-    let Some(entry) = registry().lock().await.get(id).cloned() else {
-        return; // unknown id → drop the socket (closes)
+    let (entry, host_guard) = match resolve_bridge_for_connection(id).await {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            tracing::warn!(%error, id, "host-browser screencast refused stale bridge");
+            return; // unknown/stale id → drop the socket (closes)
+        }
     };
-    if let Err(e) = run_screencast_bridge(desktop_ws, entry.mac_port, None).await {
+    // Hold the host lease until CDP is connected. A destination-changing PUT
+    // then closes the old master and this established tunnel channel; it cannot
+    // race us into a newly reused loopback port. Do not retain the lease for the
+    // long-lived screencast itself.
+    let cdp_ws = match connect_page_cdp(entry.mac_port).await {
+        Ok(cdp_ws) => cdp_ws,
+        Err(error) => {
+            tracing::warn!(%error, id, "host-browser screencast CDP connect failed");
+            return;
+        }
+    };
+    if !is_same_entry(id, &entry).await {
+        return;
+    }
+    drop(host_guard);
+    if let Err(e) = run_screencast_bridge(desktop_ws, cdp_ws, None).await {
         tracing::warn!(error = ?e, id, "host-browser screencast bridge ended");
     }
 }
 
 /// One-shot navigate for a registered browser (the host app's `localhost:PORT`).
 pub async fn navigate(id: &str, url: &str) -> Result<()> {
-    let entry = lookup(id).await?;
-    let page_ws = discover_page_ws(entry.mac_port).await?;
-    let (cdp_ws, _) = tokio_tungstenite::connect_async(page_ws.as_str())
-        .await
-        .map_err(|e| HostRuntimeError::Bootstrap(format!("CDP connect for navigate: {e}")))?;
+    let (entry, _host_guard) = resolve_bridge_for_connection(id).await?;
+    // Navigation is short-lived, so retain the host lease until its CDP command
+    // has been accepted. This prevents PUT from closing A's forward and a
+    // foreign service reusing the same Mac port before we connect.
+    let cdp_ws = connect_page_cdp(entry.mac_port).await?;
+    if !is_same_entry(id, &entry).await {
+        return Err(HostRuntimeError::Bootstrap(format!(
+            "host browser `{id}` was replaced while navigation was connecting"
+        )));
+    }
     let (mut sink, _src) = cdp_ws.split();
-    sink.send(CdpMessage::Text(
-        cdp_command(1, "Page.navigate", serde_json::json!({ "url": url })),
-    ))
+    sink.send(CdpMessage::Text(cdp_command(
+        1,
+        "Page.navigate",
+        serde_json::json!({ "url": url }),
+    )))
     .await
     .map_err(|e| HostRuntimeError::Bootstrap(format!("CDP navigate send: {e}")))?;
     // Give Chromium a beat to accept the command before the socket drops.
@@ -476,7 +568,26 @@ pub async fn navigate(id: &str, url: &str) -> Result<()> {
 /// Status of a registered browser (or `None` when unknown).
 pub async fn status(id: &str) -> Option<HostBrowserStatus> {
     let entry = registry().lock().await.get(id).cloned()?;
-    let tmux_running = host_runtime::has_session(&entry.host, &entry.tmux_target)
+    let (_host_guard, host) = match resolve_current_host(&entry).await {
+        Ok(Some(resolved)) => resolved,
+        Ok(None) => {
+            forget_if_same(id, &entry).await;
+            return None;
+        }
+        Err(error) => {
+            tracing::warn!(%error, id, host_id = %entry.host_id, "host-browser status refused stale host resolution");
+            return None;
+        }
+    };
+
+    // A start for the same slug may have replaced this registry entry while we
+    // waited for the host lease. Never inspect the replacement's deterministic
+    // target using this stale entry.
+    if !is_same_entry(id, &entry).await {
+        return None;
+    }
+
+    let tmux_running = host_runtime::has_session(&host, &entry.tmux_target)
         .await
         .unwrap_or(false);
     let cdp_reachable = cdp_tcp_reachable(entry.mac_port).await;
@@ -492,11 +603,119 @@ pub async fn status(id: &str) -> Option<HostBrowserStatus> {
 /// Stop a registered browser: kill its tmux session and forget it. (The `-L`
 /// tunnel drops with its SSH channel; the next start cancel-then-arms anyway.)
 pub async fn stop(id: &str) -> Result<()> {
-    let entry = registry().lock().await.remove(id);
-    if let Some(e) = entry {
-        teardown_host_browser(&e.host, &e.workdir).await?;
+    let Some(entry) = registry().lock().await.get(id).cloned() else {
+        return Ok(());
+    };
+    let (_host_guard, host) = match resolve_current_host(&entry).await? {
+        Some(resolved) => resolved,
+        None => {
+            forget_if_same(id, &entry).await;
+            return Err(HostRuntimeError::Bootstrap(format!(
+                "host browser `{id}` belongs to a deleted or changed SSH destination"
+            )));
+        }
+    };
+
+    // If another start replaced this entry while the lease was pending, leave
+    // the replacement alone. Its target may be identical but belongs to a newer
+    // browser lifecycle.
+    if !forget_if_same(id, &entry).await {
+        return Ok(());
+    }
+    host_runtime::kill_session(&host, &entry.tmux_target).await?;
+    Ok(())
+}
+
+/// Tear down and forget every browser bridge bound to `host` before a host PUT
+/// or delete invalidates its ControlMaster. The caller must already hold this
+/// host's lifecycle guard, preserving the canonical host → registry lock order.
+///
+/// Entries whose saved destination matches `host` are killed on that exact
+/// endpoint. An already-stale entry for the same UUID is only forgotten: its
+/// deterministic tmux target must never be sent to the current destination.
+/// The registry mutex is never held across tmux/SSH awaits.
+pub(crate) async fn retire_host_bridges_for_mutation(host: &Host) -> Result<()> {
+    let destination = HostDestination::from_host(host);
+    let entries: Vec<(String, BridgeEntry)> = {
+        let entries = registry().lock().await;
+        entries
+            .iter()
+            .filter(|(_, entry)| entry.host_id == host.id)
+            .map(|(id, entry)| (id.clone(), entry.clone()))
+            .collect()
+    };
+
+    for (id, entry) in entries {
+        if entry.destination == destination {
+            host_runtime::kill_session(host, &entry.tmux_target).await?;
+        }
+        forget_if_same(&id, &entry).await;
     }
     Ok(())
+}
+
+/// Resolve the fresh host while holding its lifecycle lease. `None` denotes a
+/// deleted host or a destination change; callers must forget the registry entry
+/// and must not send its tmux target to that endpoint.
+async fn resolve_current_host(
+    entry: &BridgeEntry,
+) -> Result<Option<(tokio::sync::OwnedMutexGuard<()>, Host)>> {
+    let host_guard = crate::routes::sessions::acquire_host_lifecycle(entry.host_id).await;
+    let Some(store) = &entry.store else {
+        // Local bridge calls cannot recreate an SSH ControlMaster and retain
+        // their historical behavior. A direct remote bridge has no authoritative
+        // Store to reload from, so refuse its later SSH operation safely.
+        if entry.destination == HostDestination::Local {
+            let host = Host {
+                id: entry.host_id,
+                name: "local".to_string(),
+                kind: HostKind::Local,
+                created_at: time::OffsetDateTime::UNIX_EPOCH,
+                updated_at: time::OffsetDateTime::UNIX_EPOCH,
+                last_seen_at: None,
+            };
+            return Ok(Some((host_guard, host)));
+        }
+        return Err(HostRuntimeError::Bootstrap(
+            "remote host-browser follow-up requires a store-backed host resolver".into(),
+        ));
+    };
+    let host = store.get_host(entry.host_id).await.map_err(|error| {
+        HostRuntimeError::Bootstrap(format!(
+            "could not reload host {} for host-browser operation: {error}",
+            entry.host_id
+        ))
+    })?;
+    let Some(host) = host else {
+        return Ok(None);
+    };
+    if HostDestination::from_host(&host) != entry.destination {
+        return Ok(None);
+    }
+    Ok(Some((host_guard, host)))
+}
+
+/// Does `id` still refer to this exact launch? Registry ids are worktree slugs,
+/// so a separate generation protects replacements that reuse every public field.
+async fn is_same_entry(id: &str, expected: &BridgeEntry) -> bool {
+    registry()
+        .lock()
+        .await
+        .get(id)
+        .is_some_and(|current| current.generation == expected.generation)
+}
+
+/// Forget only the entry we resolved, never a replacement inserted while its
+/// host lifecycle lease was pending.
+async fn forget_if_same(id: &str, expected: &BridgeEntry) -> bool {
+    let mut entries = registry().lock().await;
+    let same = entries
+        .get(id)
+        .is_some_and(|current| current.generation == expected.generation);
+    if same {
+        entries.remove(id);
+    }
+    same
 }
 
 async fn lookup(id: &str) -> Result<BridgeEntry> {
@@ -508,11 +727,37 @@ async fn lookup(id: &str) -> Result<BridgeEntry> {
         .ok_or_else(|| HostRuntimeError::Bootstrap(format!("unknown host browser id: {id}")))
 }
 
+/// Resolve a registry entry against the current Store row while holding the
+/// host lifecycle lease. This validation happens before every new CDP
+/// connection as well as before SSH/tmux operations: otherwise a closed
+/// forward's Mac port could be reused and a stale bridge could drive the wrong
+/// browser.
+async fn resolve_bridge_for_connection(
+    id: &str,
+) -> Result<(BridgeEntry, tokio::sync::OwnedMutexGuard<()>)> {
+    let entry = lookup(id).await?;
+    let Some((host_guard, _host)) = resolve_current_host(&entry).await? else {
+        forget_if_same(id, &entry).await;
+        return Err(HostRuntimeError::Bootstrap(format!(
+            "host browser `{id}` belongs to a deleted or changed SSH destination"
+        )));
+    };
+    if !is_same_entry(id, &entry).await {
+        return Err(HostRuntimeError::Bootstrap(format!(
+            "host browser `{id}` was replaced while waiting for its host lease"
+        )));
+    }
+    Ok((entry, host_guard))
+}
+
 /// True when the CDP port answers a TCP connect through the tunnel.
 async fn cdp_tcp_reachable(mac_port: u16) -> bool {
-    tokio::net::TcpStream::connect(("127.0.0.1", mac_port))
-        .await
-        .is_ok()
+    tokio::time::timeout(
+        CDP_CONNECT_TIMEOUT,
+        tokio::net::TcpStream::connect(("127.0.0.1", mac_port)),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok())
 }
 
 /// Discover the page target's DevTools WS URL via `GET /json`, re-pointed at the
@@ -538,19 +783,39 @@ async fn discover_page_ws(mac_port: u16) -> Result<String> {
         .ok_or_else(|| HostRuntimeError::Bootstrap(format!("unparseable CDP ws url: {reported}")))
 }
 
+type CdpWebSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Discover and connect the page target through the already-armed local
+/// forward. Callers that came from the registry hold the host lifecycle lease
+/// until this returns, closing the port-reuse window around connection setup.
+async fn connect_page_cdp(mac_port: u16) -> Result<CdpWebSocket> {
+    let page_ws = discover_page_ws(mac_port).await?;
+    let connect = tokio::time::timeout(
+        CDP_CONNECT_TIMEOUT,
+        tokio_tungstenite::connect_async(page_ws.as_str()),
+    )
+    .await
+    .map_err(|_| {
+        HostRuntimeError::Bootstrap(format!(
+            "CDP WebSocket handshake timed out after {}s",
+            CDP_CONNECT_TIMEOUT.as_secs()
+        ))
+    })?;
+    let (cdp_ws, _) =
+        connect.map_err(|e| HostRuntimeError::Bootstrap(format!("CDP connect: {e}")))?;
+    Ok(cdp_ws)
+}
+
 /// The bidirectional bridge: CDP screencast frames → desktop (binary, 0x62
 /// protocol); desktop input → CDP `Input.dispatch*`. A single writer task owns
 /// the CDP sink (acks + input both feed it via an mpsc) so the two pumps never
 /// race on it. Returns when either side closes.
 async fn run_screencast_bridge(
     desktop_ws: DesktopWebSocket,
-    mac_port: u16,
+    cdp_ws: CdpWebSocket,
     navigate_url: Option<String>,
 ) -> Result<()> {
-    let page_ws = discover_page_ws(mac_port).await?;
-    let (cdp_ws, _) = tokio_tungstenite::connect_async(page_ws.as_str())
-        .await
-        .map_err(|e| HostRuntimeError::Bootstrap(format!("CDP connect: {e}")))?;
     let (mut cdp_sink, mut cdp_src) = cdp_ws.split();
     let (dt_sink, mut dt_src) = desktop_ws.split();
     let dt_sink = Arc::new(Mutex::new(dt_sink));
@@ -660,7 +925,54 @@ async fn run_screencast_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentum_core::SshAuth;
     use std::path::Path;
+
+    fn ssh_host(user: &str, hostname: &str, port: u16, auth: SshAuth) -> Host {
+        Host {
+            id: uuid::Uuid::new_v4(),
+            name: "test".into(),
+            kind: HostKind::Ssh {
+                user: user.into(),
+                hostname: hostname.into(),
+                port,
+                auth,
+            },
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            last_seen_at: None,
+        }
+    }
+
+    #[test]
+    fn host_destination_ignores_credentials_but_detects_endpoint_changes() {
+        let original = ssh_host("alice", "box.test", 22, SshAuth::Agent);
+        let rotated = ssh_host(
+            "alice",
+            "box.test",
+            22,
+            SshAuth::Password {
+                password: "new-secret".into(),
+            },
+        );
+        assert_eq!(
+            HostDestination::from_host(&original),
+            HostDestination::from_host(&rotated),
+            "same-destination credential rotation must re-resolve safely"
+        );
+
+        for changed in [
+            ssh_host("bob", "box.test", 22, SshAuth::Agent),
+            ssh_host("alice", "other.test", 22, SshAuth::Agent),
+            ssh_host("alice", "box.test", 2222, SshAuth::Agent),
+        ] {
+            assert_ne!(
+                HostDestination::from_host(&original),
+                HostDestination::from_host(&changed),
+                "a deterministic tmux target must not cross SSH destinations"
+            );
+        }
+    }
 
     #[test]
     fn workdir_slug_sanitizes_basename_and_defaults_empty() {

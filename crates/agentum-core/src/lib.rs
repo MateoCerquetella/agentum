@@ -109,8 +109,23 @@ pub enum SshAuth {
     /// key/agent (the secret lives at rest) — offered because users with fresh
     /// boxes that only have password login asked for it.
     Password {
+        /// Responses from the Agentum host API intentionally omit this field.
+        /// The default marker lets existing clients deserialize that redacted
+        /// response and submit an unchanged password-auth form; the server
+        /// recognizes the marker and retains the stored credential. Requests
+        /// that set a real password still serialize it normally.
+        #[serde(default = "redacted_ssh_password")]
         password: String,
     },
+}
+
+/// In-memory marker used when a password-auth host was deserialized from a
+/// redacted API response. It is never a stored credential and must never be
+/// persisted for a newly-created host.
+pub const REDACTED_SSH_PASSWORD: &str = "__AGENTUM_REDACTED_SSH_PASSWORD__";
+
+fn redacted_ssh_password() -> String {
+    REDACTED_SSH_PASSWORD.to_string()
 }
 
 fn default_ssh_port() -> u16 {

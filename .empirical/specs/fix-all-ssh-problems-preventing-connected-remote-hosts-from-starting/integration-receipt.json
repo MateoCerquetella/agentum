@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "feature": "fix-all-ssh-problems-preventing-connected-remote-hosts-from-starting",
+  "claimId": "fix-all-ssh-problems-preventing-connected-remote-hosts-from-starting-5a48ce1f8c8d",
+  "repositoryId": "sha256:cec1f0afd1d6f5688524ada3ceadd5d49822ab7e2e3bfb711714f992211af4ad",
+  "baseCommit": "95d7f93f35b32088e578e30a3fad93023fc2dc0f",
+  "baseTree": "02e5fe04b18a2f18b275dce84b45bd091aead55d",
+  "featureTree": "sha256:39cd51e28b067e39d1aaf1eed2d786513a956e4aa10e876ada7924b449fb4592",
+  "targetCommit": "95d7f93f35b32088e578e30a3fad93023fc2dc0f",
+  "targetTree": "02e5fe04b18a2f18b275dce84b45bd091aead55d",
+  "capabilityBaseDigests": {
+    "remote-session-reliability": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "deltaDigest": "sha256:32a495098951f694a2319219b02195c66370e4bf6fe4ad54836fd53731f0687d",
+  "resultDigests": {
+    "remote-session-reliability": "sha256:1739cda5957063935298b958e4571bf7b80316591a6273d5e89bf626eb5225fe"
+  },
+  "verificationReceiptDigests": [
+    "sha256:1183e8d69fc6cf588dda52c9c4952159a307f4af550bbeec32ad0767b82b31fd"
+  ],
+  "integratedAt": "2026-08-04T08:16:30.115Z",
+  "digest": "sha256:771e65aa36541c41013885379a254ca04a92c78dc31b6f81e8167ccae2a651b5"
+}

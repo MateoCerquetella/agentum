@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 5,
+  "revision": 9,
+  "activeFeature": "fix-the-connectivity-issue-that-makes-agentum-tui-unusable-compare",
+  "request": "Fix the connectivity issue that makes agentum-tui unusable. Compare the working Rust SSH connectivity implementation in the sibling agentum project, including its refactored version if present, port the appropriate behavior into agentum-tui, and make SSH connection startup faster while preserving correctness. Verify the fix and integrate it locally.",
+  "profile": "complex",
+  "workflow": "complex",
+  "mode": "yolo",
+  "phase": "done",
+  "status": "done",
+  "repairAttempts": 0,
+  "message": "Integrated capability changes: remote-session-reliability",
+  "implementationActor": "agent",
+  "specDigest": "sha256:8e0f399fa4c0d94d539c94eeb3142331bb6f1ddebac0c7900be138f89a337d5e",
+  "approvedSpecRevision": 3,
+  "capabilityArchiveRequired": true,
+  "capabilityDeltaDigest": "sha256:27b25a8bd27b69116098c8f73f1f0daedfa9ecf0df3168cd08c31fe9e0d89ada",
+  "impactDigest": "sha256:e295f849ffe2ee90527fe396c548783898e5a64e443bab3dd79f4367c67c7970",
+  "capabilityClaimId": "fix-the-connectivity-issue-that-makes-agentum-tui-unusable-compare-6d9b38d7a378",
+  "authorizationDigest": "sha256:259a3a21a664dca85c4920035a5b37ad384570264df0ec77be55789fefeccf29",
+  "evidence": [],
+  "evidenceReceiptIds": [
+    "executed-b5381d828ebb33d6c9c1dc69",
+    "collected-297f2c5ddee60bc2843a0641"
+  ],
+  "legacyEvidenceCount": 0,
+  "completion": {
+    "implemented": true,
+    "verified": true,
+    "integrated": true,
+    "delivered": false,
+    "published": false,
+    "highest": "integrated",
+    "reasons": {
+      "delivered": "delivered has not been proven by a durable receipt.",
+      "published": "published has not been proven by a durable receipt."
+    }
+  },
+  "updatedAt": "2026-08-04T12:32:49.616Z"
+}

@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "feature": "fix-all-ssh-problems-preventing-connected-remote-hosts-from-starting",
+  "lastSequence": 8,
+  "lastEventDigest": "sha256:c582d2a5b22ed5be6aed72d5ed138b432d16d198c7511dfc11c00f4812d85f03",
+  "stateDigest": "sha256:759358ca2333f658313712aa9593835663938b0bc9eca74611db35a47449758c",
+  "state": {
+    "revision": 8,
+    "activeFeature": "fix-all-ssh-problems-preventing-connected-remote-hosts-from-starting",
+    "request": "Fix all SSH problems preventing connected remote hosts from starting/using sessions in the Agentum TUI. Reproduce the ssh/tmux 500 error, identify root causes across TUI/server/tmux layers, implement robust fixes and actionable errors, add regression tests, and verify the remote-session workflow.",
+    "profile": "complex",
+    "phase": "done",
+    "status": "done",
+    "repairAttempts": 0,
+    "message": "Integrated capability changes: remote-session-reliability",
+    "implementationActor": "agent",
+    "specDigest": "sha256:15894ee6344fedd5b7bba10b459035b40ee7f2d0327bc38269eeeacb58b4d0a8",
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "sha256:00945f252db77e6c2dec34e3450bd3e56ca84c0fad71cb6a98c73e1327ea06cd",
+    "updatedAt": "2026-08-04T08:16:30.294Z",
+    "schemaVersion": 5,
+    "workflow": "complex",
+    "mode": "normal",
+    "approvedSpecRevision": 6,
+    "impactDigest": "sha256:8fc03ec56f5c21b761e725d6905b01d966327b790d86600272dbf8534708f165",
+    "capabilityClaimId": "fix-all-ssh-problems-preventing-connected-remote-hosts-from-starting-5a48ce1f8c8d",
+    "authorizationDigest": null,
+    "evidenceReceiptIds": [
+      "collected-5cd3fe5ee9b665ab7cba7150"
+    ],
+    "legacyEvidenceCount": 9,
+    "completion": {
+      "implemented": true,
+      "verified": true,
+      "integrated": true,
+      "delivered": false,
+      "published": false,
+      "highest": "integrated",
+      "reasons": {
+        "delivered": "delivered has not been proven by a durable receipt.",
+        "published": "published has not been proven by a durable receipt."
+      }
+    },
+    "evidence": []
+  },
+  "compactedAt": "2026-08-04T08:16:30.404Z",
+  "digest": "sha256:fc3d608be9fe58f25b0f74c9a9503b23903e7aba77eb0e30933c1c76f78d8201"
+}

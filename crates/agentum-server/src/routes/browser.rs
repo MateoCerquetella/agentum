@@ -97,6 +97,9 @@ async fn grab(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Va
 /// Add an annotation to a page element (body: `{ "selector", "comment", "intent"?, "tab"? }`).
 /// The bridge grabs the element then adds the annotation to the renderer's store
 /// (so it appears in the tray and is returned by `annotations`).
-async fn annotate(State(s): State<AppState>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+async fn annotate(
+    State(s): State<AppState>,
+    Json(b): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
     forward(&s, "annotate", b).await
 }

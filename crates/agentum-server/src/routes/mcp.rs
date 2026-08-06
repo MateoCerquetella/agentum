@@ -16,6 +16,7 @@
 //! Tools are backed by the same `AppState` (store, bridge, …) the REST routes
 //! use — a tool is just another view over existing logic, never a reimpl.
 
+use agentum_core::Status;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -38,28 +39,24 @@ async fn handle_get() -> Response {
     StatusCode::METHOD_NOT_ALLOWED.into_response()
 }
 
-/// Does the request carry the correct `Authorization: Bearer <mcp_token>`?
-/// Constant-time compare so a wrong token can't be brute-forced by timing.
-fn mcp_authorized(state: &AppState, headers: &axum::http::HeaderMap) -> bool {
-    headers
+/// Verify the session-scoped bearer and ensure its persisted session is still
+/// live. Stopping/deleting a session therefore revokes a copied project-agent
+/// credential without rotating every other preserved pane.
+async fn mcp_authorized(state: &AppState, headers: &axum::http::HeaderMap) -> bool {
+    let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|tok| ct_eq(tok, state.mcp_token.as_str()))
-        .unwrap_or(false)
-}
-
-/// Length-checked constant-time byte comparison (the length itself isn't secret).
-fn ct_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
+        .map(str::trim);
+    let Some(session_id) = token.and_then(|token| {
+        crate::mcp_provision::verify_session_mcp_token(state.mcp_token.as_str(), token)
+    }) else {
         return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        diff |= x ^ y;
-    }
-    diff == 0
+    };
+    matches!(
+        state.store.get_session_by_id(session_id).await,
+        Ok(Some(session)) if matches!(session.status, Status::Idle | Status::Running)
+    )
 }
 
 /// One JSON-RPC message in, one response out. Notifications (no `id`) are
@@ -73,7 +70,7 @@ async fn handle(
     // request (including the no-auth embedded server). /mcp may be reached over a
     // reverse SSH tunnel from a host where other users/processes share localhost;
     // without the bearer token they get 401.
-    if !mcp_authorized(&state, &headers) {
+    if !mcp_authorized(&state, &headers).await {
         return (StatusCode::UNAUTHORIZED, "missing or invalid MCP token").into_response();
     }
     let Some(id) = msg.get("id").cloned() else {
@@ -488,10 +485,7 @@ async fn tool_spawn_session(state: &AppState, args: &Value) -> anyhow::Result<St
         .get("workdir")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing `workdir`"))?;
-    let tool = args
-        .get("tool")
-        .and_then(Value::as_str)
-        .unwrap_or("claude");
+    let tool = args.get("tool").and_then(Value::as_str).unwrap_or("claude");
     let model = args
         .get("model")
         .and_then(Value::as_str)
@@ -764,6 +758,44 @@ async fn tool_harness_log_decision(args: &Value) -> anyhow::Result<String> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn scoped_mcp_token_is_revoked_when_its_session_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = agentum_store::Store::open(&dir.path().join("mcp-auth.db"))
+            .await
+            .unwrap();
+        let session = store
+            .create_session(agentum_core::NewSession {
+                name: "mcp-auth".into(),
+                workdir: dir.path().to_string_lossy().into_owned(),
+                tool: "codex".into(),
+                model: None,
+                flags: Vec::new(),
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+        let (bus, _) = tokio::sync::broadcast::channel(8);
+        let mut state = crate::AppState::new(store.clone(), bus);
+        state.mcp_token = std::sync::Arc::new("master-token-for-test".into());
+        let token = crate::mcp_provision::session_mcp_token(state.mcp_token.as_str(), session.id);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+
+        assert!(mcp_authorized(&state, &headers).await);
+        store
+            .update_status_and_target(session.id, Status::Stopped, None)
+            .await
+            .unwrap();
+        assert!(!mcp_authorized(&state, &headers).await);
+    }
+
     fn tool_names(orchestration_enabled: bool) -> Vec<String> {
         tool_specs(orchestration_enabled)
             .as_array()
@@ -800,12 +832,18 @@ mod tests {
         // Enabled: the mailbox + task DAG tools are advertised.
         let on = tool_names(true);
         for t in ORCHESTRATION_TOOLS {
-            assert!(on.contains(&t.to_string()), "{t} should be listed when enabled");
+            assert!(
+                on.contains(&t.to_string()),
+                "{t} should be listed when enabled"
+            );
         }
         // Disabled: none of them are, but the rest of the catalog survives.
         let off = tool_names(false);
         for t in ORCHESTRATION_TOOLS {
-            assert!(!off.contains(&t.to_string()), "{t} must be hidden when disabled");
+            assert!(
+                !off.contains(&t.to_string()),
+                "{t} must be hidden when disabled"
+            );
         }
         assert!(off.contains(&"agentum_list_worktrees".to_string()));
         assert!(off.len() + ORCHESTRATION_TOOLS.len() == on.len());

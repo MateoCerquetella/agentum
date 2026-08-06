@@ -218,9 +218,9 @@ async fn screencast_streams_jpeg_frames_and_navigate_changes_them() {
         .expect("an initial JPEG frame");
     println!("initial frame: {} bytes", initial.len());
 
-    ws.send(WsMessage::Text(
-        format!(r#"{{"type":"navigate","url":"{red}"}}"#).into(),
-    ))
+    ws.send(WsMessage::Text(format!(
+        r#"{{"type":"navigate","url":"{red}"}}"#
+    )))
     .await
     .expect("send navigate red");
     let red_frame = next_jpeg_differing(&mut ws, Some(&initial), Duration::from_secs(10))
@@ -235,9 +235,9 @@ async fn screencast_streams_jpeg_frames_and_navigate_changes_them() {
     .await
     .expect("send input");
 
-    ws.send(WsMessage::Text(
-        format!(r#"{{"type":"navigate","url":"{blue}"}}"#).into(),
-    ))
+    ws.send(WsMessage::Text(format!(
+        r#"{{"type":"navigate","url":"{blue}"}}"#
+    )))
     .await
     .expect("send navigate blue");
     let blue_frame = next_jpeg_differing(&mut ws, Some(&red_frame), Duration::from_secs(10))

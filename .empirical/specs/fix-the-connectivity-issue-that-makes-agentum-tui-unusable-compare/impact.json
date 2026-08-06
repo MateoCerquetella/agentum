@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "classification": "behavioral",
+  "capabilities": [
+    "remote-session-reliability"
+  ],
+  "surfaces": [
+    "agentum-server SSH connection warmer",
+    "agentum-server remote session streaming",
+    "agentum-tmux pooled SSH transport"
+  ],
+  "regressionRationale": null,
+  "digest": "sha256:e295f849ffe2ee90527fe396c548783898e5a64e443bab3dd79f4367c67c7970"
+}

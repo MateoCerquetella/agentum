@@ -5,10 +5,11 @@
 //! on a side port for trust-on-first-use bootstrap.
 
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentum_core::Event;
+use agentum_core::{Event, Host, HostKind, Status};
 use agentum_store::Store;
 use axum::Router;
 use axum::body::Body;
@@ -19,6 +20,10 @@ use axum::routing::get;
 use axum_server::tls_rustls::RustlsConfig;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+
+const EMBEDDED_RUNTIME_LOCK_DIR: &str = "embedded-runtime.lock";
+const EMBEDDED_RUNTIME_OWNER_FILE: &str = "owner.json";
+const EMBEDDED_RUNTIME_INITIALIZE_GRACE: Duration = Duration::from_secs(30);
 
 pub mod auth;
 pub mod bridge;
@@ -31,15 +36,15 @@ mod headers;
 pub mod host_browser;
 pub mod host_install_hints;
 pub mod host_runtime;
-mod logging;
 pub mod linear;
+mod logging;
 pub mod mcp_provision;
 pub mod planner;
 pub mod playwright_mcp;
 pub mod ratelimit;
 mod routes;
-pub mod task_sink;
 mod rules;
+pub mod task_sink;
 pub mod tls;
 mod transcript_store;
 pub mod usage;
@@ -151,13 +156,9 @@ pub struct AppState {
     /// `std::sync::Mutex` because the critical section is a single HashMap
     /// lookup/insert/remove — no `.await` while holding the lock.
     pub hook_tokens: Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, String>>>,
-    /// Secret bearer token guarding the agentum MCP server (`/mcp`). Minted once
-    /// at boot. Every agentum-launched agent gets it baked into its MCP config
-    /// (`Authorization: Bearer …`), and the `/mcp` handler rejects any request
-    /// without it — *even on the no-auth embedded server*. This is what makes the
-    /// MCP safe to expose to a remote host over the reverse SSH tunnel: the port
-    /// is loopback-bound on the host AND the tool surface needs this token, so
-    /// another user/process on the host can't drive agentum.
+    /// Owner-private master used to derive a different MCP bearer for each
+    /// session. The master itself is never given to an agent. Persisting it
+    /// keeps a preserved pane's derived credential valid across daemon restarts.
     pub mcp_token: Arc<String>,
     /// The base URL this server is reachable at on loopback (`http://127.0.0.1:<port>`),
     /// set only for the embedded desktop server (which binds an ephemeral port). The
@@ -166,6 +167,13 @@ pub struct AppState {
     /// port. `None` for the standalone `agentum serve` daemon (clients use 8822 / their
     /// profile). It also anchors the PostToolUse hook URL, replacing a hardcoded 8822.
     pub api_base_url: Option<String>,
+    /// Dedicated loopback listener exposing only `POST /mcp`. Remote reverse
+    /// tunnels terminate here, never at [`Self::api_base_url`]: the embedded
+    /// REST listener intentionally skips user auth on local loopback, so
+    /// forwarding it wholesale would let another process on the SSH host reach
+    /// session/host/clipboard/browser APIs. The MCP-only route independently
+    /// requires a live session-scoped bearer on every request.
+    pub mcp_base_url: Option<String>,
     /// Hook into the host desktop process for ops only it can do (browser
     /// webview automation, macOS computer-use). `None` for the standalone
     /// daemon — `/api/browser/*` and `/api/computer/*` then return 501.
@@ -175,6 +183,255 @@ pub struct AppState {
     /// background [`harness::drive`] task operate on the same in-memory runs +
     /// event bus. Cheap to construct; always present.
     pub harness: Arc<harness::HarnessEngine>,
+}
+
+const MCP_TOKEN_SETTING: &str = "runtime.mcp_bearer_token.v1";
+
+fn valid_persisted_mcp_token(token: &str) -> bool {
+    token.len() == 43
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Load the stable MCP derivation master from the owner-only SQLite store,
+/// creating it atomically on first upgrade/install. The master is never an
+/// accepted wire credential; [`mcp_provision::session_mcp_token`] derives the
+/// scoped bearer an individual live session receives. Store::open enforces
+/// private DB/sidecar paths, and `setting_get_or_insert` makes concurrent boots
+/// converge on one value.
+async fn persistent_mcp_token(store: &Store) -> anyhow::Result<String> {
+    let candidate = auth::new_token();
+    let (stored, _) = store
+        .setting_get_or_insert(MCP_TOKEN_SETTING, &candidate)
+        .await?;
+    if valid_persisted_mcp_token(&stored) {
+        return Ok(stored);
+    }
+
+    // A manually-corrupted/legacy value is not usable as a derivation master.
+    // Rotate it explicitly; tmux's non-secret generation marker makes the next
+    // reconciliation restart only panes carrying an old derived credential.
+    let replacement = auth::new_token();
+    store.setting_set(MCP_TOKEN_SETTING, &replacement).await?;
+    Ok(replacement)
+}
+
+/// Identity written into the embedded-runtime lease. PID alone is insufficient:
+/// a crashed process can leave the directory behind and the OS may later reuse
+/// its PID. `started_at` makes that stale-owner check PID-reuse safe.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+struct EmbeddedRuntimeOwner {
+    pid: u32,
+    started_at: u64,
+    instance_id: uuid::Uuid,
+}
+
+/// Process-lifetime lease for the embedded server.
+///
+/// SSH ControlMasters and their reverse-forward tables are process-external
+/// shared state. Two embedded Agentum processes must therefore never reconcile
+/// them concurrently: the later process could silently repoint a preserved
+/// agent's MCP tunnel at its own ephemeral port. The atomic directory is the
+/// dependency-free lock primitive; owner PID + start time permit crash-safe
+/// stale recovery.
+struct EmbeddedRuntimeLease {
+    path: PathBuf,
+    owner: EmbeddedRuntimeOwner,
+}
+
+impl EmbeddedRuntimeLease {
+    fn acquire() -> anyhow::Result<Self> {
+        let lock_path = agentum_store::paths::state_dir()
+            .map_err(|error| anyhow::anyhow!(error))?
+            .join(EMBEDDED_RUNTIME_LOCK_DIR);
+        Self::acquire_at(lock_path)
+    }
+
+    fn acquire_at(path: PathBuf) -> anyhow::Result<Self> {
+        let parent = path.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "embedded runtime lock has no parent directory: {}",
+                path.display()
+            )
+        })?;
+        std::fs::create_dir_all(parent)?;
+        restrict_private_directory(parent)?;
+
+        let pid = std::process::id();
+        let started_at = process_start_time(pid).ok_or_else(|| {
+            anyhow::anyhow!("could not determine this Agentum process start time")
+        })?;
+        let owner = EmbeddedRuntimeOwner {
+            pid,
+            started_at,
+            instance_id: uuid::Uuid::new_v4(),
+        };
+
+        // One pass normally acquires the directory. Extra passes cover a race
+        // where another process concurrently renames a stale lease.
+        for _ in 0..4 {
+            match create_private_directory(&path) {
+                Ok(()) => {
+                    if let Err(error) = write_runtime_owner(&path, &owner) {
+                        let _ = std::fs::remove_file(path.join(EMBEDDED_RUNTIME_OWNER_FILE));
+                        let _ = std::fs::remove_dir(&path);
+                        return Err(error);
+                    }
+                    return Ok(Self { path, owner });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+
+            validate_private_lock_directory(&path)?;
+            if let Some(active) = active_runtime_owner(&path)? {
+                anyhow::bail!(
+                    "another embedded Agentum server is already running (pid {}, started at {}); close it before starting a second desktop/TUI server",
+                    active.pid,
+                    active.started_at
+                );
+            }
+
+            // Claim the stale directory by rename before deleting it. A rival
+            // process can win the rename, but neither contender can delete a
+            // newly-created successor at the canonical lock path.
+            let stale_path = parent.join(format!(
+                ".embedded-runtime.stale-{}-{}",
+                pid, owner.instance_id
+            ));
+            match std::fs::rename(&path, &stale_path) {
+                Ok(()) => std::fs::remove_dir_all(&stale_path)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        anyhow::bail!(
+            "embedded Agentum runtime lock remained contended at {}",
+            path.display()
+        )
+    }
+}
+
+impl Drop for EmbeddedRuntimeLease {
+    fn drop(&mut self) {
+        let owner_path = self.path.join(EMBEDDED_RUNTIME_OWNER_FILE);
+        let still_ours = std::fs::read(&owner_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<EmbeddedRuntimeOwner>(&bytes).ok())
+            .is_some_and(|owner| owner == self.owner);
+        if still_ours {
+            let _ = std::fs::remove_file(owner_path);
+            // Deliberately non-recursive: unexpected contents make cleanup fail
+            // closed instead of deleting anything another actor placed here.
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+}
+
+fn process_start_time(pid: u32) -> Option<u64> {
+    let system = sysinfo::System::new_all();
+    system
+        .process(sysinfo::Pid::from_u32(pid))
+        .map(sysinfo::Process::start_time)
+}
+
+fn active_runtime_owner(path: &Path) -> anyhow::Result<Option<EmbeddedRuntimeOwner>> {
+    let owner_path = path.join(EMBEDDED_RUNTIME_OWNER_FILE);
+    let owner_bytes = match std::fs::read(&owner_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            reject_recent_unowned_lock(path)?;
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let owner = match serde_json::from_slice::<EmbeddedRuntimeOwner>(&owner_bytes) {
+        Ok(owner) => owner,
+        Err(_) => {
+            reject_recent_unowned_lock(path)?;
+            return Ok(None);
+        }
+    };
+    let active = process_start_time(owner.pid) == Some(owner.started_at);
+    Ok(active.then_some(owner))
+}
+
+fn reject_recent_unowned_lock(path: &Path) -> anyhow::Result<()> {
+    let modified = std::fs::metadata(path)?.modified()?;
+    if modified.elapsed().unwrap_or(Duration::ZERO) < EMBEDDED_RUNTIME_INITIALIZE_GRACE {
+        anyhow::bail!(
+            "embedded Agentum runtime lock at {} is still being initialized; retry shortly",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn write_runtime_owner(path: &Path, owner: &EmbeddedRuntimeOwner) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let owner_path = path.join(EMBEDDED_RUNTIME_OWNER_FILE);
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&owner_path)?;
+    let bytes = serde_json::to_vec(owner)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn create_private_directory(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+fn restrict_private_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn validate_private_lock_directory(path: &Path) -> anyhow::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        anyhow::bail!(
+            "refusing unsafe embedded runtime lock path (not a real directory): {}",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o777 != 0o700 {
+            anyhow::bail!(
+                "refusing embedded runtime lock with unsafe permissions at {} (expected 0700)",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn saved_ssh_hosts(hosts: Vec<Host>) -> Vec<Host> {
+    hosts
+        .into_iter()
+        .filter(|host| matches!(host.kind, HostKind::Ssh { .. }))
+        .collect()
 }
 
 impl AppState {
@@ -208,14 +465,150 @@ impl AppState {
             clipboard_pending: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             clipboard_request_bus,
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            // Minted once per server instance; agents present it on every /mcp call.
+            // Standalone/default construction starts ephemeral. Embedded boot
+            // replaces this with the atomically persisted Store credential
+            // before the router or any agent launch can observe the state.
             mcp_token: Arc::new(auth::new_token()),
             // Only the embedded loopback server knows its own URL (it binds an
             // ephemeral port); the standalone daemon leaves this None.
             api_base_url: None,
+            // Every real boot binds this before constructing either router.
+            // Plain AppState::new remains useful to unit tests that do not
+            // launch agents or listeners.
+            mcp_base_url: None,
             // Set only by the desktop via serve_embedded_loopback_with_bridge.
             desktop_bridge: None,
             harness: Arc::new(harness::HarnessEngine::new()),
+        }
+    }
+}
+
+/// Reconcile persisted sessions at embedded-server boot. `Idle` rows resume
+/// through the same host-aware operation as `POST /start`; managed SSH agents
+/// persisted as `Running` re-arm their stable remote MCP listener to this boot's
+/// ephemeral Mac port. Ownership + credential-generation markers make normal
+/// boots non-destructive and first-upgrade credential rotation explicit.
+/// `Stopped`, local, terminal and external rows stay untouched. Failures are
+/// logged independently so the rest of the sweep still runs.
+pub async fn resume_idle_sessions(state: &AppState) {
+    let sessions = match state.store.list_sessions(Some(Status::Idle)).await {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(%error, "could not load idle sessions for startup resume");
+            Vec::new()
+        }
+    };
+
+    // Snapshot originally-Running rows before any Idle resume can change
+    // statuses. Otherwise an Idle SSH MCP session launched by the first sweep
+    // would immediately appear in a second `list_sessions(Running)` query and
+    // be killed/reprovisioned a second time.
+    let running = match state.store.list_sessions(Some(Status::Running)).await {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(%error, "could not load running sessions for MCP reprovisioning");
+            Vec::new()
+        }
+    };
+
+    // Inventory hosts independently of session rows. A saved SSH host can have
+    // only Stopped sessions (or no rows after those sessions were deleted) and
+    // still own a pooled ControlMaster carrying a reverse forward to the prior
+    // embedded server's now-dead ephemeral port.
+    let ssh_hosts: Vec<Host> = match state.store.list_hosts().await {
+        Ok(hosts) => saved_ssh_hosts(hosts),
+        Err(error) => {
+            tracing::warn!(%error, "could not load SSH hosts for startup tunnel reset");
+            Vec::new()
+        }
+    };
+
+    let boot_mcp_host_ids: std::collections::HashSet<_> = sessions
+        .iter()
+        .chain(running.iter())
+        .filter(|session| routes::sessions::managed_session_consumes_agentum_mcp(session))
+        .map(|session| session.host_id.unwrap_or(agentum_core::LOCAL_HOST_ID))
+        .collect();
+
+    // The agent-facing reverse port and bearer token are stable, while the
+    // embedded Mac port changes each boot. Close old masters for EVERY saved
+    // SSH host, which removes stale forwards even when no resumable session
+    // references that host. Hold the route-level host lifecycle lock across
+    // reset + optional rearm: a user start that wins the lock first is observed
+    // by the fresh store read below and rearmed; one that runs afterward builds
+    // its own tunnel on the already-reset master.
+    //
+    // `reset_ssh_master_for_mcp_rearm` also serializes the transport's global
+    // master/tunnel state, so spawning per-host tasks would only queue behind
+    // the same critical section and provide no safe parallelism.
+    for saved_host in &ssh_hosts {
+        let _host_guard = routes::sessions::acquire_host_lifecycle(saved_host.id).await;
+        // The saved-host inventory predates lock acquisition. A credential
+        // update may have won the lock first, so reload the exact revision we
+        // will reset/warm rather than resurrecting the stale snapshot.
+        let host = match state.store.get_host(saved_host.id).await {
+            Ok(Some(host)) if matches!(host.kind, HostKind::Ssh { .. }) => host,
+            Ok(_) => continue,
+            Err(error) => {
+                tracing::warn!(host_id = %saved_host.id, %error, "could not refresh SSH host during boot reset");
+                continue;
+            }
+        };
+        if let Err(error) = host_runtime::reset_ssh_master_for_mcp_rearm(&host).await {
+            tracing::warn!(host_id = %host.id, %error, "could not reset SSH master at boot");
+        }
+
+        // Refresh while this host's lifecycle is locked so a concurrent API
+        // launch cannot fall between the boot snapshot and master reset.
+        let has_live_mcp_consumer = match state.store.list_sessions(None).await {
+            Ok(current) => current.iter().any(|session| {
+                session.host_id == Some(host.id)
+                    && matches!(session.status, Status::Idle | Status::Running)
+                    && routes::sessions::managed_session_consumes_agentum_mcp(session)
+            }),
+            Err(error) => {
+                tracing::warn!(host_id = %host.id, %error, "could not refresh sessions during SSH rearm");
+                boot_mcp_host_ids.contains(&host.id)
+            }
+        };
+        if has_live_mcp_consumer {
+            let Some(mac_port) = mcp_provision::local_mcp_port(state) else {
+                tracing::warn!(host_id = %host.id, "embedded MCP port unavailable during SSH rearm");
+                continue;
+            };
+            if let Err(error) = host_runtime::ensure_reverse_tunnel(&host, mac_port).await {
+                tracing::warn!(host_id = %host.id, %error, "could not rearm stable remote MCP listener");
+            }
+        }
+    }
+
+    for session in sessions {
+        if let Err(error) = routes::sessions::resume_idle_session_by_id(state, session.id).await {
+            tracing::warn!(
+                session_id = %session.id,
+                session_name = %session.name,
+                host_id = ?session.host_id,
+                %error,
+                "could not resume idle session"
+            );
+        }
+    }
+
+    // Reconcile persisted Running SSH MCP rows too. Their owner + credential
+    // generation markers decide whether this is a normal no-kill reattach or a
+    // one-time upgrade restart. Local panes, terminals and external sessions
+    // remain untouched.
+    for session in running {
+        if let Err(error) =
+            routes::sessions::reprovision_running_remote_mcp_session_by_id(state, session.id).await
+        {
+            tracing::warn!(
+                session_id = %session.id,
+                session_name = %session.name,
+                host_id = ?session.host_id,
+                %error,
+                "could not reprovision preserved remote MCP session"
+            );
         }
     }
 }
@@ -311,6 +704,39 @@ pub fn router(state: AppState) -> Router {
         .layer(logging::redacting_trace_layer())
 }
 
+/// Router bound behind the SSH reverse tunnel. Keep this deliberately tiny:
+/// the full embedded API is loopback/no-auth for the local TUI and desktop,
+/// while a reverse tunnel makes its destination reachable from another
+/// machine. `/mcp` performs its own live, session-scoped bearer check before it
+/// parses or dispatches a JSON-RPC message.
+fn mcp_only_router(state: AppState) -> Router {
+    routes::mcp::router()
+        .with_state(state)
+        .layer(axum_mw::from_fn(headers::security_headers))
+        .layer(logging::redacting_trace_layer())
+}
+
+/// Bind the private MCP-only listener before session reconciliation starts and
+/// publish its exact loopback URL into shared state. Callers must keep the
+/// returned listener alive for the same lifetime as their primary API server.
+async fn bind_mcp_only_listener(state: &mut AppState) -> anyhow::Result<TcpListener> {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let addr = listener.local_addr()?;
+    state.mcp_base_url = Some(format!("http://{addr}"));
+    Ok(listener)
+}
+
+fn spawn_mcp_only_listener(listener: TcpListener, state: AppState) -> tokio::task::JoinHandle<()> {
+    let addr = listener.local_addr().ok();
+    let app = mcp_only_router(state);
+    tracing::info!(?addr, "agentum MCP-only listener ready");
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, app).await {
+            tracing::error!(%error, "agentum MCP-only listener exited");
+        }
+    })
+}
+
 /// Bind and serve forever. Drives both the main API server (TLS or plain),
 /// the small plain-HTTP cert-server, the watchdog reconcile loop, and a
 /// periodic auth-session sweeper.
@@ -335,14 +761,17 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
     let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
     let mut state = AppState::with_fingerprint(store, bus.clone(), cert_fingerprint);
     state.no_auth = opts.no_auth;
+    // Standalone and embedded boots must derive the same scoped credential for
+    // preserved panes. An ephemeral master here strands every already-running
+    // agent after a daemon restart even though its tmux pane survived.
+    state.mcp_token = Arc::new(persistent_mcp_token(&state.store).await?);
+    let mcp_listener = bind_mcp_only_listener(&mut state).await?;
 
     if state.store.count_users().await.unwrap_or(0) == 0 {
         tracing::warn!(
             "no users registered yet — open the desktop app to register the first one (or run `agentum auth add <name>` on the host)"
         );
     }
-
-    spawn_background_workers(&state, &bus);
 
     let app = router(state.clone());
 
@@ -367,21 +796,27 @@ pub async fn serve(opts: ServeOptions, store: Store) -> anyhow::Result<()> {
             }
         });
 
+        let mcp_handle = spawn_mcp_only_listener(mcp_listener, state.clone());
+        spawn_startup_reconciliation_then_workers(state.clone(), bus.clone());
         tracing::info!(addr = %opts.addr, "agentum-server listening (https)");
         let result = axum_server::bind_rustls(opts.addr, tls_config)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await;
         cert_handle.abort();
+        mcp_handle.abort();
         result.map_err(Into::into)
     } else {
         tracing::warn!(addr = %opts.addr, "agentum-server listening (plain http; --no-tls)");
         let listener = TcpListener::bind(opts.addr).await?;
-        axum::serve(
+        let mcp_handle = spawn_mcp_only_listener(mcp_listener, state.clone());
+        spawn_startup_reconciliation_then_workers(state.clone(), bus.clone());
+        let result = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .await
-        .map_err(Into::into)
+        .await;
+        mcp_handle.abort();
+        result.map_err(Into::into)
     }
 }
 
@@ -455,13 +890,43 @@ fn spawn_background_workers(state: &AppState, bus: &broadcast::Sender<Event>) {
                 {
                     // Per-host spawn: one slow/dead host must not delay warming
                     // the others.
+                    let store = store.clone();
                     tokio::spawn(async move {
-                        let _ = crate::host_runtime::warm_ssh_master(&host).await;
+                        // Serialize with host credential edits. Otherwise a
+                        // warmer holding a stale Host snapshot can reopen the
+                        // just-closed old-credential master after PATCH /host.
+                        let _host_guard =
+                            crate::routes::sessions::acquire_host_lifecycle(host.id).await;
+                        // Re-read after acquiring the lock: `host` came from
+                        // the outer sweep and may predate a credential update
+                        // that won the lifecycle lock first.
+                        let current = match store.get_host(host.id).await {
+                            Ok(Some(current))
+                                if matches!(current.kind, agentum_core::HostKind::Ssh { .. }) =>
+                            {
+                                current
+                            }
+                            _ => return,
+                        };
+                        let _ = crate::host_runtime::warm_ssh_master(&current).await;
                     });
                 }
             }
         });
     }
+}
+
+/// Run the potentially slow SSH/session boot reconciliation after the MCP-only
+/// listener is live. Standalone and embedded boots use the same ordering so a
+/// preserved ControlMaster cannot retain a reverse forward to the preceding
+/// process's loopback port. Worker startup intentionally remains after
+/// reconciliation: the watchdog must not observe the controlled reset and race
+/// it into a false crash transition.
+fn spawn_startup_reconciliation_then_workers(state: AppState, bus: broadcast::Sender<Event>) {
+    tokio::spawn(async move {
+        resume_idle_sessions(&state).await;
+        spawn_background_workers(&state, &bus);
+    });
 }
 
 /// Boot the API server in-process on an ephemeral loopback port with auth
@@ -495,14 +960,19 @@ pub async fn serve_embedded_loopback_with_bridge(
     bridge: Arc<dyn bridge::DesktopBridge>,
 ) -> anyhow::Result<SocketAddr> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    let runtime_lease = EmbeddedRuntimeLease::acquire()?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let addr = listener.local_addr()?;
     let (mut state, bus) = embedded_app_state(store, addr);
+    state.mcp_token = Arc::new(persistent_mcp_token(&state.store).await?);
     state.desktop_bridge = Some(bridge);
-    spawn_background_workers(&state, &bus);
-    let app = router(state);
+    let mcp_listener = bind_mcp_only_listener(&mut state).await?;
+    let mcp_handle = spawn_mcp_only_listener(mcp_listener, state.clone());
+    let app = router(state.clone());
     tracing::info!(%addr, "agentum-server listening (embedded loopback, desktop bridge)");
     tokio::spawn(async move {
+        // Keep the cross-process lease for exactly the listener's lifetime.
+        let _runtime_lease = runtime_lease;
         if let Err(e) = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -511,7 +981,9 @@ pub async fn serve_embedded_loopback_with_bridge(
         {
             tracing::error!("embedded agentum-server exited: {e}");
         }
+        mcp_handle.abort();
     });
+    spawn_startup_reconciliation_then_workers(state, bus);
     Ok(addr)
 }
 
@@ -521,19 +993,22 @@ pub async fn serve_embedded_loopback_with_bridge(
 pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(SocketAddr, AppState)> {
     // rustls provider selection is process-global; harmless if already set.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    let runtime_lease = EmbeddedRuntimeLease::acquire()?;
 
     // Bind first so we know the ephemeral port BEFORE building the state — it
     // must carry its own URL.
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let addr = listener.local_addr()?;
 
-    let (state, bus) = embedded_app_state(store, addr);
-
-    spawn_background_workers(&state, &bus);
+    let (mut state, bus) = embedded_app_state(store, addr);
+    state.mcp_token = Arc::new(persistent_mcp_token(&state.store).await?);
+    let mcp_listener = bind_mcp_only_listener(&mut state).await?;
+    let mcp_handle = spawn_mcp_only_listener(mcp_listener, state.clone());
 
     let app = router(state.clone());
     tracing::info!(%addr, "agentum-server listening (embedded loopback, no-auth)");
     tokio::spawn(async move {
+        let _runtime_lease = runtime_lease;
         if let Err(e) = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -542,7 +1017,9 @@ pub async fn serve_embedded_loopback_state(store: Store) -> anyhow::Result<(Sock
         {
             tracing::error!("embedded agentum-server exited: {e}");
         }
+        mcp_handle.abort();
     });
+    spawn_startup_reconciliation_then_workers(state.clone(), bus);
     Ok((addr, state))
 }
 
@@ -579,6 +1056,90 @@ async fn cert_redirect_hint(_: Request<Body>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentum_core::{NewHost, NewSession, SshAuth};
+    use tower::ServiceExt as _;
+
+    #[test]
+    fn embedded_runtime_lease_is_exclusive_and_released_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(EMBEDDED_RUNTIME_LOCK_DIR);
+
+        let first = EmbeddedRuntimeLease::acquire_at(path.clone()).unwrap();
+        let error = EmbeddedRuntimeLease::acquire_at(path.clone())
+            .err()
+            .expect("a second embedded runtime must be rejected");
+        assert!(error.to_string().contains("already running"));
+
+        drop(first);
+        assert!(!path.exists());
+        let replacement = EmbeddedRuntimeLease::acquire_at(path.clone()).unwrap();
+        drop(replacement);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn embedded_runtime_lease_reclaims_pid_reuse_safe_stale_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(EMBEDDED_RUNTIME_LOCK_DIR);
+        create_private_directory(&path).unwrap();
+        let actual_start = process_start_time(std::process::id()).unwrap();
+        let stale = EmbeddedRuntimeOwner {
+            pid: std::process::id(),
+            started_at: actual_start.saturating_add(1),
+            instance_id: uuid::Uuid::new_v4(),
+        };
+        write_runtime_owner(&path, &stale).unwrap();
+
+        let lease = EmbeddedRuntimeLease::acquire_at(path.clone()).unwrap();
+        assert_ne!(lease.owner.instance_id, stale.instance_id);
+        drop(lease);
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_runtime_lease_files_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(EMBEDDED_RUNTIME_LOCK_DIR);
+        let lease = EmbeddedRuntimeLease::acquire_at(path.clone()).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(path.join(EMBEDDED_RUNTIME_OWNER_FILE))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(lease);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn embedded_runtime_lease_rejects_a_symlink_lock_path() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("attacker-controlled");
+        std::fs::create_dir(&target).unwrap();
+        let path = dir.path().join(EMBEDDED_RUNTIME_LOCK_DIR);
+        symlink(&target, &path).unwrap();
+
+        let error = EmbeddedRuntimeLease::acquire_at(path)
+            .err()
+            .expect("a symlink must never be treated as the runtime lock directory");
+        assert!(
+            error
+                .to_string()
+                .contains("unsafe embedded runtime lock path")
+        );
+    }
 
     #[tokio::test]
     async fn embedded_app_state_carries_its_url_and_is_no_auth() {
@@ -602,5 +1163,167 @@ mod tests {
         let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
         let state = AppState::new(store, bus);
         assert_eq!(state.api_base_url, None);
+        assert_eq!(state.mcp_base_url, None);
+    }
+
+    #[tokio::test]
+    async fn dedicated_mcp_listener_exposes_no_rest_api_and_requires_its_bearer() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
+        let mut state = AppState::new(store, bus);
+        let listener = bind_mcp_only_listener(&mut state).await.unwrap();
+        let mcp_addr = listener.local_addr().unwrap();
+        assert_eq!(
+            state.mcp_base_url.as_deref(),
+            Some(format!("http://{mcp_addr}").as_str())
+        );
+        drop(listener);
+
+        let app = mcp_only_router(state);
+        let rest = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rest.status(), axum::http::StatusCode::NOT_FOUND);
+
+        let unauthorized = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn persistent_mcp_token_is_created_once_and_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+
+        let first = persistent_mcp_token(&store).await.unwrap();
+        let second = persistent_mcp_token(&store).await.unwrap();
+
+        assert!(valid_persisted_mcp_token(&first));
+        assert_eq!(second, first);
+        assert_eq!(
+            store
+                .setting_get(MCP_TOKEN_SETTING)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(first.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_mcp_token_rotates_an_invalid_stored_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        store
+            .setting_set(MCP_TOKEN_SETTING, "corrupt token")
+            .await
+            .unwrap();
+
+        let token = persistent_mcp_token(&store).await.unwrap();
+
+        assert!(valid_persisted_mcp_token(&token));
+        assert_ne!(token, "corrupt token");
+        assert_eq!(
+            store
+                .setting_get(MCP_TOKEN_SETTING)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(token.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn saved_ssh_host_inventory_does_not_depend_on_session_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let ssh_host = store
+            .create_host(NewHost {
+                name: "sessionless-ssh".into(),
+                kind: HostKind::Ssh {
+                    user: "agentum".into(),
+                    hostname: "192.0.2.1".into(),
+                    port: 22,
+                    auth: SshAuth::Agent,
+                },
+            })
+            .await
+            .unwrap();
+        let deleted = store
+            .create_session_on_host(
+                NewSession {
+                    name: "deleted-remote".into(),
+                    workdir: "/tmp".into(),
+                    tool: "terminal".into(),
+                    model: None,
+                    flags: Vec::new(),
+                    card_id: None,
+                    worktree_path: None,
+                    worktree_branch: None,
+                    worktree_base_ref: None,
+                },
+                Some(ssh_host.id),
+            )
+            .await
+            .unwrap();
+        store.delete_session(deleted.id).await.unwrap();
+
+        let hosts = saved_ssh_hosts(store.list_hosts().await.unwrap());
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].id, ssh_host.id);
+    }
+
+    #[tokio::test]
+    async fn startup_resume_leaves_explicitly_stopped_sessions_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("t.db")).await.unwrap();
+        let session = store
+            .create_session(NewSession {
+                name: "stay-stopped".into(),
+                workdir: dir.path().to_string_lossy().into_owned(),
+                tool: "terminal".into(),
+                model: None,
+                flags: Vec::new(),
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_status_and_target(session.id, Status::Stopped, None)
+            .await
+            .unwrap();
+        let (bus, _) = broadcast::channel::<Event>(EVENT_BUS_CAPACITY);
+        let state = AppState::new(store, bus);
+
+        resume_idle_sessions(&state).await;
+
+        let stored = state
+            .store
+            .get_session_by_id(session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, Status::Stopped);
+        assert!(stored.tmux_target.is_none());
     }
 }

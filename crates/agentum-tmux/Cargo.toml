@@ -10,9 +10,11 @@ description = "tmux subprocess adapter for agentum."
 
 [dependencies]
 agentum-core  = { workspace = true }
+sha2          = "0.10"
 thiserror     = { workspace = true }
 tokio         = { workspace = true }
 tracing       = { workspace = true }
+uuid          = { workspace = true }
 shlex         = "1"
 
 [dev-dependencies]

@@ -1,6 +1,8 @@
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use agentum_core::{
@@ -8,6 +10,7 @@ use agentum_core::{
     WorktreeSpec,
 };
 use agentum_store::paths;
+use agentum_tmux::ssh::SshMux;
 use axum::Json;
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -26,6 +29,206 @@ use crate::StreamCheckpoint;
 use crate::error::ApiError;
 
 const GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const REMOTE_STREAM_CANCELLATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+type RemoteStreamCleanup = Result<(), String>;
+
+/// One long-lived remote WebSocket stream registered against its host. Host
+/// PUT/DELETE signals `cancel`; `cleanup` is published only after the stream's
+/// SSH tail and input-writer children have both been explicitly killed and
+/// reaped. Weak registry entries make normal disconnect cleanup automatic.
+struct RemoteStreamControl {
+    cancel: tokio::sync::watch::Sender<bool>,
+    cleanup: tokio::sync::watch::Sender<Option<RemoteStreamCleanup>>,
+}
+
+struct RemoteStreamRegistration {
+    control: Arc<RemoteStreamControl>,
+    finished: bool,
+}
+
+impl RemoteStreamRegistration {
+    fn finish(mut self, result: RemoteStreamCleanup) {
+        self.control.cleanup.send_replace(Some(result));
+        self.finished = true;
+    }
+}
+
+impl Drop for RemoteStreamRegistration {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.control.cleanup.send_replace(Some(Err(
+                "remote stream ended without explicit child cleanup".into(),
+            )));
+        }
+    }
+}
+
+fn remote_stream_registry()
+-> &'static std::sync::Mutex<HashMap<Uuid, Vec<Weak<RemoteStreamControl>>>> {
+    static STREAMS: OnceLock<std::sync::Mutex<HashMap<Uuid, Vec<Weak<RemoteStreamControl>>>>> =
+        OnceLock::new();
+    STREAMS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Register while the caller holds this host's shared lifecycle lease and
+/// before spawning any long-lived SSH child. That ordering guarantees a host
+/// PUT can either precede the spawn or observe, cancel and await it; there is no
+/// interval where an old-revision child can appear after invalidation unseen.
+fn register_remote_stream(
+    host_id: Uuid,
+) -> (RemoteStreamRegistration, tokio::sync::watch::Receiver<bool>) {
+    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+    let (cleanup, _cleanup_rx) = tokio::sync::watch::channel(None);
+    let control = Arc::new(RemoteStreamControl { cancel, cleanup });
+
+    let registry = remote_stream_registry();
+    let mut registry = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    registry.retain(|_, streams| {
+        streams.retain(|stream| stream.strong_count() > 0);
+        !streams.is_empty()
+    });
+    registry
+        .entry(host_id)
+        .or_default()
+        .push(Arc::downgrade(&control));
+
+    (
+        RemoteStreamRegistration {
+            control,
+            finished: false,
+        },
+        cancel_rx,
+    )
+}
+
+/// Cancel every persistent remote stream for `host_id` and wait for explicit
+/// child cleanup acknowledgment. The caller MUST already hold the shared host
+/// lifecycle lease. Host routes use this before ControlMaster invalidation, so
+/// no pre-PUT child can attach late and recreate the retired namespace.
+pub(crate) async fn cancel_remote_streams_for_host(host_id: Uuid) -> Result<(), ApiError> {
+    let controls: Vec<Arc<RemoteStreamControl>> = {
+        let registry = remote_stream_registry();
+        let mut registry = registry
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let controls = registry
+            .get_mut(&host_id)
+            .map(|streams| {
+                streams.retain(|stream| stream.strong_count() > 0);
+                streams.iter().filter_map(Weak::upgrade).collect()
+            })
+            .unwrap_or_default();
+        registry.retain(|_, streams| !streams.is_empty());
+        controls
+    };
+
+    for control in &controls {
+        control.cancel.send_replace(true);
+    }
+
+    let deadline = tokio::time::Instant::now() + REMOTE_STREAM_CANCELLATION_TIMEOUT;
+    for control in controls {
+        let mut cleanup = control.cleanup.subscribe();
+        let result = tokio::time::timeout_at(deadline, async {
+            loop {
+                if let Some(result) = cleanup.borrow().clone() {
+                    return result;
+                }
+                cleanup.changed().await.map_err(|_| {
+                    "remote stream cleanup channel closed before acknowledgment".to_string()
+                })?;
+            }
+        })
+        .await
+        .map_err(|_| {
+            ApiError::Conflict(format!(
+                "timed out cleaning up active SSH streams for host {host_id}; host mutation cancelled"
+            ))
+        })?;
+        result.map_err(|error| {
+            ApiError::Conflict(format!(
+                "could not clean up an active SSH stream for host {host_id}: {error}; host mutation cancelled"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+/// Serialize every lifecycle mutation for one session. The lock covers the
+/// complete store read → tmux mutation → store write transaction for start,
+/// startup resume, stop, kill and delete. Weak entries keep this process-wide
+/// registry from growing with deleted sessions while avoiding an `AppState`
+/// field that every test fixture would need to duplicate.
+fn session_lifecycle_lock(id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<std::sync::Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    let locks = LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut locks = locks
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&id).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(id, Arc::downgrade(&lock));
+    lock
+}
+
+/// Short global hand-off gate used only while a caller resolves/acquires its
+/// per-session lock. `create_and_spawn_session` holds it across the database
+/// insert (before the UUID exists) and hands off directly to the new session's
+/// lock. Other lifecycle routes take the gate before their per-session lock, so
+/// none can slip into the tiny insert → lock-registration window. The gate is
+/// dropped before any tmux/network work, preserving concurrency across sessions.
+fn lifecycle_lock_handoff() -> &'static tokio::sync::Mutex<()> {
+    static HANDOFF: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    HANDOFF.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+pub(crate) async fn acquire_session_lifecycle(id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+    let handoff = lifecycle_lock_handoff().lock().await;
+    let lock = session_lifecycle_lock(id);
+    drop(handoff);
+    lock.lock_owned().await
+}
+
+pub(crate) async fn acquire_host_lifecycle(id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+    agentum_tmux::ssh::acquire_host_lifecycle(id).await
+}
+
+/// Resolve the immutable host binding before taking leases, then acquire them
+/// in the process-wide canonical host → session order. The session is always
+/// reloaded by the locked implementation, so a concurrent delete between the
+/// preliminary lookup and lease acquisition resolves to a normal 404.
+async fn acquire_host_and_session_lifecycle(
+    state: &AppState,
+    id: Uuid,
+) -> Result<
+    (
+        tokio::sync::OwnedMutexGuard<()>,
+        tokio::sync::OwnedMutexGuard<()>,
+    ),
+    ApiError,
+> {
+    let session = load(state, id).await?;
+    let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host_guard = acquire_host_lifecycle(host_id).await;
+    let session_guard = acquire_session_lifecycle(id).await;
+    Ok((host_guard, session_guard))
+}
+
+fn tool_consumes_agentum_mcp(tool: &str) -> bool {
+    crate::mcp_provision::tool_supports_mcp(tool)
+        || crate::mcp_provision::agent_mcp_file(tool).is_some()
+}
+
+pub(crate) fn managed_session_consumes_agentum_mcp(session: &Session) -> bool {
+    !is_external(session) && tool_consumes_agentum_mcp(&session.tool)
+}
 
 /// When a Local session's `workdir` is missing, decide whether it's a desktop
 /// git-worktree workspace we can safely recreate. Matches the desktop layout
@@ -139,6 +342,7 @@ async fn create(
         worktree,
     } = body;
     let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
+    let _host_guard = acquire_host_lifecycle(host_id).await;
     let host = state
         .store
         .get_host(host_id)
@@ -185,7 +389,22 @@ async fn create(
                     "worktree isolation is not available on SSH hosts yet".into(),
                 ));
             }
-            PathBuf::from(new.workdir.trim())
+            // Resolve `~`/relative paths and validate the selected tool against
+            // the actual SSH target before persisting. Session creation has no
+            // UUID yet, so the nil id is used only for the irrelevant Claude
+            // transcript probe; start performs the same preflight with the real
+            // id before any tunnel/tmux mutation.
+            let requested = PathBuf::from(new.workdir.trim());
+            let preflight = crate::host_runtime::preflight_remote_launch(
+                &host,
+                &requested,
+                &new.tool,
+                Uuid::nil(),
+            )
+            .await
+            .map_err(|e| ApiError::from_host_runtime(&host, e))?;
+            new.workdir = preflight.workdir.to_string_lossy().into_owned();
+            preflight.workdir
         }
     };
 
@@ -349,6 +568,7 @@ async fn patch_session(
     Json(body): Json<PatchBody>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
+    let _guard = acquire_session_lifecycle(id).await;
     let session = load(&state, id).await?;
     let running = matches!(session.status, Status::Running);
 
@@ -433,11 +653,32 @@ async fn delete(
     Query(q): Query<DeleteQuery>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
+    delete_session_by_id_with_force(&state, id, q.force).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Canonical force-delete used by internal rollback paths. It shares the same
+/// host/session leases, remote ownership checks and credential cleanup as the
+/// HTTP route.
+pub(crate) async fn delete_session_by_id(state: &AppState, id: Uuid) -> Result<(), ApiError> {
+    delete_session_by_id_with_force(state, id, true).await
+}
+
+async fn delete_session_by_id_with_force(
+    state: &AppState,
+    id: Uuid,
+    force: bool,
+) -> Result<(), ApiError> {
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(state, id).await?;
+    delete_session_locked(state, id, force).await
+}
+
+async fn delete_session_locked(state: &AppState, id: Uuid, force: bool) -> Result<(), ApiError> {
+    let session = load(state, id).await?;
 
     // Guard a genuinely-running agent behind ?force=true so it isn't torn
     // down by accident. Any other status (Idle/Crashed/Stopped) deletes freely.
-    if matches!(session.status, Status::Running) && !q.force {
+    if matches!(session.status, Status::Running) && !force {
         return Err(ApiError::BadRequest(
             "session is running; pass ?force=true to kill and remove".into(),
         ));
@@ -447,28 +688,60 @@ async fn delete(
     // must NOT do — both previously surfaced as "can't delete the session":
     //   1. Gate teardown on `Running` only. The recorded status lags reality —
     //      a session resting in `Idle` (an agent awaiting input) still owns a
-    //      live pane, so the old `Running`-only gate orphaned it, and a stale
-    //      `agentum-<name>` pane then broke recreating a session of that name.
-    //      We always tear down now; `kill_session` is idempotent (it no-ops when
-    //      the pane is already gone).
-    //   2. Let a teardown failure block record removal. An unreachable host, or
-    //      a host record that's been deleted, must not pin the session row in the
-    //      store forever — removing the local record is always allowed; we just
-    //      can't reach a remote pane that may already be dead. Failures are
-    //      logged, never propagated.
-    match load_host_for_session(&state, &session).await {
+    //      live pane, so the old `Running`-only gate orphaned it. We tear down
+    //      any still-owned target now; `kill_session` is idempotent when gone.
+    //   2. Let an incidental teardown failure block record removal. An
+    //      unreachable/deleted host must not pin the row forever. A live SSH
+    //      ownership conflict is the deliberate exception: keep the exact DB
+    //      binding and return 409 rather than orphaning a pane we refused to
+    //      touch.
+    match load_host_for_session(state, &session).await {
         Ok(host) => {
             let target = tmux_target(&session);
-            let outcome = if is_external(&session) {
+            let mut control_target = target.clone();
+            let may_teardown = if !is_external(&session)
+                && matches!(host.kind, HostKind::Ssh { .. })
+            {
+                match crate::host_runtime::has_session(&host, &target).await {
+                    // Do not issue a name-based idempotent kill: if the exact
+                    // pane disappears and a prefix sibling appears between
+                    // calls, tmux could otherwise resolve the sibling.
+                    Ok(false) => false,
+                    Ok(true) => {
+                        control_target =
+                            migrate_or_verify_remote_tmux_owner(state, &host, &session, &target)
+                                .await?;
+                        true
+                    }
+                    Err(error) => {
+                        tracing::warn!(session = %session.id, %target, %error, "could not verify tmux ownership during delete");
+                        false
+                    }
+                }
+            } else {
+                true
+            };
+            let outcome = if !may_teardown {
+                Ok(())
+            } else if is_external(&session) {
                 // Never destroy a user-owned tmux session — just disarm the pipe.
                 crate::host_runtime::unpipe_pane(&host, &target).await
             } else {
-                crate::host_runtime::kill_session(&host, &target).await
+                crate::host_runtime::kill_session(&host, &control_target).await
             };
             if let Err(e) = outcome {
                 tracing::warn!(
                     session = %session.id, %target,
                     "tmux teardown failed during delete (removing record anyway): {e}"
+                );
+            }
+            if session.tool == "claude"
+                && let Err(error) = remove_session_claude_mcp_config(&host, id).await
+            {
+                tracing::warn!(
+                    session_id = %id,
+                    %error,
+                    "could not remove Claude MCP config during delete"
                 );
             }
         }
@@ -479,7 +752,7 @@ async fn delete(
     }
 
     state.store.delete_session(id).await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 /// Session JSON + a `spawned` flag: `true` when start created a fresh pane
@@ -527,16 +800,446 @@ fn pane_env(
     ]
 }
 
-/// Spawn the agent process for a freshly-(re)started session into a tmux pane
-/// on `host`, arm the output pipe, and mark it `Running`. Shared by the `start`
-/// HTTP handler and the harness-engine driver ([`crate::harness`]) so both go
-/// through the *one* launch path — YOLO marker translation, loopback `pane_env`,
-/// the Claude `--settings` PostToolUse hook, and MCP wiring all stay centralized
-/// here. `workdir` must already be resolved + validated by the caller (the
-/// reattach / external / worktree-heal decisions differ per caller and stay
-/// out of this helper). On a pipe failure the half-spawned pane is killed so we
-/// never leave an orphan behind.
-pub(crate) async fn spawn_agent_into_pane(
+fn required_remote_mcp_port(state: &AppState) -> Result<u16, ApiError> {
+    crate::mcp_provision::local_mcp_port(state).ok_or_else(|| {
+        ApiError::BadGateway(
+            "remote launch requires Agentum's dedicated MCP listener; restart the Agentum TUI or desktop app"
+                .into(),
+        )
+    })
+}
+
+fn remote_claude_mcp_config_path(home: &str, session_id: Uuid) -> PathBuf {
+    std::path::Path::new(home)
+        .join(".agentum/runtime")
+        .join(format!("mcp-{session_id}.json"))
+}
+
+fn agent_mcp_config_matches(
+    content: &str,
+    file: crate::mcp_provision::AgentMcpFile,
+    expected_url: &str,
+    expected_auth_env: &str,
+    forbidden_secret: &str,
+) -> bool {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(content) else {
+        return false;
+    };
+    let entry = &root[file.servers_key]["agentum"];
+    let expected_authorization = file.auth_header_value(expected_auth_env);
+    entry[file.url_field].as_str() == Some(expected_url)
+        && entry["headers"]["Authorization"].as_str() == Some(expected_authorization.as_str())
+        && file
+            .extra
+            .iter()
+            .all(|(key, value)| entry[*key].as_str() == Some(*value))
+        && (forbidden_secret.is_empty() || !content.contains(forbidden_secret))
+}
+
+async fn verify_remote_agent_mcp_config(
+    host: &Host,
+    workdir: &str,
+    tool: &str,
+    expected_url: &str,
+    expected_auth_env: &str,
+    forbidden_secret: &str,
+) -> Result<(), ApiError> {
+    let Some(file) = crate::mcp_provision::agent_mcp_file(tool) else {
+        return Ok(());
+    };
+    let abs = format!("{}/{}", workdir.trim_end_matches('/'), file.rel_path);
+    let content = crate::host_runtime::read_remote_file(host, &abs)
+        .await
+        .map_err(|error| ApiError::from_host_runtime(host, error))?
+        .ok_or_else(|| {
+            ApiError::BadGateway(format!("remote {tool} MCP config was not created at {abs}"))
+        })?;
+    if agent_mcp_config_matches(
+        &content,
+        file,
+        expected_url,
+        expected_auth_env,
+        forbidden_secret,
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::BadGateway(format!(
+            "remote {tool} MCP config at {abs} does not contain the current Agentum endpoint and credential reference"
+        )))
+    }
+}
+
+fn quote_remote_shell(inner: &str) -> Result<String, ApiError> {
+    shlex::try_quote(inner)
+        .map(|quoted| format!("sh -c {quoted}"))
+        .map_err(|_| ApiError::BadRequest("remote path could not be shell-quoted".into()))
+}
+
+/// Ensure the directory that temporarily carries Claude's bearer-token config
+/// is owner-only before writing the file. `write_remote_file` makes the file
+/// itself 0600 atomically; this also repairs an older, overly-permissive runtime
+/// directory before the credential enters it.
+async fn prepare_remote_runtime_dir(host: &Host, home: &str) -> Result<(), ApiError> {
+    let dir = std::path::Path::new(home).join(".agentum/runtime");
+    let dir = dir
+        .to_str()
+        .ok_or_else(|| ApiError::BadRequest("remote HOME is not valid UTF-8".into()))?;
+    let dir = shlex::try_quote(dir)
+        .map_err(|_| ApiError::BadRequest("remote runtime path could not be quoted".into()))?;
+    let script = quote_remote_shell(&format!("umask 077; mkdir -p {dir} && chmod 700 {dir}"))?;
+    crate::host_runtime::ssh_stdout(host, &script)
+        .await
+        .map(|_| ())
+        .map_err(|error| ApiError::from_host_runtime(host, error))
+}
+
+async fn remove_remote_claude_mcp_config(host: &Host, session_id: Uuid) -> Result<(), ApiError> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Ok(());
+    }
+    // `$HOME` is intentionally expanded by the remote POSIX shell. The only
+    // interpolated portion is a UUID, so this cleanup command carries no
+    // user-controlled shell syntax.
+    let inner = format!(
+        "rm -f \"$HOME/.agentum/runtime/mcp-{session_id}.json\" \
+         \"/tmp/agentum-mcp-{session_id}.json\""
+    );
+    let script = quote_remote_shell(&inner)?;
+    crate::host_runtime::ssh_stdout(host, &script)
+        .await
+        .map(|_| ())
+        .map_err(|error| ApiError::from_host_runtime(host, error))
+}
+
+async fn remove_session_claude_mcp_config(host: &Host, session_id: Uuid) -> Result<(), ApiError> {
+    match &host.kind {
+        HostKind::Local => {
+            crate::mcp_provision::remove_combined_config(session_id).map_err(|error| {
+                ApiError::Internal(format!("remove local Claude MCP config: {error:#}"))
+            })
+        }
+        HostKind::Ssh { .. } => remove_remote_claude_mcp_config(host, session_id).await,
+    }
+}
+
+const TMUX_OWNER_OPTION: &str = "@agentum_session_id";
+
+fn quote_remote_tmux_target(target: &str) -> Result<String, ApiError> {
+    // tmux 3.7b does not accept the `=name` exact-target spelling. A quoted
+    // target is safe to pass through the remote shell, and tmux resolves an
+    // exact session name before considering a unique prefix.
+    shlex::try_quote(target)
+        .map(|quoted| quoted.into_owned())
+        .map_err(|_| ApiError::BadRequest("tmux target could not be quoted".into()))
+}
+
+#[derive(Debug)]
+struct RemoteTmuxIdentity {
+    name: String,
+    id: String,
+    owner: Option<Uuid>,
+}
+
+async fn remote_tmux_identity(host: &Host, selector: &str) -> Result<RemoteTmuxIdentity, ApiError> {
+    let quoted_target = quote_remote_tmux_target(selector)?;
+    let script = quote_remote_shell(&format!(
+        "sep=$(printf '\\037'); \
+         tmux display-message -p -t {quoted_target} \
+         \"AGENTUM_TMUX_IDENTITY${{sep}}#{{session_name}}${{sep}}#{{session_id}}${{sep}}#{{{TMUX_OWNER_OPTION}}}\" \
+         2>/dev/null || true"
+    ))?;
+    let output = crate::host_runtime::ssh_stdout(host, &script)
+        .await
+        .map_err(|error| ApiError::from_host_runtime(host, error))?;
+    parse_remote_tmux_identity_output(&output, selector)
+}
+
+fn parse_remote_tmux_identity_output(
+    output: &str,
+    selector: &str,
+) -> Result<RemoteTmuxIdentity, ApiError> {
+    let record = output
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("AGENTUM_TMUX_IDENTITY\u{1f}"))
+        .ok_or_else(|| {
+            ApiError::BadGateway("remote tmux identity probe returned an invalid response".into())
+        })?;
+    let mut fields = record.split('\u{1f}');
+    let resolved = fields.next().unwrap_or_default().trim();
+    let session_id = fields.next().unwrap_or_default().trim();
+    let value = fields.next().unwrap_or_default().trim();
+    if fields.next().is_some() {
+        return Err(ApiError::BadGateway(
+            "remote tmux identity probe returned an invalid field count".into(),
+        ));
+    }
+    if resolved.is_empty()
+        || !session_id.strip_prefix('$').is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    {
+        return Err(ApiError::Conflict(format!(
+            "tmux selector `{selector}` does not resolve to a live session identity"
+        )));
+    }
+    let owner = if value.is_empty() {
+        None
+    } else {
+        Uuid::parse_str(value).map(Some).map_err(|_| {
+            ApiError::Conflict(format!(
+                "tmux target `{resolved}` has an invalid Agentum ownership marker"
+            ))
+        })?
+    };
+    Ok(RemoteTmuxIdentity {
+        name: resolved.to_string(),
+        id: session_id.to_string(),
+        owner,
+    })
+}
+
+async fn exact_remote_tmux_identity(
+    host: &Host,
+    target: &str,
+) -> Result<RemoteTmuxIdentity, ApiError> {
+    let identity = remote_tmux_identity(host, target).await?;
+    validate_exact_tmux_resolution(target, &identity.name).map_err(ApiError::Conflict)?;
+    Ok(identity)
+}
+
+fn validate_exact_tmux_resolution(requested: &str, resolved: &str) -> Result<(), String> {
+    if requested == resolved {
+        Ok(())
+    } else {
+        Err(format!(
+            "tmux target `{requested}` resolves by prefix to `{resolved}`; refusing non-exact ownership"
+        ))
+    }
+}
+
+async fn mark_remote_tmux_owner(
+    host: &Host,
+    expected_name: &str,
+    exact_selector: &str,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    mark_remote_tmux_owner_if_absent(host, exact_selector, id).await?;
+    let identity = remote_tmux_identity(host, exact_selector).await?;
+    if identity.name != expected_name {
+        return Err(ApiError::Conflict(format!(
+            "tmux identity `{exact_selector}` changed from `{expected_name}` to `{}`",
+            identity.name
+        )));
+    }
+    match identity.owner {
+        Some(owner) if owner == id => Ok(()),
+        Some(owner) => Err(ApiError::Conflict(format!(
+            "tmux target `{expected_name}` belongs to Agentum session {owner}, not {id}"
+        ))),
+        None => Err(ApiError::Conflict(format!(
+            "tmux target `{expected_name}` remained unmarked after ownership claim"
+        ))),
+    }
+}
+
+fn validate_legacy_owner_migration_binding(
+    session_id: Uuid,
+    external: bool,
+    persisted_host_id: Option<Uuid>,
+    persisted_target: Option<&str>,
+    live_host_id: Uuid,
+    live_target: &str,
+    exact_binding_ids: &[Uuid],
+) -> Result<(), String> {
+    if external {
+        return Err("external tmux sessions are user-owned".into());
+    }
+    if persisted_host_id != Some(live_host_id) || persisted_target != Some(live_target) {
+        return Err("the live host/target is not the session's exact persisted binding".into());
+    }
+    if live_target
+        .strip_prefix("agentum-")
+        .is_none_or(|suffix| suffix.is_empty())
+    {
+        return Err("the target is not a historical `agentum-` managed target".into());
+    }
+    match exact_binding_ids {
+        [only] if *only == session_id => Ok(()),
+        [only] => Err(format!(
+            "the sole persisted binding belongs to Agentum session {only}"
+        )),
+        bindings => Err(format!(
+            "found {} persisted session bindings for the host/target pair",
+            bindings.len()
+        )),
+    }
+}
+
+/// Claim an unmarked legacy target without overwriting a marker another actor
+/// may have installed after our initial probe. tmux's `-o` flag is an
+/// option-level compare-and-set: it writes only while the option is absent.
+async fn mark_remote_tmux_owner_if_absent(
+    host: &Host,
+    exact_selector: &str,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    let quoted_target = quote_remote_tmux_target(exact_selector)?;
+    let id_string = id.to_string();
+    let quoted_id = shlex::try_quote(&id_string)
+        .map_err(|_| ApiError::BadRequest("session id could not be quoted".into()))?;
+    let script = quote_remote_shell(&format!(
+        "tmux set-option -o -t {quoted_target} {TMUX_OWNER_OPTION} {quoted_id} >/dev/null 2>&1 || true"
+    ))?;
+    crate::host_runtime::ssh_stdout(host, &script)
+        .await
+        .map(|_| ())
+        .map_err(|error| ApiError::from_host_runtime(host, error))
+}
+
+/// Verify a live managed SSH target before reattaching, controlling or
+/// destroying it. An unmarked pane may be migrated exactly once, but only when
+/// it is an historical `agentum-` target and the store proves there is exactly
+/// one persisted `(host_id, tmux_target)` binding, owned by this session.
+/// Existing mismatched (or invalid) markers are never overwritten.
+async fn migrate_or_verify_remote_tmux_owner(
+    state: &AppState,
+    host: &Host,
+    session: &Session,
+    target: &str,
+) -> Result<String, ApiError> {
+    let identity = exact_remote_tmux_identity(host, target).await?;
+    match identity.owner {
+        Some(owner) if owner != session.id => {
+            return Err(ApiError::Conflict(format!(
+                "tmux target `{target}` belongs to Agentum session {owner}, not {}",
+                session.id
+            )));
+        }
+        Some(_) => return Ok(identity.id),
+        None => {}
+    }
+
+    let exact_binding_ids: Vec<Uuid> = state
+        .store
+        .list_sessions(None)
+        .await?
+        .into_iter()
+        .filter(|bound| {
+            bound.host_id == Some(host.id) && bound.tmux_target.as_deref() == Some(target)
+        })
+        .map(|bound| bound.id)
+        .collect();
+    validate_legacy_owner_migration_binding(
+        session.id,
+        is_external(session),
+        session.host_id,
+        session.tmux_target.as_deref(),
+        host.id,
+        target,
+        &exact_binding_ids,
+    )
+    .map_err(|reason| {
+        ApiError::Conflict(format!(
+            "tmux target `{target}` has no Agentum ownership marker; refusing legacy ownership migration: {reason}"
+        ))
+    })?;
+
+    mark_remote_tmux_owner_if_absent(host, &identity.id, session.id).await?;
+    let verified = remote_tmux_identity(host, &identity.id).await?;
+    if verified.name != target || verified.id != identity.id {
+        return Err(ApiError::Conflict(format!(
+            "tmux identity `{}` changed while migrating `{target}`",
+            identity.id
+        )));
+    }
+    match verified.owner {
+        Some(owner) if owner == session.id => Ok(identity.id),
+        Some(owner) => Err(ApiError::Conflict(format!(
+            "tmux target `{target}` belongs to Agentum session {owner}, not {}",
+            session.id
+        ))),
+        None => Err(ApiError::Conflict(format!(
+            "tmux target `{target}` remained unmarked after legacy ownership migration"
+        ))),
+    }
+}
+
+/// Ownership gate for callers that already hold the canonical host → session
+/// leases and are about to operate on a live tmux target. External/user-owned
+/// panes and local sessions deliberately bypass Agentum's marker namespace.
+pub(crate) async fn guard_managed_ssh_tmux_io(
+    state: &AppState,
+    host: &Host,
+    session: &Session,
+    target: &str,
+) -> Result<String, ApiError> {
+    if !is_external(session) && matches!(host.kind, HostKind::Ssh { .. }) {
+        migrate_or_verify_remote_tmux_owner(state, host, session, target).await
+    } else {
+        Ok(target.to_string())
+    }
+}
+
+const TMUX_MCP_GENERATION_OPTION: &str = "@agentum_mcp_generation";
+
+fn mcp_token_generation(token: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+
+    let mut input = b"session-scoped-mcp-v1\0".to_vec();
+    input.extend_from_slice(token.as_bytes());
+    let digest = Sha256::digest(&input);
+    let mut generation = String::with_capacity(24);
+    for byte in &digest[..12] {
+        write!(&mut generation, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    generation
+}
+
+async fn remote_tmux_mcp_generation(host: &Host, target: &str) -> Result<Option<String>, ApiError> {
+    let quoted_target = quote_remote_tmux_target(target)?;
+    let script = quote_remote_shell(&format!(
+        "value=$(tmux show-options -v -t {quoted_target} {TMUX_MCP_GENERATION_OPTION} 2>/dev/null || true); \
+         printf 'AGENTUM_MCP_GENERATION\\t%s\\n' \"$value\""
+    ))?;
+    let output = crate::host_runtime::ssh_stdout(host, &script)
+        .await
+        .map_err(|error| ApiError::from_host_runtime(host, error))?;
+    let value = output
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("AGENTUM_MCP_GENERATION\t"))
+        .ok_or_else(|| {
+            ApiError::BadGateway(
+                "remote tmux MCP generation probe returned an invalid response".into(),
+            )
+        })?
+        .trim();
+    Ok((!value.is_empty()).then(|| value.to_string()))
+}
+
+async fn mark_remote_tmux_mcp_generation(
+    host: &Host,
+    target: &str,
+    generation: &str,
+) -> Result<(), ApiError> {
+    let quoted_target = quote_remote_tmux_target(target)?;
+    let quoted_generation = shlex::try_quote(generation)
+        .map_err(|_| ApiError::BadRequest("MCP generation could not be quoted".into()))?;
+    let script = quote_remote_shell(&format!(
+        "tmux set-option -t {quoted_target} {TMUX_MCP_GENERATION_OPTION} {quoted_generation}"
+    ))?;
+    crate::host_runtime::ssh_stdout(host, &script)
+        .await
+        .map(|_| ())
+        .map_err(|error| ApiError::from_host_runtime(host, error))
+}
+
+/// Spawn implementation for callers that already hold this session's
+/// lifecycle lock. Keeping the public crate seam locked lets harness drivers
+/// participate in the same transaction without recursively locking start/create.
+async fn spawn_agent_into_pane_locked(
     state: &AppState,
     session: &Session,
     host: &Host,
@@ -544,7 +1247,58 @@ pub(crate) async fn spawn_agent_into_pane(
     workdir: &std::path::Path,
 ) -> Result<(), ApiError> {
     let adapter = agentum_executor::adapter_for(&session.tool);
-    let mut launch = adapter.launch(session);
+    let remote_preflight = if matches!(host.kind, HostKind::Ssh { .. }) {
+        Some(
+            crate::host_runtime::preflight_remote_launch(host, workdir, &session.tool, session.id)
+                .await
+                .map_err(|e| ApiError::from_host_runtime(host, e))?,
+        )
+    } else {
+        None
+    };
+    let resolved_workdir = remote_preflight
+        .as_ref()
+        .map(|preflight| preflight.workdir.as_path())
+        .unwrap_or(workdir);
+    let mut launch = match remote_preflight.as_ref() {
+        Some(preflight) => adapter.launch_remote(
+            session,
+            &agentum_executor::RemoteLaunchContext {
+                shell: Cow::Borrowed(preflight.shell.as_str()),
+                claude_transcript_exists: preflight.claude_transcript_exists,
+            },
+        ),
+        None => adapter.launch(session),
+    };
+    if let Some(preflight) = remote_preflight.as_ref() {
+        let program = launch.argv.first_mut().ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "tool adapter `{}` produced an empty launch command",
+                session.tool
+            ))
+        })?;
+        // A long-lived remote tmux server can retain a stale PATH. Always exec
+        // the absolute binary selected by the fresh host preflight.
+        *program = preflight.executable.clone();
+    }
+
+    if let Some(preflight) = remote_preflight.as_ref() {
+        // The SSH login/preflight sees the user's current PATH, whereas a
+        // long-lived tmux server may retain a stale snapshot. Replace any
+        // adapter-provided PATH with the freshly probed value so the selected
+        // CLI and all of its child processes see the same toolchain.
+        launch.env.retain(|(key, _)| key != "PATH");
+        launch
+            .env
+            .push(("PATH".into(), preflight.fresh_path.clone()));
+    }
+
+    let session_mcp_secret =
+        crate::mcp_provision::session_mcp_token(state.mcp_token.as_str(), session.id);
+    // Resolve the local pane-log path before staging any remote credential so
+    // a local path failure cannot strand a Claude MCP config on the host.
+    let log =
+        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
 
     if matches!(host.kind, HostKind::Local) {
         // Loopback hook URLs only work for local panes. SSH-hosted agents
@@ -596,107 +1350,238 @@ pub(crate) async fn spawn_agent_into_pane(
         // Wire the agentum MCP into agents that take it via a launch arg
         // (Claude --mcp-config, Codex -c); local agents reach it on the Mac
         // loopback. Best-effort — never blocks a launch.
+        // Real boots always provide the dedicated MCP-only listener. Keep the
+        // API/default fallback solely for direct unit-test AppState values and
+        // older embedding callers; SSH tunnelling uses `local_mcp_port`, which
+        // intentionally has no such fallback.
         let base = state
-            .api_base_url
+            .mcp_base_url
             .as_deref()
+            .or(state.api_base_url.as_deref())
             .unwrap_or("http://127.0.0.1:8822");
         let agentum_mcp_url = format!("{base}/mcp");
         if let Some(p) =
-            crate::mcp_provision::provision(state, &session.tool, &agentum_mcp_url).await
+            crate::mcp_provision::provision(state, session.id, &session.tool, &agentum_mcp_url)
+                .await
         {
-            launch.argv.extend(adapter.mcp_args(&p));
+            adapter.apply_mcp(&mut launch, &p);
         }
         // File-based agents (Cursor/Gemini/OpenCode) load MCP from a config file
         // in the workdir — write it (no-op for claude/codex).
-        crate::mcp_provision::write_agent_project_config(
+        match crate::mcp_provision::write_agent_project_config(
             state,
+            session.id,
             host,
-            &workdir.to_string_lossy(),
+            &resolved_workdir.to_string_lossy(),
             &session.tool,
             &agentum_mcp_url,
         )
-        .await;
-    } else if matches!(host.kind, HostKind::Ssh { .. }) {
+        .await
+        {
+            Ok(Some(env)) => launch.env.push(env),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %session.id,
+                    tool = %session.tool,
+                    %error,
+                    "could not provision local project MCP config; launching without it"
+                );
+            }
+        }
+    } else if matches!(host.kind, HostKind::Ssh { .. }) && tool_consumes_agentum_mcp(&session.tool)
+    {
         // Remote MCP parity: the agentum MCP lives on the Mac. Reverse-tunnel it
         // to the host (token-guarded, loopback-bound), then wire each agent at
-        // the tunnel URL. Best-effort: a tunnel failure logs and launches the
-        // agent without the MCP rather than blocking.
-        match crate::mcp_provision::local_mcp_port(state) {
-            Some(mac_port) => match crate::host_runtime::ensure_reverse_tunnel(host, mac_port).await
-            {
-                Ok(host_port) => {
-                    // The remote agent needs its own orchestration handle and an
-                    // AGENTUM_API_URL pointing at the tunnel.
-                    launch
-                        .env
-                        .push(("AGENTUM_TERMINAL_HANDLE".into(), session.name.clone()));
-                    launch.env.push((
-                        "AGENTUM_API_URL".into(),
-                        format!("http://127.0.0.1:{host_port}"),
-                    ));
-                    let agentum_mcp_url = format!("http://127.0.0.1:{host_port}/mcp");
-                    let servers =
-                        vec![crate::mcp_provision::agentum_server(state, &agentum_mcp_url)];
-                    let provision = if session.tool == "claude" {
-                        // Claude needs the --mcp-config FILE on the HOST.
-                        let host_cfg = format!("/tmp/agentum-mcp-{}.json", session.id);
-                        let json = crate::mcp_provision::config_json(&servers);
-                        match crate::host_runtime::write_remote_file(host, &host_cfg, &json).await {
-                            Ok(()) => Some(agentum_executor::McpProvision {
-                                servers,
-                                config_file: PathBuf::from(host_cfg),
-                            }),
-                            Err(e) => {
-                                tracing::warn!(session = %session.id, "could not write remote MCP config to host: {e}");
-                                None
-                            }
-                        }
-                    } else {
-                        // Codex injects MCP inline via `-c` — no host file needed.
-                        Some(agentum_executor::McpProvision {
-                            servers,
-                            config_file: PathBuf::new(),
-                        })
-                    };
-                    if let Some(p) = provision {
-                        launch.argv.extend(adapter.mcp_args(&p));
-                    }
-                    // File-based agents: write the config on the HOST in the workdir.
-                    crate::mcp_provision::write_agent_project_config(
-                        state,
-                        host,
-                        &workdir.to_string_lossy(),
-                        &session.tool,
-                        &agentum_mcp_url,
-                    )
-                    .await;
-                }
-                Err(e) => tracing::warn!(
-                    session = %session.id,
-                    "reverse MCP tunnel to host failed; launching remote agent without agentum MCP: {e}"
-                ),
-            },
-            None => tracing::warn!(
-                "no embedded api_base_url; cannot reverse-tunnel the agentum MCP to an SSH host"
-            ),
+        // the tunnel URL. This is required, not best-effort: reporting a remote
+        // agent as Running while silently omitting Agentum's MCP leaves it
+        // deceptively half-functional.
+        let mac_port = required_remote_mcp_port(state)?;
+        let host_port = crate::host_runtime::ensure_reverse_tunnel(host, mac_port)
+            .await
+            .map_err(|e| ApiError::from_host_runtime(host, e))?;
+
+        // The remote agent keeps its orchestration identity, but the reverse
+        // tunnel terminates at an MCP-only listener. Never advertise that port
+        // as AGENTUM_API_URL: doing so would either be misleading (REST is 404)
+        // or tempt a future change to expose the no-auth embedded REST router.
+        // Remote orchestration is available through the scoped Agentum MCP.
+        launch
+            .env
+            .push(("AGENTUM_TERMINAL_HANDLE".into(), session.name.clone()));
+        let agentum_mcp_url = format!("http://127.0.0.1:{host_port}/mcp");
+        let servers = vec![crate::mcp_provision::agentum_server(
+            state,
+            session.id,
+            &agentum_mcp_url,
+        )];
+        let provision = if session.tool == "claude" {
+            // Claude needs the --mcp-config FILE on the HOST. Failing this write
+            // is a launch failure; do not start an agent missing its MCP.
+            let preflight = remote_preflight
+                .as_ref()
+                .expect("SSH launch always has a remote preflight");
+            prepare_remote_runtime_dir(host, &preflight.home).await?;
+            let host_cfg = remote_claude_mcp_config_path(&preflight.home, session.id);
+            let host_cfg_str = host_cfg.to_str().ok_or_else(|| {
+                ApiError::BadRequest("remote Claude MCP config path is not valid UTF-8".into())
+            })?;
+            let json = crate::mcp_provision::config_json(&servers);
+            crate::host_runtime::write_remote_file(host, host_cfg_str, &json)
+                .await
+                .map_err(|e| ApiError::from_host_runtime(host, e))?;
+            agentum_executor::McpProvision {
+                servers,
+                config_file: host_cfg,
+            }
+        } else {
+            // Codex injects MCP inline via `-c` — no host file needed.
+            agentum_executor::McpProvision {
+                servers,
+                config_file: PathBuf::new(),
+            }
+        };
+        adapter.apply_mcp(&mut launch, &provision);
+        // File-based agents: write the config on the HOST in the workdir.
+        let project_auth_env = crate::mcp_provision::write_agent_project_config(
+            state,
+            session.id,
+            host,
+            &resolved_workdir.to_string_lossy(),
+            &session.tool,
+            &agentum_mcp_url,
+        )
+        .await
+        .map_err(|error| {
+            ApiError::BadGateway(format!(
+                "could not provision remote {} MCP project config: {error}",
+                session.tool
+            ))
+        })?;
+        match project_auth_env {
+            Some((env_name, env_value)) => {
+                launch.env.push((env_name.clone(), env_value));
+                verify_remote_agent_mcp_config(
+                    host,
+                    &resolved_workdir.to_string_lossy(),
+                    &session.tool,
+                    &agentum_mcp_url,
+                    &env_name,
+                    session_mcp_secret.as_str(),
+                )
+                .await?;
+            }
+            None if crate::mcp_provision::agent_mcp_file(&session.tool).is_some() => {
+                return Err(ApiError::BadGateway(format!(
+                    "remote {} MCP project config did not produce a launch credential",
+                    session.tool
+                )));
+            }
+            None => {}
         }
     }
 
-    crate::host_runtime::new_session(host, target, workdir, &launch.argv, &launch.env)
+    let mut launch_result = match &host.kind {
+        HostKind::Local => match crate::host_runtime::new_session(
+            host,
+            target,
+            resolved_workdir,
+            &launch.argv,
+            &launch.env,
+        )
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        {
+            Err(error) => Err(ApiError::from_host_runtime(host, error)),
+            Ok(()) => {
+                if let Err(error) = crate::host_runtime::pipe_pane(host, target, &log).await {
+                    let _ = crate::host_runtime::kill_session(host, target).await;
+                    Err(ApiError::from_host_runtime(host, error))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+        HostKind::Ssh { .. } => crate::host_runtime::launch_remote_session(
+            host,
+            target,
+            resolved_workdir,
+            &launch.argv,
+            &launch.env,
+            &[state.mcp_token.as_str(), session_mcp_secret.as_str()],
+            &log,
+        )
+        .await
+        .map_err(|e| ApiError::from_host_runtime(host, e)),
+    };
 
-    let log =
-        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if let Err(e) = crate::host_runtime::pipe_pane(host, target, &log).await {
-        let _ = crate::host_runtime::kill_session(host, target).await;
-        return Err(ApiError::Internal(e.to_string()));
+    let mut remote_control_target = None;
+    if launch_result.is_ok() && matches!(host.kind, HostKind::Ssh { .. }) {
+        match exact_remote_tmux_identity(host, target).await {
+            Ok(identity) => {
+                remote_control_target = Some(identity.id.clone());
+                if let Err(marker_error) =
+                    mark_remote_tmux_owner(host, target, &identity.id, session.id).await
+                {
+                    // A new pane is not committed until its durable ownership
+                    // marker is in place. Roll back through tmux's immutable
+                    // `$N` session id so a disappearing exact name can never
+                    // prefix-resolve to a different pane.
+                    let _ = crate::host_runtime::kill_session(host, &identity.id).await;
+                    launch_result = Err(marker_error);
+                }
+            }
+            Err(marker_error) => {
+                launch_result = Err(marker_error);
+            }
+        }
+    }
+    if launch_result.is_ok()
+        && matches!(host.kind, HostKind::Ssh { .. })
+        && tool_consumes_agentum_mcp(&session.tool)
+    {
+        let generation = mcp_token_generation(state.mcp_token.as_str());
+        let control_target = remote_control_target.as_deref().unwrap_or(target);
+        if let Err(marker_error) =
+            mark_remote_tmux_mcp_generation(host, control_target, &generation).await
+        {
+            let _ = crate::host_runtime::kill_session(host, control_target).await;
+            launch_result = Err(marker_error);
+        }
     }
 
-    state
+    // Keep Claude's owner-only config for the lifetime of a successful pane:
+    // the CLI is allowed to re-read it after startup. Failed launches have no
+    // consumer, so remove their credential immediately; successful panes clean
+    // it on stop/kill/delete (and before generation reprovisioning).
+    if session.tool == "claude"
+        && launch_result.is_err()
+        && let Err(cleanup_error) = remove_session_claude_mcp_config(host, session.id).await
+    {
+        tracing::warn!(session_id = %session.id, %cleanup_error, "could not remove Claude MCP config after failed launch");
+    }
+    if let Err(error) = launch_result {
+        state.hook_tokens.lock().unwrap().remove(&session.id);
+        return Err(error);
+    }
+
+    if let Err(error) = state
         .store
         .update_status_and_target(session.id, Status::Running, Some(target))
-        .await?;
+        .await
+    {
+        // A pane without its persisted identity/status is an orphan and can be
+        // stolen by a later name-derived start. Roll the just-created pane back
+        // before surfacing the database error.
+        let control_target = remote_control_target.as_deref().unwrap_or(target);
+        let _ = crate::host_runtime::kill_session(host, control_target).await;
+        if session.tool == "claude"
+            && let Err(cleanup_error) = remove_session_claude_mcp_config(host, session.id).await
+        {
+            tracing::warn!(session_id = %session.id, %cleanup_error, "could not remove Claude MCP config after persistence failure");
+        }
+        state.hook_tokens.lock().unwrap().remove(&session.id);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -705,22 +1590,106 @@ async fn start(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
+    let (session, spawned) = start_session_by_id(&state, id).await?;
+    Ok(Json(session_with_spawned(session, spawned)))
+}
+
+/// Host-aware start operation shared by the HTTP route and boot-time idle
+/// resume. Keeping host lookup, reattach, remote validation and launch behind
+/// this one callable prevents a persisted SSH-owned row from ever falling back
+/// to local filesystem/tmux behavior.
+pub(crate) async fn start_session_by_id(
+    state: &AppState,
+    id: Uuid,
+) -> Result<(Session, bool), ApiError> {
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(state, id).await?;
+    start_session_locked(state, id).await
+}
+
+/// Boot-time resume entry point. The initial `list_sessions(Idle)` is only a
+/// snapshot; a concurrent explicit stop can win while the sweep waits for this
+/// session's lock. Re-read under the lifecycle lock and skip unless it is still
+/// `Idle` so startup can never undo the user's stop.
+pub(crate) async fn resume_idle_session_by_id(
+    state: &AppState,
+    id: Uuid,
+) -> Result<Option<(Session, bool)>, ApiError> {
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(state, id).await?;
+    let session = load(state, id).await?;
+    if !matches!(session.status, Status::Idle) {
+        return Ok(None);
+    }
+    start_session_locked(state, id).await.map(Some)
+}
+
+/// Reconcile a preserved Running SSH MCP pane at boot. Normal boots verify its
+/// stable credential-generation marker, re-arm the stable host listener and
+/// reattach without killing it. A missing/stale generation (first upgrade or
+/// explicit token rotation) triggers the one necessary restart. Plain terminals,
+/// local panes and external/user-owned tmux sessions are excluded.
+pub(crate) async fn reprovision_running_remote_mcp_session_by_id(
+    state: &AppState,
+    id: Uuid,
+) -> Result<Option<(Session, bool)>, ApiError> {
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(state, id).await?;
+    let session = load(state, id).await?;
+    if !matches!(session.status, Status::Running)
+        || is_external(&session)
+        || !tool_consumes_agentum_mcp(&session.tool)
+    {
+        return Ok(None);
+    }
+    let host = load_host_for_session(state, &session).await?;
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Ok(None);
+    }
+    start_session_locked(state, id).await.map(Some)
+}
+
+async fn start_session_locked(state: &AppState, id: Uuid) -> Result<(Session, bool), ApiError> {
+    let session = load(state, id).await?;
+    let host = load_host_for_session(state, &session).await?;
     // External sessions keep their (non-agentum) target across stop, so
     // start can only ever reattach to it — never derive a fresh
     // `agentum-*` name, which would spawn a parallel session.
-    let target = if is_external(&session) {
-        session.tmux_target.clone().ok_or_else(|| {
-            ApiError::BadRequest("external session has lost its tmux target".into())
-        })?
-    } else {
-        agentum_tmux::target_for(&session.name)
-    };
+    let target = start_target(&session)?;
 
-    let already = crate::host_runtime::has_session(&host, &target)
+    let mut already = crate::host_runtime::has_session(&host, &target)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::from_host_runtime(&host, e))?;
+    let mut remote_control_target = None;
+
+    if already && !is_external(&session) && matches!(host.kind, HostKind::Ssh { .. }) {
+        let exact_target =
+            migrate_or_verify_remote_tmux_owner(state, &host, &session, &target).await?;
+        remote_control_target = Some(exact_target.clone());
+        if tool_consumes_agentum_mcp(&session.tool) {
+            let expected = mcp_token_generation(state.mcp_token.as_str());
+            let current = remote_tmux_mcp_generation(&host, &exact_target).await?;
+            if current.as_deref() != Some(expected.as_str()) {
+                // One-time upgrade/credential rotation: this verified managed
+                // pane has a missing/stale credential generation. Restart it
+                // exactly once; subsequent boots keep the stable token/host
+                // port and reattach without sacrificing conversation state.
+                crate::host_runtime::kill_session(&host, &exact_target)
+                    .await
+                    .map_err(|e| ApiError::from_host_runtime(&host, e))?;
+                state
+                    .store
+                    .update_status_and_target(id, Status::Idle, None)
+                    .await?;
+                already = false;
+            } else {
+                // The credential and agent-facing host port are stable, but the
+                // Mac endpoint is ephemeral. Ensure boot has re-armed the stable
+                // reverse listener to this server before reporting the pane live.
+                let mac_port = required_remote_mcp_port(state)?;
+                crate::host_runtime::ensure_reverse_tunnel(&host, mac_port)
+                    .await
+                    .map_err(|error| ApiError::from_host_runtime(&host, error))?;
+            }
+        }
+    }
 
     if already {
         // The tmux session is still alive — REATTACH to it instead of killing
@@ -732,13 +1701,31 @@ async fn start(
         // is reattachable regardless, and the watchdog reconciles the real state
         // on its next tick. Previously this branch killed the "orphan", which
         // destroyed exactly the session the user wanted to keep across a restart.
-        if !matches!(session.status, Status::Running) {
+        // Stop explicitly disarms an external pane's pipe. Re-arm every live
+        // reattach (the operation is idempotent) before reporting Running so a
+        // reattached local or remote pane immediately resumes streaming.
+        let log = paths::pane_log(&session.id.to_string())
+            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        let control_target = remote_control_target.as_deref().unwrap_or(&target);
+        crate::host_runtime::pipe_pane(&host, control_target, &log)
+            .await
+            .map_err(|e| ApiError::from_host_runtime(&host, e))?;
+        if !matches!(session.status, Status::Running)
+            || session.tmux_target.as_deref() != Some(target.as_str())
+        {
             state
                 .store
                 .update_status_and_target(id, Status::Running, Some(&target))
                 .await?;
         }
-        return Ok(Json(session_with_spawned(load(&state, id).await?, false)));
+        return Ok((load(state, id).await?, false));
+    }
+
+    if !is_external(&session) && session.tool == "claude" {
+        // Remove a credential file left by a crashed daemon/pane before the
+        // next preflight. The successful launch below writes the current
+        // generation atomically at this same private path.
+        remove_session_claude_mcp_config(&host, id).await?;
     }
 
     // The underlying tmux session of an external attach is owned by the
@@ -792,8 +1779,8 @@ async fn start(
     // All launch conventions (YOLO translation, loopback env, Claude hook, MCP
     // wiring, pipe-pane, status flip) live in the shared spawn helper so the
     // harness-engine driver goes through the exact same path.
-    spawn_agent_into_pane(&state, &session, &host, &target, &workdir).await?;
-    Ok(Json(session_with_spawned(load(&state, id).await?, true)))
+    spawn_agent_into_pane_locked(state, &session, &host, &target, &workdir).await?;
+    Ok((load(state, id).await?, true))
 }
 
 /// Create a session record AND launch its agent into a fresh tmux pane in one
@@ -810,6 +1797,7 @@ pub(crate) async fn create_and_spawn_session(
     host_id: Option<Uuid>,
 ) -> Result<Session, ApiError> {
     let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
+    let _host_guard = acquire_host_lifecycle(host_id).await;
     let host = state
         .store
         .get_host(host_id)
@@ -830,14 +1818,81 @@ pub(crate) async fn create_and_spawn_session(
             new.workdir = workdir.to_string_lossy().into_owned();
             workdir
         }
-        HostKind::Ssh { .. } => PathBuf::from(new.workdir.trim()),
+        HostKind::Ssh { .. } => {
+            let requested = PathBuf::from(new.workdir.trim());
+            let preflight = crate::host_runtime::preflight_remote_launch(
+                &host,
+                &requested,
+                &new.tool,
+                Uuid::nil(),
+            )
+            .await
+            .map_err(|e| ApiError::from_host_runtime(&host, e))?;
+            new.workdir = preflight.workdir.to_string_lossy().into_owned();
+            preflight.workdir
+        }
     };
 
-    let session = state.store.create_session_on_host(new, Some(host_id)).await?;
-    // A freshly-created agentum session always derives its target from the name;
-    // there is no pre-existing pane to reattach to (that's the `start` route's job).
-    let target = agentum_tmux::target_for(&session.name);
-    spawn_agent_into_pane(state, &session, &host, &target, &workdir).await?;
+    let handoff = lifecycle_lock_handoff().lock().await;
+    let session = state
+        .store
+        .create_session_on_host(new, Some(host_id))
+        .await?;
+    // Hand the insert directly to the new per-session lock before allowing any
+    // lifecycle route through the registry gate. This closes the only interval
+    // where the row exists but its generated UUID was not known to this caller.
+    let _guard = session_lifecycle_lock(session.id)
+        .try_lock_owned()
+        .expect("a newly inserted session lock cannot already be held");
+    drop(handoff);
+    let target = managed_tmux_target(&session);
+    spawn_agent_into_pane_locked(state, &session, &host, &target, &workdir).await?;
+    load(state, session.id).await
+}
+
+/// Atomically claim a board card and launch its canonical managed session.
+/// `Store::claim_card` currently creates local-host rows (its schema-era
+/// contract predates selectable hosts), so reject a non-local request rather
+/// than launching remotely while persisting a misleading local binding.
+pub(crate) async fn claim_card_and_spawn_session(
+    state: &AppState,
+    card_id: i64,
+    mut new: NewSession,
+    host_id: Option<Uuid>,
+) -> Result<Session, ApiError> {
+    let host_id = host_id.unwrap_or(LOCAL_HOST_ID);
+    if host_id != LOCAL_HOST_ID {
+        return Err(ApiError::BadRequest(
+            "board card sessions can only be claimed on the local host".into(),
+        ));
+    }
+
+    let _host_guard = acquire_host_lifecycle(host_id).await;
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown host: {host_id}")))?;
+    let workdir = super::util::expand_workdir(&new.workdir)?;
+    if !workdir.exists() {
+        return Err(ApiError::BadRequest(format!(
+            "workdir does not exist: {}",
+            workdir.display()
+        )));
+    }
+    new.workdir = workdir.to_string_lossy().into_owned();
+
+    // Keep the UUID hand-off atomic with respect to every route that resolves a
+    // per-session lease, exactly like `create_and_spawn_session`.
+    let handoff = lifecycle_lock_handoff().lock().await;
+    let (_card, session) = state.store.claim_card(card_id, new).await?;
+    let _session_guard = session_lifecycle_lock(session.id)
+        .try_lock_owned()
+        .expect("a newly claimed session lock cannot already be held");
+    drop(handoff);
+
+    let target = managed_tmux_target(&session);
+    spawn_agent_into_pane_locked(state, &session, &host, &target, &workdir).await?;
     load(state, session.id).await
 }
 
@@ -846,9 +1901,27 @@ async fn stop(
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(&state, id).await?;
+    Ok(Json(stop_session_locked(&state, id).await?))
+}
+
+async fn stop_session_locked(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
+    let session = load(state, id).await?;
+    let host = load_host_for_session(state, &session).await?;
     let target = tmux_target(&session);
+    let managed_remote = !is_external(&session) && matches!(host.kind, HostKind::Ssh { .. });
+    let live = if managed_remote {
+        crate::host_runtime::has_session(&host, &target)
+            .await
+            .map_err(|error| ApiError::from_host_runtime(&host, error))?
+    } else {
+        true
+    };
+    let control_target = if managed_remote && live {
+        migrate_or_verify_remote_tmux_owner(state, &host, &session, &target).await?
+    } else {
+        target.clone()
+    };
     if is_external(&session) {
         // Detach only: the tmux session belongs to the user. Disarm the
         // log pipe and keep the target so a later start can reattach.
@@ -858,17 +1931,24 @@ async fn stop(
             .update_status_and_target(id, Status::Stopped, Some(&target))
             .await?;
     } else {
-        crate::host_runtime::graceful_stop(&host, &target, GRACEFUL_STOP_TIMEOUT)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if live {
+            crate::host_runtime::graceful_stop(&host, &control_target, GRACEFUL_STOP_TIMEOUT)
+                .await
+                .map_err(|e| ApiError::from_host_runtime(&host, e))?;
+        }
         state
             .store
             .update_status_and_target(id, Status::Stopped, None)
             .await?;
     }
+    if session.tool == "claude"
+        && let Err(error) = remove_session_claude_mcp_config(&host, id).await
+    {
+        tracing::warn!(session_id = %id, %error, "could not remove Claude MCP config during stop");
+    }
     state.hook_tokens.lock().unwrap().remove(&id);
-    emit_stopped(&state, &session, "stop").await;
-    Ok(Json(load(&state, id).await?))
+    emit_stopped(state, &session, "stop").await;
+    load(state, id).await
 }
 
 async fn kill(
@@ -876,9 +1956,32 @@ async fn kill(
     Path(id): Path<String>,
 ) -> Result<Json<Session>, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = load(&state, id).await?;
-    let host = load_host_for_session(&state, &session).await?;
+    Ok(Json(kill_session_by_id(&state, id).await?))
+}
+
+/// Canonical hard stop used by HTTP, board and harness paths.
+pub(crate) async fn kill_session_by_id(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(state, id).await?;
+    kill_session_locked(state, id).await
+}
+
+async fn kill_session_locked(state: &AppState, id: Uuid) -> Result<Session, ApiError> {
+    let session = load(state, id).await?;
+    let host = load_host_for_session(state, &session).await?;
     let target = tmux_target(&session);
+    let managed_remote = !is_external(&session) && matches!(host.kind, HostKind::Ssh { .. });
+    let live = if managed_remote {
+        crate::host_runtime::has_session(&host, &target)
+            .await
+            .map_err(|error| ApiError::from_host_runtime(&host, error))?
+    } else {
+        true
+    };
+    let control_target = if managed_remote && live {
+        migrate_or_verify_remote_tmux_owner(state, &host, &session, &target).await?
+    } else {
+        target.clone()
+    };
     if is_external(&session) {
         // Even a kill must not destroy a user-owned tmux session —
         // detach (disarm the pipe) and keep the target for reattach.
@@ -888,17 +1991,24 @@ async fn kill(
             .update_status_and_target(id, Status::Stopped, Some(&target))
             .await?;
     } else {
-        crate::host_runtime::kill_session(&host, &target)
-            .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+        if live {
+            crate::host_runtime::kill_session(&host, &control_target)
+                .await
+                .map_err(|e| ApiError::from_host_runtime(&host, e))?;
+        }
         state
             .store
             .update_status_and_target(id, Status::Stopped, None)
             .await?;
     }
+    if session.tool == "claude"
+        && let Err(error) = remove_session_claude_mcp_config(&host, id).await
+    {
+        tracing::warn!(session_id = %id, %error, "could not remove Claude MCP config during kill");
+    }
     state.hook_tokens.lock().unwrap().remove(&id);
-    emit_stopped(&state, &session, "kill").await;
-    Ok(Json(load(&state, id).await?))
+    emit_stopped(state, &session, "kill").await;
+    load(state, id).await
 }
 
 /// Persist + broadcast a `session.stopped` event so the UI gets a benign
@@ -934,11 +2044,95 @@ async fn load_host_for_session(state: &AppState, session: &Session) -> Result<Ho
         .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))
 }
 
+/// Acquire the process-wide host lifecycle lease and reload the persisted SSH
+/// host while that lease is held. Long-lived WebSocket tasks must never retain
+/// a [`Host`] across a host PUT: the PUT closes the old ControlMaster before it
+/// commits the new credential revision, and reusing a pre-PUT value afterwards
+/// could recreate the retired master. Callers keep the returned guard only for
+/// the single SSH/tmux operation (or process spawn) they are about to perform.
+async fn acquire_current_stream_host(
+    state: &AppState,
+    host_id: Uuid,
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, Host), ApiError> {
+    let guard = acquire_host_lifecycle(host_id).await;
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))?;
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Err(ApiError::BadRequest(format!(
+            "session host is no longer an SSH host: {host_id}"
+        )));
+    }
+    Ok((guard, host))
+}
+
+/// Cancellation-aware form used after a persistent stream has registered.
+/// Without this select, a stream could wait for the host lease held by PUT
+/// while PUT simultaneously waits for the stream's cleanup acknowledgment.
+async fn acquire_current_stream_host_unless_cancelled(
+    state: &AppState,
+    host_id: Uuid,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<Option<(tokio::sync::OwnedMutexGuard<()>, Host)>, ApiError> {
+    if *cancel.borrow() {
+        return Ok(None);
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.changed() => Ok(None),
+        current = acquire_current_stream_host(state, host_id) => current.map(Some),
+    }
+}
+
+/// Send a frame without letting a backpressured/non-reading WebSocket block a
+/// host mutation from reaching child cleanup. Once cancellation is signaled,
+/// the frame is abandoned and the stream loop proceeds directly to reap/ACK.
+async fn send_remote_stream_message_unless_cancelled(
+    socket: &mut WebSocket,
+    message: Message,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+) -> bool {
+    if *cancel.borrow() {
+        return false;
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.changed() => false,
+        result = socket.send(message) => result.is_ok(),
+    }
+}
+
 fn tmux_target(session: &Session) -> String {
     session
         .tmux_target
         .clone()
-        .unwrap_or_else(|| agentum_tmux::target_for(&session.name))
+        .unwrap_or_else(|| managed_tmux_target(session))
+}
+
+/// A newly managed pane includes its immutable session UUID. Names are display
+/// labels and are not unique, so a name-only target can collide with another DB
+/// row (or a user's unrelated tmux session) and make `has-session` look like a
+/// valid reattach. Persisted legacy targets remain honored, while every new
+/// target is collision-safe without relying on mutable pane contents.
+fn managed_tmux_target(session: &Session) -> String {
+    agentum_tmux::target_for(&format!("{}-{}", session.name, session.id.simple()))
+}
+
+/// Target selection for a start is deliberately persistence-first. A running
+/// pane keeps its immutable tmux identity even when the user renames the
+/// session; only rows that have never owned a target derive a collision-safe
+/// target from the display name plus immutable UUID. External records cannot be
+/// recreated when that binding is missing.
+fn start_target(session: &Session) -> Result<String, ApiError> {
+    match session.tmux_target.clone() {
+        Some(target) => Ok(target),
+        None if is_external(session) => Err(ApiError::BadRequest(
+            "external session has lost its tmux target".into(),
+        )),
+        None => Ok(managed_tmux_target(session)),
+    }
 }
 
 /// True when this record was created by attaching to a pre-existing
@@ -970,11 +2164,8 @@ async fn send(
     Json(body): Json<SendBody>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = state
-        .store
-        .get_session_by_id(id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(&state, id).await?;
+    let session = load(&state, id).await?;
     let host = load_host_for_session(&state, &session).await?;
     let target = session
         .tmux_target
@@ -989,16 +2180,17 @@ async fn send(
 
     if !crate::host_runtime::has_session(&host, target)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|e| ApiError::from_host_runtime(&host, e))?
     {
         return Err(ApiError::BadRequest(
             "tmux session not active for this session".into(),
         ));
     }
+    let control_target = guard_managed_ssh_tmux_io(&state, &host, &session, target).await?;
 
-    crate::host_runtime::send_keys(&host, target, payload, body.append_enter)
+    crate::host_runtime::send_keys(&host, &control_target, payload, body.append_enter)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|e| ApiError::from_host_runtime(&host, e))?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1040,21 +2232,35 @@ async fn stream(
     Query(q): Query<StreamQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = parse_uuid(&id)?;
-    let session = state
-        .store
-        .get_session_by_id(id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let (host_guard, session_guard) = acquire_host_and_session_lifecycle(&state, id).await?;
+    let session = load(&state, id).await?;
     let host = load_host_for_session(&state, &session).await?;
-    let target = tmux_target(&session);
+    let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    let mut target = session
+        .tmux_target
+        .clone()
+        .ok_or_else(|| ApiError::BadRequest("session is not running".into()))?;
+    if !is_external(&session) && matches!(host.kind, HostKind::Ssh { .. }) {
+        // The ownership guard resolves the target and proves that the exact
+        // tmux identity is live. A separate `has-session` here duplicated that
+        // SSH round trip on every attach, directly delaying the WebSocket
+        // upgrade on high-latency hosts.
+        target = guard_managed_ssh_tmux_io(&state, &host, &session, &target).await?;
+    }
     let positions = state.stream_positions.clone();
     let resume = q.resume;
     let redraw = q.redraw;
+    let remote = matches!(host.kind, HostKind::Ssh { .. });
+    // The upgraded socket is long-lived. Release the handshake transaction
+    // before returning it; the remote stream reacquires the shared host lease
+    // around each SSH operation instead of pinning host edits for its lifetime.
+    drop(session_guard);
+    drop(host_guard);
     Ok(ws.on_upgrade(move |socket| async move {
-        if matches!(host.kind, HostKind::Local) {
+        if !remote {
             stream_session(socket, id, target, positions, resume, redraw).await;
         } else {
-            stream_remote_session(socket, host, id, target, redraw).await;
+            stream_remote_session(socket, state, host_id, id, target, redraw).await;
         }
     }))
 }
@@ -1287,9 +2493,7 @@ async fn stream_session(
     // The post-restore settle lets the clean frame land in the log before
     // the snapshot below captures it. No-op when we never learned the
     // client's size or the pane is too short to shrink.
-    if redraw_requested
-        && let Some((cols, rows)) = current_size
-    {
+    if redraw_requested && let Some((cols, rows)) = current_size {
         let shrunk = rows.saturating_sub(1);
         if shrunk >= 1 && shrunk != rows {
             let _ = agentum_tmux::resize_window(&target, cols, shrunk).await;
@@ -1346,9 +2550,11 @@ async fn stream_session(
     // never a delta replay (which would just re-feed the corrupting bytes).
     // Clients pair `redraw` with omitting `resume`, but gate here too so a
     // client sending both still heals.
-    if let (true, Some(cp), true) =
-        (resume_requested && !redraw_requested, saved_checkpoint, resume_size_matches)
-    {
+    if let (true, Some(cp), true) = (
+        resume_requested && !redraw_requested,
+        saved_checkpoint,
+        resume_size_matches,
+    ) {
         if let Ok(end) = file.seek(std::io::SeekFrom::End(0)).await
             && end >= cp.pos
         {
@@ -1616,6 +2822,262 @@ async fn stream_session(
     );
 }
 
+/// Terminate a long-lived SSH child and explicitly reap it. A bounded failure
+/// is propagated to the host mutation barrier, which then fails closed instead
+/// of committing a new host revision while an old-revision child may survive.
+async fn kill_and_reap_remote_stream_child(
+    child: &mut tokio::process::Child,
+    label: &str,
+) -> RemoteStreamCleanup {
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(error) => return Err(format!("could not inspect {label}: {error}")),
+    }
+
+    let kill_error = child.start_kill().err();
+    match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(format!("could not reap {label}: {error}")),
+        Err(_) => {
+            let suffix = kill_error
+                .map(|error| format!(" (kill request also failed: {error})"))
+                .unwrap_or_default();
+            Err(format!("timed out reaping {label}{suffix}"))
+        }
+    }
+}
+
+const TAIL_RESPAWN_ATTEMPTS: u32 = 6;
+const TAIL_POOLED_ATTEMPTS: u32 = 3;
+const INPUT_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+const REMOTE_TITLE_POLL_IDLE_TICKS: u32 = 2;
+
+fn tail_respawn_backoff(attempt: u32) -> Duration {
+    let millis = 250u64.saturating_mul(1u64 << attempt.min(4));
+    Duration::from_millis(millis.min(3_000))
+}
+
+/// First try the pooled streaming master. If repeated attempts cannot open a
+/// usable tail, evict it exactly once and keep the rest of this recovery cycle
+/// on fresh connections so a dead/saturated pool cannot trap every retry.
+fn tail_reconnect_plan(attempt: u32) -> (SshMux, bool) {
+    if attempt < TAIL_POOLED_ATTEMPTS {
+        (SshMux::Streaming, false)
+    } else {
+        (SshMux::Off, attempt == TAIL_POOLED_ATTEMPTS)
+    }
+}
+
+fn remote_title_poll_due(bytes_since_poll: bool, ticks_since_poll: u32) -> bool {
+    bytes_since_poll || ticks_since_poll >= REMOTE_TITLE_POLL_IDLE_TICKS
+}
+
+async fn write_remote_input_with_timeout<W>(
+    writer: &mut W,
+    bytes: &[u8],
+    deadline: Duration,
+) -> bool
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    matches!(
+        tokio::time::timeout(deadline, async {
+            writer.write_all(bytes).await?;
+            writer.flush().await
+        })
+        .await,
+        Ok(Ok(()))
+    )
+}
+
+async fn queue_remote_input_unless_cancelled(
+    sender: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    bytes: Vec<u8>,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+) -> bool {
+    if *cancel.borrow() {
+        return false;
+    }
+    tokio::select! {
+        biased;
+        _ = cancel.changed() => false,
+        result = sender.send(bytes) => result.is_ok(),
+    }
+}
+
+/// One long-lived remote tail plus the tasks that drain both of its pipes. The
+/// stream registry cannot acknowledge host mutation until `shutdown` explicitly
+/// kills/reaps the child and ends these tasks.
+struct RemoteTailPump {
+    child: tokio::process::Child,
+    receiver: tokio::sync::mpsc::Receiver<Bytes>,
+    stdout_handle: tokio::task::JoinHandle<()>,
+    stderr_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RemoteTailPump {
+    async fn spawn(
+        host: &Host,
+        log: &std::path::Path,
+        offset: Option<u64>,
+        mux: SshMux,
+    ) -> Result<Self, String> {
+        let mut child = crate::host_runtime::spawn_remote_pane_tail(host, log, offset, mux)
+            .map_err(|error| error.to_string())?;
+        let Some(mut stdout) = child.stdout.take() else {
+            let cleanup = kill_and_reap_remote_stream_child(&mut child, "remote pane tail").await;
+            return Err(match cleanup {
+                Ok(()) => "remote pane tail stdout was unavailable".into(),
+                Err(error) => format!("remote pane tail stdout was unavailable; {error}"),
+            });
+        };
+        let stderr_handle = child.stderr.take().map(|mut stderr| {
+            let label = log
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("?")
+                .to_string();
+            tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                if stderr.read_to_end(&mut bytes).await.is_ok() && !bytes.is_empty() {
+                    tracing::warn!(
+                        session = %label,
+                        "remote pane tail ended: {}",
+                        String::from_utf8_lossy(&bytes).trim()
+                    );
+                }
+            })
+        });
+        let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(64);
+        let stdout_handle = tokio::spawn(async move {
+            let mut buffer = vec![0u8; READ_CHUNK];
+            loop {
+                match stdout.read(&mut buffer).await {
+                    // EOF means the SSH channel died; closing the sender wakes
+                    // the owning WebSocket loop so it can recover in place.
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => {
+                        if sender
+                            .send(Bytes::copy_from_slice(&buffer[..read]))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            receiver,
+            stdout_handle,
+            stderr_handle,
+        })
+    }
+
+    async fn shutdown(mut self) -> RemoteStreamCleanup {
+        let cleanup = kill_and_reap_remote_stream_child(&mut self.child, "remote pane tail").await;
+        self.stdout_handle.abort();
+        let _ = self.stdout_handle.await;
+        if let Some(mut stderr_handle) = self.stderr_handle
+            && tokio::time::timeout(Duration::from_millis(500), &mut stderr_handle)
+                .await
+                .is_err()
+        {
+            stderr_handle.abort();
+            let _ = stderr_handle.await;
+        }
+        cleanup
+    }
+}
+
+/// Recover a tail without tearing down the client WebSocket. Every attempt
+/// reloads the saved host under its lifecycle lease, samples the snapshot and
+/// log offset together, then starts the replacement tail before repainting.
+async fn reestablish_remote_tail(
+    state: &AppState,
+    host_id: Uuid,
+    id: Uuid,
+    target: &str,
+    log: &std::path::Path,
+    socket: &mut WebSocket,
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+) -> Option<RemoteTailPump> {
+    for attempt in 0..TAIL_RESPAWN_ATTEMPTS {
+        if *cancel.borrow() {
+            return None;
+        }
+        tokio::select! {
+            biased;
+            _ = cancel.changed() => return None,
+            _ = sleep(tail_respawn_backoff(attempt)) => {}
+        }
+
+        let (host_guard, host) = match acquire_current_stream_host_unless_cancelled(
+            state, host_id, cancel,
+        )
+        .await
+        {
+            Ok(Some(current)) => current,
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::debug!(session = %id, %host_id, %error, "remote tail recovery could not reload host");
+                continue;
+            }
+        };
+
+        let (mux, evict_first) = tail_reconnect_plan(attempt);
+        if evict_first {
+            crate::host_runtime::evict_ssh_master(&host, SshMux::Streaming).await;
+        }
+        let capture = crate::host_runtime::capture_pane_with_log_offset(&host, target, log).await;
+        let (offset, snapshot) = match capture {
+            Ok(capture) => capture,
+            Err(error) => {
+                drop(host_guard);
+                tracing::debug!(session = %id, %host_id, %error, "remote tail recovery snapshot failed");
+                continue;
+            }
+        };
+        let replacement = RemoteTailPump::spawn(&host, log, Some(offset), mux).await;
+        drop(host_guard);
+        let replacement = match replacement {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                tracing::debug!(session = %id, %host_id, %error, "remote tail recovery spawn failed");
+                continue;
+            }
+        };
+
+        if !snapshot.is_empty() {
+            let mut payload = Vec::with_capacity(snapshot.len() + 2);
+            payload.extend_from_slice(b"\x1bc");
+            payload.extend_from_slice(&snapshot);
+            if !send_remote_stream_message_unless_cancelled(
+                socket,
+                Message::Binary(Bytes::from(payload)),
+                cancel,
+            )
+            .await
+            {
+                let _ = replacement.shutdown().await;
+                return None;
+            }
+        }
+        return Some(replacement);
+    }
+
+    let _ = send_remote_stream_message_unless_cancelled(
+        socket,
+        Message::Text("[remote stream interrupted — reconnecting]".into()),
+        cancel,
+    )
+    .await;
+    None
+}
+
 /// Remote (SSH) session stream — the push-based mirror of [`stream_session`].
 ///
 /// Previously this polled `capture-pane` over SSH every 700 ms and re-sent a
@@ -1628,7 +3090,8 @@ async fn stream_session(
 /// model as the local file tail, just sourced over one long-lived SSH channel.
 async fn stream_remote_session(
     mut socket: WebSocket,
-    host: Host,
+    state: AppState,
+    host_id: Uuid,
     id: Uuid,
     target: String,
     redraw_requested: bool,
@@ -1659,18 +3122,11 @@ async fn stream_remote_session(
     // a full handshake to attach — every byte a busy agent emitted in that
     // multi-second window was silently dropped, and a chunk lost mid-escape-
     // sequence left the terminal corrupted until a manual refresh.
-    // Capture the snapshot, RETRYING while it comes back empty. A just-launched
-    // agent paints its first frame slowly — Claude Code spins up node and draws
-    // a "trust this folder?" prompt, which measured >3s to appear — and that
-    // first frame is often a STATIC screen (it waits for input, emitting nothing
-    // more), so the live tail has nothing to stream and the snapshot is the only
-    // way to paint it. A single capture at connect therefore returned a blank
-    // grid and the pane sat BLANK ("opened an agent, no response") until a manual
-    // refresh. Re-capturing every ~300ms until the pane has drawn something (or a
-    // 12s budget elapses — generous enough for a cold node/agent boot) makes a
-    // freshly-opened agent paint as soon as it renders. The loop breaks the
-    // instant a frame is non-empty, so a fast pane isn't delayed; each retry
-    // re-samples the offset so the tail still resumes exactly past what we paint.
+    // Capture exactly once, even when the pane is still blank. The same command
+    // arms pipe-pane and returns the byte offset paired with that snapshot, so
+    // the live tail below will deliver the first frame as soon as the process
+    // draws it. Retrying an empty capture delayed tail startup by as much as 12
+    // seconds and made a valid idle shell look disconnected.
     // Redraw heal (see the local path and the `redraw` query doc): force the
     // remote agent to fully repaint before we snapshot, so a corrupted grid
     // (e.g. an OS `wall` broadcast written over the pane on the host) is
@@ -1679,114 +3135,92 @@ async fn stream_remote_session(
     // shrink-then-restore that nets to the original geometry. No file probe on
     // a remote host, so use a fixed inter-resize pause long enough for the
     // agent to observe the smaller size and start repainting; the snapshot
-    // retry loop below then captures the clean frame.
+    // below then captures the clean frame.
     if redraw_requested {
         const REMOTE_NUDGE_PAUSE: Duration = Duration::from_millis(150);
-        let _ = crate::host_runtime::resize_window_relative(&host, &target, -1).await;
+        if let Ok((_host_guard, host)) = acquire_current_stream_host(&state, host_id).await {
+            let _ = crate::host_runtime::resize_window_relative(&host, &target, -1).await;
+        }
         sleep(REMOTE_NUDGE_PAUSE).await;
-        let _ = crate::host_runtime::resize_window_relative(&host, &target, 1).await;
+        if let Ok((_host_guard, host)) = acquire_current_stream_host(&state, host_id).await {
+            let _ = crate::host_runtime::resize_window_relative(&host, &target, 1).await;
+        }
         sleep(REMOTE_NUDGE_PAUSE).await;
     }
 
-    const SNAPSHOT_RETRY_BUDGET: Duration = Duration::from_millis(12_000);
-    const SNAPSHOT_RETRY_GAP: Duration = Duration::from_millis(300);
-    let snap_deadline = tokio::time::Instant::now() + SNAPSHOT_RETRY_BUDGET;
     let mut log_offset: Option<u64> = None;
-    loop {
-        let out_of_budget = tokio::time::Instant::now() >= snap_deadline;
-        match crate::host_runtime::capture_pane_with_log_offset(&host, &target, &log).await {
-            Ok((offset, snap)) => {
-                log_offset = Some(offset);
-                if !snap.is_empty() {
-                    let mut payload = Vec::with_capacity(snap.len() + 2);
-                    payload.extend_from_slice(b"\x1bc");
-                    payload.extend_from_slice(&snap);
-                    if socket
-                        .send(Message::Binary(Bytes::from(payload)))
-                        .await
-                        .is_err()
-                    {
-                        return;
+    match acquire_current_stream_host(&state, host_id).await {
+        Ok((_host_guard, host)) => {
+            match crate::host_runtime::capture_pane_with_log_offset(&host, &target, &log).await {
+                Ok((offset, snapshot)) => {
+                    log_offset = Some(offset);
+                    if !snapshot.is_empty() {
+                        let mut payload = Vec::with_capacity(snapshot.len() + 2);
+                        payload.extend_from_slice(b"\x1bc");
+                        payload.extend_from_slice(&snapshot);
+                        if socket
+                            .send(Message::Binary(Bytes::from(payload)))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
-                    break;
                 }
-                // Empty grid: the agent hasn't painted yet. Keep retrying.
-                if out_of_budget {
-                    break;
+                Err(error) => {
+                    tracing::debug!(session = %id, %host_id, %error, "remote pane snapshot failed; starting live tail immediately");
                 }
-                sleep(SNAPSHOT_RETRY_GAP).await;
             }
-            // A capture error early in a session's life is usually transient —
-            // the tmux pane is still being set up, or the streaming SSH channel
-            // is cold. RETRY within the budget instead of bailing to a blank
-            // pane; only give up (fall back to tail-from-EOF) once time's up.
-            Err(_) => {
-                if out_of_budget {
-                    break;
-                }
-                sleep(SNAPSHOT_RETRY_GAP).await;
-            }
+        }
+        Err(error) => {
+            tracing::debug!(session = %id, %host_id, %error, "remote pane snapshot could not reload host; starting live tail immediately");
         }
     }
 
     // Persistent `ssh tail -f` of the remote pane log. Its stdout is pumped
-    // through an mpsc so the select loop below multiplexes output against
-    // keystrokes — a chatty pane never starves input, and vice versa.
-    let mut child = match crate::host_runtime::spawn_remote_pane_tail(&host, &log, log_offset) {
-        Ok(c) => c,
-        Err(e) => {
+    // through a bounded channel so the select loop multiplexes output and
+    // keystrokes. Initial channel refusal uses the same bounded recovery as a
+    // mid-stream failure instead of opening a blank pane and immediately
+    // tearing down the WebSocket.
+    let (host_guard, host) = match acquire_current_stream_host(&state, host_id).await {
+        Ok(current) => current,
+        Err(error) => {
             let _ = socket
-                .send(Message::Text(format!("[remote tail error: {e}]").into()))
+                .send(Message::Text(
+                    format!("[remote tail error: {error}]").into(),
+                ))
                 .await;
             return;
         }
     };
-    let Some(mut stdout) = child.stdout.take() else {
-        let _ = child.kill().await;
-        return;
-    };
-    // Drain + log the tail's stderr so a transport failure that ends the stream
-    // (e.g. the remote sshd refusing the channel under MaxSessions pressure:
-    // "Session open refused by peer") is recorded instead of silently surfacing
-    // as a bare "[session stream closed]". Also keeps the pipe from filling.
-    if let Some(mut stderr) = child.stderr.take() {
-        let label = log
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("?")
-            .to_string();
-        tokio::spawn(async move {
-            let mut buf = Vec::new();
-            if stderr.read_to_end(&mut buf).await.is_ok() && !buf.is_empty() {
-                tracing::warn!(
-                    session = %label,
-                    "remote pane tail ended: {}",
-                    String::from_utf8_lossy(&buf).trim()
-                );
-            }
-        });
-    }
-    let (tail_tx, mut tail_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
-    let tail_handle = tokio::spawn(async move {
-        let mut buf = vec![0u8; READ_CHUNK];
-        loop {
-            match stdout.read(&mut buf).await {
-                // 0 = ssh/tail exited (channel/host dropped). Unlike a local file
-                // tail this never means "caught up"; end the task so the loop
-                // tears the connection down.
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tail_tx
-                        .send(Bytes::copy_from_slice(&buf[..n]))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
+    // Registration and spawn are one host-lease transaction. A PUT cannot
+    // cross this point without seeing the child in the cancellation registry.
+    let (registration, mut cancel_rx) = register_remote_stream(host_id);
+    let tail_spawn = RemoteTailPump::spawn(&host, &log, log_offset, SshMux::Streaming).await;
+    drop(host_guard);
+    let mut tail = match tail_spawn {
+        Ok(tail) => Some(tail),
+        Err(error) => {
+            tracing::debug!(session = %id, %host_id, %error, "initial remote tail spawn failed");
+            match reestablish_remote_tail(
+                &state,
+                host_id,
+                id,
+                &target,
+                &log,
+                &mut socket,
+                &mut cancel_rx,
+            )
+            .await
+            {
+                Some(tail) => Some(tail),
+                None => {
+                    registration.finish(Ok(()));
+                    return;
                 }
             }
         }
-    });
+    };
 
     // Input writer: keystrokes leave the select loop through an mpsc and a
     // dedicated task delivers them. The fast path is a PERSISTENT SSH channel
@@ -1798,44 +3232,154 @@ async fn stream_remote_session(
     // `send_bytes` so input still works, just slower.
     //
     // Either way the loop coalesces whatever queued while the previous write was
-    // in flight (fast typing, paste) into one write, and delivery failures are
-    // logged rather than echoed — the pane not echoing already signals a drop.
+    // in flight (fast typing, paste) into one write. The WebSocket task applies
+    // backpressure at the bounded queue instead of silently dropping accepted
+    // input, while cancellation can still wake it immediately.
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
-    let input_handle = {
-        let host = host.clone();
+    let mut input_handle = {
+        let state = state.clone();
         let target = target.clone();
+        let mut input_cancel = cancel_rx.clone();
         tokio::spawn(async move {
-            // Persistent keystroke channel + its stdin; None → use per-exec fallback.
-            let mut writer = crate::host_runtime::spawn_remote_input_writer(&host, &target).ok();
-            let mut stdin = writer.as_mut().and_then(|c| c.stdin.take());
-            while let Some(first) = input_rx.recv().await {
+            // Pre-open the writer while the streaming master is hot so the
+            // first keystroke is a one-way write, not a channel-open round trip.
+            let mut writer = match acquire_current_stream_host_unless_cancelled(
+                &state,
+                host_id,
+                &mut input_cancel,
+            )
+            .await
+            {
+                Ok(Some((_host_guard, host))) => {
+                    crate::host_runtime::spawn_remote_input_writer(&host, &target).ok()
+                }
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(%host_id, %error, "remote input writer could not reload host");
+                    None
+                }
+            };
+            let mut stdin = writer.as_mut().and_then(|child| child.stdin.take());
+            let mut cleanup_errors = Vec::new();
+            'input: loop {
+                let first = tokio::select! {
+                    biased;
+                    _ = input_cancel.changed() => break 'input,
+                    first = input_rx.recv() => match first {
+                        Some(first) => first,
+                        None => break 'input,
+                    },
+                };
                 let mut buf = first;
-                // Drain whatever queued while the previous write was in flight,
-                // up to the send-keys 4 KB chunk size.
+                // Drain whatever queued while the previous write was in flight.
+                // The encoder independently splits an arbitrarily large first
+                // frame at the shared tmux-safe boundary.
                 while buf.len() < 4096 {
                     match input_rx.try_recv() {
                         Ok(more) => buf.extend_from_slice(&more),
                         Err(_) => break,
                     }
                 }
-                let mut delivered = false;
-                if let Some(si) = stdin.as_mut() {
-                    let line = crate::host_runtime::encode_input_hex_line(&buf);
-                    if si.write_all(&line).await.is_ok() && si.flush().await.is_ok() {
-                        delivered = true;
-                    } else {
-                        // Persistent channel broke — drop the child (kills the
-                        // dead ssh) and fall back to per-exec for this and every
-                        // subsequent keystroke.
-                        stdin = None;
-                        drop(writer.take());
+
+                // Restore the fast persistent path after an initial spawn
+                // failure or a prior broken/wedged child. Reload the saved host
+                // while holding its lifecycle lease so old credentials cannot
+                // reappear after a PUT.
+                if stdin.is_none() {
+                    if let Some(mut stale) = writer.take()
+                        && let Err(error) =
+                            kill_and_reap_remote_stream_child(&mut stale, "remote input writer")
+                                .await
+                    {
+                        cleanup_errors.push(error);
+                    }
+                    match acquire_current_stream_host_unless_cancelled(
+                        &state,
+                        host_id,
+                        &mut input_cancel,
+                    )
+                    .await
+                    {
+                        Ok(Some((_host_guard, host))) => {
+                            if let Ok(mut child) =
+                                crate::host_runtime::spawn_remote_input_writer(&host, &target)
+                            {
+                                stdin = child.stdin.take();
+                                writer = Some(child);
+                            }
+                        }
+                        Ok(None) => break 'input,
+                        Err(error) => {
+                            tracing::warn!(%host_id, %error, "remote input writer could not reload host");
+                        }
                     }
                 }
-                if !delivered
-                    && let Err(e) = crate::host_runtime::send_bytes(&host, &target, &buf).await
-                {
-                    tracing::warn!(target = %target, error = ?e, "remote input send failed");
+
+                let mut delivered = false;
+                if let Some(si) = stdin.as_mut() {
+                    // This is the exact framing used by the working Agentum
+                    // server: newline-framed base64 decoded into tmux's own
+                    // paste buffer. This preserves arbitrary bytes and lets
+                    // tmux drain large pastes without overflowing the pane PTY.
+                    let frames = crate::host_runtime::encode_remote_input_lines(&buf);
+                    let wrote = tokio::select! {
+                        biased;
+                        _ = input_cancel.changed() => break 'input,
+                        result = write_remote_input_with_timeout(si, &frames, INPUT_WRITE_TIMEOUT) => result,
+                    };
+                    if wrote {
+                        delivered = true;
+                    } else {
+                        // A broken pipe or a master whose far end stopped
+                        // draining must never freeze every later keystroke.
+                        stdin = None;
+                        if let Some(mut failed) = writer.take()
+                            && let Err(error) = kill_and_reap_remote_stream_child(
+                                &mut failed,
+                                "remote input writer",
+                            )
+                            .await
+                        {
+                            cleanup_errors.push(error);
+                        }
+                    }
                 }
+                if !delivered {
+                    // A failed persistent channel usually means a host PUT
+                    // closed its old ControlMaster. Reload under the shared
+                    // lease so fallback input cannot recreate that old
+                    // credential revision.
+                    let send_result = match acquire_current_stream_host_unless_cancelled(
+                        &state,
+                        host_id,
+                        &mut input_cancel,
+                    )
+                    .await
+                    {
+                        Ok(Some((_host_guard, host))) => {
+                            crate::host_runtime::send_bytes(&host, &target, &buf)
+                                .await
+                                .map_err(|error| error.to_string())
+                        }
+                        Ok(None) => break 'input,
+                        Err(error) => Err(error.to_string()),
+                    };
+                    if let Err(error) = send_result {
+                        tracing::warn!(target = %target, %error, "remote input send failed");
+                    }
+                }
+            }
+
+            if let Some(mut writer) = writer
+                && let Err(error) =
+                    kill_and_reap_remote_stream_child(&mut writer, "remote input writer").await
+            {
+                cleanup_errors.push(error);
+            }
+            if cleanup_errors.is_empty() {
+                Ok(())
+            } else {
+                Err(cleanup_errors.join("; "))
             }
         })
     };
@@ -1851,10 +3395,40 @@ async fn stream_remote_session(
     // the master headroom.
     let mut title_ticker = tokio::time::interval(Duration::from_millis(2500));
     let mut last_pane_title = String::new();
+    let mut bytes_since_title_poll = true;
+    let mut ticks_since_title_poll = 0u32;
+    let mut tail_cleanup_errors = Vec::new();
     loop {
+        // Deliberately fair. A ratatui/agent pane can keep the tail receiver
+        // continuously ready; output-first `biased` selection then prevents
+        // `socket.recv()` from ever accepting keyboard bytes. The working
+        // Agentum stream uses Tokio's fair selection for this exact mux.
         tokio::select! {
+            _ = cancel_rx.changed() => break,
             _ = title_ticker.tick() => {
-                if let Ok(title) = crate::host_runtime::pane_title(&host, &target).await
+                ticks_since_title_poll = ticks_since_title_poll.saturating_add(1);
+                if !remote_title_poll_due(bytes_since_title_poll, ticks_since_title_poll) {
+                    continue;
+                }
+                bytes_since_title_poll = false;
+                ticks_since_title_poll = 0;
+                let title = match acquire_current_stream_host_unless_cancelled(
+                    &state,
+                    host_id,
+                    &mut cancel_rx,
+                )
+                .await
+                {
+                    Ok(Some((_host_guard, host))) => {
+                        crate::host_runtime::pane_title(&host, &target).await.ok()
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        tracing::debug!(session = %id, %host_id, %error, "remote title poll could not reload host");
+                        None
+                    }
+                };
+                if let Some(title) = title
                     && !title.is_empty()
                     && title != last_pane_title
                 {
@@ -1863,51 +3437,109 @@ async fn stream_remote_session(
                     osc.extend_from_slice(b"\x1b]0;");
                     osc.extend_from_slice(title.as_bytes());
                     osc.push(0x07);
-                    if socket.send(Message::Binary(Bytes::from(osc))).await.is_err() {
+                    if !send_remote_stream_message_unless_cancelled(
+                        &mut socket,
+                        Message::Binary(Bytes::from(osc)),
+                        &mut cancel_rx,
+                    )
+                    .await
+                    {
                         break;
                     }
                 }
             }
-            chunk = tail_rx.recv() => match chunk {
+            chunk = tail.as_mut().expect("remote tail is present").receiver.recv() => match chunk {
                 Some(bytes) => {
+                    bytes_since_title_poll = true;
                     // Coalesce a backlog of small SSH-tail reads into one frame
                     // (no added latency) so a weak client isn't woken once per
                     // tiny chunk of a chatty remote agent.
-                    let frame = coalesce_queued(bytes, &mut tail_rx);
-                    if socket.send(Message::Binary(frame)).await.is_err() {
+                    let frame = coalesce_queued(
+                        bytes,
+                        &mut tail.as_mut().expect("remote tail is present").receiver,
+                    );
+                    if !send_remote_stream_message_unless_cancelled(
+                        &mut socket,
+                        Message::Binary(frame),
+                        &mut cancel_rx,
+                    )
+                    .await
+                    {
                         break;
                     }
                 }
-                None => break, // tail task ended (ssh died / host unreachable)
+                None => {
+                    let ended = tail.take().expect("remote tail is present");
+                    if let Err(error) = ended.shutdown().await {
+                        tail_cleanup_errors.push(error);
+                        break;
+                    }
+                    match reestablish_remote_tail(
+                        &state,
+                        host_id,
+                        id,
+                        &target,
+                        &log,
+                        &mut socket,
+                        &mut cancel_rx,
+                    )
+                    .await
+                    {
+                        Some(replacement) => tail = Some(replacement),
+                        None => break,
+                    }
+                }
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Binary(b))) if !b.is_empty() => {
-                    // Channel-full (writer wedged on a dead host for 256
-                    // frames) drops the key; the 12 s ssh timeout unwedges
-                    // the writer long before that backlog accrues.
-                    let _ = input_tx.try_send(b.to_vec());
+                    if !queue_remote_input_unless_cancelled(
+                        &input_tx,
+                        b.to_vec(),
+                        &mut cancel_rx,
+                    )
+                    .await
+                    {
+                        break;
+                    }
                 }
                 Some(Ok(Message::Text(t))) => {
                     if let Some((cols, rows)) = parse_resize(&t) {
-                        match crate::host_runtime::resize_window(&host, &target, cols, rows).await {
+                        let resize_result = match acquire_current_stream_host_unless_cancelled(
+                            &state,
+                            host_id,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        {
+                            Ok(Some((_host_guard, host))) => {
+                                crate::host_runtime::resize_window(&host, &target, cols, rows)
+                                    .await
+                                    .map_err(|error| (error.is_tmux_target_missing(), error.to_string()))
+                            }
+                            Ok(None) => break,
+                            Err(error) => Err((false, error.to_string())),
+                        };
+                        match resize_result {
                             Ok(()) => {}
                             // Teardown can win the race with a resize already
                             // queued by the selected client. The event/session
                             // refresh path owns recovery; reporting this as a
                             // terminal error only opens a fatal-looking modal
                             // for expected lifecycle churn.
-                            Err(e) if e.is_tmux_target_missing() => {
+                            Err((true, error)) => {
                                 tracing::debug!(
                                     target = %target,
-                                    error = %e,
+                                    %error,
                                     "ignored resize for vanished remote tmux target"
                                 );
                             }
-                            Err(e) => {
-                                if socket
-                                    .send(Message::Text(format!("[resize dropped: {e}]").into()))
-                                    .await
-                                    .is_err()
+                            Err((false, error)) => {
+                                if !send_remote_stream_message_unless_cancelled(
+                                    &mut socket,
+                                    Message::Text(format!("[resize dropped: {error}]").into()),
+                                    &mut cancel_rx,
+                                )
+                                .await
                                 {
                                     break;
                                 }
@@ -1916,18 +3548,46 @@ async fn stream_remote_session(
                     } else if parse_refresh(&t) {
                         // Re-paint the current screen on demand (same shape as the
                         // initial snapshot). Heals any bytes missed at connect.
-                        if let Ok(snap) = crate::host_runtime::capture_pane_ansi(&host, &target).await
+                        let snapshot = match acquire_current_stream_host_unless_cancelled(
+                            &state,
+                            host_id,
+                            &mut cancel_rx,
+                        )
+                        .await
+                        {
+                            Ok(Some((_host_guard, host))) => {
+                                crate::host_runtime::capture_pane_ansi(&host, &target).await.ok()
+                            }
+                            Ok(None) => break,
+                            Err(error) => {
+                                tracing::debug!(session = %id, %host_id, %error, "remote refresh could not reload host");
+                                None
+                            }
+                        };
+                        if let Some(snap) = snapshot
                             && !snap.is_empty()
                         {
                             let mut payload = Vec::with_capacity(snap.len() + 2);
                             payload.extend_from_slice(b"\x1bc");
                             payload.extend_from_slice(&snap);
-                            if socket.send(Message::Binary(Bytes::from(payload))).await.is_err() {
+                            if !send_remote_stream_message_unless_cancelled(
+                                &mut socket,
+                                Message::Binary(Bytes::from(payload)),
+                                &mut cancel_rx,
+                            )
+                            .await
+                            {
                                 break;
                             }
                         }
-                    } else {
-                        let _ = input_tx.try_send(t.as_bytes().to_vec());
+                    } else if !queue_remote_input_unless_cancelled(
+                        &input_tx,
+                        t.as_bytes().to_vec(),
+                        &mut cancel_rx,
+                    )
+                    .await
+                    {
+                        break;
                     }
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
@@ -1935,9 +3595,47 @@ async fn stream_remote_session(
             },
         }
     }
-    tail_handle.abort();
-    input_handle.abort();
-    let _ = child.kill().await;
+    // Normal WebSocket disconnects use the same cancellation path as host
+    // mutation so an input worker waiting on the host lease or a blocked stdin
+    // write wakes promptly before cleanup.
+    registration.control.cancel.send_replace(true);
+    drop(input_tx);
+
+    // Kill and reap both long-lived SSH children before acknowledging host
+    // cancellation. Run the independent cleanup paths concurrently so the
+    // host mutation barrier stays comfortably inside its bounded deadline.
+    let tail_cleanup = async {
+        if let Some(tail) = tail.take()
+            && let Err(error) = tail.shutdown().await
+        {
+            tail_cleanup_errors.push(error);
+        }
+        if tail_cleanup_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(tail_cleanup_errors.join("; "))
+        }
+    };
+    let input_cleanup = async {
+        match tokio::time::timeout(Duration::from_secs(3), &mut input_handle).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => Err(format!("remote input writer task failed: {error}")),
+            Err(_) => {
+                input_handle.abort();
+                let _ = input_handle.await;
+                Err("timed out cleaning up remote input writer".into())
+            }
+        }
+    };
+    let (tail_cleanup, input_cleanup) = tokio::join!(tail_cleanup, input_cleanup);
+
+    let cleanup = match (tail_cleanup, input_cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(tail), Ok(())) => Err(tail),
+        (Ok(()), Err(input)) => Err(input),
+        (Err(tail), Err(input)) => Err(format!("{tail}; {input}")),
+    };
+    registration.finish(cleanup);
 }
 
 // ---------- GET /api/sessions/{id}/pane ----------
@@ -1953,11 +3651,8 @@ async fn pane(
     Path(id): Path<Uuid>,
     Query(q): Query<PaneQuery>,
 ) -> Result<Json<PaneSnapshot>, ApiError> {
-    let session = state
-        .store
-        .get_session_by_id(id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("session {id}")))?;
+    let (_host_guard, _session_guard) = acquire_host_and_session_lifecycle(&state, id).await?;
+    let session = load(&state, id).await?;
     let host = load_host_for_session(&state, &session).await?;
 
     let n = clamp_lines(q.lines);
@@ -1968,9 +3663,21 @@ async fn pane(
 
     let lines: Vec<String> = match session.tmux_target.as_deref() {
         Some(target) => {
-            let text = crate::host_runtime::capture_pane_visible(&host, target)
+            let mut control_target = target.to_string();
+            if !is_external(&session) && matches!(host.kind, HostKind::Ssh { .. }) {
+                if !crate::host_runtime::has_session(&host, target)
+                    .await
+                    .map_err(|error| ApiError::from_host_runtime(&host, error))?
+                {
+                    return Err(ApiError::BadRequest(
+                        "tmux session not active for this session".into(),
+                    ));
+                }
+                control_target = guard_managed_ssh_tmux_io(&state, &host, &session, target).await?;
+            }
+            let text = crate::host_runtime::capture_pane_visible(&host, &control_target)
                 .await
-                .map_err(|e| ApiError::Internal(e.to_string()))?;
+                .map_err(|e| ApiError::from_host_runtime(&host, e))?;
             // Lines reversed/truncated/un-reversed so the last N lines preserve chronological order.
             let collected: Vec<&str> = text.lines().rev().take(n).collect();
             collected.into_iter().rev().map(|s| s.to_string()).collect()
@@ -2104,8 +3811,230 @@ fn parse_refresh(t: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{coalesce_queued, pane_env, parse_refresh, parse_resize};
+    use super::{
+        TAIL_POOLED_ATTEMPTS, acquire_session_lifecycle, agent_mcp_config_matches, coalesce_queued,
+        mcp_token_generation, pane_env, parse_refresh, parse_remote_tmux_identity_output,
+        parse_resize, queue_remote_input_unless_cancelled, quote_remote_tmux_target,
+        remote_claude_mcp_config_path, remote_title_poll_due, session_lifecycle_lock,
+        tail_reconnect_plan, tail_respawn_backoff, tool_consumes_agentum_mcp,
+        validate_exact_tmux_resolution, validate_legacy_owner_migration_binding,
+        write_remote_input_with_timeout,
+    };
     use bytes::Bytes;
+
+    #[test]
+    fn only_mcp_consumers_require_remote_forwarding() {
+        for tool in ["claude", "codex", "cursor", "agent", "gemini", "opencode"] {
+            assert!(tool_consumes_agentum_mcp(tool), "{tool}");
+        }
+        for tool in ["terminal", "aider", "unknown"] {
+            assert!(!tool_consumes_agentum_mcp(tool), "{tool}");
+        }
+    }
+
+    #[test]
+    fn remote_claude_config_lives_in_private_runtime_namespace() {
+        let id = uuid::Uuid::nil();
+        assert_eq!(
+            remote_claude_mcp_config_path("/home/alice", id),
+            std::path::PathBuf::from(format!("/home/alice/.agentum/runtime/mcp-{id}.json"))
+        );
+    }
+
+    #[test]
+    fn remote_tmux_target_uses_supported_quoted_name_without_exact_prefix() {
+        assert_eq!(
+            quote_remote_tmux_target("agentum-test3").unwrap(),
+            "agentum-test3"
+        );
+        let quoted = quote_remote_tmux_target("agentum test3").unwrap();
+        assert!(!quoted.contains("=agentum"));
+        assert_eq!(quoted, "'agentum test3'");
+        assert_eq!(quote_remote_tmux_target("$12").unwrap(), "'$12'");
+    }
+
+    #[test]
+    fn remote_tmux_resolution_rejects_prefix_collisions() {
+        validate_exact_tmux_resolution("agentum-test3", "agentum-test3").unwrap();
+        let prefix = validate_exact_tmux_resolution("agentum-test", "agentum-test3").unwrap_err();
+        assert!(prefix.contains("resolves by prefix"));
+    }
+
+    #[test]
+    fn remote_tmux_identity_parser_uses_one_tagged_record_and_ignores_banners() {
+        let owner = uuid::Uuid::new_v4();
+        let output = format!(
+            "login banner\nAGENTUM_TMUX_IDENTITY\u{1f}agentum-test3\u{1f}$7\u{1f}{owner}\n"
+        );
+        let identity = parse_remote_tmux_identity_output(&output, "agentum-test3").unwrap();
+        assert_eq!(identity.name, "agentum-test3");
+        assert_eq!(identity.id, "$7");
+        assert_eq!(identity.owner, Some(owner));
+    }
+
+    #[test]
+    fn mcp_generation_is_stable_non_secret_token_fingerprint() {
+        let token = "abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE";
+        let generation = mcp_token_generation(token);
+        assert_eq!(generation, mcp_token_generation(token));
+        assert_ne!(generation, mcp_token_generation("different-token"));
+        assert_eq!(generation.len(), 24);
+        assert!(!generation.contains(token));
+    }
+
+    #[test]
+    fn file_agent_config_verification_requires_current_url_and_token() {
+        let file = crate::mcp_provision::agent_mcp_file("cursor").unwrap();
+        let auth_env = "AGENTUM_MCP_AUTH_TEST";
+        let server = agentum_executor::McpServer {
+            name: "agentum".into(),
+            url: "http://127.0.0.1:9001/mcp".into(),
+            auth_token: Some("current-token".into()),
+            auth_env_var: Some("AGENTUM_CODEX_MCP_AUTH_TEST".into()),
+        };
+        let config =
+            crate::mcp_provision::merge_agent_config(None, &file, &server, auth_env).unwrap();
+        assert!(agent_mcp_config_matches(
+            &config,
+            file,
+            "http://127.0.0.1:9001/mcp",
+            auth_env,
+            "current-token",
+        ));
+        assert!(!agent_mcp_config_matches(
+            &config,
+            file,
+            "http://127.0.0.1:9002/mcp",
+            auth_env,
+            "current-token",
+        ));
+        assert!(!config.contains("current-token"));
+    }
+
+    #[test]
+    fn file_agent_config_verification_requires_client_specific_fields() {
+        let file = crate::mcp_provision::agent_mcp_file("opencode").unwrap();
+        let auth_env = "AGENTUM_MCP_AUTH_TEST";
+        let server = agentum_executor::McpServer {
+            name: "agentum".into(),
+            url: "http://127.0.0.1:9001/mcp".into(),
+            auth_token: Some("current-token".into()),
+            auth_env_var: Some("AGENTUM_CODEX_MCP_AUTH_TEST".into()),
+        };
+        let config =
+            crate::mcp_provision::merge_agent_config(None, &file, &server, auth_env).unwrap();
+        assert!(agent_mcp_config_matches(
+            &config,
+            file,
+            "http://127.0.0.1:9001/mcp",
+            auth_env,
+            "current-token",
+        ));
+
+        let mut without_type: serde_json::Value = serde_json::from_str(&config).unwrap();
+        without_type[file.servers_key]["agentum"]
+            .as_object_mut()
+            .unwrap()
+            .remove("type");
+        let without_type = serde_json::to_string(&without_type).unwrap();
+        assert!(!agent_mcp_config_matches(
+            &without_type,
+            file,
+            "http://127.0.0.1:9001/mcp",
+            auth_env,
+            "current-token",
+        ));
+    }
+
+    #[test]
+    fn lifecycle_lock_is_shared_while_a_mutation_holds_it() {
+        let id = uuid::Uuid::new_v4();
+        let first = session_lifecycle_lock(id);
+        let second = session_lifecycle_lock(id);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
+    async fn blocked_session_lease_does_not_hold_the_global_handoff_gate() {
+        let blocked_id = uuid::Uuid::new_v4();
+        let other_id = uuid::Uuid::new_v4();
+        let held = session_lifecycle_lock(blocked_id).lock_owned().await;
+        let waiter = tokio::spawn(acquire_session_lifecycle(blocked_id));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let other = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            acquire_session_lifecycle(other_id),
+        )
+        .await
+        .expect("a blocked session must not convoy unrelated session leases");
+        drop(other);
+        drop(held);
+        waiter.await.unwrap();
+    }
+
+    #[test]
+    fn unmarked_legacy_owner_migration_requires_one_exact_binding() {
+        let session_id = uuid::Uuid::new_v4();
+        let host_id = uuid::Uuid::new_v4();
+        validate_legacy_owner_migration_binding(
+            session_id,
+            false,
+            Some(host_id),
+            Some("agentum-legacy"),
+            host_id,
+            "agentum-legacy",
+            &[session_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unmarked_legacy_owner_migration_rejects_duplicate_bindings() {
+        let session_id = uuid::Uuid::new_v4();
+        let host_id = uuid::Uuid::new_v4();
+        let other_id = uuid::Uuid::new_v4();
+        let error = validate_legacy_owner_migration_binding(
+            session_id,
+            false,
+            Some(host_id),
+            Some("agentum-legacy"),
+            host_id,
+            "agentum-legacy",
+            &[session_id, other_id],
+        )
+        .unwrap_err();
+        assert!(error.contains("2 persisted session bindings"));
+    }
+
+    #[test]
+    fn unmarked_legacy_owner_migration_rejects_unpersisted_or_foreign_targets() {
+        let session_id = uuid::Uuid::new_v4();
+        let host_id = uuid::Uuid::new_v4();
+        let missing = validate_legacy_owner_migration_binding(
+            session_id,
+            false,
+            Some(host_id),
+            None,
+            host_id,
+            "agentum-legacy",
+            &[session_id],
+        )
+        .unwrap_err();
+        assert!(missing.contains("exact persisted binding"));
+
+        let foreign = validate_legacy_owner_migration_binding(
+            session_id,
+            false,
+            Some(host_id),
+            Some("user-pane"),
+            host_id,
+            "user-pane",
+            &[session_id],
+        )
+        .unwrap_err();
+        assert!(foreign.contains("historical `agentum-`"));
+    }
 
     #[test]
     fn pane_env_publishes_api_url_and_derives_hook_from_it() {
@@ -2154,6 +4083,105 @@ mod tests {
         assert_eq!(&out[..], b"onetwothree");
         // Drained everything that was waiting.
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn tail_reconnect_is_bounded_and_escapes_the_pool_once() {
+        use agentum_tmux::ssh::SshMux;
+
+        assert_eq!(
+            tail_respawn_backoff(0),
+            std::time::Duration::from_millis(250)
+        );
+        assert_eq!(
+            tail_respawn_backoff(1),
+            std::time::Duration::from_millis(500)
+        );
+        assert_eq!(tail_respawn_backoff(2), std::time::Duration::from_secs(1));
+        assert_eq!(tail_respawn_backoff(3), std::time::Duration::from_secs(2));
+        assert_eq!(tail_respawn_backoff(4), std::time::Duration::from_secs(3));
+        assert_eq!(
+            tail_respawn_backoff(u32::MAX),
+            std::time::Duration::from_secs(3)
+        );
+
+        for attempt in 0..TAIL_POOLED_ATTEMPTS {
+            assert_eq!(tail_reconnect_plan(attempt), (SshMux::Streaming, false));
+        }
+        assert_eq!(
+            tail_reconnect_plan(TAIL_POOLED_ATTEMPTS),
+            (SshMux::Off, true)
+        );
+        assert_eq!(
+            tail_reconnect_plan(TAIL_POOLED_ATTEMPTS + 1),
+            (SshMux::Off, false)
+        );
+    }
+
+    #[test]
+    fn remote_title_poll_skips_idle_ticks_but_keeps_activity_and_safety_checks() {
+        assert!(
+            remote_title_poll_due(true, 1),
+            "output re-arms the next poll"
+        );
+        assert!(
+            !remote_title_poll_due(false, 1),
+            "first idle tick is skipped"
+        );
+        assert!(
+            remote_title_poll_due(false, 2),
+            "second idle tick is the safety poll"
+        );
+        assert!(remote_title_poll_due(false, u32::MAX));
+    }
+
+    #[tokio::test]
+    async fn persistent_input_write_succeeds_fast_or_times_out() {
+        let mut sink = tokio::io::sink();
+        assert!(
+            write_remote_input_with_timeout(
+                &mut sink,
+                b"61\n",
+                std::time::Duration::from_millis(20),
+            )
+            .await
+        );
+
+        // Keep the reader alive but never drain it. The one-byte duplex buffer
+        // fills immediately, reproducing a writer whose remote end stopped
+        // consuming without depending on a live SSH host.
+        let (mut blocked, _reader) = tokio::io::duplex(1);
+        assert!(
+            !write_remote_input_with_timeout(
+                &mut blocked,
+                b"61 62 63\n",
+                std::time::Duration::from_millis(20),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_input_queue_backpressures_without_dropping() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        sender.send(vec![1]).await.unwrap();
+        let (_cancel_sender, mut cancel) = tokio::sync::watch::channel(false);
+
+        let enqueue = queue_remote_input_unless_cancelled(&sender, vec![2], &mut cancel);
+        tokio::pin!(enqueue);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut enqueue)
+                .await
+                .is_err(),
+            "a full input queue must apply backpressure"
+        );
+        assert_eq!(receiver.recv().await, Some(vec![1]));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut enqueue)
+                .await
+                .expect("enqueue should resume when queue capacity returns")
+        );
+        assert_eq!(receiver.recv().await, Some(vec![2]));
     }
 
     #[test]
@@ -2223,6 +4251,7 @@ mod tests {
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 mcp_token: Arc::new(String::from("test-mcp-token")),
                 api_base_url: None,
+                mcp_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
             }
@@ -2247,6 +4276,198 @@ mod tests {
                 })
                 .await
                 .unwrap()
+        }
+
+        #[tokio::test]
+        async fn remote_stream_host_reload_waits_for_and_observes_latest_revision() {
+            use agentum_core::{HostKind, NewHost, SshAuth};
+
+            let state = fresh_state().await;
+            let host = state
+                .store
+                .create_host(NewHost {
+                    name: "before-put".into(),
+                    kind: HostKind::Ssh {
+                        user: "alice".into(),
+                        hostname: "example.test".into(),
+                        port: 22,
+                        auth: SshAuth::Agent,
+                    },
+                })
+                .await
+                .unwrap();
+            let host_id = host.id;
+            let host_kind = host.kind.clone();
+
+            // Model the host PUT transaction: its shared lease stays held
+            // through the store commit. A stream reload must wait, then read
+            // the post-PUT row rather than retaining/recreating the old SSH
+            // connection revision.
+            let put_guard = acquire_host_lifecycle(host_id).await;
+            let stream_state = state.clone();
+            let mut waiter = tokio::spawn(async move {
+                let (_stream_guard, current) = acquire_current_stream_host(&stream_state, host_id)
+                    .await
+                    .unwrap();
+                current
+            });
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(25), &mut waiter)
+                    .await
+                    .is_err(),
+                "the stream reload must serialize behind an in-flight host PUT"
+            );
+
+            state
+                .store
+                .update_host(
+                    host_id,
+                    NewHost {
+                        name: "after-put".into(),
+                        kind: host_kind,
+                    },
+                )
+                .await
+                .unwrap();
+            drop(put_guard);
+
+            let current = tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+                .await
+                .expect("stream reload should resume after PUT releases its lease")
+                .unwrap();
+            assert_eq!(current.name, "after-put");
+        }
+
+        #[tokio::test]
+        async fn host_stream_cancellation_waits_for_explicit_cleanup_ack() {
+            let host_id = Uuid::new_v4();
+            let _host_guard = acquire_host_lifecycle(host_id).await;
+            let (registration, mut cancel_rx) = register_remote_stream(host_id);
+
+            let mut cancellation =
+                tokio::spawn(async move { cancel_remote_streams_for_host(host_id).await });
+            tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.changed())
+                .await
+                .expect("host mutation should signal the registered stream")
+                .unwrap();
+            assert!(*cancel_rx.borrow());
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(25), &mut cancellation,)
+                    .await
+                    .is_err(),
+                "host mutation must not pass the barrier before child cleanup ACK"
+            );
+
+            registration.finish(Ok(()));
+            tokio::time::timeout(std::time::Duration::from_secs(1), cancellation)
+                .await
+                .expect("host mutation should resume after cleanup ACK")
+                .unwrap()
+                .unwrap();
+        }
+
+        #[tokio::test]
+        async fn remote_stream_child_cleanup_explicitly_kills_and_reaps() {
+            let mut child = tokio::process::Command::new("sh")
+                .args(["-c", "exec sleep 30"])
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                kill_and_reap_remote_stream_child(&mut child, "test stream child"),
+            )
+            .await
+            .expect("cleanup must be bounded")
+            .unwrap();
+            assert!(
+                child.try_wait().unwrap().is_some(),
+                "cleanup must reap the child, not merely request termination"
+            );
+        }
+
+        #[tokio::test]
+        async fn remote_launch_requires_a_tunnelable_embedded_api_port() {
+            let mut state = fresh_state().await;
+            assert!(matches!(
+                required_remote_mcp_port(&state),
+                Err(ApiError::BadGateway(message)) if message.contains("dedicated MCP listener")
+            ));
+
+            // The full loopback REST API is never a valid reverse-tunnel
+            // destination; remote agents may reach only the dedicated,
+            // bearer-protected MCP listener.
+            state.api_base_url = Some("http://127.0.0.1:5544".into());
+            assert!(required_remote_mcp_port(&state).is_err());
+            state.mcp_base_url = Some("http://127.0.0.1:5544".into());
+            assert_eq!(required_remote_mcp_port(&state).unwrap(), 5544);
+        }
+
+        #[tokio::test]
+        async fn start_prefers_persisted_tmux_target_after_rename() {
+            let state = fresh_state().await;
+            let session = create_test_session(&state).await;
+            state
+                .store
+                .update_status_and_target(session.id, Status::Idle, Some("agentum-original"))
+                .await
+                .unwrap();
+            let renamed = state
+                .store
+                .patch_session_name(session.id, "renamed-display-label")
+                .await
+                .unwrap();
+
+            assert_eq!(start_target(&renamed).unwrap(), "agentum-original");
+        }
+
+        #[tokio::test]
+        async fn new_managed_targets_are_unique_even_when_names_match() {
+            let state = fresh_state().await;
+            let first = create_test_session(&state).await;
+            let mut second = first.clone();
+            second.id = Uuid::new_v4();
+
+            let first_target = managed_tmux_target(&first);
+            let second_target = managed_tmux_target(&second);
+            assert_ne!(first_target, second_target);
+            assert!(first_target.contains(&first.id.simple().to_string()));
+            assert!(second_target.contains(&second.id.simple().to_string()));
+        }
+
+        #[tokio::test]
+        async fn startup_resume_rechecks_idle_status_before_mutating_tmux() {
+            let state = fresh_state().await;
+            let session = create_test_session(&state).await;
+            state
+                .store
+                .update_status_and_target(session.id, Status::Stopped, None)
+                .await
+                .unwrap();
+
+            let resumed = resume_idle_session_by_id(&state, session.id).await.unwrap();
+            assert!(resumed.is_none());
+            let stored = state
+                .store
+                .get_session_by_id(session.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.status, Status::Stopped);
+        }
+
+        #[tokio::test]
+        async fn external_start_requires_its_persisted_binding() {
+            let state = fresh_state().await;
+            let mut session = create_test_session(&state).await;
+            session.flags.push(EXTERNAL_TMUX_FLAG.into());
+            session.tmux_target = None;
+
+            assert!(matches!(
+                start_target(&session),
+                Err(ApiError::BadRequest(message)) if message.contains("lost its tmux target")
+            ));
         }
 
         // Test 2 + 3: pure unit tests for clamp_lines — no HTTP, no DB.
@@ -2368,6 +4589,7 @@ mod tests {
                 hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
                 mcp_token: Arc::new(String::from("test-mcp-token")),
                 api_base_url: None,
+                mcp_base_url: None,
                 desktop_bridge: None,
                 harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
             }

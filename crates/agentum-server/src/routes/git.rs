@@ -157,7 +157,7 @@ async fn status_entries(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<StatusEntry>>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
     Ok(Json(parse_status_entries(&raw)))
 }
@@ -216,7 +216,7 @@ async fn commit_compare(
     Query(q): Query<CommitCompareQuery>,
 ) -> Result<Json<CommitCompareResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     let commit = q.commit.trim().to_string();
     let commit_oid = match run_git(
         &host,
@@ -375,7 +375,7 @@ async fn branch_compare(
     Query(q): Query<BranchCompareQuery>,
 ) -> Result<Json<BranchCompareResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     let base = q.base.trim().to_string();
     let compare_ref = run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
         .await
@@ -498,7 +498,7 @@ async fn conflict(
     Path(id): Path<String>,
 ) -> Result<Json<ConflictResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     // Rebase leaves a state dir (rebase-merge / rebase-apply) rather than a ref.
     let rebase_dir = git_state_dir_exists(&host, &cwd, "rebase-merge").await
         || git_state_dir_exists(&host, &cwd, "rebase-apply").await;
@@ -528,7 +528,7 @@ async fn rebase(
     Json(body): Json<RebaseBody>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.base_ref.trim().is_empty() {
         return Err(ApiError::BadRequest("base_ref is empty".into()));
     }
@@ -542,7 +542,7 @@ async fn abort_merge(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     run_git(&host, &cwd, &["merge", "--abort"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -553,7 +553,7 @@ async fn abort_rebase(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     run_git(&host, &cwd, &["rebase", "--abort"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -571,7 +571,7 @@ async fn discard(
     Json(body): Json<DiscardBody>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     for p in &body.paths {
         ensure_safe_relative(p)?;
     }
@@ -597,7 +597,7 @@ async fn upstream(
     Path(id): Path<String>,
 ) -> Result<Json<UpstreamStatus>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     // Both calls fail harmlessly when there is no upstream, so run them
     // concurrently instead of gating rev-list on rev-parse — over SSH that
     // halves the wall-clock cost of this endpoint.
@@ -665,7 +665,7 @@ async fn branches(
     Path(id): Path<String>,
 ) -> Result<Json<BranchesResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     // Independent reads — run concurrently so a remote host pays one RTT.
     let (current_out, raw) = tokio::join!(
         run_git(&host, &cwd, &["rev-parse", "--abbrev-ref", "HEAD"]),
@@ -710,7 +710,7 @@ async fn log(
     Query(q): Query<LogQuery>,
 ) -> Result<Json<Vec<LogEntry>>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let limit_arg = format!("-{limit}");
     // \x1f (unit separator) won't appear in commit metadata — a safe field delimiter.
@@ -744,7 +744,7 @@ async fn fetch(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     run_git(&host, &cwd, &["fetch", "--all", "--prune"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -755,7 +755,7 @@ async fn pull(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     run_git(&host, &cwd, &["pull", "--ff-only"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -767,7 +767,7 @@ async fn push(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     run_git(&host, &cwd, &["push", "--set-upstream", "origin", "HEAD"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -853,24 +853,31 @@ pub(crate) async fn cwd_for(state: &AppState, id: Uuid) -> Result<PathBuf, ApiEr
     Ok(PathBuf::from(session.effective_cwd()))
 }
 
-/// Resolve a session to `(host, cwd)`: the host its git ops run on (its
-/// `host_id`, or the local host) and its effective working directory. The
-/// cwd is a path on `host` — a remote path for a remote session — so all
-/// git in this module routes through `host_runtime::git_in_dir`, never a
-/// local `git -C` against a path that only exists on the remote.
-async fn host_and_cwd_for(state: &AppState, id: Uuid) -> Result<(Host, String), ApiError> {
+/// Resolve a session to `(guard, host, cwd)`: first discover its immutable host
+/// binding, then acquire that host's lifecycle lease before reloading the
+/// current [`Host`] revision. The returned guard must remain live through the
+/// route's complete git/filesystem operation so a concurrent Host PUT cannot
+/// close revision A, commit B, and then have this request recreate A's SSH
+/// master from a stale value. The cwd is a path on `host` — a remote path for a
+/// remote session — so all git in this module routes through
+/// `host_runtime::git_in_dir`, never local `git -C` against a remote path.
+async fn host_and_cwd_for(
+    state: &AppState,
+    id: Uuid,
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, Host, String), ApiError> {
     let session = state
         .store
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
     let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host_guard = super::sessions::acquire_host_lifecycle(host_id).await;
     let host = state
         .store
         .get_host(host_id)
         .await?
         .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))?;
-    Ok((host, session.effective_cwd().to_string()))
+    Ok((host_guard, host, session.effective_cwd().to_string()))
 }
 
 fn parse_uuid(s: &str) -> Result<Uuid, ApiError> {
@@ -902,7 +909,7 @@ async fn status(
     Path(id): Path<String>,
 ) -> Result<Json<GitStatus>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     let raw = run_git_bytes(&host, &cwd, &["status", "--porcelain=v1", "-z"]).await?;
     Ok(Json(parse_porcelain_z(&raw)))
 }
@@ -962,7 +969,7 @@ async fn diff(
     Query(q): Query<DiffQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     ensure_safe_relative(&q.path)?;
 
     let mut diff_args = vec!["diff", "--no-color"];
@@ -1028,7 +1035,7 @@ async fn file(
     Query(q): Query<FileQuery>,
 ) -> Result<Json<FileResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     ensure_safe_relative(&q.path)?;
     let rev = q.rev.as_deref().unwrap_or("worktree");
 
@@ -1086,7 +1093,7 @@ async fn stage(
     Json(body): Json<StageBody>,
 ) -> Result<Json<GitStatus>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.paths.is_empty() {
         return Err(ApiError::BadRequest("paths is empty".into()));
     }
@@ -1134,7 +1141,7 @@ async fn commit(
     Json(body): Json<CommitBody>,
 ) -> Result<Json<CommitResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.message.trim().is_empty() {
         return Err(ApiError::BadRequest("commit message is empty".into()));
     }
@@ -1204,7 +1211,7 @@ async fn commit_staged(
     Json(body): Json<CommitStagedBody>,
 ) -> Result<Json<CommitResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.message.trim().is_empty() {
         return Err(ApiError::BadRequest("commit message is empty".into()));
     }
@@ -1249,7 +1256,7 @@ async fn check_ignore(
     Json(body): Json<CheckIgnoreBody>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     if body.paths.is_empty() {
         return Ok(Json(Vec::new()));
     }
@@ -1277,7 +1284,7 @@ async fn fast_forward(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     run_git(&host, &cwd, &["merge", "--ff-only", "@{upstream}"]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1343,7 +1350,7 @@ async fn remote_file_url(
     Query(q): Query<RemoteFileUrlQuery>,
 ) -> Result<Json<RemoteFileUrlResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     let remote = match run_git(&host, &cwd, &["remote", "get-url", "origin"]).await {
         Ok(s) => s.trim().to_string(),
         Err(_) => return Ok(Json(RemoteFileUrlResp { url: None })),
@@ -1400,7 +1407,7 @@ async fn blob(
     Query(q): Query<BlobQuery>,
 ) -> Result<Json<BlobResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     ensure_safe_relative(&q.path)?;
     // A commit/ref never starts with '-'; reject so the rev can't smuggle a
     // `git show` option.
@@ -1511,7 +1518,7 @@ async fn history(
     Query(q): Query<HistoryQuery>,
 ) -> Result<Json<HistoryResp>, ApiError> {
     let id = parse_uuid(&id)?;
-    let (host, cwd) = host_and_cwd_for(&state, id).await?;
+    let (_host_guard, host, cwd) = host_and_cwd_for(&state, id).await?;
     let limit = q.limit.unwrap_or(50).clamp(1, 1000);
     // \x1f field sep, \x1e record sep; fetch one extra to detect `hasMore`.
     let fmt = "%H\u{1f}%P\u{1f}%s\u{1f}%B\u{1f}%an\u{1f}%ae\u{1f}%at\u{1e}";

@@ -72,10 +72,20 @@ async fn start(
     State(state): State<AppState>,
     Json(req): Json<StartRequest>,
 ) -> Result<Json<StartedHostBrowser>, ApiError> {
+    let host_id = Uuid::parse_str(&req.host_id)
+        .map_err(|_| ApiError::BadRequest(format!("invalid host_id: {}", req.host_id)))?;
+    // Serialize the authoritative Store reload and every launch/tunnel action
+    // with PUT/delete/session lifecycle work for this host. The guard ends when
+    // start returns; it is never retained for the browser's lifetime.
+    let _host_guard = crate::routes::sessions::acquire_host_lifecycle(host_id).await;
     let host = resolve_host(&state, &req.host_id).await?;
-    let started = host_browser::start_host_browser(&host, std::path::Path::new(&req.workdir))
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let started = host_browser::start_host_browser_from_store(
+        &host,
+        state.store.clone(),
+        std::path::Path::new(&req.workdir),
+    )
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(started))
 }
 
@@ -85,6 +95,11 @@ async fn install(
     State(state): State<AppState>,
     Json(req): Json<InstallRequest>,
 ) -> Result<Json<InstallResult>, ApiError> {
+    let host_id = Uuid::parse_str(&req.host_id)
+        .map_err(|_| ApiError::BadRequest(format!("invalid host_id: {}", req.host_id)))?;
+    // Installation runs through SSH too, so resolve it under the same host
+    // lifecycle lease as launch and host PUT/delete.
+    let _host_guard = crate::routes::sessions::acquire_host_lifecycle(host_id).await;
     let host = resolve_host(&state, &req.host_id).await?;
     let output = crate::host_runtime::install_host_chromium(&host)
         .await

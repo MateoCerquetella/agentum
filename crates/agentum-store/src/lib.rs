@@ -2,13 +2,15 @@
 //!
 //! All XDG path resolution lives in [`paths`].
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use agentum_core::{
-    BoardComment, BoardItem, BoardLink, BoardPatch, Channel, Event, Host, HostKind, LOCAL_HOST_ID,
-    LinkKind, Message, NewBoardComment, NewBoardItem, NewChannel, NewHost, NewMessage, NewNote,
-    NewSession, Note, NotePatch, ReorderEntry, RequiredField, Session, SshAuth, Status, User,
+    BoardComment, BoardItem, BoardLink, BoardPatch, Channel, EXTERNAL_TMUX_FLAG, Event, Host,
+    HostKind, LOCAL_HOST_ID, LinkKind, Message, NewBoardComment, NewBoardItem, NewChannel, NewHost,
+    NewMessage, NewNote, NewSession, Note, NotePatch, ReorderEntry, RequiredField, Session,
+    SshAuth, Status, User,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
@@ -52,31 +54,128 @@ pub struct Store {
     pool: SqlitePool,
 }
 
+/// Checksum of the pre-refactor migration 0017. The SQL statements are byte-
+/// for-byte identical to the canonical migration; only its opening comment was
+/// renamed. Databases created by either Agentum line are therefore compatible,
+/// but SQLx normally rejects the historical checksum before opening them.
+const LEGACY_SESSION_HOOK_MIGRATION_CHECKSUM: &str = "1C2BCC11C2A201012EA0446FDDA9FD76299A112AD7D9452E91EA9788541246F661A227E2DCD5F582C080039AD028B4A7";
+
+/// Teach this run's in-memory migrator about the one known comment-only
+/// checksum alias without rewriting migration metadata in the user's database.
+/// Every other migration checksum remains strictly validated by SQLx.
+async fn accept_legacy_session_hook_checksum(
+    pool: &SqlitePool,
+    migrator: &mut sqlx::migrate::Migrator,
+) -> std::result::Result<(), sqlx::Error> {
+    let migration_table_exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if migration_table_exists == 0 {
+        return Ok(());
+    }
+
+    let applied: Option<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT checksum, hex(checksum) FROM _sqlx_migrations \
+         WHERE version = 17 AND description = 'session hook tokens' AND success = 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some((checksum, checksum_hex)) = applied else {
+        return Ok(());
+    };
+    if checksum_hex != LEGACY_SESSION_HOOK_MIGRATION_CHECKSUM {
+        return Ok(());
+    }
+
+    if let Some(migration) = migrator
+        .migrations
+        .to_mut()
+        .iter_mut()
+        .find(|migration| migration.version == 17)
+    {
+        migration.checksum = Cow::Owned(checksum);
+    }
+    Ok(())
+}
+
 impl Store {
     /// Open (or create) a database at the given file path and run pending migrations.
     pub async fn open(db_path: &Path) -> Result<Self> {
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
+        if !db_path.is_absolute() || db_path.file_name().is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "database path must be an absolute file path so its private parent can be verified: {}",
+                    db_path.display()
+                ),
+            )
+            .into());
         }
 
+        // SQLite opens the database and WAL sidecars by path. Secure and pin
+        // their parent/file identities before handing that path to SQLite so a
+        // pre-planted symlink, hard link, foreign-owned file, or permissive
+        // umask cannot expose the credentials stored in this database.
+        let prepared = prepare_private_database(db_path)?;
+        let secured_db_path = prepared.path.as_path();
+
         let opts = SqliteConnectOptions::new()
-            .filename(db_path)
-            .create_if_missing(true)
+            .filename(secured_db_path)
+            // `prepare_private_database` creates the DB with owner-only mode.
+            // Never let SQLite create it later under the process umask.
+            .create_if_missing(false)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true);
 
-        let pool = SqlitePoolOptions::new()
+        let pool = match SqlitePoolOptions::new()
             .max_connections(8)
             .connect_with(opts)
-            .await?;
+            .await
+        {
+            Ok(pool) => pool,
+            Err(error) => {
+                // A failed SQLite open can still have touched WAL sidecars.
+                // Revalidate them before returning the connection error.
+                secure_database_files(secured_db_path, prepared.parent)?;
+                return Err(error.into());
+            }
+        };
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        // Connecting enables WAL and may create the sidecars before the first
+        // migration runs. Validate them immediately, and close every SQLite
+        // handle before surfacing a filesystem-policy failure.
+        if let Err(error) = secure_database_files(secured_db_path, prepared.parent) {
+            pool.close().await;
+            return Err(error.into());
+        }
 
-        // The DB holds Argon2id password hashes and live bearer tokens.
-        // Force 0600 on the file + WAL/SHM sidecars so a permissive umask
-        // doesn't leak them to other local accounts.
-        restrict_db_perms(db_path);
+        let mut migrations = sqlx::migrate!("./migrations");
+        let migration_result: Result<()> = async {
+            accept_legacy_session_hook_checksum(&pool, &mut migrations).await?;
+            migrations.run(&pool).await?;
+            Ok(())
+        }
+        .await;
+        if let Err(error) = migration_result {
+            // A failed migration may still have created or rewritten WAL/SHM.
+            // Secure those files while the pool keeps their inodes stable,
+            // then close every handle before returning either error.
+            let security_result = secure_database_files(secured_db_path, prepared.parent);
+            pool.close().await;
+            security_result?;
+            return Err(error);
+        }
+
+        // Migrations write pages and can create/recreate WAL state. Re-check
+        // after they finish; permission repair is security-critical and must
+        // fail boot rather than merely warn.
+        if let Err(error) = secure_database_files(secured_db_path, prepared.parent) {
+            pool.close().await;
+            return Err(error.into());
+        }
 
         Ok(Self { pool })
     }
@@ -111,6 +210,40 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Return the existing value for `key`, or atomically insert `candidate`
+    /// when the key is absent. The boolean is true only for the caller whose
+    /// candidate was inserted.
+    ///
+    /// `BEGIN IMMEDIATE` reserves SQLite's writer slot before the insert and
+    /// keeps the following read in the same transaction. Simultaneous callers
+    /// using independent [`Store`] pools therefore converge on one value; a
+    /// loser never overwrites the winner and observes that committed value.
+    pub async fn setting_get_or_insert(
+        &self,
+        key: &str,
+        candidate: &str,
+    ) -> Result<(String, bool)> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let inserted = sqlx::query(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(key) DO NOTHING",
+        )
+        .bind(key)
+        .bind(candidate)
+        .bind(&now_s)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1;
+        let (stored,): (String,) = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+            .bind(key)
+            .fetch_one(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok((stored, inserted))
     }
 
     /// Read a boolean setting (stored as `"1"`/`"0"`), falling back to `default`
@@ -203,9 +336,41 @@ impl Store {
     /// host — mirrors `delete_host`, which treats it as "no such editable
     /// host"), or `AlreadyExists` when a rename collides with another host.
     pub async fn update_host(&self, id: Uuid, new: NewHost) -> Result<Host> {
+        self.update_host_inner(id, new, false).await
+    }
+
+    /// Update a password-auth host while retaining whatever password is in the
+    /// row at commit time. The conditional SQL prevents a redacted whole-host
+    /// PUT from restoring a stale password when another daemon changed it
+    /// between the route's read and write. If the current row is no longer
+    /// password-auth, the update conflicts instead of creating password auth
+    /// with an absent or stale secret.
+    pub async fn update_host_retaining_password(&self, id: Uuid, new: NewHost) -> Result<Host> {
+        self.update_host_inner(id, new, true).await
+    }
+
+    async fn update_host_inner(
+        &self,
+        id: Uuid,
+        new: NewHost,
+        retain_password: bool,
+    ) -> Result<Host> {
         if id == LOCAL_HOST_ID {
             return Err(StoreError::NotFound(
                 "the local host is not editable".into(),
+            ));
+        }
+        if retain_password
+            && !matches!(
+                &new.kind,
+                HostKind::Ssh {
+                    auth: SshAuth::Password { .. },
+                    ..
+                }
+            )
+        {
+            return Err(StoreError::AlreadyExists(
+                "password retention requires password authentication".into(),
             ));
         }
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
@@ -214,8 +379,10 @@ impl Store {
             r#"
             UPDATE hosts SET
                 name = ?, kind = ?, user = ?, hostname = ?, port = ?,
-                auth_kind = ?, key_path = ?, secret = ?, updated_at = ?
-            WHERE id = ?
+                auth_kind = ?, key_path = ?,
+                secret = CASE WHEN ? = 1 THEN secret ELSE ? END,
+                updated_at = ?
+            WHERE id = ? AND (? = 0 OR auth_kind = 'password')
             "#,
         )
         .bind(&new.name)
@@ -225,9 +392,11 @@ impl Store {
         .bind(parts.port.map(i64::from))
         .bind(parts.auth_kind)
         .bind(parts.key_path)
+        .bind(if retain_password { 1_i64 } else { 0_i64 })
         .bind(parts.secret)
         .bind(&now_s)
         .bind(id.to_string())
+        .bind(if retain_password { 1_i64 } else { 0_i64 })
         .execute(&self.pool)
         .await;
         if let Err(sqlx::Error::Database(db)) = &res
@@ -237,6 +406,19 @@ impl Store {
         }
         let affected = res?.rows_affected();
         if affected == 0 {
+            if retain_password {
+                let exists: Option<(i64,)> =
+                    sqlx::query_as("SELECT 1 FROM hosts WHERE id = ? LIMIT 1")
+                        .bind(id.to_string())
+                        .fetch_optional(&self.pool)
+                        .await?;
+                if exists.is_some() {
+                    return Err(StoreError::AlreadyExists(
+                        "host authentication changed while retaining its password; retry the edit"
+                            .into(),
+                    ));
+                }
+            }
             return Err(StoreError::NotFound(id.to_string()));
         }
         self.get_host(id)
@@ -246,8 +428,11 @@ impl Store {
 
     pub async fn update_host_seen(&self, id: Uuid) -> Result<()> {
         let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
-        sqlx::query("UPDATE hosts SET last_seen_at = ?, updated_at = ? WHERE id = ?")
-            .bind(&now_s)
+        // `updated_at` is the saved connection revision used to namespace SSH
+        // ControlMasters. A health/readiness observation is metadata, not a
+        // connection mutation; rotating it here strands the old master and its
+        // reverse forwards after every successful probe.
+        sqlx::query("UPDATE hosts SET last_seen_at = ? WHERE id = ?")
             .bind(&now_s)
             .bind(id.to_string())
             .execute(&self.pool)
@@ -361,6 +546,122 @@ impl Store {
             worktree_branch: wt_branch,
             worktree_base_ref: wt_base,
         })
+    }
+
+    /// Atomically reuse or create the external-session record bound to the
+    /// exact `(host_id, tmux_target)` pair.
+    ///
+    /// `BEGIN IMMEDIATE` takes SQLite's write reservation before the lookup,
+    /// so concurrent attach requests—even from separate daemon processes that
+    /// share this DB—cannot both observe an absent binding and insert two rows.
+    /// An existing managed row is also canonical for that pane and is returned
+    /// unchanged; the attach route may use it for viewing but must not create a
+    /// second external owner. New rows persist the target in the initial insert,
+    /// closing the former create-then-update race window. The boolean is `true`
+    /// only when this call inserted the row.
+    pub async fn create_or_get_external_session(
+        &self,
+        mut new: NewSession,
+        host_id: Uuid,
+        tmux_target: &str,
+    ) -> Result<(Session, bool)> {
+        agentum_core::validate_name(&new.name)?;
+        if !new.flags.iter().any(|flag| flag == EXTERNAL_TMUX_FLAG) {
+            new.flags.push(EXTERNAL_TMUX_FLAG.to_string());
+        }
+
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut existing = sqlx::query_as::<_, SessionRow>(
+            "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
+             FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id \
+             WHERE s.host_id = ? AND s.tmux_target = ? \
+             ORDER BY s.created_at ASC, s.id ASC",
+        )
+        .bind(host_id.to_string())
+        .bind(tmux_target)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        if existing.len() > 1 {
+            return Err(StoreError::AlreadyExists(format!(
+                "tmux target `{tmux_target}` on host {host_id} has multiple session bindings"
+            )));
+        }
+        if let Some(row) = existing.pop() {
+            let session = Session::try_from(row)?;
+            tx.commit().await?;
+            return Ok((session, false));
+        }
+
+        // Session display names are globally unique. Resolve only that known
+        // collision while holding the write reservation; unrelated DB errors
+        // are never reclassified as a name collision.
+        let base_name = new.name.clone();
+        let name_taken: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM sessions WHERE name = ? LIMIT 1")
+                .bind(&new.name)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if name_taken.is_some() {
+            let prefix = &base_name[..base_name.len().min(56)];
+            loop {
+                let candidate = format!("{prefix}-{}", &Uuid::new_v4().simple().to_string()[..6]);
+                let taken: Option<(i64,)> =
+                    sqlx::query_as("SELECT 1 FROM sessions WHERE name = ? LIMIT 1")
+                        .bind(&candidate)
+                        .fetch_optional(&mut *tx)
+                        .await?;
+                if taken.is_none() {
+                    new.name = candidate;
+                    break;
+                }
+            }
+        }
+
+        let id = Uuid::new_v4();
+        let now = OffsetDateTime::now_utc();
+        let now_s = now.format(&Rfc3339)?;
+        let flags = serde_json::to_string(&new.flags)?;
+        sqlx::query(
+            r#"
+            INSERT INTO sessions
+                (id, name, workdir, tool, model, flags, status, tmux_target,
+                 created_at, updated_at, card_id, worktree_path,
+                 worktree_branch, worktree_base_ref, host_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(&new.name)
+        .bind(&new.workdir)
+        .bind(&new.tool)
+        .bind(&new.model)
+        .bind(&flags)
+        // Keep the durable claim non-running until pipe-pane succeeds. The
+        // route promotes it atomically afterward; a pipe failure is therefore
+        // retryable and cannot be mistaken for a healthy attached session.
+        .bind(Status::Stopped.as_str())
+        .bind(tmux_target)
+        .bind(&now_s)
+        .bind(&now_s)
+        .bind(new.card_id)
+        .bind(new.worktree_path.as_deref())
+        .bind(new.worktree_branch.as_deref())
+        .bind(new.worktree_base_ref.as_deref())
+        .bind(host_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+
+        let row = sqlx::query_as::<_, SessionRow>(
+            "SELECT s.*, h.name AS host_label, h.kind AS host_kind \
+             FROM sessions s LEFT JOIN hosts h ON h.id = s.host_id WHERE s.id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+        let session = Session::try_from(row)?;
+        tx.commit().await?;
+        Ok((session, true))
     }
 
     /// Null out the three worktree columns after the server has called
@@ -502,6 +803,44 @@ impl Store {
             return Err(StoreError::NotFound(id.to_string()));
         }
         Ok(())
+    }
+
+    /// Optimistically update a session's runtime state.
+    ///
+    /// The write succeeds only when status, tmux target, and `updated_at`
+    /// still match the observation that prompted it. This is intended for
+    /// asynchronous observers such as the watchdog: a stale pane sample must
+    /// not overwrite a stop or restart that committed after the sample was
+    /// taken. A missing row and a changed row both return `false`; neither is
+    /// an error for an optimistic caller.
+    pub async fn compare_and_set_status_and_target(
+        &self,
+        id: Uuid,
+        expected_status: Status,
+        expected_tmux_target: Option<&str>,
+        expected_updated_at: OffsetDateTime,
+        status: Status,
+        tmux_target: Option<&str>,
+    ) -> Result<bool> {
+        let now_s = OffsetDateTime::now_utc().format(&Rfc3339)?;
+        let expected_updated_at_s = expected_updated_at.format(&Rfc3339)?;
+        let affected = sqlx::query(
+            "UPDATE sessions SET status = ?, tmux_target = ?, updated_at = ? \
+             WHERE id = ? AND status = ? AND updated_at = ? \
+             AND ((tmux_target IS NULL AND ? IS NULL) OR tmux_target = ?)",
+        )
+        .bind(status.as_str())
+        .bind(tmux_target)
+        .bind(now_s)
+        .bind(id.to_string())
+        .bind(expected_status.as_str())
+        .bind(expected_updated_at_s)
+        .bind(expected_tmux_target)
+        .bind(expected_tmux_target)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(affected == 1)
     }
 
     /// Patch the session's display name. Empty / whitespace-only inputs
@@ -1799,50 +2138,484 @@ impl Store {
     }
 }
 
-/// Best-effort 0600 on the SQLite file and its WAL/SHM sidecars. Logs a
-/// warning on failure rather than aborting boot — on weird filesystems
-/// (NFS, FAT) chmod may fail but the server should still come up.
+fn database_parent(db_path: &Path) -> &Path {
+    db_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn sqlite_sidecar_path(db_path: &Path, suffix: &str) -> PathBuf {
+    let mut path = db_path.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+fn unsafe_database_path(path: &Path, message: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        format!(
+            "unsafe database path {}: {}",
+            path.display(),
+            message.into()
+        ),
+    )
+}
+
+struct PreparedDatabase {
+    /// Canonical-parent path handed to SQLite. Once the verified parent has
+    /// been resolved, later replacement of a symlink in the caller's ancestry
+    /// cannot redirect SQLite to a different database.
+    path: PathBuf,
+    parent: PrivateDatabaseParent,
+}
+
 #[cfg(unix)]
-fn restrict_db_perms(db_path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let candidates = [
-        db_path.to_path_buf(),
-        db_path.with_extension(
-            db_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| format!("{e}-wal"))
-                .unwrap_or_else(|| "sqlite-wal".to_string()),
-        ),
-        db_path.with_extension(
-            db_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| format!("{e}-shm"))
-                .unwrap_or_else(|| "sqlite-shm".to_string()),
-        ),
-    ];
-    for p in &candidates {
-        if !p.exists() {
-            continue;
+#[derive(Debug, Clone, Copy)]
+struct PrivateDatabaseParent {
+    dev: u64,
+    ino: u64,
+    uid: u32,
+}
+
+/// Create and verify the DB parent without trusting `$UID` or following its
+/// final path component. A freshly-created private probe supplies the process's
+/// effective uid, while descriptor/path identity checks catch replacement
+/// during mode repair.
+#[cfg(unix)]
+fn secure_database_parent(path: &Path) -> std::io::Result<PrivateDatabaseParent> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static OWNER_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+
+    let initial = std::fs::symlink_metadata(path)?;
+    if initial.file_type().is_symlink() || !initial.file_type().is_dir() {
+        return Err(unsafe_database_path(
+            path,
+            "database parent must be a real directory",
+        ));
+    }
+
+    let directory = std::fs::File::open(path)?;
+    let opened = directory.metadata()?;
+    if !opened.file_type().is_dir()
+        || opened.dev() != initial.dev()
+        || opened.ino() != initial.ino()
+    {
+        return Err(unsafe_database_path(
+            path,
+            "database parent changed while opening",
+        ));
+    }
+
+    let effective_uid = loop {
+        let sequence = OWNER_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let probe_path = path.join(format!(
+            ".agentum-db-owner-probe.{}.{}",
+            std::process::id(),
+            sequence
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&probe_path)
+        {
+            Ok(probe) => {
+                let uid = probe.metadata()?.uid();
+                drop(probe);
+                std::fs::remove_file(&probe_path)?;
+                break uid;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
         }
-        match std::fs::metadata(p) {
-            Ok(m) => {
-                let mut perm = m.permissions();
-                perm.set_mode(0o600);
-                if let Err(e) = std::fs::set_permissions(p, perm) {
-                    tracing::warn!(path = %p.display(), error = %e, "could not chmod 0600");
+    };
+
+    if opened.uid() != effective_uid {
+        return Err(unsafe_database_path(
+            path,
+            format!(
+                "database parent is owned by uid {}, expected uid {effective_uid}",
+                opened.uid()
+            ),
+        ));
+    }
+
+    // fchmod the directory we opened, not a path that may have been swapped.
+    directory.set_permissions(std::fs::Permissions::from_mode(0o700))?;
+    let secured = directory.metadata()?;
+    let current = std::fs::symlink_metadata(path)?;
+    if !secured.file_type().is_dir()
+        || secured.uid() != effective_uid
+        || secured.mode() & 0o7777 != 0o700
+        || current.file_type().is_symlink()
+        || !current.file_type().is_dir()
+        || current.dev() != secured.dev()
+        || current.ino() != secured.ino()
+        || current.uid() != effective_uid
+        || current.mode() & 0o7777 != 0o700
+    {
+        return Err(unsafe_database_path(
+            path,
+            "database parent failed owner/mode/identity verification",
+        ));
+    }
+
+    Ok(PrivateDatabaseParent {
+        dev: secured.dev(),
+        ino: secured.ino(),
+        uid: effective_uid,
+    })
+}
+
+#[cfg(unix)]
+fn verify_database_parent(path: &Path, expected: PrivateDatabaseParent) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_dir()
+        || metadata.dev() != expected.dev
+        || metadata.ino() != expected.ino
+        || metadata.uid() != expected.uid
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err(unsafe_database_path(
+            path,
+            "database parent was replaced or permissions changed",
+        ));
+    }
+    Ok(())
+}
+
+/// Reject canonical ancestors whose entries can be replaced by an unrelated
+/// local account. Sticky writable directories (notably `/tmp`) are safe for an
+/// owner-owned child, while a group/other-writable non-sticky directory is not.
+#[cfg(unix)]
+fn unsafe_database_ancestor_reason(
+    owner_uid: u32,
+    mode: u32,
+    expected_uid: u32,
+) -> Option<&'static str> {
+    if owner_uid != expected_uid && owner_uid != 0 {
+        // The owner can chmod the directory and replace its child even when
+        // its current mode is read-only; sticky directories also grant their
+        // owner an explicit removal exception.
+        Some("database ancestor is not owned by the current user or root")
+    } else if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+        Some("database ancestor is group/other-writable without the sticky bit")
+    } else {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn validate_database_ancestry(
+    canonical_parent: &Path,
+    parent: PrivateDatabaseParent,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    verify_database_parent(canonical_parent, parent)?;
+    for ancestor in canonical_parent.ancestors().skip(1) {
+        let metadata = std::fs::symlink_metadata(ancestor)?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            return Err(unsafe_database_path(
+                ancestor,
+                "canonical database ancestry must contain only real directories",
+            ));
+        }
+
+        let mode = metadata.mode() & 0o7777;
+        if let Some(reason) = unsafe_database_ancestor_reason(metadata.uid(), mode, parent.uid) {
+            return Err(unsafe_database_path(ancestor, reason));
+        }
+    }
+    verify_database_parent(canonical_parent, parent)
+}
+
+#[cfg(unix)]
+fn validate_private_database_file(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    expected_uid: u32,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.uid() != expected_uid
+        || metadata.nlink() != 1
+    {
+        return Err(unsafe_database_path(
+            path,
+            "database files must be current-user-owned, singly-linked regular files",
+        ));
+    }
+    Ok(())
+}
+
+/// Secure one SQLite file through a verified descriptor. `create` is true only
+/// for the main DB during preflight; optional WAL/SHM files may be absent.
+#[cfg(unix)]
+fn secure_database_file(
+    path: &Path,
+    parent_path: &Path,
+    parent: PrivateDatabaseParent,
+    create: bool,
+) -> std::io::Result<bool> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    // Two daemon processes may initialize the same missing database together.
+    // If both observe ENOENT, the `create_new` loser must validate/open the
+    // winner's inode rather than spuriously failing boot. Keep retries bounded
+    // so an actively churning path remains a fail-closed denial, not a hang.
+    let mut creation_races = 0;
+    let (file, initial) = loop {
+        let initial = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                validate_private_database_file(path, &metadata, parent.uid)?;
+                Some((metadata.dev(), metadata.ino()))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).mode(0o600);
+        if initial.is_none() {
+            options.create_new(true);
+        }
+        match options.open(path) {
+            Ok(file) => break (file, initial),
+            Err(error)
+                if initial.is_none()
+                    && error.kind() == std::io::ErrorKind::AlreadyExists
+                    && creation_races < 8 =>
+            {
+                creation_races += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    let opened = file.metadata()?;
+    validate_private_database_file(path, &opened, parent.uid)?;
+    if initial.is_some_and(|identity| identity != (opened.dev(), opened.ino())) {
+        return Err(unsafe_database_path(
+            path,
+            "database file changed while opening",
+        ));
+    }
+
+    let current = std::fs::symlink_metadata(path)?;
+    validate_private_database_file(path, &current, parent.uid)?;
+    if current.dev() != opened.dev() || current.ino() != opened.ino() {
+        return Err(unsafe_database_path(
+            path,
+            "database file path does not match opened file",
+        ));
+    }
+    verify_database_parent(parent_path, parent)?;
+
+    // fchmod the verified inode and then prove the path still names it.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    let secured = file.metadata()?;
+    let secured_path = std::fs::symlink_metadata(path)?;
+    validate_private_database_file(path, &secured, parent.uid)?;
+    validate_private_database_file(path, &secured_path, parent.uid)?;
+    if secured.mode() & 0o7777 != 0o600
+        || secured_path.mode() & 0o7777 != 0o600
+        || secured_path.dev() != secured.dev()
+        || secured_path.ino() != secured.ino()
+    {
+        return Err(unsafe_database_path(
+            path,
+            "database file failed owner/mode/identity verification",
+        ));
+    }
+    verify_database_parent(parent_path, parent)?;
+    Ok(true)
+}
+
+#[cfg(unix)]
+fn prepare_private_database(db_path: &Path) -> std::io::Result<PreparedDatabase> {
+    let requested_parent = database_parent(db_path);
+    let parent = secure_database_parent(requested_parent)?;
+    verify_database_parent(requested_parent, parent)?;
+
+    // Resolve any symlink above the final, verified parent exactly once, then
+    // use that stable spelling for every SQLite and sidecar operation.
+    let canonical_parent = std::fs::canonicalize(requested_parent)?;
+    verify_database_parent(requested_parent, parent)?;
+    verify_database_parent(&canonical_parent, parent)?;
+    validate_database_ancestry(&canonical_parent, parent)?;
+
+    let file_name = db_path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("database path has no file name: {}", db_path.display()),
+        )
+    })?;
+    let canonical_db_path = canonical_parent.join(file_name);
+    secure_database_file(&canonical_db_path, &canonical_parent, parent, true)?;
+
+    // Reject unsafe stale sidecars before SQLite has an opportunity to open
+    // them. They remain optional because a cleanly closed WAL database may not
+    // have either sidecar on disk.
+    secure_database_file(
+        &sqlite_sidecar_path(&canonical_db_path, "-wal"),
+        &canonical_parent,
+        parent,
+        false,
+    )?;
+    secure_database_file(
+        &sqlite_sidecar_path(&canonical_db_path, "-shm"),
+        &canonical_parent,
+        parent,
+        false,
+    )?;
+    verify_database_parent(requested_parent, parent)?;
+    verify_database_parent(&canonical_parent, parent)?;
+    Ok(PreparedDatabase {
+        path: canonical_db_path,
+        parent,
+    })
+}
+
+#[cfg(unix)]
+fn secure_database_files(db_path: &Path, parent: PrivateDatabaseParent) -> std::io::Result<()> {
+    let parent_path = database_parent(db_path);
+    if !secure_database_file(db_path, parent_path, parent, false)? {
+        return Err(unsafe_database_path(db_path, "database file disappeared"));
+    }
+    secure_database_file(
+        &sqlite_sidecar_path(db_path, "-wal"),
+        parent_path,
+        parent,
+        false,
+    )?;
+    secure_database_file(
+        &sqlite_sidecar_path(db_path, "-shm"),
+        parent_path,
+        parent,
+        false,
+    )?;
+    verify_database_parent(parent_path, parent)
+}
+
+#[cfg(not(unix))]
+#[derive(Debug, Clone, Copy)]
+struct PrivateDatabaseParent;
+
+/// Non-Unix platforms lack portable uid/link-count/mode APIs. Still reject
+/// final-component symlinks and non-regular files, pre-create the DB ourselves,
+/// and revalidate every path after WAL/migrations.
+#[cfg(not(unix))]
+fn secure_database_parent(path: &Path) -> std::io::Result<PrivateDatabaseParent> {
+    std::fs::create_dir_all(path)?;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(unsafe_database_path(
+            path,
+            "database parent must be a real directory",
+        ));
+    }
+    Ok(PrivateDatabaseParent)
+}
+
+#[cfg(not(unix))]
+fn secure_database_file(path: &Path, create: bool) -> std::io::Result<bool> {
+    let mut creation_races = 0;
+    loop {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    return Err(unsafe_database_path(
+                        path,
+                        "database path must be a regular file",
+                    ));
+                }
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)?;
+                return Ok(true);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {
+                match std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                {
+                    Ok(_) => return Ok(true),
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::AlreadyExists
+                            && creation_races < 8 =>
+                    {
+                        creation_races += 1;
+                    }
+                    Err(error) => return Err(error),
                 }
             }
-            Err(e) => {
-                tracing::warn!(path = %p.display(), error = %e, "stat failed");
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
         }
     }
 }
 
 #[cfg(not(unix))]
-fn restrict_db_perms(_db_path: &Path) {}
+fn prepare_private_database(db_path: &Path) -> std::io::Result<PreparedDatabase> {
+    let requested_parent = database_parent(db_path);
+    let parent = secure_database_parent(requested_parent)?;
+    let canonical_parent = std::fs::canonicalize(requested_parent)?;
+    let canonical_metadata = std::fs::symlink_metadata(&canonical_parent)?;
+    if canonical_metadata.file_type().is_symlink() || !canonical_metadata.file_type().is_dir() {
+        return Err(unsafe_database_path(
+            &canonical_parent,
+            "canonical database parent must be a real directory",
+        ));
+    }
+    let file_name = db_path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("database path has no file name: {}", db_path.display()),
+        )
+    })?;
+    let canonical_db_path = canonical_parent.join(file_name);
+    secure_database_file(&canonical_db_path, true)?;
+    secure_database_file(&sqlite_sidecar_path(&canonical_db_path, "-wal"), false)?;
+    secure_database_file(&sqlite_sidecar_path(&canonical_db_path, "-shm"), false)?;
+    Ok(PreparedDatabase {
+        path: canonical_db_path,
+        parent,
+    })
+}
+
+#[cfg(not(unix))]
+fn secure_database_files(db_path: &Path, _parent: PrivateDatabaseParent) -> std::io::Result<()> {
+    let parent = std::fs::symlink_metadata(database_parent(db_path))?;
+    if parent.file_type().is_symlink() || !parent.file_type().is_dir() {
+        return Err(unsafe_database_path(
+            database_parent(db_path),
+            "database parent is no longer a real directory",
+        ));
+    }
+    if !secure_database_file(db_path, false)? {
+        return Err(unsafe_database_path(db_path, "database file disappeared"));
+    }
+    secure_database_file(&sqlite_sidecar_path(db_path, "-wal"), false)?;
+    secure_database_file(&sqlite_sidecar_path(db_path, "-shm"), false)?;
+    Ok(())
+}
 
 struct HostKindParts<'a> {
     kind: &'static str,
@@ -2249,24 +3022,492 @@ mod tests {
         Store::open(&p).await.unwrap()
     }
 
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    }
+
+    #[cfg(unix)]
+    fn assert_private_regular_file(path: &Path) {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        assert!(metadata.file_type().is_file(), "not a file: {path:?}");
+        assert!(!metadata.file_type().is_symlink(), "symlink: {path:?}");
+        assert_eq!(metadata.nlink(), 1, "hard-linked DB file: {path:?}");
+        assert_eq!(metadata.mode() & 0o7777, 0o600, "bad mode: {path:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_creates_private_parent_database_and_wal_sidecars() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("data");
+        let db = parent.join("agentum.sqlite");
+        let store = Store::open(&db).await.unwrap();
+        store
+            .setting_set("permission-test", "secret")
+            .await
+            .unwrap();
+
+        let parent_metadata = std::fs::symlink_metadata(&parent).unwrap();
+        assert!(parent_metadata.file_type().is_dir());
+        assert!(!parent_metadata.file_type().is_symlink());
+        assert_eq!(parent_metadata.mode() & 0o7777, 0o700);
+
+        assert_private_regular_file(&db);
+        assert_eq!(
+            std::fs::symlink_metadata(&db).unwrap().uid(),
+            parent_metadata.uid(),
+            "database and private parent must have the same owner"
+        );
+        for sidecar in [
+            sqlite_sidecar_path(&db, "-wal"),
+            sqlite_sidecar_path(&db, "-shm"),
+        ] {
+            assert!(sidecar.exists(), "WAL sidecar was not created: {sidecar:?}");
+            assert_private_regular_file(&sidecar);
+            assert_eq!(
+                std::fs::symlink_metadata(&sidecar).unwrap().uid(),
+                parent_metadata.uid()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_repairs_owner_controlled_parent_and_database_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("existing-data");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let db = parent.join("existing.sqlite");
+        std::fs::write(&db, []).unwrap();
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o666)).unwrap();
+
+        let _store = Store::open(&db).await.unwrap();
+
+        assert_eq!(mode(&parent), 0o700);
+        assert_private_regular_file(&db);
+    }
+
+    #[tokio::test]
+    async fn open_accepts_the_comment_only_legacy_session_hook_checksum() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("legacy-migration").join("agentum.sqlite");
+        let first = Store::open(&db).await.unwrap();
+        sqlx::query(
+            "UPDATE _sqlx_migrations \
+             SET checksum = X'1C2BCC11C2A201012EA0446FDDA9FD76299A112AD7D9452E91EA9788541246F661A227E2DCD5F582C080039AD028B4A7' \
+             WHERE version = 17",
+        )
+        .execute(first.pool())
+        .await
+        .unwrap();
+        first.pool().close().await;
+        drop(first);
+
+        let reopened = Store::open(&db)
+            .await
+            .expect("comment-only historical checksum should remain compatible");
+        let checksum: String =
+            sqlx::query_scalar("SELECT hex(checksum) FROM _sqlx_migrations WHERE version = 17")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            checksum, LEGACY_SESSION_HOOK_MIGRATION_CHECKSUM,
+            "compatibility must not rewrite the user's migration metadata"
+        );
+    }
+
+    #[test]
+    fn simultaneous_prepare_of_missing_database_converges_on_one_private_file() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("shared-data").join("agentum.sqlite");
+        let callers = 8;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(callers));
+        let mut tasks = Vec::new();
+
+        for _ in 0..callers {
+            let db = db.clone();
+            let barrier = barrier.clone();
+            tasks.push(std::thread::spawn(move || {
+                barrier.wait();
+                prepare_private_database(&db)
+            }));
+        }
+
+        let mut prepared_paths = Vec::new();
+        for task in tasks {
+            match task.join().unwrap() {
+                Ok(prepared) => prepared_paths.push(prepared.path),
+                Err(error) => panic!("simultaneous DB preparation failed: {error}"),
+            }
+        }
+        assert_eq!(prepared_paths.len(), callers);
+        let canonical_db = std::fs::canonicalize(db.parent().unwrap())
+            .unwrap()
+            .join(db.file_name().unwrap());
+        assert!(prepared_paths.iter().all(|path| path == &canonical_db));
+
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(db.parent().unwrap()), 0o700);
+            assert_private_regular_file(&db);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_rejects_relative_path_without_chmodding_working_directory() {
+        let cwd = std::env::current_dir().unwrap();
+        let before = mode(&cwd);
+        let relative = PathBuf::from(format!(
+            ".agentum-relative-store-test-{}.sqlite",
+            Uuid::new_v4().simple()
+        ));
+
+        let error = Store::open(&relative)
+            .await
+            .err()
+            .expect("relative DB path must fail closed");
+
+        assert!(error.to_string().contains("absolute file path"));
+        assert_eq!(mode(&cwd), before, "Store::open chmodded the process cwd");
+        assert!(!relative.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_rejects_symlink_database_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("data");
+        std::fs::create_dir(&parent).unwrap();
+        let victim = root.path().join("victim");
+        std::fs::write(&victim, b"do-not-touch").unwrap();
+        let db = parent.join("agentum.sqlite");
+        symlink(&victim, &db).unwrap();
+
+        let error = Store::open(&db)
+            .await
+            .err()
+            .expect("symlink DB must fail closed");
+
+        assert!(error.to_string().contains("unsafe database path"));
+        assert_eq!(std::fs::read(&victim).unwrap(), b"do-not-touch");
+        assert!(
+            std::fs::symlink_metadata(&db)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_rejects_symlink_database_parent() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let real_parent = root.path().join("real-data");
+        std::fs::create_dir(&real_parent).unwrap();
+        let linked_parent = root.path().join("linked-data");
+        symlink(&real_parent, &linked_parent).unwrap();
+        let db = linked_parent.join("agentum.sqlite");
+
+        let error = Store::open(&db)
+            .await
+            .err()
+            .expect("symlink parent must fail closed");
+
+        assert!(error.to_string().contains("database parent"));
+        assert!(!real_parent.join("agentum.sqlite").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_resolves_symlink_above_verified_database_parent() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let real_ancestor = root.path().join("real-ancestor");
+        std::fs::create_dir(&real_ancestor).unwrap();
+        let linked_ancestor = root.path().join("linked-ancestor");
+        symlink(&real_ancestor, &linked_ancestor).unwrap();
+
+        let requested_db = linked_ancestor.join("data").join("agentum.sqlite");
+        let canonical_db = real_ancestor.join("data").join("agentum.sqlite");
+        let store = Store::open(&requested_db).await.unwrap();
+        store
+            .setting_set("canonical-parent-test", "value")
+            .await
+            .unwrap();
+
+        assert_private_regular_file(&canonical_db);
+        assert_eq!(mode(canonical_db.parent().unwrap()), 0o700);
+        assert_eq!(
+            store
+                .setting_get("canonical-parent-test")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("value")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_database_path_survives_ancestor_symlink_retarget() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let real_ancestor = root.path().join("real-ancestor");
+        std::fs::create_dir(&real_ancestor).unwrap();
+        let attacker_ancestor = root.path().join("attacker-ancestor");
+        let attacker_parent = attacker_ancestor.join("data");
+        std::fs::create_dir_all(&attacker_parent).unwrap();
+        let attacker_db = attacker_parent.join("agentum.sqlite");
+        std::fs::write(&attacker_db, b"attacker-file").unwrap();
+
+        let linked_ancestor = root.path().join("linked-ancestor");
+        symlink(&real_ancestor, &linked_ancestor).unwrap();
+        let requested_db = linked_ancestor.join("data").join("agentum.sqlite");
+        let real_db = real_ancestor.join("data").join("agentum.sqlite");
+        let prepared = prepare_private_database(&requested_db).unwrap();
+        let canonical_db = std::fs::canonicalize(real_db.parent().unwrap())
+            .unwrap()
+            .join(real_db.file_name().unwrap());
+        assert_eq!(prepared.path, canonical_db);
+
+        std::fs::remove_file(&linked_ancestor).unwrap();
+        symlink(&attacker_ancestor, &linked_ancestor).unwrap();
+        std::fs::write(&prepared.path, b"canonical-file").unwrap();
+
+        assert_eq!(std::fs::read(&real_db).unwrap(), b"canonical-file");
+        assert_eq!(std::fs::read(&attacker_db).unwrap(), b"attacker-file");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_accepts_non_writable_database_ancestor() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let read_only_ancestor = root.path().join("read-only-ancestor");
+        let parent = read_only_ancestor.join("data");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::set_permissions(&read_only_ancestor, std::fs::Permissions::from_mode(0o555))
+            .unwrap();
+        let db = parent.join("agentum.sqlite");
+
+        let result = Store::open(&db).await;
+        // Restore cleanup access even if the assertion below fails.
+        std::fs::set_permissions(&read_only_ancestor, std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        let _store = result.unwrap();
+
+        assert_eq!(mode(&parent), 0o700);
+        assert_private_regular_file(&db);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn database_ancestor_policy_rejects_foreign_owner() {
+        let effective_uid = 1_000;
+        let foreign_uid = 1_001;
+
+        for mode in [0o755, 0o1777] {
+            assert!(
+                unsafe_database_ancestor_reason(foreign_uid, mode, effective_uid).is_some(),
+                "foreign-owned ancestor mode {mode:o} was accepted"
+            );
+        }
+        assert!(unsafe_database_ancestor_reason(effective_uid, 0o755, effective_uid).is_none());
+        assert!(unsafe_database_ancestor_reason(0, 0o755, effective_uid).is_none());
+        assert!(unsafe_database_ancestor_reason(0, 0o1777, effective_uid).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_rejects_non_sticky_world_writable_database_ancestor() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let unsafe_ancestor = root.path().join("replaceable-ancestor");
+        let parent = unsafe_ancestor.join("data");
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::set_permissions(&unsafe_ancestor, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let db = parent.join("agentum.sqlite");
+
+        let result = Store::open(&db).await;
+        // Restore cleanup access before inspecting the failure.
+        std::fs::set_permissions(&unsafe_ancestor, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = result
+            .err()
+            .expect("replaceable non-sticky ancestor must fail closed");
+
+        assert!(error.to_string().contains("group/other-writable"));
+        assert!(!db.exists(), "database was created through unsafe ancestry");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_rejects_hard_linked_database() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("data");
+        std::fs::create_dir(&parent).unwrap();
+        let original = parent.join("original.sqlite");
+        std::fs::write(&original, []).unwrap();
+        let db = parent.join("agentum.sqlite");
+        std::fs::hard_link(&original, &db).unwrap();
+
+        let error = Store::open(&db)
+            .await
+            .err()
+            .expect("hard-linked DB must fail closed");
+
+        assert!(error.to_string().contains("singly-linked"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_rejects_preplanted_wal_symlink_before_sqlite_connects() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("data");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let db = parent.join("agentum.sqlite");
+        std::fs::write(&db, []).unwrap();
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let victim = root.path().join("wal-victim");
+        std::fs::write(&victim, b"do-not-touch").unwrap();
+        let wal = sqlite_sidecar_path(&db, "-wal");
+        symlink(&victim, &wal).unwrap();
+
+        let error = Store::open(&db)
+            .await
+            .err()
+            .expect("symlink WAL must fail closed");
+
+        assert!(error.to_string().contains("unsafe database path"));
+        assert_eq!(std::fs::read(&victim).unwrap(), b"do-not-touch");
+    }
+
     #[tokio::test]
     async fn settings_roundtrip_and_bool_default() {
         let s = tmp_store().await;
         // Unset key → None, and the bool reader returns the caller's default.
         assert_eq!(s.setting_get("orchestration.enabled").await.unwrap(), None);
-        assert!(!s.setting_get_bool("orchestration.enabled", false).await.unwrap());
-        assert!(s.setting_get_bool("orchestration.enabled", true).await.unwrap());
+        assert!(
+            !s.setting_get_bool("orchestration.enabled", false)
+                .await
+                .unwrap()
+        );
+        assert!(
+            s.setting_get_bool("orchestration.enabled", true)
+                .await
+                .unwrap()
+        );
 
         // Set true, then flip false — upsert overwrites in place.
-        s.setting_set_bool("orchestration.enabled", true).await.unwrap();
+        s.setting_set_bool("orchestration.enabled", true)
+            .await
+            .unwrap();
         assert_eq!(
-            s.setting_get("orchestration.enabled").await.unwrap().as_deref(),
+            s.setting_get("orchestration.enabled")
+                .await
+                .unwrap()
+                .as_deref(),
             Some("1")
         );
-        assert!(s.setting_get_bool("orchestration.enabled", false).await.unwrap());
+        assert!(
+            s.setting_get_bool("orchestration.enabled", false)
+                .await
+                .unwrap()
+        );
 
-        s.setting_set_bool("orchestration.enabled", false).await.unwrap();
-        assert!(!s.setting_get_bool("orchestration.enabled", true).await.unwrap());
+        s.setting_set_bool("orchestration.enabled", false)
+            .await
+            .unwrap();
+        assert!(
+            !s.setting_get_bool("orchestration.enabled", true)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn setting_get_or_insert_converges_across_simultaneous_pools() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("setting-get-or-insert.sqlite");
+        let first = Store::open(&db).await.unwrap();
+        let second = Store::open(&db).await.unwrap();
+        let callers = 16;
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(callers));
+        let mut tasks = Vec::new();
+
+        for index in 0..callers {
+            let store = if index % 2 == 0 {
+                first.clone()
+            } else {
+                second.clone()
+            };
+            let barrier = barrier.clone();
+            let candidate = format!("candidate-{index}");
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let outcome = store
+                    .setting_get_or_insert("lifecycle.identity", &candidate)
+                    .await;
+                (candidate, outcome)
+            }));
+        }
+
+        let mut outcomes = Vec::new();
+        for task in tasks {
+            let (candidate, outcome) = task.await.unwrap();
+            let (stored, inserted) = outcome.unwrap();
+            outcomes.push((candidate, stored, inserted));
+        }
+        let winners: Vec<_> = outcomes
+            .iter()
+            .filter(|(_, _, inserted)| *inserted)
+            .collect();
+        assert_eq!(winners.len(), 1, "exactly one candidate must be inserted");
+        let winner = winners[0].0.as_str();
+        assert_eq!(winners[0].1, winner);
+        for (_, stored, _) in &outcomes {
+            assert_eq!(stored, winner);
+        }
+        assert_eq!(
+            first
+                .setting_get("lifecycle.identity")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(winner)
+        );
+        assert_eq!(
+            second
+                .setting_get_or_insert("lifecycle.identity", "late-candidate")
+                .await
+                .unwrap(),
+            (winner.to_string(), false)
+        );
     }
 
     #[tokio::test]
@@ -2295,6 +3536,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_state_cas_updates_only_the_exact_observed_generation() {
+        let store = tmp_store().await;
+        let session = store
+            .create_session(NewSession {
+                name: "watchdog-cas-success".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_status_and_target(session.id, Status::Running, Some("pane-a"))
+            .await
+            .unwrap();
+        let observed = store.get_session_by_id(session.id).await.unwrap().unwrap();
+
+        assert!(
+            store
+                .compare_and_set_status_and_target(
+                    session.id,
+                    Status::Running,
+                    Some("pane-a"),
+                    observed.updated_at,
+                    Status::Crashed,
+                    None,
+                )
+                .await
+                .unwrap()
+        );
+        let crashed = store.get_session_by_id(session.id).await.unwrap().unwrap();
+        assert_eq!(crashed.status, Status::Crashed);
+        assert_eq!(crashed.tmux_target, None);
+
+        // The same observation is single-use: its version no longer matches.
+        assert!(
+            !store
+                .compare_and_set_status_and_target(
+                    session.id,
+                    Status::Running,
+                    Some("pane-a"),
+                    observed.updated_at,
+                    Status::Crashed,
+                    None,
+                )
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_state_cas_cannot_overwrite_stop_or_same_target_restart() {
+        let store = tmp_store().await;
+        let session = store
+            .create_session(NewSession {
+                name: "watchdog-cas-stale".into(),
+                workdir: "/tmp".into(),
+                tool: "claude".into(),
+                model: None,
+                flags: vec![],
+                card_id: None,
+                worktree_path: None,
+                worktree_branch: None,
+                worktree_base_ref: None,
+            })
+            .await
+            .unwrap();
+        store
+            .update_status_and_target(session.id, Status::Running, Some("reused-pane"))
+            .await
+            .unwrap();
+        let old_run = store.get_session_by_id(session.id).await.unwrap().unwrap();
+
+        store
+            .update_status_and_target(session.id, Status::Stopped, None)
+            .await
+            .unwrap();
+        assert!(
+            !store
+                .compare_and_set_status_and_target(
+                    session.id,
+                    Status::Running,
+                    Some("reused-pane"),
+                    old_run.updated_at,
+                    Status::Crashed,
+                    None,
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .get_session_by_id(session.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            Status::Stopped
+        );
+
+        // Simulate a completed restart that deliberately reuses the same tmux
+        // target. Status + target match the old observation again, but the
+        // generation timestamp is new, so the old watchdog still loses.
+        store
+            .update_status_and_target(session.id, Status::Running, Some("reused-pane"))
+            .await
+            .unwrap();
+        let restarted = store.get_session_by_id(session.id).await.unwrap().unwrap();
+        assert_ne!(restarted.updated_at, old_run.updated_at);
+        assert!(
+            !store
+                .compare_and_set_status_and_target(
+                    session.id,
+                    Status::Running,
+                    Some("reused-pane"),
+                    old_run.updated_at,
+                    Status::Crashed,
+                    None,
+                )
+                .await
+                .unwrap()
+        );
+        let still_running = store.get_session_by_id(session.id).await.unwrap().unwrap();
+        assert_eq!(still_running.status, Status::Running);
+        assert_eq!(still_running.tmux_target.as_deref(), Some("reused-pane"));
+    }
+
+    #[tokio::test]
     async fn unique_name() {
         let s = tmp_store().await;
         let new = NewSession {
@@ -2311,6 +3685,226 @@ mod tests {
         s.create_session(new.clone()).await.unwrap();
         let err = s.create_session(new).await.unwrap_err();
         assert!(matches!(err, StoreError::AlreadyExists(_)));
+    }
+
+    fn external_session(name: &str) -> NewSession {
+        NewSession {
+            name: name.into(),
+            workdir: "/remote/project".into(),
+            tool: "terminal".into(),
+            model: None,
+            flags: vec![EXTERNAL_TMUX_FLAG.into()],
+            card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
+        }
+    }
+
+    async fn test_ssh_host(store: &Store, name: &str) -> Host {
+        store
+            .create_host(NewHost {
+                name: name.into(),
+                kind: HostKind::Ssh {
+                    user: "me".into(),
+                    hostname: format!("{name}.example"),
+                    port: 22,
+                    auth: SshAuth::Agent,
+                },
+            })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn external_attach_get_or_create_is_concurrently_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("concurrent-attach.sqlite");
+        let store = Store::open(&db).await.unwrap();
+        // A second pool models another embedded daemon process sharing the DB,
+        // not merely concurrent tasks borrowing one pool.
+        let second_store = Store::open(&db).await.unwrap();
+        let host = test_ssh_host(&store, "attach-host").await;
+        let callers = 12;
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(callers));
+        let mut tasks = Vec::new();
+
+        for index in 0..callers {
+            let store = if index % 2 == 0 {
+                store.clone()
+            } else {
+                second_store.clone()
+            };
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .create_or_get_external_session(
+                        external_session("shared-pane"),
+                        host.id,
+                        "shared-pane",
+                    )
+                    .await
+            }));
+        }
+
+        let mut ids = std::collections::HashSet::new();
+        let mut created = 0;
+        for task in tasks {
+            let (session, was_created) = task.await.unwrap().unwrap();
+            ids.insert(session.id);
+            created += usize::from(was_created);
+            assert_eq!(session.host_id, Some(host.id));
+            assert_eq!(session.tmux_target.as_deref(), Some("shared-pane"));
+            assert_eq!(session.status, Status::Stopped);
+            assert!(session.flags.iter().any(|f| f == EXTERNAL_TMUX_FLAG));
+        }
+
+        assert_eq!(created, 1, "exactly one caller must insert the binding");
+        assert_eq!(ids.len(), 1, "every caller must receive the same row");
+        let matching: Vec<_> = store
+            .list_sessions(None)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|session| {
+                session.host_id == Some(host.id)
+                    && session.tmux_target.as_deref() == Some("shared-pane")
+            })
+            .collect();
+        assert_eq!(matching.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn external_attach_reuses_target_owned_by_managed_session() {
+        let store = tmp_store().await;
+        let host = test_ssh_host(&store, "managed-host").await;
+        let managed = store
+            .create_session_on_host(
+                NewSession {
+                    flags: Vec::new(),
+                    ..external_session("managed")
+                },
+                Some(host.id),
+            )
+            .await
+            .unwrap();
+        store
+            .update_status_and_target(managed.id, Status::Running, Some("owned-pane"))
+            .await
+            .unwrap();
+
+        let (attached, created) = store
+            .create_or_get_external_session(external_session("external"), host.id, "owned-pane")
+            .await
+            .unwrap();
+        assert!(!created);
+        assert_eq!(attached.id, managed.id);
+        assert!(!attached.flags.iter().any(|flag| flag == EXTERNAL_TMUX_FLAG));
+        assert_eq!(store.list_sessions(None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn external_attach_only_suffixes_a_real_name_collision() {
+        let store = tmp_store().await;
+        let host = test_ssh_host(&store, "suffix-host").await;
+        store
+            .create_session(NewSession {
+                flags: Vec::new(),
+                ..external_session("same-name")
+            })
+            .await
+            .unwrap();
+
+        let (attached, created) = store
+            .create_or_get_external_session(external_session("same-name"), host.id, "tmux-target")
+            .await
+            .unwrap();
+        assert!(created);
+        assert_ne!(attached.name, "same-name");
+        assert!(attached.name.starts_with("same-name-"));
+        assert_eq!(attached.tmux_target.as_deref(), Some("tmux-target"));
+    }
+
+    #[tokio::test]
+    async fn external_attach_scopes_identical_targets_by_host() {
+        let store = tmp_store().await;
+        let first_host = test_ssh_host(&store, "first-host").await;
+        let second_host = test_ssh_host(&store, "second-host").await;
+
+        let (first, first_created) = store
+            .create_or_get_external_session(
+                external_session("first-pane"),
+                first_host.id,
+                "shared-target",
+            )
+            .await
+            .unwrap();
+        let (second, second_created) = store
+            .create_or_get_external_session(
+                external_session("second-pane"),
+                second_host.id,
+                "shared-target",
+            )
+            .await
+            .unwrap();
+
+        assert!(first_created && second_created);
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.host_id, Some(first_host.id));
+        assert_eq!(second.host_id, Some(second_host.id));
+    }
+
+    #[tokio::test]
+    async fn external_attach_reports_preexisting_duplicate_bindings() {
+        let store = tmp_store().await;
+        let host = test_ssh_host(&store, "duplicate-host").await;
+        for name in ["older", "newer"] {
+            let session = store
+                .create_session_on_host(external_session(name), Some(host.id))
+                .await
+                .unwrap();
+            store
+                .update_status_and_target(session.id, Status::Stopped, Some("duplicate-target"))
+                .await
+                .unwrap();
+        }
+
+        let error = store
+            .create_or_get_external_session(external_session("third"), host.id, "duplicate-target")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            StoreError::AlreadyExists(message) if message.contains("multiple session bindings")
+        ));
+        assert_eq!(store.list_sessions(None).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn external_attach_propagates_non_name_database_errors() {
+        let store = tmp_store().await;
+        let host = test_ssh_host(&store, "failure-host").await;
+        sqlx::query(
+            "CREATE TRIGGER fail_external_attach \
+             BEFORE INSERT ON sessions \
+             WHEN NEW.tmux_target = 'forced-failure' \
+             BEGIN SELECT RAISE(ABORT, 'forced external attach failure'); END",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+
+        let error = store
+            .create_or_get_external_session(
+                external_session("failure-pane"),
+                host.id,
+                "forced-failure",
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StoreError::Sqlx(_)));
+        assert!(store.list_sessions(None).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2368,6 +3962,106 @@ mod tests {
         let reloaded = s.get_host(created.id).await.unwrap().unwrap();
         assert_eq!(reloaded.name, "box-renamed");
         assert_eq!(reloaded.kind, updated.kind);
+    }
+
+    #[tokio::test]
+    async fn update_host_password_retention_uses_secret_current_at_commit_time() {
+        let store = tmp_store().await;
+        let created = store
+            .create_host(NewHost {
+                name: "box".into(),
+                kind: HostKind::Ssh {
+                    user: "me".into(),
+                    hostname: "box.local".into(),
+                    port: 22,
+                    auth: SshAuth::Password {
+                        password: "original".into(),
+                    },
+                },
+            })
+            .await
+            .unwrap();
+
+        // Another writer replaces the secret after a route could have loaded
+        // `original`. The redacted update must retain this newer value rather
+        // than write its stale in-memory copy back.
+        store
+            .update_host(
+                created.id,
+                NewHost {
+                    name: "box".into(),
+                    kind: HostKind::Ssh {
+                        user: "me".into(),
+                        hostname: "box.local".into(),
+                        port: 22,
+                        auth: SshAuth::Password {
+                            password: "newer-secret".into(),
+                        },
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let retained = store
+            .update_host_retaining_password(
+                created.id,
+                NewHost {
+                    name: "box-renamed".into(),
+                    kind: HostKind::Ssh {
+                        user: "me".into(),
+                        hostname: "box.local".into(),
+                        port: 22,
+                        // Deliberately stale; retention SQL must ignore it.
+                        auth: SshAuth::Password {
+                            password: "original".into(),
+                        },
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(retained.name, "box-renamed");
+        assert!(matches!(
+            retained.kind,
+            HostKind::Ssh {
+                auth: SshAuth::Password { password },
+                ..
+            } if password == "newer-secret"
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_host_password_retention_conflicts_if_auth_changed() {
+        let store = tmp_store().await;
+        let created = test_ssh_host(&store, "auth-change").await;
+        let error = store
+            .update_host_retaining_password(
+                created.id,
+                NewHost {
+                    name: created.name.clone(),
+                    kind: HostKind::Ssh {
+                        user: "me".into(),
+                        hostname: "auth-change.example".into(),
+                        port: 22,
+                        auth: SshAuth::Password {
+                            password: "stale".into(),
+                        },
+                    },
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            StoreError::AlreadyExists(message) if message.contains("authentication changed")
+        ));
+        assert!(matches!(
+            store.get_host(created.id).await.unwrap().unwrap().kind,
+            HostKind::Ssh {
+                auth: SshAuth::Agent,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

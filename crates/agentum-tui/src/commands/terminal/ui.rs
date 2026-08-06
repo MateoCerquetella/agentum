@@ -407,7 +407,7 @@ pub fn draw(f: &mut Frame<'_>, app: &App) {
             // bool so the renderer can show "(not installed)" next to
             // the Tool field without taking a borrow on `app` itself
             // (the overlay's `form` is already a borrow against `app`).
-            let tool_unavailable = !app.tool_available(form.tool.trim());
+            let tool_unavailable = !app.tool_available_on_host(form.tool.trim(), form.host_uuid());
             draw_new_session_overlay(f, f.area(), form, &app.hosts, tool_unavailable, p)
         }
         Overlay::Confirm(action) => draw_confirm_overlay(f, f.area(), action, p),
@@ -2462,23 +2462,16 @@ fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let para = Paragraph::new(line).style(Style::default().bg(p.surface_bg));
         f.render_widget(para, rows[0]);
     } else {
-        // Newest-first list. `errors_scroll` is "entries from the top
-        // (newest) we've already scrolled past". Saturate against the
-        // list length so `End` (errors_scroll = usize::MAX) snaps to
-        // the oldest visible entry without crashing.
-        let visible = (rows[0].height as usize).max(1);
-        let n = app.errors.len();
-        let max_scroll = n.saturating_sub(1);
-        let scroll = app.errors_scroll.min(max_scroll);
-        let text_w = rows[0].width.saturating_sub(12) as usize; // leave room for stamp
-        let lines: Vec<Line> = app
-            .errors
-            .iter()
-            .rev()
-            .skip(scroll)
-            .take(visible)
-            .map(|e| format_error_line(e, text_w, p))
-            .collect();
+        // Flatten entries into their wrapped visual rows before applying the
+        // offset. `errors_scroll` therefore continues to mean "rows skipped
+        // from the newest item", even when one SSH error contains a long
+        // stderr transcript or explicit newlines. End/G clamps to the final
+        // full viewport rather than leaving a single last row stranded at
+        // the top of an otherwise-empty overlay.
+        let visible = rows[0].height as usize;
+        let lines = format_error_lines(&app.errors, rows[0].width as usize, p);
+        let scroll = clamp_error_scroll(lines.len(), visible, app.errors_scroll);
+        let lines: Vec<Line> = lines.into_iter().skip(scroll).take(visible).collect();
         let para = Paragraph::new(lines).style(Style::default().bg(p.surface_bg));
         f.render_widget(para, rows[0]);
     }
@@ -2499,24 +2492,138 @@ fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
     f.render_widget(hints_para, rows[1]);
 }
 
-/// Render one error entry as a single line: `[ 12s ] message`.
-/// Long messages are truncated to the available width so wrapping
-/// doesn't desync the scroll offset (which counts entries, not lines).
-fn format_error_line<'a>(entry: &ErrorEntry, text_w: usize, p: &Palette) -> Line<'a> {
+/// Render errors newest-first and flatten each message into visual rows.
+/// The first row of an entry carries its age; continuation rows align with
+/// the message column so multi-line SSH stderr remains easy to scan.
+fn format_error_lines(errors: &[ErrorEntry], row_width: usize, p: &Palette) -> Vec<Line<'static>> {
+    errors
+        .iter()
+        .rev()
+        .flat_map(|entry| {
+            error_visual_rows(entry, row_width).into_iter().map(|row| {
+                Line::from(vec![
+                    Span::styled(row.prefix, Style::default().fg(p.muted)),
+                    Span::styled(row.text, Style::default().fg(p.fg)),
+                ])
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ErrorVisualRow {
+    prefix: String,
+    text: String,
+}
+
+/// Pure layout for one error entry. Explicit newline boundaries always
+/// produce a row, including blank lines, while overlong logical lines are
+/// hard-wrapped without dropping any characters. On extremely narrow
+/// terminals the timestamp is omitted so the message still has room.
+fn error_visual_rows(entry: &ErrorEntry, row_width: usize) -> Vec<ErrorVisualRow> {
     let stamp = format_short_age(entry.at);
-    let stamp_text = format!("  [{stamp:>4}] ");
-    let mut text = entry.text.replace('\n', " ");
-    if text_w > 1 && text.chars().count() > text_w {
-        text = text
-            .chars()
-            .take(text_w.saturating_sub(1))
-            .collect::<String>()
-            + "…";
+    let full_prefix = format!("  [{stamp:>4}] ");
+    let prefix_width = Span::raw(full_prefix.as_str()).width();
+    let prefix = if row_width > prefix_width {
+        full_prefix
+    } else {
+        String::new()
+    };
+    let prefix_width = Span::raw(prefix.as_str()).width();
+    let text_width = row_width.saturating_sub(prefix_width).max(1);
+    let wrapped = wrap_error_message(&entry.text, text_width);
+
+    wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| ErrorVisualRow {
+            prefix: if index == 0 {
+                prefix.clone()
+            } else {
+                " ".repeat(prefix_width)
+            },
+            text,
+        })
+        .collect()
+}
+
+fn wrap_error_message(message: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+
+    // `split`, unlike `lines`, preserves an explicit trailing newline as a
+    // final empty row. That distinction matters for stderr blocks where a
+    // blank line separates the command failure from its diagnostic.
+    for logical_line in message.split('\n') {
+        if logical_line.is_empty() {
+            rows.push(String::new());
+            continue;
+        }
+
+        let mut row = String::new();
+        let mut row_width: usize = 0;
+        for ch in logical_line.chars() {
+            let ch_width = Span::raw(ch.to_string()).width();
+            if !row.is_empty() && row_width.saturating_add(ch_width) > width {
+                rows.push(std::mem::take(&mut row));
+                row_width = 0;
+            }
+            row.push(ch);
+            row_width = row_width.saturating_add(ch_width);
+        }
+        if !row.is_empty() {
+            rows.push(row);
+        }
     }
-    Line::from(vec![
-        Span::styled(stamp_text, Style::default().fg(p.muted)),
-        Span::styled(text, Style::default().fg(p.fg)),
-    ])
+
+    // `"".split('\n')` already yields one empty row, but retain a defensive
+    // fallback so this helper's contract can never produce a zero-height
+    // entry if its implementation changes later.
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows
+}
+
+/// Wrap a New Session form error without dropping transport diagnostics. The
+/// first row carries the error marker; continuation rows align with its text.
+fn inline_form_error_rows(message: &str, row_width: usize) -> Vec<ErrorVisualRow> {
+    let full_prefix = "  ! ".to_string();
+    let prefix = if row_width > Span::raw(full_prefix.as_str()).width() {
+        full_prefix
+    } else {
+        String::new()
+    };
+    let prefix_width = Span::raw(prefix.as_str()).width();
+    let text_width = row_width.saturating_sub(prefix_width).max(1);
+
+    wrap_error_message(message, text_width)
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| ErrorVisualRow {
+            prefix: if index == 0 {
+                prefix.clone()
+            } else {
+                " ".repeat(prefix_width)
+            },
+            text,
+        })
+        .collect()
+}
+
+fn clamp_error_scroll(total_visual_rows: usize, visible_rows: usize, requested: usize) -> usize {
+    let max_scroll = total_visual_rows.saturating_sub(visible_rows);
+
+    // End/G uses `usize::MAX` as a bottom sentinel. Up/PageUp subtract from
+    // that value in app.rs, so preserve the distance from the sentinel here:
+    // after `G`, one `k` must reveal the preceding visual row rather than
+    // remaining pinned at the bottom until an impossible number of presses.
+    if requested > usize::MAX / 2 {
+        let rows_from_bottom = usize::MAX - requested;
+        max_scroll.saturating_sub(rows_from_bottom)
+    } else {
+        requested.min(max_scroll)
+    }
 }
 
 /// Compact "time since" label: `12s`, `3m`, `2h`, `4d`. Avoids needing
@@ -2546,6 +2653,8 @@ fn draw_new_session_overlay(
     tool_unavailable: bool,
     p: &Palette,
 ) {
+    const OVERLAY_WIDTH: u16 = 70;
+
     // If the directory picker is up, it owns the overlay box.
     if let Some(picker) = &form.picker {
         draw_dir_picker_overlay(f, area, picker, p);
@@ -2609,7 +2718,7 @@ fn draw_new_session_overlay(
         p,
     );
     // The Tool field's hint normally lists the cycle order; when the
-    // typed name resolves to an uninstalled binary the hint is
+    // typed name resolves to an uninstalled binary on the selected host the hint is
     // replaced by a red warning so the user sees the gating reason
     // without having to submit and wait for an error toast. Mirrors
     // the tile-dimming on the dashboard.
@@ -2620,7 +2729,7 @@ fn draw_new_session_overlay(
             &form.tool,
             form.field == NewSessionField::Tool,
             "claude",
-            "(not installed on the daemon)",
+            "(not installed on the selected host)",
             p,
         );
     } else {
@@ -2707,12 +2816,19 @@ fn draw_new_session_overlay(
     ]));
     if let Some(err) = &form.error {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("  ! {err}"),
-            Style::default().fg(p.error),
-        )));
+        let row_width = OVERLAY_WIDTH.min(area.width).saturating_sub(2) as usize;
+        lines.extend(
+            inline_form_error_rows(err, row_width)
+                .into_iter()
+                .map(|row| {
+                    Line::from(vec![
+                        Span::styled(row.prefix, Style::default().fg(p.error)),
+                        Span::styled(row.text, Style::default().fg(p.error)),
+                    ])
+                }),
+        );
     }
-    overlay_box(f, area, " New session ", lines, 70, p);
+    overlay_box(f, area, " New session ", lines, OVERLAY_WIDTH, p);
 }
 
 fn push_form_field(
@@ -3857,6 +3973,122 @@ mod tests {
         assert_eq!(format_ctx(Some(42)), "42%");
         assert_eq!(format_ctx(Some(100)), "100%");
         assert_eq!(format_ctx(Some(101)), "—");
+    }
+
+    #[test]
+    fn error_rows_wrap_at_narrow_width_without_truncating() {
+        let entry = ErrorEntry {
+            at: SystemTime::now(),
+            text: "abcdef\nxy".to_string(),
+        };
+
+        let rows = error_visual_rows(&entry, 4);
+        assert_eq!(
+            rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>(),
+            vec!["abcd", "ef", "xy"]
+        );
+        assert!(
+            rows.iter().all(|row| row.prefix.is_empty()),
+            "the timestamp must yield to the message on a four-column viewport"
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.text.as_str()).collect::<String>(),
+            entry.text.replace('\n', ""),
+            "wrapping must not discard message characters"
+        );
+    }
+
+    #[test]
+    fn error_rows_preserve_explicit_blank_and_trailing_lines() {
+        assert_eq!(
+            wrap_error_message("first\n\nlast\n", 80),
+            vec!["first", "", "last", ""]
+        );
+        assert_eq!(wrap_error_message("a🙂b", 3), vec!["a🙂", "b"]);
+    }
+
+    #[test]
+    fn new_session_error_rows_wrap_multiline_preflight_without_truncation() {
+        let message = "502 Bad Gateway — remote preflight failed\nstderr: codex not found";
+        let rows = inline_form_error_rows(message, 20);
+
+        assert_eq!(rows[0].prefix, "  ! ");
+        assert!(
+            rows.iter().skip(1).all(|row| row.prefix == "    "),
+            "continuation rows must align under the form error text"
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.text.as_str()).collect::<String>(),
+            message.replace('\n', ""),
+            "wrapping must preserve the complete HTTP/SSH diagnostic"
+        );
+    }
+
+    #[test]
+    fn formatted_error_rows_are_newest_first() {
+        let entries = vec![
+            ErrorEntry {
+                at: SystemTime::now(),
+                text: "older".to_string(),
+            },
+            ErrorEntry {
+                at: SystemTime::now(),
+                text: "newer".to_string(),
+            },
+        ];
+        let p = &super::super::theme::Theme::by_name("midnight").palette;
+        let lines = format_error_lines(&entries, 80, p);
+        let first: String = lines[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(first.ends_with("newer"));
+    }
+
+    #[test]
+    fn error_scroll_is_a_visual_row_offset_and_end_keeps_a_full_viewport() {
+        assert_eq!(clamp_error_scroll(12, 5, 3), 3);
+        assert_eq!(clamp_error_scroll(12, 5, usize::MAX), 7);
+        assert_eq!(clamp_error_scroll(12, 5, usize::MAX - 1), 6);
+        assert_eq!(clamp_error_scroll(12, 5, usize::MAX - 10), 0);
+        assert_eq!(clamp_error_scroll(3, 5, usize::MAX), 0);
+    }
+
+    #[test]
+    fn narrow_error_overlay_renders_every_wrapped_row() {
+        use ratatui::Terminal as RatatuiTerminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new(Vec::new());
+        app.errors.push(ErrorEntry {
+            at: SystemTime::now(),
+            text: "abcdefghijklmnopqrstuvwxyz\nexplicit second line".to_string(),
+        });
+        app.error_count = 1;
+
+        // 28 terminal columns -> 22 columns inside the overlay -> 13 message
+        // columns after the timestamp. Both the implicit wraps and the
+        // explicit newline fit in the seven-row body.
+        let backend = TestBackend::new(28, 14);
+        let mut terminal = RatatuiTerminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_errors_overlay(frame, frame.area(), &app, &app.theme.palette))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let rendered_rows: Vec<String> = buffer
+            .content()
+            .chunks(buffer.area.width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect();
+        for expected in ["abcdefghijklm", "nopqrstuvwxyz", "explicit seco", "nd line"] {
+            assert!(
+                rendered_rows.iter().any(|row| row.contains(expected)),
+                "missing wrapped row {expected:?} in {rendered_rows:#?}"
+            );
+        }
+        assert!(rendered_rows.iter().all(|row| !row.contains('…')));
     }
 
     // ---- spec 001 -----------------------------------------------------

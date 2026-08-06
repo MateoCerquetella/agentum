@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 5,
+  "profile": "complex",
+  "maxRepairAttempts": 2,
+  "evidence": {
+    "required": true,
+    "browserForUi": true,
+    "screenshotForUi": true,
+    "codeReview": true
+  },
+  "isolation": {
+    "mode": "ask",
+    "baseBranch": "auto",
+    "worktreePath": "../agentum-tui-{feature}",
+    "branchPattern": "{type}/{feature}"
+  },
+  "decisions": {
+    "complexRecords": "required"
+  },
+  "setupComplete": true,
+  "legacySource": null,
+  "migratedFrom": {
+    "schemaVersion": 4,
+    "migratedAt": "2026-08-04T07:11:14.553Z"
+  }
+}

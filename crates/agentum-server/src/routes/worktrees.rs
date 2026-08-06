@@ -288,7 +288,7 @@ async fn create(
         reject_dashed("branchNameOverride", branch)?;
     }
     let repo_path = resolve_repo_path(&body.repo_id)?;
-    let host = load_host_for_repo(&state, &body.repo_id).await?;
+    let (_host_guard, host) = load_host_for_repo(&state, &body.repo_id).await?;
     // Build the worktree path as a plain string (not PathBuf): for a remote
     // repo this is a POSIX path on the *remote* fs, not the daemon's. Both
     // local and remote hosts are unix, so `/`-joined strings are correct
@@ -395,7 +395,7 @@ async fn remove(
     })?;
     reject_dashed("worktree path", worktree_path)?;
     let repo_path = resolve_repo_path(repo_id)?;
-    let host = load_host_for_repo(&state, repo_id).await?;
+    let (_host_guard, host) = load_host_for_repo(&state, repo_id).await?;
 
     let mut args = vec!["worktree", "remove"];
     if body.force.unwrap_or(false) {
@@ -552,7 +552,7 @@ async fn prune(
     for repo_id in repo_ids {
         // A repo whose host was deleted/unreachable, or whose path no longer
         // resolves, shouldn't abort the whole sweep — skip it, keep going.
-        let (Ok(host), Ok(repo_path)) = (
+        let (Ok((_host_guard, host)), Ok(repo_path)) = (
             load_host_for_repo(&state, &repo_id).await,
             resolve_repo_path(&repo_id),
         ) else {
@@ -672,7 +672,7 @@ async fn force_delete_branch(
         .map(|(repo, _)| repo)
         .unwrap_or(&body.worktree_id);
     let repo_path = resolve_repo_path(repo_id)?;
-    let host = load_host_for_repo(&state, repo_id).await?;
+    let (_host_guard, host) = load_host_for_repo(&state, repo_id).await?;
     let output = git_in_dir(
         &host,
         &repo_path,
@@ -770,7 +770,7 @@ async fn detected(
     let repo_id = q
         .repo_id
         .ok_or_else(|| ApiError::BadRequest("repoId is required".into()))?;
-    let host = load_host_for_repo(&state, &repo_id).await?;
+    let (_host_guard, host) = load_host_for_repo(&state, &repo_id).await?;
     let worktrees = scan_git_worktrees(&host, &repo_id)
         .await
         .unwrap_or_default();

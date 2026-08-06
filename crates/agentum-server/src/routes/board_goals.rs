@@ -3,8 +3,7 @@
 //! parallel table. The planner is a normal agent session bound via
 //! `session.card_id = goal.id` (CONTEXT D-07).
 
-use agentum_core::{BoardItem, Event, NewBoardItem, NewSession, Status, TransitionCtx};
-use agentum_store::paths;
+use agentum_core::{BoardItem, Event, NewBoardItem, NewSession, TransitionCtx};
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
@@ -20,7 +19,10 @@ use crate::planner;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/board/goals", post(create_goal))
-        .route("/api/board/goals/{id}/harness-plan", post(plan_goal_harness))
+        .route(
+            "/api/board/goals/{id}/harness-plan",
+            post(plan_goal_harness),
+        )
 }
 
 #[derive(Deserialize)]
@@ -201,9 +203,7 @@ async fn plan_goal_harness(
         // and provider; an external sink mirrors the card out and we carry its
         // provider + url so the harness can drive ticket-state transitions later.
         let (id, provider, url) = match sink {
-            crate::task_sink::TaskSink::Board => {
-                (c.key.clone(), Some("board".to_string()), None)
-            }
+            crate::task_sink::TaskSink::Board => (c.key.clone(), Some("board".to_string()), None),
             other => {
                 let fref = other
                     .create_feature(
@@ -238,7 +238,9 @@ async fn plan_goal_harness(
             .await
             {
                 Ok(_) => {}
-                Err(e) => tracing::warn!(provider = p, id = %id, error = %e, "initial Todo transition failed (non-fatal)"),
+                Err(e) => {
+                    tracing::warn!(provider = p, id = %id, error = %e, "initial Todo transition failed (non-fatal)")
+                }
             }
         }
         feats.push(crate::harness::BacklogFeature {
@@ -254,12 +256,14 @@ async fn plan_goal_harness(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let _ = state.bus.send(Event::new("goal.harness.planned").with_payload(json!({
-        "goal_id": goal_id,
-        "workdir": wd.to_string_lossy(),
-        "provider": sink.provider(),
-        "feature_count": list.features.len(),
-    })));
+    let _ = state
+        .bus
+        .send(Event::new("goal.harness.planned").with_payload(json!({
+            "goal_id": goal_id,
+            "workdir": wd.to_string_lossy(),
+            "provider": sink.provider(),
+            "feature_count": list.features.len(),
+        })));
 
     Ok(Json(PlanGoalHarnessResponse {
         provider: sink.provider(),
@@ -329,7 +333,9 @@ pub(crate) async fn spawn_card_session(
         }
     };
 
-    // 3. Verify workdir exists on disk (mirrors spawn_planner_session :155-160).
+    // 3. Resolve workdir before handing creation to the canonical lifecycle
+    //    transaction. The shared service validates it again so every caller
+    //    gets identical start semantics.
     let wd = super::util::expand_workdir(&workdir)?;
     if !wd.exists() {
         return Err(ApiError::BadRequest(format!(
@@ -356,40 +362,20 @@ pub(crate) async fn spawn_card_session(
         worktree_base_ref: None,
     };
 
-    // 5. Atomic dual-write: INSERT session row + UPDATE card.session_id in one tx.
-    //    claim_card returns AlreadyExists (→ HTTP 409) if the card is already bound.
-    let (_card_after, session) = state
-        .store
-        .claim_card(card.id, new_session)
-        .await
-        .map_err(ApiError::from)?;
+    // 5. Atomically claim the card, acquire the generated session's lifecycle
+    //    ownership before publishing the hand-off, and launch through the same
+    //    UUID-targeted transaction as POST /sessions/:id/start. This preserves
+    //    Store::claim_card's dual-write conflict behavior while eliminating the
+    //    parallel name-derived tmux path.
+    let session =
+        crate::routes::sessions::claim_card_and_spawn_session(state, card.id, new_session, None)
+            .await?;
+    let target = session
+        .tmux_target
+        .clone()
+        .ok_or_else(|| ApiError::Internal("spawned card session has no tmux target".into()))?;
 
-    // 6. Spawn tmux pane (mirrors spawn_planner_session :152-173).
-    let target = agentum_tmux::target_for(&session.name);
-    let adapter = agentum_executor::adapter_for(&session.tool);
-    let launch = adapter.launch(&session);
-
-    if let Err(e) = agentum_tmux::new_session(&target, &wd, &launch.argv, &launch.env).await {
-        return Err(ApiError::Internal(e.to_string()));
-    }
-
-    let log =
-        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
-        let _ = agentum_tmux::kill_session(&target).await;
-        return Err(ApiError::Internal(e.to_string()));
-    }
-
-    // 7. Mark session Running so the watchdog reconciler picks it up.
-    //    The watchdog's watch_session loop emits `session.started` on the bus
-    //    once it observes Status::Running — this route does NOT emit that event
-    //    itself (plan-checker iter-1 W-3: avoid duplicate signal on the bus).
-    state
-        .store
-        .update_status_and_target(session.id, Status::Running, Some(&target))
-        .await?;
-
-    // 8. Send the ticket title+body as the first prompt so the agent
+    // 6. Send the ticket title+body as the first prompt so the agent
     //    starts with context. Fire-and-forget on a tokio task because
     //    Claude's splash + trust dialog can swallow keystrokes that
     //    arrive too early — wait ~1.5s before send_keys. The HTTP
@@ -428,8 +414,9 @@ fn build_card_prompt(card: &BoardItem) -> Option<String> {
 
 /// Spawn a planner agent session bound to the given goal.
 ///
-/// Mirrors `routes::sessions::start` lines 256-274 exactly — any
-/// change to that flow must be reflected here.
+/// Uses the canonical create+spawn lifecycle service so UUID target derivation,
+/// locking, MCP wiring, pipe setup, and persistence rollback cannot drift from
+/// the normal session routes.
 async fn spawn_planner_session(
     state: &AppState,
     goal: &BoardItem,
@@ -439,20 +426,9 @@ async fn spawn_planner_session(
     // Name convention: `planner-<lowercase-goal-key>` e.g. `planner-ag-42`.
     let session_name = format!("planner-{}", goal.key.to_lowercase());
 
-    // Expand `~`/`~/x` once so the stored session row and the tmux spawn
-    // both see the same canonical absolute path.
-    let wd = super::util::expand_workdir(workdir)?;
-    if !wd.exists() {
-        return Err(ApiError::BadRequest(format!(
-            "workdir does not exist: {}",
-            wd.display()
-        )));
-    }
-    let workdir_resolved = wd.to_string_lossy().into_owned();
-
     let new_session = NewSession {
         name: session_name.clone(),
-        workdir: workdir_resolved,
+        workdir: workdir.to_string(),
         tool: cfg.tool.clone(),
         model: None,
         flags: vec![],
@@ -463,34 +439,18 @@ async fn spawn_planner_session(
         worktree_branch: None,
         worktree_base_ref: None,
     };
-    let session = state.store.create_session(new_session).await?;
-
-    // Spawn the tmux pane — mirrors sessions::start lines 259-273.
-    let target = agentum_tmux::target_for(&session.name);
-    let adapter = agentum_executor::adapter_for(&session.tool);
-    let launch = adapter.launch(&session);
-
-    agentum_tmux::new_session(&target, &wd, &launch.argv, &launch.env)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let log =
-        paths::pane_log(&session.id.to_string()).map_err(|e| ApiError::Internal(e.to_string()))?;
-    if let Err(e) = agentum_tmux::pipe_pane(&target, &log).await {
-        let _ = agentum_tmux::kill_session(&target).await;
-        return Err(ApiError::Internal(e.to_string()));
-    }
-
-    state
-        .store
-        .update_status_and_target(session.id, Status::Running, Some(&target))
-        .await?;
+    let session =
+        crate::routes::sessions::create_and_spawn_session(state, new_session, None).await?;
+    let target = session
+        .tmux_target
+        .as_deref()
+        .ok_or_else(|| ApiError::Internal("spawned planner session has no tmux target".into()))?;
 
     // Send the planner prompt as the first agent message.
     // <AG-KEY> is substituted with the real goal key (e.g. AG-42) so the
     // prompt can reference the card on the board without hard-coding IDs.
     let prompt = cfg.prompt.replace("<AG-KEY>", &goal.key);
-    if let Err(e) = agentum_tmux::send_keys(&target, &prompt, true).await {
+    if let Err(e) = agentum_tmux::send_keys(target, &prompt, true).await {
         // Prompt delivery failure is not fatal — the session is already
         // running; the user can send the prompt manually via /send.
         tracing::warn!(error = %e, "send planner prompt failed; session still running");
@@ -553,6 +513,7 @@ mod tests {
             hook_tokens: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mcp_token: Arc::new(String::from("test-mcp-token")),
             api_base_url: None,
+            mcp_base_url: None,
             desktop_bridge: None,
             harness: std::sync::Arc::new(crate::harness::HarnessEngine::new()),
         }
@@ -947,7 +908,9 @@ mod tests {
         assert_eq!(resp.0.provider, "board");
 
         // feature_list.json is on disk, loadable, and every feature is Pending.
-        let cfg = crate::harness::HarnessConfig::load(dir.path()).await.unwrap();
+        let cfg = crate::harness::HarnessConfig::load(dir.path())
+            .await
+            .unwrap();
         assert_eq!(cfg.features.features.len(), 2);
         assert!(
             cfg.features

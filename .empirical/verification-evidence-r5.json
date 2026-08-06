@@ -1,0 +1,56 @@
+[
+  {
+    "criterionId": "AC-1",
+    "kind": "test",
+    "passed": true,
+    "summary": "Isolated live smoke against the saved dyaus SSH host and empirical-forge workdir launched the resolved remote Codex 0.146.0 binary in tmux, observed the session alive after the startup window, and cleaned it up without touching saved sessions."
+  },
+  {
+    "criterionId": "AC-2",
+    "kind": "test",
+    "passed": true,
+    "summary": "Live Codex smoke accepted mcp_servers.agentum.bearer_token_env_var with the token supplied only through the staged child environment; executor and host-runtime tests assert the literal token is absent from argv, generated shell commands, and redacted errors."
+  },
+  {
+    "criterionId": "AC-3",
+    "kind": "test",
+    "passed": true,
+    "summary": "Server/runtime unit tests pass for remote prerequisite, SSH stage, tmux setup, tunnel, canonical missing-session, and early-exit classifications; the API maps actionable prerequisites to 400 and upstream failures to 502."
+  },
+  {
+    "criterionId": "AC-4",
+    "kind": "test",
+    "passed": true,
+    "summary": "Live remote exit-42 smoke preserved 'agentum smoke diagnostic', returned the exit status, and verified that the failed tmux target was removed; deterministic transaction tests assert pipe-before-respawn and cleanup ordering."
+  },
+  {
+    "criterionId": "AC-5",
+    "kind": "test",
+    "passed": true,
+    "summary": "Startup-resume and session-start tests pass: only Idle rows resume through the shared host-aware start operation, explicitly Stopped rows stay stopped, and persisted SSH targets are preferred after rename."
+  },
+  {
+    "criterionId": "AC-6",
+    "kind": "test",
+    "passed": true,
+    "summary": "Live plain-terminal smoke resolved and launched /bin/fish on the remote host; executor and TUI routing tests verify remote shell selection and preservation of selected profile, host_id, client, and workdir."
+  },
+  {
+    "criterionId": "AC-7",
+    "kind": "test",
+    "passed": true,
+    "summary": "Ratatui TestBackend and pure layout tests pass for JSON error-envelope decoding, multiline and narrow-width wrapping without truncation, visual-row scrolling, bottom navigation, clear, and close behavior."
+  },
+  {
+    "criterionId": "AC-8",
+    "kind": "test",
+    "passed": true,
+    "summary": "All 35 agentum-tmux tests pass, covering agent/key/password command construction, keyboard-interactive password auth, -T, stale multiplex recovery, typed has-session errors, ControlMaster shutdown, safe quoting, and timeout child cleanup; live password-host smoke also passed."
+  },
+  {
+    "criterionId": "AC-9",
+    "kind": "test",
+    "passed": true,
+    "summary": "cargo check --workspace --all-targets and cargo test --workspace --all-targets both pass after adding deterministic regressions across executor, tmux transport, server runtime/lifecycle, and TUI API/layout/routing."
+  }
+]

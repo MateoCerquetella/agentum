@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "id": "collected-5cd3fe5ee9b665ab7cba7150",
+  "criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7",
+    "AC-8",
+    "AC-9"
+  ],
+  "evidenceKinds": [
+    "review"
+  ],
+  "summary": "Independent integrated security review found no remaining actionable High or Medium findings after three static sweeps; final tests, lint, formatting, and live SSH terminal/Codex verification are green.",
+  "passed": true,
+  "startedAt": "2026-08-04T07:13:18.819Z",
+  "completedAt": "2026-08-04T07:13:18.819Z",
+  "provenance": {
+    "repositoryId": "sha256:cec1f0afd1d6f5688524ada3ceadd5d49822ab7e2e3bfb711714f992211af4ad",
+    "feature": "fix-all-ssh-problems-preventing-connected-remote-hosts-from-starting",
+    "specRevision": 6,
+    "specDigest": "sha256:15894ee6344fedd5b7bba10b459035b40ee7f2d0327bc38269eeeacb58b4d0a8",
+    "treeDigest": "sha256:3b42a11322b5810f0ebd7ee8ec6b727425f47ff68115cb640843bbca210b3256",
+    "policyDigest": "sha256:f6714a46c77763ae57174906bd8a615cc8d9afe3cf4d94ce422cc43767011dc2"
+  },
+  "digest": "sha256:ac4f483275be8770e37e932b7ea6f9a7efab4f98b02937ec267ce0af5b4b98a0",
+  "kind": "collected",
+  "collector": "independent-review-agent:Kuhn",
+  "artifacts": [
+    {
+      "path": ".empirical/final-security-review-r6.md",
+      "mediaType": "text/markdown",
+      "bytes": 1179,
+      "digest": "sha256:0b311b8e24d54e74351c7fa98efa2e6072aa1f67cfad40328198a1ade29f3ecd"
+    },
+    {
+      "path": ".empirical/review-evidence-r6.json",
+      "mediaType": "application/json",
+      "bytes": 3774,
+      "digest": "sha256:ce5e04bbf4397fbe7d94097e2015828328359e748761f4112435ed9b41b6259c"
+    }
+  ]
+}

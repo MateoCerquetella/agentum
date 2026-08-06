@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "collected-362aad27e9de10d502fedd47",
+  "criteria": [
+    "AC-UI-1"
+  ],
+  "evidenceKinds": [
+    "human"
+  ],
+  "summary": "Real installed TUI delivered and rendered the exact Unicode marker through the saved SSH-backed tmux session; pooled SSH latency improved from about 5.25s to 0.75s.",
+  "passed": true,
+  "startedAt": "2026-08-05T18:45:05.074Z",
+  "completedAt": "2026-08-05T18:45:05.074Z",
+  "provenance": {
+    "repositoryId": "sha256:cec1f0afd1d6f5688524ada3ceadd5d49822ab7e2e3bfb711714f992211af4ad",
+    "feature": "fix-the-agentum-tui-input-regression-where-text-the-user",
+    "specRevision": 2,
+    "specDigest": "sha256:7df42b7fd4c0412b6fdfb56fe5b556ca74579e98b49a22f0ef3e349bba87b9cb",
+    "treeDigest": "sha256:aa8e11ac7406f40c3e0c7341420d7f0f568cc29ebb3b19b965a07e2b68898249",
+    "policyDigest": "sha256:97398833bceb5ff580d583bd6abdf91a7816b991c84fb5fd21ff9638e8ebda43"
+  },
+  "digest": "sha256:90a620c18cb1388a9d18e538a3c2a8887a9a03840f6076021110f0b0b1aa8af5",
+  "kind": "collected",
+  "collector": "Codex PTY observation plus independent remote tmux capture-pane",
+  "artifacts": [
+    {
+      "path": ".empirical/specs/fix-the-agentum-tui-input-regression-where-text-the-user/live-vps-verification-r7.md",
+      "mediaType": "text/markdown",
+      "bytes": 1864,
+      "digest": "sha256:dec416fb996283525eca6868719cc086ec5998ff38e5e2806985b23e841684ac"
+    }
+  ]
+}
