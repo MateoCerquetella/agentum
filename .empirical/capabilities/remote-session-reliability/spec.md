@@ -102,33 +102,41 @@ decorate accepted input with transport framing or implementation labels.
 
 ### Requirement: Responsive pooled SSH interaction
 
-Agentum MUST reuse healthy pooled SSH connections for interactive work, MUST
-detect and retire a genuinely wedged pool, and MUST avoid background channel
-traffic that competes unnecessarily with user input.
+Agentum MUST keep keystrokes, pane-output streams, and liveness observation on
+independent saved-host/revision-scoped SSH pools. Interactive paths MUST avoid
+avoidable small-packet buffering, output MUST remain serviceable during
+sustained input, and host invalidation MUST retire every pool role.
 
-#### Scenario: Application reload finds an orphaned master
+#### Scenario: User types while the agent emits output
 
-- **Given** an Agentum-owned ControlMaster socket whose remote TCP path is dead
-- **When** the boot or periodic warmer probes it with a real remote no-op
-- **Then** Agentum evicts and reopens that exact master
-- **And** a successful probe itself satisfies warmup without another handshake
+- **Given** an SSH-backed terminal is receiving sustained key events and pane output
+- **When** the bidirectional WebSocket pump services both directions
+- **Then** outbound input and inbound output both continue making progress
+- **And** latency-sensitive connections do not retain Nagle or bulk compression buffering
 
-#### Scenario: Shared master is healthy or merely busy
+#### Scenario: Pane streaming pool silently wedges
 
-- **Given** a pooled master shared by active remote sessions
-- **When** its health probe succeeds or returns a non-mux channel-pressure error
-- **Then** Agentum preserves the master instead of disrupting other sessions
+- **Given** the pane log continues growing but its streaming SSH child forwards no bytes
+- **When** the next observer-pool liveness checks run
+- **Then** Agentum detects persistent lag without relying on that streaming pool
+- **And** repairs only the streaming role and resumes from an atomic offset
+- **And** no keypress is required
 
-#### Scenario: Remote session is idle
+#### Scenario: Saved host changes
 
-- **Given** no pane output has arrived since the last title poll
-- **When** the next normal title-poll tick fires
-- **Then** Agentum skips the SSH round trip
-- **And** a bounded periodic safety tick still checks for a title-only change
+- **Given** a host has interactive, streaming, and observer masters
+- **When** that host is edited or deleted
+- **Then** Agentum retires all three exact revision-scoped masters before committing the mutation
 
-#### Scenario: User pastes a large payload
+### Requirement: Host-aware session uploads
 
-- **Given** one WebSocket input frame exceeds tmux's safe marshalled command size
-- **When** Agentum sends it through the persistent SSH writer
-- **Then** it splits the bytes into lossless tmux-safe input lines
-- **And** all bytes remain in order
+Agentum MUST ship the verified host-aware upload implementation in the runnable
+binary used for SSH-backed sessions, preserving private atomic remote writes and
+exact-pane path injection.
+
+#### Scenario: User pastes an image after updating Agentum
+
+- **Given** the installed binary contains the reviewed host-aware upload route
+- **When** Ctrl-V obtains an image and uploads it for an SSH-backed session
+- **Then** the image is written only below the saved remote workdir
+- **And** its safe relative path is typed once into the exact remote pane

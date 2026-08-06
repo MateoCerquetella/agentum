@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "feature": "continue-enhancing-and-optimizing-agentum-especially-the-ssh-backed-inte",
+  "claimId": "continue-enhancing-and-optimizing-agentum-especially-the-ssh-backed-inte-6d9b38d7a378",
+  "repositoryId": "sha256:8c3d97a07336bc3e1116b7a83a32df4bb0376cf8ab78a9ba852a47d220317676",
+  "baseCommit": "d98d85bc3ffc721199c3119b24417ea22f14abf3",
+  "baseTree": "34b46dab93cd184546ee15e7351e9a1038773014",
+  "featureTree": "sha256:75b282828d6c1421b60d92a27462b30e88923f891580d3850eedf2be01ac40d4",
+  "targetCommit": "d98d85bc3ffc721199c3119b24417ea22f14abf3",
+  "targetTree": "34b46dab93cd184546ee15e7351e9a1038773014",
+  "capabilityBaseDigests": {
+    "remote-session-reliability": "sha256:df3fbed9a65ec535086bad7609b4a7d72326991b73b687df37d4150fb99053b8"
+  },
+  "deltaDigest": "sha256:87827a7aaa479249ee5faf4a9ca0fe72febfdcdc1ed6a5518dc4a3c185e4443d",
+  "resultDigests": {
+    "remote-session-reliability": "sha256:a6b9c8d5890fd27c44a332cd648bcf159e842c8b77077cd9dad6e064dd6941ca"
+  },
+  "verificationReceiptDigests": [
+    "sha256:90be98f2ad5c439f44e9f51b58efe8d352408da676d10a326b4675a5cc75f644"
+  ],
+  "integratedAt": "2026-08-06T15:25:28.914Z",
+  "digest": "sha256:6a16c9f43b163e9be5171dab2fc5bbed3fb6bc36b7a5a4e6dbf547525c626aab"
+}

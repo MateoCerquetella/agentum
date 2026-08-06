@@ -4,6 +4,21 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] — 2026-08-06
+
+### Fixed
+- **Continuously responsive SSH terminals.** Terminal WebSockets now disable
+  Nagle buffering and fairly service input and output. Latency-sensitive SSH
+  traffic avoids bulk compression, while pane streaming retains compression
+  for throughput.
+- **Autonomous remote-output recovery.** Pane liveness checks use an independent
+  observer SSH pool, allowing Agentum to detect and repair a silently stalled
+  streaming connection within a few seconds without waiting for a keypress.
+- **Image paste for SSH-backed sessions.** Clipboard images are validated,
+  written privately and atomically beneath the saved remote workdir, and their
+  safe relative path is inserted into the exact remote tmux pane rather than a
+  daemon-local shadow session.
+
 ## [0.18.0] — 2026-08-06
 
 ### Added

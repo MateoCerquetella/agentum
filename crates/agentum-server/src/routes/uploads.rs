@@ -1,15 +1,15 @@
-//! `/api/sessions/{id}/uploads` — POST raw image bytes; daemon writes to
-//! `<workdir>/.agentum-uploads/` and types the relative path into the
-//! tmux pane.
+//! `/api/sessions/{id}/uploads` — POST raw image bytes; the server writes to
+//! `<workdir>/.agentum-uploads/` on the session's saved host and types the
+//! relative path into that host's exact tmux pane.
 //!
 //! This is the daemon side of the TUI's Ctrl-V image-paste flow. The TUI
 //! reads the LOCAL OS clipboard via `arboard`, PNG-encodes the RGBA
 //! pixels, and POSTs the bytes here. We sniff the `Content-Type`,
 //! sanitize it down to a known image extension, write the bytes under
-//! `.agentum-uploads/<ts>-<rand>.<ext>`, and `tmux send-keys` the
-//! relative path (plus a trailing space, *no* Enter) into the pane so
-//! the agent picks it up as a file reference. The user commits the
-//! prompt themselves with Enter.
+//! `.agentum-uploads/<ts>-<rand>.<ext>`, and uses the host-aware tmux adapter to
+//! send the relative path (plus a trailing space, *no* Enter) into the pane so
+//! the agent picks it up as a file reference. The user commits the prompt with
+//! Enter.
 //!
 //! The filename is daemon-controlled (timestamp + random hex + sanitised
 //! extension) — never derived from user-supplied headers or the body —
@@ -20,7 +20,7 @@
 //! middleware layer; it inherits auth enforcement and is NOT added to
 //! `auth::is_public`.
 
-use agentum_core::Event;
+use agentum_core::{Event, HostKind, LOCAL_HOST_ID};
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
@@ -82,19 +82,30 @@ async fn upload(
     }
 
     let id = parse_uuid(&id)?;
+    // Resolve and hold the canonical host -> session lifecycle order before
+    // reloading either record. Host PUT/DELETE and session stop/restart cannot
+    // cross this transaction and redirect bytes or input to another revision.
+    let (_host_guard, _session_guard) =
+        super::sessions::acquire_host_and_session_lifecycle(&state, id).await?;
     let session = state
         .store
         .get_session_by_id(id)
         .await?
         .ok_or_else(|| ApiError::NotFound(id.to_string()))?;
+    let host_id = session.host_id.unwrap_or(LOCAL_HOST_ID);
+    let host = state
+        .store
+        .get_host(host_id)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest(format!("session host is missing: {host_id}")))?;
     let target = session
         .tmux_target
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("session is not running".into()))?;
 
-    if !agentum_tmux::has_session(target)
+    if !crate::host_runtime::has_session(&host, target)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
+        .map_err(|error| ApiError::from_host_runtime(&host, error))?
     {
         return Err(ApiError::BadRequest(
             "tmux session not active for this session".into(),
@@ -112,28 +123,32 @@ async fn upload(
         .unwrap_or("");
     let ext = sanitize_ext(mime_to_ext(mime));
 
-    let workdir = super::util::expand_workdir(&session.workdir)?;
-    let uploads_dir = workdir.join(".agentum-uploads");
-    tokio::fs::create_dir_all(&uploads_dir)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
+    // Remote session creation persists an absolute host-resolved workdir. Do
+    // not expand `~` against the daemon's HOME here; that was the local-shadow
+    // half of the original bug. `effective_cwd` also respects local worktrees.
     let now = OffsetDateTime::now_utc();
     let rand_hex = short_rand_hex();
     let relative_path = relative_upload_path(ext, now, &rand_hex);
-    let abs_path = workdir.join(&relative_path);
+    let workdir = match &host.kind {
+        HostKind::Local => super::util::expand_workdir(session.effective_cwd())?,
+        HostKind::Ssh { .. } => std::path::PathBuf::from(session.effective_cwd()),
+    };
+    let abs_path = upload_destination(&workdir, &relative_path)?;
 
-    tokio::fs::write(&abs_path, &body)
+    let abs_path_str = abs_path
+        .to_str()
+        .ok_or_else(|| ApiError::BadRequest("session upload path is not valid UTF-8".into()))?;
+    crate::host_runtime::write_remote_file_bytes(&host, abs_path_str, &body)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|error| ApiError::from_host_runtime(&host, error))?;
 
     // Type the relative path into the pane. `false` = no trailing
     // Enter — the agent's prompt commits when the user hits return
     // themselves. Trailing space gives breathing room before the
     // user's typed context.
-    agentum_tmux::send_keys(target, &format!("{relative_path} "), false)
+    crate::host_runtime::send_keys(&host, target, &format!("{relative_path} "), false)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+        .map_err(|error| ApiError::from_host_runtime(&host, error))?;
 
     // Broadcast on the event bus so other clients (dashboard, peer
     // TUIs) can mirror the activity. Send-error means "no
@@ -190,6 +205,19 @@ fn relative_upload_path(ext: &str, now: OffsetDateTime, rand_hex: &str) -> Strin
         .format(TS_FORMAT)
         .unwrap_or_else(|_| "00000000-000000".into());
     format!(".agentum-uploads/{ts}-{rand_hex}.{ext}")
+}
+
+fn upload_destination(
+    workdir: &std::path::Path,
+    relative_path: &str,
+) -> Result<std::path::PathBuf, ApiError> {
+    if !workdir.is_absolute() {
+        return Err(ApiError::BadRequest(format!(
+            "session workdir is not absolute: {}",
+            workdir.display()
+        )));
+    }
+    Ok(workdir.join(relative_path))
 }
 
 /// Map a Content-Type header value to a file extension. Unknown or
@@ -262,6 +290,30 @@ mod tests {
         // rand hex, extension. Any drift in the format is a wire-
         // contract change.
         assert_eq!(p, ".agentum-uploads/20260526-123456-abcd1234.png");
+    }
+
+    #[test]
+    fn upload_destination_stays_under_absolute_session_workdir() {
+        let path = upload_destination(
+            std::path::Path::new("/srv/project"),
+            ".agentum-uploads/20260526-123456-abcd1234.png",
+        )
+        .unwrap();
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/srv/project/.agentum-uploads/20260526-123456-abcd1234.png")
+        );
+        assert!(
+            upload_destination(std::path::Path::new("~/project"), ".agentum-uploads/a.png")
+                .is_err()
+        );
+        assert!(
+            upload_destination(
+                std::path::Path::new("relative/project"),
+                ".agentum-uploads/a.png"
+            )
+            .is_err()
+        );
     }
 
     #[test]

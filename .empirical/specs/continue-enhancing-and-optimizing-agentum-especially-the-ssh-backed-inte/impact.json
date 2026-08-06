@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "classification": "behavioral",
+  "capabilities": [
+    "remote-session-reliability"
+  ],
+  "surfaces": [
+    "workflow"
+  ],
+  "regressionRationale": null,
+  "digest": "sha256:1181d2cc2cc500ae089c70f6654b55396bbe8f1db9a9832e81a8f052a9708e2e"
+}

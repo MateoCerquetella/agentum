@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "collected-e0fbb52712d2342747df3dd2",
+  "criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7"
+  ],
+  "evidenceKinds": [
+    "review"
+  ],
+  "summary": "Reviewed the implementation and accepted decisions against all criteria, including exact-role streaming-master repair, cancellation, byte continuity, and absence of input-path regressions.",
+  "passed": true,
+  "startedAt": "2026-08-06T14:19:32.410Z",
+  "completedAt": "2026-08-06T14:19:32.410Z",
+  "provenance": {
+    "repositoryId": "sha256:8c3d97a07336bc3e1116b7a83a32df4bb0376cf8ab78a9ba852a47d220317676",
+    "feature": "fix-the-ssh-backed-interactive-session-bug-where-after-running",
+    "specRevision": 2,
+    "specDigest": "sha256:41b565000a7c6d70844cb49f5385e9e46c0e515a12c0e007c509288e053c4091",
+    "treeDigest": "sha256:770dc75e9d43c5abea46c06275c6cc11303dc3b26c94a6fd14029a48ee44b77d",
+    "policyDigest": "sha256:17e98648a64a7aa59e2d3b12cea1a289ab7956c261401a7965278562e1f9776b"
+  },
+  "digest": "sha256:a1c5f398401ec752ed9d1ac5e7440826738ca6672646ebc970f820f944e702b5",
+  "kind": "collected",
+  "collector": "codex-review",
+  "artifacts": [
+    {
+      "path": ".empirical/specs/fix-the-ssh-backed-interactive-session-bug-where-after-running/review.md",
+      "mediaType": "text/markdown",
+      "bytes": 2018,
+      "digest": "sha256:14a99e7a8522c70b65be96d6179d7f50d916acaff5200ad6852c0fcb48cada8f"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "sequence": 12,
+  "previousDigest": "sha256:b12d0c341d48efb032e105456b6a323664e6ddc87b511d14133d6744d3a180f4",
+  "actor": "empirical-integrate",
+  "type": "compaction-boundary",
+  "summary": "Compacted through journal event 11",
+  "createdAt": "2026-08-06T14:32:27.467Z",
+  "stateBeforeDigest": "sha256:ab8b2a6979e2ee5400f0ee968dc35ef0f3ee05e2615ebf5f6b365610560c0d2a",
+  "stateAfterDigest": "sha256:ab8b2a6979e2ee5400f0ee968dc35ef0f3ee05e2615ebf5f6b365610560c0d2a",
+  "state": {
+    "schemaVersion": 5,
+    "revision": 11,
+    "activeFeature": "fix-image-paste-for-ssh-backed-agentum-sessions-the-upload",
+    "request": "Fix image paste for SSH-backed Agentum sessions. The upload route currently checks tmux, creates .agentum-uploads, writes the image, and sends the relative path on the daemon's local machine, causing 'tmux session not active for this session'. Make the entire upload transaction host-aware and safe for both local and saved SSH sessions, preserving exact session/host/tmux identity and existing clipboard-broker behavior.",
+    "profile": "complex",
+    "workflow": "complex",
+    "mode": "normal",
+    "phase": "done",
+    "status": "done",
+    "repairAttempts": 0,
+    "message": "Integrated capability changes: remote-session-reliability",
+    "implementationActor": "agent",
+    "specDigest": "sha256:ce187df31f00374e1e4b394ff76cb9b62c453be8d15c5314a6bf52829408d09c",
+    "approvedSpecRevision": 2,
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "sha256:84f85651dd41bc417ea751439e316a281c04c6a06630efe4a2bcef98bd731fda",
+    "impactDigest": "sha256:1181d2cc2cc500ae089c70f6654b55396bbe8f1db9a9832e81a8f052a9708e2e",
+    "capabilityClaimId": "fix-image-paste-for-ssh-backed-agentum-sessions-the-upload-6d9b38d7a378",
+    "authorizationDigest": null,
+    "evidence": [],
+    "evidenceReceiptIds": [
+      "executed-fe0391ad56f4b666907605b8",
+      "collected-0d0e790f6e6377a483f8803a"
+    ],
+    "legacyEvidenceCount": 0,
+    "completion": {
+      "implemented": true,
+      "verified": true,
+      "integrated": true,
+      "delivered": false,
+      "published": false,
+      "highest": "integrated",
+      "reasons": {
+        "delivered": "delivered has not been proven by a durable receipt.",
+        "published": "published has not been proven by a durable receipt."
+      }
+    },
+    "updatedAt": "2026-08-06T14:32:27.452Z"
+  },
+  "digest": "sha256:e418f5fcedecedeb6f9fc19f213c7c5d6059159a006f634f3fd0eed3bc403052"
+}

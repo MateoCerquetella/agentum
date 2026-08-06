@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "id": "collected-348af294c9d1b1159544708d",
+  "criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7",
+    "AC-8"
+  ],
+  "evidenceKinds": [
+    "review"
+  ],
+  "summary": "Independent review phase found no unresolved issues. Verified fair Nagle-free terminal pumping; distinct revision-scoped interactive/streaming/observer pools; complete warmup, exact-role repair and concurrent cleanup; observer-routed autonomous lag recovery; private atomic host-aware binary uploads; unchanged local and wire behavior; passing configured receipt executed-b7e9bcc1edd7b2a57d20e96b; and matching newly installed v0.18.0 binaries at both user PATH locations.",
+  "passed": true,
+  "startedAt": "2026-08-06T15:23:31.166Z",
+  "completedAt": "2026-08-06T15:23:31.166Z",
+  "provenance": {
+    "repositoryId": "sha256:8c3d97a07336bc3e1116b7a83a32df4bb0376cf8ab78a9ba852a47d220317676",
+    "feature": "continue-enhancing-and-optimizing-agentum-especially-the-ssh-backed-inte",
+    "specRevision": 2,
+    "specDigest": "sha256:38d99bd0372eb3ab19994f4e532e4193c85b5e2cdb706c294e4b7d6a11d8597b",
+    "treeDigest": "sha256:75b282828d6c1421b60d92a27462b30e88923f891580d3850eedf2be01ac40d4",
+    "policyDigest": "sha256:17e98648a64a7aa59e2d3b12cea1a289ab7956c261401a7965278562e1f9776b"
+  },
+  "digest": "sha256:f99fa1dc5cf3c22abf13be45f58bb2a36fd774db20fa0c1e354377f34556e609",
+  "kind": "collected",
+  "collector": "codex-independent-review-phase",
+  "artifacts": [
+    {
+      "path": ".empirical/specs/continue-enhancing-and-optimizing-agentum-especially-the-ssh-backed-inte/decisions.md",
+      "mediaType": "text/markdown",
+      "bytes": 1702,
+      "digest": "sha256:4d4892543bebc55d4465e323492cff75491ae270217929f997316eec9d8742ec"
+    },
+    {
+      "path": "crates/agentum-server/src/host_runtime.rs",
+      "mediaType": "text/plain",
+      "bytes": 221617,
+      "digest": "sha256:b79130a857d0ecc84194ba0d94db8d6dbb4eb19c271436a1b8718fc89b2c02d3"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/sessions.rs",
+      "mediaType": "text/plain",
+      "bytes": 199954,
+      "digest": "sha256:76ed723098a098cc9e4f057d2638a16ca49f7b640b9de69eb922199411dfef4c"
+    },
+    {
+      "path": "crates/agentum-server/src/routes/uploads.rs",
+      "mediaType": "text/plain",
+      "bytes": 14103,
+      "digest": "sha256:6f7777f14268b3a00c2e18e250a654f12f2f4763e73d80506f14e91b73fb0e9a"
+    },
+    {
+      "path": "crates/agentum-tmux/src/ssh.rs",
+      "mediaType": "text/plain",
+      "bytes": 145997,
+      "digest": "sha256:2c14937bcea15f6de33de5c852ada5d08455fbb8ac4cf3d7674f543591297807"
+    },
+    {
+      "path": "crates/agentum-tui/src/commands/terminal/api.rs",
+      "mediaType": "text/plain",
+      "bytes": 68365,
+      "digest": "sha256:67658598c8bec5c630c7337d1080eab280f79d1cad9594c22c5ea678b3cb1d46"
+    }
+  ]
+}

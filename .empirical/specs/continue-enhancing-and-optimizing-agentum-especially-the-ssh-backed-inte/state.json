@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 5,
+  "revision": 8,
+  "activeFeature": "continue-enhancing-and-optimizing-agentum-especially-the-ssh-backed-inte",
+  "request": "Continue enhancing and optimizing Agentum, especially the SSH-backed interactive session path after the recently integrated stall recovery and host-aware image paste fixes.\n\nApproved Socratic discovery:\n- Primary user and problem: The user operates SSH-backed Agentum sessions. Typing still has noticeable latency, output rendering stalls, and image paste is not working in the version currently being run. These failures make remote interactive sessions unreliable and slow for normal agent work.\n- Smallest observable outcome: For the full lifetime of every SSH-backed session, typing feels immediate, output continues rendering without requiring a keypress or reconnect, and image paste consistently uploads to the remote workdir and inserts a usable path into the exact pane.\n- Scope, non-goals, and constraints: Include the SSH-backed interactive input path, remote output stream/rendering path, and remote image-paste transaction. Preserve local-session behavior, exact saved-host/session/tmux identity, clipboard compatibility, security constraints, and existing public protocols. Avoid new dependencies, unrelated UI redesign, release publication, and broad architectural changes. Follow-up decision: Non-goals: redesigning the TUI, changing supported SSH authentication, modifying agent CLI behavior, adding dependencies, or publishing a release.\n- Failure cases and risks: Protect against stale saved-host revisions, reused tmux names, dead or saturated SSH masters, silent tail children, blocked input writers, duplicate or lost input, output gaps, unsafe upload paths, symlink/hardlink attacks, partial uploads, missing remote permissions, leaked image bytes, and success events emitted before remote completion. Recovery must be bounded, cancellation-aware, and must not disrupt healthy sessions sharing a host.\n- Required verification: This is a terminal/SSH path rather than a browser UI. Prove it with deterministic transport tests that simulate sustained typing, silent tail stalls, recovery, exact byte ordering, and host-aware binary uploads; focused server tests; the configured full workspace test command; code review; and independent-worktree integration. If a configured live SSH target is available, add credential-redacted latency and long-idle interaction evidence, but do not weaken deterministic gates when one is unavailable.",
+  "profile": "complex",
+  "workflow": "complex",
+  "mode": "normal",
+  "phase": "done",
+  "status": "done",
+  "repairAttempts": 0,
+  "message": "Integrated capability changes: remote-session-reliability",
+  "implementationActor": "codex",
+  "specDigest": "sha256:38d99bd0372eb3ab19994f4e532e4193c85b5e2cdb706c294e4b7d6a11d8597b",
+  "approvedSpecRevision": 2,
+  "capabilityArchiveRequired": true,
+  "capabilityDeltaDigest": "sha256:11366134f48b2e003cf9cd304984907fca79d84a2f19db6a3483a23f50446e0d",
+  "impactDigest": "sha256:1181d2cc2cc500ae089c70f6654b55396bbe8f1db9a9832e81a8f052a9708e2e",
+  "capabilityClaimId": "continue-enhancing-and-optimizing-agentum-especially-the-ssh-backed-inte-6d9b38d7a378",
+  "authorizationDigest": null,
+  "evidence": [],
+  "evidenceReceiptIds": [
+    "executed-b7e9bcc1edd7b2a57d20e96b",
+    "collected-348af294c9d1b1159544708d"
+  ],
+  "legacyEvidenceCount": 0,
+  "completion": {
+    "implemented": true,
+    "verified": true,
+    "integrated": true,
+    "delivered": false,
+    "published": false,
+    "highest": "integrated",
+    "reasons": {
+      "delivered": "delivered has not been proven by a durable receipt.",
+      "published": "published has not been proven by a durable receipt."
+    }
+  },
+  "updatedAt": "2026-08-06T15:25:28.934Z"
+}

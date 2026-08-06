@@ -23,7 +23,7 @@ use base64::Engine as _;
 use agentum_tmux::ssh::{
     SshMux, is_mux_transport_error, ssh_close_control_masters, ssh_command_opts,
     ssh_control_exit_cmd, ssh_control_forward_cmd, ssh_control_local_cancel_cmd,
-    ssh_control_local_forward_cmd, ssh_output, ssh_retire_legacy_control_masters,
+    ssh_control_local_forward_cmd, ssh_output, ssh_output_on, ssh_retire_legacy_control_masters,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -1996,6 +1996,7 @@ fn pooled_master_stage(mux: SshMux) -> &'static str {
     match mux {
         SshMux::Interactive => "interactive ControlMaster health probe",
         SshMux::Streaming => "streaming ControlMaster health probe",
+        SshMux::Observer => "observer ControlMaster health probe",
         SshMux::Off => "unpooled SSH health probe",
     }
 }
@@ -2036,6 +2037,17 @@ pub async fn evict_ssh_master(host: &Host, mux: SshMux) {
     }
     let _master_guard = acquire_ssh_master_warm(host.id).await;
     evict_ssh_master_locked(host, mux).await;
+}
+
+/// Prove and, when transport evidence warrants it, repair one exact pooled SSH
+/// role. Silent pane-tail recovery uses this for `Streaming` so it cannot evict
+/// or add contention to the interactive master that carries accepted input.
+pub async fn repair_ssh_master_role(host: &Host, mux: SshMux) -> Result<()> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) || mux == SshMux::Off {
+        return Ok(());
+    }
+    let _master_guard = acquire_ssh_master_warm(host.id).await;
+    probe_or_repair_pooled_master_locked(host, mux).await
 }
 
 async fn open_pooled_master_locked(host: &Host, mux: SshMux) -> Result<()> {
@@ -2095,10 +2107,10 @@ async fn probe_or_repair_pooled_master_locked(host: &Host, mux: SshMux) -> Resul
     }
 }
 
-/// Prove (and, when necessary, repair) BOTH pooled SSH masters for `host`.
-/// Boot/periodic calls keep interactive operations and the first tail off the
-/// cold 1-3 second TCP+auth path. Healthy probes are the warmup; a genuinely
-/// wedged role is evicted and reopened once. Streaming remains best-effort.
+/// Prove (and, when necessary, repair) all pooled SSH masters for `host`.
+/// Boot/periodic calls keep interactive operations, the first tail, and the
+/// independent observer off the cold TCP+auth path. Streaming and observer
+/// warmup remain best-effort; the interactive role is required.
 pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     if !matches!(host.kind, HostKind::Ssh { .. }) {
         return Ok(());
@@ -2108,12 +2120,16 @@ pub async fn warm_ssh_master(host: &Host) -> Result<()> {
     // concurrent credential edit cannot retire an old revision and have this
     // task recreate it after the close.
     let _master_guard = acquire_ssh_master_warm(host.id).await;
-    let (interactive, streaming) = tokio::join!(
+    let (interactive, streaming, observer) = tokio::join!(
         probe_or_repair_pooled_master_locked(host, SshMux::Interactive),
         probe_or_repair_pooled_master_locked(host, SshMux::Streaming),
+        probe_or_repair_pooled_master_locked(host, SshMux::Observer),
     );
     if let Err(error) = streaming {
         tracing::debug!(host = %host.name, %error, "streaming SSH master warmup deferred");
+    }
+    if let Err(error) = observer {
+        tracing::debug!(host = %host.name, %error, "observer SSH master warmup deferred");
     }
     interactive?;
     reconcile_desired_reverse_tunnels_locked(host).await
@@ -2662,9 +2678,8 @@ fn open_local_safe_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-/// Write `content` to `abs_path` on `host` (local fs, or on the SSH host) with
-/// owner-only (0600) permissions. Used to place a remote agent's `--mcp-config`
-/// file — which carries the MCP **bearer token** — where the agent can read it.
+/// Write raw `content` to `abs_path` on `host` (local fs, or on the SSH host)
+/// with owner-only (0600) permissions.
 ///
 /// Security: the file must be unreadable to other users on the host (the token
 /// is a credential). We write with `umask 077` to a `mktemp` file and `mv` it
@@ -2672,7 +2687,13 @@ fn open_local_safe_regular_file(path: &Path) -> std::io::Result<std::fs::File> {
 /// follow, and the file is never briefly world-readable. Parent components and
 /// any existing destination are checked fail-closed; content travels only over
 /// process stdin, never as plaintext or encoded data in SSH argv.
-pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Result<()> {
+async fn write_host_file_bytes_with_timeout(
+    host: &Host,
+    abs_path: &str,
+    content: &[u8],
+    remote_timeout: Duration,
+    stage: &'static str,
+) -> Result<()> {
     let destination = Path::new(abs_path);
     if !destination.is_absolute() {
         return Err(HostRuntimeError::RemotePrerequisite {
@@ -2696,7 +2717,7 @@ pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Re
                     options.mode(0o600);
                 }
                 let mut file = options.open(&tmp)?;
-                file.write_all(content.as_bytes())?;
+                file.write_all(content)?;
                 file.sync_all()?;
                 drop(file);
                 // Recheck immediately before replacement. `rename` itself does
@@ -2729,20 +2750,13 @@ pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Re
             // The script contains metadata only. The possibly-secret content is
             // fed through SSH stdin into a same-directory private temp file.
             let script = remote_atomic_write_script(abs_path)?;
-            let out = ssh_output_with_stdin(
-                host,
-                &script,
-                content.as_bytes(),
-                REMOTE_LAUNCH_TIMEOUT,
-                "private file write",
-            )
-            .await?;
+            let out = ssh_output_with_stdin(host, &script, content, remote_timeout, stage).await?;
             if out.status.success() {
                 Ok(())
             } else if out.status.code() == Some(255) {
                 Err(ssh_stage_error(
                     host,
-                    "private file write",
+                    stage,
                     out.status.code(),
                     &String::from_utf8_lossy(&out.stderr),
                 ))
@@ -2757,6 +2771,34 @@ pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Re
             }
         }
     }
+}
+
+/// Write UTF-8 configuration/credential content with the established short
+/// launch-time bound. Kept as the compatibility entry point for existing MCP
+/// provisioning callers.
+pub async fn write_remote_file(host: &Host, abs_path: &str, content: &str) -> Result<()> {
+    write_host_file_bytes_with_timeout(
+        host,
+        abs_path,
+        content.as_bytes(),
+        REMOTE_LAUNCH_TIMEOUT,
+        "private file write",
+    )
+    .await
+}
+
+/// Write arbitrary private file bytes on `host`. Uploads can be as large as 25
+/// MiB, so their SSH stdin transfer receives a bounded two-minute window rather
+/// than the short agent-launch configuration deadline.
+pub async fn write_remote_file_bytes(host: &Host, abs_path: &str, content: &[u8]) -> Result<()> {
+    write_host_file_bytes_with_timeout(
+        host,
+        abs_path,
+        content,
+        Duration::from_secs(120),
+        "private binary file write",
+    )
+    .await
 }
 
 /// Read `abs_path` from `host` (local fs or SSH), or `None` when it doesn't
@@ -2861,6 +2903,67 @@ pub async fn pane_title(host: &Host, target: &str) -> Result<String> {
             Ok(out.trim_matches(|c| c == '\n' || c == '\r').to_string())
         }
     }
+}
+
+/// Low-frequency state used to prove that a persistent remote pane tail is
+/// still making progress. Keeping the title in the same response replaces the
+/// old, separate title exec on the latency-sensitive interactive master.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePaneStreamState {
+    pub log_size: u64,
+    pub title: String,
+}
+
+/// Read the pane log size and title in one bounded round trip on the independent
+/// observer ControlMaster. The operation neither touches the pane nor changes
+/// the pipe. Callers compare `log_size` with bytes already received from their
+/// `tail -f` child to distinguish a healthy idle pane from a silent channel.
+pub async fn remote_pane_stream_state(
+    host: &Host,
+    target: &str,
+    out_path: &Path,
+) -> Result<RemotePaneStreamState> {
+    if !matches!(host.kind, HostKind::Ssh { .. }) {
+        return Err(HostRuntimeError::Unsupported);
+    }
+    let script = remote_pane_stream_state_script(target, out_path)?;
+    let output = ssh_output_on(host, &script, SSH_TIMEOUT, remote_pane_stream_mux())
+        .await
+        .map_err(map_ssh_io)?;
+    if !output.status.success() {
+        return Err(HostRuntimeError::NonZero {
+            status: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    let stdout = String::from_utf8(output.stdout)?;
+    let (size, title) = stdout.split_once('\n').unwrap_or((stdout.as_str(), ""));
+    let log_size = size
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| HostRuntimeError::SshStage {
+            stage: "pane stream state",
+            host: host.name.clone(),
+            message: "remote pane log size was not an unsigned integer".into(),
+        })?;
+    Ok(RemotePaneStreamState {
+        log_size,
+        title: title.trim_matches(|c| c == '\n' || c == '\r').to_string(),
+    })
+}
+
+fn remote_pane_stream_mux() -> SshMux {
+    SshMux::Observer
+}
+
+fn remote_pane_stream_state_script(target: &str, out_path: &Path) -> Result<String> {
+    let log = remote_pane_log_expr(out_path)?;
+    let operation = format!(
+        "o=$(wc -c < {log} 2>/dev/null || echo 0); \
+         t=$(tmux display-message -p -t \"$sid\" '#{{pane_title}}' 2>/dev/null || true); \
+         printf '%s\\n%s' \"$o\" \"$t\""
+    );
+    remote_exact_tmux_script(target, &operation)
 }
 
 pub async fn send_keys(host: &Host, target: &str, keys: &str, append_enter: bool) -> Result<()> {
@@ -3731,7 +3834,7 @@ mod tests {
     fn control_master_check_targets_each_role_without_opening_a_connection() {
         let host = ssh_host();
         let mut paths = Vec::new();
-        for mux in [SshMux::Interactive, SshMux::Streaming] {
+        for mux in [SshMux::Interactive, SshMux::Streaming, SshMux::Observer] {
             let command = ssh_control_check_cmd(&host, mux).expect("private ControlPath");
             let args: Vec<String> = command
                 .as_std()
@@ -4250,6 +4353,29 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn local_private_binary_write_preserves_every_byte_and_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let destination = dir.path().join("uploads").join("image.bin");
+        let content = [0x00, 0xff, 0x89, b'P', b'N', b'G', 0x0a, 0x80];
+        write_remote_file_bytes(&local_host(), destination.to_str().unwrap(), &content)
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), content);
+        assert_eq!(
+            std::fs::symlink_metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn local_private_file_write_refuses_symlink_parent_and_hardlink_destination() {
         use std::os::unix::fs::symlink;
 
@@ -4487,6 +4613,24 @@ mod tests {
         // `$HOME` so it resolves on the remote; quoted so a home dir with
         // spaces stays one token; basename is the session's local log name.
         assert_eq!(expr, "\"$HOME/.agentum/panes/abc-123.log\"");
+    }
+
+    #[test]
+    fn remote_pane_stream_state_combines_size_and_title_without_touching_pane() {
+        assert_eq!(remote_pane_stream_mux(), SshMux::Observer);
+        let p = std::path::Path::new("/x/sessions/sess-1.log");
+        let script = remote_pane_stream_state_script("agentum-demo", p).unwrap();
+        assert!(script.starts_with("sh -c "), "not sh-wrapped: {script}");
+        assert!(script.contains("wc -c"), "log size missing: {script}");
+        assert!(script.contains("#{pane_title}"), "title missing: {script}");
+        assert!(
+            script.contains("list-sessions"),
+            "exact target lookup missing"
+        );
+        assert!(script.contains("$HOME/.agentum/panes/sess-1.log"));
+        assert!(!script.contains("capture-pane"));
+        assert!(!script.contains("send-keys"));
+        assert!(!script.contains("pipe-pane"));
     }
 
     #[test]

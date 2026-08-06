@@ -107,7 +107,7 @@ async fn close_smoke_control_masters(host: &Host) {
     // Close only this test's UUID/revision-namespaced masters. Deliberately do
     // not call the broad upgrade-retirement helper: a developer may be running
     // another Agentum process against the same endpoint during this smoke.
-    for mux in [SshMux::Interactive, SshMux::Streaming] {
+    for mux in [SshMux::Interactive, SshMux::Streaming, SshMux::Observer] {
         if let Some(mut command) = ssh_control_exit_cmd(host, mux) {
             let _ = tokio::time::timeout(Duration::from_secs(3), command.output()).await;
         }

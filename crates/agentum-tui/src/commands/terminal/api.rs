@@ -46,6 +46,9 @@ const REMOTE_SESSION_CREATE_TIMEOUT: Duration = Duration::from_secs(90);
 // can cancel a healthy mutation halfway through. Keep a finite outer bound,
 // but leave enough room for the complete lifecycle transaction.
 const SESSION_LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(90);
+/// `connect_async_tls_with_config`'s third argument controls TCP_NODELAY.
+/// Terminal frames are latency-sensitive, unlike bulk HTTP transfers.
+const TERMINAL_WS_DISABLE_NAGLE: bool = true;
 
 use super::trust;
 
@@ -1162,8 +1165,16 @@ impl Client {
                 }
                 let url = ws_url(&base, &path, &token, &extra);
                 let connector = ws_connector(&url, &trust);
-                let result =
-                    connect_async_tls_with_config(url.as_str(), None, false, connector).await;
+                // Terminal frames are latency-sensitive and often only a few
+                // bytes. Disable Nagle so a key or short pane update is not
+                // held behind a delayed ACK on remote daemon profiles.
+                let result = connect_async_tls_with_config(
+                    url.as_str(),
+                    None,
+                    TERMINAL_WS_DISABLE_NAGLE,
+                    connector,
+                )
+                .await;
                 let stream = match result {
                     Ok((s, _)) => {
                         attempt = 0;
@@ -1231,8 +1242,10 @@ impl Client {
                 // queue across reconnects and flush the moment the next
                 // attempt succeeds.
                 let drop_reason: DropReason = loop {
+                    // Fair selection matters when the user types while an agent
+                    // is streaming output. Prioritising key_rx indefinitely can
+                    // starve ready pane frames and make rendering appear frozen.
                     tokio::select! {
-                        biased;
                         out = key_rx.recv() => {
                             let Some(out) = out else {
                                 // Caller dropped the keystroke sender. No more
@@ -1503,8 +1516,8 @@ fn backoff_delay(attempt: u32) -> Duration {
 mod tests {
     use super::{
         Client, DEFAULT_HTTP_TIMEOUT, HOST_READINESS_TIMEOUT, REMOTE_SESSION_CREATE_TIMEOUT,
-        SESSION_LIFECYCLE_TIMEOUT, TermOut, TlsTrust, build_upload_url, format_api_error,
-        session_action_timeout, session_create_timeout, session_delete_timeout,
+        SESSION_LIFECYCLE_TIMEOUT, TERMINAL_WS_DISABLE_NAGLE, TermOut, TlsTrust, build_upload_url,
+        format_api_error, session_action_timeout, session_create_timeout, session_delete_timeout,
         term_out_to_ws_message, ws_url,
     };
     use reqwest::StatusCode;
@@ -1523,6 +1536,11 @@ mod tests {
         let message = term_out_to_ws_message(TermOut::Bytes(input.clone()));
 
         assert_eq!(message, WsMsg::Binary(input));
+    }
+
+    #[test]
+    fn terminal_websocket_disables_nagle() {
+        assert!(TERMINAL_WS_DISABLE_NAGLE);
     }
 
     #[test]

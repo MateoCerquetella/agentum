@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 5,
+  "revision": 11,
+  "activeFeature": "fix-the-ssh-backed-interactive-session-bug-where-after-running",
+  "request": "Fix the SSH-backed interactive session bug where, after running for a while, the connection appears stalled until the user presses a key, and continue optimizing remote-session responsiveness/latency without compromising reliability, input fidelity, or pooled-connection safety.",
+  "profile": "complex",
+  "workflow": "complex",
+  "mode": "normal",
+  "phase": "done",
+  "status": "done",
+  "repairAttempts": 0,
+  "message": "Integrated capability changes: remote-session-reliability",
+  "implementationActor": "agent",
+  "specDigest": "sha256:41b565000a7c6d70844cb49f5385e9e46c0e515a12c0e007c509288e053c4091",
+  "approvedSpecRevision": 2,
+  "capabilityArchiveRequired": true,
+  "capabilityDeltaDigest": "sha256:28040119aa5c0f25242265a8bcb470a7d88e82231e0e89162ff41e94f2923dca",
+  "impactDigest": "sha256:1181d2cc2cc500ae089c70f6654b55396bbe8f1db9a9832e81a8f052a9708e2e",
+  "capabilityClaimId": "fix-the-ssh-backed-interactive-session-bug-where-after-running-6d9b38d7a378",
+  "authorizationDigest": null,
+  "evidence": [],
+  "evidenceReceiptIds": [
+    "executed-97ce9516b5ca119e0c5c7c2e",
+    "collected-e0fbb52712d2342747df3dd2"
+  ],
+  "legacyEvidenceCount": 0,
+  "completion": {
+    "implemented": true,
+    "verified": true,
+    "integrated": true,
+    "delivered": false,
+    "published": false,
+    "highest": "integrated",
+    "reasons": {
+      "delivered": "delivered has not been proven by a durable receipt.",
+      "published": "published has not been proven by a durable receipt."
+    }
+  },
+  "updatedAt": "2026-08-06T14:23:00.271Z"
+}

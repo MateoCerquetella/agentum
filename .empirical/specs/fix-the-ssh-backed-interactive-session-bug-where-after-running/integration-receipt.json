@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "feature": "fix-the-ssh-backed-interactive-session-bug-where-after-running",
+  "claimId": "fix-the-ssh-backed-interactive-session-bug-where-after-running-6d9b38d7a378",
+  "repositoryId": "sha256:8c3d97a07336bc3e1116b7a83a32df4bb0376cf8ab78a9ba852a47d220317676",
+  "baseCommit": "d98d85bc3ffc721199c3119b24417ea22f14abf3",
+  "baseTree": "34b46dab93cd184546ee15e7351e9a1038773014",
+  "featureTree": "sha256:770dc75e9d43c5abea46c06275c6cc11303dc3b26c94a6fd14029a48ee44b77d",
+  "targetCommit": "d98d85bc3ffc721199c3119b24417ea22f14abf3",
+  "targetTree": "34b46dab93cd184546ee15e7351e9a1038773014",
+  "capabilityBaseDigests": {
+    "remote-session-reliability": "sha256:3c787ee4e5e99b7a5fe0592dc33c3c1796c4c7c709c6c3381b25de351bbf6e4b"
+  },
+  "deltaDigest": "sha256:0787b197f0db61952734db408d9daafdf1e524ab1303318ff4c47e6044f7e216",
+  "resultDigests": {
+    "remote-session-reliability": "sha256:b02a99bf74c44d7d1f79bd6062cb72a93bc97d8137860535e6e7368551d258f9"
+  },
+  "verificationReceiptDigests": [
+    "sha256:514cb8467c13972160097d8e1f64467a6c5b8251b81f805d499f7c22f6e54d9a"
+  ],
+  "integratedAt": "2026-08-06T14:23:00.253Z",
+  "digest": "sha256:232c450a44c90c8a80d34a4815ef8dc69f19dd65a1506c0acdfe7d4580ec14f6"
+}

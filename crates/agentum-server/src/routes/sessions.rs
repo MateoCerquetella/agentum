@@ -204,7 +204,7 @@ pub(crate) async fn acquire_host_lifecycle(id: Uuid) -> tokio::sync::OwnedMutexG
 /// in the process-wide canonical host → session order. The session is always
 /// reloaded by the locked implementation, so a concurrent delete between the
 /// preliminary lookup and lease acquisition resolves to a normal 404.
-async fn acquire_host_and_session_lifecycle(
+pub(crate) async fn acquire_host_and_session_lifecycle(
     state: &AppState,
     id: Uuid,
 ) -> Result<
@@ -2851,7 +2851,58 @@ async fn kill_and_reap_remote_stream_child(
 const TAIL_RESPAWN_ATTEMPTS: u32 = 6;
 const TAIL_POOLED_ATTEMPTS: u32 = 3;
 const INPUT_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+const REMOTE_TITLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REMOTE_TITLE_POLL_IDLE_TICKS: u32 = 2;
+const REMOTE_TAIL_LAG_CONFIRMATIONS: u8 = 2;
+
+/// Durable progress comparison for one remote `tail -f`. A single observation
+/// of remote bytes ahead of locally consumed bytes can be an ordinary race;
+/// only a persistent discrepancy proves the live SSH child stopped forwarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RemoteTailProgress {
+    consumed_offset: Option<u64>,
+    lag_observations: u8,
+}
+
+impl RemoteTailProgress {
+    fn new(offset: Option<u64>) -> Self {
+        Self {
+            consumed_offset: offset,
+            lag_observations: 0,
+        }
+    }
+
+    fn received(&mut self, bytes: usize) {
+        self.consumed_offset = self
+            .consumed_offset
+            .map(|offset| offset.saturating_add(bytes as u64));
+        self.lag_observations = 0;
+    }
+
+    fn reset(&mut self, offset: u64) {
+        self.consumed_offset = Some(offset);
+        self.lag_observations = 0;
+    }
+
+    /// Returns true only after the remote log has remained ahead across the
+    /// configured number of probes with no intervening tail delivery.
+    fn observe(&mut self, remote_size: u64) -> bool {
+        let Some(consumed) = self.consumed_offset else {
+            self.reset(remote_size);
+            return false;
+        };
+        if remote_size <= consumed {
+            if remote_size < consumed {
+                // Log replacement/truncation starts a new monotonic baseline.
+                self.consumed_offset = Some(remote_size);
+            }
+            self.lag_observations = 0;
+            return false;
+        }
+        self.lag_observations = self.lag_observations.saturating_add(1);
+        self.lag_observations >= REMOTE_TAIL_LAG_CONFIRMATIONS
+    }
+}
 
 fn tail_respawn_backoff(attempt: u32) -> Duration {
     let millis = 250u64.saturating_mul(1u64 << attempt.min(4));
@@ -3004,7 +3055,7 @@ async fn reestablish_remote_tail(
     log: &std::path::Path,
     socket: &mut WebSocket,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
-) -> Option<RemoteTailPump> {
+) -> Option<(RemoteTailPump, u64)> {
     for attempt in 0..TAIL_RESPAWN_ATTEMPTS {
         if *cancel.borrow() {
             return None;
@@ -3066,7 +3117,7 @@ async fn reestablish_remote_tail(
                 return None;
             }
         }
-        return Some(replacement);
+        return Some((replacement, offset));
     }
 
     let _ = send_remote_stream_message_unless_cancelled(
@@ -3198,8 +3249,8 @@ async fn stream_remote_session(
     let (registration, mut cancel_rx) = register_remote_stream(host_id);
     let tail_spawn = RemoteTailPump::spawn(&host, &log, log_offset, SshMux::Streaming).await;
     drop(host_guard);
-    let mut tail = match tail_spawn {
-        Ok(tail) => Some(tail),
+    let (mut tail, initial_tail_offset) = match tail_spawn {
+        Ok(tail) => (Some(tail), log_offset),
         Err(error) => {
             tracing::debug!(session = %id, %host_id, %error, "initial remote tail spawn failed");
             match reestablish_remote_tail(
@@ -3213,7 +3264,7 @@ async fn stream_remote_session(
             )
             .await
             {
-                Some(tail) => Some(tail),
+                Some((tail, offset)) => (Some(tail), Some(offset)),
                 None => {
                     registration.finish(Ok(()));
                     return;
@@ -3221,6 +3272,7 @@ async fn stream_remote_session(
             }
         }
     };
+    let mut tail_progress = RemoteTailProgress::new(initial_tail_offset);
 
     // Input writer: keystrokes leave the select loop through an mpsc and a
     // dedicated task delivers them. The fast path is a PERSISTENT SSH channel
@@ -3384,19 +3436,22 @@ async fn stream_remote_session(
         })
     };
 
-    // Why: like the local stream, the remote pane's OSC title is consumed by tmux
-    // on the host and never crosses the pane byte stream — so the desktop's
-    // title-derived agent status would be blank for SSH sessions. Poll the remote
-    // pane_title and re-inject it as a synthetic OSC title on change. Each poll is
-    // a round-trip SSH exec over the *shared* ControlMaster, and that master is
-    // also what carries keystroke `send_keys` — so a too-fast cadence across many
-    // open sessions churns the master's limited channels (remote MaxSessions) and
-    // can starve input. 2.5 s keeps agent-status lag imperceptible while leaving
-    // the master headroom.
-    let mut title_ticker = tokio::time::interval(Duration::from_millis(2500));
+    // Pane title and tail liveness share one background metadata probe on the
+    // observer master. Never await its SSH round trip inside the ticker branch:
+    // a slow probe must not pause keyboard or pane-byte dispatch. The remote log
+    // size lets us distinguish a healthy idle pane from a live local ssh child
+    // that silently stopped forwarding newly appended bytes.
+    // The observer pool makes this cheap tick independent of both keystrokes
+    // and pane bytes. Idle sessions still skip every other tick, while a silent
+    // tail with new remote bytes is confirmed and repaired in about 2-3s
+    // instead of remaining frozen until another user event.
+    let mut title_ticker = tokio::time::interval(REMOTE_TITLE_POLL_INTERVAL);
     let mut last_pane_title = String::new();
     let mut bytes_since_title_poll = true;
     let mut ticks_since_title_poll = 0u32;
+    let mut pane_state_probe: Option<
+        tokio::task::JoinHandle<Result<crate::host_runtime::RemotePaneStreamState, String>>,
+    > = None;
     let mut tail_cleanup_errors = Vec::new();
     loop {
         // Deliberately fair. A ratatui/agent pane can keep the tail receiver
@@ -3410,28 +3465,112 @@ async fn stream_remote_session(
                 if !remote_title_poll_due(bytes_since_title_poll, ticks_since_title_poll) {
                     continue;
                 }
+                if pane_state_probe.is_some() {
+                    continue;
+                }
                 bytes_since_title_poll = false;
                 ticks_since_title_poll = 0;
-                let title = match acquire_current_stream_host_unless_cancelled(
-                    &state,
-                    host_id,
-                    &mut cancel_rx,
-                )
-                .await
-                {
-                    Ok(Some((_host_guard, host))) => {
-                        crate::host_runtime::pane_title(&host, &target).await.ok()
+                let probe_state = state.clone();
+                let probe_target = target.clone();
+                let probe_log = log.clone();
+                let mut probe_cancel = cancel_rx.clone();
+                pane_state_probe = Some(tokio::spawn(async move {
+                    let Some((_host_guard, host)) = acquire_current_stream_host_unless_cancelled(
+                        &probe_state,
+                        host_id,
+                        &mut probe_cancel,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?
+                    else {
+                        return Err("remote pane-state probe cancelled".into());
+                    };
+                    tokio::select! {
+                        biased;
+                        _ = probe_cancel.changed() => Err("remote pane-state probe cancelled".into()),
+                        result = crate::host_runtime::remote_pane_stream_state(
+                            &host,
+                            &probe_target,
+                            &probe_log,
+                        ) => result.map_err(|error| error.to_string()),
                     }
-                    Ok(None) => break,
+                }));
+            }
+            probe_result = async {
+                pane_state_probe
+                    .as_mut()
+                    .expect("guarded pane-state probe")
+                    .await
+            }, if pane_state_probe.is_some() => {
+                let _finished_probe = pane_state_probe.take();
+                let pane_state = match probe_result {
+                    Ok(Ok(pane_state)) => pane_state,
+                    Ok(Err(error)) => {
+                        tracing::debug!(session = %id, %host_id, %error, "remote pane-state probe failed");
+                        continue;
+                    }
                     Err(error) => {
-                        tracing::debug!(session = %id, %host_id, %error, "remote title poll could not reload host");
-                        None
+                        tracing::debug!(session = %id, %host_id, %error, "remote pane-state probe task failed");
+                        continue;
                     }
                 };
-                if let Some(title) = title
-                    && !title.is_empty()
-                    && title != last_pane_title
-                {
+
+                if tail_progress.observe(pane_state.log_size) {
+                    tracing::warn!(
+                        session = %id,
+                        %host_id,
+                        remote_log_size = pane_state.log_size,
+                        consumed_offset = ?tail_progress.consumed_offset,
+                        "remote pane tail stopped forwarding; recovering without user input"
+                    );
+                    let wedged = tail.take().expect("remote tail is present");
+                    if let Err(error) = wedged.shutdown().await {
+                        tail_cleanup_errors.push(error);
+                        break;
+                    }
+                    match acquire_current_stream_host_unless_cancelled(
+                        &state,
+                        host_id,
+                        &mut cancel_rx,
+                    )
+                    .await
+                    {
+                        Ok(Some((_host_guard, host))) => {
+                            if let Err(error) = crate::host_runtime::repair_ssh_master_role(
+                                &host,
+                                SshMux::Streaming,
+                            )
+                            .await
+                            {
+                                tracing::debug!(session = %id, %host_id, %error, "streaming master repair deferred to tail reconnect");
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(error) => {
+                            tracing::debug!(session = %id, %host_id, %error, "streaming master repair could not reload host");
+                        }
+                    }
+                    match reestablish_remote_tail(
+                        &state,
+                        host_id,
+                        id,
+                        &target,
+                        &log,
+                        &mut socket,
+                        &mut cancel_rx,
+                    )
+                    .await
+                    {
+                        Some((replacement, offset)) => {
+                            tail = Some(replacement);
+                            tail_progress.reset(offset);
+                        }
+                        None => break,
+                    }
+                }
+
+                let title = pane_state.title;
+                if !title.is_empty() && title != last_pane_title {
                     last_pane_title = title.clone();
                     let mut osc = Vec::with_capacity(title.len() + 5);
                     osc.extend_from_slice(b"\x1b]0;");
@@ -3458,6 +3597,7 @@ async fn stream_remote_session(
                         bytes,
                         &mut tail.as_mut().expect("remote tail is present").receiver,
                     );
+                    tail_progress.received(frame.len());
                     if !send_remote_stream_message_unless_cancelled(
                         &mut socket,
                         Message::Binary(frame),
@@ -3485,7 +3625,10 @@ async fn stream_remote_session(
                     )
                     .await
                     {
-                        Some(replacement) => tail = Some(replacement),
+                        Some((replacement, offset)) => {
+                            tail = Some(replacement);
+                            tail_progress.reset(offset);
+                        }
                         None => break,
                     }
                 }
@@ -3600,6 +3743,10 @@ async fn stream_remote_session(
     // write wakes promptly before cleanup.
     registration.control.cancel.send_replace(true);
     drop(input_tx);
+    if let Some(probe) = pane_state_probe.take() {
+        probe.abort();
+        let _ = probe.await;
+    }
 
     // Kill and reap both long-lived SSH children before acknowledging host
     // cancellation. Run the independent cleanup paths concurrently so the
@@ -3812,13 +3959,13 @@ fn parse_refresh(t: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        TAIL_POOLED_ATTEMPTS, acquire_session_lifecycle, agent_mcp_config_matches, coalesce_queued,
-        mcp_token_generation, pane_env, parse_refresh, parse_remote_tmux_identity_output,
-        parse_resize, queue_remote_input_unless_cancelled, quote_remote_tmux_target,
-        remote_claude_mcp_config_path, remote_title_poll_due, session_lifecycle_lock,
-        tail_reconnect_plan, tail_respawn_backoff, tool_consumes_agentum_mcp,
-        validate_exact_tmux_resolution, validate_legacy_owner_migration_binding,
-        write_remote_input_with_timeout,
+        RemoteTailProgress, TAIL_POOLED_ATTEMPTS, acquire_session_lifecycle,
+        agent_mcp_config_matches, coalesce_queued, mcp_token_generation, pane_env, parse_refresh,
+        parse_remote_tmux_identity_output, parse_resize, queue_remote_input_unless_cancelled,
+        quote_remote_tmux_target, remote_claude_mcp_config_path, remote_title_poll_due,
+        session_lifecycle_lock, tail_reconnect_plan, tail_respawn_backoff,
+        tool_consumes_agentum_mcp, validate_exact_tmux_resolution,
+        validate_legacy_owner_migration_binding, write_remote_input_with_timeout,
     };
     use bytes::Bytes;
 
@@ -4133,6 +4280,35 @@ mod tests {
             "second idle tick is the safety poll"
         );
         assert!(remote_title_poll_due(false, u32::MAX));
+    }
+
+    #[test]
+    fn remote_tail_progress_requires_persistent_lag_and_resets_on_delivery() {
+        let mut progress = RemoteTailProgress::new(Some(100));
+        assert!(
+            !progress.observe(120),
+            "one racing observation is tolerated"
+        );
+        progress.received(20);
+        assert!(!progress.observe(120), "caught-up tail is healthy");
+        assert!(!progress.observe(140), "new lag starts a fresh candidate");
+        assert!(
+            progress.observe(140),
+            "unchanged lag confirms a silent tail"
+        );
+    }
+
+    #[test]
+    fn remote_tail_progress_distinguishes_idle_unknown_and_truncated_logs() {
+        let mut unknown = RemoteTailProgress::new(None);
+        assert!(!unknown.observe(50));
+        assert_eq!(unknown.consumed_offset, Some(50));
+        assert!(!unknown.observe(50), "healthy idle does not reconnect");
+
+        let mut truncated = RemoteTailProgress::new(Some(200));
+        assert!(!truncated.observe(10));
+        assert_eq!(truncated.consumed_offset, Some(10));
+        assert!(!truncated.observe(10));
     }
 
     #[tokio::test]

@@ -153,9 +153,9 @@ fn legacy_control_socket_dirs() -> Vec<PathBuf> {
     legacy_control_socket_dirs_from(xdg.as_deref(), home.as_deref())
 }
 
-/// Which pooled ControlMaster a connection attaches to. Two separate masters per
-/// host keep the bursty interactive traffic and the long-lived stream tails from
-/// starving each other on one connection's `MaxSessions` channel budget.
+/// Which pooled ControlMaster a connection attaches to. Separate masters keep
+/// latency-sensitive input, long-lived pane tails, and low-frequency liveness
+/// observation from starving or circularly depending on one another.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SshMux {
     /// No pooling — a fresh TCP+auth connection. Used by the stale-master retry.
@@ -167,6 +167,10 @@ pub enum SshMux {
     /// ONE connection per host instead of one-per-session (which overran sshd's
     /// `MaxStartups` and timed tails out as "[session stream closed]").
     Streaming,
+    /// The observer master (`cmo-`): low-frequency pane title/log-progress
+    /// probes. It must be independent of `Streaming`, because those probes are
+    /// what prove that a live tail has silently stopped forwarding.
+    Observer,
 }
 
 /// Short, deterministic connection revision for one persisted host record.
@@ -267,6 +271,7 @@ fn control_path_for(host: &Host, mux: SshMux) -> Option<String> {
         SshMux::Off => None,
         SshMux::Interactive => control_path_template_for(host, "cm"),
         SshMux::Streaming => control_path_template_for(host, "cms"),
+        SshMux::Observer => control_path_template_for(host, "cmo"),
     }
 }
 
@@ -307,6 +312,8 @@ fn legacy_control_paths_for(mux: SshMux) -> Vec<String> {
         SshMux::Off => return Vec::new(),
         SshMux::Interactive => "cm",
         SshMux::Streaming => "cms",
+        // No Agentum release predating namespaced paths had this role.
+        SshMux::Observer => return Vec::new(),
     };
     legacy_control_socket_dirs()
         .into_iter()
@@ -887,7 +894,14 @@ fn try_ssh_command_opts(
         // traffic (pane streams, git, small execs) is all compressible and
         // never the fast-link bulk transfer where compression would hurt.
         .arg("-o")
-        .arg("Compression=yes")
+        .arg(if mux == SshMux::Streaming || mux == SshMux::Off {
+            "Compression=yes"
+        } else {
+            // Input and observer traffic consists of tiny latency-sensitive
+            // records. Compression adds framing/CPU work but saves no useful
+            // bandwidth there; reserve it for the bulk pane stream.
+            "Compression=no"
+        })
         .arg("-p")
         .arg(port.to_string());
 
@@ -1225,7 +1239,7 @@ pub async fn ssh_retire_legacy_control_masters(host: &Host, dur: Duration) -> st
     first.and(second).and(third).and(fourth)
 }
 
-/// Close both current, record/revision-namespaced ControlMasters and both
+/// Close all current, record/revision-namespaced ControlMasters and both
 /// pre-namespacing ControlMasters associated with `host`, bounded by `dur` per
 /// command. All exits run concurrently, so the total wall-clock bound is one
 /// `dur` even when both historical socket roots exist.
@@ -1237,12 +1251,13 @@ pub async fn ssh_retire_legacy_control_masters(host: &Host, dur: Duration) -> st
 /// first error is propagated. A local host, or an environment where no safe
 /// ControlPath can be built, is a no-op.
 pub async fn ssh_close_control_masters(host: &Host, dur: Duration) -> std::io::Result<()> {
-    let (interactive, streaming, legacy) = tokio::join!(
+    let (interactive, streaming, observer, legacy) = tokio::join!(
         close_control_master_command(ssh_control_exit_cmd(host, SshMux::Interactive), dur),
         close_control_master_command(ssh_control_exit_cmd(host, SshMux::Streaming), dur),
+        close_control_master_command(ssh_control_exit_cmd(host, SshMux::Observer), dur),
         ssh_retire_legacy_control_masters(host, dur)
     );
-    interactive.and(streaming).and(legacy)
+    interactive.and(streaming).and(observer).and(legacy)
 }
 
 fn is_absent_control_socket_line(line: &str) -> bool {
@@ -2173,7 +2188,12 @@ mod tests {
 
     #[test]
     fn every_ordinary_ssh_exec_clears_configured_forwards() {
-        for mux in [SshMux::Off, SshMux::Interactive, SshMux::Streaming] {
+        for mux in [
+            SshMux::Off,
+            SshMux::Interactive,
+            SshMux::Streaming,
+            SshMux::Observer,
+        ] {
             let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", mux);
             assert!(
                 arg_strings(&cmd).contains(&"ClearAllForwardings=yes".to_string()),
@@ -2184,7 +2204,12 @@ mod tests {
 
     #[test]
     fn every_ssh_exec_disables_tty_allocation() {
-        for mux in [SshMux::Off, SshMux::Interactive, SshMux::Streaming] {
+        for mux in [
+            SshMux::Off,
+            SshMux::Interactive,
+            SshMux::Streaming,
+            SshMux::Observer,
+        ] {
             let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", mux);
             assert!(
                 arg_strings(&cmd).contains(&"-T".to_string()),
@@ -2194,9 +2219,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_and_interactive_masters_use_distinct_sockets() {
-        // Tails (Streaming) must pool on a SEPARATE socket from interactive ops
-        // so they don't share one connection's MaxSessions channel budget.
+    fn pooled_roles_use_three_distinct_sockets() {
         let path_of = |mux| {
             arg_strings(&ssh_command_opts(&ssh_host(SshAuth::Agent), "x", mux))
                 .into_iter()
@@ -2204,7 +2227,10 @@ mod tests {
         };
         let interactive = path_of(SshMux::Interactive).expect("interactive path");
         let streaming = path_of(SshMux::Streaming).expect("streaming path");
+        let observer = path_of(SshMux::Observer).expect("observer path");
         assert_ne!(interactive, streaming, "masters share a socket");
+        assert_ne!(interactive, observer, "masters share a socket");
+        assert_ne!(streaming, observer, "masters share a socket");
         assert!(
             interactive.contains("/cm-"),
             "interactive not cm-: {interactive}"
@@ -2213,6 +2239,7 @@ mod tests {
             streaming.contains("/cms-"),
             "streaming not cms-: {streaming}"
         );
+        assert!(observer.contains("/cmo-"), "observer not cmo-: {observer}");
     }
 
     #[test]
@@ -2314,14 +2341,19 @@ mod tests {
     }
 
     #[test]
-    fn ssh_command_enables_compression_for_throughput() {
-        // Pane streams compress ~10x; on a bandwidth-limited link that is an
-        // ~11x effective-throughput win. Every mux mode must carry it.
-        for mux in [SshMux::Off, SshMux::Interactive, SshMux::Streaming] {
+    fn ssh_command_uses_compression_only_for_bulk_capable_paths() {
+        for mux in [SshMux::Off, SshMux::Streaming] {
             let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", mux);
             assert!(
                 arg_strings(&cmd).contains(&"Compression=yes".to_string()),
                 "compression missing (mux={mux:?})"
+            );
+        }
+        for mux in [SshMux::Interactive, SshMux::Observer] {
+            let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", mux);
+            assert!(
+                arg_strings(&cmd).contains(&"Compression=no".to_string()),
+                "latency-sensitive role enables compression (mux={mux:?})"
             );
         }
     }
@@ -2370,7 +2402,12 @@ mod tests {
         // Detect a dead peer (slept laptop, dropped link) at the TCP layer, not
         // only via the app-level ServerAlive probe — so a stale pooled master is
         // torn down and replaced instead of lingering. Every mux mode carries it.
-        for mux in [SshMux::Off, SshMux::Interactive, SshMux::Streaming] {
+        for mux in [
+            SshMux::Off,
+            SshMux::Interactive,
+            SshMux::Streaming,
+            SshMux::Observer,
+        ] {
             let cmd = ssh_command_opts(&ssh_host(SshAuth::Agent), "echo hi", mux);
             assert!(
                 arg_strings(&cmd).contains(&"TCPKeepAlive=yes".to_string()),
@@ -3408,9 +3445,13 @@ mod tests {
     }
 
     #[test]
-    fn control_exit_commands_target_both_host_masters() {
+    fn control_exit_commands_target_all_host_masters() {
         let host = ssh_host(SshAuth::Agent);
-        let cases = [(SshMux::Interactive, "/cm-"), (SshMux::Streaming, "/cms-")];
+        let cases = [
+            (SshMux::Interactive, "/cm-"),
+            (SshMux::Streaming, "/cms-"),
+            (SshMux::Observer, "/cmo-"),
+        ];
         for (mux, socket_marker) in cases {
             let cmd = ssh_control_exit_cmd(&host, mux).expect("ssh host yields exit command");
             let args = arg_strings(&cmd);
