@@ -4,6 +4,31 @@ All notable changes to agentum are recorded here. The format is loosely based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] — 2026-08-07
+
+### Added
+- **Searchable, scrollable session pickers.** Picker input filters the full
+  result set as you type, and long lists keep the selected row visible while
+  supporting keyboard and page navigation.
+- **Auxiliary terminal workspaces.** Create a new agent or plain terminal beside
+  the focused pane, switch focus predictably, resize the split, and keep each
+  pane bound to its own session and host.
+- **Live task and usage observability.** Plan, todo, task, agent, token, cost,
+  context, and Claude usage state refresh in the terminal UI with explicit
+  current, empty, stale, unavailable, and read-error states.
+- **Persistent diagnostics.** Structured operation and session-scoped failures
+  remain available in a wrapped, scrollable error view with a copyable report.
+
+### Fixed
+- **Host-aware transcript state.** Agent task snapshots now reconcile local and
+  SSH transcript resets, replacements, and transport failures without showing
+  stale data as current or collapsing host-unavailable and source-read errors.
+- **Predictable creation shortcuts and Lazygit paths.** `C` opens the New Session
+  flow without colliding with navigation, while Lazygit opens the exact selected
+  directory even when it is not yet a Git repository.
+- **Diagnostic deduplication.** Repeated errors coalesce only when their message,
+  operation, and session identity all match.
+
 ## [0.18.1] — 2026-08-06
 
 ### Fixed

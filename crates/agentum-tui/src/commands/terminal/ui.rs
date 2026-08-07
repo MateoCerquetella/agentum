@@ -2479,11 +2479,8 @@ fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let para = Paragraph::new(lines).style(Style::default().bg(p.surface_bg));
         f.render_widget(para, rows[0]);
 
-        let selected_index = error_entry_index_at_visual_row(
-            &app.errors,
-            rows[0].width as usize,
-            scroll,
-        );
+        let selected_index =
+            error_entry_index_at_visual_row(&app.errors, rows[0].width as usize, scroll);
         if let Some(entry) = selected_index.and_then(|index| app.errors.get(index)) {
             let scope = entry
                 .session_id
@@ -4119,6 +4116,16 @@ pub(super) fn draw_usage_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Pal
 mod tests {
     use super::*;
 
+    fn test_error_entry(text: &str) -> ErrorEntry {
+        ErrorEntry {
+            at: SystemTime::now(),
+            text: text.to_string(),
+            operation: "test operation".to_string(),
+            session_id: None,
+            report: text.to_string(),
+        }
+    }
+
     #[test]
     fn format_tokens_variants() {
         assert_eq!(format_tokens(None), "—");
@@ -4151,10 +4158,7 @@ mod tests {
 
     #[test]
     fn error_rows_wrap_at_narrow_width_without_truncating() {
-        let entry = ErrorEntry {
-            at: SystemTime::now(),
-            text: "abcdef\nxy".to_string(),
-        };
+        let entry = test_error_entry("abcdef\nxy");
 
         let rows = error_visual_rows(&entry, 4);
         assert_eq!(
@@ -4200,16 +4204,7 @@ mod tests {
 
     #[test]
     fn formatted_error_rows_are_newest_first() {
-        let entries = vec![
-            ErrorEntry {
-                at: SystemTime::now(),
-                text: "older".to_string(),
-            },
-            ErrorEntry {
-                at: SystemTime::now(),
-                text: "newer".to_string(),
-            },
-        ];
+        let entries = vec![test_error_entry("older"), test_error_entry("newer")];
         let p = &super::super::theme::Theme::by_name("midnight").palette;
         let lines = format_error_lines(&entries, 80, p);
         let first: String = lines[0]
@@ -4235,10 +4230,9 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         let mut app = App::new(Vec::new());
-        app.errors.push(ErrorEntry {
-            at: SystemTime::now(),
-            text: "abcdefghijklmnopqrstuvwxyz\nexplicit second line".to_string(),
-        });
+        app.errors.push(test_error_entry(
+            "abcdefghijklmnopqrstuvwxyz\nexplicit second line",
+        ));
         app.error_count = 1;
 
         // 28 terminal columns -> 22 columns inside the overlay -> 13 message

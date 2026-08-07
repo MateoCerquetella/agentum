@@ -1579,7 +1579,7 @@ mod tests {
 
     #[test]
     fn terminal_websocket_disables_nagle() {
-        assert!(TERMINAL_WS_DISABLE_NAGLE);
+        const { assert!(TERMINAL_WS_DISABLE_NAGLE) };
     }
 
     #[test]

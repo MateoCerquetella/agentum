@@ -10520,6 +10520,7 @@ mod new_session_remote_tests {
                 profile: "remote".into(),
                 result: Box::new(Ok(NewSessionCreated {
                     session: session(id, "created-late"),
+                    destination: CreateDestination::ReplaceFocused,
                     start_result: Some(Ok(())),
                 })),
             },

@@ -4,8 +4,8 @@
   "maxRepairAttempts": 2,
   "evidence": {
     "required": true,
-    "browserForUi": true,
-    "screenshotForUi": true,
+    "browserForUi": false,
+    "screenshotForUi": false,
     "codeReview": true
   },
   "isolation": {
