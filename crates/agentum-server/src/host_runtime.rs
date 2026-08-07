@@ -2871,6 +2871,59 @@ pub async fn read_remote_file(host: &Host, abs_path: &str) -> Result<Option<Stri
     }
 }
 
+/// Read the deterministic Claude transcript for an Agentum session from the
+/// host that owns it. SSH paths are anchored at the remote user's `$HOME`;
+/// they are never interpreted on the daemon filesystem.
+pub async fn read_claude_transcript(
+    host: &Host,
+    workdir: &str,
+    session_id: uuid::Uuid,
+) -> Result<(String, Option<String>)> {
+    match &host.kind {
+        HostKind::Local => {
+            let path =
+                agentum_core::transcript::transcript_path_for(Path::new(workdir), session_id)
+                    .ok_or(HostRuntimeError::Unsupported)?;
+            let display = path.to_string_lossy().into_owned();
+            let content = match std::fs::read_to_string(&path) {
+                Ok(s) => Some(s),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e.into()),
+            };
+            Ok((display, content))
+        }
+        HostKind::Ssh { .. } => {
+            if !Path::new(workdir).is_absolute() {
+                return Err(HostRuntimeError::Unsupported);
+            }
+            let encoded = workdir.replace('/', "-");
+            let relative = format!(".claude/projects/{encoded}/{session_id}.jsonl");
+            let script = claude_transcript_read_script(&relative)?;
+            let out = ssh_output(host, &script, SSH_TIMEOUT)
+                .await
+                .map_err(map_ssh_io)?;
+            let display = format!("$HOME/{relative}");
+            if out.status.success() {
+                Ok((display, Some(String::from_utf8(out.stdout)?)))
+            } else if out.status.code() == Some(44) {
+                Ok((display, None))
+            } else {
+                Err(HostRuntimeError::NonZero {
+                    status: out.status.code(),
+                    stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+                })
+            }
+        }
+    }
+}
+
+fn claude_transcript_read_script(relative: &str) -> Result<String> {
+    let relative = q(relative)?;
+    Ok(format!(
+        "path=\"$HOME\"/{relative}; if [ ! -e \"$path\" ]; then exit 44; fi; cat \"$path\""
+    ))
+}
+
 pub async fn capture_pane_visible(host: &Host, target: &str) -> Result<String> {
     match &host.kind {
         HostKind::Local => Ok(agentum_tmux::capture_pane_visible(target).await?),
@@ -5138,6 +5191,26 @@ mod tests {
         );
         assert!(s.contains("command -v"), "not a portable PATH probe: {s}");
         assert!(s.contains("printf"), "first hit not printed: {s}");
+    }
+
+    #[test]
+    fn claude_transcript_script_is_home_anchored_and_shell_quoted() {
+        let script = claude_transcript_read_script(
+            ".claude/projects/-srv-project/00000000-0000-0000-0000-000000000001.jsonl",
+        )
+        .unwrap();
+        assert!(script.starts_with("path=\"$HOME\"/"));
+        assert!(
+            script.contains("exit 44"),
+            "missing must have a distinct status"
+        );
+        assert!(script.ends_with("cat \"$path\""));
+
+        let quoted = claude_transcript_read_script(".claude/projects/a'b/session.jsonl").unwrap();
+        assert!(
+            quoted.contains("\".claude/projects/a'b/session.jsonl\""),
+            "path was not kept inside one quoted shell word: {quoted}"
+        );
     }
 
     #[tokio::test]

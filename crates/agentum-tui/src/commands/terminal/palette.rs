@@ -140,9 +140,8 @@ pub enum ActionKind {
     ToggleShowAllServers,
 
     // ── Session CRUD ──────────────────────────────────────────────
-    /// Open the New Session form. Mirrors the `n` keybinding in the
-    /// tree so users can spawn an agent from the palette without
-    /// switching focus first.
+    /// Open the New Session form. Mirrors the tree-only `C` binding; when
+    /// invoked from a terminal pane the new session opens beside it.
     NewSession,
     /// Open the inline rename prompt for the given session. Mirrors
     /// `Ctrl-R` from tree focus.
@@ -247,8 +246,8 @@ impl Catalog {
             kind: ActionKind::SpawnTerminal,
         });
         a.push(Action {
-            label: "New session…  (create agent)".into(),
-            hint: "n".into(),
+            label: "Add agent / new session…".into(),
+            hint: "C (tree) · opens beside terminal".into(),
             group: "sessions",
             kind: ActionKind::NewSession,
         });

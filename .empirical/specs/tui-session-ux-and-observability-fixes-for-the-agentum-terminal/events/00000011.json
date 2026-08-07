@@ -1,0 +1,242 @@
+{
+  "schemaVersion": 4,
+  "revision": 11,
+  "previousRevision": 10,
+  "actor": "agent",
+  "summary": "Reviewed the full implementation against AC-1 through AC-12 and decisions D-001 through D-005. Fixed two review findings: diagnostic deduplication now includes operation/session identity, and SSH transcript source failures are distinct from host transport outages. Corrected the error-overlay close hint and added focused regression tests; both pass.",
+  "createdAt": "2026-08-07T14:33:53.357Z",
+  "state": {
+    "schemaVersion": 4,
+    "revision": 11,
+    "activeFeature": "tui-session-ux-and-observability-fixes-for-the-agentum-terminal",
+    "request": "TUI session UX and observability fixes for the agentum terminal app (crates/agentum-tui): 1) In-session agent management: from inside a session view, let the user add more agents (spawn a new plain terminal pane or another agent such as claude/codex) and add keyboard shortcuts to move focus between sessions/panes and to resize panes. 2) Keybind change: make C the key for create (change the current create/new-session keybind). 3) Error copy: improve error messages so the full error can be pasted into an LLM chat for debugging — include operation, session id, daemon/host state, version, and log file location where relevant. 4) Bug: the per-session/per-agent usage readout (bottom-left usage panel, /api/usage/claude) is not working, and agent tasks are not working either. 5) Bug: the Plan / Todos / Agents right-side panels (agent-tasks panel backed by transcript_store and /api/sessions/{id}/agent-tasks) are not working — investigate why and fix.",
+    "profile": "complex",
+    "phase": "archive",
+    "status": "waiting",
+    "repairAttempts": 1,
+    "message": "Reviewed the full implementation against AC-1 through AC-12 and decisions D-001 through D-005. Fixed two review findings: diagnostic deduplication now includes operation/session identity, and SSH transcript source failures are distinct from host transport outages. Corrected the error-overlay close hint and added focused regression tests; both pass.",
+    "implementationActor": "agent",
+    "specDigest": "23904c79f24e21e91881d0f6bfbaaeaa0d87313be7934419a33ca776d595cf48",
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "c6cfb76885e447f38311c31abfcb639055a08411747263b0fe7b2daca375acf0",
+    "evidence": [
+      {
+        "criterionId": "AC-1",
+        "kind": "test",
+        "passed": true,
+        "summary": "Auxiliary session/pane creation and inherited defaults tests pass."
+      },
+      {
+        "criterionId": "AC-2",
+        "kind": "test",
+        "passed": true,
+        "summary": "Availability and partial create/start failure tests pass."
+      },
+      {
+        "criterionId": "AC-3",
+        "kind": "test",
+        "passed": true,
+        "summary": "Focus cycle and passthrough tests pass."
+      },
+      {
+        "criterionId": "AC-4",
+        "kind": "test",
+        "passed": true,
+        "summary": "Split resize bounds and persistence tests pass."
+      },
+      {
+        "criterionId": "AC-5",
+        "kind": "test",
+        "passed": true,
+        "summary": "C/c/n keybinding tests and real PTY create-form exercise pass."
+      },
+      {
+        "criterionId": "AC-6",
+        "kind": "test",
+        "passed": true,
+        "summary": "Structured diagnostic detail/copy/redaction tests pass."
+      },
+      {
+        "criterionId": "AC-7",
+        "kind": "test",
+        "passed": true,
+        "summary": "Usage polling, state, stale retention, and retry tests pass."
+      },
+      {
+        "criterionId": "AC-8",
+        "kind": "test",
+        "passed": true,
+        "summary": "Usage route metadata/degradation/credential safety tests pass."
+      },
+      {
+        "criterionId": "AC-9",
+        "kind": "test",
+        "passed": true,
+        "summary": "Task parsing, initial fetch, event refresh, and focused-pane observation tests pass."
+      },
+      {
+        "criterionId": "AC-10",
+        "kind": "test",
+        "passed": true,
+        "summary": "Local/SSH transcript lifecycle, reset, and isolation tests pass."
+      },
+      {
+        "criterionId": "AC-11",
+        "kind": "test",
+        "passed": true,
+        "summary": "Distinct task snapshot state and stale-retention tests pass."
+      },
+      {
+        "criterionId": "AC-12",
+        "kind": "test",
+        "passed": true,
+        "summary": "Full workspace tests and strict workspace clippy pass."
+      },
+      {
+        "criterionId": "AC-1",
+        "kind": "test",
+        "passed": true,
+        "summary": "Auxiliary create/inheritance/pane-preservation tests pass; real PTY confirmed create flow."
+      },
+      {
+        "criterionId": "AC-2",
+        "kind": "test",
+        "passed": true,
+        "summary": "Target-host availability and recoverable partial create/start failure coverage passes."
+      },
+      {
+        "criterionId": "AC-3",
+        "kind": "test",
+        "passed": true,
+        "summary": "Forward/back focus-cycle, visible focus state, close focus, and passthrough coverage passes."
+      },
+      {
+        "criterionId": "AC-4",
+        "kind": "test",
+        "passed": true,
+        "summary": "Bounded split resizing, persistence, dual-stream dimensions, and no-split feedback coverage passes."
+      },
+      {
+        "criterionId": "AC-5",
+        "kind": "test",
+        "passed": true,
+        "summary": "C/c/n dispatch coverage passes; real PTY opened create form with uppercase C."
+      },
+      {
+        "criterionId": "AC-6",
+        "kind": "test",
+        "passed": true,
+        "summary": "Structured full diagnostics, copy flow, unknown fields, log paths, and credential redaction coverage passes."
+      },
+      {
+        "criterionId": "AC-7",
+        "kind": "test",
+        "passed": true,
+        "summary": "Immediate usage fetch, refresh cadence, explicit source/error states, stale retention, and diagnostics coverage passes."
+      },
+      {
+        "criterionId": "AC-8",
+        "kind": "test",
+        "passed": true,
+        "summary": "Daemon-host usage metadata, absent/unreadable stores, safe degradation, and credential non-exposure tests pass."
+      },
+      {
+        "criterionId": "AC-9",
+        "kind": "test",
+        "passed": true,
+        "summary": "Initial task population, record convergence, event refresh, focused-pane following, and isolation tests pass."
+      },
+      {
+        "criterionId": "AC-10",
+        "kind": "test",
+        "passed": true,
+        "summary": "Local/SSH transcript identity, creation, append, replacement, truncation, restart/reset, reconciliation, and isolation tests pass."
+      },
+      {
+        "criterionId": "AC-11",
+        "kind": "test",
+        "passed": true,
+        "summary": "Unsupported, waiting, empty, stale, offline, read-error, and incompatible task state coverage passes."
+      },
+      {
+        "criterionId": "AC-12",
+        "kind": "test",
+        "passed": true,
+        "summary": "cargo test --workspace and strict workspace clippy pass."
+      },
+      {
+        "criterionId": "AC-1",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      },
+      {
+        "criterionId": "AC-2",
+        "kind": "review",
+        "passed": true,
+        "summary": "Review confirmed unavailable tools and partial create/start states are actionable and recoverable."
+      },
+      {
+        "criterionId": "AC-3",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      },
+      {
+        "criterionId": "AC-4",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      },
+      {
+        "criterionId": "AC-5",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      },
+      {
+        "criterionId": "AC-6",
+        "kind": "review",
+        "passed": true,
+        "summary": "Review confirmed diagnostics are structured and redacted; fixed deduplication so identical text from different operations/sessions is never lost."
+      },
+      {
+        "criterionId": "AC-7",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      },
+      {
+        "criterionId": "AC-8",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      },
+      {
+        "criterionId": "AC-9",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      },
+      {
+        "criterionId": "AC-10",
+        "kind": "review",
+        "passed": true,
+        "summary": "Review confirmed UUID-pinned local/SSH transcript handling, resets, reconciliation, and isolation."
+      },
+      {
+        "criterionId": "AC-11",
+        "kind": "review",
+        "passed": true,
+        "summary": "Review fixed SSH transcript error classification so transport outages remain host-unavailable while source permission/UTF-8 failures render read-error."
+      },
+      {
+        "criterionId": "AC-12",
+        "kind": "review",
+        "passed": true,
+        "summary": "Reviewed implementation, tests, and accepted decisions; no unresolved contradiction or release-blocking defect remains."
+      }
+    ],
+    "updatedAt": "2026-08-07T14:33:53.357Z"
+  }
+}

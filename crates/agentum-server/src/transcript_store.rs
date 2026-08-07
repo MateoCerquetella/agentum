@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agentum_core::Event;
-use agentum_core::transcript::{self, AgentTaskState};
+use agentum_core::transcript::{self, AgentTaskSnapshot, AgentTaskSnapshotStatus, AgentTaskState};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::json;
 use time::OffsetDateTime;
@@ -45,22 +45,21 @@ struct Slot {
     /// Deterministic path of this session's JSONL transcript
     /// (`<project_dir>/<agentum-session-id>.jsonl`). Always set, even
     /// when the file doesn't exist yet — claude materializes it on
-    /// the first turn. We *promote* to this path the moment it
-    /// appears on disk, swapping out any fallback we picked at slot
-    /// creation time so the panel snaps to the agent's own transcript
-    /// the instant claude starts writing.
+    /// the first turn.
     pinned_path: PathBuf,
-    /// What we're actually reading right now. Equals `pinned_path`
-    /// when claude has begun writing; otherwise it's a best-guess
-    /// fallback (the latest `*.jsonl` in the project dir at the
-    /// moment we resolved). `refresh` re-checks for `pinned_path` on
-    /// every tick so a slot that started with a stale fallback
-    /// recovers automatically.
+    /// What we're actually reading right now. Kept separately so a future
+    /// explicitly identified legacy source can be supported without changing
+    /// cursor bookkeeping; current sessions always use `pinned_path`.
     transcript_path: PathBuf,
     /// Bytes already consumed from `transcript_path`. Lets each event
     /// apply only the newly appended slice instead of re-parsing the
     /// whole transcript.
     cursor: u64,
+    /// Stable file identity used to distinguish replacement from append.
+    /// Claude occasionally atomically replaces a transcript during recovery;
+    /// size alone cannot detect a replacement whose new file is as large as
+    /// the old one.
+    file_identity: Option<u64>,
     /// Pending `Task` tool dispatches awaiting their `tool_result`.
     /// Keyed by tool_use id.
     pending_tasks: HashMap<String, OffsetDateTime>,
@@ -69,9 +68,17 @@ struct Slot {
     _watcher: RecommendedWatcher,
 }
 
+#[derive(Default)]
+struct RemoteCursor {
+    seen_len: usize,
+    seen_hash: u64,
+    reset_at: usize,
+}
+
 #[derive(Clone)]
 pub struct TranscriptStore {
     inner: Arc<Mutex<HashMap<Uuid, Slot>>>,
+    remote_cursors: Arc<Mutex<HashMap<Uuid, RemoteCursor>>>,
     bus: broadcast::Sender<Event>,
 }
 
@@ -79,6 +86,7 @@ impl TranscriptStore {
     pub fn new(bus: broadcast::Sender<Event>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            remote_cursors: Arc::new(Mutex::new(HashMap::new())),
             bus,
         }
     }
@@ -89,6 +97,80 @@ impl TranscriptStore {
         self.inner.lock().ok()?.get(&id).map(|s| s.state.clone())
     }
 
+    /// Source-qualified local snapshot for the HTTP API. The distinction
+    /// between a missing transcript and a readable transcript with no task
+    /// records is observable in the TUI instead of both becoming `{}`.
+    pub fn snapshot_with_status(&self, id: Uuid, tool: &str) -> AgentTaskSnapshot {
+        if tool != "claude" {
+            let mut snap = AgentTaskSnapshot::new(
+                AgentTaskState::default(),
+                AgentTaskSnapshotStatus::Unsupported,
+                tool,
+            );
+            snap.detail = Some(format!(
+                "task transcript parser is not available for {tool}"
+            ));
+            return snap;
+        }
+
+        let Ok(guard) = self.inner.lock() else {
+            let mut snap = AgentTaskSnapshot::new(
+                AgentTaskState::default(),
+                AgentTaskSnapshotStatus::ReadError,
+                tool,
+            );
+            snap.detail = Some("transcript cache lock is unavailable".to_string());
+            return snap;
+        };
+        let Some(slot) = guard.get(&id) else {
+            return AgentTaskSnapshot::new(
+                AgentTaskState::default(),
+                AgentTaskSnapshotStatus::WaitingForTranscript,
+                tool,
+            );
+        };
+        let metadata = match std::fs::metadata(&slot.transcript_path) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                let mut snap = AgentTaskSnapshot::new(
+                    slot.state.clone(),
+                    AgentTaskSnapshotStatus::ReadError,
+                    tool,
+                );
+                snap.transcript_path = Some(slot.transcript_path.to_string_lossy().into_owned());
+                snap.detail = Some(error.to_string());
+                return snap;
+            }
+        };
+        if metadata.is_some()
+            && let Err(error) = std::fs::File::open(&slot.transcript_path)
+        {
+            let mut snap = AgentTaskSnapshot::new(
+                slot.state.clone(),
+                AgentTaskSnapshotStatus::ReadError,
+                tool,
+            );
+            snap.transcript_path = Some(slot.transcript_path.to_string_lossy().into_owned());
+            snap.detail = Some(error.to_string());
+            return snap;
+        }
+        let status = if metadata.is_none() {
+            AgentTaskSnapshotStatus::WaitingForTranscript
+        } else if slot.state.is_empty() {
+            AgentTaskSnapshotStatus::Empty
+        } else {
+            AgentTaskSnapshotStatus::Current
+        };
+        let mut snap = AgentTaskSnapshot::new(slot.state.clone(), status, tool);
+        snap.transcript_path = Some(slot.transcript_path.to_string_lossy().into_owned());
+        snap.updated_at_ms = metadata
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64);
+        snap
+    }
+
     /// Clear the cached plan/todos/tasks for this session **and** fast-
     /// forward the file cursor to the current end-of-file so anything
     /// already in the transcript is treated as consumed. Used by the
@@ -97,18 +179,15 @@ impl TranscriptStore {
     /// and the plan/todo panel needs to mirror that even though the
     /// transcript file stays append-only.
     ///
-    /// No-op if the slot doesn't exist yet (nothing cached → nothing
-    /// to wipe). Broadcasts an `agent_tasks.updated` so every connected
-    /// client refetches and lands on the empty state in lockstep.
+    /// SSH snapshots do not have local watcher slots, so their most recently
+    /// observed byte length is fast-forwarded separately. Broadcasts an
+    /// `agent_tasks.updated` so every connected client lands on the empty
+    /// state in lockstep.
     pub fn reset(&self, id: Uuid) {
-        let cleared;
+        let mut cleared = false;
+        if let Ok(mut guard) = self.inner.lock()
+            && let Some(slot) = guard.get_mut(&id)
         {
-            let Ok(mut guard) = self.inner.lock() else {
-                return;
-            };
-            let Some(slot) = guard.get_mut(&id) else {
-                return;
-            };
             slot.state = AgentTaskState::default();
             slot.pending_tasks.clear();
             // Cursor → current file length so the next refresh() only
@@ -120,12 +199,47 @@ impl TranscriptStore {
             }
             cleared = true;
         }
+        if let Ok(mut cursors) = self.remote_cursors.lock()
+            && let Some(cursor) = cursors.get_mut(&id)
+        {
+            cursor.reset_at = cursor.seen_len;
+            cleared = true;
+        }
         if cleared {
             let _ = self.bus.send(
                 Event::new("agent_tasks.updated")
                     .with_payload(json!({ "session_id": id.to_string() })),
             );
         }
+    }
+
+    /// Return the byte offset after the last explicit reset for an SSH
+    /// transcript. Each GET still parses the complete post-reset suffix, so a
+    /// partial final line or missed event converges on the next bounded poll.
+    /// Prefix hashing detects replacement even when the replacement is not
+    /// smaller than the prior file.
+    pub fn remote_parse_start(&self, id: Uuid, content: &[u8]) -> usize {
+        use std::hash::{Hash, Hasher};
+
+        let Ok(mut cursors) = self.remote_cursors.lock() else {
+            return 0;
+        };
+        let cursor = cursors.entry(id).or_default();
+        let prefix_len = cursor.seen_len.min(content.len());
+        let mut prefix_hasher = std::collections::hash_map::DefaultHasher::new();
+        content[..prefix_len].hash(&mut prefix_hasher);
+        let prefix_hash = prefix_hasher.finish();
+        if content.len() < cursor.seen_len
+            || (cursor.seen_len > 0 && prefix_hash != cursor.seen_hash)
+        {
+            cursor.reset_at = 0;
+        }
+        let start = cursor.reset_at.min(content.len());
+        let mut full_hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut full_hasher);
+        cursor.seen_len = content.len();
+        cursor.seen_hash = full_hasher.finish();
+        start
     }
 
     /// Begin watching this session's transcript file if we aren't
@@ -166,26 +280,17 @@ impl TranscriptStore {
         let Some(pinned_path) = transcript::transcript_path_for(&workdir, id) else {
             return;
         };
-        // Resolve the actual file to read.
-        //
-        // Post-v0.6.25 sessions: claude was launched with
+        // Claude is launched with
         // `--session-id <agentum-uuid>`, so `pinned_path` materializes
         // on the first turn and is the only one we ever read. Pinning
         // is what stops two agents in the same workdir from
         // cross-pollinating todos.
-        //
-        // Pre-v0.6.25 sessions: claude wrote to its own random UUID,
-        // and `pinned_path` will never appear. Without a fallback the
-        // Plan / Todos / Tasks panels stay empty until the user kills
-        // the session and recreates it. We accept the cross-
-        // pollination risk for pre-pin sessions in exchange for a
-        // working panel — the alternative is a silent dead-end UI.
-        let transcript_path = if pinned_path.exists() {
-            pinned_path.clone()
-        } else {
-            transcript::latest_transcript_excluding(&project_dir, Some(&pinned_path))
-                .unwrap_or_else(|| pinned_path.clone())
-        };
+        // Never fall back to a different JSONL in the same workdir. That old
+        // heuristic made a newly selected session briefly display another
+        // agent's plan/todos until its own UUID-pinned transcript appeared.
+        // Older unpinned sessions now remain explicitly in the waiting state
+        // instead of risking cross-session leakage.
+        let transcript_path = pinned_path.clone();
 
         // Make the directory if it doesn't exist yet — Claude Code creates
         // it on first turn. notify barfs on missing paths otherwise.
@@ -222,6 +327,9 @@ impl TranscriptStore {
         } else {
             (AgentTaskState::default(), 0, HashMap::new())
         };
+        let file_identity = std::fs::metadata(&transcript_path)
+            .ok()
+            .and_then(|metadata| file_identity(&metadata));
 
         if let Ok(mut guard) = self.inner.lock() {
             guard.insert(
@@ -232,6 +340,7 @@ impl TranscriptStore {
                     pinned_path,
                     transcript_path,
                     cursor,
+                    file_identity,
                     pending_tasks: pending,
                     _watcher: watcher,
                 },
@@ -289,6 +398,7 @@ impl TranscriptStore {
             if slot.transcript_path != slot.pinned_path && slot.pinned_path.exists() {
                 slot.transcript_path = slot.pinned_path.clone();
                 slot.cursor = 0;
+                slot.file_identity = None;
                 slot.state = AgentTaskState::default();
                 slot.pending_tasks.clear();
             }
@@ -303,6 +413,14 @@ impl TranscriptStore {
                 Ok(m) => m,
                 Err(_) => return,
             };
+            let identity = file_identity(&metadata);
+            if slot.file_identity.is_some() && identity.is_some() && slot.file_identity != identity
+            {
+                slot.cursor = 0;
+                slot.state = AgentTaskState::default();
+                slot.pending_tasks.clear();
+            }
+            slot.file_identity = identity;
             let len = metadata.len();
             if len < slot.cursor {
                 slot.cursor = 0;
@@ -356,6 +474,24 @@ impl TranscriptStore {
             );
         }
     }
+
+    /// Reconcile a requested slot even if its filesystem notification was
+    /// coalesced or lost. The TUI's bounded polling path calls the GET route,
+    /// which invokes this method before returning the snapshot.
+    pub fn reconcile(&self, id: Uuid) {
+        self.refresh(id);
+    }
+}
+
+#[cfg(unix)]
+fn file_identity(metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.ino())
+}
+
+#[cfg(not(unix))]
+fn file_identity(_metadata: &std::fs::Metadata) -> Option<u64> {
+    None
 }
 
 fn is_relevant(kind: &EventKind) -> bool {
@@ -376,9 +512,126 @@ fn parse_full(path: &std::path::Path) -> (AgentTaskState, u64, HashMap<String, O
     let Ok(content) = std::fs::read_to_string(path) else {
         return (state, 0, pending);
     };
-    for line in content.lines() {
+    // Only consume newline-terminated records. A half-written final JSON
+    // object must remain behind the cursor so reconciliation can parse it
+    // after Claude completes the write.
+    let complete_len = content.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    for line in content[..complete_len].lines() {
         transcript::apply_line(&mut state, &mut pending, line);
     }
-    let cursor = content.len() as u64;
+    let cursor = complete_len as u64;
     (state, cursor, pending)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    fn plan_line(plan: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"2025-01-01T00:00:00Z","message":{{"content":[{{"type":"tool_use","id":"p1","name":"ExitPlanMode","input":{{"plan":"{plan}"}}}}]}}}}"#
+        )
+    }
+
+    fn insert_slot(store: &TranscriptStore, id: Uuid, path: PathBuf) {
+        let (state, cursor, pending_tasks) = parse_full(&path);
+        let file_identity = std::fs::metadata(&path)
+            .ok()
+            .and_then(|metadata| super::file_identity(&metadata));
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let watcher = RecommendedWatcher::new(tx, Config::default()).unwrap();
+        store.inner.lock().unwrap().insert(
+            id,
+            Slot {
+                workdir: path.parent().unwrap().to_path_buf(),
+                state,
+                pinned_path: path.clone(),
+                transcript_path: path,
+                cursor,
+                file_identity,
+                pending_tasks,
+                _watcher: watcher,
+            },
+        );
+    }
+
+    #[test]
+    fn initial_parse_leaves_partial_trailing_record_for_reconciliation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let line = plan_line("partial becomes current");
+        std::fs::write(&path, &line).unwrap();
+
+        let (state, cursor, _) = parse_full(&path);
+        assert!(state.is_empty());
+        assert_eq!(cursor, 0);
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file).unwrap();
+        let (state, cursor, _) = parse_full(&path);
+        assert_eq!(state.plan.as_deref(), Some("partial becomes current"));
+        assert_eq!(cursor, line.len() as u64 + 1);
+    }
+
+    #[test]
+    fn reconcile_recovers_missed_append_and_atomic_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, format!("{}\n", plan_line("first"))).unwrap();
+        let (bus, _) = broadcast::channel(8);
+        let store = TranscriptStore::new(bus);
+        let id = Uuid::new_v4();
+        insert_slot(&store, id, path.clone());
+
+        let todo = r#"{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"c1","name":"TaskCreate","input":{"subject":"caught up"}}]}}"#;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "{todo}").unwrap();
+        store.reconcile(id);
+        let snap = store.snapshot_with_status(id, "claude");
+        assert_eq!(snap.state.todos[0].content, "caught up");
+
+        let replacement = dir.path().join("replacement.jsonl");
+        std::fs::write(&replacement, format!("{}\n", plan_line("replacement"))).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        store.reconcile(id);
+        let snap = store.snapshot_with_status(id, "claude");
+        assert_eq!(snap.state.plan.as_deref(), Some("replacement"));
+        assert!(snap.state.todos.is_empty());
+    }
+
+    #[test]
+    fn unsupported_tools_are_not_reported_as_empty_claude_state() {
+        let (bus, _) = broadcast::channel(1);
+        let store = TranscriptStore::new(bus);
+        let snapshot = store.snapshot_with_status(Uuid::new_v4(), "codex");
+        assert_eq!(snapshot.status, AgentTaskSnapshotStatus::Unsupported);
+        assert_eq!(snapshot.tool, "codex");
+        assert!(snapshot.detail.unwrap().contains("not available"));
+    }
+
+    #[test]
+    fn remote_reset_fast_forwards_and_replacement_clears_the_cutoff() {
+        let (bus, _) = broadcast::channel(4);
+        let store = TranscriptStore::new(bus);
+        let id = Uuid::new_v4();
+        let before = b"old transcript\n";
+        assert_eq!(store.remote_parse_start(id, before), 0);
+
+        store.reset(id);
+        assert_eq!(store.remote_parse_start(id, before), before.len());
+        let mut appended = before.to_vec();
+        appended.extend_from_slice(b"new record\n");
+        assert_eq!(store.remote_parse_start(id, &appended), before.len());
+
+        let replacement = b"replacement file with a different prefix\n";
+        assert_eq!(store.remote_parse_start(id, replacement), 0);
+    }
 }

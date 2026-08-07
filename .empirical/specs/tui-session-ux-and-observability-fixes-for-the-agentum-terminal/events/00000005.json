@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 4,
+  "revision": 5,
+  "previousRevision": 4,
+  "actor": "agent",
+  "summary": "Implemented the approved terminal session UX and observability contract: auxiliary agent/terminal panes with focus and split resizing, uppercase-C creation, structured copyable diagnostics, robust usage and task snapshots across local/SSH hosts, explicit panel states, and regression coverage. Verified with cargo test --workspace, strict workspace clippy, focused formatting/diff checks, and a real tmux PTY exercise.",
+  "createdAt": "2026-08-07T14:19:17.489Z",
+  "state": {
+    "schemaVersion": 4,
+    "revision": 5,
+    "activeFeature": "tui-session-ux-and-observability-fixes-for-the-agentum-terminal",
+    "request": "TUI session UX and observability fixes for the agentum terminal app (crates/agentum-tui): 1) In-session agent management: from inside a session view, let the user add more agents (spawn a new plain terminal pane or another agent such as claude/codex) and add keyboard shortcuts to move focus between sessions/panes and to resize panes. 2) Keybind change: make C the key for create (change the current create/new-session keybind). 3) Error copy: improve error messages so the full error can be pasted into an LLM chat for debugging — include operation, session id, daemon/host state, version, and log file location where relevant. 4) Bug: the per-session/per-agent usage readout (bottom-left usage panel, /api/usage/claude) is not working, and agent tasks are not working either. 5) Bug: the Plan / Todos / Agents right-side panels (agent-tasks panel backed by transcript_store and /api/sessions/{id}/agent-tasks) are not working — investigate why and fix.",
+    "profile": "complex",
+    "phase": "verify",
+    "status": "waiting",
+    "repairAttempts": 0,
+    "message": "Implemented the approved terminal session UX and observability contract: auxiliary agent/terminal panes with focus and split resizing, uppercase-C creation, structured copyable diagnostics, robust usage and task snapshots across local/SSH hosts, explicit panel states, and regression coverage. Verified with cargo test --workspace, strict workspace clippy, focused formatting/diff checks, and a real tmux PTY exercise.",
+    "implementationActor": "agent",
+    "specDigest": "23904c79f24e21e91881d0f6bfbaaeaa0d87313be7934419a33ca776d595cf48",
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "c6cfb76885e447f38311c31abfcb639055a08411747263b0fe7b2daca375acf0",
+    "evidence": [
+      {
+        "criterionId": "AC-1",
+        "kind": "test",
+        "passed": true,
+        "summary": "TUI unit tests verify terminal-origin create uses Auxiliary destination, inherits profile/host/workdir, attaches a right pane, and preserves the original left session; the full workspace suite passes."
+      },
+      {
+        "criterionId": "AC-2",
+        "kind": "test",
+        "passed": true,
+        "summary": "Unit coverage verifies target-host availability filtering and recoverable partial create/start failure diagnostics; strict workspace clippy and all tests pass."
+      },
+      {
+        "criterionId": "AC-3",
+        "kind": "test",
+        "passed": true,
+        "summary": "Focus-cycle and observed-session tests cover Tree, left terminal, right terminal, and Lazygit in both directions, with surviving-pane focus behavior and passthrough guards."
+      },
+      {
+        "criterionId": "AC-4",
+        "kind": "test",
+        "passed": true,
+        "summary": "Split-bound tests verify bounded ratios, no collapse, persistent preference updates, no-split messaging, and resizing of both stream dimensions."
+      },
+      {
+        "criterionId": "AC-5",
+        "kind": "test",
+        "passed": true,
+        "summary": "Keybinding tests prove uppercase C is the sole create character, lowercase c remains separate, n is inactive, and terminal-focused input is forwarded. Real PTY opened the form with Shift-C from tree focus."
+      },
+      {
+        "criterionId": "AC-6",
+        "kind": "test",
+        "passed": true,
+        "summary": "Diagnostic tests verify full structured copy reports, exact session/daemon/host/version/log fields, unknown labels, clear behavior, and redaction of bearer, OAuth, password, and hook-token shapes."
+      },
+      {
+        "criterionId": "AC-7",
+        "kind": "test",
+        "passed": true,
+        "summary": "Usage tests cover immediate fetch, attempt-based retry cadence, stale last-good retention, in-flight clearing, explicit loading/source/error states, and copyable diagnostics."
+      },
+      {
+        "criterionId": "AC-8",
+        "kind": "test",
+        "passed": true,
+        "summary": "Server usage tests cover generated/source metadata, not-installed/local-scan/live degradation, unreadable stores, and credential-safe OAuth handling."
+      },
+      {
+        "criterionId": "AC-9",
+        "kind": "test",
+        "passed": true,
+        "summary": "Task snapshot tests cover first-selection fetch, event and focus refresh, plan/todo/task/subagent record parsing, and focused left/right session observation without cross-session state reuse."
+      },
+      {
+        "criterionId": "AC-10",
+        "kind": "test",
+        "passed": true,
+        "summary": "Transcript-store and host-runtime tests cover UUID-pinned local and SSH paths, creation, partial append, missed append reconciliation, truncation, atomic replacement, remote clear/replace reset, read errors, and session isolation."
+      },
+      {
+        "criterionId": "AC-11",
+        "kind": "test",
+        "passed": true,
+        "summary": "Snapshot/API/UI tests distinguish unsupported, waiting transcript, empty, stale, host unavailable, read error, and incompatible daemon while retaining last-good data on fetch failure."
+      },
+      {
+        "criterionId": "AC-12",
+        "kind": "test",
+        "passed": true,
+        "summary": "cargo test --workspace passed across all crates and integration tests; cargo clippy --workspace --all-targets -- -D warnings also passed."
+      }
+    ],
+    "updatedAt": "2026-08-07T14:19:17.489Z"
+  }
+}
