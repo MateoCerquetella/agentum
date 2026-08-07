@@ -85,6 +85,14 @@ pub struct ClaudeUsageSnapshot {
     /// fields came from `/api/oauth/usage`, `"scan"` when we only have
     /// the local transcript scan (graceful degradation — no real %).
     pub source: Option<String>,
+    /// Wall-clock time at which this response was collected. Clients use it to
+    /// distinguish a retained snapshot from a live refresh.
+    pub generated_at_ms: i64,
+    /// `live`, `local_scan`, or `not_installed`. Kept as a string so new
+    /// server states remain forward-compatible with older clients.
+    pub collection_status: String,
+    /// Redacted, user-facing collection detail. Never contains credentials.
+    pub status_detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -687,11 +695,21 @@ fn redact_token(msg: &str, token: &str) -> String {
 // Claude's interactive palette is high-risk and large; graceful degradation
 // (source="scan", no band) is the safer minimum.
 pub async fn enrich_claude(mut snap: ClaudeUsageSnapshot) -> ClaudeUsageSnapshot {
+    snap.generated_at_ms = now_ms();
     // Estimated cost is local-only; compute it regardless of OAuth success.
     snap.est_cost_usd = estimate_cost_usd(&snap.by_model);
 
+    if !snap.claude_installed {
+        snap.source = Some("scan".to_string());
+        snap.collection_status = "not_installed".to_string();
+        snap.status_detail = Some("Claude transcript directories were not found".to_string());
+        return snap;
+    }
+
     let Some(token) = read_claude_oauth_token() else {
         snap.source = Some("scan".to_string());
+        snap.collection_status = "local_scan".to_string();
+        snap.status_detail = Some("Claude OAuth usage is unavailable; showing local scan".into());
         return snap;
     };
 
@@ -702,11 +720,15 @@ pub async fn enrich_claude(mut snap: ClaudeUsageSnapshot) -> ClaudeUsageSnapshot
             snap.limit_pct = pick_limit_pct(usage.five_hour_pct, usage.seven_day_pct);
             snap.resets_at_ms = usage.resets_at_ms;
             snap.source = Some("oauth".to_string());
+            snap.collection_status = "live".to_string();
+            snap.status_detail = None;
         }
         Err(e) => {
             // Never log the token; `e` is already redacted.
             tracing::debug!(error = %e, "claude oauth usage fetch failed; degrading to scan");
             snap.source = Some("scan".to_string());
+            snap.collection_status = "local_scan".to_string();
+            snap.status_detail = Some(format!("OAuth usage unavailable: {e}"));
         }
     }
 
@@ -767,6 +789,12 @@ impl<'de> Deserialize<'de> for ClaudeUsageSnapshot {
             est_cost_usd: Option<f64>,
             #[serde(default)]
             source: Option<String>,
+            #[serde(default)]
+            generated_at_ms: i64,
+            #[serde(default)]
+            collection_status: String,
+            #[serde(default)]
+            status_detail: Option<String>,
         }
         let h = Helper::deserialize(deserializer)?;
         Ok(ClaudeUsageSnapshot {
@@ -782,6 +810,9 @@ impl<'de> Deserialize<'de> for ClaudeUsageSnapshot {
             resets_at_ms: h.resets_at_ms,
             est_cost_usd: h.est_cost_usd,
             source: h.source,
+            generated_at_ms: h.generated_at_ms,
+            collection_status: h.collection_status,
+            status_detail: h.status_detail,
         })
     }
 }
@@ -925,6 +956,9 @@ mod tests {
         assert_eq!(snap.resets_at_ms, None);
         assert_eq!(snap.est_cost_usd, None);
         assert_eq!(snap.source, None);
+        assert_eq!(snap.generated_at_ms, 0);
+        assert!(snap.collection_status.is_empty());
+        assert_eq!(snap.status_detail, None);
     }
 
     #[test]
@@ -944,6 +978,15 @@ mod tests {
         assert_eq!(back.limit_pct, Some(82.0));
         assert_eq!(back.source.as_deref(), Some("oauth"));
         assert_eq!(back.window_tokens, 99);
+    }
+
+    #[tokio::test]
+    async fn absent_claude_store_has_explicit_not_installed_metadata() {
+        let snap = enrich_claude(ClaudeUsageSnapshot::default()).await;
+        assert_eq!(snap.collection_status, "not_installed");
+        assert_eq!(snap.source.as_deref(), Some("scan"));
+        assert!(snap.generated_at_ms > 0);
+        assert!(snap.status_detail.unwrap().contains("not found"));
     }
 
     #[test]

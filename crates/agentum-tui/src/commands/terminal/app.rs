@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use agentum_core::{
-    Event, HostKind, NewHost, Session, SshAuth, Status, transcript::AgentTaskState,
+    Event, HostKind, NewHost, Session, SshAuth, Status,
+    transcript::{AgentTaskSnapshot, AgentTaskSnapshotStatus, AgentTaskState},
 };
 use anyhow::Result;
 use crossterm::event::{
@@ -70,7 +71,7 @@ pub struct Notification {
     pub ttl: Duration,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus {
     Tree,
     /// Left / primary terminal pane.
@@ -186,7 +187,7 @@ pub enum Overlay {
     /// PATCH; Esc cancels. Pre-filled with the current name so the user
     /// can edit rather than retype from scratch.
     Rename(RenameState),
-    /// New-session form (n key on the tree).
+    /// New-session form (`C` on the tree or the global command palette).
     NewSession(Box<NewSessionForm>),
     /// Generic confirmation prompt for destructive session actions.
     Confirm(PendingAction),
@@ -532,6 +533,48 @@ pub enum RunOutcome {
 pub struct ErrorEntry {
     pub at: SystemTime,
     pub text: String,
+    pub operation: String,
+    pub session_id: Option<Uuid>,
+    /// Full redacted, self-contained report. The list preview may truncate
+    /// `text`, but detail and clipboard paths always use this value.
+    pub report: String,
+}
+
+/// Remove common credential shapes before diagnostics reach tracing, UI, or
+/// clipboard. This intentionally keeps surrounding error text intact.
+fn redact_diagnostic(input: &str) -> String {
+    let mut output = input.to_string();
+    for marker in [
+        "Bearer ",
+        "bearer ",
+        "accessToken\":\"",
+        "accessToken\": \"",
+        "refreshToken\":\"",
+        "refreshToken\": \"",
+        "access_token=",
+        "oauth_token=",
+        "token=",
+        "password=",
+        "password:\"",
+        "password: \"",
+        "password: ",
+        "AGENTUM_HOOK_TOKEN=",
+    ] {
+        let mut from = 0;
+        loop {
+            let Some(relative) = output[from..].find(marker) else {
+                break;
+            };
+            let value_start = from + relative + marker.len();
+            let value_end = output[value_start..]
+                .find(|c: char| c.is_whitespace() || matches!(c, '&' | ',' | '"' | '\''))
+                .map(|n| value_start + n)
+                .unwrap_or(output.len());
+            output.replace_range(value_start..value_end, "<redacted>");
+            from = value_start + "<redacted>".len();
+        }
+    }
+    output
 }
 
 /// Suggested tool names. Mirrors the web's datalist on the New Session
@@ -616,6 +659,14 @@ pub struct NewSessionForm {
     /// the dashboard's tile grid). Mutually exclusive with `picker` in
     /// practice — only one overlay can be focused at a time.
     pub tool_picker: Option<ToolPickerState>,
+    /// Where the successfully-created session is displayed.
+    pub destination: CreateDestination,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CreateDestination {
+    ReplaceFocused,
+    Auxiliary,
 }
 
 /// Static state for the tool-picker modal. Entries are derived from
@@ -626,7 +677,31 @@ pub struct NewSessionForm {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ToolPickerState {
     pub entries: Vec<ToolPickerEntry>,
+    /// Live case-insensitive filter over tool name and description.
+    pub query: String,
+    /// Position inside the filtered result list, not the backing catalog.
     pub cursor: usize,
+}
+
+impl ToolPickerState {
+    pub(super) fn matching_indices(&self) -> Vec<usize> {
+        let terms: Vec<String> = self
+            .query
+            .split_whitespace()
+            .map(|term| term.to_ascii_lowercase())
+            .collect();
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let haystack = format!("{} {}", entry.name, entry.description).to_ascii_lowercase();
+                terms
+                    .iter()
+                    .all(|term| haystack.contains(term))
+                    .then_some(index)
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -708,6 +783,7 @@ impl NewSessionForm {
             submitting: false,
             picker: None,
             tool_picker: None,
+            destination: CreateDestination::ReplaceFocused,
         }
     }
 
@@ -1347,7 +1423,7 @@ pub struct App {
     /// out of each agent's Claude Code transcript. Keys are session
     /// ids. Populated from `GET /api/sessions/{id}/agent-tasks` and
     /// refreshed when an `agent_tasks.updated` event lands on the bus.
-    pub agent_tasks: HashMap<Uuid, AgentTaskState>,
+    pub agent_tasks: HashMap<Uuid, AgentTaskSnapshot>,
     /// Sender for spawn-detached agent-tasks fetches. Background tasks
     /// post `(session_id, Some(state))` on success or
     /// `(session_id, None)` on transport error; the run-loop drains
@@ -1355,7 +1431,8 @@ pub struct App {
     /// writes into `agent_tasks` on success. Letting fetches run off
     /// the keystroke path keeps j/k navigation snappy even when the
     /// daemon is remote.
-    pub agent_tasks_tx: Option<mpsc::UnboundedSender<(Uuid, Option<AgentTaskState>)>>,
+    pub agent_tasks_tx:
+        Option<mpsc::UnboundedSender<(Uuid, std::result::Result<AgentTaskSnapshot, String>)>>,
     /// Session ids with an in-flight `spawn_agent_tasks_fetch`. Used
     /// to coalesce duplicate fetches when navigation, events, and the
     /// 5-second slow-path all want to refresh the same id within a
@@ -1536,10 +1613,17 @@ pub struct App {
     /// Wall-clock instant the latest `claude_usage` landed. Drives the
     /// poll cadence and lets the readout flag a stale snapshot.
     pub claude_usage_at: Option<Instant>,
+    /// Last attempted usage fetch, successful or not. Retry cadence is based
+    /// on this timestamp so an unreachable daemon cannot trigger a request on
+    /// every UI tick while the last-good timestamp remains unchanged.
+    pub claude_usage_last_attempt_at: Option<Instant>,
+    /// Last classified fetch failure. A last good snapshot remains visible but
+    /// is marked stale while this is set.
+    pub claude_usage_error: Option<String>,
     /// Result channel for the background usage poll. The spawned task posts
     /// one `Option<ClaudeUsage>` per poll (None on transport error); the
     /// run-loop's `select!` arm drains it into `claude_usage`.
-    pub usage_tx: Option<mpsc::UnboundedSender<Option<ClaudeUsage>>>,
+    pub usage_tx: Option<mpsc::UnboundedSender<std::result::Result<ClaudeUsage, String>>>,
     /// True while a usage poll is in flight, so the tick loop coalesces
     /// rather than stacking requests if a fetch outlives the interval.
     pub usage_inflight: bool,
@@ -1583,6 +1667,7 @@ enum NewSessionTaskResult {
 
 struct NewSessionCreated {
     session: Session,
+    destination: CreateDestination,
     /// `None` when Start immediately was disabled; otherwise the result of
     /// the start request. Create success is retained even when start fails.
     start_result: Option<Result<(), String>>,
@@ -1747,6 +1832,8 @@ impl App {
             upload_outcome_tx: None,
             claude_usage: None,
             claude_usage_at: None,
+            claude_usage_last_attempt_at: None,
+            claude_usage_error: None,
             usage_tx: None,
             usage_inflight: false,
         }
@@ -1848,7 +1935,6 @@ impl App {
         if !is_probed_tool(trimmed) {
             return true;
         }
-
         let Some(host_id) = host_id.filter(|id| *id != agentum_core::LOCAL_HOST_ID) else {
             return self.tool_available(trimmed);
         };
@@ -2059,6 +2145,27 @@ impl App {
         }
     }
 
+    /// Session whose plan/todos/agents panel should be shown. Terminal focus
+    /// wins; while the tree owns input, follow the terminal side the tree is
+    /// currently retargeting.
+    pub fn observed_session_id(&self) -> Option<Uuid> {
+        match self.focus {
+            Focus::TermRight => self.split_right.as_ref().and_then(|s| s.selected),
+            Focus::Term => self.selected,
+            Focus::Tree | Focus::Lazygit if self.last_term_side == Side::Right => self
+                .split_right
+                .as_ref()
+                .and_then(|s| s.selected)
+                .or(self.selected),
+            Focus::Tree | Focus::Lazygit => self.selected,
+        }
+    }
+
+    pub fn observed_session(&self) -> Option<&Session> {
+        let id = self.observed_session_id()?;
+        self.sessions.iter().find(|s| s.id == id)
+    }
+
     /// Append an error message to the visible log and bump the counter.
     /// Status bar deliberately is NOT touched here: the status row at the
     /// bottom is reserved for non-error feedback ("filter cleared",
@@ -2066,6 +2173,15 @@ impl App {
     /// drown those signals out — the user opens the errors overlay (`e`
     /// from tree focus, or via the palette) to read what failed.
     pub fn push_error(&mut self, text: impl Into<String>) {
+        self.push_diagnostic("tui operation", self.observed_session_id(), text);
+    }
+
+    pub fn push_diagnostic(
+        &mut self,
+        operation: impl Into<String>,
+        session_id: Option<Uuid>,
+        text: impl Into<String>,
+    ) {
         const MAX_ERROR_LOG: usize = 200;
         // Suppress an identical error message that was just pushed —
         // typing into a dead WS channel hits `push_error` once per
@@ -2076,13 +2192,16 @@ impl App {
         // sweet spot: short enough that a real recurrence within a
         // session feels live, long enough to collapse a typing burst.
         const DEDUP_WINDOW: Duration = Duration::from_secs(2);
-        let text = text.into();
+        let operation = operation.into();
+        let text = redact_diagnostic(&text.into());
         if text.is_empty() {
             return;
         }
         let now = SystemTime::now();
         if let Some(last) = self.errors.last()
             && last.text == text
+            && last.operation == operation
+            && last.session_id == session_id
             && now
                 .duration_since(last.at)
                 .map(|d| d < DEDUP_WINDOW)
@@ -2090,7 +2209,67 @@ impl App {
         {
             return;
         }
-        self.errors.push(ErrorEntry { at: now, text });
+        let active_key = self.active_profile.clone().unwrap_or_default();
+        let daemon = self.clients.get(&active_key);
+        let daemon_endpoint = daemon
+            .and_then(|e| e.client.as_ref())
+            .map(|c| c.endpoint().to_string())
+            .unwrap_or_else(|| "unknown".into());
+        let daemon_state = daemon
+            .map(|e| format!("{:?}", e.status).to_ascii_lowercase())
+            .unwrap_or_else(|| "unknown".into());
+        let daemon_version = daemon
+            .and_then(|e| e.version.clone())
+            .unwrap_or_else(|| "unknown".into());
+        let session = session_id.and_then(|id| self.sessions.iter().find(|s| s.id == id));
+        let host_id = session
+            .and_then(|s| s.host_id)
+            .unwrap_or(agentum_core::LOCAL_HOST_ID);
+        let host = self.hosts.iter().find(|h| h.id == host_id);
+        let host_label = host
+            .map(|h| h.name.clone())
+            .or_else(|| session.and_then(|s| s.host_label.clone()))
+            .unwrap_or_else(|| "unknown".into());
+        let host_kind = host
+            .map(|h| match &h.kind {
+                HostKind::Local => "local",
+                HostKind::Ssh { .. } => "ssh",
+            })
+            .or_else(|| session.and_then(|s| s.host_kind.as_deref()))
+            .unwrap_or("unknown");
+        let host_state = self
+            .host_readiness_cache
+            .get(&host_id)
+            .map(|cached| if cached.1.ok { "ready" } else { "not_ready" })
+            .unwrap_or("unknown");
+        let tui_log = agentum_store::paths::cache_dir()
+            .map(|p| p.join("tui.log").display().to_string())
+            .unwrap_or_else(|_| "unknown".into());
+        let pane_log = session_id
+            .map(|id| {
+                if host_kind == "ssh" {
+                    format!("$HOME/.agentum/panes/{id}.log")
+                } else {
+                    agentum_store::paths::pane_log(&id.to_string())
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "unknown".into())
+                }
+            })
+            .unwrap_or_else(|| "n/a".into());
+        let sid = session_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "n/a".into());
+        let report = redact_diagnostic(&format!(
+            "operation: {operation}\nerror: {text}\nsession_id: {sid}\ntui_version: {}\ndaemon_endpoint: {daemon_endpoint}\ndaemon_state: {daemon_state}\ndaemon_version: {daemon_version}\nhost_id: {host_id}\nhost_label: {host_label}\nhost_kind: {host_kind}\nhost_state: {host_state}\ntui_log: {tui_log}\npane_log: {pane_log}",
+            env!("CARGO_PKG_VERSION")
+        ));
+        self.errors.push(ErrorEntry {
+            at: now,
+            text,
+            operation,
+            session_id,
+            report,
+        });
         let n = self.errors.len();
         if n > MAX_ERROR_LOG {
             self.errors.drain(0..n - MAX_ERROR_LOG);
@@ -2956,7 +3135,7 @@ pub async fn run_loop(
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<EventMsg>();
     let (lg_tx, mut lg_rx) = mpsc::unbounded_channel::<PtyMsg>();
     let (agent_tasks_tx, mut agent_tasks_rx) =
-        mpsc::unbounded_channel::<(Uuid, Option<AgentTaskState>)>();
+        mpsc::unbounded_channel::<(Uuid, std::result::Result<AgentTaskSnapshot, String>)>();
     // Result channel for the Ctrl-V image-paste flow. One uploader
     // task posts a single `UploadOutcome` per Ctrl-V; the `select!`
     // arm below drains the rx and surfaces the message as a status
@@ -2971,7 +3150,8 @@ pub async fn run_loop(
     // Result channel for the background Claude-usage poll (spec 001). The
     // spawned task posts one `Option<ClaudeUsage>` per poll; the `select!`
     // arm below stores it on `App`. Mirrors `agent_tasks_tx`.
-    let (usage_tx, mut usage_rx) = mpsc::unbounded_channel::<Option<ClaudeUsage>>();
+    let (usage_tx, mut usage_rx) =
+        mpsc::unbounded_channel::<std::result::Result<ClaudeUsage, String>>();
     // Stash cheap clones on `App` so `update_selection` can pick the
     // correct sender by side without re-threading args. The lazygit
     // sender lives here too so `refresh_lazygit_for_selection` can
@@ -3217,7 +3397,7 @@ pub async fn run_loop(
                 handle_lazygit_msg(&mut app, msg);
             }
 
-            Some((id, maybe_state)) = agent_tasks_rx.recv() => {
+            Some((id, result)) = agent_tasks_rx.recv() => {
                 // Always drop the in-flight marker so the next
                 // navigation/event can re-fetch this id immediately.
                 // On transport error the message carries `None` and
@@ -3225,8 +3405,34 @@ pub async fn run_loop(
                 // alone — better to keep showing the last good plan
                 // than to flash an empty panel.
                 app.agent_tasks_inflight.remove(&id);
-                if let Some(state) = maybe_state {
-                    app.agent_tasks.insert(id, state);
+                match result {
+                    Ok(snapshot) => {
+                        app.agent_tasks.insert(id, snapshot);
+                    }
+                    Err(error) => {
+                        if let Some(snapshot) = app.agent_tasks.get_mut(&id) {
+                            snapshot.status = AgentTaskSnapshotStatus::Stale;
+                            snapshot.detail = Some(error.clone());
+                        } else {
+                            let status = if error.contains("does not expose")
+                                || error.contains("update `agentum serve`")
+                            {
+                                AgentTaskSnapshotStatus::Incompatible
+                            } else {
+                                AgentTaskSnapshotStatus::ReadError
+                            };
+                            let tool = app.sessions.iter().find(|s| s.id == id)
+                                .map(|s| s.tool.as_str()).unwrap_or("unknown");
+                            let mut snapshot = AgentTaskSnapshot::new(
+                                AgentTaskState::default(),
+                                status,
+                                tool,
+                            );
+                            snapshot.detail = Some(error.clone());
+                            app.agent_tasks.insert(id, snapshot);
+                        }
+                        app.push_diagnostic("fetch agent tasks", Some(id), error);
+                    }
                 }
             }
 
@@ -3247,15 +3453,22 @@ pub async fn run_loop(
                 apply_new_session_task_result(&mut app, result, &client);
             }
 
-            Some(maybe_usage) = usage_rx.recv() => {
+            Some(usage_result) = usage_rx.recv() => {
                 // Background Claude-usage poll result (spec 001). On
                 // transport error the message carries `None`; we keep the
                 // previous snapshot (stale-but-flagged beats blank) and
                 // just clear the in-flight marker so the next tick retries.
                 app.usage_inflight = false;
-                if let Some(usage) = maybe_usage {
-                    app.claude_usage = Some(usage);
-                    app.claude_usage_at = Some(Instant::now());
+                match usage_result {
+                    Ok(usage) => {
+                        app.claude_usage = Some(usage);
+                        app.claude_usage_at = Some(Instant::now());
+                        app.claude_usage_error = None;
+                    }
+                    Err(error) => {
+                        app.claude_usage_error = Some(error.clone());
+                        app.push_diagnostic("fetch Claude usage", None, error);
+                    }
                 }
             }
 
@@ -3289,10 +3502,10 @@ pub async fn run_loop(
                 // the 5s session refresh — usage moves slowly and the
                 // upstream endpoint is rate-limitable. `spawn_usage_fetch`
                 // coalesces via `usage_inflight`.
-                let usage_due = app
-                    .claude_usage_at
-                    .map(|at| at.elapsed() >= app.prefs.usage_refresh())
-                    .unwrap_or(true);
+                let usage_due = usage_poll_due(
+                    app.claude_usage_last_attempt_at,
+                    app.prefs.usage_refresh(),
+                );
                 if usage_due {
                     spawn_usage_fetch(&mut app, &client);
                 }
@@ -3401,7 +3614,7 @@ pub async fn run_loop(
                     // makes the panel converge even if a bus.lagged
                     // dropped the relevant `agent_tasks.updated`.
                     if app.right_panel_visible
-                        && let Some(id) = app.selected
+                        && let Some(id) = app.observed_session_id()
                     {
                         spawn_agent_tasks_fetch(&mut app, &client, id);
                     }
@@ -4568,7 +4781,7 @@ async fn handle_key(
         // immediately on first toggle, even if the events stream hasn't
         // pushed an `agent_tasks.updated` for this session yet.
         if app.right_panel_visible
-            && let Some(id) = app.selected
+            && let Some(id) = app.observed_session_id()
         {
             spawn_agent_tasks_fetch(app, client, id);
         }
@@ -4764,10 +4977,12 @@ async fn handle_key(
     // unshifted glyphs); F5/F6 stays as the universal cycle.
     if key.code == KeyCode::F(5) {
         app.set_focus(next_focus(app.focus, app.lazygit_open(), app.split_open()));
+        fetch_observed_tasks_if_visible(app, client);
         return;
     }
     if key.code == KeyCode::F(6) {
         app.set_focus(prev_focus(app.focus, app.lazygit_open(), app.split_open()));
+        fetch_observed_tasks_if_visible(app, client);
         return;
     }
 
@@ -5480,7 +5695,7 @@ async fn handle_key(
         }
 
         // Session lifecycle ------------------------------------------------
-        KeyCode::Char('n') => {
+        code if is_tree_create_code(&code) => {
             let resolve_home_in_background = app.selected_session().is_none();
             // Default the workdir to the selected session's workdir if any,
             // else the *daemon's* $HOME (not the laptop's). When the user
@@ -6066,6 +6281,7 @@ fn spawn_new_session_create(
     let host_id = form.host_uuid();
     let worktree = form.worktree_requested();
     let up_after = form.up_after;
+    let destination = form.destination;
     let Some((op_id, tx)) =
         begin_new_session_operation(app, form, format!("creating `{name}`… (Esc hides)"))
     else {
@@ -6097,6 +6313,7 @@ fn spawn_new_session_create(
                 };
                 Ok(NewSessionCreated {
                     session,
+                    destination,
                     start_result,
                 })
             }
@@ -6254,6 +6471,7 @@ fn apply_new_session_task_result(app: &mut App, result: NewSessionTaskResult, cl
                 Ok(mut created) => {
                     let id = created.session.id;
                     let name = created.session.name.clone();
+                    let destination = created.destination;
                     let start_failed = match created.start_result {
                         Some(Ok(())) => {
                             created.session.status = Status::Running;
@@ -6291,12 +6509,7 @@ fn apply_new_session_task_result(app: &mut App, result: NewSessionTaskResult, cl
 
                     if active {
                         app.overlay = Overlay::None;
-                        app.tree.select_session(id);
-                        let side = app.target_side();
-                        update_selection(app, client, side);
-                        if app.selected == Some(id) {
-                            app.set_focus(Focus::Term);
-                        }
+                        attach_created_session(app, client, id, destination);
                     }
                 }
             }
@@ -6503,7 +6716,13 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                 } else {
                     "daemon"
                 };
-                form.error = Some(format!("{bin} not installed on the {location}"));
+                let error = format!("{bin} not installed on the {location}");
+                app.push_diagnostic(
+                    "validate agent availability",
+                    app.observed_session_id(),
+                    error.clone(),
+                );
+                form.error = Some(error);
                 app.overlay = Overlay::NewSession(form);
                 return;
             }
@@ -6517,10 +6736,13 @@ async fn handle_new_session_key(app: &mut App, key: KeyEvent, client: &Client) {
                 && let Some(report) = app.cached_readiness(host_id)
                 && !report.ok
             {
-                form.error = Some(format!(
-                    "host not ready — {} (Ctrl-H to fix)",
-                    report.message
-                ));
+                let error = format!("host not ready — {} (Ctrl-H to fix)", report.message);
+                app.push_diagnostic(
+                    "validate target host",
+                    app.observed_session_id(),
+                    error.clone(),
+                );
+                form.error = Some(error);
                 app.overlay = Overlay::NewSession(form);
                 return;
             }
@@ -6909,11 +7131,16 @@ fn open_tool_picker(
         })
         .collect();
     let cursor = entries.iter().position(|e| e.name == trimmed).unwrap_or(0);
-    ToolPickerState { entries, cursor }
+    ToolPickerState {
+        entries,
+        query: String::new(),
+        cursor,
+    }
 }
 
 /// Tool-picker keymap. Mirrors `handle_dir_picker_key` so muscle
-/// memory transfers: ↑/↓ move, Enter accepts, Esc cancels. Unlike the
+/// memory transfers: typing filters, ↑/↓ move, Enter accepts, Esc clears or
+/// cancels. Unlike the
 /// dir picker there's no concept of "descend into" or "use this dir"
 /// — every entry is a leaf, so Enter and `a` both commit. Entries
 /// marked unavailable (uninstalled probed binaries) are still
@@ -6924,17 +7151,30 @@ fn handle_tool_picker_key(form: &mut NewSessionForm, key: KeyEvent) {
         return;
     };
     match key.code {
-        KeyCode::Esc => {
+        KeyCode::Esc if picker.query.is_empty() => {
             form.tool_picker = None;
+        }
+        KeyCode::Esc => {
+            picker.query.clear();
+            picker.cursor = 0;
         }
         KeyCode::Up => {
             picker.cursor = picker.cursor.saturating_sub(1);
         }
-        KeyCode::Down if picker.cursor + 1 < picker.entries.len() => {
+        KeyCode::Down if picker.cursor + 1 < picker.matching_indices().len() => {
             picker.cursor += 1;
         }
-        KeyCode::Enter | KeyCode::Char('a') | KeyCode::Char('s') => {
-            if let Some(entry) = picker.entries.get(picker.cursor).cloned() {
+        KeyCode::Backspace => {
+            picker.query.pop();
+            picker.cursor = 0;
+        }
+        KeyCode::Enter => {
+            let matching = picker.matching_indices();
+            if let Some(entry) = matching
+                .get(picker.cursor)
+                .and_then(|index| picker.entries.get(*index))
+                .cloned()
+            {
                 form.tool = entry.name.to_string();
                 // Mirror the dashboard tile-dim semantics: choosing an
                 // uninstalled probed agent shows the hint inline so
@@ -6951,6 +7191,13 @@ fn handle_tool_picker_key(form: &mut NewSessionForm, key: KeyEvent) {
                 };
             }
             form.tool_picker = None;
+        }
+        KeyCode::Char(c)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            picker.query.push(c);
+            picker.cursor = 0;
         }
         _ => {}
     }
@@ -7953,6 +8200,17 @@ fn handle_errors_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('c') => {
             app.clear_errors();
         }
+        KeyCode::Char('y') => {
+            let n = app.errors.len();
+            if n > 0 {
+                let scroll = app.errors_scroll.min(n.saturating_sub(1));
+                let index = n - 1 - scroll;
+                if let Some(report) = app.errors.get(index).map(|e| e.report.clone()) {
+                    app.pending_clipboard_seq = Some(build_osc52_sequence(&report));
+                    app.status_msg = Some("copied full diagnostic report".into());
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -8080,7 +8338,7 @@ async fn run_palette_action(
             // Match the Ctrl-T keybinding: kick a fetch when turning
             // the panel on so it populates immediately.
             if app.right_panel_visible
-                && let Some(id) = app.selected
+                && let Some(id) = app.observed_session_id()
             {
                 spawn_agent_tasks_fetch(app, client, id);
             }
@@ -8180,10 +8438,10 @@ async fn run_palette_action(
         // ── Session CRUD from palette ─────────────────────────────
         ActionKind::NewSession => {
             let resolve_home_in_background = app.selected_session().is_none();
-            // Mirror the tree `n` handler: seed the target host from the
+            // Mirror the tree `C` handler: seed the target host from the
             // selected session, or from the highlighted sidebar host when
             // the cursor is in the Hosts section.
-            let (profile, workdir, host_id) = if let Some(s) = app.selected_session() {
+            let (profile, workdir, host_id) = if let Some(s) = app.observed_session() {
                 let owning_profile = app.profile_for_session(s.id).to_string();
                 let host_id = s
                     .host_id
@@ -8219,6 +8477,9 @@ async fn run_palette_action(
                     host_id,
                     host_name,
                 );
+            }
+            if matches!(app.focus, Focus::Term | Focus::TermRight) {
+                form.destination = CreateDestination::Auxiliary;
             }
             app.overlay = Overlay::NewSession(Box::new(form));
         }
@@ -8286,6 +8547,10 @@ fn next_focus(current: Focus, lazygit_open: bool, split_open: bool) -> Focus {
     }
 }
 
+fn is_tree_create_code(code: &KeyCode) -> bool {
+    matches!(code, KeyCode::Char('C'))
+}
+
 /// Previous-panel cycle. Mirrors `next_focus` reversed.
 fn prev_focus(current: Focus, lazygit_open: bool, split_open: bool) -> Focus {
     match (current, split_open, lazygit_open) {
@@ -8300,11 +8565,9 @@ fn prev_focus(current: Focus, lazygit_open: bool, split_open: bool) -> Focus {
 }
 
 /// Walk up from `start` looking for a `.git` entry (a directory or a
-/// gitlink file in a worktree). Returns the first repo root found, or
-/// `None` if we hit the filesystem root without seeing one. Used by
-/// `toggle_lazygit` so the remote-workdir fallback opens in a real
-/// repo instead of dumping the user into lazygit's "empty repo"
-/// screen on their `$HOME`.
+/// gitlink file in a worktree). Used only to label the launch state: we still
+/// open the requested directory when no repository exists so Lazygit's own
+/// initialize-repository prompt remains available.
 fn nearest_git_repo(start: &Path) -> Option<PathBuf> {
     let mut cur = start.to_path_buf();
     loop {
@@ -8314,6 +8577,20 @@ fn nearest_git_repo(start: &Path) -> Option<PathBuf> {
         if !cur.pop() {
             return None;
         }
+    }
+}
+
+fn lazygit_launch_cwd(session_workdir: Option<&str>, local_cwd: &Path) -> (PathBuf, bool) {
+    match session_workdir {
+        Some(workdir) => {
+            let path = PathBuf::from(workdir);
+            if path.is_dir() {
+                (path, false)
+            } else {
+                (local_cwd.to_path_buf(), true)
+            }
+        }
+        None => (local_cwd.to_path_buf(), false),
     }
 }
 
@@ -8352,23 +8629,12 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
     // lazygit silently fails with `chdir: no such file or directory` and the
     // pane just reports "lazygit exited" milliseconds after spawn.
     let local_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let (cwd, fell_back) = match app.selected_session() {
-        Some(s) => {
-            let p = PathBuf::from(&s.workdir);
-            if p.is_dir() {
-                (p, false)
-            } else {
-                (
-                    nearest_git_repo(&local_cwd).unwrap_or_else(|| local_cwd.clone()),
-                    true,
-                )
-            }
-        }
-        None => (
-            nearest_git_repo(&local_cwd).unwrap_or_else(|| local_cwd.clone()),
-            false,
-        ),
-    };
+    let (cwd, fell_back) = lazygit_launch_cwd(
+        app.selected_session()
+            .map(|session| session.workdir.as_str()),
+        &local_cwd,
+    );
+    let has_repository = nearest_git_repo(&cwd).is_some();
     let args = extensions::resolve_args(&LAZYGIT, &cwd);
 
     // Use a placeholder size; the run-loop resizes on the next frame.
@@ -8377,7 +8643,12 @@ async fn toggle_lazygit(app: &mut App, lg_tx: &mpsc::UnboundedSender<PtyMsg>) {
             app.lazygit = Some(pty);
             app.lazygit_cwd = Some(cwd.clone());
             app.focus = Focus::Lazygit;
-            app.status_msg = Some(if fell_back {
+            app.status_msg = Some(if !has_repository {
+                format!(
+                    "lazygit @ {} · no repository yet (initialize from the prompt)",
+                    cwd.display()
+                )
+            } else if fell_back {
                 format!(
                     "lazygit: session workdir not local — opened in {}",
                     cwd.display()
@@ -8731,19 +9002,14 @@ fn update_selection(app: &mut App, client: &Client, side: Side) {
     if side == Side::Left {
         request_lazygit_for_selection(app);
     }
-    // Pull a fresh agent-tasks snapshot for the new selection on the
-    // primary (left) side so the right-hand plan/todos panel updates
-    // in-step with navigation. The fetch runs spawn-detached — the
+    // Pull a fresh agent-tasks snapshot for either side so the right-hand
+    // plan/todos panel follows terminal focus. The fetch runs spawn-detached — the
     // result lands on `agent_tasks_rx`, not on this stack — so the
     // keystroke handler never blocks on a network round trip even
     // when the daemon is remote. The cache hit path renders
-    // synchronously from `agent_tasks` (keyed by id) so the panel
-    // shows last-known state immediately and updates the moment the
-    // fresh snapshot arrives. Skipped for right-side splits because
-    // the panel tracks `app.selected` only.
-    if side == Side::Left
-        && let Some(id) = new_id
-    {
+    // synchronously from `agent_tasks` (keyed by id) so the panel shows
+    // last-known state immediately and updates when the snapshot arrives.
+    if let Some(id) = new_id {
         spawn_agent_tasks_fetch(app, client, id);
     }
 }
@@ -8975,8 +9241,9 @@ fn track_term_input_for_clear(app: &mut App, session_id: Uuid, key: &KeyEvent, c
             if is_clear {
                 // Local clear first so the right panel goes blank
                 // immediately, before the round-trip to the daemon.
-                if let Some(state) = app.agent_tasks.get_mut(&session_id) {
-                    *state = AgentTaskState::default();
+                if let Some(snapshot) = app.agent_tasks.get_mut(&session_id) {
+                    snapshot.state = AgentTaskState::default();
+                    snapshot.status = AgentTaskSnapshotStatus::Empty;
                 }
                 // Server reset: detached so the keystroke send isn't
                 // blocked on it. Fire-and-forget; the next
@@ -9017,14 +9284,22 @@ fn spawn_agent_tasks_fetch(app: &mut App, client: &Client, id: Uuid) {
     let target = owner.unwrap_or_else(|| client.clone());
     tokio::spawn(async move {
         let payload = match target.agent_tasks(id).await {
-            Ok(state) => Some(state),
+            Ok(state) => Ok(state),
             Err(e) => {
                 tracing::debug!(session = %id, error = %e, "agent_tasks fetch failed");
-                None
+                Err(format!("{e:#}"))
             }
         };
         let _ = tx.send((id, payload));
     });
+}
+
+fn fetch_observed_tasks_if_visible(app: &mut App, client: &Client) {
+    if app.right_panel_visible
+        && let Some(id) = app.observed_session_id()
+    {
+        spawn_agent_tasks_fetch(app, client, id);
+    }
 }
 
 /// Spawn a background fetch of `/api/usage/claude` (spec 001). Coalesces
@@ -9040,17 +9315,24 @@ fn spawn_usage_fetch(app: &mut App, client: &Client) {
         return; // coalesce — a poll is already running
     }
     app.usage_inflight = true;
+    app.claude_usage_last_attempt_at = Some(Instant::now());
     let target = client.clone();
     tokio::spawn(async move {
         let payload = match target.claude_usage().await {
-            Ok(usage) => Some(usage),
+            Ok(usage) => Ok(usage),
             Err(e) => {
                 tracing::debug!(error = %e, "claude usage fetch failed");
-                None
+                Err(format!("{e:#}"))
             }
         };
         let _ = tx.send(payload);
     });
+}
+
+fn usage_poll_due(last_attempt: Option<Instant>, interval: Duration) -> bool {
+    last_attempt
+        .map(|at| at.elapsed() >= interval)
+        .unwrap_or(true)
 }
 
 /// Debounce window between the last navigation and the lazygit PTY
@@ -9303,7 +9585,8 @@ async fn apply_event(app: &mut App, ev: Event, client: &Client) {
                 .and_then(|s| Uuid::parse_str(s).ok())
                 .or(ev.session_id);
             let Some(id) = target else { return };
-            let interesting = Some(id) == app.selected || app.agent_tasks.contains_key(&id);
+            let interesting =
+                Some(id) == app.observed_session_id() || app.agent_tasks.contains_key(&id);
             if interesting {
                 spawn_agent_tasks_fetch(app, client, id);
             }
@@ -9421,7 +9704,7 @@ struct PlainTerminalTarget {
 }
 
 fn plain_terminal_target(app: &App) -> PlainTerminalTarget {
-    if let Some(session) = app.selected_session() {
+    if let Some(session) = app.observed_session() {
         return PlainTerminalTarget {
             selected_id: Some(session.id),
             profile: app.profile_for_session(session.id).to_string(),
@@ -9441,6 +9724,44 @@ fn plain_terminal_target(app: &App) -> PlainTerminalTarget {
     }
 }
 
+fn attach_created_session(
+    app: &mut App,
+    client: &Client,
+    id: Uuid,
+    destination: CreateDestination,
+) {
+    app.tree.select_session(id);
+    match destination {
+        CreateDestination::ReplaceFocused => {
+            let side = app.target_side();
+            update_selection(app, client, side);
+            if side == Side::Right {
+                app.set_focus(Focus::TermRight);
+            } else {
+                app.set_focus(Focus::Term);
+            }
+        }
+        CreateDestination::Auxiliary => {
+            if app.lazygit_open() {
+                app.lazygit = None;
+                app.lazygit_cwd = None;
+            }
+            if app.split_right.is_none() {
+                app.split_right = Some(TermSlot {
+                    selected: None,
+                    term: TerminalPane::new(),
+                    term_in: None,
+                    term_size: (0, 0),
+                    term_reconnect_pending: false,
+                });
+            }
+            update_selection(app, client, Side::Right);
+            app.last_term_side = Side::Right;
+            app.set_focus(Focus::TermRight);
+        }
+    }
+}
+
 /// Spawn a plain interactive shell as a session. Uses the `terminal`
 /// adapter so the server picks the user's `$SHELL` (fish / zsh / bash)
 /// rather than hard-coding bash — matching what the user gets when they
@@ -9448,6 +9769,11 @@ fn plain_terminal_target(app: &App) -> PlainTerminalTarget {
 /// so it appears in the tree and can be killed/deleted like any other
 /// agent.
 async fn spawn_plain_terminal(app: &mut App, client: &Client) {
+    let destination = if matches!(app.focus, Focus::Term | Focus::TermRight) {
+        CreateDestination::Auxiliary
+    } else {
+        CreateDestination::ReplaceFocused
+    };
     let name = next_shell_name(&app.sessions);
     let target = plain_terminal_target(app);
     // A selected peer/SSH session must never silently fall back to the
@@ -9462,9 +9788,11 @@ async fn spawn_plain_terminal(app: &mut App, client: &Client) {
                 } else {
                     format!("profile `{}`", target.profile)
                 };
-                app.push_error(format!(
-                    "shell create failed: {owner} is not currently reachable"
-                ));
+                app.push_diagnostic(
+                    "resolve terminal target",
+                    target.selected_id,
+                    format!("shell create failed: {owner} is not currently reachable"),
+                );
                 return;
             }
         },
@@ -9488,20 +9816,23 @@ async fn spawn_plain_terminal(app: &mut App, client: &Client) {
             // follow-up operation routes to the same client immediately.
             app.session_profile.insert(id, target.profile);
             if let Err(e) = target_client.start_session(id).await {
-                app.push_error(format!("shell start failed: {e}"));
+                app.push_diagnostic(
+                    "start newly-created terminal",
+                    Some(id),
+                    format!("terminal session `{name}` was created, but start failed: {e:#}"),
+                );
             } else {
                 push_notification(app, format!("shell: {name}"), None, NotifKind::Info);
             }
             refresh_all(app).await;
-            app.tree.select_session(id);
-            {
-                let side = app.target_side();
-                update_selection(app, &target_client, side);
-            }
-            app.set_focus(Focus::Term);
+            attach_created_session(app, client, id, destination);
         }
         Err(e) => {
-            app.push_error(format!("shell create failed: {e}"));
+            app.push_diagnostic(
+                "create terminal session",
+                target.selected_id,
+                format!("{e:#}"),
+            );
         }
     }
 }
@@ -10340,6 +10671,34 @@ mod tool_picker_tests {
         assert!(form.tool_picker.is_none());
         assert_eq!(form.tool, "claude");
     }
+
+    #[test]
+    fn typing_filters_name_and_description_then_enter_commits() {
+        let mut form = new_form();
+        form.tool_picker = Some(open_tool_picker("claude", None));
+        for c in "open source".chars() {
+            handle_tool_picker_key(&mut form, ev(KeyCode::Char(c)));
+        }
+        let picker = form.tool_picker.as_ref().unwrap();
+        let matching = picker.matching_indices();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(picker.entries[matching[0]].name, "opencode");
+
+        handle_tool_picker_key(&mut form, ev(KeyCode::Enter));
+        assert_eq!(form.tool, "opencode");
+        assert!(form.tool_picker.is_none());
+    }
+
+    #[test]
+    fn escape_clears_search_before_closing_picker() {
+        let mut form = new_form();
+        form.tool_picker = Some(open_tool_picker("claude", None));
+        handle_tool_picker_key(&mut form, ev(KeyCode::Char('c')));
+        handle_tool_picker_key(&mut form, ev(KeyCode::Esc));
+        assert_eq!(form.tool_picker.as_ref().unwrap().query, "");
+        handle_tool_picker_key(&mut form, ev(KeyCode::Esc));
+        assert!(form.tool_picker.is_none());
+    }
 }
 
 #[cfg(test)]
@@ -10863,5 +11222,167 @@ mod ctrl_v_tests {
         assert!(msg.contains("busy"), "got: {msg}");
         let msg = clipboard_error_message(arboard::Error::ClipboardNotSupported);
         assert!(msg.contains("not supported"), "got: {msg}");
+    }
+}
+
+#[cfg(test)]
+mod session_workspace_observability_tests {
+    use super::*;
+    use agentum_core::Status;
+    use time::OffsetDateTime;
+
+    fn session(id: Uuid, name: &str) -> Session {
+        let now = OffsetDateTime::now_utc();
+        Session {
+            id,
+            name: name.to_string(),
+            workdir: format!("/tmp/{name}"),
+            tool: "claude".to_string(),
+            model: None,
+            flags: Vec::new(),
+            status: Status::Running,
+            tmux_target: None,
+            host_id: None,
+            host_label: None,
+            host_kind: None,
+            created_at: now,
+            updated_at: now,
+            last_activity_at: None,
+            tokens: None,
+            cost_usd: None,
+            ctx: None,
+            last_log: None,
+            uptime_seconds: None,
+            state: None,
+            pinned: false,
+            card_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            worktree_base_ref: None,
+        }
+    }
+
+    #[test]
+    fn focus_cycle_includes_both_terminal_panes_in_both_directions() {
+        assert_eq!(next_focus(Focus::Tree, false, true), Focus::Term);
+        assert_eq!(next_focus(Focus::Term, false, true), Focus::TermRight);
+        assert_eq!(next_focus(Focus::TermRight, false, true), Focus::Tree);
+        assert_eq!(prev_focus(Focus::Tree, false, true), Focus::TermRight);
+        assert_eq!(prev_focus(Focus::TermRight, false, true), Focus::Term);
+        assert_eq!(prev_focus(Focus::Term, false, true), Focus::Tree);
+    }
+
+    #[test]
+    fn observed_task_session_follows_focused_or_last_terminal_side() {
+        let left = Uuid::new_v4();
+        let right = Uuid::new_v4();
+        let mut app = App::new(vec![session(left, "left"), session(right, "right")]);
+        app.selected = Some(left);
+        app.split_right = Some(TermSlot {
+            selected: Some(right),
+            term: TerminalPane::new(),
+            term_in: None,
+            term_size: (0, 0),
+            term_reconnect_pending: false,
+        });
+
+        app.set_focus(Focus::Term);
+        assert_eq!(app.observed_session_id(), Some(left));
+        app.set_focus(Focus::TermRight);
+        assert_eq!(app.observed_session_id(), Some(right));
+        app.set_focus(Focus::Tree);
+        assert_eq!(app.observed_session_id(), Some(right));
+    }
+
+    #[test]
+    fn uppercase_c_is_the_only_tree_create_character() {
+        assert!(is_tree_create_code(&KeyCode::Char('C')));
+        assert!(!is_tree_create_code(&KeyCode::Char('c')));
+        assert!(!is_tree_create_code(&KeyCode::Char('n')));
+    }
+
+    #[test]
+    fn usage_retry_waits_for_interval_after_any_attempt() {
+        assert!(usage_poll_due(None, Duration::from_secs(30)));
+        assert!(!usage_poll_due(
+            Some(Instant::now()),
+            Duration::from_secs(30)
+        ));
+        assert!(usage_poll_due(
+            Some(Instant::now() - Duration::from_secs(31)),
+            Duration::from_secs(30)
+        ));
+    }
+
+    #[test]
+    fn lazygit_keeps_an_existing_non_repository_directory() {
+        let dir = std::env::temp_dir().join(format!("agentum-lazygit-{}", Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        assert!(nearest_git_repo(&dir).is_none());
+
+        let (chosen, fell_back) =
+            lazygit_launch_cwd(Some(dir.to_string_lossy().as_ref()), Path::new("/"));
+        assert_eq!(chosen, dir);
+        assert!(!fell_back);
+
+        std::fs::remove_dir(&chosen).unwrap();
+    }
+
+    #[test]
+    fn diagnostic_redaction_covers_header_json_query_and_password_shapes() {
+        let raw = concat!(
+            "Authorization: Bearer secret-a\n",
+            "{\"accessToken\": \"secret-b\",\"refreshToken\":\"secret-c\"}\n",
+            "url?access_token=secret-d&token=secret-e\n",
+            "password: secret-f AGENTUM_HOOK_TOKEN=secret-g"
+        );
+        let redacted = redact_diagnostic(raw);
+        for secret in [
+            "secret-a", "secret-b", "secret-c", "secret-d", "secret-e", "secret-f", "secret-g",
+        ] {
+            assert!(!redacted.contains(secret), "leaked {secret}: {redacted}");
+        }
+        assert!(redacted.matches("<redacted>").count() >= 7);
+    }
+
+    #[test]
+    fn selected_diagnostic_copy_uses_full_report_and_clear_still_works() {
+        let mut app = App::new(Vec::new());
+        app.push_diagnostic("refresh usage", None, "line one\nline two token=secret");
+        let report = app.errors[0].report.clone();
+        assert!(report.contains("operation: refresh usage"));
+        assert!(report.contains("line one\nline two"));
+        assert!(report.contains("daemon_endpoint: unknown"));
+        assert!(!report.contains("secret"));
+
+        handle_errors_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.pending_clipboard_seq,
+            Some(build_osc52_sequence(&report))
+        );
+        handle_errors_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        );
+        assert!(app.errors.is_empty());
+        assert_eq!(app.error_count, 0);
+    }
+
+    #[test]
+    fn diagnostic_deduplication_keeps_distinct_operations_and_sessions() {
+        let mut app = App::new(Vec::new());
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+
+        app.push_diagnostic("fetch usage", Some(first), "connection reset");
+        app.push_diagnostic("fetch tasks", Some(first), "connection reset");
+        app.push_diagnostic("fetch tasks", Some(second), "connection reset");
+        app.push_diagnostic("fetch tasks", Some(second), "connection reset");
+
+        assert_eq!(app.errors.len(), 3);
+        assert_eq!(app.error_count, 3);
     }
 }

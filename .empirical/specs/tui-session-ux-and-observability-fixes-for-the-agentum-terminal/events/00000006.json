@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 4,
+  "revision": 6,
+  "previousRevision": 5,
+  "actor": "agent",
+  "summary": "Automated tests, strict clippy, and real tmux PTY checks pass, but mandated real-browser and browser-screenshot verification could not run because this session has no Playwright MCP/browser tools. Browser verification loop failed loudly per its contract.",
+  "createdAt": "2026-08-07T14:19:57.973Z",
+  "state": {
+    "schemaVersion": 4,
+    "revision": 6,
+    "activeFeature": "tui-session-ux-and-observability-fixes-for-the-agentum-terminal",
+    "request": "TUI session UX and observability fixes for the agentum terminal app (crates/agentum-tui): 1) In-session agent management: from inside a session view, let the user add more agents (spawn a new plain terminal pane or another agent such as claude/codex) and add keyboard shortcuts to move focus between sessions/panes and to resize panes. 2) Keybind change: make C the key for create (change the current create/new-session keybind). 3) Error copy: improve error messages so the full error can be pasted into an LLM chat for debugging — include operation, session id, daemon/host state, version, and log file location where relevant. 4) Bug: the per-session/per-agent usage readout (bottom-left usage panel, /api/usage/claude) is not working, and agent tasks are not working either. 5) Bug: the Plan / Todos / Agents right-side panels (agent-tasks panel backed by transcript_store and /api/sessions/{id}/agent-tasks) are not working — investigate why and fix.",
+    "profile": "complex",
+    "phase": "implement",
+    "status": "waiting",
+    "repairAttempts": 1,
+    "message": "Automated tests, strict clippy, and real tmux PTY checks pass, but mandated real-browser and browser-screenshot verification could not run because this session has no Playwright MCP/browser tools. Browser verification loop failed loudly per its contract.",
+    "implementationActor": "agent",
+    "specDigest": "23904c79f24e21e91881d0f6bfbaaeaa0d87313be7934419a33ca776d595cf48",
+    "capabilityArchiveRequired": true,
+    "capabilityDeltaDigest": "c6cfb76885e447f38311c31abfcb639055a08411747263b0fe7b2daca375acf0",
+    "evidence": [],
+    "updatedAt": "2026-08-07T14:19:57.973Z"
+  }
+}

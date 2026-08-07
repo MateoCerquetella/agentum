@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 use agentum_core::Status as SessionStatus;
-use agentum_core::transcript::{AgentTaskState, TaskStatus, TodoStatus};
+use agentum_core::transcript::{AgentTaskSnapshotStatus, AgentTaskState, TaskStatus, TodoStatus};
 
 use uuid::Uuid;
 
@@ -635,7 +635,7 @@ fn draw_tree(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let hint = if !filter.is_empty() {
             format!("   (no matches for ⌕{filter})")
         } else {
-            "   (no sessions — press n)".to_string()
+            "   (no sessions — press C)".to_string()
         };
         items.push(ListItem::new(Line::from(Span::styled(
             hint,
@@ -1495,7 +1495,7 @@ fn draw_help_overlay(f: &mut Frame<'_>, area: Rect, lazygit_open: bool, p: &Pale
         Line::from(""),
         head("  Sessions", p),
         body(
-            "  n                 new session (name / workdir / tool / model)",
+            "  C                 create session (name / workdir / tool / model)",
             p,
         ),
         body("  u                 start (up) the selected session", p),
@@ -2451,7 +2451,11 @@ fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Percentage(38),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
         .split(inner);
 
     if app.errors.is_empty() {
@@ -2474,6 +2478,31 @@ fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         let lines: Vec<Line> = lines.into_iter().skip(scroll).take(visible).collect();
         let para = Paragraph::new(lines).style(Style::default().bg(p.surface_bg));
         f.render_widget(para, rows[0]);
+
+        let selected_index = error_entry_index_at_visual_row(
+            &app.errors,
+            rows[0].width as usize,
+            scroll,
+        );
+        if let Some(entry) = selected_index.and_then(|index| app.errors.get(index)) {
+            let scope = entry
+                .session_id
+                .map(|id| format!("session {id}"))
+                .unwrap_or_else(|| "global".to_string());
+            let detail = Paragraph::new(entry.report.as_str())
+                .block(
+                    Block::default()
+                        .title(format!(
+                            " {} · {} · full copy payload ",
+                            entry.operation, scope
+                        ))
+                        .borders(Borders::TOP)
+                        .border_style(Style::default().fg(p.idle_border)),
+                )
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(p.fg).bg(p.surface_bg));
+            f.render_widget(detail, rows[1]);
+        }
     }
 
     let hints = Line::from(vec![
@@ -2485,11 +2514,13 @@ fn draw_errors_overlay(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette) {
         Span::styled("top/bottom", Style::default().fg(p.muted)),
         Span::styled("  c ", Style::default().fg(p.subtle)),
         Span::styled("clear", Style::default().fg(p.muted)),
-        Span::styled("  Esc / e ", Style::default().fg(p.subtle)),
+        Span::styled("  y ", Style::default().fg(p.subtle)),
+        Span::styled("copy full report", Style::default().fg(p.muted)),
+        Span::styled("  Esc / ! ", Style::default().fg(p.subtle)),
         Span::styled("close", Style::default().fg(p.muted)),
     ]);
     let hints_para = Paragraph::new(hints).style(Style::default().bg(p.surface_bg));
-    f.render_widget(hints_para, rows[1]);
+    f.render_widget(hints_para, rows[2]);
 }
 
 /// Render errors newest-first and flatten each message into visual rows.
@@ -2508,6 +2539,25 @@ fn format_error_lines(errors: &[ErrorEntry], row_width: usize, p: &Palette) -> V
             })
         })
         .collect()
+}
+
+/// Map a visual-row scroll offset back to the diagnostic entry occupying
+/// that row. Entries are rendered newest-first while storage remains
+/// oldest-first, so the returned index is suitable for `errors.get(index)`.
+fn error_entry_index_at_visual_row(
+    errors: &[ErrorEntry],
+    row_width: usize,
+    scroll: usize,
+) -> Option<usize> {
+    let mut first_row = 0usize;
+    for (index, entry) in errors.iter().enumerate().rev() {
+        let rows = error_visual_rows(entry, row_width).len();
+        if scroll < first_row.saturating_add(rows) {
+            return Some(index);
+        }
+        first_row = first_row.saturating_add(rows);
+    }
+    errors.first().map(|_| 0)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2957,28 +3007,44 @@ fn push_toggle_field(
 fn draw_tool_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &ToolPickerState, p: &Palette) {
     let mut lines: Vec<Line<'_>> = Vec::new();
     lines.push(head("Pick an agent", p));
+    lines.push(Line::from(vec![
+        Span::styled("  search  ", Style::default().fg(p.muted)),
+        Span::styled(
+            if picker.query.is_empty() {
+                "type to filter…".to_string()
+            } else {
+                picker.query.clone()
+            },
+            Style::default().fg(p.fg).add_modifier(Modifier::BOLD),
+        ),
+    ]));
     lines.push(Line::from(""));
 
-    if picker.entries.is_empty() {
+    let matching = picker.matching_indices();
+    if matching.is_empty() {
         // Cold-state safeguard: TOOL_SUGGESTIONS is non-empty in this
         // build, but reflecting `entries.is_empty()` keeps the overlay
         // useful if a future filter knocks every entry out.
         lines.push(Line::from(Span::styled(
-            "  (no agents available)",
+            "  (no matching agents)",
             Style::default().fg(p.muted),
         )));
     } else {
-        // Show the full list — TOOL_SUGGESTIONS is bounded and short,
-        // so we don't need the dir picker's 14-entry window.
-        let name_width = picker
-            .entries
+        // Keep the selected row visible on short terminals. The catalog can
+        // grow without pushing later agents below the clipped overlay.
+        let capacity = area.height.saturating_sub(8).clamp(1, 12) as usize;
+        let (start, end) = picker_window(matching.len(), picker.cursor, capacity);
+        let name_width = matching
             .iter()
-            .map(|e| e.name.len())
+            .filter_map(|index| picker.entries.get(*index))
+            .map(|entry| entry.name.len())
             .max()
             .unwrap_or(0)
             .max(8);
-        for (i, entry) in picker.entries.iter().enumerate() {
-            let is_cursor = i == picker.cursor;
+        for (visible_index, entry_index) in matching[start..end].iter().enumerate() {
+            let entry = &picker.entries[*entry_index];
+            let result_index = start + visible_index;
+            let is_cursor = result_index == picker.cursor;
             let prefix = if is_cursor { "  > " } else { "    " };
             // Suffix mirrors the dashboard tile-dim: an uninstalled
             // probed agent is greyed out and tagged so the picker
@@ -3004,6 +3070,15 @@ fn draw_tool_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &ToolPickerSt
             );
             lines.push(Line::from(Span::styled(text, line_style)));
         }
+        let above = start;
+        let below = matching.len().saturating_sub(end);
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  ↑ {above} more · ↓ {below} more · {} matches",
+                matching.len()
+            ),
+            Style::default().fg(p.muted),
+        )));
     }
 
     lines.push(Line::from(""));
@@ -3012,10 +3087,22 @@ fn draw_tool_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &ToolPickerSt
         Span::styled(" move   ", Style::default().fg(p.muted)),
         Span::styled("Enter", Style::default().fg(p.accent)),
         Span::styled(" select   ", Style::default().fg(p.muted)),
+        Span::styled("type", Style::default().fg(p.accent)),
+        Span::styled(" search   ", Style::default().fg(p.muted)),
         Span::styled("Esc", Style::default().fg(p.accent)),
-        Span::styled(" back", Style::default().fg(p.muted)),
+        Span::styled(" clear/back", Style::default().fg(p.muted)),
     ]));
     overlay_box(f, area, " Agent picker ", lines, 70, p);
+}
+
+fn picker_window(total: usize, cursor: usize, capacity: usize) -> (usize, usize) {
+    let capacity = capacity.max(1).min(total.max(1));
+    let cursor = cursor.min(total.saturating_sub(1));
+    let start = cursor
+        .saturating_add(1)
+        .saturating_sub(capacity)
+        .min(total.saturating_sub(capacity));
+    (start, (start + capacity).min(total))
 }
 
 fn draw_dir_picker_overlay(f: &mut Frame<'_>, area: Rect, picker: &DirPickerState, p: &Palette) {
@@ -3309,9 +3396,15 @@ fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
         ])
         .split(area);
 
-    let session = app.selected_session();
+    let session = app.observed_session();
     let plan_title = match session {
-        Some(s) => format!(" Plan · {} ", s.name),
+        Some(s) => {
+            let badge = task_snapshot_badge(app.agent_tasks.get(&s.id).map(|snap| snap.status));
+            match badge {
+                Some(badge) => format!(" Plan · {} · {badge} ", s.name),
+                None => format!(" Plan · {} ", s.name),
+            }
+        }
         None => " Plan ".to_string(),
     };
 
@@ -3320,15 +3413,20 @@ fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
     // even on first launch.
     let (plan_lines, todos_lines, tasks_lines) = match session {
         Some(session) => {
-            let state = app.agent_tasks.get(&session.id);
+            let snapshot = app.agent_tasks.get(&session.id);
+            let state = snapshot.map(|s| &s.state);
             let inner_width = rows[0].width.saturating_sub(2) as usize;
             let plan = build_plan_lines(state, inner_width, p);
             let todos = build_todos_lines(state, inner_width, p);
             let tasks = build_tasks_lines(state, inner_width, p);
+            let status_hint = snapshot_status_hint(
+                snapshot.map(|s| s.status),
+                snapshot.and_then(|s| s.detail.as_deref()),
+            );
             (
-                or_empty_hint(plan, "Waiting for /plan…", p),
-                or_empty_hint(todos, "No todos yet.", p),
-                or_empty_hint(tasks, "No subagent runs yet.", p),
+                or_empty_hint(plan, status_hint.unwrap_or("Waiting for /plan…"), p),
+                or_empty_hint(todos, status_hint.unwrap_or("No todos yet."), p),
+                or_empty_hint(tasks, status_hint.unwrap_or("No subagent runs yet."), p),
             )
         }
         None => {
@@ -3349,6 +3447,49 @@ fn draw_agent_tasks_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Palette)
     render_section(f, rows[0], &plan_title, plan_lines, p);
     render_section(f, rows[1], " Todos ", todos_lines, p);
     render_section(f, rows[2], " Agents ", tasks_lines, p);
+}
+
+fn task_snapshot_badge(status: Option<AgentTaskSnapshotStatus>) -> Option<&'static str> {
+    match status {
+        None => Some("LOADING"),
+        Some(AgentTaskSnapshotStatus::Current | AgentTaskSnapshotStatus::Empty) => None,
+        Some(AgentTaskSnapshotStatus::WaitingForTranscript) => Some("WAITING"),
+        Some(AgentTaskSnapshotStatus::Unsupported) => Some("UNSUPPORTED"),
+        Some(AgentTaskSnapshotStatus::Stale) => Some("STALE"),
+        Some(AgentTaskSnapshotStatus::HostUnavailable) => Some("HOST OFFLINE"),
+        Some(AgentTaskSnapshotStatus::ReadError) => Some("READ ERROR"),
+        Some(AgentTaskSnapshotStatus::Incompatible) => Some("UPDATE DAEMON"),
+    }
+}
+
+fn snapshot_status_hint(
+    status: Option<AgentTaskSnapshotStatus>,
+    detail: Option<&str>,
+) -> Option<&str> {
+    match status {
+        None => Some("Loading agent state…"),
+        Some(AgentTaskSnapshotStatus::Current | AgentTaskSnapshotStatus::Empty) => None,
+        Some(AgentTaskSnapshotStatus::WaitingForTranscript) => {
+            Some("Waiting for Claude transcript…")
+        }
+        Some(AgentTaskSnapshotStatus::Unsupported) => {
+            Some("Task panel unsupported for this agent.")
+        }
+        Some(AgentTaskSnapshotStatus::Stale) => Some("Stale task data — refresh failed."),
+        Some(AgentTaskSnapshotStatus::HostUnavailable) => {
+            Some("Agent host unavailable — task data not refreshed.")
+        }
+        Some(AgentTaskSnapshotStatus::ReadError) => {
+            if detail.is_some() {
+                Some("Task transcript read failed — open Errors (!).")
+            } else {
+                Some("Task transcript read failed.")
+            }
+        }
+        Some(AgentTaskSnapshotStatus::Incompatible) => {
+            Some("Daemon is too old for agent tasks — update agentum serve.")
+        }
+    }
 }
 
 fn or_empty_hint(lines: Vec<Line<'static>>, hint: &str, p: &Palette) -> Vec<Line<'static>> {
@@ -3742,6 +3883,12 @@ fn format_resets_in(resets_at_ms: i64, now_ms: i64) -> String {
 /// `source != "oauth"` or `limit_pct == None`), the band segment becomes
 /// an explicit "usage unavailable" rather than a wrong number.
 fn usage_header_line<'a>(usage: &ClaudeUsage, p: &Palette) -> Line<'a> {
+    if usage.collection_status == "not_installed" || !usage.claude_installed {
+        return Line::from(Span::styled(
+            "Claude not installed on active daemon host",
+            Style::default().fg(p.muted),
+        ));
+    }
     let now_ms = SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -3815,10 +3962,9 @@ pub(super) fn draw_usage_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Pal
         return;
     }
 
-    // Carve off a 1-row header for the account-wide usage readout when we
-    // have a snapshot. This renders even with zero active agents — plan
-    // headroom is account-wide, not per-session.
-    let (header_area, inner) = if app.claude_usage.is_some() && inner.height >= 3 {
+    // Always reserve a header state: an initial transport failure must not
+    // collapse into the same blank panel as "still loading".
+    let (header_area, inner) = if inner.height >= 3 {
         let split = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -3827,8 +3973,36 @@ pub(super) fn draw_usage_panel(f: &mut Frame<'_>, area: Rect, app: &App, p: &Pal
     } else {
         (None, inner)
     };
-    if let (Some(hdr), Some(usage)) = (header_area, app.claude_usage.as_ref()) {
-        let line = usage_header_line(usage, p);
+    if let Some(hdr) = header_area {
+        let line = if let Some(usage) = app.claude_usage.as_ref() {
+            let mut line = usage_header_line(usage, p);
+            if app.claude_usage_error.is_some() {
+                line.spans.insert(
+                    0,
+                    Span::styled(
+                        "STALE · ",
+                        Style::default().fg(p.warning).add_modifier(Modifier::BOLD),
+                    ),
+                );
+            } else if usage.collection_status == "local_scan" {
+                line.spans
+                    .insert(0, Span::styled("LOCAL · ", Style::default().fg(p.warning)));
+            }
+            line
+        } else if let Some(error) = app.claude_usage_error.as_deref() {
+            Line::from(Span::styled(
+                format!(
+                    "usage unavailable · {}",
+                    truncate(error, hdr.width as usize)
+                ),
+                Style::default().fg(p.error),
+            ))
+        } else {
+            Line::from(Span::styled(
+                "loading account usage…",
+                Style::default().fg(p.muted),
+            ))
+        };
         f.render_widget(
             Paragraph::new(line).style(Style::default().bg(p.panel_bg)),
             hdr,
@@ -4131,6 +4305,71 @@ mod tests {
         assert_eq!(format_resets_in(0, 1_000_000), "now");
         // 2d.
         assert_eq!(format_resets_in(2 * 86_400_000, 0), "2d");
+    }
+
+    #[test]
+    fn terminal_split_clamps_both_panes_to_configured_bounds() {
+        let area = Rect::new(0, 0, 100, 20);
+        let (left, right) = split_terminal(area, true, 0);
+        assert_eq!(left.width, 25);
+        assert_eq!(right.unwrap().width, 75);
+
+        let (left, right) = split_terminal(area, true, 100);
+        assert_eq!(left.width, 75);
+        assert_eq!(right.unwrap().width, 25);
+
+        let (_, right) = split_terminal(area, false, 50);
+        assert!(right.is_none());
+    }
+
+    #[test]
+    fn picker_window_scrolls_to_keep_later_results_visible() {
+        assert_eq!(picker_window(20, 0, 5), (0, 5));
+        assert_eq!(picker_window(20, 4, 5), (0, 5));
+        assert_eq!(picker_window(20, 5, 5), (1, 6));
+        assert_eq!(picker_window(20, 19, 5), (15, 20));
+        assert_eq!(picker_window(3, 2, 10), (0, 3));
+    }
+
+    #[test]
+    fn task_snapshot_failures_have_distinct_actionable_hints() {
+        assert_eq!(task_snapshot_badge(None), Some("LOADING"));
+        assert_eq!(
+            task_snapshot_badge(Some(AgentTaskSnapshotStatus::Current)),
+            None
+        );
+        assert_eq!(
+            task_snapshot_badge(Some(AgentTaskSnapshotStatus::Stale)),
+            Some("STALE")
+        );
+        assert_eq!(
+            snapshot_status_hint(None, None),
+            Some("Loading agent state…")
+        );
+        assert_eq!(
+            snapshot_status_hint(Some(AgentTaskSnapshotStatus::WaitingForTranscript), None),
+            Some("Waiting for Claude transcript…")
+        );
+        assert_eq!(
+            snapshot_status_hint(Some(AgentTaskSnapshotStatus::Unsupported), None),
+            Some("Task panel unsupported for this agent.")
+        );
+        assert_eq!(
+            snapshot_status_hint(Some(AgentTaskSnapshotStatus::Stale), None),
+            Some("Stale task data — refresh failed.")
+        );
+        assert_eq!(
+            snapshot_status_hint(Some(AgentTaskSnapshotStatus::HostUnavailable), None),
+            Some("Agent host unavailable — task data not refreshed.")
+        );
+        assert_eq!(
+            snapshot_status_hint(Some(AgentTaskSnapshotStatus::ReadError), Some("denied")),
+            Some("Task transcript read failed — open Errors (!).")
+        );
+        assert_eq!(
+            snapshot_status_hint(Some(AgentTaskSnapshotStatus::Incompatible), None),
+            Some("Daemon is too old for agent tasks — update agentum serve.")
+        );
     }
 }
 

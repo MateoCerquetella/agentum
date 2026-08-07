@@ -129,6 +129,55 @@ impl AgentTaskState {
     }
 }
 
+/// Collection state for a per-session transcript snapshot.  This travels with
+/// the parsed data so clients never have to guess whether an empty list means
+/// "nothing recorded yet", "unsupported tool", or "the source failed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTaskSnapshotStatus {
+    Current,
+    Empty,
+    WaitingForTranscript,
+    Unsupported,
+    Stale,
+    HostUnavailable,
+    ReadError,
+    Incompatible,
+}
+
+/// Source-qualified response returned by `/api/sessions/{id}/agent-tasks`.
+/// New fields are optional/defaulted so stored fixtures and older clients can
+/// continue to consume the underlying [`AgentTaskState`] independently.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskSnapshot {
+    #[serde(flatten)]
+    pub state: AgentTaskState,
+    pub status: AgentTaskSnapshotStatus,
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_host_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl AgentTaskSnapshot {
+    pub fn new(state: AgentTaskState, status: AgentTaskSnapshotStatus, tool: &str) -> Self {
+        Self {
+            state,
+            status,
+            tool: tool.to_string(),
+            source_host_id: None,
+            transcript_path: None,
+            updated_at_ms: None,
+            detail: None,
+        }
+    }
+}
+
 // ---------- path resolution ----------
 
 /// Translate a workdir into the directory Claude Code uses for its
@@ -843,5 +892,35 @@ mod tests {
             r#"{"type":"user","timestamp":"2025-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"<command-name>/help</command-name>"}]}}"#,
         );
         assert!(!state.is_empty(), "/help shouldn't wipe state");
+    }
+
+    #[test]
+    fn task_snapshot_envelope_round_trips_with_flattened_legacy_state() {
+        let mut state = AgentTaskState {
+            plan: Some("ship it".to_string()),
+            ..AgentTaskState::default()
+        };
+        state.todos.push(TodoItem {
+            content: "verify".to_string(),
+            active_form: None,
+            status: TodoStatus::InProgress,
+            description: None,
+            task_id: Some("4".to_string()),
+            create_tool_id: None,
+        });
+        let mut snapshot =
+            AgentTaskSnapshot::new(state, AgentTaskSnapshotStatus::Current, "claude");
+        snapshot.source_host_id = Some(Uuid::nil());
+        snapshot.transcript_path = Some("/tmp/session.jsonl".to_string());
+
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(value["plan"], "ship it");
+        assert_eq!(value["status"], "current");
+        assert_eq!(value["tool"], "claude");
+
+        let decoded: AgentTaskSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.state.todos.len(), 1);
+        assert_eq!(decoded.status, AgentTaskSnapshotStatus::Current);
+        assert_eq!(decoded.source_host_id, Some(Uuid::nil()));
     }
 }

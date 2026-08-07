@@ -13,7 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentum_core::{
-    Event, Host, HostReadiness, NewHost, Session, WorktreeSpec, transcript::AgentTaskState,
+    Event, Host, HostReadiness, NewHost, Session, WorktreeSpec,
+    transcript::{AgentTaskSnapshot, AgentTaskSnapshotStatus, AgentTaskState},
 };
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::Bytes;
@@ -151,6 +152,39 @@ pub struct ClaudeUsage {
     /// only have the local transcript scan (no real % — degraded).
     #[serde(default)]
     pub source: Option<String>,
+    /// Daemon collection time (unix milliseconds).
+    #[serde(default)]
+    pub generated_at_ms: i64,
+    /// `live`, `local_scan`, `not_installed`, or a newer forward-compatible
+    /// daemon status.
+    #[serde(default)]
+    pub collection_status: String,
+    /// Redacted collection detail suitable for an unavailable-state hint.
+    #[serde(default)]
+    pub status_detail: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AgentTaskWire {
+    Snapshot(AgentTaskSnapshot),
+    Legacy(AgentTaskState),
+}
+
+fn normalize_agent_task_wire(wire: AgentTaskWire) -> AgentTaskSnapshot {
+    match wire {
+        AgentTaskWire::Snapshot(snapshot) => snapshot,
+        AgentTaskWire::Legacy(state) => {
+            let status = if state.is_empty() {
+                AgentTaskSnapshotStatus::Empty
+            } else {
+                AgentTaskSnapshotStatus::Current
+            };
+            let mut snapshot = AgentTaskSnapshot::new(state, status, "unknown");
+            snapshot.detail = Some("legacy daemon response".into());
+            snapshot
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -445,6 +479,10 @@ impl Client {
             token,
             trust,
         })
+    }
+
+    pub fn endpoint(&self) -> &str {
+        self.base.as_str()
     }
 
     pub async fn health(&self) -> Result<Health> {
@@ -747,16 +785,16 @@ impl Client {
     /// background tasks for one agent. Backed by the daemon's
     /// transcript-tail watcher, so the data refreshes within a beat of
     /// every TodoWrite / ExitPlanMode / Task tool call the agent makes.
-    pub async fn agent_tasks(&self, id: Uuid) -> Result<AgentTaskState> {
+    pub async fn agent_tasks(&self, id: Uuid) -> Result<AgentTaskSnapshot> {
         let url = self.base.join(&format!("/api/sessions/{id}/agent-tasks"))?;
-        let resp = self
-            .http
-            .get(url)
-            .bearer_auth(&self.token)
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(resp.json::<AgentTaskState>().await?)
+        let resp = self.http.get(url).bearer_auth(&self.token).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            bail!("daemon does not expose session agent tasks — update agentum");
+        }
+        let resp = resp.error_for_status()?;
+        Ok(normalize_agent_task_wire(
+            resp.json::<AgentTaskWire>().await?,
+        ))
     }
 
     /// `POST /api/sessions/{id}/agent-tasks/reset` — wipe the cached
@@ -1515,10 +1553,11 @@ fn backoff_delay(attempt: u32) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::{
-        Client, DEFAULT_HTTP_TIMEOUT, HOST_READINESS_TIMEOUT, REMOTE_SESSION_CREATE_TIMEOUT,
-        SESSION_LIFECYCLE_TIMEOUT, TERMINAL_WS_DISABLE_NAGLE, TermOut, TlsTrust, build_upload_url,
-        format_api_error, session_action_timeout, session_create_timeout, session_delete_timeout,
-        term_out_to_ws_message, ws_url,
+        AgentTaskSnapshotStatus, AgentTaskWire, Client, DEFAULT_HTTP_TIMEOUT,
+        HOST_READINESS_TIMEOUT, REMOTE_SESSION_CREATE_TIMEOUT, SESSION_LIFECYCLE_TIMEOUT,
+        TERMINAL_WS_DISABLE_NAGLE, TermOut, TlsTrust, build_upload_url, format_api_error,
+        normalize_agent_task_wire, session_action_timeout, session_create_timeout,
+        session_delete_timeout, term_out_to_ws_message, ws_url,
     };
     use reqwest::StatusCode;
     use tokio_tungstenite::tungstenite::Message as WsMsg;
@@ -1724,5 +1763,23 @@ mod tests {
             "tok",
             &[],
         );
+    }
+
+    #[test]
+    fn agent_task_wire_accepts_envelope_and_legacy_bare_state() {
+        let legacy: AgentTaskWire =
+            serde_json::from_str(r#"{"plan":"legacy plan","todos":[],"tasks":[]}"#).unwrap();
+        let legacy = normalize_agent_task_wire(legacy);
+        assert_eq!(legacy.status, AgentTaskSnapshotStatus::Current);
+        assert_eq!(legacy.state.plan.as_deref(), Some("legacy plan"));
+        assert_eq!(legacy.detail.as_deref(), Some("legacy daemon response"));
+
+        let envelope: AgentTaskWire = serde_json::from_str(
+            r#"{"plan":null,"todos":[],"tasks":[],"status":"empty","tool":"claude"}"#,
+        )
+        .unwrap();
+        let envelope = normalize_agent_task_wire(envelope);
+        assert_eq!(envelope.status, AgentTaskSnapshotStatus::Empty);
+        assert_eq!(envelope.tool, "claude");
     }
 }
