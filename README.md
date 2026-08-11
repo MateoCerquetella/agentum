@@ -2,8 +2,6 @@
 
 A terminal UI for running and supervising AI coding agents in tmux.
 
-![agentum terminal UI](assets/agentum.png)
-
 ## Install
 
 Requires Rust 1.85+ and `tmux`.
