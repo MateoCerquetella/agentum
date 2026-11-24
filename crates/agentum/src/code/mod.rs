@@ -428,6 +428,7 @@ pub async fn create_thread(app: &App, b: NewThread) -> R<ThreadSummary> {
 
 /// Start (or resume) the agent of a thread with this first input.
 async fn start_agent(app: &App, s: &ThreadSummary, mut input: Input, resume: Option<String>) -> R<()> {
+    crate::plugins::before_turn(app, s, &input.text).await.map_err(|e| AppError(StatusCode::CONFLICT, e))?;
     // A side chat's first message carries its parent's conversation.
     if let (Some(pid), None) = (&s.parent, &resume) {
         let pid2 = pid.clone();
@@ -571,6 +572,9 @@ pub async fn send(app: &App, id: &str, b: SendBody) -> R<()> {
     let id2 = id.to_string();
     if !app.db.call(move |c| db::started(c, &id2)).await? {
         return start_agent(app, &t, input, None).await;
+    }
+    if !t.state.busy() {
+        crate::plugins::before_turn(app, &t, &input.text).await.map_err(|e| AppError(StatusCode::CONFLICT, e))?;
     }
     match machine_call(app, &t.machine, Req::Send { thread: id.to_string(), input: input.clone(), mode: b.mode }).await {
         Ok(_) => Ok(()),

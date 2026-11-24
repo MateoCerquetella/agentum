@@ -28,7 +28,7 @@ struct State {
 
 thread_local! {
     static WS: RefCell<State> = RefCell::new(State::default());
-    static CONNECTED: RwSignal<u32> = RwSignal::new(0);
+    static CONNECTED: RwSignal<u32> = crate::global(0);
 }
 
 /// Bumps every time the socket (re)opens: read it in an Effect to refetch after a gap.

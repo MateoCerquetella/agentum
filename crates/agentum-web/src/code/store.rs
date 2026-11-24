@@ -6,9 +6,9 @@ use agentum_ui::prelude::*;
 use agentum_ui::ws::connected;
 
 thread_local! {
-    static OV: RwSignal<Option<Overview>> = RwSignal::new(None);
+    static OV: RwSignal<Option<Overview>> = agentum_ui::global(None);
     static STARTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static VISITED: RwSignal<Vec<String>> = RwSignal::new(agentum_ui::store::get("agentum.visited").map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect()).unwrap_or_default());
+    static VISITED: RwSignal<Vec<String>> = agentum_ui::global(agentum_ui::store::get("agentum.visited").map(|s| s.split(',').filter(|x| !x.is_empty()).map(str::to_string).collect()).unwrap_or_default());
 }
 
 pub fn overview() -> RwSignal<Option<Overview>> {

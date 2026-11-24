@@ -7,6 +7,27 @@ license.workspace = true
 publish = false
 
 [dependencies]
+agentum-plugin-git = { path = "../../plugins/git", features = ["web"] }
+agentum-plugin-pr = { path = "../../plugins/pr", features = ["web"] }
+agentum-plugin-files = { path = "../../plugins/files", features = ["web"] }
+agentum-plugin-editor = { path = "../../plugins/editor", features = ["web"] }
+agentum-plugin-history = { path = "../../plugins/history", features = ["web"] }
+agentum-plugin-terminal = { path = "../../plugins/terminal", features = ["web"] }
+agentum-plugin-hover-cards = { path = "../../plugins/hover-cards", features = ["web"] }
+agentum-plugin-timestamps = { path = "../../plugins/timestamps", features = ["web"] }
+agentum-plugin-sticky-prompt = { path = "../../plugins/sticky-prompt", features = ["web"] }
+agentum-plugin-nudger = { path = "../../plugins/nudger", features = ["web"] }
+agentum-plugin-scheduled-send = { path = "../../plugins/scheduled-send", features = ["web"] }
+agentum-plugin-side-chat = { path = "../../plugins/side-chat", features = ["web"] }
+agentum-plugin-drafts = { path = "../../plugins/drafts", features = ["web"] }
+agentum-plugin-usage = { path = "../../plugins/usage", features = ["web"] }
+agentum-plugin-context = { path = "../../plugins/context", features = ["web"] }
+agentum-plugin-concurrency = { path = "../../plugins/concurrency", features = ["web"] }
+agentum-plugin-notify = { path = "../../plugins/notify", features = ["web"] }
+agentum-plugin-aura = { path = "../../plugins/aura", features = ["web"] }
+agentum-plugin-genui = { path = "../../plugins/genui", features = ["web"] }
+agentum-plugin-browser = { path = "../../plugins/browser", features = ["web"] }
+agentum-plugin-themes = { path = "../../plugins/themes", features = ["web"] }
 agentum-proto.workspace = true
 agentum-plugin = { workspace = true, features = ["web"] }
 agentum-ui.workspace = true

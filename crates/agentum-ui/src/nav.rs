@@ -17,7 +17,7 @@ type Opener = Box<dyn Fn(&str, Where, BTreeMap<String, String>)>;
 
 thread_local! {
     static OPEN: RefCell<Option<Opener>> = const { RefCell::new(None) };
-    static PARAMS: RwSignal<BTreeMap<String, String>> = RwSignal::new(read());
+    static PARAMS: RwSignal<BTreeMap<String, String>> = crate::global(read());
 }
 
 /// The query string of the current URL.

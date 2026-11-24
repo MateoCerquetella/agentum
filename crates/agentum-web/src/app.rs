@@ -118,7 +118,7 @@ fn Shell() -> impl IntoView {
     let load_settings = move || {
         spawn_local(async move {
             if let Ok(d) = api_get::<Value>("/settings").await {
-                brand.set(d["brand"].as_str().filter(|b| !b.is_empty() && *b != "CERQ").unwrap_or("Agentum").to_string());
+                brand.set(d["brand"].as_str().filter(|b| !b.is_empty() && !b.eq_ignore_ascii_case("cerq")).unwrap_or("Agentum").to_string());
                 theme::adopt_look(&d["ui"]["look"]);
                 ui_prefs.set(d["ui"].clone());
             }

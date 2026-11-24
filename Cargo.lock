@@ -61,6 +61,27 @@ version = "0.1.0-beta.1"
 dependencies = [
  "aes-gcm",
  "agentum-plugin",
+ "agentum-plugin-aura",
+ "agentum-plugin-browser",
+ "agentum-plugin-concurrency",
+ "agentum-plugin-context",
+ "agentum-plugin-drafts",
+ "agentum-plugin-editor",
+ "agentum-plugin-files",
+ "agentum-plugin-genui",
+ "agentum-plugin-git",
+ "agentum-plugin-history",
+ "agentum-plugin-hover-cards",
+ "agentum-plugin-notify",
+ "agentum-plugin-nudger",
+ "agentum-plugin-pr",
+ "agentum-plugin-scheduled-send",
+ "agentum-plugin-side-chat",
+ "agentum-plugin-sticky-prompt",
+ "agentum-plugin-terminal",
+ "agentum-plugin-themes",
+ "agentum-plugin-timestamps",
+ "agentum-plugin-usage",
  "agentum-proto",
  "anyhow",
  "async-imap",
@@ -118,6 +139,384 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentum-plugin-aura"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-browser"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-concurrency"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-context"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-drafts"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-editor"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-files"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-genui"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-git"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-history"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-hover-cards"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-notify"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-nudger"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-pr"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-scheduled-send"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-side-chat"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-sticky-prompt"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-terminal"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-themes"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-timestamps"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-usage"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "agentum-proto"
 version = "0.1.0-beta.1"
 dependencies = [
@@ -146,6 +545,27 @@ name = "agentum-web"
 version = "0.1.0-beta.1"
 dependencies = [
  "agentum-plugin",
+ "agentum-plugin-aura",
+ "agentum-plugin-browser",
+ "agentum-plugin-concurrency",
+ "agentum-plugin-context",
+ "agentum-plugin-drafts",
+ "agentum-plugin-editor",
+ "agentum-plugin-files",
+ "agentum-plugin-genui",
+ "agentum-plugin-git",
+ "agentum-plugin-history",
+ "agentum-plugin-hover-cards",
+ "agentum-plugin-notify",
+ "agentum-plugin-nudger",
+ "agentum-plugin-pr",
+ "agentum-plugin-scheduled-send",
+ "agentum-plugin-side-chat",
+ "agentum-plugin-sticky-prompt",
+ "agentum-plugin-terminal",
+ "agentum-plugin-themes",
+ "agentum-plugin-timestamps",
+ "agentum-plugin-usage",
  "agentum-proto",
  "agentum-ui",
  "console_error_panic_hook",

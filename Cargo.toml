@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "plugins/*"]
 # `cargo build` alone builds the two binaries; the web app is built for wasm32 by scripts/build-web.sh.
 default-members = ["crates/agentum", "crates/agentd"]
 

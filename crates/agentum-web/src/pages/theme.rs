@@ -11,15 +11,19 @@ const KEY: &str = "cerq.theme";
 const MODE_KEY: &str = "cerq.mode";
 
 thread_local! {
-    static LOOK: RwSignal<u32> = RwSignal::new(0);
+    static LOOK: RwSignal<u32> = agentum_ui::global(0);
 }
 /// Bumps on every change of look or mode.
 pub fn look_signal() -> RwSignal<u32> {
     LOOK.with(|l| *l)
 }
 
+/// The built-in looks and the ones plugins add.
+pub fn all_themes() -> Vec<(&'static str, &'static str, &'static str)> {
+    THEMES.iter().copied().chain(crate::plugins::themes()).collect()
+}
 pub fn theme() -> String {
-    store::get(KEY).filter(|v| THEMES.iter().any(|(k, ..)| k == v)).unwrap_or_else(|| "studio".into())
+    store::get(KEY).filter(|v| all_themes().iter().any(|(k, ..)| k == v)).unwrap_or_else(|| "studio".into())
 }
 pub fn mode() -> String {
     store::get(MODE_KEY).filter(|v| MODES.iter().any(|(k, ..)| k == v)).unwrap_or_else(|| "system".into())
@@ -60,7 +64,7 @@ pub fn set_mode(m: &str) {
 /// The look saved on the hub (the last pick on any device): this device takes it.
 pub fn adopt_look(look: &Value) {
     let mut changed = false;
-    if let Some(t) = look["theme"].as_str().filter(|t| THEMES.iter().any(|(k, ..)| k == t)) {
+    if let Some(t) = look["theme"].as_str().filter(|t| all_themes().iter().any(|(k, ..)| k == t)) {
         if store::get(KEY).as_deref() != Some(t) {
             store::set(KEY, t);
             changed = true;

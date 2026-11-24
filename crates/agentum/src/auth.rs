@@ -41,7 +41,7 @@ fn key_ok(h: &HeaderMap, want: Option<&str>) -> bool {
 /// Every /api route except sign-in needs a session (or, for the dashboard's widgets, the widget key).
 pub async fn guard(State(app): State<App>, req: Request, next: Next) -> Response {
     let p = req.uri().path();
-    let open = !p.starts_with("/api/") || matches!(p, "/api/auth/login" | "/api/health" | "/api/auth/passkey/login/start" | "/api/auth/passkey/login/finish" | "/api/bb/enter" | "/api/bb/check");
+    let open = !p.starts_with("/api/") || matches!(p, "/api/auth/login" | "/api/health" | "/api/auth/passkey/login/start" | "/api/auth/passkey/login/finish" | "/api/code/syntax.css");
     let (wk, ik) = (std::env::var("CERQ_WIDGET_KEY").ok(), std::env::var("CERQ_INGEST_KEY").ok());
     if open || widget_key_ok(req.method(), p, req.headers(), wk.as_deref()) || ingest_key_ok(req.method(), p, req.headers(), ik.as_deref()) { return next.run(req).await; }
     if user_of(&app, req.headers()).await.is_some() {

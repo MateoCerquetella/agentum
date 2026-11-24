@@ -112,6 +112,11 @@ pub mod hub {
         async fn on_event(&self, _cx: &Ctx, _thread: &ThreadSummary, _event: &Event) {}
         /// Once at boot: start background work (check `cx.enabled()` as you go).
         fn start(&self, _cx: Ctx) {}
+        /// Before a thread starts a turn (a new thread, or a send): Err(why) refuses it, and the
+        /// person sees why (a concurrency limit, a budget).
+        async fn before_turn(&self, _cx: &Ctx, _thread: &ThreadSummary, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
     }
 }
 
@@ -200,6 +205,11 @@ pub mod web {
         /// Extra CSS for the whole app (themes).
         fn css(&self) -> Option<&'static str> {
             None
+        }
+        /// Looks it adds to Settings → Appearance: (id, name, description). Their CSS (in `css`)
+        /// targets `html[data-theme="<id>"]`.
+        fn themes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
+            &[]
         }
     }
 }

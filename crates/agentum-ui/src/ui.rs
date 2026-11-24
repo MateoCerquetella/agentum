@@ -21,8 +21,8 @@ struct Confirm {
 }
 
 thread_local! {
-    static TOASTS: RwSignal<Vec<Toast>> = RwSignal::new(vec![]);
-    static DIALOG: RwSignal<Option<Confirm>> = RwSignal::new(None);
+    static TOASTS: RwSignal<Vec<Toast>> = crate::global(vec![]);
+    static DIALOG: RwSignal<Option<Confirm>> = crate::global(None);
     static ANSWER: RefCell<Option<futures_channel::Sender>> = const { RefCell::new(None) };
     static NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

@@ -17,6 +17,16 @@ pub mod ws;
 
 pub use icons::Icon;
 
+/// A signal that lives as long as the page (app-wide state kept in a `thread_local!`). A plain
+/// `RwSignal::new` belongs to whatever view is being built and dies with it.
+pub fn global<T: Send + Sync + 'static>(value: T) -> leptos::prelude::RwSignal<T> {
+    use leptos::prelude::*;
+    thread_local! {
+        static ROOT: Owner = Owner::new_root(None);
+    }
+    ROOT.with(|o| o.with(|| RwSignal::new(value)))
+}
+
 /// The common imports of a page or plugin.
 pub mod prelude {
     pub use crate::api::{api, api_delete, api_get, api_post, api_put, rpc, ApiError};
@@ -25,6 +35,7 @@ pub mod prelude {
     pub use crate::nav::{navigate, set_param, use_param, use_params, Where};
     pub use crate::ui::{confirm, toast, toast_bad, Modal};
     pub use crate::ws::{on_ws, subscribe};
+    pub use crate::global;
     pub use leptos::prelude::*;
     pub use leptos::task::spawn_local;
     pub use serde_json::{json, Value};

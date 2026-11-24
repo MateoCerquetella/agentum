@@ -6,13 +6,37 @@ use agentum_proto::api::{EventView, ThreadSummary};
 use agentum_ui::prelude::*;
 
 /// The plugins built into this app (their hub parts are in crates/agentum/src/plugins.rs).
+static ALL: &[&dyn WebPlugin] = &[
+        &agentum_plugin_git::WEB,
+        &agentum_plugin_pr::WEB,
+        &agentum_plugin_files::WEB,
+        &agentum_plugin_editor::WEB,
+        &agentum_plugin_history::WEB,
+        &agentum_plugin_terminal::WEB,
+        &agentum_plugin_hover_cards::WEB,
+        &agentum_plugin_timestamps::WEB,
+        &agentum_plugin_sticky_prompt::WEB,
+        &agentum_plugin_nudger::WEB,
+        &agentum_plugin_scheduled_send::WEB,
+        &agentum_plugin_side_chat::WEB,
+        &agentum_plugin_drafts::WEB,
+        &agentum_plugin_usage::WEB,
+        &agentum_plugin_context::WEB,
+        &agentum_plugin_concurrency::WEB,
+        &agentum_plugin_notify::WEB,
+        &agentum_plugin_aura::WEB,
+        &agentum_plugin_genui::WEB,
+        &agentum_plugin_browser::WEB,
+        &agentum_plugin_themes::WEB,
+];
+
 pub fn all() -> &'static [&'static dyn WebPlugin] {
-    &[]
+    ALL
 }
 
 thread_local! {
     /// Plugin ids turned off (from /api/plugins).
-    static OFF: RwSignal<Vec<String>> = RwSignal::new(vec![]);
+    static OFF: RwSignal<Vec<String>> = agentum_ui::global(vec![]);
     static LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 pub fn off() -> RwSignal<Vec<String>> {
@@ -62,6 +86,10 @@ pub fn overlays() -> impl IntoView {
             {on().into_iter().filter_map(|p| p.overlay()).collect_view()}
         }
     }
+}
+/// Looks added by plugins (id, name, description).
+pub fn themes() -> Vec<(&'static str, &'static str, &'static str)> {
+    all().iter().filter(|p| off().with_untracked(|o| !o.iter().any(|x| x == p.manifest().id))).flat_map(|p| p.themes().iter().copied()).collect()
 }
 pub fn settings_sections() -> Vec<(&'static agentum_plugin::Manifest, Option<AnyView>)> {
     all().iter().map(|p| (p.manifest(), p.settings())).collect()

@@ -6,6 +6,27 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+agentum-plugin-git = { path = "../../plugins/git", features = ["hub"] }
+agentum-plugin-pr = { path = "../../plugins/pr", features = ["hub"] }
+agentum-plugin-files = { path = "../../plugins/files", features = ["hub"] }
+agentum-plugin-editor = { path = "../../plugins/editor", features = ["hub"] }
+agentum-plugin-history = { path = "../../plugins/history", features = ["hub"] }
+agentum-plugin-terminal = { path = "../../plugins/terminal", features = ["hub"] }
+agentum-plugin-hover-cards = { path = "../../plugins/hover-cards", features = ["hub"] }
+agentum-plugin-timestamps = { path = "../../plugins/timestamps", features = ["hub"] }
+agentum-plugin-sticky-prompt = { path = "../../plugins/sticky-prompt", features = ["hub"] }
+agentum-plugin-nudger = { path = "../../plugins/nudger", features = ["hub"] }
+agentum-plugin-scheduled-send = { path = "../../plugins/scheduled-send", features = ["hub"] }
+agentum-plugin-side-chat = { path = "../../plugins/side-chat", features = ["hub"] }
+agentum-plugin-drafts = { path = "../../plugins/drafts", features = ["hub"] }
+agentum-plugin-usage = { path = "../../plugins/usage", features = ["hub"] }
+agentum-plugin-context = { path = "../../plugins/context", features = ["hub"] }
+agentum-plugin-concurrency = { path = "../../plugins/concurrency", features = ["hub"] }
+agentum-plugin-notify = { path = "../../plugins/notify", features = ["hub"] }
+agentum-plugin-aura = { path = "../../plugins/aura", features = ["hub"] }
+agentum-plugin-genui = { path = "../../plugins/genui", features = ["hub"] }
+agentum-plugin-browser = { path = "../../plugins/browser", features = ["hub"] }
+agentum-plugin-themes = { path = "../../plugins/themes", features = ["hub"] }
 agentum-proto.workspace = true
 agentum-plugin = { workspace = true, features = ["hub"] }
 async-trait.workspace = true

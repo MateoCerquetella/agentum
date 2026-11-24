@@ -326,8 +326,8 @@ fn ThreadPage(id: String) -> impl IntoView {
                 <Composer id=id.clone() summary=summary/>
             </div>
             {move || rail.get().and_then(|r| tabs.iter().find(|t| t.id == r).copied()).map(|t| view! {
-                <aside class="code-rail" style="width:min(46%,560px);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0">
-                    <div class="row" style="padding:6px 8px;gap:6px;border-bottom:1px solid var(--line)">
+                <aside class="code-rail" style="width:min(46%,560px);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0">
+                    <div class="row" style="padding:6px 8px;gap:6px;border-bottom:1px solid var(--border)">
                         <Icon name=t.icon/><b class="grow">{t.title}</b>
                         <button class="icon-btn" title="Close" on:click=move |_| { rail.set(None); agentum_ui::store::set("agentum.rail", "") }><Icon name="x"/></button>
                     </div>
@@ -419,7 +419,7 @@ fn Header(id: String, summary: Signal<Option<ThreadSummary>>, rail: RwSignal<Opt
     let p3 = patch.clone();
     let p4 = patch.clone();
     view! {
-        <div class="code-head row" style="gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)">
+        <div class="code-head row" style="gap:8px;padding:8px 12px;border-bottom:1px solid var(--border)">
             {move || summary.get().map(|s| view! { <Icon name=agent_icon(s.agent) title=s.agent.label().to_string()/> })}
             {move || if editing.get() {
                 let p = p2.clone();
@@ -499,7 +499,7 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
     };
     let s1 = send;
     view! {
-        <div class="code-composer col" style="gap:6px;padding:8px 12px;border-top:1px solid var(--line)">
+        <div class="code-composer col" style="gap:6px;padding:8px 12px;border-top:1px solid var(--border)">
             <textarea class="composer-text" rows="3" placeholder=move || if busy() { "Queue a message (⏎), steer the turn (⌥⏎), or stop and send (⌘⇧⏎)" } else { "Reply (⏎ to send, ⇧⏎ for a new line)" }
                 prop:value=text
                 on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set(&key, &v); text.set(v) }

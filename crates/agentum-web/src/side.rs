@@ -167,8 +167,18 @@ fn Row(t: ThreadSummary, on: Signal<bool>) -> impl IntoView {
     });
     let title = if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() };
     let hover = crate::plugins::thread_row(&t);
+    // A hover card after a short wait (plugins draw it).
+    let card = RwSignal::new(false);
+    let timer = StoredValue::new_local(None::<gloo_timers::callback::Timeout>);
+    let t_hover = t.clone();
     view! {
-        <div class=move || format!("dock-row{}{}", if on.get() { " on" } else { "" }, if matches!(m, Mark::Unread | Mark::NeedsYou) { " unread" } else { "" })>
+        <div class=move || format!("dock-row{}{}", if on.get() { " on" } else { "" }, if matches!(m, Mark::Unread | Mark::NeedsYou) { " unread" } else { "" })
+            on:mouseenter=move |_| timer.set_value(Some(gloo_timers::callback::Timeout::new(450, move || card.set(true))))
+            on:mouseleave=move |_| { timer.set_value(None); card.set(false) }>
+            {move || card.get().then(|| {
+                let views = crate::plugins::thread_hover(&t_hover);
+                (!views.is_empty()).then(|| view! { <div class="hover-card">{views}</div> })
+            })}
             <button class="dock-row-hit" title=title.clone() aria-current=move || on.get().then_some("true")
                 on:click=move |e| navigate("code", if e.alt_key() || e.meta_key() { Where::Right } else { Where::Replace }, &[("thread", &id)])/>
             <span class="dock-row-1"><span class="dock-title">{title}</span><span class="dock-time">{ago_ms(t.updated_at)}</span></span>

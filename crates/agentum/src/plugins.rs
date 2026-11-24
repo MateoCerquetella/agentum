@@ -18,8 +18,32 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// Every plugin's hub part (their web parts are listed in crates/agentum-web/src/plugins.rs).
+static ALL: &[&dyn HubPlugin] = &[
+        &agentum_plugin_git::HUB,
+        &agentum_plugin_pr::HUB,
+        &agentum_plugin_files::HUB,
+        &agentum_plugin_editor::HUB,
+        &agentum_plugin_history::HUB,
+        &agentum_plugin_terminal::HUB,
+        &agentum_plugin_hover_cards::HUB,
+        &agentum_plugin_timestamps::HUB,
+        &agentum_plugin_sticky_prompt::HUB,
+        &agentum_plugin_nudger::HUB,
+        &agentum_plugin_scheduled_send::HUB,
+        &agentum_plugin_side_chat::HUB,
+        &agentum_plugin_drafts::HUB,
+        &agentum_plugin_usage::HUB,
+        &agentum_plugin_context::HUB,
+        &agentum_plugin_concurrency::HUB,
+        &agentum_plugin_notify::HUB,
+        &agentum_plugin_aura::HUB,
+        &agentum_plugin_genui::HUB,
+        &agentum_plugin_browser::HUB,
+        &agentum_plugin_themes::HUB,
+];
+
 pub fn all() -> &'static [&'static dyn HubPlugin] {
-    &[]
+    ALL
 }
 
 fn find(id: &str) -> Option<&'static dyn HubPlugin> {
@@ -130,6 +154,16 @@ pub fn on_event(app: &App, t: &ThreadSummary, e: &Event) {
             }
         }
     });
+}
+
+/// Every plugin that is on may refuse a turn (Err: why).
+pub async fn before_turn(app: &App, t: &ThreadSummary, text: &str) -> Result<(), String> {
+    for p in all() {
+        if enabled(app, p.manifest()).await {
+            p.before_turn(&ctx(app, p.manifest()), t, text).await?;
+        }
+    }
+    Ok(())
 }
 
 pub fn routes() -> Router<App> {
