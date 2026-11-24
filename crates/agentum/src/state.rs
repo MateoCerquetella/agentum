@@ -10,11 +10,12 @@ pub struct Config {
 }
 impl Config {
     pub fn from_env() -> Config {
-        let e = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        // AGENTUM_* first; CERQ_* still work (an install from before the rename).
+        let e = |k: &str, d: &str| std::env::var(format!("AGENTUM_{k}")).or_else(|_| std::env::var(format!("CERQ_{k}"))).unwrap_or_else(|_| d.to_string());
         Config {
-            data_dir: e("CERQ_DATA", "./data"),
-            bind: e("CERQ_BIND", "127.0.0.1:7100"),
-            searxng: e("CERQ_SEARXNG", ""),
+            data_dir: e("DATA", "./data"),
+            bind: e("BIND", "127.0.0.1:7100"),
+            searxng: e("SEARXNG", ""),
         }
     }
 }
@@ -31,6 +32,8 @@ pub struct App {
     pub gate: Arc<crate::llm::Gate>,
     /// Saved CERQ_* settings (see settings.rs), read with app.setting(KEY).
     pub settings: Arc<std::sync::RwLock<std::collections::HashMap<String, String>>>,
+    /// The Code section: connected machines, thread summaries, live fan-out.
+    pub code: Arc<crate::code::Hub>,
 }
 impl App {
     pub fn emit(&self, v: serde_json::Value) { let _ = self.events.send(v); }

@@ -11,6 +11,7 @@ mod mail;
 mod notes;
 mod floatnote;
 mod passkey;
+mod plugins;
 mod push;
 mod secrets;
 mod settings;
@@ -35,7 +36,10 @@ async fn main() -> anyhow::Result<()> {
     let cfg = Config::from_env();
     std::fs::create_dir_all(&cfg.data_dir)?;
     secrets::init(&cfg.data_dir)?;
-    let db = util::Db::open(&format!("{}/cerq.db", cfg.data_dir))?;
+    // agentum.db; a CERQ install keeps its cerq.db.
+    let old = format!("{}/cerq.db", cfg.data_dir);
+    let path = if std::path::Path::new(&old).exists() && !std::path::Path::new(&format!("{}/agentum.db", cfg.data_dir)).exists() { old } else { format!("{}/agentum.db", cfg.data_dir) };
+    let db = util::Db::open(&path)?;
     db.call(|c| db::migrate(c)).await?;
     let http = reqwest::Client::builder()
         .tls_backend_preconfigured(rustls_config())
@@ -46,9 +50,11 @@ async fn main() -> anyhow::Result<()> {
         .pool_idle_timeout(std::time::Duration::from_secs(4))
         .build()?;
     let (events, _) = tokio::sync::broadcast::channel(256);
-    let app = App { cfg: Arc::new(cfg), db, http, cache: Default::default(), events, gate: Default::default(), settings: Default::default() };
+    let app = App { cfg: Arc::new(cfg), db, http, cache: Default::default(), events, gate: Default::default(), settings: Default::default(), code: Default::default() };
 
     settings::load(&app).await?;
+    code::start(&app).await?;
+    plugins::start(&app);
 
     // The background jobs start one after another, not all at once: Mercury (a Raspberry Pi) has reset
     // within a minute of CERQ starting, when mail, calendar, the brief and the journal all began together.
@@ -92,7 +98,9 @@ async fn main() -> anyhow::Result<()> {
         .merge(chat::routes())
         .merge(creatures::routes())
         .merge(voice::routes())
-        .merge(passkey::routes());
+        .merge(passkey::routes())
+        .merge(code::routes())
+        .merge(plugins::routes());
 
     let router = api
         .fallback(web::static_handler)
@@ -101,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(app.clone());
 
     let bind = app.cfg.bind.clone();
-    tracing::info!("CERQ listening on {bind}");
+    tracing::info!("Agentum listening on {bind}");
     let l = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(l, router).with_graceful_shutdown(async { let _ = tokio::signal::ctrl_c().await; }).await?;
     Ok(())
