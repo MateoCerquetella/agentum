@@ -1,0 +1,13 @@
+/* Aura behind the Dispatcher's page (Aura.tsx). The page's own surface is CERQ's: its background
+   colour, so the wallpaper meets the theme, and a reading column under the conversation. */
+.aura-host { position: absolute; inset: 0; z-index: 0; pointer-events: none; isolation: isolate; overflow: hidden; }
+html:not([data-theme="studio"]) .aura-host { --background: var(--bg); --aura-panel: var(--sidebar); }
+html[data-theme="studio"] .aura-host { --aura-panel: var(--sidebar, var(--background)); }
+.chat-main.aura-on { position: relative; }
+.chat-main.aura-on > :not(.aura-host) { position: relative; z-index: 1; }
+.chat-main.aura-on .code-tabs { background: color-mix(in srgb, var(--aura-bg) 72%, transparent); backdrop-filter: blur(12px) saturate(.9); }
+.chat-main.aura-on .chat-scroll { --aura-col: min(784px, 100%);
+  background: linear-gradient(to right, transparent calc(50% - var(--aura-col) / 2), color-mix(in srgb, var(--aura-bg) 90%, transparent) calc(50% - var(--aura-col) / 2), color-mix(in srgb, var(--aura-bg) 90%, transparent) calc(50% + var(--aura-col) / 2), transparent calc(50% + var(--aura-col) / 2)); }
+.chat-main.aura-on .code-new { background: color-mix(in srgb, var(--aura-bg) 78%, transparent); backdrop-filter: blur(14px) saturate(.9); border-radius: 1.5rem; padding: 24px; }
+.chat-main.aura-on { --aura-bg: var(--bg); }
+html[data-theme="studio"] .chat-main.aura-on { --aura-bg: var(--background); }

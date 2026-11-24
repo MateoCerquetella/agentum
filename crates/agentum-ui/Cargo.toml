@@ -1,0 +1,19 @@
+[package]
+name = "agentum-ui"
+description = "Agentum's web kit (Leptos): icons, the API and WebSocket clients, and shared components, for the app and plugins' web parts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agentum-proto.workspace = true
+leptos.workspace = true
+leptos_router.workspace = true
+gloo-net.workspace = true
+gloo-timers.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlInputElement", "HtmlTextAreaElement", "Storage", "Location", "History", "KeyboardEvent", "MouseEvent", "Event", "EventTarget", "Navigator", "Clipboard", "DomRect", "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition", "MediaQueryList", "Notification", "NotificationPermission", "Performance", "console"] }

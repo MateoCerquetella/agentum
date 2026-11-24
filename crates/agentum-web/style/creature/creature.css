@@ -1,0 +1,84 @@
+/* The bots' creatures (Creature.tsx). The picture is drawn a little past its box: hats and ears need the room. */
+.creature { position: relative; display: inline-block; flex: none; }
+.creature canvas { position: absolute; top: -12%; left: -12%; width: 124%; height: 124%; max-width: none; pointer-events: none; opacity: 0; transition: opacity .3s; }
+.creature canvas.on { opacity: 1; }
+.creature img { position: absolute; inset: 0; width: 100%; height: 100%; }
+.creature img.still { inset: -12%; width: 124%; height: 124%; max-width: none; pointer-events: none; }
+.creature.pettable { cursor: grab; user-select: none; }
+.creature.pettable:active { cursor: grabbing; }
+.pet-heart { position: absolute; width: 10%; min-width: 14px; pointer-events: none; filter: drop-shadow(0 1px 0 #00000038); animation: pet-heart 1.1s steps(14, end) forwards; }
+@keyframes pet-heart {
+  from { opacity: 0; transform: translate(-50%, -60%) scale(.4); }
+  20% { opacity: 1; transform: translate(calc(-50% + var(--drift) * 12%), -130%) scale(1); }
+  65% { opacity: 1; }
+  to { opacity: 0; transform: translate(calc(-50% + var(--drift) * 60%), -420%) scale(.85); }
+}
+@media (prefers-reduced-motion: reduce) { .pet-heart { animation-duration: .01s; } }
+
+/* The sidebar's Bots list: a bot that isn't built yet is an egg, and can't be opened. */
+.bot-who { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.nav-label { padding: 10px 8px 2px; font-size: 11px; color: var(--subdue); }
+.nav.bot { padding: 5px 8px; }
+.nav.bot:disabled { cursor: default; opacity: .75; }
+.nav.bot:disabled:hover { background: transparent; color: var(--base); }
+.sidebar.collapsed .nav.bot { padding: 5px 2px; justify-content: center; }
+
+/* The Dispatcher's laptop (Laptop.tsx): mitts tap in turn, the screen's light flickers on its face. */
+.laptop { position: absolute; inset: 0; pointer-events: none; }
+.laptop-glow { position: absolute; top: 26%; left: 50%; width: 58%; height: 36%; transform: translateX(-50%); border-radius: 50%; background: radial-gradient(closest-side, oklch(0.86 0.11 220 / 0.4), transparent); mix-blend-mode: screen; }
+.laptop svg { position: absolute; bottom: 4%; left: 50%; width: 62%; transform: translateX(-50%); overflow: visible; filter: drop-shadow(0 2px 0 rgb(0 0 0 / 0.3)); }
+@keyframes laptop-tap { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.5px); } }
+@keyframes laptop-glow { 0%, 100% { opacity: 0.9; } 40% { opacity: 0.6; } 70% { opacity: 1; } }
+@media (prefers-reduced-motion: no-preference) {
+  .laptop-hand-l { animation: laptop-tap 0.26s steps(2) infinite; }
+  .laptop-hand-r { animation: laptop-tap 0.26s steps(2) infinite 0.13s; }
+  .laptop-glow { animation: laptop-glow 1.7s ease-in-out infinite; }
+}
+
+/* A speech bubble over a creature: what it is doing (yellow), that it needs you (ink), or calm. */
+.speech-bubble { position: absolute; top: -10px; left: 50%; z-index: 3; width: max-content; max-width: min(16rem, 90vw); white-space: nowrap; padding: 6px 12px; border-radius: 16px; font-size: 12px; font-weight: 500; line-height: 16px; letter-spacing: normal; pointer-events: none; box-shadow: 0 6px 18px -6px rgb(0 0 0 / .35); transform: translate(-50%, 0); animation: bubble-in 0.3s cubic-bezier(.2,.9,.3,1.2) both; }
+.speech-bubble::after { content: ''; position: absolute; bottom: -4px; left: 50%; width: 8px; height: 8px; transform: translateX(-50%) rotate(45deg); background: inherit; }
+.speech-bubble > span { display: block; overflow: hidden; text-overflow: ellipsis; }
+.speech-bubble.busy { background: oklch(0.82 0.16 85); color: #1b2029; }
+.speech-bubble.ask { background: var(--hi); color: var(--bg); }
+.speech-bubble.calm { background: var(--widget); color: var(--base); outline: 1px solid var(--border); }
+html[data-theme="studio"] .speech-bubble.ask { background: var(--foreground); color: var(--background); }
+html[data-theme="studio"] .speech-bubble.calm { background: var(--popover); color: var(--muted-foreground); outline-color: var(--hairline); }
+@keyframes bubble-in { from { transform: translate(-50%, 6px) scale(0.85); opacity: 0; } to { transform: translate(-50%, 0) scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .speech-bubble { animation: none; } }
+
+/* The party: pixel confetti falls and spins. */
+@keyframes confetti-fall { from { transform: translate3d(0, -10vh, 0) rotate(0); } to { transform: translate3d(var(--drift), 110vh, 0) rotate(var(--spin)); } }
+.confetti { position: fixed; top: 0; width: 8px; height: 8px; z-index: 90; pointer-events: none; animation: confetti-fall var(--fall) cubic-bezier(.25,.6,.45,1) forwards; }
+
+
+/* The hatch stage (Hatch.tsx): the egg drops in and bumps down; shell flies when it breaks; light gathers. */
+.hatch-backdrop { position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; background: rgb(0 0 0 / .65); backdrop-filter: blur(4px); animation: hatch-fade .3s ease-out; }
+@keyframes hatch-fade { from { opacity: 0; } }
+.hatch-box { position: relative; display: flex; flex-direction: column; align-items: center; width: min(30rem, 92vw); text-align: center; color: #fff; }
+.hatch-x { position: absolute; top: -8px; right: 0; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: rgb(255 255 255 / .6); box-shadow: none; }
+.hatch-x:hover { background: rgb(255 255 255 / .1); color: #fff; }
+.hatch-kicker { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: rgb(255 255 255 / .6); }
+.hatch-title { margin: 4px 0 0; font-size: 30px; font-weight: 600; letter-spacing: -.02em; animation: hatch-fade .5s ease-out; }
+.hatch-stage { position: relative; width: 300px; height: 300px; margin: 12px 0; }
+.hatch-orb { position: absolute; inset: 0; }
+.hatch-orb.tappable { cursor: pointer; user-select: none; }
+.hatch-orb canvas { position: absolute; top: -12%; left: -12%; width: 124%; height: 124%; max-width: none; pointer-events: none; }
+.hatch-glow { position: absolute; inset: 8%; border-radius: 50%; pointer-events: none; opacity: 0; transform: scale(.6); transition: opacity 1.2s ease, transform 1.4s cubic-bezier(.2,.8,.2,1); }
+.hatch-glow.on { opacity: 1; transform: scale(1.15); }
+@keyframes hatch-drop {
+  0% { transform: translateY(-75vh); animation-timing-function: cubic-bezier(.55, 0, 1, .45); }
+  72% { transform: translateY(0); animation-timing-function: cubic-bezier(0, .55, .45, 1); }
+  84% { transform: translateY(-5%); animation-timing-function: cubic-bezier(.55, 0, 1, .45); }
+  100% { transform: translateY(0); }
+}
+.hatch-drop { animation: hatch-drop .95s both; }
+@keyframes hatch-shard { from { transform: translate(-50%, -50%) rotate(0); opacity: 1; } to { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) + 60px)) rotate(var(--spin)); opacity: 0; } }
+.hatch-shard { position: absolute; left: 50%; top: 56%; border-radius: 2px; pointer-events: none; animation: hatch-shard 1.2s cubic-bezier(.15, .7, .35, 1) both; }
+.hatch-help { margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 14px; color: rgb(255 255 255 / .8); }
+.hatch-help p { margin: 0; max-width: 24rem; }
+.hatch-help > span { display: flex; gap: 6px; }
+.hatch-help i { width: 8px; height: 8px; border-radius: 50%; background: rgb(255 255 255 / .25); transition: background .3s; }
+.hatch-help i.on { background: #fff; }
+.hatch-born { animation: hatch-fade .5s ease-out; }
+@media (prefers-reduced-motion: reduce) { .hatch-drop, .hatch-shard { animation: none; } }

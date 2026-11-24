@@ -1,0 +1,4 @@
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"]

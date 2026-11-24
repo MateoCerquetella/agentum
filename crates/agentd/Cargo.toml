@@ -1,0 +1,14 @@
+[package]
+name = "agentd"
+description = "Agentum's machine daemon: runs coding agents (Claude Code, Codex, OpenCode), terminals, files and git on one machine, for the hub."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agentum-proto.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
