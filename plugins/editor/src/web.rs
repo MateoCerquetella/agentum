@@ -211,7 +211,7 @@ fn EditorTab(cx: ThreadCx) -> impl IntoView {
     }
     let docs = {
         let id = id.clone();
-        move || opened().with(|o| o.get(&id).map(|t| t.docs.clone()).unwrap_or_default())
+        Signal::derive(move || opened().with(|o| o.get(&id).map(|t| t.docs.clone()).unwrap_or_default()))
     };
     let active_path = {
         let id = id.clone();
@@ -254,17 +254,17 @@ fn EditorTab(cx: ThreadCx) -> impl IntoView {
     let rail = cx.rail;
     view! {
         <div class="ed">
-            <Show when={ let docs = docs.clone(); move || !docs().is_empty() }>
+            <Show when=move || docs.with(|d| !d.is_empty())>
                 <div class="ed-tabs">
                     {
-                        let docs = docs.clone();
-                        move || docs().into_iter().map(|d| {
+                        move || docs.get().into_iter().map(|d| {
                             let p = d.path.clone();
                             let p2 = p.clone();
                             let p3 = p.clone();
+                            let p4 = p.clone();
                             let d2 = d.clone();
                             view! {
-                                <div class="ed-tab" class:on=move || active_path.get().as_deref() == Some(p.as_str()) title=p.clone() on:click=move |_| activate.run(p2.clone())>
+                                <div class="ed-tab" class:on=move || active_path.get().as_deref() == Some(p4.as_str()) title=p.clone() on:click=move |_| activate.run(p2.clone())>
                                     <span class="truncate">{base(&d.path).to_string()}</span>
                                     <span class="ed-dot" class:dirty=move || d2.dirty()></span>
                                     <button class="ed-x" title="Close" on:click=move |e| { e.stop_propagation(); close.run(p3.clone()) }><Icon name="x" size=11/></button>
@@ -276,7 +276,7 @@ fn EditorTab(cx: ThreadCx) -> impl IntoView {
             </Show>
             {move || {
                 let path = active_path.get();
-                let doc = path.and_then(|p| docs().into_iter().find(|d| d.path == p));
+                let doc = path.and_then(|p| docs.get().into_iter().find(|d| d.path == p));
                 match doc {
                     Some(d) => view! { <Editor doc=d cwd=cwd/> }.into_any(),
                     None => view! {
@@ -303,7 +303,7 @@ fn insert(ta: &web_sys::HtmlTextAreaElement, s: &str) {
     if !ok {
         let start = ta.selection_start().ok().flatten().unwrap_or(0);
         let end = ta.selection_end().ok().flatten().unwrap_or(start);
-        let _ = ta.set_range_text_with_start_and_end_and_selection_mode(s, start, end, web_sys::SelectionMode::End);
+        let _ = ta.set_range_text_with_start_and_end_and_mode(s, start, end, "end");
         let _ = ta.dispatch_event(&web_sys::Event::new("input").unwrap());
     }
 }

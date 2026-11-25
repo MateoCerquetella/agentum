@@ -265,6 +265,7 @@ name = "agentum-plugin-files"
 version = "0.1.0-beta.1"
 dependencies = [
  "agentum-plugin",
+ "agentum-plugin-editor",
  "agentum-proto",
  "agentum-ui",
  "async-trait",
