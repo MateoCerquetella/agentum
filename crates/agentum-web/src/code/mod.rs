@@ -674,6 +674,24 @@ fn ThreadPage(id: String) -> impl IntoView {
             }
             let _ = p.actions.try_set(a);
         });
+        // The header's + launcher: each side-panel tab (a click opens it in the panel, a drag beside).
+        {
+            let id = id.clone();
+            let _ = p.tools.try_set(tabs.iter().map(|t| {
+                let tid = t.id;
+                PaneTool {
+                    label: t.title.to_string(),
+                    icon: t.icon,
+                    page: "panel",
+                    params: vec![("tab".into(), tid.into()), ("thread".into(), id.clone())],
+                    open: Some(Callback::new(move |_| {
+                        agentum_ui::store::set("agentum.rail", tid);
+                        agentum_ui::store::set("agentum.rail.last", tid);
+                        rail.set(Some(tid.to_string()));
+                    })),
+                }
+            }).collect());
+        }
         let pinned = Signal::derive(move || summary.with(|s| s.as_ref().is_some_and(|s| s.pinned)));
         Effect::new(move |_| {
             let pin = pinned.get();

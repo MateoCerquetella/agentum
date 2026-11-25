@@ -52,10 +52,24 @@ pub struct PaneCtx {
     pub actions: RwSignal<Vec<PaneAction>>,
     /// The header's ⋯ menu.
     pub menu: RwSignal<Vec<PaneAction>>,
+    /// What the header's + launcher offers for this page (a thread's Files, Git, Terminal…),
+    /// besides the app's pages.
+    pub tools: RwSignal<Vec<PaneTool>>,
+}
+
+/// A tool in the pane header's + launcher: clicked, it opens here (`open`) or beside; dragged
+/// onto a half, it opens there as `page` with `params`.
+#[derive(Clone)]
+pub struct PaneTool {
+    pub label: String,
+    pub icon: &'static str,
+    pub page: &'static str,
+    pub params: Vec<(String, String)>,
+    pub open: Option<Callback<()>>,
 }
 impl PaneCtx {
     pub fn new(right: bool) -> Self {
-        PaneCtx { right, title: RwSignal::new(None), sub: RwSignal::new(None), actions: RwSignal::new(vec![]), menu: RwSignal::new(vec![]) }
+        PaneCtx { right, title: RwSignal::new(None), sub: RwSignal::new(None), actions: RwSignal::new(vec![]), menu: RwSignal::new(vec![]), tools: RwSignal::new(vec![]) }
     }
     /// Safe after the pane is gone (a page's cleanup can run after its pane's).
     pub fn clear(&self) {
@@ -63,6 +77,7 @@ impl PaneCtx {
         let _ = self.sub.try_set(None);
         let _ = self.actions.try_set(vec![]);
         let _ = self.menu.try_set(vec![]);
+        let _ = self.tools.try_set(vec![]);
     }
 }
 

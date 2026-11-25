@@ -5,7 +5,7 @@
 //! under their thread. Drag a card to a half to open it there; ⌘-click opens it on the right.
 use crate::code::store::{self, overview};
 use crate::code::{agent_icon, patch_thread, tomorrow_9};
-use agentum_proto::api::{PatchThread, SearchHit, ThreadSummary};
+use agentum_proto::api::{PatchThread, ThreadSummary};
 use agentum_proto::{Attention, ThreadState};
 use agentum_ui::nav::Where;
 use agentum_ui::prelude::*;
@@ -296,29 +296,10 @@ pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
     let ov = overview();
     let (l_thread, r_thread) = (use_param("thread"), use_param("r_thread"));
     let current = Signal::derive(move || l_thread.get().filter(|t| !t.is_empty()).or_else(|| r_thread.get()));
-    let find = RwSignal::new(None::<String>);
-    let hits = RwSignal::new(Vec::<SearchHit>::new());
     // Minute clock: snoozes wake on time.
     let now = RwSignal::new(now_ms());
     let tick = StoredValue::new_local(Some(gloo_timers::callback::Interval::new(60_000, move || now.set(now_ms()))));
     on_cleanup(move || tick.set_value(None));
-    Effect::new(move |_| {
-        let q = find.get().unwrap_or_default().trim().to_string();
-        if q.len() < 2 {
-            hits.set(vec![]);
-            return;
-        }
-        spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(150).await;
-            if find.get_untracked().unwrap_or_default().trim() != q {
-                return;
-            }
-            let enc = js_sys::encode_uri_component(&q);
-            if let Ok(h) = api_get::<Vec<SearchHit>>(&format!("/code/search?q={enc}")).await {
-                hits.set(h.into_iter().filter(|h| h.seq > 0).collect());
-            }
-        });
-    });
     // ⌘1–9 open the visible threads in order; ⌘⇧[ / ] the previous and next.
     let visible = Memo::new(move |_| ov.with(|o| o.as_ref().map(|o| order(&o.threads, now.get())).unwrap_or_default()));
     agentum_ui::on_window(leptos::ev::keydown, move |e| {
@@ -350,8 +331,7 @@ pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
     let on_r = Signal::derive(move || r_thread.get());
     let dock_on = move || crate::plugins::is_on("dockside");
     let list = move || {
-        let q = find.get().unwrap_or_default();
-        let searching = !q.trim().is_empty();
+        let (q, searching) = (String::new(), false);
         ov.with(|o| {
             let Some(o) = o else { return view! { <p class="dk-empty">"Connecting to your machines…"</p> }.into_any() };
             if !dock_on() {
@@ -386,44 +366,13 @@ pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
                         <Icon name="plus-circle" size=16/><span>"New thread"</span>
                     </button>
                     <span class="dk-machines" title="Machines online">{move || ov.with(|o| o.as_ref().map(|o| format!("{}/{}", o.machines.iter().filter(|m| m.online).count(), o.machines.len())).unwrap_or_default())}</span>
-                    <button class=move || if find.get().is_some() { "icon-btn on" } else { "icon-btn" } title="Find a thread, or what was said"
-                        on:click=move |_| find.update(|f| *f = if f.is_some() { None } else { Some(String::new()) })><Icon name="search" size=15/></button>
-                </div>
-                <Show when=move || find.get().is_some()>
-                    <input class="dock-find" autofocus placeholder="Find a thread or what was said" prop:value=move || find.get().unwrap_or_default()
-                        on:input=move |e| find.set(Some(event_target_value(&e))) on:keydown=move |e| if e.key() == "Escape" { find.set(None) }/>
-                </Show>
-                // Dockside's top list: the plugins' pages (Usage, Browser…), as BB shows them.
-                <div class="dk-nav">
-                    {move || crate::plugins::pages().into_iter().map(|d| {
-                        let id = d.id;
-                        view! {
-                            <button class="dk-navrow" draggable="true" title=format!("{} · drag it to a side to open it there", d.title)
-                                on:dragstart=move |e| agentum_ui::dnd::start(&e, id, &[])
-                                on:click=move |e| navigate(id, if e.meta_key() || e.ctrl_key() { Where::Right } else { Where::Replace }, &[])>
-                                <Icon name=d.icon size=15/><span>{d.title}</span>
-                            </button>
-                        }
-                    }).collect_view()}
+                    <button class="icon-btn" title="Go to… a thread, what was said, a page (⌘K)" on:click=move |_| crate::palette::shown().set(true)><Icon name="search" size=15/></button>
                 </div>
                 <div class="dk-head"><Icon name="folder" size=13/><span>{move || if dock_on() { "Projects" } else { "Threads" }}</span>
                     <span class="dk-count">{move || ov.with(|o| o.as_ref().map(|o| group(&o.threads, now.get(), "").projects.len()).unwrap_or(0))}</span>
                 </div>
                 <div class="dk-scroll">
                     {list}
-                    {move || {
-                        let h = hits.get();
-                        (!h.is_empty()).then(|| view! {
-                            <div class="dk-shelf-h static"><span>"Said in threads"</span><span class="dk-rule"/></div>
-                            <ul class="dk-list">{h.into_iter().take(20).map(|hit| { let id = hit.thread.clone(); let seq = hit.seq.to_string(); view! {
-                                <li class="dk-slim hit">
-                                    <button class="dk-hit" on:click=move |_| navigate("code", Where::Replace, &[("thread", &id), ("at", &seq)])/>
-                                    <span class="dk-title">{hit.title.clone()}</span>
-                                    <span class="dk-excerpt" inner_html=hit.excerpt.clone()/>
-                                </li>
-                            }}).collect_view()}</ul>
-                        })
-                    }}
                 </div>
             </div>
         </Show>

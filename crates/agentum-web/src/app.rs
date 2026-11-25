@@ -59,7 +59,7 @@ fn Shell() -> impl IntoView {
     let hidden = RwSignal::new(store::flag("cerq.sidebar.hidden"));
     let side_w = RwSignal::new(store::get("cerq.sidebar.w").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0));
     let mobile_open = RwSignal::new(false);
-    let palette = RwSignal::new(false);
+    let palette = crate::palette::shown();
     let side = RwSignal::new(side_of(&left.get_untracked()).unwrap_or(if store::get("cerq.side").as_deref() == Some("work") { Side::Work } else { Side::Life }));
     let brand = RwSignal::new("Agentum".to_string());
     let ui_prefs = RwSignal::new(Value::Null);
@@ -255,6 +255,7 @@ fn Shell() -> impl IntoView {
                     {move || ctx.sub.get().map(|s| view! { <span class="pane-sub truncate">{s}</span> })}
                     <span class="grow"/>
                     <div id=if p == Pane::Left { "pane-tools-left" } else { "pane-tools-right" } class="row"/>
+                    <crate::launcher::Launcher ctx=ctx/>
                     {move || ctx.actions.get().into_iter().map(|a| {
                         let run = a.run;
                         let on = a.on;
@@ -348,10 +349,13 @@ fn Shell() -> impl IntoView {
                         open(&last, Where::Replace, BTreeMap::new());
                     }
                 })/>
-                <button class="nav nav-search" title="Go to… (⌘K)" on:click=move |_| palette.set(true)>
-                    <Icon name="search"/>
-                    <Show when=move || !collapsed.get()><span>"Go to…"</span><span class="kbd" style="margin-left:auto">"⌘K"</span></Show>
-                </button>
+                // Coding has it beside New thread (Dockside's top row).
+                <Show when=move || side.get() == Side::Life>
+                    <button class="nav nav-search" title="Go to… (⌘K)" on:click=move |_| palette.set(true)>
+                        <Icon name="search"/>
+                        <Show when=move || !collapsed.get()><span>"Go to…"</span><span class="kbd" style="margin-left:auto">"⌘K"</span></Show>
+                    </button>
+                </Show>
                 {move || match side.get() {
                     Side::Life => view! { <crate::side::Personal left=left right=right collapsed=collapsed counts=counts prefs=ui_prefs/> }.into_any(),
                     Side::Work => view! { <crate::dockside::Dockside collapsed=collapsed/> }.into_any(),

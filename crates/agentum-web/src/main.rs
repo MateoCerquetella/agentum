@@ -2,6 +2,7 @@
 mod app;
 mod code;
 mod dockside;
+mod launcher;
 mod pages;
 mod palette;
 mod plugins;

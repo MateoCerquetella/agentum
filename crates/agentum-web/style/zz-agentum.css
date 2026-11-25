@@ -216,3 +216,10 @@ a.dk-hit { display: block; }
 /* New thread: the checkout's branch (not a menu) and the worktree chip's "Branch from: main". */
 .pk-static, .pk-static:hover { cursor: default; background: transparent; color: var(--subdue); }
 .pk-chip > b { font-weight: 600; color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
+
+/* The pane header's + launcher (the user's BB Action Topbar): tools and pages, drag one to a side. */
+.launcher .launcher-pop { left: auto; right: 0; width: 300px; }
+.launcher .launcher-pop.away { opacity: 0; pointer-events: none; }
+.launcher .pk-item[draggable="true"] { cursor: grab; }
+.launcher .pk-item .pk-sub { margin-left: auto; font-size: 11px; opacity: 0; }
+.launcher .pk-item.sel .pk-sub, .launcher .pk-item:hover .pk-sub { opacity: 1; }
