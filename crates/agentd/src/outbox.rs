@@ -7,7 +7,7 @@ use crate::db::Db;
 use crate::util::now_ms;
 use agentum_proto::{Event, EventKind, ThreadId};
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
 #[derive(Default)]
@@ -24,14 +24,17 @@ struct Log {
 
 pub struct Outbox {
     logs: Mutex<HashMap<ThreadId, Log>>,
+    /// Up to which seq each thread's events are in the database. Only those are sent: a hub
+    /// never sees an event that agentd could forget (and renumber) after a crash.
+    persisted: Arc<Mutex<HashMap<ThreadId, u64>>>,
     /// Woken when there is something new to send.
-    pub notify: Notify,
+    pub notify: Arc<Notify>,
     db: Db,
 }
 
 impl Outbox {
     pub fn new(db: Db) -> Outbox {
-        Outbox { logs: Mutex::new(HashMap::new()), notify: Notify::new(), db }
+        Outbox { logs: Mutex::new(HashMap::new()), persisted: Arc::new(Mutex::new(HashMap::new())), notify: Arc::new(Notify::new()), db }
     }
 
     /// Restore a thread's log from the database (at startup).
@@ -39,6 +42,7 @@ impl Outbox {
         let mut logs = self.logs.lock().unwrap();
         let last = events.last().map(|e| e.seq).unwrap_or(0).max(last);
         logs.insert(thread.to_string(), Log { events: events.into(), last, acked, sent: acked });
+        self.persisted.lock().unwrap().insert(thread.to_string(), last);
     }
 
     /// Make sure the thread has a log; numbering continues after `last_seq` (the hub's) or our own.
@@ -51,6 +55,9 @@ impl Outbox {
             log.acked = log.acked.max(last_seq);
             log.sent = log.sent.max(last_seq);
             log.events.retain(|e| e.seq > last_seq);
+            let mut p = self.persisted.lock().unwrap();
+            let e = p.entry(thread.to_string()).or_insert(0);
+            *e = (*e).max(last_seq);
         }
     }
 
@@ -64,8 +71,14 @@ impl Outbox {
             log.events.push_back(ev.clone());
             ev
         };
-        self.db.insert_event(thread, &ev);
-        self.notify.notify_one();
+        let (persisted, notify, id, seq) = (self.persisted.clone(), self.notify.clone(), thread.to_string(), ev.seq);
+        self.db.insert_event(thread, &ev, move || {
+            let mut p = persisted.lock().unwrap();
+            let e = p.entry(id).or_insert(0);
+            *e = (*e).max(seq);
+            drop(p);
+            notify.notify_one();
+        });
         ev.seq
     }
 
@@ -89,12 +102,14 @@ impl Outbox {
     /// Events not yet sent on this connection, per thread, in order (at most `max` per thread).
     pub fn take_unsent(&self, max: usize) -> Vec<(ThreadId, Vec<Event>)> {
         let mut logs = self.logs.lock().unwrap();
+        let persisted = self.persisted.lock().unwrap();
         let mut out = Vec::new();
         for (id, log) in logs.iter_mut() {
-            if log.sent >= log.last {
+            let upto = persisted.get(id).copied().unwrap_or(0).min(log.last);
+            if log.sent >= upto {
                 continue;
             }
-            let batch: Vec<Event> = log.events.iter().filter(|e| e.seq > log.sent).take(max).cloned().collect();
+            let batch: Vec<Event> = log.events.iter().filter(|e| e.seq > log.sent && e.seq <= upto).take(max).cloned().collect();
             if let Some(last) = batch.last() {
                 log.sent = last.seq;
                 out.push((id.clone(), batch));
@@ -105,7 +120,8 @@ impl Outbox {
 
     /// Is anything still waiting to be sent?
     pub fn has_unsent(&self) -> bool {
-        self.logs.lock().unwrap().values().any(|l| l.sent < l.last)
+        let persisted = self.persisted.lock().unwrap();
+        self.logs.lock().unwrap().iter().any(|(id, l)| l.sent < persisted.get(id).copied().unwrap_or(0).min(l.last))
     }
 
     /// A new connection: everything unacked must go out again.
@@ -146,17 +162,25 @@ mod tests {
         EventKind::Notice { text: t.into() }
     }
 
+    /// Wait until the database thread has committed what was pushed.
+    fn settle(o: &Outbox) {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        rt.block_on(o.db.flush());
+    }
+
     #[test]
     fn numbering_ack_and_rewind() {
         let o = outbox();
         o.ensure("t", 0);
         assert_eq!(o.push("t", n("a")), 1);
         assert_eq!(o.push("t", n("b")), 2);
+        settle(&o);
         let b = o.take_unsent(100);
         assert_eq!(b[0].1.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2]);
         assert!(o.take_unsent(100).is_empty());
         o.push("t", n("c"));
         o.ack("t", 1);
+        settle(&o);
         // Reconnect: 2 and 3 go again, in order.
         o.rewind();
         let b = o.take_unsent(100);
@@ -180,6 +204,7 @@ mod tests {
         for i in 0..5 {
             o.push("t", n(&i.to_string()));
         }
+        settle(&o);
         assert_eq!(o.take_unsent(2)[0].1.len(), 2);
         assert_eq!(o.take_unsent(2)[0].1[0].seq, 3);
         assert!(o.has_unsent());

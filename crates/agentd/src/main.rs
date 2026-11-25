@@ -52,7 +52,7 @@ fn run() -> anyhow::Result<()> {
         Some("error") => tracing::Level::ERROR,
         _ => tracing::Level::INFO,
     };
-    tracing_subscriber::fmt().with_max_level(level).with_target(false).init();
+    tracing_subscriber::fmt().with_max_level(level).with_target(false).with_writer(std::io::stderr).init();
     let cfg = Config::load()?;
     // A small runtime: agentd mostly waits.
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).max_blocking_threads(16).enable_all().build()?;

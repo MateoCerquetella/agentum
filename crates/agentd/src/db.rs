@@ -8,10 +8,17 @@ use std::path::Path;
 use std::sync::mpsc;
 
 type Job = Box<dyn FnOnce(&Connection) + Send>;
+/// Run after the transaction holding the job commits.
+type After = Box<dyn FnOnce() + Send>;
+
+enum Msg {
+    Job(Job),
+    After(Job, After),
+}
 
 #[derive(Clone)]
 pub struct Db {
-    tx: mpsc::Sender<Job>,
+    tx: mpsc::Sender<Msg>,
 }
 
 /// A thread as agentd remembers it.
@@ -64,27 +71,27 @@ impl Db {
         }
         let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.execute_batch(SCHEMA)?;
-        let (tx, rx) = mpsc::channel::<Job>();
+        let (tx, rx) = mpsc::channel::<Msg>();
         std::thread::Builder::new().name("agentd-db".into()).spawn(move || run(conn, rx))?;
         Ok(Db { tx })
     }
 
     /// Run `f` on the database thread; errors are logged.
     pub fn exec(&self, what: &'static str, f: impl FnOnce(&Connection) -> rusqlite::Result<()> + Send + 'static) {
-        let _ = self.tx.send(Box::new(move |c| {
+        let _ = self.tx.send(Msg::Job(Box::new(move |c| {
             if let Err(e) = f(c) {
                 tracing::warn!("db {what}: {e}");
             }
-        }));
+        })));
     }
 
     /// Run `f` on the database thread and wait for its result.
     pub async fn call<T: Send + 'static>(&self, f: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static) -> anyhow::Result<T> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.tx
-            .send(Box::new(move |c| {
+            .send(Msg::Job(Box::new(move |c| {
                 let _ = tx.send(f(c));
-            }))
+            })))
             .map_err(|_| anyhow::anyhow!("database thread is gone"))?;
         rx.await.map_err(|_| anyhow::anyhow!("database thread is gone"))?
     }
@@ -112,15 +119,23 @@ impl Db {
         });
     }
 
-    pub fn insert_event(&self, thread: &str, ev: &Event) {
+    /// Store an event; `after` runs once it is committed.
+    pub fn insert_event(&self, thread: &str, ev: &Event, after: impl FnOnce() + Send + 'static) {
         let thread = thread.to_string();
         let seq = ev.seq;
         let json = serde_json::to_string(ev).unwrap_or_default();
-        self.exec("insert event", move |c| {
-            c.execute("INSERT OR REPLACE INTO events (thread, seq, json) VALUES (?1, ?2, ?3)", params![thread, seq as i64, json])?;
-            c.execute("UPDATE threads SET last_seq = MAX(last_seq, ?2) WHERE id = ?1", params![thread, seq as i64])?;
-            Ok(())
+        let job: Job = Box::new(move |c| {
+            let r = c
+                .execute("INSERT OR REPLACE INTO events (thread, seq, json) VALUES (?1, ?2, ?3)", params![thread, seq as i64, json])
+                .and_then(|_| c.execute("UPDATE threads SET last_seq = MAX(last_seq, ?2) WHERE id = ?1", params![thread, seq as i64]));
+            if let Err(e) = r {
+                tracing::warn!("db insert event: {e}");
+            }
         });
+        if let Err(mpsc::SendError(Msg::After(_, after))) = self.tx.send(Msg::After(job, Box::new(after))) {
+            // No database thread: don't hold the event back forever.
+            after();
+        }
     }
 
     pub fn ack(&self, thread: &str, seq: u64) {
@@ -180,28 +195,39 @@ impl Db {
         });
     }
 
-    /// Wait until everything queued so far is written.
+    /// Wait until everything queued so far is committed (and its after-commit work done).
     pub async fn flush(&self) {
-        let _ = self.call(|_| Ok(())).await;
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        if self.tx.send(Msg::After(Box::new(|_| {}), Box::new(move || { let _ = tx.send(()); }))).is_ok() {
+            let _ = rx.await;
+        }
     }
 }
 
-fn run(conn: Connection, rx: mpsc::Receiver<Job>) {
+fn run(conn: Connection, rx: mpsc::Receiver<Msg>) {
+    let mut afters: Vec<After> = Vec::new();
     while let Ok(first) = rx.recv() {
         let _ = conn.execute_batch("BEGIN");
-        first(&conn);
-        let mut n = 1;
-        while n < 512 {
-            match rx.try_recv() {
-                Ok(job) => {
+        let mut next = Some(first);
+        let mut n = 0;
+        while let Some(m) = next.take() {
+            match m {
+                Msg::Job(job) => job(&conn),
+                Msg::After(job, after) => {
                     job(&conn);
-                    n += 1;
+                    afters.push(after);
                 }
-                Err(_) => break,
+            }
+            n += 1;
+            if n < 512 {
+                next = rx.try_recv().ok();
             }
         }
         if let Err(e) = conn.execute_batch("COMMIT") {
             tracing::warn!("db commit: {e}");
+        }
+        for a in afters.drain(..) {
+            a();
         }
     }
 }
@@ -228,7 +254,7 @@ mod tests {
                 turn: 1,
             });
             for seq in 1..=3 {
-                db.insert_event("t_a", &Event { seq, ts: 1, kind: EventKind::Notice { text: format!("n{seq}") } });
+                db.insert_event("t_a", &Event { seq, ts: 1, kind: EventKind::Notice { text: format!("n{seq}") } }, || {});
             }
             db.ack("t_a", 1);
             db.flush().await;
