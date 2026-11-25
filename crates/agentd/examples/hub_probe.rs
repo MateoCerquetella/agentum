@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
         id += 1;
         send(&mut ws, ToAgentd::Req { id, req: Req::Models { agent } }).await?;
         let thread = format!("t_probe{:05}", id);
-        let spec = ThreadSpec { agent: Some(agent), model: models.get(agent.id()).cloned(), effort: None, permission: Permission::Ask, cwd: cwd.clone() };
+        let spec = ThreadSpec { agent: Some(agent), model: models.get(agent.id()).cloned(), effort: None, permission: Permission::Ask, cwd: cwd.clone(), instructions: None };
         let started = Instant::now();
         send(&mut ws, ToAgentd::Req { id: id + 1000, req: Req::Start { thread: thread.clone(), spec, resume: None, input: Some(Input::text(&text)), last_seq: 0 } }).await?;
         let deadline = Instant::now() + Duration::from_secs(240);

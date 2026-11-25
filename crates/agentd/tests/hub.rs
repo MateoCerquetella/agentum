@@ -246,7 +246,7 @@ async fn agentd_against_a_fake_hub() {
     assert!(h.stats.cpus > 0 && h.stats.rss_mb > 0);
 
     // A thread: start with input, stream, finish.
-    let spec = ThreadSpec { agent: Some(AgentKind::ClaudeCode), model: None, effort: None, permission: Permission::Ask, cwd: repo.to_string_lossy().into() };
+    let spec = ThreadSpec { agent: Some(AgentKind::ClaudeCode), model: None, effort: None, permission: Permission::Ask, cwd: repo.to_string_lossy().into(), instructions: None };
     c.ok(Req::Start { thread: THREAD.into(), spec: spec.clone(), resume: None, input: Some(input("hello")), last_seq: 0 }).await;
     let evs = c.events_until(|e| matches!(e.kind, EventKind::State { state: ThreadState::Idle })).await;
     assert_contiguous(&evs, 1);

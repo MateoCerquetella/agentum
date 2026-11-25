@@ -470,7 +470,8 @@ async fn start_agent(app: &App, s: &ThreadSummary, mut input: Input, resume: Opt
         let tail: String = ctx.chars().rev().take(12_000).collect::<Vec<_>>().into_iter().rev().collect();
         input.text = format!("You are a side chat about another coding thread in this same directory. Answer questions about it; don't change files unless asked. Its conversation so far:\n{tail}\n\n---\n\n{}", input.text);
     }
-    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone() };
+    let instructions = crate::plugins::instructions(app, s).await;
+    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone(), instructions };
     let req = Req::Start { thread: s.id.clone(), spec, resume, input: Some(input), last_seq: s.last_seq };
     match machine_call(app, &s.machine, req).await {
         Ok(_) => {

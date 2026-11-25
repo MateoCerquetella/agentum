@@ -121,6 +121,13 @@ pub mod hub {
         async fn before_turn(&self, _cx: &Ctx, _thread: &ThreadSummary, _text: &str) -> Result<(), String> {
             Ok(())
         }
+        /// What every agent should know about this plugin (only when it is on): added to the
+        /// agent's system prompt when its process starts (Claude Code `--append-system-prompt`,
+        /// Codex `developerInstructions`, an OpenCode instruction entry). Keep it short: every
+        /// turn of every thread carries it.
+        async fn instructions(&self, _cx: &Ctx, _thread: &ThreadSummary) -> Option<String> {
+            None
+        }
     }
 }
 

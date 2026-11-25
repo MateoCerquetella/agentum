@@ -588,6 +588,13 @@ impl Agent for OpencodeAgent {
                 r.get("data").map(|d| s(d, "id")).filter(|i| !i.is_empty()).ok_or_else(|| anyhow::anyhow!("opencode gave no session id"))?
             }
         };
+        // Plugins' instructions: an API-managed instruction entry (replaced on every start).
+        if let Some(i) = &opts.instructions {
+            let path = format!("/api/experimental/session/{sid}/instructions/entries/agentum");
+            if let Err(e) = server.call("PUT", &path, Some(&json!({"value": i}))).await {
+                tracing::info!("opencode: no instruction entries? ({e})");
+            }
+        }
         let info = server.call("GET", &format!("/api/session/{sid}"), None).await.unwrap_or(Value::Null);
         let model = info.get("data").and_then(|d| d.get("model")).map(|m| format!("{}/{}", s(m, "providerID"), s(m, "id"))).filter(|m| m != "/");
         let tr = Arc::new(Mutex::new(Translator::new(&sid, &cwd)));

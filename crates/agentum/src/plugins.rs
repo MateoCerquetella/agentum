@@ -169,6 +169,19 @@ pub async fn before_turn(app: &App, t: &ThreadSummary, text: &str) -> Result<(),
     Ok(())
 }
 
+/// What the plugins that are on tell every agent of this thread (None: nothing).
+pub async fn instructions(app: &App, t: &ThreadSummary) -> Option<String> {
+    let mut parts = vec![];
+    for p in all() {
+        if enabled(app, p.manifest()).await {
+            if let Some(s) = p.instructions(&ctx(app, p.manifest()), t).await.filter(|s| !s.trim().is_empty()) {
+                parts.push(s.trim().to_string());
+            }
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
 pub fn routes() -> Router<App> {
     Router::new().route("/api/plugins", get(list)).route("/api/plugins/{id}", put(update)).route("/api/p/{id}/{method}", post(rpc))
 }
