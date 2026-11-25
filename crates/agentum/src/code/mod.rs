@@ -247,8 +247,8 @@ pub async fn ingest(app: &App, conn: &Conn, thread: &str, events: Vec<Event>) {
                 app.code.partial.lock().unwrap().remove(thread);
             }
             EventKind::Usage { usage } => t.usage = Some(usage.clone()),
-            EventKind::RateLimits { limits } => {
-                let l = AgentLimits { agent: t.agent, machine: t.machine.clone(), limits: limits.clone(), at: ts };
+            EventKind::RateLimits { limits, plan } => {
+                let l = AgentLimits { agent: t.agent, machine: t.machine.clone(), limits: limits.clone(), at: ts, plan: plan.clone() };
                 {
                     let mut all = app.code.limits.write().unwrap();
                     all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));

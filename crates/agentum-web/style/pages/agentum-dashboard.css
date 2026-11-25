@@ -50,6 +50,7 @@ html[data-theme="studio"] :is(.dw-body, .dw-frame, .dw-card) { border: 0; border
 .dw-dots-list { display: flex; align-items: center; min-width: 0; list-style: none; margin: 0; padding: 0; color: var(--base); word-spacing: -0.18em; white-space: nowrap; }
 .dw-dots-list > li { flex: none; }
 .dw-dots-list > li:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+html[data-theme="studio"] .dw-dots-list { word-spacing: normal; }
 .dw-dots-list > li:not(:last-child)::after { content: '•'; color: var(--subdue); margin: 0 .4rem; position: relative; top: 1px; word-spacing: 0; }
 .dw .dw-dots-list a { color: inherit; }
 .dw .dw-dots-list a:hover { color: var(--primary); }

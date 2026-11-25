@@ -91,7 +91,7 @@ fn fold(events: &[EventView]) -> Vec<Item> {
                 let tokens = usage.as_ref().map(|u| u.input + u.output + u.cache_read + u.cache_write).unwrap_or(0);
                 out.push(Item::Turn { seq, stop: *stop, ms: *duration_ms, cost: *cost_usd, tokens })
             }
-            EventKind::RateLimits { limits: l } => limits = l.clone(),
+            EventKind::RateLimits { limits: l, .. } => limits = l.clone(),
             EventKind::Error { message, .. } => {
                 let m = message.to_lowercase();
                 let refused = m.contains("429") || m.contains("usage limit") || m.contains("rate limit") || m.contains("too many requests") || m.contains("quota");

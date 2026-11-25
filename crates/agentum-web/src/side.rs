@@ -108,15 +108,18 @@ pub struct AgentUse {
     pub machine: String,
     pub at: i64,
     pub windows: Vec<RateLimit>,
+    /// "Max", "Plus"… when the agent said.
+    pub plan: Option<String>,
 }
 /// Every agent that reported limits, the one used last first.
 pub fn agents_use(o: &Overview) -> Vec<AgentUse> {
     let mut by: Vec<AgentUse> = vec![];
     for l in o.limits.iter().filter(|l| !l.limits.is_empty()) {
-        let u = AgentUse { agent: l.agent, machine: l.machine.clone(), at: l.at, windows: l.limits.clone() };
+        let plan = l.plan.as_deref().filter(|p| !p.is_empty()).map(|p| p[..1].to_uppercase() + &p[1..]);
+        let u = AgentUse { agent: l.agent, machine: l.machine.clone(), at: l.at, windows: l.limits.clone(), plan: plan.clone() };
         match by.iter_mut().find(|x| x.agent == l.agent) {
-            Some(x) if l.at > x.at => *x = u,
-            Some(_) => {}
+            Some(x) if l.at > x.at => *x = AgentUse { plan: u.plan.or(x.plan.take()), ..u },
+            Some(x) => x.plan = x.plan.take().or(plan),
             None => by.push(u),
         }
     }
@@ -176,7 +179,7 @@ pub fn UsageCard(agent: AgentKind, #[prop(optional)] on_close: Option<Callback<(
         <div class="ucard-card">
             <div class="ucard-head">
                 {agent_logo(agent, 16)}
-                <div class="grow"><b>{agent.label()}</b><div class="subdue">"Subscription usage"</div></div>
+                <div class="grow"><b>{agent.label()}</b><div class="subdue">{move || match u.with(|u| u.as_ref().and_then(|u| u.plan.clone())) { Some(p) => format!("{p} · subscription usage"), None => "Subscription usage".into() }}</div></div>
                 <button class="icon-btn" title="Refresh" aria-label="Refresh" disabled=move || busy.get() on:click=refresh><Icon name="refresh" size=14 class=Signal::derive(move || if busy.get() { "spin".to_string() } else { String::new() })/></button>
                 {on_close.map(|c| view! { <button class="icon-btn" title="Close" aria-label="Close" on:click=move |_| c.run(())><Icon name="x" size=14/></button> })}
             </div>

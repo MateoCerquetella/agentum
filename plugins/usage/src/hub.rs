@@ -111,10 +111,10 @@ impl HubPlugin for Plugin {
 
     async fn on_event(&self, cx: &Ctx, t: &ThreadSummary, e: &Event) {
         // The newest windows per agent and machine, kept so the page has them after a restart.
-        if let EventKind::RateLimits { limits } = &e.kind {
+        if let EventKind::RateLimits { limits, plan } = &e.kind {
             let _g = AGG.lock().await;
             let mut all = cx.kv_get(LIMITS).await.and_then(|v| v.as_object().cloned()).unwrap_or_default();
-            all.insert(format!("{}\t{}", t.agent.id(), t.machine), json!({ "agent": t.agent, "machine": t.machine, "limits": limits, "at": e.ts }));
+            all.insert(format!("{}\t{}", t.agent.id(), t.machine), json!({ "agent": t.agent, "machine": t.machine, "limits": limits, "at": e.ts, "plan": plan }));
             cx.kv_set(LIMITS, Value::Object(all)).await;
             return;
         }

@@ -103,6 +103,9 @@ pub struct AgentLimits {
     pub machine: String,
     pub limits: Vec<RateLimit>,
     pub at: Ms,
+    /// The subscription ("max", "plus"…), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 /// A thread with its events. Assistant messages carry `html` (markdown rendered by the hub).

@@ -114,7 +114,7 @@ impl Translator {
                 if let Some(l) = rate_limits(v.get("rate_limit_info").unwrap_or(&Value::Null))
                     && !l.is_empty()
                 {
-                    out.push(Act::Ev(EventKind::RateLimits { limits: l }));
+                    out.push(Act::Ev(EventKind::RateLimits { limits: l, plan: subscription() }));
                 }
             }
             "control_request" => self.control_request(v, &mut out),
@@ -429,6 +429,14 @@ fn diffs_for(tu: &ToolUse, meta: Option<&Value>, cwd: &str) -> Vec<FileDiff> {
     }
 }
 
+/// The Claude subscription this machine is signed in with ("max", "pro"…): only that field of
+/// Claude Code's credentials file is read.
+pub fn subscription() -> Option<String> {
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| crate::util::home().join(".claude"));
+    let v: Value = serde_json::from_slice(&std::fs::read(dir.join(".credentials.json")).ok()?).ok()?;
+    v.get("claudeAiOauth")?.get("subscriptionType")?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+}
+
 /// Claude's `rate_limit_info` → windows (utilization is a fraction).
 pub fn rate_limits(info: &Value) -> Option<Vec<RateLimit>> {
     let mut out = Vec::new();
@@ -665,7 +673,7 @@ mod tests {
         let EventKind::Session { session_id, model } = &evs[0] else { panic!("{:?}", evs[0]) };
         assert_eq!(session_id, "fa9e8168-b121-477e-b92c-6f8b6ba2ff4f");
         assert_eq!(model.as_deref(), Some("claude-haiku-5-5"));
-        assert!(matches!(&evs[1], EventKind::RateLimits { limits } if limits.iter().any(|l| l.window == "5h" && (l.used_percent - 40.0).abs() < 0.01)));
+        assert!(matches!(&evs[1], EventKind::RateLimits { limits, .. } if limits.iter().any(|l| l.window == "5h" && (l.used_percent - 40.0).abs() < 0.01)));
         let tool = evs.iter().find_map(|e| match e {
             EventKind::Tool { item, name, kind, title, .. } => Some((item.clone(), name.clone(), *kind, title.clone())),
             _ => None,
