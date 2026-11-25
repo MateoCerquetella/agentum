@@ -163,8 +163,12 @@ section[data-sec="late"] .ctd-due { color: var(--negative); }
 /* Dialog */
 .cal-form { display: flex; flex-direction: column; gap: 10px; }
 .cal-title-in { font-size: 15px; padding: 8px 10px; }
-.cal-when { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.cal-when .row input[type=date] { flex: 1; min-width: 0; }
+.cal-when { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+/* Starts and Ends one under the other: a date and a time side by side never fit half a dialog. */
+.cal-when.cal-times { grid-template-columns: minmax(0, 1fr); }
+.cal-when .row { flex-wrap: nowrap; }
+.cal-when .row input[type=date] { flex: 1 1 0; min-width: 0; }
+.cal-when .row input[type=time] { flex: 0 0 auto; min-width: 0; }
 .cal-when select { width: 100%; }
 @media (max-width: 520px) { .cal-when { grid-template-columns: 1fr; } }
 .cal-review { margin: 0; display: flex; flex-direction: column; gap: 6px; }

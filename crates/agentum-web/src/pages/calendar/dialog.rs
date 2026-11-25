@@ -238,7 +238,7 @@ pub fn EventDialog(cx: Cx, dlg: Dlg) -> impl IntoView {
                     <label class="row small muted">
                         <input type="checkbox" prop:checked=move || d.with(|x| x.all_day) disabled=ro on:change=move |e| { let v = event_target_checked(&e); set(&|x| x.all_day = v) }/>" All day"
                     </label>
-                    <div class="cal-when">
+                    <div class="cal-when cal-times">
                         <label class="field"><span>"Starts"</span><span class="row">
                             <input type="date" prop:value=move || d.with(|x| x.sd.clone()) disabled=ro on:change=move |e| {
                                 let n = event_target_value(&e);
