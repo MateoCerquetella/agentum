@@ -107,7 +107,9 @@ impl Terms {
             bail!("{cwd}: no such directory");
         }
         let pair = native_pty_system().openpty(size)?;
-        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        // $SHELL, else the account's login shell (a system service has no $SHELL, and `sh -l`
+        // would reset PATH from /etc/profile), else sh.
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).or_else(login_shell).unwrap_or_else(|| "/bin/sh".into());
         let mut cb = CommandBuilder::new(&shell);
         match &cmd {
             Some(c) => {
@@ -136,14 +138,23 @@ impl Terms {
             }
         })?;
 
-        // Output: read on a thread, coalesce on the runtime.
+        // Output: read on a thread, coalesce on the runtime. Terminal queries the shell sends (fish
+        // waits for the device-attributes reply before its first prompt) are answered here, so a
+        // terminal works whether or not a page is showing it.
         let (chunk_tx, mut chunk_rx) = mpsc::channel::<Vec<u8>>(64);
+        let answer_tx = in_tx.clone();
         std::thread::Builder::new().name("agentd-term-out".into()).spawn(move || {
             let mut buf = vec![0u8; 16 * 1024];
+            let mut carry: Vec<u8> = Vec::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
+                        let (reply, keep) = answer_queries(&carry, &buf[..n]);
+                        carry = keep;
+                        if !reply.is_empty() {
+                            let _ = answer_tx.send(reply);
+                        }
                         if chunk_tx.blocking_send(buf[..n].to_vec()).is_err() {
                             break;
                         }
@@ -245,5 +256,103 @@ mod tests {
         assert!(seen.contains("got-abc"), "{seen:?}");
         assert_eq!(exit, Some(Some(0)));
         assert!(terms.handle(TermReq::Replay { term: "t1".into() }).is_err(), "gone after exit");
+    }
+}
+
+/// This account's shell in /etc/passwd.
+fn login_shell() -> Option<String> {
+    let uid = std::fs::read_to_string("/proc/self/status").ok()?.lines().find_map(|l| l.strip_prefix("Uid:"))?.split_whitespace().next()?.to_string();
+    std::fs::read_to_string("/etc/passwd").ok()?.lines().find_map(|l| {
+        let f: Vec<&str> = l.split(':').collect();
+        (f.len() >= 7 && f[2] == uid && Path::new(f[6]).exists()).then(|| f[6].to_string())
+    })
+}
+
+/// Replies to the queries a shell sends its terminal: device attributes (primary and secondary),
+/// the terminal's name (XTVERSION), status, foreground/background colours (OSC 10/11) and
+/// capabilities (XTGETTCAP, answered "unknown"). `carry` is the end of the previous chunk (a query
+/// split across reads); returns the reply and the new carry.
+pub fn answer_queries(carry: &[u8], chunk: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut data = carry.to_vec();
+    data.extend_from_slice(chunk);
+    let mut reply = Vec::new();
+    let mut i = 0;
+    let mut done = 0; // everything before this was looked at completely
+    while i < data.len() {
+        if data[i] != 0x1b {
+            i += 1;
+            done = i;
+            continue;
+        }
+        let rest = &data[i..];
+        if rest.len() < 2 {
+            break;
+        }
+        match rest[1] {
+            b'[' => {
+                // CSI: parameters then a final byte (0x40..0x7e).
+                let Some(end) = rest[2..].iter().position(|b| (0x40..=0x7e).contains(b)) else { break };
+                let params = &rest[2..2 + end];
+                let fin = rest[2 + end];
+                match (params, fin) {
+                    (b"" | b"0", b'c') => reply.extend_from_slice(b"\x1b[?62;22c"),
+                    (b">" | b">0", b'c') => reply.extend_from_slice(b"\x1b[>1;10;0c"),
+                    (b">" | b">0", b'q') => reply.extend_from_slice(b"\x1bP>|agentum\x1b\\"),
+                    (b"5", b'n') => reply.extend_from_slice(b"\x1b[0n"),
+                    _ => {}
+                }
+                i += 3 + end;
+            }
+            b']' => {
+                // OSC, ended by BEL or ST.
+                let body = &rest[2..];
+                let (end, term_len) = match (body.iter().position(|b| *b == 0x07), body.windows(2).position(|w| w == b"\x1b\\")) {
+                    (Some(a), Some(b)) if b < a => (b, 2),
+                    (Some(a), _) => (a, 1),
+                    (None, Some(b)) => (b, 2),
+                    (None, None) => break,
+                };
+                match &body[..end] {
+                    b"10;?" => reply.extend_from_slice(b"\x1b]10;rgb:d8d8/dada/e7e7\x1b\\"),
+                    b"11;?" => reply.extend_from_slice(b"\x1b]11;rgb:2323/2626/3838\x1b\\"),
+                    _ => {}
+                }
+                i += 2 + end + term_len;
+            }
+            b'P' => {
+                // DCS, ended by ST.
+                let body = &rest[2..];
+                let Some(end) = body.windows(2).position(|w| w == b"\x1b\\") else { break };
+                if body.starts_with(b"+q") {
+                    reply.extend_from_slice(b"\x1bP0+r\x1b\\");
+                }
+                i += 2 + end + 2;
+            }
+            _ => i += 2,
+        }
+        done = i;
+    }
+    // Keep an unfinished sequence (bounded) for the next read.
+    let keep = if done < data.len() && data.len() - done <= 256 { data[done..].to_vec() } else { Vec::new() };
+    (reply, keep)
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::answer_queries;
+    #[test]
+    fn answers_what_fish_asks() {
+        let out = b"hi\x1b[>0q\x1b]11;?\x1b\\\x1bP+q696e646e\x1b\\\x1b[c";
+        let (r, keep) = answer_queries(b"", out);
+        assert!(keep.is_empty());
+        let r = String::from_utf8_lossy(&r);
+        assert!(r.contains("\x1b[?62;22c") && r.contains("\x1bP>|agentum") && r.contains("]11;rgb:") && r.contains("\x1bP0+r"));
+        // Split across two reads.
+        let (r1, keep) = answer_queries(b"", b"x\x1b[");
+        assert!(r1.is_empty() && keep == b"\x1b[");
+        let (r2, _) = answer_queries(&keep, b"c done");
+        assert_eq!(r2, b"\x1b[?62;22c");
+        // Ordinary colours and moves get no answer.
+        assert!(answer_queries(b"", b"\x1b[31mred\x1b[0m\x1b[2J\x1b]0;title\x07").0.is_empty());
     }
 }

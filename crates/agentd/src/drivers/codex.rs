@@ -502,6 +502,39 @@ fn emit(acts: Vec<Act>, out: &Tx, writer: &tokio::sync::mpsc::UnboundedSender<St
 
 pub struct CodexAgent;
 
+/// "ollama/<model>": Codex's built-in local provider with that model (your own model, no quota).
+/// Anything else is a model of the account's provider.
+fn provider_of(model: &str) -> (Option<&'static str>, &str) {
+    match model.split_once('/') {
+        Some(("ollama", m)) if !m.is_empty() => (Some("ollama"), m),
+        Some(("lmstudio", m)) if !m.is_empty() => (Some("lmstudio"), m),
+        _ => (None, model),
+    }
+}
+
+fn set_model(p: &mut Value, model: &str, with_provider: bool) {
+    let (provider, m) = provider_of(model);
+    p["model"] = json!(m);
+    if let (Some(pv), true) = (provider, with_provider) {
+        p["modelProvider"] = json!(pv);
+    }
+}
+
+/// The models of the local Ollama (OLLAMA_HOST or 127.0.0.1:11434), as "ollama/<name>".
+async fn ollama_models() -> Vec<ModelInfo> {
+    let host = std::env::var("OLLAMA_HOST").ok().map(|h| h.trim_start_matches("http://").trim_end_matches('/').to_string()).filter(|h| !h.is_empty()).unwrap_or_else(|| "127.0.0.1:11434".into());
+    let Ok(Ok(r)) = tokio::time::timeout(Duration::from_secs(3), crate::http::request(&host, "GET", "/api/tags", "", None)).await else { return vec![] };
+    let Ok(v) = r.json() else { return vec![] };
+    v["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m["name"].as_str())
+        .filter(|n| !n.contains("embed"))
+        .map(|n| ModelInfo { id: format!("ollama/{n}"), label: format!("{n} (Ollama, this machine)"), efforts: vec![], default_effort: None, default: false, context_window: None })
+        .collect()
+}
+
 struct Live {
     rpc: Rpc,
     tr: Arc<Mutex<Translator>>,
@@ -527,14 +560,14 @@ impl Agent for CodexAgent {
             Some(id) => {
                 let mut p = json!({"threadId": id, "cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox, "excludeTurns": true});
                 if let Some(m) = &opts.model {
-                    p["model"] = json!(m);
+                    set_model(&mut p, m, true);
                 }
                 rpc.call("thread/resume", p, Duration::from_secs(60)).await
             }
             None => {
                 let mut p = json!({"cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox});
                 if let Some(m) = &opts.model {
-                    p["model"] = json!(m);
+                    set_model(&mut p, m, true);
                 }
                 rpc.call("thread/start", p, Duration::from_secs(60)).await
             }
@@ -576,6 +609,7 @@ impl Agent for CodexAgent {
             }
         }
         rpc.proc.kill();
+        models.extend(ollama_models().await);
         Ok(models)
     }
 }
@@ -603,7 +637,8 @@ impl Session for Live {
         self.tr.lock().unwrap().turn_started();
         let mut p = json!({"threadId": self.thread_id, "input": input_items(input)});
         if let Some(m) = &self.model {
-            p["model"] = json!(m);
+            // The provider is the thread's; a turn only names the model.
+            set_model(&mut p, m, false);
         }
         if let Some(e) = &self.effort {
             p["effort"] = json!(e);
