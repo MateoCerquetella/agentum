@@ -294,7 +294,7 @@ pub fn UsageW() -> impl IntoView {
 #[component]
 pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl IntoView {
     let ov = overview();
-    // Which account each agent's meter shows (an agent can have several: freebee's Claude is
+    // Which account each agent's meter shows (an agent can have several: a work machine's Claude may be
     // another organization). Remembered; the meter's badge switches it.
     let chosen = RwSignal::new(agentum_ui::store::get("agentum.usage.accounts").and_then(|s| serde_json::from_str::<std::collections::BTreeMap<String, String>>(&s).ok()).unwrap_or_default());
     let choose = move |agent: AgentKind, key: String| {
