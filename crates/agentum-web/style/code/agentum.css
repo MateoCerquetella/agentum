@@ -5,6 +5,8 @@
 .chip:hover { background: var(--hl); color: var(--hi); }
 .chip.on { background: var(--primary); border-color: var(--primary); color: var(--on-primary, #fff); }
 .code-thread .timeline { display: flex; flex-direction: column; gap: 10px; }
+/* Nothing in a long thread shrinks: cards that clip (tools) would be squeezed to their border. */
+.code-thread .timeline > * { flex-shrink: 0; }
 .timeline .msg { max-width: 860px; width: 100%; margin: 0 auto; }
 .timeline .msg.user { display: flex; flex-direction: column; align-items: flex-end; }
 .timeline .msg.user .md { background: var(--hl); color: var(--hi); padding: 8px 12px; border-radius: 12px 12px 2px 12px; max-width: 85%; overflow-wrap: anywhere; }
