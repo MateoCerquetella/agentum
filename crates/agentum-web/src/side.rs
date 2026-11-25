@@ -78,6 +78,7 @@ pub fn Personal(left: RwSignal<String>, right: RwSignal<Option<String>>, collaps
                 </button>
                 <button class="icon-btn side-bot-plus" title="New private chat" on:click=move |_| navigate("chat", Where::Replace, &[("chat", "")])><Icon name="plus" size=16/></button>
             </div>
+            <crate::pages::chat::side::PersonalChats/>
             <div class="nav-label side-pages">"Pages"</div>
         </Show>
         <For each=move || order.get() key=|p| *p let:id>
