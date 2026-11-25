@@ -36,6 +36,37 @@ deploy/build.sh        # dist/agentum-<arch>, dist/agentd-<arch>
    `agentd install --hub wss://<hub>/agentd --token <token> --name <machine>` (a systemd user
    service; the agents' CLIs must be installed and signed in on that machine).
 
+### Configuration from env files
+
+Both binaries read a dotenv file when they start (`KEY=value` lines; `export`, `#` comments and
+`'single'`/`"double"` quotes allowed); a variable already set in the environment wins over the file.
+
+- The hub: `$AGENTUM_ENV_FILE`, else `/etc/agentum.env` (if it exists), else `<data dir>/.env`
+  (`AGENTUM_DATA`, default `./data`). Settings are `AGENTUM_*` (`AGENTUM_DATA`, `AGENTUM_BIND`…)
+  and the older `CERQ_*`.
+- agentd: `$AGENTD_ENV_FILE`, else `~/.config/agentum/agentd.env`. `AGENTD_HUB`, `AGENTD_TOKEN`,
+  `AGENTD_NAME`, `AGENTD_CA`, `AGENTD_HUB_IP`, `AGENTD_ROOTS` and `AGENTD_PROJECTS` (lists separated
+  by `:` or `,`; `AGENTD_ROOTS=` scans nothing) override `agentd.toml`, which `agentd install` still
+  writes; with `AGENTD_HUB` set, the toml file may be left out. Other variables in the file (an API
+  key, `PATH`) reach the agents agentd runs; `AGENTD_TOKEN` doesn't. Keep the file `chmod 600`.
+
+```
+# ~/.config/agentum/agentd.env
+AGENTD_HUB=wss://hub.example.lan/agentd
+AGENTD_TOKEN=agm_…
+AGENTD_NAME=jupiter
+AGENTD_PROJECTS=~/src/app:~/src/site
+```
+
+### Secrets
+
+The Secrets tab of a thread (the Secrets plugin) lists the keys of `.env` in the thread's working
+directory, by name only, and adds, updates or deletes one through a masked field. A value goes from
+the browser to the hub to agentd and into the file (written atomically, mode 600) and nowhere else:
+not into a thread, a log or the hub's database. If git doesn't ignore `.env`, agentd adds it to
+`.gitignore` and the tab says so. Agents are told to ask for a key in that tab instead of asking for
+its value in chat.
+
 The project grew out of an earlier personal dashboard (CERQ) and replaces the author's use of BB.
 
 ## License

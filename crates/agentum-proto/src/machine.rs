@@ -52,6 +52,9 @@ pub struct Hello {
     /// Memory and load, for the machine list.
     #[serde(default)]
     pub stats: Stats,
+    /// Requests this agentd understands beyond the first protocol ("secrets").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -130,6 +133,38 @@ pub enum Req {
     Fs(FsReq),
     Git(GitReq),
     Term(TermReq),
+    /// Only to an agentd whose [`Hello::features`] has "secrets" (an older one would log the frame).
+    Secrets(SecretsReq),
+}
+
+/// A directory's `.env`. Values go in, never out: agentd answers with key names only. Its Debug
+/// and Display leave the value out.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(tag = "secrets", rename_all = "kebab-case")]
+pub enum SecretsReq {
+    /// `{keys: [..], exists, ignored, tracked}`: the keys in `<dir>/.env`, whether git ignores it and
+    /// whether it is committed.
+    Keys { dir: String },
+    /// Add or replace `key` (the file is rewritten atomically, mode 600). If git doesn't ignore
+    /// `.env`, it is added to `<dir>/.gitignore`: the answer says `gitignore_added`.
+    Set { dir: String, key: String, value: String },
+    Delete { dir: String, key: String },
+}
+
+impl std::fmt::Debug for SecretsReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SecretsReq({self})")
+    }
+}
+
+impl std::fmt::Display for SecretsReq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SecretsReq::Keys { dir } => write!(f, "keys of {dir}/.env"),
+            SecretsReq::Set { dir, key, .. } => write!(f, "set {key} in {dir}/.env"),
+            SecretsReq::Delete { dir, key } => write!(f, "delete {key} from {dir}/.env"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -90,6 +90,7 @@ dependencies = [
  "agentum-plugin-nudger",
  "agentum-plugin-pr",
  "agentum-plugin-scheduled-send",
+ "agentum-plugin-secrets",
  "agentum-plugin-side-chat",
  "agentum-plugin-sticky-prompt",
  "agentum-plugin-terminal",
@@ -447,6 +448,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentum-plugin-secrets"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "leptos",
+ "serde_json",
+ "web-sys",
+]
+
+[[package]]
 name = "agentum-plugin-side-chat"
 version = "0.1.0-beta.1"
 dependencies = [
@@ -600,6 +614,7 @@ dependencies = [
  "agentum-plugin-nudger",
  "agentum-plugin-pr",
  "agentum-plugin-scheduled-send",
+ "agentum-plugin-secrets",
  "agentum-plugin-side-chat",
  "agentum-plugin-sticky-prompt",
  "agentum-plugin-terminal",

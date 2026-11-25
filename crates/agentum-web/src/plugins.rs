@@ -29,6 +29,7 @@ static ALL: &[&dyn WebPlugin] = &[
         &agentum_plugin_browser::WEB,
         &agentum_plugin_themes::WEB,
     &agentum_plugin_dockside::WEB,
+    &agentum_plugin_secrets::WEB,
 ];
 
 pub fn all() -> &'static [&'static dyn WebPlugin] {

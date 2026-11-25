@@ -15,7 +15,7 @@ browser ──HTTP + one WebSocket (/api/ws)──▶ agentum (the hub, axum + S
 
 | Crate | What |
 |---|---|
-| `crates/agentum-proto` | Shared types: threads and events (`thread.rs`), hub ↔ agentd (`machine.rs`), the web API (`api.rs`). |
+| `crates/agentum-proto` | Shared types: threads and events (`thread.rs`), hub ↔ agentd (`machine.rs`), the web API (`api.rs`); a small dotenv reader/editor (`dotenv.rs`). |
 | `crates/agentum` | The hub. Personal space (from CERQ: `mail/`, `calendar/`, `notes.rs`, `chat/`, `today/`, `widgets.rs`, `settings.rs`, `accounts.rs`, `auth.rs`, `passkey.rs`, `push.rs`, `voice.rs`…), the Code section (`code/`), the plugin host (`plugins.rs`), serving the web app (`web.rs`). |
 | `crates/agentd` | The machine daemon. |
 | `crates/agentum-plugin` | The plugin API (`hub` and `web` features). |
@@ -66,14 +66,35 @@ React app's calls are in the reference copy at `/tmp/cerq-src/web/src`). The Cod
 Like BB's: a manifest, a hub part and a web part.
 
 - Hub part: `impl HubPlugin` — `rpc(cx, method, input)`, `on_event(cx, thread, event)`,
-  `start(cx)`, `before_turn(cx, thread, text)`. `cx` (`HubCtx`) reaches machines (`cx.machine(id, Req)`),
-  threads, the plugin's own key-value storage, its settings, `publish` (to pages subscribed to
-  `plugin:<id>`) and `notify` (push).
+  `start(cx)`, `before_turn(cx, thread, text)`, `instructions(cx, thread)`. `cx` (`HubCtx`) reaches
+  machines (`cx.machine(id, Req)`), threads, the plugin's own key-value storage, its settings,
+  `publish` (to pages subscribed to `plugin:<id>`) and `notify` (push).
+- `instructions`: what every agent should know about the plugin (Generative UI: the ```ui language;
+  Secrets: ask for keys in the Secrets tab). When an agent process starts, the hub joins the
+  instructions of the plugins that are on into `ThreadSpec.instructions`, and agentd adds them to the
+  system prompt: Claude Code `--append-system-prompt`, Codex `developerInstructions` (thread/start
+  and thread/resume), OpenCode an instruction entry (`PUT /api/experimental/session/<id>/instructions/entries/agentum`).
+  Every turn carries them: keep them short. Genui's (`plugins/genui/src/instructions.md`) lists exactly
+  the components its web part draws; its tests evaluate the examples.
 - Web part: `impl WebPlugin` — slots: `rail_tabs` (the thread's side panel), `thread_header`,
   `thread_row` (sidebar badges), `thread_hover` (hover card), `message_meta`, `composer_actions`,
   `code_fence` (```lang), `settings` (Settings → Plugins), `overlay`, `nav` (a page at `/p/<id>`),
   `css`, `themes`.
 - Settings → Plugins turns each on or off (`GET/PUT /api/plugins`).
+- Secrets (`plugins/secrets`): its RPC takes a thread id (never a path) and sends `Req::Secrets`
+  (`keys`, `set`, `delete` on `<cwd>/.env`) to that thread's machine. agentd answers with key names
+  only; `SecretsReq`'s Debug/Display leave the value out. agentd lists `"secrets"` in
+  `Hello.features` and the hub sends secrets only to an agentd that does (an older one would log the
+  unknown frame, value and all).
+
+## Env files
+
+At start, before any thread exists, each binary loads a dotenv file into its environment without
+overriding what is set (`agentum_proto::dotenv::load`): the hub `$AGENTUM_ENV_FILE`, else
+`/etc/agentum.env`, else `<data dir>/.env`; agentd `$AGENTD_ENV_FILE`, else
+`~/.config/agentum/agentd.env`. agentd's `AGENTD_HUB/TOKEN/NAME/CA/HUB_IP/ROOTS/PROJECTS` override
+agentd.toml (`Config::apply_env`); agentd drops `AGENTD_TOKEN` from its environment once the config
+is read, so agents and terminals don't inherit it.
 
 ## Building and running
 
