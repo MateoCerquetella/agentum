@@ -66,7 +66,7 @@ impl Config {
     }
 
     pub fn load_or_default() -> Config {
-        std::fs::read_to_string(Self::path()).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_default()
+        std::fs::read_to_string(Self::path()).ok().and_then(|t| toml::from_str(&t).ok()).unwrap_or_else(|| Config { idle_minutes: default_idle(), ..Default::default() })
     }
 
     pub fn save(&self) -> anyhow::Result<PathBuf> {
