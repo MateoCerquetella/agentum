@@ -579,6 +579,14 @@ impl Agent for CodexAgent {
                 return Err(e);
             }
         };
+        // The account's limits now, so a refused turn can say which and until when (and the
+        // usage meters know before the first turn).
+        if let Ok(r) = rpc.call("account/rateLimits/read", Value::Null, Duration::from_secs(10)).await {
+            let l = rate_limits(r.get("rateLimits").unwrap_or(&Value::Null));
+            if !l.is_empty() {
+                let _ = out.send(DriverOut::Event(EventKind::RateLimits { limits: l }));
+            }
+        }
         let thread_id = res.get("thread").map(|t| s(t, "id")).unwrap_or_default();
         anyhow::ensure!(!thread_id.is_empty(), "codex gave no thread id");
         let model = res.get("model").and_then(|m| m.as_str()).map(str::to_string);

@@ -86,7 +86,9 @@ fn ModelChip(machine: Signal<String>, agent: RwSignal<AgentKind>, model: RwSigna
         let mut v: Vec<PickItem> = vec![];
         if !lock_agent {
             for a in AgentKind::ALL {
-                v.push(PickItem { id: format!("agent:{}", a.id()), label: a.label().into(), icon: agent_icon(a), group: "Agent".into(), disabled: !installed(a), on: agent.get() == a, sub: if installed(a) { String::new() } else { "not installed".into() } });
+                let full = ov.with(|o| o.as_ref().and_then(|o| o.limits.iter().find(|l| l.agent == a && l.machine == machine.get()).and_then(|l| l.limits.iter().filter(|w| w.used_percent >= 99.5).map(|w| w.window.clone()).next())));
+                let sub = if !installed(a) { "not installed".to_string() } else if let Some(w) = full { format!("{w} limit used up") } else { String::new() };
+                v.push(PickItem { id: format!("agent:{}", a.id()), label: a.label().into(), icon: agent_icon(a), group: "Agent".into(), disabled: !installed(a), on: agent.get() == a, sub });
             }
         }
         let g = format!("{} models", agent.get().label());
