@@ -1,0 +1,20 @@
+{"method":"turn/started","params":{"threadId":"th1","turn":{"id":"tu1","items":[],"status":"inProgress"}}}
+{"method":"item/started","params":{"threadId":"th1","turnId":"tu1","startedAtMs":1,"item":{"type":"reasoning","id":"rs1","summary":[],"content":[]}}}
+{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"th1","turnId":"tu1","itemId":"rs1","summaryIndex":0,"delta":"Touch a file, then edit notes."}}
+{"method":"item/completed","params":{"threadId":"th1","turnId":"tu1","startedAtMs":1,"item":{"type":"reasoning","id":"rs1","summary":["Touch a file, then edit notes."],"content":[]}}}
+{"method":"turn/plan/updated","params":{"threadId":"th1","turnId":"tu1","plan":[{"step":"touch codex.txt","status":"inProgress"},{"step":"edit notes.txt","status":"pending"}]}}
+{"method":"item/started","params":{"threadId":"th1","turnId":"tu1","startedAtMs":2,"item":{"type":"commandExecution","id":"call_1","command":"touch codex.txt","commandActions":[{"type":"unknown","command":"touch codex.txt"}],"cwd":"/r","status":"inProgress"}}}
+{"id":0,"method":"item/commandExecution/requestApproval","params":{"threadId":"th1","turnId":"tu1","itemId":"call_1","startedAtMs":2,"command":"touch codex.txt","cwd":"/r","reason":null}}
+{"method":"item/commandExecution/outputDelta","params":{"threadId":"th1","turnId":"tu1","itemId":"call_1","delta":"created\n"}}
+{"method":"item/completed","params":{"threadId":"th1","turnId":"tu1","startedAtMs":2,"item":{"type":"commandExecution","id":"call_1","command":"touch codex.txt","commandActions":[{"type":"unknown","command":"touch codex.txt"}],"cwd":"/r","status":"completed","exitCode":0,"aggregatedOutput":"","durationMs":12}}}
+{"method":"item/started","params":{"threadId":"th1","turnId":"tu1","startedAtMs":3,"item":{"type":"fileChange","id":"call_2","status":"inProgress","changes":[{"path":"/r/notes.txt","kind":{"type":"update","move_path":null},"diff":"@@ -1 +1,2 @@\n hello there\n+bye\n"}]}}}
+{"id":1,"method":"item/fileChange/requestApproval","params":{"threadId":"th1","turnId":"tu1","itemId":"call_2","startedAtMs":3,"reason":null}}
+{"method":"item/completed","params":{"threadId":"th1","turnId":"tu1","startedAtMs":3,"item":{"type":"fileChange","id":"call_2","status":"completed","changes":[{"path":"/r/notes.txt","kind":{"type":"update","move_path":null},"diff":"@@ -1 +1,2 @@\n hello there\n+bye\n"}]}}}
+{"method":"item/started","params":{"threadId":"th1","turnId":"tu1","startedAtMs":4,"item":{"type":"agentMessage","id":"msg_1","text":""}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"th1","turnId":"tu1","itemId":"msg_1","delta":"do"}}
+{"method":"item/agentMessage/delta","params":{"threadId":"th1","turnId":"tu1","itemId":"msg_1","delta":"ne"}}
+{"method":"item/completed","params":{"threadId":"th1","turnId":"tu1","startedAtMs":4,"item":{"type":"agentMessage","id":"msg_1","text":"done"}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"th1","turnId":"tu1","tokenUsage":{"total":{"inputTokens":1200,"cachedInputTokens":0,"outputTokens":40,"reasoningOutputTokens":10,"totalTokens":1240},"last":{"inputTokens":1200,"cachedInputTokens":0,"outputTokens":40,"reasoningOutputTokens":10,"totalTokens":1240},"modelContextWindow":272000}}}
+{"method":"thread/name/updated","params":{"threadId":"th1","threadName":"Touch codex.txt and edit notes"}}
+{"method":"thread/status/changed","params":{"threadId":"th1","status":{"type":"idle"}}}
+{"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"tu1","items":[],"status":"completed","error":null,"durationMs":5400}}}
