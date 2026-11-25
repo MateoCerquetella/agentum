@@ -155,3 +155,16 @@ html[data-theme="studio"] .ucard-bar { background: var(--muted); }
 .ucard-bar { height: 4px; }
 .dock-meter { gap: 5px; }
 .dock-meter-bar { width: 22px; }
+
+/* Mail's folders under Mail while it's open (pages/mail/side.rs): one sidebar, not two. */
+.side-mail { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 8px 17px; padding-left: 6px; border-left: 1px solid var(--border); }
+.side-mail .nav.side-mbox { gap: 8px; padding-top: 4px; padding-bottom: 4px; font-size: 13px; }
+.side-mail .nav.side-mbox.sub { padding-left: 24px; }
+.side-mail .nav.side-mbox svg.fill { fill: currentColor; }
+.side-mail-acct { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 4px 10px 2px 8px; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; text-align: left; font: inherit; font-size: 12px; font-weight: 500; color: var(--subdue); cursor: pointer; }
+.side-mail-acct:hover, .side-mail-acct.here { color: var(--hi); }
+.side-mail-acct > svg { flex: none; transform: rotate(-90deg); transition: transform .15s; }
+.side-mail-acct > svg.open { transform: none; }
+.side-mail-acct .count { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; height: 20px; min-width: 20px; padding: 0 6px; border-radius: 99px; background: color-mix(in srgb, var(--hi) 7%, transparent); font-size: 11px; font-weight: 500; color: var(--subdue); }
+html[data-theme="studio"] .side-mail-acct { color: var(--muted-foreground); }
+html[data-theme="studio"] .side-mail-acct:hover, html[data-theme="studio"] .side-mail-acct.here { color: var(--foreground); }

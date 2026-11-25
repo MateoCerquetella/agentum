@@ -1,5 +1,5 @@
-/* Mail pane (pages/Mail.tsx + src/mail/*). Layout: .ml-main holds the mail
-   sidebar (--nav), the list (--list) and absolutely placed panes (reader,
+/* Mail pane (pages/mail). Its folders are in the app's sidebar (.side-mail, side.css).
+   Layout: .ml-main holds the list (--list) and absolutely placed panes (reader,
    composer, help) that start where the list ends; narrow = one column. */
 .ml { height: 100%; display: flex; flex-direction: column; position: relative; outline: none; }
 .ml input[type=checkbox] { padding: 0; accent-color: var(--primary); }
@@ -20,28 +20,20 @@
 .ml-tabs button:hover { color: var(--hi); }
 .ml-tabs button.on { color: var(--hi); box-shadow: inset 0 -2px 0 var(--primary); }
 
-.ml-main { flex: 1; min-height: 0; display: flex; position: relative; --nav: 0px; --list: 100%; }
-.ml-wide .ml-main { --nav: 200px; --list: calc((100% - 200px) * .42); }
+.ml-main { flex: 1; min-height: 0; display: flex; position: relative; --list: 100%; }
+.ml-wide .ml-main { --list: clamp(340px, 38%, 480px); }
 .ml-mid .ml-main { --list: 42%; }
-.ml-nav { flex: 0 0 var(--nav); width: var(--nav); overflow-y: auto; border-right: 1px solid var(--border); padding: 10px 8px; display: flex; flex-direction: column; gap: 1px; }
 .ml-list { flex: 0 0 var(--list); width: var(--list); min-width: 0; overflow-y: auto; padding: 10px 12px 24px; }
 .ml-in:not(.ml-narrow) .ml-list { border-right: 1px solid var(--border); }
 .ml-body { flex: 1; min-width: 0; overflow: auto; padding: 12px 16px 32px; }
 .ml-pane { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; min-width: 0; z-index: 2; }
-.ml-in:not(.ml-narrow) .ml-pane { left: calc(var(--nav) + var(--list)); }
+.ml-in:not(.ml-narrow) .ml-pane { left: var(--list); }
 .ml-pane.ml-front { z-index: 3; }
 .ml .ml-pane.ml-top { left: 0; z-index: 5; padding: 10px 16px; overflow: auto; }
 .ml-pane.ml-empty { z-index: 1; display: grid; place-content: center; justify-items: center; gap: 4px; text-align: center; color: var(--base); }
 .ml-pane.ml-empty svg { color: var(--subdue); margin-bottom: 6px; }
 
 /* Sidebar */
-.ml-sec { margin: 12px 8px 4px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--subdue); }
-.ml-sec:first-child { margin-top: 2px; }
-.ml-nav button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; padding: 5px 8px; border-radius: var(--radius); color: var(--base); text-align: left; }
-.ml-nav button span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ml-nav button b { font-weight: 400; color: var(--primary); }
-.ml-nav button:hover { background: var(--hl); color: var(--hi); }
-.ml-nav button.on { background: var(--hl); color: var(--hi); box-shadow: inset 2px 0 0 var(--acct, var(--primary)); }
 .ml-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--acct, var(--subdue)); }
 
 /* Filter bar, chips, select bar */

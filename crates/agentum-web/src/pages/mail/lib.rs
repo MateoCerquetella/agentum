@@ -318,6 +318,21 @@ pub fn when(ts: i64) -> String {
     }
 }
 
+/// The reader's date: "Wed 25 Nov, 03:17 PM" in this device's zone and clock, as the list shows
+/// times (the header's own text, like "2026-11-25T17:11:01-03:00", only if it doesn't parse).
+pub fn long_when(raw: &str) -> String {
+    let ms = js_sys::Date::parse(raw);
+    if ms.is_nan() {
+        return raw.to_string();
+    }
+    let this_year = js_sys::Date::new(&ms.into()).get_full_year() == js_sys::Date::new_0().get_full_year();
+    let mut o = vec![("weekday", "short"), ("day", "numeric"), ("month", "short"), ("hour", "2-digit"), ("minute", "2-digit")];
+    if !this_year {
+        o.push(("year", "numeric"));
+    }
+    fmt_date(ms, None, &o)
+}
+
 fn re(cell: &'static OnceLock<Regex>, src: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(src).expect("regex"))
 }
