@@ -80,6 +80,12 @@ pub struct ThreadSummary {
     #[serde(default)]
     pub cost_usd: f64,
     pub last_seq: u64,
+    /// Snoozed: hidden from the sidebar until then (it wakes early if it works or asks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<Ms>,
+    /// When it was archived (settled); the sidebar's Settled shelf shows the last day's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<Ms>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -190,6 +196,9 @@ pub struct PatchThread {
     pub effort: Option<String>,
     #[serde(default)]
     pub permission: Option<Permission>,
+    /// Some(Some(t)): snooze until t; Some(None): wake it.
+    #[serde(default)]
+    pub snoozed_until: Option<Option<Ms>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

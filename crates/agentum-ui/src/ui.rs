@@ -114,14 +114,16 @@ fn answer(v: bool) {
 /// Toasts and the confirm dialog; mounted once by the app.
 #[component]
 pub fn UiLayer() -> impl IntoView {
+    let ctx_menu = view! { <crate::picker::ContextMenuLayer/> };
     let toasts = TOASTS.with(|t| *t);
     let dialog = DIALOG.with(|d| *d);
-    let _esc = window_event_listener(leptos::ev::keydown, move |e| {
+    crate::on_window(leptos::ev::keydown, move |e| {
         if e.key() == "Escape" && dialog.get_untracked().is_some() {
             answer(false);
         }
     });
     view! {
+        {ctx_menu}
         <div class="toasts">
             <For each=move || toasts.get() key=|t| t.id let:t>
                 {match t.on_click {
@@ -158,7 +160,7 @@ pub fn UiLayer() -> impl IntoView {
 /// A dialog with a title, closed by ×, Escape or a click outside.
 #[component]
 pub fn Modal(#[prop(into)] title: String, on_close: Callback<()>, #[prop(optional)] wide: bool, children: Children) -> impl IntoView {
-    let _esc = window_event_listener(leptos::ev::keydown, move |e| {
+    crate::on_window(leptos::ev::keydown, move |e| {
         if e.key() == "Escape" {
             on_close.run(())
         }

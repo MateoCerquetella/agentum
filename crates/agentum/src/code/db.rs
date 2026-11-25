@@ -35,7 +35,18 @@ fn parse_enum<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
     serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
 }
 
-pub const THREAD_COLS: &str = "id, machine, agent, model, effort, permission, project, cwd, branch, title, state, unread, pinned, archived, ord, section, parent, created_at, updated_at, preview, asking, queued, usage, cost, last_seq";
+pub const THREAD_COLS: &str = "id, machine, agent, model, effort, permission, project, cwd, branch, title, state, unread, pinned, archived, ord, section, parent, created_at, updated_at, preview, asking, queued, usage, cost, last_seq, snoozed_until, archived_at";
+
+/// Columns added after the first beta.
+pub fn migrate_more(c: &Connection) -> rusqlite::Result<()> {
+    let cols: Vec<String> = c.prepare("PRAGMA table_info(code_threads)")?.query_map([], |r| r.get::<_, String>(1))?.filter_map(Result::ok).collect();
+    for (name, ty) in [("snoozed_until", "INTEGER"), ("archived_at", "INTEGER")] {
+        if !cols.iter().any(|c| c == name) {
+            c.execute_batch(&format!("ALTER TABLE code_threads ADD COLUMN {name} {ty}"))?;
+        }
+    }
+    Ok(())
+}
 
 pub fn thread_of(r: &Row) -> rusqlite::Result<ThreadSummary> {
     let state: ThreadState = parse_enum(&r.get::<_, String>(10)?).unwrap_or_default();
@@ -69,6 +80,8 @@ pub fn thread_of(r: &Row) -> rusqlite::Result<ThreadSummary> {
         usage,
         cost_usd: r.get(23)?,
         last_seq: r.get::<_, i64>(24)? as u64,
+        snoozed_until: r.get(25)?,
+        archived_at: r.get(26)?,
     })
 }
 
@@ -85,16 +98,18 @@ pub fn get_thread(c: &Connection, id: &str) -> rusqlite::Result<Option<ThreadSum
 /// Insert or update a thread's summary columns.
 pub fn save_thread(c: &Connection, t: &ThreadSummary) -> rusqlite::Result<()> {
     c.execute(
-        "INSERT INTO code_threads(id, machine, agent, model, effort, permission, project, cwd, branch, title, state, unread, pinned, archived, ord, section, parent, created_at, updated_at, preview, asking, queued, usage, cost, last_seq)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)
+        "INSERT INTO code_threads(id, machine, agent, model, effort, permission, project, cwd, branch, title, state, unread, pinned, archived, ord, section, parent, created_at, updated_at, preview, asking, queued, usage, cost, last_seq, snoozed_until, archived_at)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)
          ON CONFLICT(id) DO UPDATE SET machine=excluded.machine, agent=excluded.agent, model=excluded.model, effort=excluded.effort, permission=excluded.permission,
            project=excluded.project, cwd=excluded.cwd, branch=excluded.branch, title=excluded.title, state=excluded.state, unread=excluded.unread, pinned=excluded.pinned,
            archived=excluded.archived, ord=excluded.ord, section=excluded.section, parent=excluded.parent, updated_at=excluded.updated_at, preview=excluded.preview,
-           asking=excluded.asking, queued=excluded.queued, usage=excluded.usage, cost=excluded.cost, last_seq=excluded.last_seq",
+           asking=excluded.asking, queued=excluded.queued, usage=excluded.usage, cost=excluded.cost, last_seq=excluded.last_seq,
+           snoozed_until=excluded.snoozed_until, archived_at=excluded.archived_at",
         params![
             t.id, t.machine, t.agent.id(), t.model, t.effort, enum_str(&t.permission), t.project, t.cwd, t.branch, t.title, enum_str(&t.state),
             t.unread as i64, t.pinned as i64, t.archived as i64, t.order, t.section, t.parent, t.created_at, t.updated_at, t.preview, t.asking,
-            t.queued as i64, t.usage.as_ref().map(|u| serde_json::to_string(u).unwrap_or_default()), t.cost_usd, t.last_seq as i64
+            t.queued as i64, t.usage.as_ref().map(|u| serde_json::to_string(u).unwrap_or_default()), t.cost_usd, t.last_seq as i64,
+            t.snoozed_until, t.archived_at
         ],
     )?;
     Ok(())

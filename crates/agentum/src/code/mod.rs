@@ -92,7 +92,7 @@ fn title_of(text: &str) -> String {
 
 /// Load summaries; start the scheduler. Called once at boot.
 pub async fn start(app: &App) -> anyhow::Result<()> {
-    app.db.call(|c| db::migrate(c)).await?;
+    app.db.call(|c| { db::migrate(c)?; db::migrate_more(c) }).await?;
     let all = app.db.call(|c| db::all_threads(c)).await?;
     {
         let mut m = app.code.threads.write().unwrap();
@@ -271,6 +271,14 @@ pub async fn ingest(app: &App, conn: &Conn, thread: &str, events: Vec<Event>) {
         keep.push(e);
     }
     t.last_seq = max_seq;
+    // A snoozed thread wakes, and a settled one comes back, when it works or asks.
+    if t.state.busy() || t.asking.is_some() {
+        t.snoozed_until = None;
+        if t.archived && t.asking.is_some() {
+            t.archived = false;
+            t.archived_at = None;
+        }
+    }
     t.attention = db::attention_of(&t);
     let id = thread.to_string();
     let (k2, t2, s2) = (keep.clone(), t.clone(), session.clone());
@@ -337,7 +345,9 @@ pub async fn machine_call(app: &App, machine: &str, req: Req) -> Result<Value, S
 
 async fn overview(State(app): State<App>) -> Json<Overview> {
     let machines = agentd::machines(&app).await;
-    let mut threads: Vec<ThreadSummary> = app.code.threads.read().unwrap().values().filter(|t| !t.archived).cloned().collect();
+    // Open threads, and the last day's settled ones (the sidebar's Settled shelf).
+    let day_ago = now() - 86_400_000;
+    let mut threads: Vec<ThreadSummary> = app.code.threads.read().unwrap().values().filter(|t| !t.archived || t.archived_at.is_some_and(|a| a > day_ago)).cloned().collect();
     threads.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let limits = app.code.limits.read().unwrap().clone();
     Json(Overview { machines, threads, limits })
@@ -414,6 +424,8 @@ pub async fn create_thread(app: &App, b: NewThread) -> R<ThreadSummary> {
         usage: None,
         cost_usd: 0.0,
         last_seq: 0,
+        snoozed_until: None,
+        archived_at: None,
     };
     let mut s = s;
     s.attention = db::attention_of(&s);
@@ -512,6 +524,7 @@ pub async fn patch_thread(app: &App, id: &str, p: PatchThread) -> R<ThreadSummar
     }
     if let Some(v) = p.archived {
         t.archived = v;
+        t.archived_at = v.then(now);
         if v {
             if let Some(c) = app.code.conn(&t.machine) {
                 c.fire(Req::Sleep { thread: id.clone() });
@@ -520,6 +533,9 @@ pub async fn patch_thread(app: &App, id: &str, p: PatchThread) -> R<ThreadSummar
     }
     if let Some(v) = p.read {
         t.unread = !v;
+    }
+    if let Some(v) = p.snoozed_until {
+        t.snoozed_until = v;
     }
     if let Some(v) = p.order {
         t.order = v;

@@ -1,6 +1,9 @@
-//! Navigation. The URL is `/<left page>[?side=<right page>&<page params>]`: two panes side by
-//! side, each page reading its own params. The app's shell does the opening; pages and plugins
-//! call [`navigate`] and read params through [`use_params`] / [`use_param`].
+//! Navigation. The URL is `/<left page>?<its params>&side=<right page>&r_<its params>`: two panes
+//! side by side, any page on either side (two threads, mail beside a thread, a thread beside its
+//! terminal). A page reads and writes its own params through [`use_param`] / [`set_param`]; in the
+//! right pane they are the `r_` ones without it knowing. The shell does the opening; pages and
+//! plugins call [`navigate`] ([`here`] = the pane they are in) and set their pane's title and
+//! actions through [`pane`].
 use leptos::prelude::*;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -13,10 +16,84 @@ pub enum Where {
     Right,
 }
 
+/// An action a page puts in its pane's header (an icon button, or an entry of its ⋯ menu).
+#[derive(Clone)]
+pub struct PaneAction {
+    pub icon: &'static str,
+    pub label: String,
+    pub run: Callback<()>,
+    /// Shown pressed (a toggle that is on).
+    pub on: Option<Signal<bool>>,
+    pub danger: bool,
+}
+impl PaneAction {
+    pub fn new(icon: &'static str, label: impl Into<String>, run: impl Fn() + Send + Sync + 'static) -> Self {
+        PaneAction { icon, label: label.into(), run: Callback::new(move |_| run()), on: None, danger: false }
+    }
+    pub fn toggled(mut self, on: Signal<bool>) -> Self {
+        self.on = Some(on);
+        self
+    }
+    pub fn danger(mut self) -> Self {
+        self.danger = true;
+        self
+    }
+}
+
+/// The pane a page is drawn in, given by the shell as context.
+#[derive(Clone, Copy)]
+pub struct PaneCtx {
+    pub right: bool,
+    /// Replaces the page's name in the pane header (a thread's title).
+    pub title: RwSignal<Option<String>>,
+    /// A muted line beside the title (machine · project · branch).
+    pub sub: RwSignal<Option<String>>,
+    /// Icon buttons in the header, before maximize/close.
+    pub actions: RwSignal<Vec<PaneAction>>,
+    /// The header's ⋯ menu.
+    pub menu: RwSignal<Vec<PaneAction>>,
+}
+impl PaneCtx {
+    pub fn new(right: bool) -> Self {
+        PaneCtx { right, title: RwSignal::new(None), sub: RwSignal::new(None), actions: RwSignal::new(vec![]), menu: RwSignal::new(vec![]) }
+    }
+    /// Safe after the pane is gone (a page's cleanup can run after its pane's).
+    pub fn clear(&self) {
+        let _ = self.title.try_set(None);
+        let _ = self.sub.try_set(None);
+        let _ = self.actions.try_set(vec![]);
+        let _ = self.menu.try_set(vec![]);
+    }
+}
+
+/// The pane the calling component is in (call while building a view, not in a handler).
+pub fn pane() -> Option<PaneCtx> {
+    use_context::<PaneCtx>()
+}
+fn right_pane() -> bool {
+    match pane() {
+        Some(p) => p.right,
+        None => ACTIVE_RIGHT.with(|a| a.get()),
+    }
+}
+
+/// The shell says which pane was last touched.
+pub fn set_active_pane(right: bool) {
+    ACTIVE_RIGHT.with(|a| a.set(right));
+}
+
+/// Where "this pane" is, for [`navigate`] (call while building a view).
+pub fn here() -> Where {
+    if right_pane() { Where::Right } else { Where::Left }
+}
+
 type Opener = Box<dyn Fn(&str, Where, BTreeMap<String, String>)>;
 
 thread_local! {
     static OPEN: RefCell<Option<Opener>> = const { RefCell::new(None) };
+    /// The pane last touched (pointer, keys, focus): what "this pane" means in an event handler,
+    /// where there is no component context. Kept by the shell.
+    static ACTIVE_RIGHT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static PARAMS: RwSignal<BTreeMap<String, String>> = crate::global(read());
 }
 
@@ -55,19 +132,39 @@ pub fn navigate(page: &str, at: Where, params: &[(&str, &str)]) {
     });
 }
 
-/// The URL params, live.
+/// This pane's URL params, live.
 pub fn use_params() -> Signal<BTreeMap<String, String>> {
-    PARAMS.with(|p| (*p).into())
+    let p = PARAMS.with(|p| *p);
+    let right = right_pane();
+    Signal::derive(move || p.with(|m| pane_params(m, right)))
 }
 
-/// One URL param, live.
+/// A pane's params out of the whole query: the `r_` ones (stripped) for the right pane.
+pub fn pane_params(m: &BTreeMap<String, String>, right: bool) -> BTreeMap<String, String> {
+    if right {
+        m.iter().filter_map(|(k, v)| k.strip_prefix("r_").map(|k| (k.to_string(), v.clone()))).collect()
+    } else {
+        m.iter().filter(|(k, _)| !k.starts_with("r_") && k.as_str() != "side").map(|(k, v)| (k.clone(), v.clone())).collect()
+    }
+}
+
+/// One of this pane's URL params, live (call while building a view).
 pub fn use_param(key: &'static str) -> Signal<Option<String>> {
     let p = PARAMS.with(|p| *p);
-    Signal::derive(move || p.with(|m| m.get(key).cloned()))
+    let key = if right_pane() { format!("r_{key}") } else { key.to_string() };
+    Signal::derive(move || p.with(|m| m.get(&key).cloned()))
 }
 
-/// Change one param without a new history entry (None removes it).
+/// Change one of this pane's params without a new history entry (None removes it). Call while
+/// building a view, or pass `right` yourself with [`set_param_in`].
 pub fn set_param(key: &str, value: Option<&str>) {
+    set_param_in(right_pane(), key, value)
+}
+
+/// [`set_param`] for a given pane.
+pub fn set_param_in(right: bool, key: &str, value: Option<&str>) {
+    let key = if right { format!("r_{key}") } else { key.to_string() };
+    let key = key.as_str();
     let mut m = read();
     match value {
         Some(v) => {

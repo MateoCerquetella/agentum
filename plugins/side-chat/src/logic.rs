@@ -54,6 +54,8 @@ mod tests {
             usage: None,
             cost_usd: 0.0,
             last_seq: 0,
+            snoozed_until: None,
+            archived_at: None,
         }
     }
 

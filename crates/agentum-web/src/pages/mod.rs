@@ -62,6 +62,7 @@ pub const PAGES: &[PageDef] = &[
     PageDef { id: "chat", title: "Secretary", icon: "lock", side: Some(Side::Life), view: chat::page, plugin: None },
     PageDef { id: "home", title: "Home", icon: "house", side: Some(Side::Life), view: home::page, plugin: None },
     PageDef { id: "code", title: "Code", icon: "bot", side: Some(Side::Work), view: crate::code::page, plugin: None },
+    PageDef { id: "panel", title: "Panel", icon: "panel-right", side: Some(Side::Work), view: crate::code::panel_page, plugin: None },
     PageDef { id: "settings", title: "Settings", icon: "settings", side: None, view: settings::page, plugin: None },
 ];
 
