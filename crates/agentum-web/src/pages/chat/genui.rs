@@ -34,6 +34,11 @@ pub fn open_url(url: &str) {
             }
         }
     }
+    // The old form: /?open=mail&msg=….
+    let page = match params.iter().position(|(k, _)| k == "open") {
+        Some(i) if path.trim_matches('/').is_empty() => params.remove(i).1,
+        _ => page,
+    };
     let refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     navigate(&page, Where::Right, &refs);
 }

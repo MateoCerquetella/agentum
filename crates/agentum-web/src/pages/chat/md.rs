@@ -80,7 +80,7 @@ pub fn pieces(text: &str, ui: bool, tasks: bool) -> Vec<Piece> {
                 }
                 let line = text[..range.start].matches('\n').count();
                 let (on, off) = (if done { " checked" } else { "" }, if tasks { "" } else { " disabled" });
-                evs.push(Event::Html(format!("<input type=\"checkbox\" data-line=\"{line}\"{on}{off}> ").into()));
+                evs.push(Event::Html(format!("<input type=\"checkbox\" data-line=\"{line}\"{on}{off}>").into()));
             }
             ev => evs.push(ev),
         }

@@ -16,3 +16,4 @@
 .ag-bot-panel .bot-panel-body { padding-top: 18px; }
 .chat-list .chat-item .x { width: 24px; height: 24px; flex: none; }
 .chat-list .chat-pick { min-width: 0; }
+.chat-list .chat-pick .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
