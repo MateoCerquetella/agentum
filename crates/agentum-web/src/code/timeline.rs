@@ -15,7 +15,8 @@ enum Item {
     Plan { seq: u64, entries: Vec<PlanEntry> },
     Ask { seq: u64, id: String, kind: AskKind, title: String, detail: Option<String>, options: Vec<AskOption>, answer: Option<(String, Option<String>)> },
     Turn { seq: u64, stop: StopReason, ms: u64, cost: Option<f64>, tokens: u64 },
-    Error { seq: u64, text: String },
+    /// `full`: a limit window used up (its name and when it resets), when the error is a refused turn.
+    Error { seq: u64, text: String, full: Option<(String, Option<i64>)> },
     Notice { seq: u64, text: String },
 }
 impl Item {
@@ -34,6 +35,7 @@ fn esc(s: &str) -> String {
 }
 
 fn fold(events: &[EventView]) -> Vec<Item> {
+    let mut limits: Vec<agentum_proto::RateLimit> = vec![];
     let mut out: Vec<Item> = vec![];
     let mut tools: BTreeMap<String, usize> = BTreeMap::new();
     let mut asks: BTreeMap<String, usize> = BTreeMap::new();
@@ -89,7 +91,13 @@ fn fold(events: &[EventView]) -> Vec<Item> {
                 let tokens = usage.as_ref().map(|u| u.input + u.output + u.cache_read + u.cache_write).unwrap_or(0);
                 out.push(Item::Turn { seq, stop: *stop, ms: *duration_ms, cost: *cost_usd, tokens })
             }
-            EventKind::Error { message, .. } => out.push(Item::Error { seq, text: message.clone() }),
+            EventKind::RateLimits { limits: l } => limits = l.clone(),
+            EventKind::Error { message, .. } => {
+                let m = message.to_lowercase();
+                let refused = m.contains("429") || m.contains("usage limit") || m.contains("rate limit") || m.contains("too many requests") || m.contains("quota");
+                let full = refused.then(|| limits.iter().filter(|w| w.used_percent >= 99.5).max_by_key(|w| w.resets_at.unwrap_or(0)).map(|w| (w.window.clone(), w.resets_at))).flatten();
+                out.push(Item::Error { seq, text: message.clone(), full })
+            }
             EventKind::Notice { text } => out.push(Item::Notice { seq, text: text.clone() }),
             _ => {}
         }
@@ -335,7 +343,19 @@ pub fn Timeline(
                                 {cost.filter(|c| *c > 0.0).map(|c| format!(" · ${c:.3}"))}
                             </div>
                         }.into_any(),
-                        Item::Error { text, .. } => view! { <div class="err small">{text}</div> }.into_any(),
+                        Item::Error { text, full, .. } => match full {
+                            Some((window, resets)) => {
+                                let agent = summary.with_untracked(|s| s.as_ref().map(|s| s.agent.label()).unwrap_or("The agent"));
+                                let when = resets.map(|r| format!(" It resets {}.", when_label(r))).unwrap_or_default();
+                                view! {
+                                    <div class="limit-card">
+                                        <b>{format!("{agent}'s {window} limit is used up.")}</b>{when}
+                                        <div class="small subdue">"Switch to another agent in the model chip below, or send again after the reset. ("{text}")"</div>
+                                    </div>
+                                }.into_any()
+                            }
+                            None => view! { <div class="err small">{text}</div> }.into_any(),
+                        },
                         Item::Notice { text, .. } => view! { <div class="small subdue notice">{text}</div> }.into_any(),
                     }
                 }
@@ -352,4 +372,12 @@ pub fn Timeline(
             </Show>
         </div>
     }
+}
+
+/// "Thu 26 Nov 23:22" (local time) for milliseconds.
+fn when_label(ms: i64) -> String {
+    let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms as f64));
+    const D: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const M: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{} {} {} {:02}:{:02}", D[d.get_day() as usize % 7], d.get_date(), M[d.get_month() as usize % 12], d.get_hours(), d.get_minutes())
 }

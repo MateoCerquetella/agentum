@@ -257,7 +257,7 @@ pub async fn handle(req: GitReq, worktrees: &Path) -> anyhow::Result<Value> {
             let o = run(&mut c, Duration::from_secs(60)).await?;
             if !o.ok {
                 let e = o.stderr.to_lowercase();
-                if e.contains("no pull requests found") || e.contains("no default remote") || e.contains("not a git repository") || e.contains("none of the git remotes") {
+                if e.contains("no pull requests found") || e.contains("no default remote") || e.contains("not a git repository") || e.contains("none of the git remotes") || e.contains("no git remotes") {
                     return Ok(Value::Null);
                 }
                 bail!("gh pr view: {}", first_lines(&o.stderr, &o.stdout));

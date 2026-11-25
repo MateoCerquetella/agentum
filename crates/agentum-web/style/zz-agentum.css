@@ -163,3 +163,4 @@
 .sidebar:has(.dk-card > .hover-card) { z-index: 90; }
 .dk .dk-card > .hover-card { position: fixed; left: calc(var(--side-w, 280px) - 4px); margin: 0; margin-top: -6px; }
 .sidebar:not([style*="--side-w"]) .dk .dk-card > .hover-card { left: 276px; }
+.timeline .limit-card { max-width: 868px; width: 100%; margin: 0 auto; padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--warm) 55%, var(--border)); background: color-mix(in srgb, var(--warm) 9%, var(--widget)); color: var(--text); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
