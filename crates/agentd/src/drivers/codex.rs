@@ -1,6 +1,6 @@
 //! Codex: `codex app-server`, newline JSON-RPC on stdio (no "jsonrpc" field), one process per thread.
 use super::{Agent, DriverOut, Proc, Session, StartOpts, Tx, permission_options, tool_title};
-use agentum_proto::machine::ModelInfo;
+use agentum_proto::machine::{AgentAccount, ModelInfo, UsageReply};
 use agentum_proto::{AgentKind, AskKind, AskOption, EventKind, FileDiff, Input, Permission, PlanEntry, RateLimit, StopReason, ToolKind, Usage};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -635,16 +635,38 @@ impl Agent for CodexAgent {
     }
 }
 
-/// The account's limits now, from a short-lived app-server (`account/rateLimits/read`).
-pub async fn usage_now(bin: PathBuf) -> anyhow::Result<(Vec<RateLimit>, Option<String>)> {
+/// The account's limits now, and who it is, from a short-lived app-server
+/// (`account/rateLimits/read`, `account/read`).
+pub async fn usage_now(bin: PathBuf) -> anyhow::Result<UsageReply> {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let tr = Arc::new(Mutex::new(Translator::new("", 0)));
     let rpc = connect(&bin, &crate::util::home(), &[], tx, tr).await?;
     let r = rpc.call("account/rateLimits/read", Value::Null, Duration::from_secs(20)).await;
+    let who = rpc.call("account/read", json!({}), Duration::from_secs(20)).await;
     rpc.proc.kill();
     let r = r?;
     let r = r.get("rateLimits").unwrap_or(&Value::Null);
-    Ok((rate_limits(r), plan_type(r)))
+    let account = match who {
+        Ok(w) => account_of(&w),
+        Err(e) => {
+            tracing::info!("codex account/read: {e}");
+            None
+        }
+    };
+    Ok(UsageReply { limits: rate_limits(r), plan: plan_type(r), account })
+}
+
+/// `account/read` → the ChatGPT user (and workspace, when it is one): ids and names only.
+pub fn account_of(r: &Value) -> Option<AgentAccount> {
+    let user = r.get("userId").and_then(|u| u.as_str()).filter(|u| !u.is_empty())?;
+    let a = r.get("account").unwrap_or(&Value::Null);
+    let st = |k: &str| a.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    let workspace = st("workspaceName");
+    let id = match &workspace {
+        Some(w) => format!("{user}/{w}"),
+        None => user.to_string(),
+    };
+    Some(AgentAccount { id, label: workspace.or_else(|| st("email")).unwrap_or_else(|| "ChatGPT".into()) })
 }
 
 pub fn models_from_list(r: &Value) -> Vec<ModelInfo> {
@@ -824,6 +846,16 @@ mod tests {
         assert_eq!(r, vec![Act::Ev(EventKind::Answered { id: "1-8".into(), option: "cancelled".into(), text: None })]);
         // Unknown server requests are refused, not left hanging.
         assert!(matches!(&t.server_request(json!(9), "attestation/generate", &json!({}))[0], Act::Write(w) if w["error"]["code"] == -32601));
+    }
+
+    #[test]
+    fn accounts() {
+        // `account/read` as codex 0.172 answers it (values made up).
+        let r = json!({"account": {"type": "chatgpt", "email": "me@example.com", "planType": "plus", "workspaceName": null}, "userId": "user-abc", "requiresOpenaiAuth": true});
+        assert_eq!(account_of(&r), Some(AgentAccount { id: "user-abc".into(), label: "me@example.com".into() }));
+        let r = json!({"account": {"type": "chatgpt", "email": "me@work.com", "planType": "business", "workspaceName": "Acme"}, "userId": "user-abc"});
+        assert_eq!(account_of(&r).map(|a| (a.id, a.label)), Some(("user-abc/Acme".into(), "Acme".into())));
+        assert_eq!(account_of(&json!({"account": {"type": "apiKey"}, "userId": null})), None);
     }
 
     #[test]

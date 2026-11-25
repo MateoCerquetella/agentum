@@ -190,17 +190,20 @@ impl Threads {
         Ok(json!(m))
     }
 
-    /// The agent's subscription limits, asked of its provider now (the sidebar's meters).
+    /// The agent's subscription limits, asked of its provider now, and the account they are of
+    /// (the sidebar's meters: one per account).
     pub async fn usage(&self, agent: AgentKind) -> anyhow::Result<Value> {
-        let (limits, plan) = match agent {
-            AgentKind::Codex => {
-                let bin = agent_bin(&self.cfg, agent).with_context(|| format!("{} is not installed on this machine", agent.label()))?;
-                crate::drivers::codex::usage_now(bin).await?
+        let bin = || agent_bin(&self.cfg, agent).with_context(|| format!("{} is not installed on this machine", agent.label()));
+        let r = match agent {
+            AgentKind::Codex => crate::drivers::codex::usage_now(bin()?).await?,
+            AgentKind::ClaudeCode => {
+                let (limits, plan) = crate::drivers::claude::usage_now().await?;
+                agentum_proto::machine::UsageReply { limits, plan, account: crate::drivers::claude::account() }
             }
-            AgentKind::ClaudeCode => crate::drivers::claude::usage_now().await?,
+            AgentKind::Cursor => crate::drivers::cursor::usage_now(bin()?).await?,
             AgentKind::Opencode => anyhow::bail!("OpenCode has no subscription limits"),
         };
-        Ok(json!({ "limits": limits, "plan": plan }))
+        Ok(json!(r))
     }
 
     /// Threads with a live process or unacked events (for Hello).
