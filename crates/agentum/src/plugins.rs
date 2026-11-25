@@ -206,9 +206,8 @@ async fn update(State(app): State<App>, Path(id): Path<String>, Json(b): Json<Va
 
 async fn rpc(State(app): State<App>, Path((id, method)): Path<(String, String)>, body: Option<Json<Value>>) -> R<Json<Value>> {
     let p = find(&id).ok_or_else(not_found)?;
-    if !enabled(&app, p.manifest()).await {
-        return Err(bad(format!("{id} is turned off")));
-    }
+    // A plugin that is off still answers its own calls (its settings are edited before it is turned
+    // on); its slots, events and background work are what being off stops.
     let input = body.map(|b| b.0).unwrap_or(Value::Null);
     p.rpc(&ctx(&app, p.manifest()), &method, input).await.map(Json).map_err(bad)
 }
