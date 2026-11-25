@@ -71,5 +71,43 @@ mod tests {
         assert!(!serde_json::to_string(&s).unwrap().contains("instructions"));
         let h: Hello = serde_json::from_value(json!({"protocol": 1, "machine": "m", "version": "v", "hostname": "h", "os": "o", "arch": "a", "home": "/h", "agents": [], "projects": [], "threads": []})).unwrap();
         assert!(h.features.is_empty());
+        // A usage answer and a stored report from before accounts.
+        let u: UsageReply = serde_json::from_value(json!({"limits": [{"window": "5h", "used_percent": 3.0}], "plan": null})).unwrap();
+        assert_eq!((u.limits.len(), u.account), (1, None));
+        let l: api::AgentLimits = serde_json::from_value(json!({"agent": "codex", "machine": "m", "limits": [], "at": 1})).unwrap();
+        assert_eq!((l.key(), l.machines.len()), ("m", 0));
+        assert!(!serde_json::to_string(&l).unwrap().contains("account"));
+        assert_eq!(round(&AgentKind::Cursor), json!("cursor"));
+        assert_eq!(AgentKind::parse("cursor"), Some(AgentKind::Cursor));
+    }
+
+    #[test]
+    fn limits_by_account() {
+        use api::{AgentLimits, limits_for, put_limits};
+        let l = |machine: &str, account: Option<&str>, machines: &[&str], at| AgentLimits {
+            agent: AgentKind::ClaudeCode,
+            machine: machine.into(),
+            limits: vec![],
+            at,
+            plan: None,
+            account: account.map(str::to_string),
+            account_label: None,
+            machines: machines.iter().map(|m| m.to_string()).collect(),
+        };
+        let mut all = vec![l("jupiter", None, &[], 1), l("workbox", None, &[], 1)];
+        // jupiter and mars report the personal account: jupiter's old report goes.
+        put_limits(&mut all, l("jupiter", Some("me"), &["jupiter", "mars"], 2));
+        assert_eq!(all.iter().map(|x| x.key()).collect::<Vec<_>>(), ["me", "workbox"]);
+        put_limits(&mut all, l("workbox", Some("work"), &["workbox"], 3));
+        assert_eq!(all.iter().map(|x| x.key()).collect::<Vec<_>>(), ["work", "me"]);
+        assert_eq!(limits_for(&all, AgentKind::ClaudeCode, "mars").and_then(|x| x.account.as_deref()), Some("me"));
+        assert_eq!(limits_for(&all, AgentKind::ClaudeCode, "workbox").and_then(|x| x.account.as_deref()), Some("work"));
+        assert!(limits_for(&all, AgentKind::Codex, "workbox").is_none());
+        // mars signs in to the work account: it leaves the personal one.
+        put_limits(&mut all, l("mars", Some("work"), &["workbox", "mars"], 4));
+        assert_eq!(all.iter().find(|x| x.key() == "me").unwrap().machines, ["jupiter"]);
+        // And jupiter too: nobody is on the personal account any more.
+        put_limits(&mut all, l("jupiter", Some("work"), &["workbox", "mars", "jupiter"], 5));
+        assert_eq!(all.len(), 1);
     }
 }

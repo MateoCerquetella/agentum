@@ -45,6 +45,8 @@ pub struct App {
     pub out: mpsc::Sender<FromAgentd>,
     out_rx: tokio::sync::Mutex<mpsc::Receiver<FromAgentd>>,
     agents: Mutex<Vec<AgentInfo>>,
+    /// The agents the hub we're connected to can read (see [`agentum_proto::machine::AGENTS_HEADER`]).
+    hub_agents: Mutex<Vec<agentum_proto::AgentKind>>,
     projects: Mutex<Vec<Project>>,
     extra: Mutex<Vec<PathBuf>>,
     connected: AtomicBool,
@@ -75,6 +77,7 @@ impl App {
             out,
             out_rx: tokio::sync::Mutex::new(out_rx),
             agents: Mutex::new(vec![]),
+            hub_agents: Mutex::new(agentum_proto::AgentKind::FIRST.to_vec()),
             projects: Mutex::new(vec![]),
             extra: Mutex::new(extra),
             connected: AtomicBool::new(false),
@@ -143,7 +146,10 @@ impl App {
             os: machine::os(),
             arch: std::env::consts::ARCH.to_string(),
             home: machine::home_string(),
-            agents: self.agents.lock().unwrap().clone(),
+            agents: {
+                let known = self.hub_agents.lock().unwrap();
+                self.agents.lock().unwrap().iter().filter(|a| known.contains(&a.agent)).cloned().collect()
+            },
             projects: self.projects.lock().unwrap().clone(),
             threads: self.threads.live(),
             stats: machine::stats(),
@@ -166,6 +172,10 @@ impl App {
                 let _ = self.out.send(FromAgentd::Update(self.hello())).await;
             }
         }
+    }
+
+    pub fn set_hub_agents(&self, agents: Vec<agentum_proto::AgentKind>) {
+        *self.hub_agents.lock().unwrap() = agents;
     }
 
     pub fn is_connected(&self) -> bool {
