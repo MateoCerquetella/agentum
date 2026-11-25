@@ -40,10 +40,37 @@ pub fn scheme() -> &'static str {
 }
 
 pub fn apply_saved() {
-    let Some(el) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.document_element()) else { return };
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+    let Some(el) = doc.document_element() else { return };
     let _ = el.set_attribute("data-theme", &theme());
     let _ = el.set_attribute("data-scheme", scheme());
+    // The browser's title bar (installed app, Android) takes the page's background.
+    if let (Some(meta), Some(body)) = (doc.query_selector("meta[name=theme-color]").ok().flatten(), doc.body()) {
+        if let Some(bg) = web_sys::window().and_then(|w| w.get_computed_style(&body).ok().flatten()).and_then(|s| s.get_property_value("background-color").ok()).filter(|c| !c.is_empty() && c != "rgba(0, 0, 0, 0)") {
+            let _ = meta.set_attribute("content", &bg);
+        }
+    }
     look_signal().update(|n| *n += 1);
+}
+
+/// In System mode the page follows the OS while it's open (macOS switching at sunset, iOS Auto).
+pub fn follow_system() {
+    use wasm_bindgen::{closure::Closure, JsCast};
+    let Some(mq) = web_sys::window().and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten()) else { return };
+    let cb = Closure::<dyn Fn()>::new(|| {
+        let shown = web_sys::window().and_then(|w| w.document()).and_then(|d| d.document_element()).and_then(|e| e.get_attribute("data-scheme"));
+        if mode() == "system" && shown.as_deref() != Some(scheme()) {
+            apply_saved();
+        }
+    });
+    let _ = mq.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref());
+    // A home-screen app coming back from the background may have missed the change.
+    if let Some(d) = web_sys::window().and_then(|w| w.document()) {
+        let _ = d.add_event_listener_with_callback("visibilitychange", cb.as_ref().unchecked_ref());
+    }
+    // Both for the app's whole life (a list nothing holds may be collected with its listener).
+    cb.forget();
+    std::mem::forget(mq);
 }
 
 fn save(key: &str, v: &str) {
