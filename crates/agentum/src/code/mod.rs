@@ -7,11 +7,12 @@ pub mod agentd;
 pub mod browser;
 pub mod db;
 pub mod render;
+pub mod surf;
 
 use crate::state::App;
 use crate::util::{bad, not_found, AppError, R};
 use agentum_proto::api::*;
-use agentum_proto::machine::{FsReq, GitReq, ModelInfo, Req};
+use agentum_proto::machine::{FsReq, GitReq, ModelInfo, Req, SurfReq};
 use agentum_proto::{AgentKind, Event, EventKind, Input, Permission, SendMode, ThreadSpec, ThreadState};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -37,6 +38,8 @@ pub struct Hub {
     pub out: tokio::sync::broadcast::Sender<Out>,
     models: Mutex<HashMap<(String, AgentKind), (Instant, Vec<ModelInfo>)>>,
     html: Mutex<HashMap<(String, u64), Arc<str>>>,
+    /// The Surf viewer's sockets relayed through agentd: sock → (machine, to the page).
+    pub socks: Mutex<HashMap<String, (String, tokio::sync::mpsc::Sender<agentum_proto::machine::SockMsg>)>>,
 }
 
 impl Default for Hub {
@@ -49,6 +52,7 @@ impl Default for Hub {
             out: tokio::sync::broadcast::channel(4096).0,
             models: Default::default(),
             html: Default::default(),
+            socks: Default::default(),
         }
     }
 }
@@ -325,6 +329,7 @@ pub fn routes() -> Router<App> {
         .route("/api/code/machines/{id}/projects", post(add_project))
         .route("/api/code/machines/{id}/main", post(set_main))
         .route("/api/code/call", post(call))
+        .merge(surf::routes())
         .route("/api/code/syntax.css", get(|| async { ([("content-type", "text/css"), ("cache-control", "public, max-age=86400")], render::syntax_css()) }))
 }
 
@@ -338,6 +343,8 @@ pub async fn machine_call(app: &App, machine: &str, req: Req) -> Result<Value, S
     let wait = match &req {
         Req::Git(GitReq::Push { .. }) | Req::Git(GitReq::PrMerge { .. }) | Req::Git(GitReq::WorktreeAdd { .. }) => Duration::from_secs(120),
         Req::Start { .. } | Req::Models { .. } => Duration::from_secs(60),
+        // The first start on a machine downloads the browser's image.
+        Req::Surf(SurfReq::Ensure { .. }) => Duration::from_secs(600),
         _ => Duration::from_secs(30),
     };
     c.call(req, wait).await
@@ -470,7 +477,8 @@ async fn start_agent(app: &App, s: &ThreadSummary, mut input: Input, resume: Opt
         let tail: String = ctx.chars().rev().take(12_000).collect::<Vec<_>>().into_iter().rev().collect();
         input.text = format!("You are a side chat about another coding thread in this same directory. Answer questions about it; don't change files unless asked. Its conversation so far:\n{tail}\n\n---\n\n{}", input.text);
     }
-    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone() };
+    let instructions = crate::plugins::instructions(app, s).await;
+    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone(), instructions };
     let req = Req::Start { thread: s.id.clone(), spec, resume, input: Some(input), last_seq: s.last_seq };
     match machine_call(app, &s.machine, req).await {
         Ok(_) => {
