@@ -11,6 +11,8 @@ pub static MANIFEST: Manifest = Manifest {
     settings: &[],
 };
 
+pub mod card;
+
 #[cfg(feature = "hub")]
 mod hub;
 #[cfg(feature = "hub")]
