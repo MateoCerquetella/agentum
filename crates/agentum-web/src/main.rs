@@ -1,6 +1,7 @@
 //! Agentum's web app: Leptos in the browser (WebAssembly), served by the hub.
 mod app;
 mod code;
+mod dockside;
 mod pages;
 mod palette;
 mod plugins;

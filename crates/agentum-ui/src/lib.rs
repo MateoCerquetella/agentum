@@ -9,10 +9,12 @@
 //! - [`fmt`]: times and sizes for people.
 //! - [`store`]: localStorage.
 pub mod api;
+pub mod dnd;
 pub mod diff;
 pub mod fmt;
 pub mod icons;
 pub mod nav;
+pub mod picker;
 pub mod store;
 pub mod ui;
 pub mod ws;
@@ -34,7 +36,8 @@ pub mod prelude {
     pub use crate::api::{api, api_delete, api_get, api_post, api_put, rpc, ApiError};
     pub use crate::fmt::{ago, ago_ms, clock, now_ms};
     pub use crate::icons::Icon;
-    pub use crate::nav::{navigate, set_param, use_param, use_params, Where};
+    pub use crate::nav::{here, navigate, pane, set_param, use_param, use_params, PaneAction, Where};
+    pub use crate::picker::{context_menu, Menu, PickItem, Picker};
     pub use crate::ui::{confirm, toast, toast_bad, Modal};
     pub use crate::ws::{on_ws, subscribe};
     pub use crate::global;

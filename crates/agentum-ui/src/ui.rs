@@ -114,6 +114,7 @@ fn answer(v: bool) {
 /// Toasts and the confirm dialog; mounted once by the app.
 #[component]
 pub fn UiLayer() -> impl IntoView {
+    let ctx_menu = view! { <crate::picker::ContextMenuLayer/> };
     let toasts = TOASTS.with(|t| *t);
     let dialog = DIALOG.with(|d| *d);
     let _esc = window_event_listener(leptos::ev::keydown, move |e| {
@@ -122,6 +123,7 @@ pub fn UiLayer() -> impl IntoView {
         }
     });
     view! {
+        {ctx_menu}
         <div class="toasts">
             <For each=move || toasts.get() key=|t| t.id let:t>
                 {match t.on_click {

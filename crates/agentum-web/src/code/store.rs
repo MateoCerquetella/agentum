@@ -87,42 +87,7 @@ pub fn thread(id: impl Fn() -> String + Send + Sync + 'static) -> Signal<Option<
     })
 }
 
-/// Thread ids in the order the sidebar shows them (for ⌘1–9 and ⌘⇧[ ]).
-pub fn sidebar_order(threads: &[ThreadSummary]) -> Vec<String> {
-    let open: Vec<&ThreadSummary> = threads.iter().filter(|t| !t.archived && t.parent.is_none()).collect();
-    let mut out: Vec<String> = vec![];
-    let mut push = |mut v: Vec<&ThreadSummary>| {
-        v.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        out.extend(v.into_iter().map(|t| t.id.clone()));
-    };
-    push(open.iter().copied().filter(|t| t.pinned).collect());
-    for a in [Attention::NeedsYou, Attention::Ready, Attention::Working, Attention::Settled] {
-        push(open.iter().copied().filter(|t| !t.pinned && t.attention == a).collect());
-    }
-    out
-}
 
-/// "3 machines · 2 working".
-pub fn machines_line() -> String {
-    OV.with(|o| {
-        o.with(|o| match o {
-            None => "Connecting…".into(),
-            Some(o) => {
-                let on = o.machines.iter().filter(|m| m.online).count();
-                let working = o.threads.iter().filter(|t| t.attention == Attention::Working).count();
-                let needs = o.threads.iter().filter(|t| t.attention == Attention::NeedsYou && !t.archived).count();
-                let mut s = format!("{on}/{} machines online", o.machines.len());
-                if working > 0 {
-                    s += &format!(" · {working} working");
-                }
-                if needs > 0 {
-                    s += &format!(" · {needs} need you");
-                }
-                s
-            }
-        })
-    })
-}
 
 /// Threads by when they were last opened here (oldest first).
 pub fn visited() -> Vec<String> {
