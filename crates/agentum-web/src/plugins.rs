@@ -90,7 +90,10 @@ pub fn overlays() -> impl IntoView {
 }
 /// Looks added by plugins (id, name, description).
 pub fn themes() -> Vec<(&'static str, &'static str, &'static str)> {
-    all().iter().filter(|p| off().with_untracked(|o| !o.iter().any(|x| x == p.manifest().id))).flat_map(|p| p.themes().iter().copied()).collect()
+    // Runs before the app mounts (the saved look is applied first): read the switch without
+    // starting its fetch (no executor yet).
+    let off = OFF.with(|o| *o);
+    all().iter().filter(|p| off.with_untracked(|o| !o.iter().any(|x| x == p.manifest().id))).flat_map(|p| p.themes().iter().copied()).collect()
 }
 pub fn settings_sections() -> Vec<(&'static agentum_plugin::Manifest, Option<AnyView>)> {
     all().iter().map(|p| (p.manifest(), p.settings())).collect()

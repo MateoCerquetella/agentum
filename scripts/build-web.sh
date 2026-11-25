@@ -8,7 +8,8 @@ cd "$(dirname "$0")/.."
 WEB=crates/agentum-web
 DIST=$WEB/dist
 TARGET_DIR=${CARGO_TARGET_DIR:-target}
-cargo build -p agentum-web --target wasm32-unknown-unknown --profile wasm
+# erase_components: Leptos type-erases component views (much smaller wasm, faster builds).
+RUSTFLAGS="${RUSTFLAGS:-} --cfg erase_components" cargo build -p agentum-web --target wasm32-unknown-unknown --profile wasm
 rm -rf "$DIST" && mkdir -p "$DIST/assets"
 wasm-bindgen --target web --no-typescript --out-dir "$DIST/tmp" --out-name agentum "$TARGET_DIR/wasm32-unknown-unknown/wasm/agentum-web.wasm"
 wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals -o "$DIST/tmp/agentum_bg.opt.wasm" "$DIST/tmp/agentum_bg.wasm"
