@@ -184,7 +184,8 @@ html[data-scheme="light"] .dw-day-sky { background: linear-gradient(0deg, transp
 .dw-todos { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .dw-todos li { display: flex; align-items: center; gap: 8px; color: var(--hi); }
 .dw-todos li.done span { text-decoration: line-through; opacity: .6; }
-.dw-usage { display: flex; flex-direction: column; gap: 8px; margin: -6px -8px; }
+.dw-usage { display: flex; flex-direction: column; gap: 8px; margin: -6px -8px; container-type: inline-size; }
+@container (max-width: 340px) { .dw-usage .ucard-grid { grid-template-columns: minmax(0, 1fr); } .dw-usage .ucard-win { border-right: 0 !important; } }
 .dw-usage .ucard-card + .ucard-card { border-top: 1px solid var(--border); padding-top: 10px; }
 
 /* The "+ Add widget" panel */
