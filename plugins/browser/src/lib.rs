@@ -1,16 +1,29 @@
-//! Browser: The agents' browser (Steel), beside your threads.
+//! Browser: each project's own browser (Surf). Steel in a container on the project's machine;
+//! agents drive it over CDP, you watch (and type into) it beside the thread or at /p/browser.
 use agentum_plugin::{Group, Manifest, SettingDef, SettingKind};
 
 pub static MANIFEST: Manifest = Manifest {
     id: "browser",
     name: "Browser",
-    description: "The agents' browser (Steel), beside your threads.",
+    description: "Each project's own browser (Surf): agents drive it, you watch it beside the thread.",
     icon: "globe",
-    group: Group::Looks,
+    group: Group::Code,
     default_on: true,
     settings: &[
-        SettingDef { key: "api_url", label: "Steel API", help: "Where Steel's API answers, like http://my-desktop:3000 (its /v1/sessions lists the browsers).", kind: SettingKind::Text, default: "\"\"" },
-        SettingDef { key: "viewer_url", label: "Viewer", help: "The page that shows the browser, like http://my-desktop:5173 (Steel's UI). Empty: a session's own viewer.", kind: SettingKind::Text, default: "\"\"" },
+        SettingDef {
+            key: "auto_start",
+            label: "Start automatically for new threads",
+            help: "A new thread starts its project's browser. Off: a project's browser starts when you start it in the thread's Browser tab, and stays on for its threads.",
+            kind: SettingKind::Bool,
+            default: "false",
+        },
+        SettingDef {
+            key: "idle_hours",
+            label: "Stop unused browsers after (hours)",
+            help: "A browser no agent has used and nobody has watched for this long is stopped (its sign-ins are kept); the project's next agent starts it again. 0: never.",
+            kind: SettingKind::Number { min: 0.0, max: 168.0 },
+            default: "4",
+        },
     ],
 };
 
