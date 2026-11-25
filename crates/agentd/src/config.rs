@@ -52,7 +52,7 @@ fn is_default_idle(v: &u64) -> bool {
     *v == 10
 }
 
-pub const DEFAULT_ROOTS: [&str; 4] = ["~/Developer", "~/projects", "~/src", "~/code"];
+pub const DEFAULT_ROOTS: [&str; 5] = ["~/Developer", "~/developer", "~/projects", "~/src", "~/code"];
 
 impl Config {
     /// `$AGENTD_CONFIG`, else `~/.config/agentum/agentd.toml`.
