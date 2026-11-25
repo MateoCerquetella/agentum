@@ -36,7 +36,8 @@ pub fn all() -> &'static [&'static dyn WebPlugin] {
 
 thread_local! {
     /// Plugin ids turned off (from /api/plugins).
-    static OFF: RwSignal<Vec<String>> = agentum_ui::global(vec![]);
+    // Until /api/plugins answers, the plugins that are off by default are off.
+    static OFF: RwSignal<Vec<String>> = agentum_ui::global(ALL.iter().filter(|p| !p.manifest().default_on).map(|p| p.manifest().id.to_string()).collect());
     static LOADED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 pub fn off() -> RwSignal<Vec<String>> {

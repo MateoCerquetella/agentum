@@ -52,3 +52,5 @@ pre.diff .diff-file { color: var(--hi); font-weight: 600; }
 .code-thread .code-head { display: flex; flex-direction: row; align-items: center; flex-wrap: nowrap; min-height: 44px; text-align: left; }
 .code-head > b { min-width: 0; }
 .code-composer .row, .code-new .row, .tool-head { display: flex; align-items: center; }
+.code-new .pickers { flex-wrap: wrap; }
+.code-new .pickers .pick { min-width: 0; flex: 0 1 auto; }
