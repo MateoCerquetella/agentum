@@ -105,7 +105,9 @@ pub fn scan_projects(roots: &[PathBuf], extra: &[PathBuf], skip: &[PathBuf]) -> 
             continue;
         }
         if is_repo(&dir) {
-            if let Ok(c) = dir.canonicalize()
+            // A worktree (`.git` is a file) isn't a project of its own: its repo is.
+            if dir.join(".git").is_dir()
+                && let Ok(c) = dir.canonicalize()
                 && seen.insert(c.clone())
             {
                 out.push(project(&c));
@@ -196,12 +198,12 @@ mod tests {
         std::fs::write(wt.join(".git"), format!("gitdir: {}\n", a.join(".git").display())).unwrap();
         let found = scan_projects(&[root.clone()], &[], &[]);
         let names: Vec<&str> = found.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, vec!["a", "wt"]);
+        // The worktree isn't a project: its repo is.
+        assert_eq!(names, vec!["a"]);
         assert_eq!(found[0].branch.as_deref(), Some("feature/x"));
-        assert_eq!(found[1].branch.as_deref(), Some("feature/x"));
         // Skipped directories stay out.
-        let found = scan_projects(&[root.clone()], &[], &[root.join("wt")]);
-        assert_eq!(found.len(), 1);
+        let found = scan_projects(&[root.clone()], &[], &[root.join("org")]);
+        assert_eq!(found.len(), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
