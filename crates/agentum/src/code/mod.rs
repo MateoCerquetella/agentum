@@ -482,6 +482,12 @@ async fn detail(State(app): State<App>, Path(id): Path<String>, Query(q): Query<
 }
 
 async fn patch(State(app): State<App>, Path(id): Path<String>, Json(p): Json<PatchThread>) -> R<Json<ThreadSummary>> {
+    Ok(Json(patch_thread(&app, &id, p).await?))
+}
+
+/// Rename, pin, archive, mark read, reorder, or switch a thread's model.
+pub async fn patch_thread(app: &App, id: &str, p: PatchThread) -> R<ThreadSummary> {
+    let id = id.to_string();
     let mut t = app.code.summary(&id).ok_or_else(not_found)?;
     let mut model_changed = false;
     if let Some(v) = p.title {
@@ -527,7 +533,7 @@ async fn patch(State(app): State<App>, Path(id): Path<String>, Json(p): Json<Pat
             c.fire(Req::SetModel { thread: id, model: m, effort: t.effort.clone() });
         }
     }
-    Ok(Json(t))
+    Ok(t)
 }
 
 async fn remove(State(app): State<App>, Path(id): Path<String>) -> R<Json<Value>> {

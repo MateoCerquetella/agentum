@@ -8,7 +8,7 @@ use crate::state::App;
 use crate::util::{bad, not_found, R};
 use agentum_plugin::hub::{Ctx, HubCtx, HubPlugin};
 use agentum_plugin::Manifest;
-use agentum_proto::api::{NewThread, SendBody, ThreadSummary, WsOut};
+use agentum_proto::api::{NewThread, PatchThread, SendBody, ThreadSummary, WsOut};
 use agentum_proto::machine::Req;
 use agentum_proto::Event;
 use axum::extract::{Path, State};
@@ -78,6 +78,9 @@ impl HubCtx for PluginCtx {
     }
     async fn new_thread(&self, body: NewThread) -> Result<ThreadSummary, String> {
         crate::code::create_thread(&self.app, body).await.map_err(|e| e.1)
+    }
+    async fn patch_thread(&self, id: &str, patch: PatchThread) -> Result<ThreadSummary, String> {
+        crate::code::patch_thread(&self.app, id, patch).await.map_err(|e| e.1)
     }
     async fn kv_get(&self, key: &str) -> Option<Value> {
         kv_get(&self.app, self.m.id, key).await
