@@ -291,7 +291,7 @@ fn Shelf(label: &'static str, items: Vec<ThreadSummary>, on: Signal<Option<Strin
 
 /// The Coding side of the sidebar.
 #[component]
-pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
+pub fn Dockside(collapsed: RwSignal<bool>, #[prop(into)] mail_open: Signal<bool>) -> impl IntoView {
     store::start();
     let ov = overview();
     let (l_thread, r_thread) = (use_param("thread"), use_param("r_thread"));
@@ -368,6 +368,13 @@ pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
                     <span class="dk-machines" title="Machines online">{move || ov.with(|o| o.as_ref().map(|o| format!("{}/{}", o.machines.iter().filter(|m| m.online).count(), o.machines.len())).unwrap_or_default())}</span>
                     <button class="icon-btn" title="Go to… a thread, what was said, a page (⌘K)" on:click=move |_| crate::palette::shown().set(true)><Icon name="search" size=15/></button>
                 </div>
+                // Mail open beside a thread: its folders here too (one sidebar, whichever side).
+                <Show when=move || mail_open.get()>
+                    <div class="dk-mail">
+                        <button class="nav on" title="Mail" on:click=move |_| navigate("mail", Where::Replace, &[])><Icon name="mail"/><span>"Mail"</span></button>
+                        <crate::pages::mail::side::Folders/>
+                    </div>
+                </Show>
                 <div class="dk-head"><Icon name="folder" size=13/><span>{move || if dock_on() { "Projects" } else { "Threads" }}</span>
                     <span class="dk-count">{move || ov.with(|o| o.as_ref().map(|o| group(&o.threads, now.get(), "").projects.len()).unwrap_or(0))}</span>
                 </div>

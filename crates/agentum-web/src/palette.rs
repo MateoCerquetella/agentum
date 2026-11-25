@@ -60,7 +60,7 @@ pub fn Palette(on_close: Callback<()>) -> impl IntoView {
         let mut v: Vec<Hit> = vec![];
         let go = |page: &'static str, at: Where, params: Vec<(String, String)>| Callback::new(move |_| {
             let p: Vec<(&str, &str)> = params.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-            navigate(page, at, &p)
+            navigate(page, beside_code(page, at), &p)
         });
         let threads = ov.with(|o| o.as_ref().map(|o| o.threads.clone()).unwrap_or_default());
         if lq.is_empty() {
@@ -155,4 +155,16 @@ pub fn Palette(on_close: Callback<()>) -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// All in one: from a coding thread, a personal page (Mail, Calendar…) opens on the right, beside the
+/// thread, instead of replacing it; on a phone (one pane) it still replaces it.
+fn beside_code(page: &str, at: Where) -> Where {
+    if !matches!(at, Where::Replace) || pages::def(page).and_then(|d| d.side) != Some(pages::Side::Life) {
+        return at;
+    }
+    let Some(w) = web_sys::window() else { return at };
+    let left = w.location().pathname().unwrap_or_default();
+    let wide = w.inner_width().ok().and_then(|x| x.as_f64()).unwrap_or(0.0) > 760.0;
+    if wide && left.trim_start_matches('/').split('/').next() == Some("code") { Where::Right } else { at }
 }
