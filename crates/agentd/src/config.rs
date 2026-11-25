@@ -15,6 +15,9 @@ pub struct Config {
     /// A PEM file of a private CA to trust for `wss://` (besides the public roots).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca: Option<String>,
+    /// Connect to this address instead of resolving the hub's host name (TLS still checks the name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_ip: Option<String>,
     /// Directories scanned for git repos (depth ≤ 4). Default: ~/Developer, ~/projects, ~/src, ~/code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roots: Option<Vec<String>>,

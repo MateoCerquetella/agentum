@@ -20,6 +20,35 @@ async fn send(ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>
     Ok(())
 }
 
+/// Just a hub on `port`: prints each agentd's Hello, acks events, answers pings. For measuring
+/// a separately started agentd (`agentd run` with `hub = "ws://127.0.0.1:PORT/agentd"`).
+async fn hub_only(port: u16) -> anyhow::Result<()> {
+    let l = TcpListener::bind(("127.0.0.1", port)).await?;
+    println!("hub on ws://127.0.0.1:{port}/agentd");
+    loop {
+        let (stream, _) = l.accept().await?;
+        tokio::spawn(async move {
+            let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
+            while let Some(Ok(m)) = ws.next().await {
+                let Message::Text(t) = m else { continue };
+                match serde_json::from_str::<FromAgentd>(t.as_str()) {
+                    Ok(FromAgentd::Hello(h)) | Ok(FromAgentd::Update(h)) => {
+                        println!("hello/update: {} {} agents={} projects={} threads={} rss={} MB", h.machine, h.version, h.agents.iter().filter(|a| a.installed).count(), h.projects.len(), h.threads.len(), h.stats.rss_mb)
+                    }
+                    Ok(FromAgentd::Events { thread, events }) => {
+                        if let Some(last) = events.last() {
+                            let _ = send(&mut ws, ToAgentd::Ack { thread, seq: last.seq }).await;
+                        }
+                    }
+                    Ok(other) => println!("{other:?}"),
+                    Err(e) => println!("bad frame: {e}"),
+                }
+            }
+            println!("agentd disconnected");
+        });
+    }
+}
+
 fn arg(args: &[String], name: &str) -> Vec<String> {
     args.iter().enumerate().filter(|(_, a)| *a == name).filter_map(|(i, _)| args.get(i + 1).cloned()).collect()
 }
@@ -28,6 +57,9 @@ fn arg(args: &[String], name: &str) -> Vec<String> {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_max_level(tracing::Level::WARN).with_writer(std::io::stderr).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(port) = arg(&args, "--hub-only").pop() {
+        return hub_only(port.parse()?).await;
+    }
     let mut agents: Vec<AgentKind> = args.iter().filter_map(|a| AgentKind::parse(a)).collect();
     if agents.is_empty() {
         agents = AgentKind::ALL.to_vec();

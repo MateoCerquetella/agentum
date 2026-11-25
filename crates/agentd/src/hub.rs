@@ -81,10 +81,24 @@ async fn session(app: &Arc<App>) -> anyhow::Result<()> {
     let mut wscfg = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
     wscfg.max_message_size = Some(64 << 20);
     wscfg.max_frame_size = Some(64 << 20);
-    let (ws, _) = tokio::time::timeout(Duration::from_secs(20), tokio_tungstenite::connect_async_tls_with_config(req, Some(wscfg), true, connector))
-        .await
-        .context("connecting timed out")?
-        .context("connecting")?;
+    // Resolve and connect ourselves (see resolve.rs); TLS and the handshake still use the name.
+    let host = req.uri().host().context("no host in the hub URL")?.to_string();
+    let port = req.uri().port_u16().unwrap_or(if app.cfg.hub.starts_with("wss:") { 443 } else { 80 });
+    let connect = async {
+        let addrs = crate::resolve::resolve(&host, port, app.cfg.hub_ip.as_deref()).await?;
+        let mut last = None;
+        for a in addrs {
+            match tokio::net::TcpStream::connect(a).await {
+                Ok(s) => {
+                    s.set_nodelay(true).ok();
+                    return Ok(tokio_tungstenite::client_async_tls_with_config(req, s, Some(wscfg), connector).await.context("handshake")?);
+                }
+                Err(e) => last = Some(anyhow::anyhow!("{a}: {e}")),
+            }
+        }
+        Err::<_, anyhow::Error>(last.unwrap_or_else(|| anyhow::anyhow!("no address for {host}")))
+    };
+    let (ws, _) = tokio::time::timeout(Duration::from_secs(20), connect).await.context("connecting timed out")??;
     let (mut sink, mut stream) = ws.split();
     let mut out = app.take_out_rx().await;
     // Anything left over from the last connection is stale.

@@ -12,6 +12,7 @@ pub mod hub;
 pub mod install;
 pub mod machine;
 pub mod outbox;
+pub mod resolve;
 pub mod term;
 pub mod threads;
 pub mod util;
