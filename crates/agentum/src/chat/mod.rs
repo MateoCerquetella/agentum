@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 pub fn routes() -> Router<App> {
     Router::new()
-        .route("/api/chat/sessions", get(list_sessions))
+        .route("/api/chat/sessions", get(list_sessions).delete(delete_all_sessions))
         .route("/api/chat/sessions/{id}", get(get_session).put(update_session).delete(delete_session))
         .route("/api/chat", post(chat))
         .route("/api/chat/approve", post(approve))
@@ -94,6 +94,12 @@ async fn update_session(State(app): State<App>, Path(id): Path<String>, Json(b):
 async fn delete_session(State(app): State<App>, Path(id): Path<String>) -> R<Json<Value>> {
     app.db.call(move |c| { c.execute("DELETE FROM chat_messages WHERE session_id=?1", [&id])?; c.execute("DELETE FROM chat_sessions WHERE id=?1", [&id]) }).await?;
     Ok(Json(json!({"ok": true})))
+}
+
+/// Delete every chat (and its messages).
+async fn delete_all_sessions(State(app): State<App>) -> R<Json<Value>> {
+    let n = app.db.call(|c| { c.execute("DELETE FROM chat_messages", [])?; c.execute("DELETE FROM chat_sessions", []) }).await?;
+    Ok(Json(json!({"ok": true, "deleted": n})))
 }
 
 async fn system_prompt(app: &App, access: Access) -> String {

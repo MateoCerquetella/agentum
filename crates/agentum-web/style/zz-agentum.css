@@ -197,3 +197,5 @@
 .dk-card.on .dk-status.can-park { display: none; }
 .dk-card.on .dk-park { display: inline-flex; }
 a.dk-hit { display: block; }
+.chats-fold { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; }
+.chats-fold:hover { color: var(--hi); }
