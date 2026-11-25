@@ -17,6 +17,8 @@ mod hub;
 pub use hub::PLUGIN as HUB;
 
 #[cfg(feature = "web")]
+mod vt;
+#[cfg(feature = "web")]
 mod web;
 #[cfg(feature = "web")]
 pub use web::PLUGIN as WEB;
