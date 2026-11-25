@@ -358,7 +358,7 @@ fn Shell() -> impl IntoView {
                 </Show>
                 {move || match side.get() {
                     Side::Life => view! { <crate::side::Personal left=left right=right collapsed=collapsed hidden=hidden counts=counts prefs=ui_prefs/> }.into_any(),
-                    Side::Work => view! { <crate::dockside::Dockside collapsed=collapsed/> }.into_any(),
+                    Side::Work => view! { <crate::dockside::Dockside collapsed=collapsed mail_open=Signal::derive(move || !hidden.get() && (left.get() == "mail" || right.get().as_deref() == Some("mail")))/> }.into_any(),
                     // (Dockside off: the same component draws a plain list.)
                 }}
                 <div class="grow"/>

@@ -1,6 +1,6 @@
 //! Mail: the mail client and the Inbox Zero assistant in one pane. Its folders are in the app's
 //! sidebar (side.rs); wide and mid: list | reading pane; narrow (phones, a thin split): one column
-//! with Back, and the folders as pickers above the list.
+//! with Back (on phones, with the folders as pickers above the list).
 pub mod lib;
 mod composer;
 mod inbox;
@@ -323,6 +323,11 @@ fn KeysHelp(on_close: Callback<()>) -> impl IntoView {
 
 pub fn page(pane: Pane) -> AnyView {
     view! { <Mail side=pane/> }.into_any()
+}
+
+/// A phone: the sidebar is a drawer there, so Mail keeps its own pickers.
+fn phone() -> bool {
+    web_sys::window().and_then(|w| w.inner_width().ok()).and_then(|x| x.as_f64()).is_some_and(|w| w <= 760.0)
 }
 
 /// The element's width, live (ResizeObserver).
@@ -793,7 +798,7 @@ fn Mail(side: Pane) -> impl IntoView {
                     }
                     match tab.get().as_str() {
                         "inbox" => view! {
-                            <div class="ml-list"><inbox::Inbox msgs=msgs f=filter set_f=change_filter with_nav=Signal::derive(move || sh.in_side.get() && layout.get() != "narrow") loading=loading error=list_err/></div>
+                            <div class="ml-list"><inbox::Inbox msgs=msgs f=filter set_f=change_filter with_nav=Signal::derive(move || sh.in_side.get() && (layout.get() != "narrow" || !phone())) loading=loading error=list_err/></div>
                             <Show when=move || layout.get() != "narrow" && !pane_open()>
                                 <div class="ml-pane ml-empty"><Icon name="mail" size=34/><div>"No email open"</div><div class="subdue">"Pick one from the list, or press c to write one."</div></div>
                             </Show>
