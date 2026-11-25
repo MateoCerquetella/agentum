@@ -143,9 +143,10 @@ impl Translator {
                 out.push(ev(EventKind::Usage { usage: u }));
             }
             "account/rateLimits/updated" => {
-                let l = rate_limits(p.get("rateLimits").unwrap_or(&Value::Null));
+                let r = p.get("rateLimits").unwrap_or(&Value::Null);
+                let l = rate_limits(r);
                 if !l.is_empty() {
-                    out.push(ev(EventKind::RateLimits { limits: l }));
+                    out.push(ev(EventKind::RateLimits { limits: l, plan: plan_type(r) }));
                 }
             }
             "thread/name/updated" => {
@@ -371,6 +372,11 @@ impl Translator {
     }
 }
 
+/// The account's plan in a rate-limit snapshot ("plus", "pro"…).
+pub fn plan_type(r: &Value) -> Option<String> {
+    r.get("planType").and_then(|p| p.as_str()).filter(|p| !p.is_empty()).map(str::to_string)
+}
+
 /// Codex's rate-limit snapshot → windows.
 pub fn rate_limits(r: &Value) -> Vec<RateLimit> {
     let mut out = Vec::new();
@@ -588,9 +594,10 @@ impl Agent for CodexAgent {
         // The account's limits now, so a refused turn can say which and until when (and the
         // usage meters know before the first turn).
         if let Ok(r) = rpc.call("account/rateLimits/read", Value::Null, Duration::from_secs(10)).await {
-            let l = rate_limits(r.get("rateLimits").unwrap_or(&Value::Null));
+            let r = r.get("rateLimits").unwrap_or(&Value::Null);
+            let l = rate_limits(r);
             if !l.is_empty() {
-                let _ = out.send(DriverOut::Event(EventKind::RateLimits { limits: l }));
+                let _ = out.send(DriverOut::Event(EventKind::RateLimits { limits: l, plan: plan_type(r) }));
             }
         }
         let thread_id = res.get("thread").map(|t| s(t, "id")).unwrap_or_default();
@@ -626,6 +633,18 @@ impl Agent for CodexAgent {
         models.extend(ollama_models().await);
         Ok(models)
     }
+}
+
+/// The account's limits now, from a short-lived app-server (`account/rateLimits/read`).
+pub async fn usage_now(bin: PathBuf) -> anyhow::Result<(Vec<RateLimit>, Option<String>)> {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let tr = Arc::new(Mutex::new(Translator::new("", 0)));
+    let rpc = connect(&bin, &crate::util::home(), &[], tx, tr).await?;
+    let r = rpc.call("account/rateLimits/read", Value::Null, Duration::from_secs(20)).await;
+    rpc.proc.kill();
+    let r = r?;
+    let r = r.get("rateLimits").unwrap_or(&Value::Null);
+    Ok((rate_limits(r), plan_type(r)))
 }
 
 pub fn models_from_list(r: &Value) -> Vec<ModelInfo> {
@@ -733,7 +752,7 @@ mod tests {
         // Recorded on this machine: the account was over its weekly limit.
         let mut t = Translator::new("/tmp/agentd-rec/proj", 0);
         let (evs, _) = run(&mut t, include_str!("../../tests/fixtures/codex_limit.jsonl"));
-        let limits = evs.iter().find_map(|e| if let EventKind::RateLimits { limits } = e { Some(limits.clone()) } else { None }).unwrap();
+        let limits = evs.iter().find_map(|e| if let EventKind::RateLimits { limits, .. } = e { Some(limits.clone()) } else { None }).unwrap();
         assert_eq!(limits[0].window, "5h");
         assert_eq!(limits[1].window, "weekly");
         assert_eq!(limits[1].used_percent, 100.0);

@@ -3,6 +3,7 @@
 //! /api/dashboard/layout, PUT /api/widgets). "Edit layout" (the pencil in the pane's header):
 //! drag widgets within or between columns, remove them (×), change one's settings (gear), and add
 //! more from the panel (+ Add widget: drag in, or +; or create a new one of any type).
+mod chart;
 mod editor;
 mod widgets;
 
@@ -126,9 +127,9 @@ fn Dashboard(pane: Pane) -> impl IntoView {
         let editable = types.with_untracked(|t| t.get(&ty).is_some());
         let (id1, id2, id3, id4) = (id.clone(), id.clone(), id.clone(), id.clone());
         let w2 = w.clone();
-        let ty_c = ty.clone();
+        let ty_c = format!("{ty}{}{}", if widgets::frameless(&w) { " frameless" } else { "" }, if widgets::headless(&w) { " headless" } else { "" });
         view! {
-            <section class=move || format!("dw dw-{ty_c}{}{}{}", if editing.get() { " editing" } else { "" }, if dragging.get().as_deref() == Some(id1.as_str()) { " dragging" } else { "" },
+            <section class=move || format!("dw dwt-{ty_c}{}{}{}", if editing.get() { " editing" } else { "" }, if dragging.get().as_deref() == Some(id1.as_str()) { " dragging" } else { "" },
                     if target.get().is_some_and(|(c, i)| c == ci && cols.with(|cs| cs.get(c).and_then(|x| x.1.get(i)) == Some(&id1))) { " drop-before" } else { "" })
                 draggable=move || if editing.get() { "true" } else { "false" }
                 on:dragstart=move |e| {
@@ -275,6 +276,7 @@ fn Dashboard(pane: Pane) -> impl IntoView {
                     }}
                 </aside>
             </Show>
+            <chart::ChartLayer/>
             {move || editor.get().map(|(ty, w)| view! {
                 <Editor ty=ty types=types.get_untracked() widget=w on_close=Callback::new(move |_| editor.set(None))
                     on_done=Callback::new(move |(id, item): (String, Option<Value>)| {

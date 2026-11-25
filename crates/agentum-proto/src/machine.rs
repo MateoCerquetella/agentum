@@ -156,6 +156,9 @@ pub enum Req {
     Surf(SurfReq),
     /// Only to an agentd whose [`Hello::features`] has "secrets" (an older one would log the frame).
     Secrets(SecretsReq),
+    /// The agent's subscription limits now, asked of its provider: `{limits: [RateLimit], plan}`.
+    /// Only to an agentd whose [`Hello::features`] has "usage".
+    Usage { agent: AgentKind },
 }
 
 /// A directory's `.env`. Values go in, never out: agentd answers with key names only. Its Debug

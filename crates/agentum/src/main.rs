@@ -114,6 +114,7 @@ async fn run(env_file: std::path::PathBuf, env: std::io::Result<Vec<String>>) ->
         .route("/api/widgets/{id}", axum::routing::delete(widgets::delete_widget))
         .route("/api/widgets/{id}/data", get(widgets::widget_data))
         .route("/api/chart", get(widgets::chart))
+        .route("/api/icons/si/{name}", get(widgets::simple_icon))
         .merge(accounts::routes())
         .merge(notes::routes())
         .merge(floatnote::routes())

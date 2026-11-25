@@ -114,7 +114,7 @@ impl Translator {
                 if let Some(l) = rate_limits(v.get("rate_limit_info").unwrap_or(&Value::Null))
                     && !l.is_empty()
                 {
-                    out.push(Act::Ev(EventKind::RateLimits { limits: l }));
+                    out.push(Act::Ev(EventKind::RateLimits { limits: l, plan: subscription() }));
                 }
             }
             "control_request" => self.control_request(v, &mut out),
@@ -429,6 +429,106 @@ fn diffs_for(tu: &ToolUse, meta: Option<&Value>, cwd: &str) -> Vec<FileDiff> {
     }
 }
 
+/// Claude Code's sign-in on this machine (its credentials file; macOS keeps it in the Keychain,
+/// not read here). The token stays in this process: never logged, never sent to the hub.
+struct Creds {
+    token: String,
+    expires_ms: Option<i64>,
+    plan: Option<String>,
+}
+fn creds() -> Option<Creds> {
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| crate::util::home().join(".claude"));
+    let v: Value = serde_json::from_slice(&std::fs::read(dir.join(".credentials.json")).ok()?).ok()?;
+    let o = v.get("claudeAiOauth")?;
+    let st = |k: &str| o.get(k).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(str::to_string);
+    Some(Creds { token: st("accessToken").unwrap_or_default(), expires_ms: o.get("expiresAt").and_then(|e| e.as_i64()), plan: plan_label(st("subscriptionType"), st("rateLimitTier")) })
+}
+/// "Max (20x)" from the rate-limit tier, else the subscription ("Pro").
+pub fn plan_label(sub: Option<String>, tier: Option<String>) -> Option<String> {
+    if let Some(n) = tier.as_deref().and_then(|t| t.split("max_").nth(1)).and_then(|t| t.split('x').next()).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) {
+        return Some(format!("Max ({n}x)"));
+    }
+    sub.map(|s| s[..1].to_uppercase() + &s[1..])
+}
+/// The Claude subscription this machine is signed in with.
+pub fn subscription() -> Option<String> {
+    creds()?.plan
+}
+
+/// The account's limits now, from Anthropic's OAuth usage endpoint (as Claude Code's /usage and
+/// BB's usage tracker read them), with the token Claude Code keeps. An expired token isn't
+/// refreshed here: refreshing rotates it under Claude Code.
+pub async fn usage_now() -> anyhow::Result<(Vec<RateLimit>, Option<String>)> {
+    let c = creds().filter(|c| !c.token.is_empty()).ok_or_else(|| anyhow::anyhow!("Claude Code isn't signed in on this machine"))?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    if c.expires_ms.is_some_and(|e| e <= now) {
+        anyhow::bail!("Claude Code's sign-in on this machine has expired: open Claude Code there to renew it");
+    }
+    let headers = vec![
+        ("Authorization", format!("Bearer {}", c.token)),
+        ("anthropic-beta", "oauth-2025-04-20".to_string()),
+        ("Accept", "application/json".to_string()),
+        ("Content-Type", "application/json".to_string()),
+        ("User-Agent", format!("agentd/{}", env!("CARGO_PKG_VERSION"))),
+    ];
+    let (status, body) = tokio::task::spawn_blocking(move || crate::https::get("api.anthropic.com", "/api/oauth/usage", &headers)).await??;
+    match status {
+        200..=299 => {}
+        401 => anyhow::bail!("Anthropic refused Claude Code's sign-in on this machine: open Claude Code there to renew it"),
+        429 => anyhow::bail!("Anthropic throttled the usage check (not your limit): try again later"),
+        s => anyhow::bail!("Claude usage check: HTTP {s}"),
+    }
+    let v: Value = serde_json::from_slice(&body).map_err(|_| anyhow::anyhow!("Claude usage check: the answer is not JSON"))?;
+    Ok((oauth_usage(&v), c.plan))
+}
+
+/// The OAuth usage answer → windows: `five_hour`, `seven_day` (utilization in percent) and the
+/// model-scoped weekly ones under `limits` ("Fable", "Opus"…).
+pub fn oauth_usage(v: &Value) -> Vec<RateLimit> {
+    let mut out = Vec::new();
+    for (k, window) in [("five_hour", "5h"), ("seven_day", "weekly")] {
+        if let Some(u) = v.get(k).and_then(|w| w.get("utilization")).and_then(|u| u.as_f64()) {
+            out.push(RateLimit { window: window.into(), used_percent: u, resets_at: v[k].get("resets_at").and_then(|r| r.as_str()).and_then(iso_ms) });
+        }
+    }
+    for l in v.get("limits").and_then(|l| l.as_array()).into_iter().flatten() {
+        let name = l.pointer("/scope/model/display_name").and_then(|n| n.as_str()).map(str::trim).filter(|n| !n.is_empty());
+        let (Some(name), Some(p)) = (name, l.get("percent").and_then(|p| p.as_f64())) else { continue };
+        if l.get("kind").and_then(|k| k.as_str()) != Some("weekly_scoped") || out.iter().any(|w: &RateLimit| w.window.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        out.push(RateLimit { window: name.to_string(), used_percent: p, resets_at: l.get("resets_at").and_then(|r| r.as_str()).and_then(iso_ms) });
+    }
+    out
+}
+
+/// "2026-11-25T19:20:00.5+00:00" (or …Z) → unix milliseconds.
+pub fn iso_ms(s: &str) -> Option<i64> {
+    let (date, rest) = s.trim().split_once('T')?;
+    let mut d = date.split('-').map(|x| x.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let (time, off_min) = if let Some(t) = rest.strip_suffix('Z').or_else(|| rest.strip_suffix('z')) {
+        (t, 0)
+    } else if let Some(i) = rest.rfind(['+', '-']) {
+        let (t, o) = rest.split_at(i);
+        let sign = if o.starts_with('-') { -1 } else { 1 };
+        let o = o[1..].replace(':', "");
+        (t, sign * (o.get(..2)?.parse::<i64>().ok()? * 60 + o.get(2..4).and_then(|x| x.parse::<i64>().ok()).unwrap_or(0)))
+    } else {
+        (rest, 0)
+    };
+    let mut t = time.split(':');
+    let (h, mi) = (t.next()?.parse::<i64>().ok()?, t.next()?.parse::<i64>().ok()?);
+    let sec = t.next().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let yy = if m <= 2 { y - 1 } else { y };
+    let era = yy.div_euclid(400);
+    let yoe = yy - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + day - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    Some(((days * 86_400 + h * 3600 + mi * 60 - off_min * 60) as f64 * 1000.0 + sec * 1000.0) as i64)
+}
+
 /// Claude's `rate_limit_info` → windows (utilization is a fraction).
 pub fn rate_limits(info: &Value) -> Option<Vec<RateLimit>> {
     let mut out = Vec::new();
@@ -669,7 +769,7 @@ mod tests {
         let EventKind::Session { session_id, model } = &evs[0] else { panic!("{:?}", evs[0]) };
         assert_eq!(session_id, "fa9e8168-b121-477e-b92c-6f8b6ba2ff4f");
         assert_eq!(model.as_deref(), Some("claude-haiku-5-5"));
-        assert!(matches!(&evs[1], EventKind::RateLimits { limits } if limits.iter().any(|l| l.window == "5h" && (l.used_percent - 40.0).abs() < 0.01)));
+        assert!(matches!(&evs[1], EventKind::RateLimits { limits, .. } if limits.iter().any(|l| l.window == "5h" && (l.used_percent - 40.0).abs() < 0.01)));
         let tool = evs.iter().find_map(|e| match e {
             EventKind::Tool { item, name, kind, title, .. } => Some((item.clone(), name.clone(), *kind, title.clone())),
             _ => None,
@@ -826,5 +926,59 @@ mod tests {
         assert!(m[0].default);
         assert_eq!(m[0].efforts, vec!["low", "high"]);
         assert_eq!(m[1].label, "Haiku 5.5");
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    #[test]
+    fn oauth_usage_windows() {
+        // The shape BB's usage tracker tests against.
+        let v = serde_json::json!({
+            "five_hour": {"utilization": 12.5, "resets_at": "2026-09-22T18:00:00Z"},
+            "seven_day": {"utilization": 40, "resets_at": null},
+            "limits": [{"kind": "weekly_scoped", "scope": {"model": {"display_name": "Opus"}}, "percent": 7, "resets_at": "2026-09-25T00:00:00+00:00"}, null, {"kind": "other", "percent": 3}]
+        });
+        let w = oauth_usage(&v);
+        assert_eq!(w.iter().map(|w| w.window.as_str()).collect::<Vec<_>>(), ["5h", "weekly", "Opus"]);
+        assert_eq!(w[0].used_percent, 12.5);
+        assert_eq!(w[0].resets_at, Some(1_790_100_000_000));
+        assert_eq!(w[1].resets_at, None);
+        assert_eq!(w[2].used_percent, 7.0);
+    }
+
+    #[test]
+    fn iso_times() {
+        assert_eq!(iso_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(iso_ms("2026-11-25T19:20:00.5+00:00"), Some(1_795_634_400_500));
+        assert_eq!(iso_ms("2026-11-25T16:20:00-03:00"), Some(1_795_634_400_000));
+        assert_eq!(iso_ms("2000-03-01T00:00:00Z"), Some(951_868_800_000));
+    }
+
+    #[test]
+    fn plans() {
+        assert_eq!(plan_label(Some("max".into()), Some("default_claude_max_20x".into())).as_deref(), Some("Max (20x)"));
+        assert_eq!(plan_label(Some("pro".into()), None).as_deref(), Some("Pro"));
+        assert_eq!(plan_label(None, None), None);
+    }
+}
+
+/// `cargo test -p agentd --lib live_usage -- --ignored --nocapture`: this machine's limits, asked now.
+#[cfg(test)]
+#[tokio::test]
+#[ignore]
+async fn live_usage() {
+    match usage_now().await {
+        Ok((w, plan)) => println!("claude: plan {plan:?}, {w:?}"),
+        Err(e) => println!("claude: {e}"),
+    }
+    match crate::machine::agent_bin(&crate::config::Config::default(), AgentKind::Codex) {
+        Some(bin) => match super::codex::usage_now(bin).await {
+            Ok((w, plan)) => println!("codex: plan {plan:?}, {w:?}"),
+            Err(e) => println!("codex: {e}"),
+        },
+        None => println!("codex: not installed"),
     }
 }

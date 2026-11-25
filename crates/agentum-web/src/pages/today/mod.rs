@@ -3,7 +3,7 @@
 //! and tomorrow / sky / mail. Pick another day in the strip to plan it. Words in the brief's
 //! language (`lang`).
 mod cards;
-mod hero;
+pub(crate) mod hero;
 mod i18n;
 mod plan;
 mod planner;
@@ -25,6 +25,10 @@ pub struct Tx {
     cal: RwSignal<String>,
 }
 impl Tx {
+    /// Words in `lang` (the Dashboard's brief card: no calendar to write to).
+    pub(crate) fn of(lang: RwSignal<String>) -> Tx {
+        Tx { lang, cal: RwSignal::new(String::new()) }
+    }
     pub fn t(&self, s: &str) -> String {
         i18n::tr(&self.lang.get(), s)
     }

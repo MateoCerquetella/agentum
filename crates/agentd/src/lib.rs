@@ -9,6 +9,7 @@ pub mod drivers;
 pub mod fs;
 pub mod git;
 pub mod http;
+pub mod https;
 pub mod hub;
 pub mod install;
 pub mod machine;
@@ -146,7 +147,7 @@ impl App {
             projects: self.projects.lock().unwrap().clone(),
             threads: self.threads.live(),
             stats: machine::stats(),
-            features: vec!["secrets".into()],
+            features: vec!["secrets".into(), "usage".into()],
         }
     }
 
@@ -239,6 +240,7 @@ impl App {
             Req::SetModel { thread, model, effort } => wait(self.threads.set_model(&thread, model, effort)),
             Req::Sleep { thread } => wait(self.threads.sleep(&thread)),
             Req::Models { agent } => async move { app.threads.models(agent).await }.boxed(),
+            Req::Usage { agent } => async move { app.threads.usage(agent).await }.boxed(),
             Req::AddProject { path } => async move { app.add_project(path).await }.boxed(),
             Req::Surf(s) => async move { app.surf_req(s).await }.boxed(),
             Req::Fs(f) => {
