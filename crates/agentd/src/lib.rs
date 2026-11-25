@@ -13,6 +13,7 @@ pub mod install;
 pub mod machine;
 pub mod outbox;
 pub mod resolve;
+pub mod surf;
 pub mod term;
 pub mod threads;
 pub mod util;
@@ -35,6 +36,8 @@ pub struct App {
     pub outbox: Arc<outbox::Outbox>,
     pub threads: Arc<threads::Threads>,
     pub terms: term::Terms,
+    /// The projects' browsers.
+    pub surf: Arc<surf::Surfs>,
     /// Frames for the hub other than thread events (replies, terminal output, updates).
     pub out: mpsc::Sender<FromAgentd>,
     out_rx: tokio::sync::Mutex<mpsc::Receiver<FromAgentd>>,
@@ -52,8 +55,9 @@ impl App {
         std::fs::create_dir_all(&data)?;
         let db = db::Db::open(&data.join("agentd.db"))?;
         let outbox = Arc::new(outbox::Outbox::new(db.clone()));
-        let threads = threads::Threads::new(cfg.clone(), db.clone(), outbox.clone());
         let (out, out_rx) = mpsc::channel(1024);
+        let surf = Arc::new(surf::Surfs::new(db.clone(), out.clone(), cfg.surf_image.clone()).await);
+        let threads = threads::Threads::new(cfg.clone(), db.clone(), outbox.clone(), surf.clone());
         let extra: Vec<PathBuf> = match db.kv_get("projects").await {
             Some(j) => serde_json::from_str(&j).unwrap_or_default(),
             None => vec![],
@@ -64,6 +68,7 @@ impl App {
             db,
             outbox,
             threads,
+            surf,
             out,
             out_rx: tokio::sync::Mutex::new(out_rx),
             agents: Mutex::new(vec![]),
@@ -82,6 +87,8 @@ impl App {
     pub async fn run(self: Arc<Self>) -> anyhow::Result<()> {
         tokio::spawn(self.clone().watch_machine());
         tokio::spawn(self.clone().write_status_loop());
+        let threads = self.threads.clone();
+        tokio::spawn(self.surf.clone().idle_loop(move || threads.live_cwds()));
         let hub = tokio::spawn(hub::run(self.clone()));
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         tokio::select! {
@@ -230,6 +237,7 @@ impl App {
             Req::Sleep { thread } => wait(self.threads.sleep(&thread)),
             Req::Models { agent } => async move { app.threads.models(agent).await }.boxed(),
             Req::AddProject { path } => async move { app.add_project(path).await }.boxed(),
+            Req::Surf(s) => async move { app.surf_req(s).await }.boxed(),
             Req::Fs(f) => {
                 let allowed = self.allowed();
                 async move { tokio::task::spawn_blocking(move || fs::handle(f, &allowed)).await? }.boxed()
@@ -270,6 +278,22 @@ impl App {
         }
         let proj = self.projects.lock().unwrap().iter().find(|x| PathBuf::from(&x.path) == p).cloned();
         Ok(json!(proj.unwrap_or(Project { path: p.to_string_lossy().into(), name: p.file_name().map(|n| n.to_string_lossy().into()).unwrap_or_default(), branch: machine::branch(&p) })))
+    }
+
+    async fn surf_req(self: &Arc<Self>, req: agentum_proto::machine::SurfReq) -> anyhow::Result<Value> {
+        use agentum_proto::machine::SurfReq;
+        match req {
+            SurfReq::Ensure { project, idle_hours } => {
+                if let Some(h) = idle_hours {
+                    self.surf.set_idle_hours(h);
+                }
+                Ok(json!(self.surf.ensure(&project, &self.allowed()).await?))
+            }
+            SurfReq::List => Ok(json!(self.surf.list().await?)),
+            SurfReq::Stop { project } => self.surf.stop(&project).await,
+            SurfReq::Get { id, path } => self.surf.get(&id, &path).await,
+            SurfReq::Open { id, sock, path } => self.surf.open(&id, &sock, &path).await,
+        }
     }
 
     pub(crate) async fn take_out_rx(&self) -> tokio::sync::MutexGuard<'_, mpsc::Receiver<FromAgentd>> {

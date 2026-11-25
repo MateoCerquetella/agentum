@@ -38,6 +38,7 @@ enum Cmd {
 struct Snapshot {
     state: ThreadState,
     live: bool,
+    cwd: String,
 }
 
 struct Handle {
@@ -50,6 +51,7 @@ pub struct Threads {
     db: Db,
     outbox: Arc<Outbox>,
     pub agents: Arc<Agents>,
+    surf: Arc<crate::surf::Surfs>,
     idle: Duration,
     handles: Mutex<HashMap<String, Handle>>,
     /// Threads known from the database that have no actor yet.
@@ -58,7 +60,7 @@ pub struct Threads {
 }
 
 impl Threads {
-    pub fn new(cfg: Config, db: Db, outbox: Arc<Outbox>) -> Arc<Threads> {
+    pub fn new(cfg: Config, db: Db, outbox: Arc<Outbox>, surf: Arc<crate::surf::Surfs>) -> Arc<Threads> {
         let idle = Duration::from_secs(cfg.idle_minutes.max(1) * 60);
         let agents = Arc::new(Agents::new(cfg.idle_minutes));
         Arc::new(Threads {
@@ -66,6 +68,7 @@ impl Threads {
             db,
             outbox,
             agents,
+            surf,
             idle,
             handles: Mutex::new(HashMap::new()),
             rows: Mutex::new(HashMap::new()),
@@ -101,7 +104,7 @@ impl Threads {
 
     fn spawn_actor(self: &Arc<Self>, handles: &mut HashMap<String, Handle>, row: ThreadRow) -> mpsc::UnboundedSender<Cmd> {
         let (tx, rx) = mpsc::unbounded_channel();
-        let snap = Arc::new(Mutex::new(Snapshot { state: row.state, live: false }));
+        let snap = Arc::new(Mutex::new(Snapshot { state: row.state, live: false, cwd: row.spec.cwd.clone() }));
         handles.insert(row.id.clone(), Handle { tx: tx.clone(), snap: snap.clone() });
         let actor = Actor::new(self.clone(), row, snap);
         tokio::spawn(actor.run(rx));
@@ -208,6 +211,11 @@ impl Threads {
         }
         out.sort_by(|a, b| a.thread.cmp(&b.thread));
         out
+    }
+
+    /// The directories of the agents running now.
+    pub fn live_cwds(&self) -> Vec<String> {
+        self.handles.lock().unwrap().values().map(|h| h.snap.lock().unwrap().clone()).filter(|s| s.live).map(|s| s.cwd).collect()
     }
 
     pub fn live_processes(&self) -> usize {
@@ -342,6 +350,7 @@ impl Actor {
                 if let Some(a) = spec.agent {
                     self.row.agent = a;
                 }
+                self.snap.lock().unwrap().cwd = spec.cwd.clone();
                 self.row.spec = spec;
                 if let Some(r) = resume
                     && self.row.session_id.as_deref() != Some(&r)
@@ -475,14 +484,19 @@ impl Actor {
         let agent = self.row.agent;
         let bin = agent_bin(&self.threads.cfg, agent).with_context(|| format!("{} is not installed on this machine", agent.label()))?;
         let (tx, rx) = mpsc::unbounded_channel();
+        let cwd = PathBuf::from(&self.row.spec.cwd);
+        // The project's browser, if it has one on (woken if it slept).
+        let env = self.threads.surf.env_for(&cwd).await;
         let opts = StartOpts {
             thread: self.row.id.clone(),
             bin,
-            cwd: PathBuf::from(&self.row.spec.cwd),
+            cwd,
             model: self.row.spec.model.clone(),
             effort: self.row.spec.effort.clone(),
             permission: self.row.spec.permission,
             resume: self.row.session_id.clone(),
+            instructions: self.row.spec.instructions.clone(),
+            env,
         };
         let resuming = opts.resume.is_some();
         let s = self.threads.agents.get(agent).start(opts, tx).await?;

@@ -37,6 +37,9 @@ pub struct Config {
     pub codex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opencode: Option<String>,
+    /// The projects' browsers' Docker image (default: the Steel build BB Surf runs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surf_image: Option<String>,
 }
 
 fn default_idle() -> u64 {
