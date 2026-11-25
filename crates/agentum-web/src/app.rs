@@ -168,6 +168,19 @@ fn Shell() -> impl IntoView {
             match payload["kind"].as_str() {
                 Some("settings") => load_settings(),
                 Some("mail") | Some("today") => load_counts(),
+                // A plugin's notification (HubCtx::notify), in every open page.
+                Some("toast") => {
+                    let (title, body) = (payload["title"].as_str().unwrap_or(""), payload["body"].as_str().unwrap_or(""));
+                    let text = if body.is_empty() { title.to_string() } else { format!("{title}: {body}") };
+                    match payload["url"].as_str().filter(|u| u.starts_with('/')).map(str::to_string) {
+                        Some(url) => agentum_ui::ui::toast_action(text, move || {
+                            let (page, q) = url.trim_start_matches('/').split_once('?').unwrap_or((url.trim_start_matches('/'), ""));
+                            let params: Vec<(&str, &str)> = q.split('&').filter_map(|kv| kv.split_once('=')).collect();
+                            navigate(page, Where::Replace, &params);
+                        }),
+                        None => toast(text),
+                    }
+                }
                 _ => {}
             }
         }

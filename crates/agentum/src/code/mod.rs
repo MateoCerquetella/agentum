@@ -417,6 +417,10 @@ pub async fn create_thread(app: &App, b: NewThread) -> R<ThreadSummary> {
     };
     let mut s = s;
     s.attention = db::attention_of(&s);
+    // A plugin may refuse the turn (a concurrency limit): then the thread isn't made at all.
+    if !b.text.trim().is_empty() {
+        crate::plugins::before_turn(app, &s, &b.text).await.map_err(|e| AppError(StatusCode::CONFLICT, e))?;
+    }
     let s2 = s.clone();
     app.db.call(move |c| db::save_thread(c, &s2)).await?;
     app.code.set_summary(s.clone());
@@ -428,7 +432,17 @@ pub async fn create_thread(app: &App, b: NewThread) -> R<ThreadSummary> {
 
 /// Start (or resume) the agent of a thread with this first input.
 async fn start_agent(app: &App, s: &ThreadSummary, mut input: Input, resume: Option<String>) -> R<()> {
-    crate::plugins::before_turn(app, s, &input.text).await.map_err(|e| AppError(StatusCode::CONFLICT, e))?;
+    if let Err(why) = crate::plugins::before_turn(app, s, &input.text).await {
+        // Refused: a new thread mustn't stay "Starting".
+        if let Some(mut t) = app.code.summary(&s.id).filter(|t| t.state == ThreadState::Starting) {
+            t.state = ThreadState::Idle;
+            t.attention = db::attention_of(&t);
+            let t2 = t.clone();
+            let _ = app.db.call(move |c| db::save_thread(c, &t2)).await;
+            app.code.set_summary(t);
+        }
+        return Err(AppError(StatusCode::CONFLICT, why));
+    }
     // A side chat's first message carries its parent's conversation.
     if let (Some(pid), None) = (&s.parent, &resume) {
         let pid2 = pid.clone();
