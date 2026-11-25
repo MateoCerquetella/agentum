@@ -326,6 +326,8 @@ pub fn routes() -> Router<App> {
         .route("/api/code/machines/{id}/main", post(set_main))
         .route("/api/code/call", post(call))
         .route("/api/code/syntax.css", get(|| async { ([("content-type", "text/css"), ("cache-control", "public, max-age=86400")], render::syntax_css()) }))
+        // Messages carry their images (data: URLs, up to six of ≤2.5 MB).
+        .layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024))
 }
 
 fn offline(m: &str) -> AppError {

@@ -311,6 +311,14 @@ pub fn Timeline(
                     match item.clone() {
                         Item::User { seq, html, queued, ev } => view! {
                             <div class=if queued { "msg user queued" } else { "msg user" } id=format!("ev-{seq}")>
+                                {match &ev.event.kind {
+                                    EventKind::User { images, .. } if !images.is_empty() => Some(view! {
+                                        <div class="msg-imgs">{images.iter().filter(|i| i.starts_with("data:image/") || i.starts_with("https://")).map(|src| view! {
+                                            { let big = RwSignal::new(false); view! { <img src=src.clone() alt="Attached image" loading="lazy" title="Click to enlarge" class:big=move || big.get() on:click=move |_| big.update(|b| *b = !*b)/> } }
+                                        }).collect_view()}</div>
+                                    }),
+                                    _ => None,
+                                }}
                                 <div class="md" inner_html=html/>
                                 <div class="msg-meta">{if queued { "Queued".into_any() } else { crate::plugins::message_meta(&ev).into_any() }}</div>
                             </div>

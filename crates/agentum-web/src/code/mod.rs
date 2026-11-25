@@ -1,5 +1,6 @@
 //! The Code page: a new thread (machine, project, agent, model) or one thread's timeline with
 //! its composer, questions and side panel (plugins' tabs: files, git, history, terminal…).
+mod attach;
 pub mod marks;
 pub mod store;
 mod timeline;
@@ -236,6 +237,7 @@ fn NewThreadPage() -> impl IntoView {
     let worktree = RwSignal::new(agentum_ui::store::flag("agentum.worktree"));
     let text = RwSignal::new(agentum_ui::store::get("agentum.draft.new").unwrap_or_default());
     let busy = RwSignal::new(false);
+    let images = RwSignal::new(Vec::<String>::new());
     let adding = RwSignal::new(String::new());
     let area = NodeRef::<leptos::html::Textarea>::new();
     if let Some(p) = pane() {
@@ -301,7 +303,7 @@ fn NewThreadPage() -> impl IntoView {
     let perm_items = Signal::derive(move || PERMS.into_iter().map(|p| PickItem { id: perm_id(p), label: perm_label(p).into(), sub: perm_sub(p).into(), icon: "shield", on: permission.get() == p, ..Default::default() }).collect::<Vec<_>>());
     let start = move || {
         let t = text.get_untracked();
-        if t.trim().is_empty() || project.get_untracked().is_empty() || busy.get_untracked() {
+        if (t.trim().is_empty() && images.with_untracked(|v| v.is_empty())) || project.get_untracked().is_empty() || busy.get_untracked() {
             if project.get_untracked().is_empty() {
                 toast_bad("Pick a project first.");
             }
@@ -313,7 +315,7 @@ fn NewThreadPage() -> impl IntoView {
             let slug: String = t.split_whitespace().take(5).collect::<Vec<_>>().join("-").to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
             format!("agentum/{}-{}", slug.trim_matches('-'), (js_sys::Math::random() * 1296.0) as u32)
         });
-        let body = NewThread { machine: machine.get_untracked(), project: project.get_untracked(), agent: Some(agent.get_untracked()), model: model.get_untracked(), effort: effort.get_untracked(), permission: permission.get_untracked(), worktree: branch, text: t, images: vec![], parent: None };
+        let body = NewThread { machine: machine.get_untracked(), project: project.get_untracked(), agent: Some(agent.get_untracked()), model: model.get_untracked(), effort: effort.get_untracked(), permission: permission.get_untracked(), worktree: branch, text: t, images: images.get_untracked(), parent: None };
         agentum_ui::store::set(&format!("agentum.project.{}", body.machine), &body.project);
         agentum_ui::store::set("agentum.machine", &body.machine);
         spawn_local(async move {
@@ -321,6 +323,7 @@ fn NewThreadPage() -> impl IntoView {
                 Ok(t) => {
                     agentum_ui::store::remove("agentum.draft.new");
                     text.set(String::new());
+                    images.set(vec![]);
                     navigate("code", at, &[("thread", &t.id)]);
                 }
                 Err(e) => toast_bad(e.message),
@@ -365,14 +368,17 @@ fn NewThreadPage() -> impl IntoView {
     view! {
         <div class="compose-home">
             <div class="compose-col">
-                <div class="cbox">
+                <div class="cbox" on:dragover=attach::on_dragover on:drop=move |e| attach::on_drop(e, images)>
+                    <attach::Thumbs images=images/>
                     <textarea node_ref=area class="cbox-text" rows="3" placeholder="Ask anything. ⏎ to start, ⇧⏎ for a new line" prop:value=text
+                        on:paste=move |e| attach::on_paste(e, images)
                         on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set("agentum.draft.new", &v); text.set(v) }
                         on:keydown=move |e| if e.key() == "Enter" && !e.shift_key() && !e.is_composing() { e.prevent_default(); start() }/>
                     <div class="cbox-bar">
+                        <attach::AttachButton images=images/>
                         <span class="grow"/>
                         <ModelChip machine=machine.into() agent=agent model=model effort=effort/>
-                        <button class="send-btn" title="Start (⏎)" disabled=move || busy.get() || text.get().trim().is_empty() || project.get().is_empty() on:click=move |_| start()>
+                        <button class="send-btn" title="Start (⏎)" disabled=move || busy.get() || (text.get().trim().is_empty() && images.with(|v| v.is_empty())) || project.get().is_empty() on:click=move |_| start()>
                             <Icon name="arrow-up" size=16/>
                         </button>
                     </div>
@@ -707,6 +713,7 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
     let key = format!("agentum.draft.{id}");
     let text = RwSignal::new(agentum_ui::store::get(&key).unwrap_or_default());
     let busy = move || summary.with(|s| s.as_ref().is_some_and(|s| s.state.busy()));
+    let images = RwSignal::new(Vec::<String>::new());
     let send = {
         let id = id.clone();
         let key = key.clone();
@@ -714,10 +721,14 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
             if b.text.trim().is_empty() {
                 b.text = text.get_untracked();
             }
-            if b.text.trim().is_empty() {
+            if b.images.is_empty() {
+                b.images = images.get_untracked();
+            }
+            if b.text.trim().is_empty() && b.images.is_empty() {
                 return;
             }
             text.set(String::new());
+            images.set(vec![]);
             agentum_ui::store::remove(&key);
             let id = id.clone();
             spawn_local(async move {
@@ -762,8 +773,9 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
     let s1 = send;
     view! {
         <div class="code-composer">
-            <div class="cbox">
-                <textarea class="cbox-text" rows="2" placeholder=move || if busy() { "Queue a message (⏎) · steer the turn (⌥⏎) · stop and send (⌘⇧⏎)" } else { "Reply… ⏎ to send, ⇧⏎ for a new line" }
+            <div class="cbox" on:dragover=attach::on_dragover on:drop=move |e| attach::on_drop(e, images)>
+                <attach::Thumbs images=images/>
+                <textarea class="cbox-text" rows="2" on:paste=move |e| attach::on_paste(e, images) placeholder=move || if busy() { "Queue a message (⏎) · steer the turn (⌥⏎) · stop and send (⌘⇧⏎)" } else { "Reply… ⏎ to send, ⇧⏎ for a new line" }
                     prop:value=text
                     on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set(&key, &v); text.set(v) }
                     on:keydown=move |e| {
@@ -774,10 +786,11 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
                         s1.run(SendBody { text: String::new(), images: vec![], mode, send_at: None });
                     }/>
                 <div class="cbox-bar">
+                    <attach::AttachButton images=images/>
                     {crate::plugins::composer_actions(cx.clone())}
                     <span class="grow pk-dim">{move || summary.get().map(|s| if s.queued > 0 { format!("{} queued", s.queued) } else { String::new() })}</span>
                     <ModelChip machine=machine agent=agent model=model effort=effort lock_agent=true up=true/>
-                    <button class="send-btn" title=move || if busy() { "Queue (⏎)" } else { "Send (⏎)" } disabled=move || text.get().trim().is_empty() on:click=move |_| send.run(SendBody::default())>
+                    <button class="send-btn" title=move || if busy() { "Queue (⏎)" } else { "Send (⏎)" } disabled=move || text.get().trim().is_empty() && images.with(|v| v.is_empty()) on:click=move |_| send.run(SendBody::default())>
                         <Icon name="arrow-up" size=16/>
                     </button>
                 </div>
