@@ -465,7 +465,7 @@ fn Term(machine: String, cwd: String, id: String) -> impl IntoView {
             <span class="tx-probe" node_ref=probe aria-hidden="true">"MMMMMMMMMM"</span>
             <div class="tx-screen" node_ref=screen></div>
             <textarea class="tx-input" node_ref=input autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="Terminal input"
-                on:keydown:undelegated=on_key on:paste=on_paste on:compositionend=on_compose
+                on:keydown=on_key on:paste=on_paste on:compositionend=on_compose
                 on:input=move |e| { if let Some(i) = input.get_untracked() { if !e.dyn_ref::<web_sys::InputEvent>().is_some_and(|x| x.is_composing()) { i.set_value("") } } }
                 on:focus=move |_| set_focus(true) on:blur=move |_| sf(false)></textarea>
             {move || failed.get().map(|e| view! { <div class="tx-note err">{e}</div> })}
