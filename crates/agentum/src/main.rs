@@ -52,6 +52,8 @@ async fn run(env_file: std::path::PathBuf, env: std::io::Result<Vec<String>>) ->
     match env {
         Ok(keys) if !keys.is_empty() => tracing::info!("{}: {}", env_file.display(), keys.join(" ")),
         Ok(_) => {}
+        // deploy/agentum.service has systemd read /etc/agentum.env (as root) already.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => tracing::info!("{}: not readable here ({e})", env_file.display()),
         Err(e) => tracing::warn!("{}: {e}", env_file.display()),
     }
     let _ = rustls::crypto::ring::default_provider().install_default();
