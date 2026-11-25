@@ -12,7 +12,7 @@ pub mod surf;
 use crate::state::App;
 use crate::util::{bad, not_found, AppError, R};
 use agentum_proto::api::*;
-use agentum_proto::machine::{FsReq, GitReq, ModelInfo, Req, SurfReq};
+use agentum_proto::machine::{FsReq, GitReq, ModelInfo, Req, SurfReq, UsageReply};
 use agentum_proto::{AgentKind, Event, EventKind, Input, Permission, SendMode, ThreadSpec, ThreadState};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -35,6 +35,8 @@ pub struct Hub {
     /// Text streaming right now: thread → item → text.
     pub partial: Mutex<HashMap<String, BTreeMap<String, Partial>>>,
     pub limits: RwLock<Vec<AgentLimits>>,
+    /// Writing the limits to the usage plugin's storage, one at a time.
+    limits_saving: tokio::sync::Mutex<()>,
     pub out: tokio::sync::broadcast::Sender<Out>,
     models: Mutex<HashMap<(String, AgentKind), (Instant, Vec<ModelInfo>)>>,
     html: Mutex<HashMap<(String, u64), Arc<str>>>,
@@ -51,6 +53,7 @@ impl Default for Hub {
             threads: Default::default(),
             partial: Default::default(),
             limits: Default::default(),
+            limits_saving: Default::default(),
             out: tokio::sync::broadcast::channel(4096).0,
             models: Default::default(),
             html: Default::default(),
@@ -112,12 +115,17 @@ pub async fn start(app: &App) -> anyhow::Result<()> {
             m.insert(t.id.clone(), t);
         }
     }
-    // Each agent's last reported limits (the usage plugin keeps them), so the sidebar's meters are
-    // there after a restart, before any thread reports again.
+    // Each account's last reported limits (the usage plugin keeps them), so the sidebar's meters
+    // are there after a restart, before any thread reports again.
     if let Some(saved) = crate::plugins::kv_get(app, "usage", "limits").await.and_then(|v| v.as_object().cloned()) {
         let mut l: Vec<AgentLimits> = saved.into_values().filter_map(|v| serde_json::from_value(v).ok()).collect();
-        l.sort_by(|a, b| b.at.cmp(&a.at));
-        *app.code.limits.write().unwrap() = l;
+        // Oldest first, each put among the others: what a newer report replaced stays out.
+        l.sort_by_key(|a| a.at);
+        let mut all = vec![];
+        for x in l {
+            put_limits(&mut all, x);
+        }
+        *app.code.limits.write().unwrap() = all;
     }
     let a = app.clone();
     tokio::spawn(async move {
@@ -138,47 +146,122 @@ pub async fn start(app: &App) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A report of an agent's limits (a thread's RateLimits, or its provider asked directly): the
-/// overview's, every page's, and the usage plugin's copy (so a restart keeps it).
-async fn remember_limits(app: &App, l: AgentLimits, persist: bool) {
-    {
-        let mut all = app.code.limits.write().unwrap();
-        all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
-        all.insert(0, l.clone());
-    }
-    app.code.publish("threads", &WsOut::Limits { limits: l.clone() });
-    if persist {
-        let mut saved = crate::plugins::kv_get(app, "usage", "limits").await.and_then(|v| v.as_object().cloned()).unwrap_or_default();
-        saved.insert(format!("{}\t{}", l.agent.id(), l.machine), json!(l));
-        crate::plugins::kv_set(app, "usage", "limits", &Value::Object(saved)).await;
-    }
+/// A report of an agent's limits (a thread's RateLimits, or its provider asked directly), kept one
+/// per account: the overview's, every page's, and the usage plugin's copy (so a restart keeps it).
+/// A thread's report is its machine's account's (as the provider last said); `provider`: the
+/// provider's answer, which has every window (a thread's lacks the per-model ones: those stay).
+async fn remember_limits(app: &App, l: AgentLimits, provider: bool) {
+    let put = merge_limits(&mut app.code.limits.write().unwrap(), l, provider, now());
+    app.code.publish("threads", &WsOut::Limits { limits: put });
+    // Every account's report, in the usage plugin's storage (the newest written last wins).
+    let _g = app.code.limits_saving.lock().await;
+    let saved: serde_json::Map<String, Value> = app.code.limits.read().unwrap().iter().map(|x| (format!("{}\t{}", x.agent.id(), x.key()), json!(x))).collect();
+    crate::plugins::kv_set(app, "usage", "limits", &Value::Object(saved)).await;
 }
 
-/// Each subscription agent's limits asked of its provider now (agentd's `Req::Usage`), from one
-/// machine per agent: the main machine first, then the next online one that has it.
+/// [`remember_limits`]' bookkeeping: `l` joins its account's report; what was put back.
+fn merge_limits(all: &mut Vec<AgentLimits>, mut l: AgentLimits, provider: bool, now: i64) -> AgentLimits {
+    if l.account.is_none()
+        && let Some(a) = all.iter().find(|x| x.agent == l.agent && x.account.is_some() && x.covers(&l.machine))
+    {
+        l.account = a.account.clone();
+        l.account_label = a.account_label.clone();
+    }
+    if l.account.is_some() && !l.machines.contains(&l.machine) {
+        l.machines.push(l.machine.clone());
+    }
+    let old = all.iter().find(|x| x.agent == l.agent && x.account == l.account && x.key() == l.key()).cloned();
+    let put = match old {
+        // A fresher report of the account is kept; it only learns where else it is signed in.
+        Some(mut old) if old.at > l.at => {
+            for m in l.machines {
+                if !old.machines.contains(&m) {
+                    old.machines.push(m);
+                }
+            }
+            old
+        }
+        Some(old) => {
+            for m in old.machines {
+                if !l.machines.contains(&m) {
+                    l.machines.push(m);
+                }
+            }
+            if !provider {
+                for w in old.limits {
+                    if !l.limits.iter().any(|y| y.window == w.window) && w.resets_at.is_none_or(|r| r > now) {
+                        l.limits.push(w);
+                    }
+                }
+                l.plan = l.plan.or(old.plan);
+            }
+            l.account_label = l.account_label.or(old.account_label);
+            l
+        }
+        None => l,
+    };
+    put_limits(all, put.clone());
+    put
+}
+
+/// Which machines to ask for an agent's limits: every one whose account isn't known yet, and one
+/// of each known account's (the next in turn, so each machine is asked again in time and a
+/// machine signed in elsewhere since is noticed). Providers throttle their usage endpoints:
+/// asking every machine of one account each time would only get it refused.
+fn usage_askees(all: &[AgentLimits], agent: AgentKind, mut online: Vec<String>) -> Vec<String> {
+    online.sort();
+    let mut ask = vec![];
+    for l in all.iter().filter(|l| l.agent == agent && l.account.is_some()) {
+        let mut on: Vec<&String> = online.iter().filter(|m| l.machines.contains(m)).collect();
+        on.sort();
+        if let Some(i) = (!on.is_empty()).then(|| on.iter().position(|m| **m == l.machine).map(|i| (i + 1) % on.len()).unwrap_or(0)) {
+            ask.push(on[i].clone());
+        }
+    }
+    for m in &online {
+        if !all.iter().any(|l| l.agent == agent && l.account.is_some() && l.machines.contains(m)) && !ask.contains(m) {
+            ask.push(m.clone());
+        }
+    }
+    ask
+}
+
+/// Each subscription agent's limits asked of its provider now (agentd's `Req::Usage`), on the
+/// online machines that have it ([`usage_askees`]): machines signed in to different accounts (a
+/// work organization here, a personal one there) each get theirs; one account's reports are one.
 pub async fn usage_refresh(app: &App) -> Vec<AgentLimits> {
     let machines = agentd::machines(app).await;
+    let known = app.code.limits.read().unwrap().clone();
+    let mut asks = vec![];
+    for agent in [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Cursor] {
+        let online = machines
+            .iter()
+            .filter(|m| m.online && m.agents.iter().any(|a| a.agent == agent && a.installed))
+            .filter(|m| app.code.conn(&m.id).is_some_and(|c| c.hello.read().unwrap().features.iter().any(|f| f == "usage")))
+            .map(|m| m.id.clone())
+            .collect();
+        for id in usage_askees(&known, agent, online) {
+            let Some(c) = app.code.conn(&id) else { continue };
+            asks.push(async move { (agent, id, c.call(Req::Usage { agent }, Duration::from_secs(45)).await) });
+        }
+    }
     let mut got = vec![];
-    for agent in [AgentKind::ClaudeCode, AgentKind::Codex] {
-        for m in machines.iter().filter(|m| m.online && m.agents.iter().any(|a| a.agent == agent && a.installed)) {
-            let Some(c) = app.code.conn(&m.id) else { continue };
-            if !c.hello.read().unwrap().features.iter().any(|f| f == "usage") {
+    for (agent, machine, r) in futures::future::join_all(asks).await {
+        let v = match r {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::info!("{} usage on {machine}: {e}", agent.label());
                 continue;
             }
-            match c.call(Req::Usage { agent }, Duration::from_secs(45)).await {
-                Ok(v) => {
-                    let limits: Vec<agentum_proto::RateLimit> = serde_json::from_value(v["limits"].clone()).unwrap_or_default();
-                    if limits.is_empty() {
-                        continue;
-                    }
-                    let l = AgentLimits { agent, machine: m.id.clone(), limits, at: now(), plan: v["plan"].as_str().map(str::to_string) };
-                    remember_limits(app, l.clone(), true).await;
-                    got.push(l);
-                    break;
-                }
-                Err(e) => tracing::info!("{} usage on {}: {e}", agent.label(), m.id),
-            }
+        };
+        let u: UsageReply = serde_json::from_value(v).unwrap_or_default();
+        if u.limits.is_empty() {
+            continue;
         }
+        let (account, account_label) = u.account.map(|a| (Some(a.id), Some(a.label))).unwrap_or_default();
+        let l = AgentLimits { agent, machine, limits: u.limits, at: now(), plan: u.plan, account, account_label, machines: vec![] };
+        remember_limits(app, l.clone(), true).await;
+        got.push(l);
     }
     got
 }
@@ -315,8 +398,7 @@ pub async fn ingest(app: &App, conn: &Conn, thread: &str, events: Vec<Event>) {
             }
             EventKind::Usage { usage } => t.usage = Some(usage.clone()),
             EventKind::RateLimits { limits, plan } => {
-                // The usage plugin keeps a thread's report itself.
-                let l = AgentLimits { agent: t.agent, machine: t.machine.clone(), limits: limits.clone(), at: ts, plan: plan.clone() };
+                let l = AgentLimits { agent: t.agent, machine: t.machine.clone(), limits: limits.clone(), at: ts, plan: plan.clone(), account: None, account_label: None, machines: vec![] };
                 remember_limits(app, l, false).await;
             }
             EventKind::Session { session_id, model } => {
@@ -870,3 +952,55 @@ pub async fn start_task(app: &App, project: &str, task: &str) -> anyhow::Result<
 
 #[allow(dead_code)]
 fn _unused(_: SendMode) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentum_proto::RateLimit;
+
+    fn report(machine: &str, account: Option<&str>, windows: &[(&str, f64)], at: i64) -> AgentLimits {
+        AgentLimits {
+            agent: AgentKind::ClaudeCode,
+            machine: machine.into(),
+            limits: windows.iter().map(|(w, p)| RateLimit { window: w.to_string(), used_percent: *p, resets_at: None }).collect(),
+            at,
+            plan: None,
+            account: account.map(str::to_string),
+            account_label: account.map(|a| format!("{a} org")),
+            machines: vec![],
+        }
+    }
+
+    #[test]
+    fn reports_join_their_account() {
+        let mut all = vec![];
+        // The provider, asked on three machines: two accounts.
+        merge_limits(&mut all, report("jupiter", Some("me"), &[("5h", 10.0), ("Opus", 5.0)], 10), true, 0);
+        merge_limits(&mut all, report("mars", Some("me"), &[("5h", 11.0), ("Opus", 5.0)], 11), true, 0);
+        merge_limits(&mut all, report("workbox", Some("work"), &[("5h", 70.0)], 12), true, 0);
+        assert_eq!(all.len(), 2);
+        let me = all.iter().find(|x| x.key() == "me").unwrap();
+        assert_eq!((me.machine.as_str(), me.machines.len(), me.limits[0].used_percent), ("mars", 2, 11.0));
+        // A thread on jupiter reports (no account, no model windows): it is the personal account's,
+        // and Opus stays.
+        let put = merge_limits(&mut all, report("jupiter", None, &[("5h", 20.0)], 13), false, 0);
+        assert_eq!((put.account.as_deref(), put.account_label.as_deref()), (Some("me"), Some("me org")));
+        assert_eq!(put.limits.iter().map(|w| w.window.as_str()).collect::<Vec<_>>(), ["5h", "Opus"]);
+        assert_eq!(all.len(), 2);
+        // An older report of the account doesn't replace a newer one.
+        let put = merge_limits(&mut all, report("mars", Some("me"), &[("5h", 1.0)], 5), true, 0);
+        assert_eq!(put.limits[0].used_percent, 20.0);
+        // A machine whose account isn't known stands alone.
+        merge_limits(&mut all, report("saturn", None, &[("5h", 3.0)], 14), false, 0);
+        assert_eq!(all.len(), 3);
+        assert_eq!(limits_for(&all, AgentKind::ClaudeCode, "workbox").map(|x| x.limits[0].used_percent), Some(70.0));
+        // Who is asked next: one machine per account (jupiter reported last: mars is next), and
+        // saturn, whose account isn't known; Codex, never reported: every machine.
+        let online = || vec!["jupiter".to_string(), "mars".into(), "saturn".into(), "workbox".into()];
+        let mut ask = usage_askees(&all, AgentKind::ClaudeCode, online());
+        ask.sort();
+        assert_eq!(ask, ["mars", "saturn", "workbox"]);
+        assert_eq!(usage_askees(&all, AgentKind::Codex, online()).len(), 4);
+        assert_eq!(usage_askees(&all, AgentKind::ClaudeCode, vec!["jupiter".into()]), ["jupiter"]);
+    }
+}

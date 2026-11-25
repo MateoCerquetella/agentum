@@ -1,7 +1,7 @@
 # Agentum: how it is built
 
 Agentum is a self-hosted personal and coding workspace: mail, calendar, notes, a dashboard and
-the Secretary (on your own model), plus coding agents (Claude Code, Codex, OpenCode) running on
+the Secretary (on your own model), plus coding agents (Claude Code, Codex, OpenCode, Cursor) running on
 your machines, which you watch and steer. **All Rust.** No Node, no TypeScript, no WebAssembly
 framework other than Leptos.
 
@@ -73,7 +73,8 @@ Like BB's: a manifest, a hub part and a web part.
   Secrets: ask for keys in the Secrets tab). When an agent process starts, the hub joins the
   instructions of the plugins that are on into `ThreadSpec.instructions`, and agentd adds them to the
   system prompt: Claude Code `--append-system-prompt`, Codex `developerInstructions` (thread/start
-  and thread/resume), OpenCode an instruction entry (`PUT /api/experimental/session/<id>/instructions/entries/agentum`).
+  and thread/resume), OpenCode an instruction entry (`PUT /api/experimental/session/<id>/instructions/entries/agentum`),
+  Cursor (`cursor-agent acp`, no system prompt over ACP) a text block after the first message of each process.
   Every turn carries them: keep them short. Genui's (`plugins/genui/src/instructions.md`) lists exactly
   the components its web part draws; its tests evaluate the examples.
 - Web part: `impl WebPlugin` — slots: `rail_tabs` (the thread's side panel), `thread_header`,
@@ -86,6 +87,18 @@ Like BB's: a manifest, a hub part and a web part.
   only; `SecretsReq`'s Debug/Display leave the value out. agentd lists `"secrets"` in
   `Hello.features` and the hub sends secrets only to an agentd that does (an older one would log the
   unknown frame, value and all).
+
+## Subscription limits
+
+The footer's meters (and each thread's limit state) are per account: agentd's `Req::Usage` answers a
+`UsageReply` with the account the agent is signed in to (Claude Code: `.claude.json`'s
+`oauthAccount` organization; Codex: app-server `account/read`; Cursor: `cursor-agent status` and its
+dashboard API with the CLI's sign-in). The hub keeps one `AgentLimits` per agent and account (with
+the machines on it; `put_limits`, `limits_for`), asks every machine whose account it doesn't know
+and one machine per known account in turn every 5 minutes (providers throttle their usage
+endpoints), attributes a thread's `RateLimits` to its machine's account, and stores them in the
+usage plugin's `limits`. agentd reports only the agents its hub names in the `/agentd` upgrade's
+`x-agentum-agents` header (an older hub can't read a newer agent kind).
 
 ## Env files
 

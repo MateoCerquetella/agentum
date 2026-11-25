@@ -2,6 +2,7 @@
 //! out. Reconnects forever with backoff (0.5 s → 30 s, jittered); every reconnect resends what
 //! the hub hasn't acked.
 use crate::App;
+use agentum_proto::AgentKind;
 use agentum_proto::machine::{FromAgentd, Reply, ToAgentd};
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
@@ -100,7 +101,10 @@ async fn session(app: &Arc<App>) -> anyhow::Result<()> {
         }
         Err::<_, anyhow::Error>(last.unwrap_or_else(|| anyhow::anyhow!("no address for {host}")))
     };
-    let (ws, _) = tokio::time::timeout(Duration::from_secs(20), connect).await.context("connecting timed out")??;
+    let (ws, resp) = tokio::time::timeout(Duration::from_secs(20), connect).await.context("connecting timed out")??;
+    // The agents this hub can read (an older hub says nothing: it knows the first three).
+    let known = resp.headers().get(agentum_proto::machine::AGENTS_HEADER).and_then(|v| v.to_str().ok()).map(|v| v.split(',').filter_map(|a| AgentKind::parse(a.trim())).collect());
+    app.set_hub_agents(known.unwrap_or_else(|| AgentKind::FIRST.to_vec()));
     let (mut sink, mut stream) = ws.split();
     let mut out = app.take_out_rx().await;
     // Anything left over from the last connection is stale.

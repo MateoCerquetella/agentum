@@ -97,15 +97,67 @@ pub struct Overview {
     pub limits: Vec<AgentLimits>,
 }
 
+/// One account's limits: one report per agent and account (machines signed in to the same account
+/// share it). A report without an account (an older agentd, or a machine whose account isn't
+/// known yet) stands for its machine.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct AgentLimits {
     pub agent: AgentKind,
+    /// The machine that reported it.
     pub machine: String,
     pub limits: Vec<RateLimit>,
     pub at: Ms,
     /// The subscription ("max", "plus"…), when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// The account's stable id (Claude's organization, Codex's user, Cursor's user and team).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// Its name for people ("Acme", an email…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_label: Option<String>,
+    /// Every machine known to be signed in to it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<String>,
+}
+
+impl AgentLimits {
+    /// What tells reports apart within an agent: the account, else the machine.
+    pub fn key(&self) -> &str {
+        self.account.as_deref().unwrap_or(&self.machine)
+    }
+    /// Whether this report is the account of `machine`.
+    pub fn covers(&self, machine: &str) -> bool {
+        self.machine == machine || self.machines.iter().any(|m| m == machine)
+    }
+}
+
+/// Put a report among the others: it replaces its account's (or its machine's), and the machines
+/// it covers leave the other accounts of that agent (a machine is signed in to one at a time).
+pub fn put_limits(all: &mut Vec<AgentLimits>, l: AgentLimits) {
+    all.retain_mut(|x| {
+        if x.agent != l.agent {
+            return true;
+        }
+        if x.account == l.account && x.key() == l.key() {
+            return false;
+        }
+        if l.account.is_some() {
+            if x.account.is_none() {
+                return !l.covers(&x.machine);
+            }
+            x.machines.retain(|m| !l.covers(m));
+            return !x.machines.is_empty();
+        }
+        true
+    });
+    all.insert(0, l);
+}
+
+/// The limits that apply to `agent` on `machine`: its account's report, else its own.
+pub fn limits_for<'a>(all: &'a [AgentLimits], agent: AgentKind, machine: &str) -> Option<&'a AgentLimits> {
+    let mine = all.iter().filter(|l| l.agent == agent && l.covers(machine));
+    mine.clone().find(|l| l.account.is_some()).or_else(|| mine.max_by_key(|l| l.at))
 }
 
 /// A thread with its events. Assistant messages carry `html` (markdown rendered by the hub).

@@ -1,7 +1,7 @@
 //! Claude Code: `claude -p` speaking stream-json on stdio, permission prompts over the control
 //! protocol (`--permission-prompt-tool stdio`).
 use super::{Agent, DriverOut, Proc, Session, StartOpts, Tx, permission_options, tool_kind, tool_title, unified_from_hunks};
-use agentum_proto::machine::ModelInfo;
+use agentum_proto::machine::{AgentAccount, ModelInfo};
 use agentum_proto::{AgentKind, AskKind, AskOption, EventKind, FileDiff, Input, Permission, PlanEntry, RateLimit, StopReason, Usage};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -453,6 +453,25 @@ pub fn plan_label(sub: Option<String>, tier: Option<String>) -> Option<String> {
 /// The Claude subscription this machine is signed in with.
 pub fn subscription() -> Option<String> {
     creds()?.plan
+}
+
+/// Who Claude Code is signed in as here: `oauthAccount` of its `.claude.json` (the organization,
+/// else the user). Names and ids only.
+pub fn account() -> Option<AgentAccount> {
+    let file = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(d) => std::path::PathBuf::from(d).join(".claude.json"),
+        None => crate::util::home().join(".claude.json"),
+    };
+    let v: Value = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    account_of(&v)
+}
+
+pub fn account_of(config: &Value) -> Option<AgentAccount> {
+    let a = config.get("oauthAccount")?;
+    let st = |k: &str| a.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    let id = st("organizationUuid").or_else(|| st("accountUuid"))?;
+    let label = st("organizationName").or_else(|| st("displayName")).unwrap_or_else(|| "Claude".into());
+    Some(AgentAccount { id, label })
 }
 
 /// The account's limits now, from Anthropic's OAuth usage endpoint (as Claude Code's /usage and
@@ -958,6 +977,15 @@ mod usage_tests {
     }
 
     #[test]
+    fn accounts() {
+        let v = serde_json::json!({"oauthAccount": {"accountUuid": "u1", "displayName": "Sam", "organizationUuid": "o1", "organizationName": "Acme", "emailAddress": "m@example.com"}});
+        assert_eq!(account_of(&v), Some(AgentAccount { id: "o1".into(), label: "Acme".into() }));
+        let v = serde_json::json!({"oauthAccount": {"accountUuid": "u1", "displayName": "Sam", "organizationUuid": ""}});
+        assert_eq!(account_of(&v), Some(AgentAccount { id: "u1".into(), label: "Sam".into() }));
+        assert_eq!(account_of(&serde_json::json!({"numStartups": 3})), None);
+    }
+
+    #[test]
     fn plans() {
         assert_eq!(plan_label(Some("max".into()), Some("default_claude_max_20x".into())).as_deref(), Some("Max (20x)"));
         assert_eq!(plan_label(Some("pro".into()), None).as_deref(), Some("Pro"));
@@ -971,12 +999,12 @@ mod usage_tests {
 #[ignore]
 async fn live_usage() {
     match usage_now().await {
-        Ok((w, plan)) => println!("claude: plan {plan:?}, {w:?}"),
+        Ok((w, plan)) => println!("claude: plan {plan:?}, {:?}, {w:?}", account().map(|a| a.label)),
         Err(e) => println!("claude: {e}"),
     }
     match crate::machine::agent_bin(&crate::config::Config::default(), AgentKind::Codex) {
         Some(bin) => match super::codex::usage_now(bin).await {
-            Ok((w, plan)) => println!("codex: plan {plan:?}, {w:?}"),
+            Ok(u) => println!("codex: plan {:?}, {:?}, {:?}", u.plan, u.account.map(|a| a.label), u.limits),
             Err(e) => println!("codex: {e}"),
         },
         None => println!("codex: not installed"),
