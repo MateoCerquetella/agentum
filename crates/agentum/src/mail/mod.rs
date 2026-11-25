@@ -1,4 +1,4 @@
-//! CERQ Mail (owner: mail backend). Port of odysseus/cerq-mail/agent.py plus
+//! CERQ Mail (owner: mail backend). Port of the earlier Python mail agent plus
 //! the Odysseus mail routes the UI used (read, attachments, send, uploads,
 //! AI reply). Cross-module API below is a contract: keep the signatures.
 mod account;

@@ -4,7 +4,7 @@
 //! unlock (auth.rs guard → locked()). ES256 only (what Apple, Google and
 //! Windows platform authenticators make), user verification required,
 //! attestation "none". Credentials in kv "auth.passkeys"; the relying party
-//! is the host CERQ is opened on (dash.cerq.lan, or localhost in development).
+//! is the host CERQ is opened on (your hub's host name, or localhost in development).
 use crate::{auth, state::App, util::*};
 use axum::{extract::{Path, State}, http::{HeaderMap, Method, StatusCode}, response::Response, routing::{delete, get, post}, Json, Router};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
@@ -117,7 +117,7 @@ async fn reg_start(State(app): State<App>, h: HeaderMap) -> R<Json<Value>> {
     let user = auth::user_of(&app, &h).await.ok_or_else(|| forbidden("sign in first"))?;
     let (rp_id, _) = rp(&h);
     let exclude: Vec<Value> = creds(&app).await.iter().map(|c| json!({"type": "public-key", "id": c["id"]})).collect();
-    Ok(Json(json!({"publicKey": {"rp": {"id": rp_id, "name": "CERQ"}, "user": {"id": B64.encode(user.as_bytes()), "name": user, "displayName": user},
+    Ok(Json(json!({"publicKey": {"rp": {"id": rp_id, "name": "Agentum"}, "user": {"id": B64.encode(user.as_bytes()), "name": user, "displayName": user},
         "challenge": challenge("register", &user), "pubKeyCredParams": [{"type": "public-key", "alg": -7}], "timeout": 60000, "attestation": "none",
         "authenticatorSelection": {"residentKey": "required", "requireResidentKey": true, "userVerification": "required"}, "excludeCredentials": exclude}})))
 }
@@ -147,7 +147,7 @@ async fn assert(app: &App, h: &HeaderMap, b: &Value, purpose: &'static str) -> R
     let ch_user = client_data(&cdj, "webauthn.get", purpose, h)?;
     let mut cs = creds(app).await;
     let id = B64.encode(b64(b, "rawId").or_else(|_| b64(b, "id"))?);
-    let i = cs.iter().position(|c| s(c, "id") == id).ok_or_else(|| forbidden("CERQ doesn't know this passkey."))?;
+    let i = cs.iter().position(|c| s(c, "id") == id).ok_or_else(|| forbidden("Agentum doesn't know this passkey."))?;
     let c = cs[i].clone();
     if !ch_user.is_empty() && s(&c, "user") != ch_user { return Err(forbidden("That passkey belongs to someone else.")); }
     let ad = b64(r, "authenticatorData")?;
@@ -215,7 +215,7 @@ mod tests {
     use p256::ecdsa::{signature::Signer, SigningKey};
     #[test]
     fn ceremony_parts() {
-        let rp_id = "dash.cerq.lan";
+        let rp_id = "hub.example.lan";
         let sk = SigningKey::from_bytes(&[7u8; 32].into()).unwrap();
         let pt = sk.verifying_key().to_encoded_point(false);
         // A COSE key and an authenticator data with it, as a platform authenticator makes them.
@@ -231,7 +231,7 @@ mod tests {
         let mut no_uv = ad.clone(); no_uv[32] = 0x41;
         assert!(auth_data(&no_uv, rp_id).is_err());                         // no user verification
         // A signature over authData || sha256(clientDataJSON) verifies with the stored key.
-        let cdj = br#"{"type":"webauthn.get","challenge":"x","origin":"https://dash.cerq.lan"}"#;
+        let cdj = br#"{"type":"webauthn.get","challenge":"x","origin":"https://hub.example.lan"}"#;
         let mut msg = ad[..37].to_vec(); msg.extend(Sha256::digest(cdj));
         let sig: Signature = sk.sign(&msg);
         let vk = VerifyingKey::from_sec1_bytes(&pk).unwrap();

@@ -39,7 +39,8 @@ fn read_url() -> (String, Option<String>) {
     let q = nav::read();
     let legacy = q.get("open").cloned().filter(|p| pages::def(p).is_some());
     let left = legacy.unwrap_or_else(|| if pages::def(&seg).is_some() { seg } else { "dashboard".into() });
-    let right = q.get("side").cloned().filter(|s| pages::def(s).is_some() && *s != left);
+    // The Code page may be on both sides (two threads); other pages once.
+    let right = q.get("side").cloned().filter(|s| pages::def(s).is_some() && (*s != left || s == "code"));
     (left, right)
 }
 
@@ -82,6 +83,31 @@ fn Shell() -> impl IntoView {
         mobile_open.set(false);
         let (cl, cr) = (left.get_untracked(), right.get_untracked());
         let p = p.to_string();
+        // A Code page on the right keeps its own params, prefixed "r_" (its thread, machine…).
+        let right_code_kept = |r: &Option<String>, fresh: &BTreeMap<String, String>| -> BTreeMap<String, String> {
+            let mut q = fresh.clone();
+            if r.as_deref() == Some("code") && cr.as_deref() == Some("code") {
+                for (k, v) in nav::read().into_iter().filter(|(k, _)| k.starts_with("r_")) {
+                    q.entry(k).or_insert(v);
+                }
+            }
+            q
+        };
+        if p == "code" {
+            let right_side = matches!(at, Where::Right) || (matches!(at, Where::Replace) && cl != "code" && cr.as_deref() == Some("code"));
+            if right_side {
+                // Into the right pane; the left keeps its page and params.
+                let mut q: BTreeMap<String, String> = nav::read().into_iter().filter(|(k, _)| !k.starts_with("r_") && k != "side").collect();
+                for (k, v) in params {
+                    q.insert(format!("r_{k}"), v);
+                }
+                return write(cl, Some(p), q, true);
+            }
+            let r = if cl == "code" { cr.clone() } else if matches!(at, Where::Left) { cr.clone().or(Some(cl.clone())) } else { cr.clone() };
+            let q = right_code_kept(&r, &params);
+            return write(p, r, q, true);
+        }
+        let params = right_code_kept(&cr, &params);
         match at {
             Where::Left => {
                 let r = if cl == p { cr } else if cr.as_deref() == Some(&p) { Some(cl) } else { cr.or(Some(cl)) };

@@ -41,3 +41,6 @@ serde.workspace = true
 serde_json.workspace = true
 web-sys.workspace = true
 console_error_panic_hook = "0.1"
+# Markdown for the Secretary's answers and the notes preview; inflate for attached Office files.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }

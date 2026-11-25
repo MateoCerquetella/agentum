@@ -63,7 +63,7 @@ pub struct Manifest {
 #[cfg(feature = "hub")]
 pub mod hub {
     use super::Manifest;
-    use agentum_proto::api::{NewThread, SendBody, ThreadSummary};
+    use agentum_proto::api::{NewThread, PatchThread, SendBody, ThreadSummary};
     use agentum_proto::machine::Req;
     use agentum_proto::Event;
     use serde_json::Value;
@@ -83,6 +83,10 @@ pub mod hub {
         async fn events(&self, id: &str, after: u64) -> Vec<Event>;
         async fn send(&self, id: &str, body: SendBody) -> Result<(), String>;
         async fn new_thread(&self, body: NewThread) -> Result<ThreadSummary, String>;
+        /// Change a thread the way the person can (rename, pin, archive…).
+        async fn patch_thread(&self, _id: &str, _patch: PatchThread) -> Result<ThreadSummary, String> {
+            Err("not supported".into())
+        }
         /// The plugin's own key-value storage.
         async fn kv_get(&self, key: &str) -> Option<Value>;
         async fn kv_set(&self, key: &str, value: Value);

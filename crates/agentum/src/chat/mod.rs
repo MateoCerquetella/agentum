@@ -98,9 +98,9 @@ async fn delete_session(State(app): State<App>, Path(id): Path<String>) -> R<Jso
 
 async fn system_prompt(app: &App, access: Access) -> String {
     if access == Access::Private {
-        return "You are CERQ in Nobody chat. Answer in the user's language. Base the answer on the conversation and your own knowledge. You have no tools or access to the user's workspace or the web.".into();
+        return "You are Agentum in Nobody chat. Answer in the user's language. Base the answer on the conversation and your own knowledge. You have no tools or access to the user's workspace or the web.".into();
     }
-    let brand = app.db.kv_get("brand").await.ok().flatten().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "CERQ".into());
+    let brand = app.db.kv_get("brand").await.ok().flatten().and_then(|v| v.as_str().map(String::from)).filter(|b| !b.eq_ignore_ascii_case("cerq")).unwrap_or_else(|| "Agentum".into());
     let now = chrono::Utc::now().with_timezone(&app.tz());
     let name = app.setting("CERQ_MY_NAME");
     let web = if access == Access::Web {

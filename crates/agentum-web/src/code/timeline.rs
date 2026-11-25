@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, PartialEq)]
 enum Item {
-    User { seq: u64, html: String, queued: bool, ts: i64 },
+    User { seq: u64, html: String, queued: bool, ev: EventView },
     Message { seq: u64, html: String, ts: i64, ev: EventView },
     Thinking { seq: u64, text: String },
     Tool { seq: u64, item: String, name: String, kind: ToolKind, title: String, input: Value, done: Option<(bool, Option<String>, Vec<FileDiff>)> },
@@ -43,10 +43,18 @@ fn fold(events: &[EventView]) -> Vec<Item> {
         match &e.event.kind {
             EventKind::User { text, queued, .. } => {
                 users.insert(seq, out.len());
-                out.push(Item::User { seq, html: e.html.clone().unwrap_or_else(|| format!("<p>{}</p>", esc(text))), queued: *queued, ts: e.event.ts });
+                out.push(Item::User { seq, html: e.html.clone().unwrap_or_else(|| format!("<p>{}</p>", esc(text))), queued: *queued, ev: e.clone() });
             }
-            EventKind::Dequeued { seq_of_user } => {
-                if let Some(Item::User { queued, .. }) = users.get(seq_of_user).and_then(|i| out.get_mut(*i)) {
+            EventKind::Dequeued { seq_of_user, dropped } => {
+                if *dropped {
+                    // A stop dropped it: it was never sent.
+                    if let Some(i) = users.get(seq_of_user).copied() {
+                        if let Some(Item::User { html, queued, .. }) = out.get_mut(i) {
+                            *queued = false;
+                            *html = format!("<s>{html}</s>");
+                        }
+                    }
+                } else if let Some(Item::User { queued, .. }) = users.get(seq_of_user).and_then(|i| out.get_mut(*i)) {
                     *queued = false;
                 }
             }
@@ -174,8 +182,9 @@ fn ToolRow(item: Item, thread: String, live: Signal<Option<String>>) -> impl Int
         Some((true, ..)) => "tool-ok",
         Some((false, ..)) => "tool-bad",
     };
-    let summary = input_summary(&name, &input);
     let head = if title.is_empty() { name.clone() } else { title.clone() };
+    // The argument only when the title doesn't already say it.
+    let summary = Some(input_summary(&name, &input)).filter(|s| *s != head && !head.contains(s.as_str())).unwrap_or_default();
     let (output, diffs) = done.clone().map(|(_, o, d)| (o, d)).unwrap_or((None, vec![]));
     let has_diff = !diffs.is_empty();
     let _ = thread;
@@ -292,10 +301,10 @@ pub fn Timeline(
                 {
                     let th = thread();
                     match item.clone() {
-                        Item::User { seq, html, queued, ts } => view! {
+                        Item::User { seq, html, queued, ev } => view! {
                             <div class=if queued { "msg user queued" } else { "msg user" } id=format!("ev-{seq}")>
                                 <div class="md" inner_html=html/>
-                                <div class="msg-meta">{if queued { "Queued".to_string() } else { clock(ts) }}</div>
+                                <div class="msg-meta">{if queued { "Queued".into_any() } else { crate::plugins::message_meta(&ev).into_any() }}</div>
                             </div>
                         }.into_any(),
                         Item::Message { seq, html, ev, .. } => view! {

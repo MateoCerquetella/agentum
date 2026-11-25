@@ -1,0 +1,24 @@
+# The hub. Copy to /etc/systemd/system/agentum.service, put the binary at /opt/agentum/agentum and
+# settings in /etc/agentum.env (KEY=value: OAuth clients, the model URL…). Data in /var/lib/agentum.
+[Unit]
+Description=Agentum hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agentum
+Group=agentum
+ExecStart=/opt/agentum/agentum
+EnvironmentFile=-/etc/agentum.env
+Environment=AGENTUM_DATA=/var/lib/agentum AGENTUM_BIND=127.0.0.1:7100 RUST_LOG=info
+Restart=on-failure
+RestartSec=3
+MemoryMax=400M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/agentum
+
+[Install]
+WantedBy=multi-user.target

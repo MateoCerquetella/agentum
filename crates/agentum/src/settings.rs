@@ -119,7 +119,7 @@ pub async fn post(State(app): State<App>, Json(body): Json<Value>) -> R<Json<Val
     }
     if let Some(b) = body.get("brand").and_then(|b| b.as_str()) {
         let b: String = b.trim().chars().filter(|c| !c.is_control() && *c != '<' && *c != '>').take(24).collect();
-        app.db.kv_set("brand", &json!(if b.is_empty() { "CERQ".to_string() } else { b })).await?;
+        app.db.kv_set("brand", &json!(if b.is_empty() { "Agentum".to_string() } else { b })).await?;
     }
     app.db.kv_set("settings", &st).await?;
     load(&app).await?;

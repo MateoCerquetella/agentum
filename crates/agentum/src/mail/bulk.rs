@@ -57,7 +57,7 @@ async fn one_click(url: &str) -> anyhow::Result<u16> {
     addrs.sort();
     let client = reqwest::Client::builder().tls_backend_preconfigured(crate::rustls_config()).redirect(reqwest::redirect::Policy::none())
         .resolve(&host, addrs[0]).timeout(std::time::Duration::from_secs(20)).build()?;
-    let r = client.post(u).header("Content-Type", "application/x-www-form-urlencoded").header("User-Agent", "CERQ Mail").body("List-Unsubscribe=One-Click").send().await?;
+    let r = client.post(u).header("Content-Type", "application/x-www-form-urlencoded").header("User-Agent", "Agentum Mail").body("List-Unsubscribe=One-Click").send().await?;
     Ok(r.status().as_u16())
 }
 

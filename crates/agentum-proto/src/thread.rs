@@ -222,8 +222,8 @@ pub struct Event {
 pub enum EventKind {
     /// What the person sent. `queued`: it waits for the running turn to end.
     User { text: String, #[serde(default, skip_serializing_if = "Vec::is_empty")] images: Vec<String>, #[serde(default)] queued: bool },
-    /// A queued message was delivered (it now starts a turn).
-    Dequeued { seq_of_user: u64 },
+    /// A queued message was delivered (it now starts a turn), or, with `dropped`, discarded by a stop.
+    Dequeued { seq_of_user: u64, #[serde(default, skip_serializing_if = "is_false")] dropped: bool },
     TurnStarted { turn: u32 },
     /// Streaming text of an assistant message; `item` names the message.
     Delta { item: String, text: String },
@@ -276,6 +276,10 @@ pub enum EventKind {
     /// Something the person should see that isn't the agent's (a resume, a model switch).
     Notice { text: String },
     Error { message: String, #[serde(default)] fatal: bool },
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl EventKind {
