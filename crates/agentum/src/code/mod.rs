@@ -105,6 +105,13 @@ pub async fn start(app: &App) -> anyhow::Result<()> {
             m.insert(t.id.clone(), t);
         }
     }
+    // Each agent's last reported limits (the usage plugin keeps them), so the sidebar's meters are
+    // there after a restart, before any thread reports again.
+    if let Some(saved) = crate::plugins::kv_get(app, "usage", "limits").await.and_then(|v| v.as_object().cloned()) {
+        let mut l: Vec<AgentLimits> = saved.into_values().filter_map(|v| serde_json::from_value(v).ok()).collect();
+        l.sort_by(|a, b| b.at.cmp(&a.at));
+        *app.code.limits.write().unwrap() = l;
+    }
     let a = app.clone();
     tokio::spawn(async move {
         loop {

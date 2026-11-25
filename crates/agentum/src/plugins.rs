@@ -109,7 +109,7 @@ impl HubCtx for PluginCtx {
     }
 }
 
-async fn kv_get(app: &App, plugin: &str, key: &str) -> Option<Value> {
+pub(crate) async fn kv_get(app: &App, plugin: &str, key: &str) -> Option<Value> {
     let (p, k) = (plugin.to_string(), key.to_string());
     app.db
         .call(move |c| {
