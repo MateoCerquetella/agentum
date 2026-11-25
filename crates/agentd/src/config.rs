@@ -7,10 +7,13 @@ use std::path::PathBuf;
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Config {
     /// The hub's agentd endpoint, e.g. `wss://hub.example.lan/agentd`.
+    #[serde(default)]
     pub hub: String,
     /// This machine's token (sent as `Authorization: Bearer <token>`).
+    #[serde(default)]
     pub token: String,
     /// The machine's name.
+    #[serde(default)]
     pub name: String,
     /// A PEM file of a private CA to trust for `wss://` (besides the public roots).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,5 +184,9 @@ mod tests {
         assert_eq!(c.projects, vec!["/x", "/y", "/z"]);
         assert_eq!(c.ca, None);
         assert_eq!(c.hub_ip.as_deref(), Some("10.0.0.2"));
+        // The file may leave the connection to the variables.
+        let mut c: Config = toml::from_str("data = \"/d\"\n").unwrap();
+        c.apply_env(|k| (k == "AGENTD_HUB").then(|| "ws://x/agentd".to_string()));
+        assert_eq!(c.hub, "ws://x/agentd");
     }
 }
