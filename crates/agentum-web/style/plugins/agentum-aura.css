@@ -1,0 +1,22 @@
+/* Aura plugin: a slow colour field behind the app. Two large layers of soft radial gradients, each
+   moved only by transform (the compositor animates them; nothing repaints, scrolling included). */
+.aura-field { position: fixed; inset: -12vmax; z-index: -1; pointer-events: none; overflow: hidden; contain: strict; transition: opacity .6s ease; }
+.aura-field i { position: absolute; inset: 0; will-change: transform; animation: aura-drift-1 72s ease-in-out infinite alternate; }
+.aura-l1 { background:
+    radial-gradient(38% 42% at 22% 28%, color-mix(in srgb, var(--aura-a) 70%, transparent), transparent 70%),
+    radial-gradient(34% 38% at 78% 72%, color-mix(in srgb, var(--aura-b) 60%, transparent), transparent 70%); }
+.aura-l2 { background:
+    radial-gradient(30% 36% at 70% 22%, color-mix(in srgb, var(--aura-c) 55%, transparent), transparent 70%),
+    radial-gradient(32% 30% at 30% 80%, color-mix(in srgb, var(--aura-a) 45%, transparent), transparent 70%);
+  animation-name: aura-drift-2 !important; animation-duration: 96s !important; }
+@keyframes aura-drift-1 { from { transform: translate3d(-4%, -3%, 0) scale(1); } to { transform: translate3d(5%, 4%, 0) scale(1.12); } }
+@keyframes aura-drift-2 { from { transform: translate3d(4%, 2%, 0) rotate(0deg) scale(1.08); } to { transform: translate3d(-5%, -4%, 0) rotate(8deg) scale(1); } }
+.aura-field.still i { animation: none; }
+@media (prefers-reduced-motion: reduce) { .aura-field i { animation: none !important; } }
+/* The app's surfaces let it through (colour only: no backdrop blur, which would cost a repaint). */
+html[data-aura] body { background: var(--bg); }
+html[data-aura][data-theme] .sidebar { background: color-mix(in srgb, var(--sidebar) 78%, transparent); }
+html[data-aura][data-theme] .pane { background: color-mix(in srgb, var(--bg) 84%, transparent); }
+html[data-aura][data-theme="studio"] body { background: var(--frame); }
+html[data-aura][data-theme="studio"] .pane { background: color-mix(in oklch, var(--background) 84%, transparent); }
+html[data-aura][data-theme="glass"] .pane, html[data-aura][data-theme="glass"] .sidebar { background: var(--bg); }
