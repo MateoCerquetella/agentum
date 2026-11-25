@@ -110,7 +110,7 @@ async fn finish(State(app): State<App>, Json(b): Json<Value>) -> R<Json<Value>> 
     let tok: Value = r.json().await.unwrap_or(json!({}));
     if !st.is_success() { return Err(bad(format!("Google refused the sign-in: {} {}", s(&tok, "error"), s(&tok, "error_description")))); }
     let refresh = s(&tok, "refresh_token");
-    if refresh.is_empty() { return Err(bad("Google sent no refresh token. Start again (CERQ asks for consent each time).")); }
+    if refresh.is_empty() { return Err(bad("Google sent no refresh token. Start again (Agentum asks for consent each time).")); }
     let info: Value = app.http.get("https://openidconnect.googleapis.com/v1/userinfo").bearer_auth(s(&tok, "access_token")).send().await?.json().await.unwrap_or(json!({}));
     let email = s(&info, "email").to_lowercase();
     if email.is_empty() { return Err(bad("Couldn't read which Google account this is.")); }

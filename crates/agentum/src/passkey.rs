@@ -117,7 +117,7 @@ async fn reg_start(State(app): State<App>, h: HeaderMap) -> R<Json<Value>> {
     let user = auth::user_of(&app, &h).await.ok_or_else(|| forbidden("sign in first"))?;
     let (rp_id, _) = rp(&h);
     let exclude: Vec<Value> = creds(&app).await.iter().map(|c| json!({"type": "public-key", "id": c["id"]})).collect();
-    Ok(Json(json!({"publicKey": {"rp": {"id": rp_id, "name": "CERQ"}, "user": {"id": B64.encode(user.as_bytes()), "name": user, "displayName": user},
+    Ok(Json(json!({"publicKey": {"rp": {"id": rp_id, "name": "Agentum"}, "user": {"id": B64.encode(user.as_bytes()), "name": user, "displayName": user},
         "challenge": challenge("register", &user), "pubKeyCredParams": [{"type": "public-key", "alg": -7}], "timeout": 60000, "attestation": "none",
         "authenticatorSelection": {"residentKey": "required", "requireResidentKey": true, "userVerification": "required"}, "excludeCredentials": exclude}})))
 }
@@ -147,7 +147,7 @@ async fn assert(app: &App, h: &HeaderMap, b: &Value, purpose: &'static str) -> R
     let ch_user = client_data(&cdj, "webauthn.get", purpose, h)?;
     let mut cs = creds(app).await;
     let id = B64.encode(b64(b, "rawId").or_else(|_| b64(b, "id"))?);
-    let i = cs.iter().position(|c| s(c, "id") == id).ok_or_else(|| forbidden("CERQ doesn't know this passkey."))?;
+    let i = cs.iter().position(|c| s(c, "id") == id).ok_or_else(|| forbidden("Agentum doesn't know this passkey."))?;
     let c = cs[i].clone();
     if !ch_user.is_empty() && s(&c, "user") != ch_user { return Err(forbidden("That passkey belongs to someone else.")); }
     let ad = b64(r, "authenticatorData")?;

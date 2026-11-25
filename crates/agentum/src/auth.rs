@@ -103,7 +103,7 @@ pub async fn logout(State(app): State<App>, headers: HeaderMap) -> R<Response> {
 
 pub async fn me(State(app): State<App>, headers: HeaderMap) -> R<Json<Value>> {
     match user_of(&app, &headers).await {
-        Some(u) => Ok(Json(json!({"user": u, "brand": app.db.kv_get("brand").await?.unwrap_or(json!("CERQ"))}))),
+        Some(u) => Ok(Json(json!({"user": u, "brand": app.db.kv_get("brand").await?.unwrap_or(json!("Agentum"))}))),
         None => Err(AppError(StatusCode::UNAUTHORIZED, "unauthorized".into())),
     }
 }
