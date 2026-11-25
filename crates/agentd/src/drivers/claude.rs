@@ -735,6 +735,12 @@ impl Session for Live {
         self.proc.write(&user_message(input))
     }
 
+    /// Claude Code reads a user message written during a turn into that turn (one result for both).
+    async fn steer(&mut self, input: &Input) -> anyhow::Result<bool> {
+        self.proc.write(&user_message(input))?;
+        Ok(true)
+    }
+
     async fn interrupt(&mut self) -> anyhow::Result<()> {
         self.tr.lock().unwrap().interrupting = true;
         let _ = self.control(json!({"subtype": "interrupt"}))?;

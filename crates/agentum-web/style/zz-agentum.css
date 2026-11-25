@@ -239,3 +239,17 @@ a.dk-hit { display: block; }
 
 /* The model picker: a model's provider, muted, right after its name (as BB). */
 .mp .mp-prov { margin-left: 6px; color: var(--subdue); font-size: 12px; }
+
+/* The composer's / and @ menus (BB's): over the box, the whole width. */
+.cbox { position: relative; }
+.ta-pop { left: 0; right: 0; max-width: none; min-width: 0; }
+.ta-list { max-height: min(320px, 45vh); overflow-y: auto; display: flex; flex-direction: column; }
+.ta-item.on { background: var(--hl); }
+.ta-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hi); }
+.ta-sub { flex: 1 1 0; max-width: none; }
+.ta-tag { flex: none; color: var(--subdue); font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; }
+.steer-btn:disabled { opacity: .4; cursor: default; }
+/* A queued message's Steer and Remove. */
+.msg.user.queued .msg-meta { display: flex; align-items: center; gap: 6px; }
+.q-act { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; cursor: pointer; }
+.q-act:hover { background: var(--hl); }

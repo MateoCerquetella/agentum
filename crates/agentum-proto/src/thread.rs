@@ -113,10 +113,14 @@ pub struct Input {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<String>,
+    /// For the agent only, after the text (the threads the person @-mentioned): not shown in the
+    /// timeline. An older agentd ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 impl Input {
     pub fn text(t: impl Into<String>) -> Input {
-        Input { text: t.into(), images: vec![] }
+        Input { text: t.into(), images: vec![], context: None }
     }
 }
 

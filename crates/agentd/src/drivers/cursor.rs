@@ -1082,7 +1082,7 @@ mod tests {
 
     #[test]
     fn prompts() {
-        let p = prompt_blocks(&Input { text: "hi".into(), images: vec!["data:image/png;base64,AAAA".into()] }, Some("Use ```ui."), true);
+        let p = prompt_blocks(&Input { text: "hi".into(), images: vec!["data:image/png;base64,AAAA".into()], context: None }, Some("Use ```ui."), true);
         assert_eq!(p.as_array().unwrap().len(), 3);
         assert_eq!(p[0], json!({"type": "image", "mimeType": "image/png", "data": "AAAA"}));
         assert_eq!(p[1], json!({"type": "text", "text": "hi"}));

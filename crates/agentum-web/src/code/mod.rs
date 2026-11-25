@@ -5,6 +5,7 @@ pub mod rich;
 pub mod marks;
 pub mod store;
 mod timeline;
+mod typeahead;
 
 use crate::pages::Pane;
 use agentum_plugin::web::{ComposerCx, ThreadCx};
@@ -131,8 +132,8 @@ fn ModelChip(machine: Signal<String>, agent: RwSignal<AgentKind>, model: RwSigna
             agent.set(a);
             effort.set(None);
         }
+        // Stays open: the reasoning is picked right under it (Esc or a click outside closes).
         model.set(id.filter(|m| m != "default"));
-        open.set(false);
     };
     view! {
         <div class="pk mp" node_ref=root>
@@ -261,6 +262,11 @@ fn NewThreadPage() -> impl IntoView {
     if let Some(p) = pane() {
         p.title.set(Some("New thread".into()));
     }
+    let ta_src = Signal::derive(move || {
+        let (m, p) = (machine.get(), project.get());
+        (!m.is_empty() && !p.is_empty()).then(|| typeahead::Src::New { machine: m, agent: agent.get(), cwd: p })
+    });
+    let ta = typeahead::Typeahead::new(text, area, ta_src, Callback::new(|v: String| agentum_ui::store::set("agentum.draft.new", &v)));
     Effect::new(move |_| {
         if let Some(t) = area.get() {
             let _ = t.focus();
@@ -489,10 +495,12 @@ fn NewThreadPage() -> impl IntoView {
             <div class="compose-col">
                 <div class="cbox" on:dragover=attach::on_dragover on:drop=move |e| attach::on_drop(e, images)>
                     <attach::Thumbs images=images/>
-                    <textarea node_ref=area class="cbox-text" rows="3" placeholder="Ask anything. ⏎ to start, ⇧⏎ for a new line" prop:value=text
+                    {ta.view()}
+                    <textarea node_ref=area class="cbox-text" rows="3" placeholder="Ask anything. / for commands and skills, @ for threads and files. ⏎ to start" prop:value=text
                         on:paste=move |e| attach::on_paste(e, images)
-                        on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set("agentum.draft.new", &v); text.set(v) }
-                        on:keydown=move |e| if e.key() == "Enter" && !e.shift_key() && !e.is_composing() { e.prevent_default(); start() }/>
+                        on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set("agentum.draft.new", &v); text.set(v); ta.sync() }
+                        on:click=move |_| ta.sync() on:keyup=move |e| if e.key().starts_with("Arrow") || e.key() == "Home" || e.key() == "End" { ta.sync() }
+                        on:keydown=move |e| { if ta.on_key(&e) { return; } if e.key() == "Enter" && !e.shift_key() && !e.is_composing() { e.prevent_default(); start() } }/>
                     <div class="cbox-bar">
                         <attach::AttachButton images=images/>
                         <span class="grow"/>
@@ -924,14 +932,24 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
         move || stop_thread(&id)
     };
     let s1 = send;
+    let area = NodeRef::<leptos::html::Textarea>::new();
+    let ta = {
+        let id = id.clone();
+        let key = key.clone();
+        typeahead::Typeahead::new(text, area, Signal::derive(move || Some(typeahead::Src::Thread(id.clone()))), Callback::new(move |v: String| agentum_ui::store::set(&key, &v)))
+    };
+    let empty = move || text.get().trim().is_empty() && images.with(|v| v.is_empty());
     view! {
         <div class="code-composer">
             <div class="cbox" on:dragover=attach::on_dragover on:drop=move |e| attach::on_drop(e, images)>
+                {ta.view()}
                 <attach::Thumbs images=images/>
-                <textarea class="cbox-text" rows="2" on:paste=move |e| attach::on_paste(e, images) placeholder=move || if busy() { "Queue a message (⏎) · steer the turn (⌥⏎) · stop and send (⌘⇧⏎)" } else { "Reply… ⏎ to send, ⇧⏎ for a new line" }
+                <textarea node_ref=area class="cbox-text" rows="2" on:paste=move |e| attach::on_paste(e, images) placeholder=move || if busy() { "Queue a message (⏎) · steer the turn (⌥⏎) · stop and send (⌘⇧⏎)" } else { "Reply… / for commands and skills, @ for threads and files" }
                     prop:value=text
-                    on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set(&key, &v); text.set(v) }
+                    on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set(&key, &v); text.set(v); ta.sync() }
+                    on:click=move |_| ta.sync() on:keyup=move |e| if e.key().starts_with("Arrow") || e.key() == "Home" || e.key() == "End" { ta.sync() }
                     on:keydown=move |e| {
+                        if ta.on_key(&e) { return; }
                         if e.key() == "Escape" && busy() { stop(); return; }
                         if e.key() != "Enter" || e.shift_key() || e.is_composing() { return; }
                         e.prevent_default();
@@ -943,7 +961,12 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
                     {crate::plugins::composer_actions(cx.clone())}
                     <span class="grow pk-dim">{move || summary.get().map(|s| if s.queued > 0 { format!("{} queued", s.queued) } else { String::new() })}</span>
                     <ModelChip machine=machine agent=agent model=model effort=effort lock_agent=true up=true/>
-                    <button class="send-btn" title=move || if busy() { "Queue (⏎)" } else { "Send (⏎)" } disabled=move || text.get().trim().is_empty() && images.with(|v| v.is_empty()) on:click=move |_| send.run(SendBody::default())>
+                    <Show when=busy>
+                        <button class="cbox-icon steer-btn" title="Steer: into the running turn now (⌥⏎)" disabled=empty on:click=move |_| send.run(SendBody { mode: SendMode::Steer, ..Default::default() })>
+                            <Icon name="bolt" size=15/>
+                        </button>
+                    </Show>
+                    <button class="send-btn" title=move || if busy() { "Queue (⏎)" } else { "Send (⏎)" } disabled=empty on:click=move |_| send.run(SendBody::default())>
                         <Icon name="arrow-up" size=16/>
                     </button>
                 </div>

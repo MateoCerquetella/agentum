@@ -32,6 +32,13 @@ browser ──HTTP + one WebSocket (/api/ws)──▶ agentum (the hub, axum + S
 - `src/code/`: the Code page (new thread, thread view, timeline, composer) and `store.rs` (live
   machines and thread summaries).
 - `src/plugins.rs`: every plugin's web part and the slot helpers.
+- The composer (`src/code/typeahead.rs`), as BB's: `/` lists the agent's commands and skills
+  (`GET /api/code/commands` → agentd `Req::Commands`, which reads them from the agent's folders:
+  `crates/agentd/src/commands.rs`). Claude Code runs `/name` itself; for Codex, OpenCode and Cursor
+  agentd expands it before sending (a command's body, or "read this SKILL.md"). `@` lists threads
+  and the project's files; a thread goes in as `[@title](/code?thread=<id>)` and the hub sends its
+  recent conversation as `Input.context` (for the agent only, not shown). While a turn runs: ⚡ (⌥⏎)
+  steers into it, and a queued message has Steer and Remove (`POST /api/code/threads/<id>/queued/<seq>`).
 - Styles: plain CSS in `style/**/*.css`, concatenated by `scripts/build-web.sh` into one file.
   The class names are CERQ's (same look); keep using them. Two looks: `html[data-theme="glance"|"studio"]`
   and `html[data-scheme="light"|"dark"]`. Use the CSS variables (`--bg --sidebar --widget --hl

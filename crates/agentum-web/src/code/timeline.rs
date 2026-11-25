@@ -7,6 +7,16 @@ use agentum_ui::prelude::*;
 use crate::code::rich::{rich_of, Rich};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A queued message: `steer` it into the running turn, or `drop` it.
+fn queued_action(thread: &str, seq: u64, action: &'static str) {
+    let url = format!("/code/threads/{thread}/queued/{seq}");
+    spawn_local(async move {
+        if let Err(e) = api_post::<serde_json::Value>(&url, &serde_json::json!({"action": action})).await {
+            toast_bad(e.message);
+        }
+    });
+}
+
 #[derive(Clone, PartialEq)]
 enum Item {
     User { seq: u64, html: String, queued: bool, ev: EventView },
@@ -58,7 +68,7 @@ fn fold(events: &[EventView], known: &[agentum_proto::RateLimit]) -> Vec<Item> {
             }
             EventKind::Dequeued { seq_of_user, dropped } => {
                 if *dropped {
-                    // A stop dropped it: it was never sent.
+                    // A stop (or its Remove) dropped it: it was never sent.
                     if let Some(i) = users.get(seq_of_user).copied() {
                         if let Some(Item::User { html, queued, .. }) = out.get_mut(i) {
                             *queued = false;
@@ -498,7 +508,14 @@ pub fn Timeline(
                                     _ => None,
                                 }}
                                 <div class="md" inner_html=html/>
-                                <div class="msg-meta">{if queued { "Queued".into_any() } else { crate::plugins::message_meta(&ev).into_any() }}</div>
+                                <div class="msg-meta">{if queued {
+                                    let (t1, t2) = (th.clone(), th.clone());
+                                    view! {
+                                        <span>"Queued"</span>
+                                        <button class="q-act" title="Into the running turn now" on:click=move |_| queued_action(&t1, seq, "steer")><Icon name="bolt" size=12/>"Steer"</button>
+                                        <button class="q-act" title="Take it out of the queue" on:click=move |_| queued_action(&t2, seq, "drop")><Icon name="x" size=12/>"Remove"</button>
+                                    }.into_any()
+                                } else { crate::plugins::message_meta(&ev).into_any() }}</div>
                             </div>
                         }.into_any(),
                         Item::Message { seq, html, ev, .. } => view! {

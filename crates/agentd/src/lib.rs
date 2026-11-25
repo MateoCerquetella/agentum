@@ -3,6 +3,7 @@
 //! It keeps one WebSocket open to the hub ([`hub`]), runs coding agents for threads
 //! ([`threads`], [`drivers`]), and serves files ([`fs`]), git ([`git`]), terminals ([`term`]) and
 //! projects' `.env` ([`secrets`]).
+pub mod commands;
 pub mod config;
 pub mod db;
 pub mod drivers;
@@ -153,7 +154,7 @@ impl App {
             projects: self.projects.lock().unwrap().clone(),
             threads: self.threads.live(),
             stats: machine::stats(),
-            features: vec!["secrets".into(), "usage".into()],
+            features: vec!["secrets".into(), "usage".into(), "commands".into(), "queued".into()],
         }
     }
 
@@ -251,6 +252,16 @@ impl App {
             Req::Sleep { thread } => wait(self.threads.sleep(&thread)),
             Req::Models { agent } => async move { app.threads.models(agent).await }.boxed(),
             Req::Usage { agent } => async move { app.threads.usage(agent).await }.boxed(),
+            Req::Queued { thread, seq, action } => wait(self.threads.queued(&thread, seq, action)),
+            Req::Commands { agent, cwd } => {
+                let allowed = self.allowed();
+                async move {
+                    let dir = allowed.check(&cwd)?;
+                    let v = tokio::task::spawn_blocking(move || commands::list(agent, &dir, &util::home())).await?;
+                    Ok(json!(v.into_iter().map(|f| f.info).collect::<Vec<_>>()))
+                }
+                .boxed()
+            }
             Req::AddProject { path } => async move { app.add_project(path).await }.boxed(),
             Req::Surf(s) => async move { app.surf_req(s).await }.boxed(),
             Req::Fs(f) => {

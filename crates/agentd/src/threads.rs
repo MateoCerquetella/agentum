@@ -5,7 +5,7 @@ use crate::db::{Db, ThreadRow};
 use crate::drivers::{Agents, DriverOut, Session, StartOpts};
 use crate::machine::agent_bin;
 use crate::outbox::Outbox;
-use agentum_proto::machine::{LiveThread, ModelInfo};
+use agentum_proto::machine::{LiveThread, ModelInfo, QueuedAction};
 use agentum_proto::{AgentKind, EventKind, Input, SendMode, StopReason, ThreadSpec, ThreadState};
 use anyhow::{Context, bail};
 use serde_json::{Value, json};
@@ -31,6 +31,7 @@ enum Cmd {
     Answer { ask: String, option: String, text: Option<String>, reply: Reply },
     SetModel { model: String, effort: Option<String>, reply: Reply },
     Sleep { reply: Reply },
+    Queued { seq: u64, action: QueuedAction, reply: Reply },
 }
 
 /// What the rest of agentd can see of a thread without asking its actor.
@@ -174,6 +175,9 @@ impl Threads {
     }
     pub fn sleep(self: &Arc<Self>, id: &str) -> anyhow::Result<Answer> {
         self.submit(id, |reply| Cmd::Sleep { reply })
+    }
+    pub fn queued(self: &Arc<Self>, id: &str, seq: u64, action: QueuedAction) -> anyhow::Result<Answer> {
+        self.submit(id, |reply| Cmd::Queued { seq, action, reply })
     }
 
     /// The agent's models (cached for 10 minutes).
@@ -440,6 +444,10 @@ impl Actor {
                 self.emit(EventKind::Notice { text: what });
                 let _ = reply.send(Ok(Value::Null));
             }
+            Cmd::Queued { seq, action, reply } => {
+                let r = self.queued(seq, action).await;
+                let _ = reply.send(r);
+            }
             Cmd::Sleep { reply } => {
                 if self.row.state.busy() {
                     self.sleep_after = true;
@@ -455,6 +463,32 @@ impl Actor {
         }
     }
 
+    /// What the agent gets for what the person sent: a `/command` expanded (for agents that
+    /// can't run it themselves), then the hidden context (the @-mentioned threads).
+    fn prepared(&self, input: &Input) -> Input {
+        let cwd = std::path::Path::new(&self.row.spec.cwd);
+        let mut text = crate::commands::expand(self.row.agent, cwd, &crate::util::home(), &input.text).unwrap_or_else(|| input.text.clone());
+        if let Some(c) = input.context.as_deref().filter(|c| !c.trim().is_empty()) {
+            text = format!("{text}\n\n{c}");
+        }
+        Input { text, images: input.images.clone(), context: None }
+    }
+
+    /// A queued message: into the running turn now (if the agent can), or out of the queue.
+    async fn queued(&mut self, seq: u64, action: QueuedAction) -> anyhow::Result<Value> {
+        let i = self.queue.iter().position(|(_, s)| *s == seq).context("that message is no longer queued")?;
+        if action == QueuedAction::Steer {
+            let input = self.prepared(&self.queue[i].0);
+            let s = self.session.as_mut().filter(|_| self.row.state.busy()).context("no turn is running")?;
+            if !s.steer(&input).await? {
+                anyhow::bail!("{} can't take a message during a turn; it stays queued", self.row.agent.label());
+            }
+        }
+        self.queue.remove(i);
+        self.emit(EventKind::Dequeued { seq_of_user: seq, dropped: action == QueuedAction::Drop });
+        Ok(json!({"ok": true}))
+    }
+
     /// Queued messages are dropped (a stop): say so for each.
     fn drop_queue(&mut self) -> usize {
         let q: Vec<(Input, u64)> = self.queue.drain(..).collect();
@@ -467,9 +501,10 @@ impl Actor {
     async fn send(&mut self, input: Input, mode: SendMode, reply: Reply) {
         self.last_active = Instant::now();
         if self.row.state.busy() {
+            let prepared = self.prepared(&input);
             if mode == SendMode::Steer
                 && let Some(s) = self.session.as_mut()
-                && matches!(s.steer(&input).await, Ok(true))
+                && matches!(s.steer(&prepared).await, Ok(true))
             {
                 self.emit(EventKind::User { text: input.text, images: input.images, queued: false });
                 let _ = reply.send(Ok(json!({"queued": false, "steered": true})));
@@ -540,6 +575,7 @@ impl Actor {
         let turn = self.row.turn;
         self.emit(EventKind::TurnStarted { turn });
         self.set_state(ThreadState::Running);
+        let input = self.prepared(&input);
         let r = self.session.as_mut().unwrap().send(&input).await;
         if let Err(e) = r {
             self.emit(EventKind::Error { message: format!("{e:#}"), fatal: false });

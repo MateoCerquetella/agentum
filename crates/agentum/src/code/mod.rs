@@ -12,7 +12,7 @@ pub mod surf;
 use crate::state::App;
 use crate::util::{bad, not_found, AppError, R};
 use agentum_proto::api::*;
-use agentum_proto::machine::{FsReq, GitReq, ModelInfo, Req, SurfReq, UsageReply};
+use agentum_proto::machine::{CommandInfo, FsReq, GitReq, ModelInfo, QueuedAction, Req, SurfReq, UsageReply};
 use agentum_proto::{AgentKind, Event, EventKind, Input, Permission, SendMode, ThreadSpec, ThreadState};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -39,6 +39,8 @@ pub struct Hub {
     limits_saving: tokio::sync::Mutex<()>,
     pub out: tokio::sync::broadcast::Sender<Out>,
     models: Mutex<HashMap<(String, AgentKind), (Instant, Vec<ModelInfo>)>>,
+    /// The `/` menu per machine, agent and directory (for 30 s).
+    commands: Mutex<HashMap<(String, AgentKind, String), (Instant, Vec<CommandInfo>)>>,
     html: Mutex<HashMap<(String, u64), Arc<str>>>,
     /// What each thread's agent was last started with from the plugins (`ThreadSpec.instructions`).
     pub instructions: Mutex<HashMap<String, Option<String>>>,
@@ -56,6 +58,7 @@ impl Default for Hub {
             limits_saving: Default::default(),
             out: tokio::sync::broadcast::channel(4096).0,
             models: Default::default(),
+            commands: Default::default(),
             html: Default::default(),
             socks: Default::default(),
             instructions: Default::default(),
@@ -92,12 +95,83 @@ fn new_id() -> String {
 }
 
 fn title_of(text: &str) -> String {
+    let text = mentions_plain(text);
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     let mut t: String = line.chars().take(72).collect();
     if line.chars().count() > 72 {
         t.push('…');
     }
     t
+}
+
+/// How the composer writes an @-mentioned thread: `[@Its title](/code?thread=<id>)`.
+const MENTION: &str = "](/code?thread=";
+
+/// The threads `text` mentions, in order, each once.
+fn mentioned(text: &str) -> Vec<String> {
+    let mut v: Vec<String> = vec![];
+    let mut rest = text;
+    while let Some(i) = rest.find(MENTION) {
+        rest = &rest[i + MENTION.len()..];
+        let id: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+        if !id.is_empty() && rest[id.len()..].starts_with(')') && !v.contains(&id) {
+            v.push(id);
+        }
+    }
+    v
+}
+
+/// `text` with its mentions as `@title` (for titles and previews).
+fn mentions_plain(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("[@") {
+        let after = &rest[i + 1..];
+        match after.find(MENTION).filter(|j| !after[..*j].contains(['[', ']', '\n'])) {
+            Some(j) if after[j + MENTION.len()..].contains(')') => {
+                out += &rest[..i];
+                out += &after[..j];
+                let tail = &after[j + MENTION.len()..];
+                rest = &tail[tail.find(')').unwrap() + 1..];
+            }
+            _ => {
+                out += &rest[..i + 2];
+                rest = &rest[i + 2..];
+            }
+        }
+    }
+    out + rest
+}
+
+/// What the agent should know of the threads `text` mentions: each one's recent conversation
+/// (up to four threads, the last ~8k characters of each).
+async fn mention_context(app: &App, from: &str, text: &str) -> R<Option<String>> {
+    let mut out = String::new();
+    for id in mentioned(text).into_iter().filter(|id| id != from).take(4) {
+        let Some(t) = app.code.summary(&id) else { continue };
+        let id2 = id.clone();
+        let evs = app.db.call(move |c| db::events(c, &id2, None, 200)).await?.0;
+        let mut conv = String::new();
+        for e in evs {
+            match e.kind {
+                EventKind::User { text, .. } => conv += &format!("\n[user] {}\n", mentions_plain(&text)),
+                EventKind::Message { text, .. } => conv += &format!("\n[agent] {text}\n"),
+                _ => {}
+            }
+        }
+        let n = conv.chars().count();
+        let tail: String = if n > 8000 { format!("…{}", conv.chars().skip(n - 8000).collect::<String>()) } else { conv };
+        let branch = t.branch.as_deref().map(|b| format!(" branch=\"{b}\"")).unwrap_or_default();
+        out += &format!(
+            "\n<thread id=\"{id}\" title=\"{}\" agent=\"{}\" machine=\"{}\" cwd=\"{}\"{branch} state=\"{:?}\">{tail}</thread>\n",
+            t.title.replace('"', "'"),
+            t.agent.label(),
+            t.machine,
+            t.cwd,
+            t.state
+        );
+    }
+    Ok((!out.is_empty()).then(|| format!("The person mentioned other Agentum threads (coding sessions, linked as [@title](/code?thread=<id>)). Their recent conversation, for context:\n{out}")))
 }
 
 /// Load summaries; start the scheduler. Called once at boot.
@@ -471,6 +545,8 @@ pub fn routes() -> Router<App> {
         .route("/api/code/threads/{id}/stop", post(stop))
         .route("/api/code/threads/{id}/answer", post(answer))
         .route("/api/code/models", get(models))
+        .route("/api/code/commands", get(commands))
+        .route("/api/code/threads/{id}/queued/{seq}", post(queued))
         .route("/api/code/search", get(search))
         .route("/api/code/machines", get(machines_h).post(add_machine))
         .route("/api/code/machines/{id}", delete(remove_machine))
@@ -494,6 +570,16 @@ pub async fn machine_call(app: &App, machine: &str, req: Req) -> Result<Value, S
     // An agentd that doesn't know a request can't answer it, and would log the frame: a secret's value.
     if matches!(req, Req::Secrets(_)) && !c.hello.read().unwrap().features.iter().any(|f| f == "secrets") {
         return Err(format!("agentd on {machine} is too old for secrets: update it"));
+    }
+    let needs = match &req {
+        Req::Commands { .. } => Some(("commands", "slash commands")),
+        Req::Queued { .. } => Some(("queued", "steering a queued message")),
+        _ => None,
+    };
+    if let Some((f, what)) = needs
+        && !c.hello.read().unwrap().features.iter().any(|x| x == f)
+    {
+        return Err(format!("agentd on {machine} is too old for {what}: update it"));
     }
     let wait = match &req {
         Req::Git(GitReq::Push { .. }) | Req::Git(GitReq::PrMerge { .. }) | Req::Git(GitReq::WorktreeAdd { .. }) => Duration::from_secs(120),
@@ -607,7 +693,8 @@ pub async fn create_thread(app: &App, b: NewThread) -> R<ThreadSummary> {
     app.db.call(move |c| db::save_thread(c, &s2)).await?;
     app.code.set_summary(s.clone());
     if !b.text.trim().is_empty() {
-        start_agent(app, &s, Input { text: b.text, images: b.images }, None).await?;
+        let context = mention_context(app, &s.id, &b.text).await?;
+        start_agent(app, &s, Input { text: b.text, images: b.images, context }, None).await?;
     }
     Ok(app.code.summary(&s.id).unwrap_or(s))
 }
@@ -776,7 +863,8 @@ pub async fn send(app: &App, id: &str, b: SendBody) -> R<()> {
         app.db.call(move |c| db::save_thread(c, &t3)).await?;
         app.code.set_summary(t2);
     }
-    let input = Input { text: b.text.clone(), images: b.images.clone() };
+    let context = mention_context(app, id, &b.text).await?;
+    let input = Input { text: b.text.clone(), images: b.images.clone(), context };
     let id2 = id.to_string();
     if !app.db.call(move |c| db::started(c, &id2)).await? {
         return start_agent(app, &t, input, None).await;
@@ -834,6 +922,54 @@ async fn models(State(app): State<App>, Query(q): Query<ModelsQ>) -> R<Json<Mode
     let list: Vec<ModelInfo> = serde_json::from_value(v.get("models").cloned().unwrap_or(v)).unwrap_or_default();
     app.code.models.lock().unwrap().insert(key, (Instant::now(), list.clone()));
     Ok(Json(Models { agent, models: list }))
+}
+
+#[derive(serde::Deserialize)]
+struct CommandsQ {
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    machine: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+}
+/// The composer's `/` menu: a thread's agent's commands and skills in its directory (or a new
+/// thread's: machine, agent, cwd).
+async fn commands(State(app): State<App>, Query(q): Query<CommandsQ>) -> R<Json<Vec<CommandInfo>>> {
+    let (machine, agent, cwd) = match q.thread.filter(|t| !t.is_empty()) {
+        Some(id) => {
+            let t = app.code.summary(&id).ok_or_else(not_found)?;
+            (t.machine, t.agent, t.cwd)
+        }
+        None => (
+            q.machine.unwrap_or_default(),
+            q.agent.as_deref().and_then(AgentKind::parse).ok_or_else(|| bad("unknown agent"))?,
+            q.cwd.unwrap_or_default(),
+        ),
+    };
+    let key = (machine.clone(), agent, cwd.clone());
+    if let Some((at, v)) = app.code.commands.lock().unwrap().get(&key)
+        && at.elapsed() < Duration::from_secs(30)
+    {
+        return Ok(Json(v.clone()));
+    }
+    let v = machine_call(&app, &machine, Req::Commands { agent, cwd }).await.map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
+    let list: Vec<CommandInfo> = serde_json::from_value(v).unwrap_or_default();
+    app.code.commands.lock().unwrap().insert(key, (Instant::now(), list.clone()));
+    Ok(Json(list))
+}
+
+#[derive(serde::Deserialize)]
+struct QueuedBody {
+    action: QueuedAction,
+}
+/// Steer a queued message into the running turn, or drop it.
+async fn queued(State(app): State<App>, Path((id, seq)): Path<(String, u64)>, Json(b): Json<QueuedBody>) -> R<Json<Value>> {
+    let t = app.code.summary(&id).ok_or_else(not_found)?;
+    machine_call(&app, &t.machine, Req::Queued { thread: id, seq, action: b.action }).await.map_err(|e| AppError(StatusCode::CONFLICT, e))?;
+    Ok(Json(json!({"ok": true})))
 }
 
 #[derive(serde::Deserialize)]
@@ -957,6 +1093,15 @@ fn _unused(_: SendMode) {}
 mod tests {
     use super::*;
     use agentum_proto::RateLimit;
+
+    #[test]
+    fn reads_mentions() {
+        let t = "Look at [@Fix login](/code?thread=ab-12) and [@x](/code?thread=cd) and [@Fix login](/code?thread=ab-12), not [@y](/code?thread=bad id).";
+        assert_eq!(mentioned(t), ["ab-12", "cd"]);
+        assert_eq!(mentions_plain(t), "Look at @Fix login and @x and @Fix login, not @y.");
+        assert_eq!(mentions_plain("mail me [@ home"), "mail me [@ home");
+        assert_eq!(title_of("[@Fix login](/code?thread=ab) why?"), "@Fix login why?");
+    }
 
     fn report(machine: &str, account: Option<&str>, windows: &[(&str, f64)], at: i64) -> AgentLimits {
         AgentLimits {

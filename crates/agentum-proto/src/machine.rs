@@ -159,6 +159,42 @@ pub enum Req {
     /// The agent's subscription limits now, asked of its provider: a [`UsageReply`].
     /// Only to an agentd whose [`Hello::features`] has "usage".
     Usage { agent: AgentKind },
+    /// The slash commands and skills `agent` has in `cwd` (the project's and the user's): a
+    /// `Vec<CommandInfo>`. Only to an agentd whose [`Hello::features`] has "commands".
+    Commands { agent: AgentKind, cwd: String },
+    /// A queued message (its `User` event's seq): `steer` it into the running turn now, or `drop`
+    /// it. Only to an agentd whose [`Hello::features`] has "queued".
+    Queued { thread: ThreadId, seq: u64, action: QueuedAction },
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum QueuedAction {
+    Steer,
+    Drop,
+}
+
+/// A slash command or a skill, for the composer's `/` menu.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CommandInfo {
+    /// Typed after the slash (`review`, `frontend:lint`, `compact`).
+    pub name: String,
+    pub kind: CommandKind,
+    /// "project", "user", "plugin" or "builtin".
+    pub origin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// What goes after the name (`argument-hint`: "[file]").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommandKind {
+    Command,
+    Skill,
+    Builtin,
 }
 
 /// The answer to [`Req::Usage`].
