@@ -335,6 +335,10 @@ fn offline(m: &str) -> AppError {
 /// Call agentd on a machine (for the hub, plugins and the generic /api/code/call).
 pub async fn machine_call(app: &App, machine: &str, req: Req) -> Result<Value, String> {
     let c = app.code.conn(machine).ok_or_else(|| format!("{machine} is offline"))?;
+    // An agentd that doesn't know a request can't answer it, and would log the frame: a secret's value.
+    if matches!(req, Req::Secrets(_)) && !c.hello.read().unwrap().features.iter().any(|f| f == "secrets") {
+        return Err(format!("agentd on {machine} is too old for secrets: update it"));
+    }
     let wait = match &req {
         Req::Git(GitReq::Push { .. }) | Req::Git(GitReq::PrMerge { .. }) | Req::Git(GitReq::WorktreeAdd { .. }) => Duration::from_secs(120),
         Req::Start { .. } | Req::Models { .. } => Duration::from_secs(60),

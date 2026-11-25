@@ -50,5 +50,18 @@ mod tests {
         assert_eq!(round(&AgentKind::ClaudeCode), json!("claude-code"));
         let w = round(&api::WsIn::Sub { ch: vec!["threads".into()] });
         assert_eq!(w, json!({"t": "sub", "ch": ["threads"]}));
+        let r = round(&Req::Secrets(SecretsReq::Set { dir: "/r".into(), key: "K".into(), value: "v".into() }));
+        assert_eq!(r, json!({"op": "secrets", "secrets": "set", "dir": "/r", "key": "K", "value": "v"}));
+        assert_eq!(format!("{:?}", Req::Secrets(SecretsReq::Set { dir: "/r".into(), key: "K".into(), value: "hunter2".into() })), "Secrets(SecretsReq(set K in /r/.env))");
+    }
+
+    #[test]
+    fn old_peers_still_parse() {
+        // A spec and a hello from before `instructions` and `features`.
+        let s: ThreadSpec = serde_json::from_value(json!({"agent": "codex", "cwd": "/r"})).unwrap();
+        assert_eq!(s.instructions, None);
+        assert!(!serde_json::to_string(&s).unwrap().contains("instructions"));
+        let h: Hello = serde_json::from_value(json!({"protocol": 1, "machine": "m", "version": "v", "hostname": "h", "os": "o", "arch": "a", "home": "/h", "agents": [], "projects": [], "threads": []})).unwrap();
+        assert!(h.features.is_empty());
     }
 }

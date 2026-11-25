@@ -1,7 +1,8 @@
 //! agentd: Agentum's per-machine daemon.
 //!
 //! It keeps one WebSocket open to the hub ([`hub`]), runs coding agents for threads
-//! ([`threads`], [`drivers`]), and serves files ([`fs`]), git ([`git`]) and terminals ([`term`]).
+//! ([`threads`], [`drivers`]), and serves files ([`fs`]), git ([`git`]), terminals ([`term`]) and
+//! projects' `.env` ([`secrets`]).
 pub mod config;
 pub mod db;
 pub mod drivers;
@@ -13,6 +14,7 @@ pub mod install;
 pub mod machine;
 pub mod outbox;
 pub mod resolve;
+pub mod secrets;
 pub mod term;
 pub mod threads;
 pub mod util;
@@ -137,6 +139,7 @@ impl App {
             projects: self.projects.lock().unwrap().clone(),
             threads: self.threads.live(),
             stats: machine::stats(),
+            features: vec!["secrets".into()],
         }
     }
 
@@ -233,6 +236,10 @@ impl App {
             Req::Fs(f) => {
                 let allowed = self.allowed();
                 async move { tokio::task::spawn_blocking(move || fs::handle(f, &allowed)).await? }.boxed()
+            }
+            Req::Secrets(s) => {
+                let allowed = self.allowed();
+                async move { tokio::task::spawn_blocking(move || secrets::handle(s, &allowed)).await? }.boxed()
             }
             Req::Git(g) => {
                 let wt = self.cfg.worktrees_dir();
