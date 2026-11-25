@@ -78,6 +78,7 @@ dependencies = [
  "agentum-plugin-browser",
  "agentum-plugin-concurrency",
  "agentum-plugin-context",
+ "agentum-plugin-dockside",
  "agentum-plugin-drafts",
  "agentum-plugin-editor",
  "agentum-plugin-files",
@@ -208,6 +209,24 @@ dependencies = [
 
 [[package]]
 name = "agentum-plugin-context"
+version = "0.1.0-beta.1"
+dependencies = [
+ "agentum-plugin",
+ "agentum-proto",
+ "agentum-ui",
+ "async-trait",
+ "gloo-timers",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "agentum-plugin-dockside"
 version = "0.1.0-beta.1"
 dependencies = [
  "agentum-plugin",
@@ -569,6 +588,7 @@ dependencies = [
  "agentum-plugin-browser",
  "agentum-plugin-concurrency",
  "agentum-plugin-context",
+ "agentum-plugin-dockside",
  "agentum-plugin-drafts",
  "agentum-plugin-editor",
  "agentum-plugin-files",

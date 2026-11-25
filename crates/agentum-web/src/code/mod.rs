@@ -1,5 +1,6 @@
 //! The Code page: a new thread (machine, project, agent, model) or one thread's timeline with
 //! its composer, questions and side panel (plugins' tabs: files, git, history, terminal…).
+pub mod marks;
 pub mod store;
 mod timeline;
 
@@ -64,64 +65,156 @@ fn models_of(machine: Signal<String>, agent: Signal<AgentKind>) -> LocalResource
     })
 }
 
-/// BB's model picker: agents as groups, their models, then the reasoning effort. One chip
-/// ("Claude Code · Opus · high").
+/// BB's model picker: the agents as tabs (their marks), the agent's models (the first few, then
+/// "More models"), searchable, and a Reasoning row. One chip: mark · model · effort.
 #[component]
 fn ModelChip(machine: Signal<String>, agent: RwSignal<AgentKind>, model: RwSignal<Option<String>>, effort: RwSignal<Option<String>>, #[prop(optional)] lock_agent: bool, #[prop(optional)] up: bool) -> impl IntoView {
     let ov = store::overview();
-    let models = models_of(machine, agent.into());
-    let installed = move |a: AgentKind| ov.with(|o| o.as_ref().and_then(|o| o.machines.iter().find(|m| m.id == machine.get())).is_none_or(|m| m.agents.iter().any(|x| x.agent == a && x.installed)));
-    let model_label = move || {
-        let m = model.get();
-        match m {
-            None => "Default".to_string(),
-            Some(id) => models.get().and_then(|v| v.iter().find(|x| x.id == id).map(|x| x.label.clone())).unwrap_or(id),
+    let open = RwSignal::new(false);
+    // The tab being looked at (committed only when a model is picked).
+    let tab = RwSignal::new(agent.get_untracked());
+    let q = RwSignal::new(String::new());
+    let more = RwSignal::new(false);
+    let models = models_of(machine, tab.into());
+    let current_models = models_of(machine, agent.into());
+    let root = NodeRef::<leptos::html::Div>::new();
+    on_window(leptos::ev::mousedown, move |e| {
+        if !open.get_untracked() {
+            return;
         }
+        let inside = e.target().and_then(|t| wasm_bindgen::JsCast::dyn_into::<web_sys::Node>(t).ok()).is_some_and(|n| root.get_untracked().is_some_and(|r| r.contains(Some(&n))));
+        if !inside {
+            open.set(false);
+        }
+    });
+    Effect::new(move |_| {
+        if open.get() {
+            tab.set(agent.get_untracked());
+            q.set(String::new());
+            more.set(false);
+        }
+    });
+    let installed = move |a: AgentKind| ov.with(|o| o.as_ref().and_then(|o| o.machines.iter().find(|m| m.id == machine.get())).is_none_or(|m| m.agents.iter().any(|x| x.agent == a && x.installed)));
+    let full = move |a: AgentKind| ov.with(|o| o.as_ref().and_then(|o| o.limits.iter().find(|l| l.agent == a && l.machine == machine.get()).and_then(|l| l.limits.iter().filter(|w| w.used_percent >= 99.5).map(|w| w.window.clone()).next())));
+    let model_label = move || match model.get() {
+        None => "Default".to_string(),
+        Some(id) => current_models.get().and_then(|v| v.iter().find(|x| x.id == id).map(|x| x.label.clone())).unwrap_or(id),
     };
     let efforts = move || {
-        let m = model.get();
+        let a = tab.get();
+        let m = if a == agent.get() { model.get() } else { None };
         models.get().map(|v| v.iter().find(|x| Some(&x.id) == m.as_ref()).or_else(|| v.iter().find(|x| x.default)).map(|x| x.efforts.clone()).unwrap_or_default()).unwrap_or_default()
     };
-    let items = Signal::derive(move || {
-        let mut v: Vec<PickItem> = vec![];
-        if !lock_agent {
-            for a in AgentKind::ALL {
-                let full = ov.with(|o| o.as_ref().and_then(|o| o.limits.iter().find(|l| l.agent == a && l.machine == machine.get()).and_then(|l| l.limits.iter().filter(|w| w.used_percent >= 99.5).map(|w| w.window.clone()).next())));
-                let sub = if !installed(a) { "not installed".to_string() } else if let Some(w) = full { format!("{w} limit used up") } else { String::new() };
-                v.push(PickItem { id: format!("agent:{}", a.id()), label: a.label().into(), icon: agent_icon(a), group: "Agent".into(), disabled: !installed(a), on: agent.get() == a, sub });
-            }
-        }
-        let g = format!("{} models", agent.get().label());
-        v.push(PickItem { id: "model:".into(), label: "Default".into(), group: g.clone(), on: model.get().is_none(), ..Default::default() });
-        for m in models.get().unwrap_or_default() {
-            let on = model.get().as_deref() == Some(m.id.as_str());
-            v.push(PickItem { id: format!("model:{}", m.id), label: m.label, group: g.clone(), on, sub: m.context_window.map(|c| format!("{}k", c / 1000)).unwrap_or_default(), ..Default::default() });
-        }
-        for e in efforts() {
-            let on = effort.get().as_deref() == Some(e.as_str());
-            v.push(PickItem { id: format!("effort:{e}"), label: e.clone(), group: "Reasoning".into(), on, ..Default::default() });
-        }
-        v
+    const FIRST: usize = 7;
+    let rows = Memo::new(move |_| {
+        let ql = q.get().to_lowercase();
+        let v = models.get().unwrap_or_default();
+        let hit: Vec<agentum_proto::machine::ModelInfo> = v.into_iter().filter(|m| ql.is_empty() || m.label.to_lowercase().contains(&ql) || m.id.to_lowercase().contains(&ql)).collect();
+        hit
     });
-    let pick = Callback::new(move |id: String| {
-        if let Some(a) = id.strip_prefix("agent:").and_then(AgentKind::parse) {
+    let pick = move |id: Option<String>| {
+        let a = tab.get_untracked();
+        if a != agent.get_untracked() {
             agent.set(a);
-            model.set(None);
             effort.set(None);
-        } else if let Some(m) = id.strip_prefix("model:") {
-            model.set((!m.is_empty()).then(|| m.to_string()));
-            effort.set(None);
-        } else if let Some(e) = id.strip_prefix("effort:") {
-            effort.set(Some(e.to_string()));
         }
-    });
+        model.set(id.filter(|m| m != "default"));
+        open.set(false);
+    };
     view! {
-        <Picker items=items on_pick=pick search=true up=up class="pk-model" title="Agent, model and reasoning" placeholder="Search models">
-            <Icon name=Signal::derive(move || agent_icon(agent.get()).to_string()) size=13/>
-            <span>{move || agent.get().label()}</span>
-            <span class="pk-dim">{move || format!("· {}", model_label())}</span>
-            {move || effort.get().map(|e| view! { <span class="pk-dim">{format!("· {e}")}</span> })}
-        </Picker>
+        <div class="pk mp" node_ref=root>
+            <button type="button" class="pk-chip pk-model" title="Agent, model and reasoning" aria-expanded=move || open.get().to_string() on:click=move |_| open.update(|o| *o = !*o)>
+                {move || view! { <crate::code::marks::AgentMark agent=agent.get() size=14/> }}
+                <span>{move || model_label()}</span>
+                {move || effort.get().map(|e| view! { <span class="pk-dim">{e}</span> })}
+                <Icon name="chevron" size=12 class="pk-chev"/>
+            </button>
+            <Show when=move || open.get()>
+                <div class=if up { "pk-pop mp-pop up right" } else { "pk-pop mp-pop right" } role="dialog" aria-label="Model"
+                    on:keydown=move |e| if e.key() == "Escape" { open.set(false) }>
+                    {(!lock_agent).then(|| view! {
+                        <div class="mp-tabs">
+                            {AgentKind::ALL.into_iter().map(|a| view! {
+                                <button type="button" class=move || format!("mp-tab{}", if tab.get() == a { " on" } else { "" })
+                                    disabled=move || !installed(a)
+                                    title=move || match (installed(a), full(a)) { (false, _) => format!("{} (not installed on {})", a.label(), machine.get()), (_, Some(w)) => format!("{}: {w} limit used up", a.label()), _ => a.label().to_string() }
+                                    on:mousedown=move |e| e.prevent_default()
+                                    on:click=move |_| { tab.set(a); more.set(false) }>
+                                    <crate::code::marks::AgentMark agent=a size=16/>
+                                    {move || full(a).map(|_| view! { <span class="mp-full"/> })}
+                                </button>
+                            }).collect_view()}
+                            <span class="mp-tabname">{move || tab.get().label()}</span>
+                        </div>
+                    })}
+                    <Show when=move || models.get().map(|v| v.len() > FIRST).unwrap_or(false)>
+                        <div class="mp-search"><Icon name="search" size=13/>
+                            <input placeholder="Search models" prop:value=q on:input=move |e| { q.set(event_target_value(&e)); more.set(true) }/>
+                        </div>
+                    </Show>
+                    <div class="mp-list">
+                        <div class="mp-label">"Model"</div>
+                        {move || {
+                            let a_on = tab.get() == agent.get();
+                            let cur = if a_on { model.get() } else { None };
+                            if models.get().is_none() {
+                                return view! { <div class="mp-empty">"Loading models…"</div> }.into_any();
+                            }
+                            let all = rows.get();
+                            let searching = !q.get().is_empty();
+                            let shown: Vec<_> = if searching || more.get() { all.clone() } else { all.iter().take(FIRST).cloned().collect() };
+                            let hidden = all.len().saturating_sub(shown.len());
+                            view! {
+                                {(!searching && !all.iter().any(|m| m.id == "default")).then(|| view! {
+                                    <button type="button" class="pk-item" on:click=move |_| pick(None)>
+                                        <span class="pk-label">"Default"</span>
+                                        <span class="pk-sub">"the agent's own choice"</span>
+                                        {(a_on && cur.is_none()).then(|| view! { <Icon name="check" size=13 class="pk-check"/> })}
+                                    </button>
+                                })}
+                                {shown.into_iter().map(|m| {
+                                    let on = cur.as_deref() == Some(m.id.as_str());
+                                    let id = m.id.clone();
+                                    view! {
+                                        <button type="button" class="pk-item" on:click=move |_| pick(Some(id.clone()))>
+                                            <span class="pk-label">{m.label.clone()}</span>
+                                            {m.context_window.map(|c| view! { <span class="pk-sub">{format!("{}k", c / 1000)}</span> })}
+                                            {on.then(|| view! { <Icon name="check" size=13 class="pk-check"/> })}
+                                        </button>
+                                    }
+                                }).collect_view()}
+                                {(hidden > 0).then(|| view! {
+                                    <button type="button" class="pk-item mp-more" on:click=move |_| more.set(true)>
+                                        <span class="pk-label">{format!("More models ({hidden})")}</span><Icon name="chevron" size=12/>
+                                    </button>
+                                })}
+                                {(searching && all.is_empty()).then(|| view! { <div class="mp-empty">"No models match your search."</div> })}
+                            }.into_any()
+                        }}
+                    </div>
+                    <Show when=move || !efforts().is_empty()>
+                        <div class="mp-reason">
+                            <div class="mp-label">"Reasoning"</div>
+                            <div class="mp-seg">
+                                {move || {
+                                    let on_tab = tab.get() == agent.get();
+                                    let mut opts: Vec<Option<String>> = vec![None];
+                                    opts.extend(efforts().into_iter().map(Some));
+                                    opts.into_iter().map(|e| {
+                                        let sel = on_tab && effort.get() == e;
+                                        let label = e.clone().unwrap_or_else(|| "Auto".into());
+                                        view! {
+                                            <button type="button" class=if sel { "on" } else { "" }
+                                                on:click=move |_| { if tab.get_untracked() != agent.get_untracked() { agent.set(tab.get_untracked()); model.set(None); } effort.set(e.clone()) }>{label}</button>
+                                        }
+                                    }).collect_view()
+                                }}
+                            </div>
+                        </div>
+                    </Show>
+                </div>
+            </Show>
+        </div>
     }
 }
 
@@ -138,7 +231,8 @@ fn NewThreadPage() -> impl IntoView {
     let agent = RwSignal::new(agentum_ui::store::get("agentum.agent").and_then(|a| AgentKind::parse(&a)).unwrap_or(AgentKind::ClaudeCode));
     let model = RwSignal::new(agentum_ui::store::get("agentum.model").filter(|m| !m.is_empty()));
     let effort = RwSignal::new(agentum_ui::store::get("agentum.effort").filter(|m| !m.is_empty()));
-    let permission = RwSignal::new(agentum_ui::store::get("agentum.perm").and_then(|p| PERMS.into_iter().find(|x| perm_id(*x) == p)).unwrap_or(Permission::Ask));
+    // Full access by default, as BB's; a pick is remembered.
+    let permission = RwSignal::new(agentum_ui::store::get("agentum.permission").and_then(|p| PERMS.into_iter().find(|x| perm_id(*x) == p)).unwrap_or(Permission::Full));
     let worktree = RwSignal::new(agentum_ui::store::flag("agentum.worktree"));
     let text = RwSignal::new(agentum_ui::store::get("agentum.draft.new").unwrap_or_default());
     let busy = RwSignal::new(false);
@@ -157,7 +251,7 @@ fn NewThreadPage() -> impl IntoView {
         agentum_ui::store::set("agentum.agent", agent.get().id());
         agentum_ui::store::set("agentum.model", model.get().as_deref().unwrap_or(""));
         agentum_ui::store::set("agentum.effort", effort.get().as_deref().unwrap_or(""));
-        agentum_ui::store::set("agentum.perm", &perm_id(permission.get()));
+        agentum_ui::store::set("agentum.permission", &perm_id(permission.get()));
         agentum_ui::store::set("agentum.worktree", if worktree.get() { "1" } else { "" });
     });
     // Defaults: the URL's machine, else the last used, else the main one, else the first online.
@@ -202,8 +296,6 @@ fn NewThreadPage() -> impl IntoView {
             group: "Machine".into(),
             disabled: !m.online,
         }).collect();
-        v.push(PickItem { id: "w:local".into(), label: "In the project".into(), sub: "its checkout, as it is".into(), icon: "folder", group: "Where".into(), on: !worktree.get(), ..Default::default() });
-        v.push(PickItem { id: "w:tree".into(), label: "New worktree".into(), sub: "its own branch".into(), icon: "branch", group: "Where".into(), on: worktree.get(), ..Default::default() });
         v
     });
     let perm_items = Signal::derive(move || PERMS.into_iter().map(|p| PickItem { id: perm_id(p), label: perm_label(p).into(), sub: perm_sub(p).into(), icon: "shield", on: permission.get() == p, ..Default::default() }).collect::<Vec<_>>());
@@ -293,13 +385,18 @@ fn NewThreadPage() -> impl IntoView {
                         })>
                         <Icon name="folder" size=13/><span>{project_name}</span>
                     </Picker>
-                    <Picker items=machine_items class="pk-quiet" title="Machine, and where on it"
-                        on_pick=Callback::new(move |id: String| {
-                            if let Some(m) = id.strip_prefix("m:") { machine.set(m.to_string()) } else { worktree.set(id == "w:tree") }
-                        })>
+                    <Picker items=machine_items class="pk-quiet" title="The machine it runs on"
+                        on_pick=Callback::new(move |id: String| if let Some(m) = id.strip_prefix("m:") { machine.set(m.to_string()) })>
                         <Icon name="server" size=13/><span>{move || machine.get()}</span>
-                        <span class="pk-dim">{move || if worktree.get() { "· new worktree" } else { "· local" }}</span>
                     </Picker>
+                    <div class="env-seg" role="radiogroup" aria-label="Where it works">
+                        <button type="button" role="radio" aria-checked=move || (!worktree.get()).to_string() class=move || if !worktree.get() { "on" } else { "" }
+                            title="Work in the project's checkout, as it is" on:click=move |_| worktree.set(false)>
+                            <Icon name="folder" size=13/>"Local"</button>
+                        <button type="button" role="radio" aria-checked=move || worktree.get().to_string() class=move || if worktree.get() { "on" } else { "" }
+                            title="Work in a new git worktree on its own branch (agentum/…)" on:click=move |_| worktree.set(true)>
+                            <Icon name="branch" size=13/>"Worktree"</button>
+                    </div>
                     <span class="grow"/>
                     <Picker items=perm_items class="pk-quiet" title="What the agent may do without asking"
                         on_pick=Callback::new(move |id: String| if let Some(p) = PERMS.into_iter().find(|p| perm_id(*p) == id) { permission.set(p) })>
