@@ -110,14 +110,7 @@ impl HubPlugin for Plugin {
     }
 
     async fn on_event(&self, cx: &Ctx, t: &ThreadSummary, e: &Event) {
-        // The newest windows per agent and machine, kept so the page has them after a restart.
-        if let EventKind::RateLimits { limits, plan } = &e.kind {
-            let _g = AGG.lock().await;
-            let mut all = cx.kv_get(LIMITS).await.and_then(|v| v.as_object().cloned()).unwrap_or_default();
-            all.insert(format!("{}\t{}", t.agent.id(), t.machine), json!({ "agent": t.agent, "machine": t.machine, "limits": limits, "at": e.ts, "plan": plan }));
-            cx.kv_set(LIMITS, Value::Object(all)).await;
-            return;
-        }
+        // (The limits, one report per account, are written to this plugin's `limits` by the hub.)
         if !matches!(e.kind, EventKind::TurnDone { .. }) {
             return;
         }
@@ -131,7 +124,7 @@ impl HubPlugin for Plugin {
     }
 
     /// `summary` → `{hours: [{h, agent, machine, project, s}], total: [{agent, machine, project, s}],
-    /// limits: [AgentLimits as last reported]}`
+    /// limits: [AgentLimits as last reported, one per account]}`
     /// (hours of the last 15 days; the page groups them into its own days).
     async fn rpc(&self, cx: &Ctx, method: &str, _input: Value) -> Result<Value, String> {
         if method != "summary" {

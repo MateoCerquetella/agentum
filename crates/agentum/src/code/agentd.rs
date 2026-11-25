@@ -118,7 +118,13 @@ pub async fn upgrade(State(app): State<App>, headers: HeaderMap, ws: WebSocketUp
     let h = token_hash(&token);
     let id: Option<String> = app.db.call(move |c| { use rusqlite::OptionalExtension; c.query_row("SELECT id FROM code_machines WHERE token_hash=?1", [h], |r| r.get(0)).optional() }).await.ok().flatten();
     let Some(id) = id.filter(|_| token.len() > 20) else { return (StatusCode::UNAUTHORIZED, "unknown machine token").into_response() };
-    ws.max_message_size(64 << 20).on_upgrade(move |s| run(app, id, s))
+    let mut r = ws.max_message_size(64 << 20).on_upgrade(move |s| run(app, id, s));
+    // The agents this hub can read: agentd reports only those (an older hub would refuse the rest).
+    let known: Vec<&str> = agentum_proto::AgentKind::ALL.iter().map(|a| a.id()).collect();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&known.join(",")) {
+        r.headers_mut().insert(agentum_proto::machine::AGENTS_HEADER, v);
+    }
+    r
 }
 
 async fn run(app: App, id: String, sock: WebSocket) {

@@ -1,5 +1,5 @@
-//! One HTTPS GET to a public host (Claude's usage check): rustls with the public roots, HTTP/1.1,
-//! the whole body. Blocking: run it on the blocking pool.
+//! One HTTPS request to a public host (Claude's and Cursor's usage checks): rustls with the public
+//! roots, HTTP/1.1, the whole body. Blocking: run it on the blocking pool.
 use anyhow::{Context, bail};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -8,6 +8,15 @@ use std::time::Duration;
 
 /// `(status, body)`. Header values are sent as given and never logged.
 pub fn get(host: &str, path: &str, headers: &[(&str, String)]) -> anyhow::Result<(u16, Vec<u8>)> {
+    request("GET", host, path, headers, None)
+}
+
+/// A POST of `body` (its Content-Type is the caller's header).
+pub fn post(host: &str, path: &str, headers: &[(&str, String)], body: &[u8]) -> anyhow::Result<(u16, Vec<u8>)> {
+    request("POST", host, path, headers, Some(body))
+}
+
+fn request(method: &str, host: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> anyhow::Result<(u16, Vec<u8>)> {
     let cfg = Arc::new(crate::hub::tls_config(None)?);
     let name = rustls::pki_types::ServerName::try_from(host.to_string())?;
     let conn = rustls::ClientConnection::new(cfg, name)?;
@@ -16,12 +25,17 @@ pub fn get(host: &str, path: &str, headers: &[(&str, String)]) -> anyhow::Result
     sock.set_read_timeout(Some(Duration::from_secs(20)))?;
     sock.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mut tls = rustls::StreamOwned::new(conn, sock);
-    let mut req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept-Encoding: identity\r\n");
+    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept-Encoding: identity\r\n");
     for (k, v) in headers {
         req.push_str(&format!("{k}: {v}\r\n"));
     }
+    if let Some(b) = body {
+        req.push_str(&format!("Content-Length: {}\r\n", b.len()));
+    }
     req.push_str("\r\n");
-    tls.write_all(req.as_bytes()).with_context(|| format!("writing to {host}"))?;
+    let mut bytes = req.into_bytes();
+    bytes.extend_from_slice(body.unwrap_or_default());
+    tls.write_all(&bytes).with_context(|| format!("writing to {host}"))?;
     let mut raw = Vec::new();
     match tls.read_to_end(&mut raw) {
         Ok(_) => {}

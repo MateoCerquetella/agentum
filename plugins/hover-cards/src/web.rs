@@ -22,6 +22,7 @@ fn agent_icon(a: AgentKind) -> &'static str {
         AgentKind::ClaudeCode => "sparkle",
         AgentKind::Codex => "terminal",
         AgentKind::Opencode => "bot",
+        AgentKind::Cursor => "cube",
     }
 }
 

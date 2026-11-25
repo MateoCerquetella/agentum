@@ -156,10 +156,34 @@ pub enum Req {
     Surf(SurfReq),
     /// Only to an agentd whose [`Hello::features`] has "secrets" (an older one would log the frame).
     Secrets(SecretsReq),
-    /// The agent's subscription limits now, asked of its provider: `{limits: [RateLimit], plan}`.
+    /// The agent's subscription limits now, asked of its provider: a [`UsageReply`].
     /// Only to an agentd whose [`Hello::features`] has "usage".
     Usage { agent: AgentKind },
 }
+
+/// The answer to [`Req::Usage`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct UsageReply {
+    #[serde(default)]
+    pub limits: Vec<crate::RateLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Who the agent is signed in as on this machine (an older agentd doesn't say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<AgentAccount>,
+}
+
+/// The account an agent is signed in to: ids and names only, never a credential.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AgentAccount {
+    /// Stable across machines signed in to the same account.
+    pub id: String,
+    pub label: String,
+}
+
+/// The response header of the hub's `/agentd` upgrade naming the agents it knows ("claude-code,
+/// codex,opencode,cursor"). An agentd reports only those (an older hub can't read the others).
+pub const AGENTS_HEADER: &str = "x-agentum-agents";
 
 /// A directory's `.env`. Values go in, never out: agentd answers with key names only. Its Debug
 /// and Display leave the value out.

@@ -12,14 +12,18 @@ pub enum AgentKind {
     ClaudeCode,
     Codex,
     Opencode,
+    Cursor,
 }
 impl AgentKind {
-    pub const ALL: [AgentKind; 3] = [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Opencode];
+    pub const ALL: [AgentKind; 4] = [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Opencode, AgentKind::Cursor];
+    /// The agents a hub knew before it said which it knows (an agentd only reports these to it).
+    pub const FIRST: [AgentKind; 3] = [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Opencode];
     pub fn id(self) -> &'static str {
         match self {
             AgentKind::ClaudeCode => "claude-code",
             AgentKind::Codex => "codex",
             AgentKind::Opencode => "opencode",
+            AgentKind::Cursor => "cursor",
         }
     }
     pub fn label(self) -> &'static str {
@@ -27,6 +31,7 @@ impl AgentKind {
             AgentKind::ClaudeCode => "Claude Code",
             AgentKind::Codex => "Codex",
             AgentKind::Opencode => "OpenCode",
+            AgentKind::Cursor => "Cursor",
         }
     }
     pub fn parse(s: &str) -> Option<AgentKind> {

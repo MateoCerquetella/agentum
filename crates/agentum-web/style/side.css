@@ -68,6 +68,8 @@ html[data-theme="studio"] .sidebar { --dock-cut: var(--frame); }
 .dock-meter { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--subdue); font-variant-numeric: tabular-nums; }
 .dock-meter-bar { display: block; width: 22px; height: 4px; border-radius: 99px; background: var(--hl); overflow: hidden; }
 .dock-meter-bar i { display: block; height: 100%; }
+/* More accounts than fit on one line: the meters wrap (BB's look, one per account). */
+.dock-meters { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 4px; min-width: 0; }
 html[data-theme="studio"] :is(.dock-chats-head, .dock-count, .dock-time, .dock-meta, .dock-shelf-head, .dock-meter, .dock-logo) { color: var(--muted-foreground); }
 html[data-theme="studio"] :is(.dock-name, .dock-title) { color: var(--foreground); }
 html[data-theme="studio"] .dock-head:hover, html[data-theme="studio"] .dock-row:hover { background: color-mix(in oklch, var(--foreground) 5%, transparent); }
@@ -169,3 +171,6 @@ html[data-theme="studio"] .ucard-bar { background: var(--muted); }
 html[data-theme="studio"] .side-mail-acct { color: var(--muted-foreground); }
 html[data-theme="studio"] .side-mail-acct:hover, html[data-theme="studio"] .side-mail-acct.here { color: var(--foreground); }
 .dk-mail { margin: 4px 0 6px; }
+/* More than three accounts' meters: they get the footer's first row, the buttons the next. */
+.dock-foot:not(.collapsed):has(.dock-meter:nth-child(4)) { flex-wrap: wrap; row-gap: 4px; }
+.dock-foot:not(.collapsed):has(.dock-meter:nth-child(4)) .dock-meters { order: -1; flex: 1 0 100%; justify-content: flex-start; gap: 2px 10px; }
