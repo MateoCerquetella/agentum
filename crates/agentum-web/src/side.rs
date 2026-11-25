@@ -294,24 +294,45 @@ pub fn UsageW() -> impl IntoView {
 #[component]
 pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl IntoView {
     let ov = overview();
-    // As BB's footer: one meter per agent (per account, when its machines are on different ones),
-    // its 5-hour window.
+    // Which account each agent's meter shows (an agent can have several: a work machine's Claude may be
+    // another organization). Remembered; the meter's badge switches it.
+    let chosen = RwSignal::new(agentum_ui::store::get("agentum.usage.accounts").and_then(|s| serde_json::from_str::<std::collections::BTreeMap<String, String>>(&s).ok()).unwrap_or_default());
+    let choose = move |agent: AgentKind, key: String| {
+        chosen.update(|c| {
+            c.insert(agent.id().to_string(), key);
+        });
+        agentum_ui::store::set("agentum.usage.accounts", &serde_json::to_string(&chosen.get_untracked()).unwrap_or_default());
+    };
+    // The agent's accounts, in the footer's order.
+    let accounts_of = move |agent: AgentKind| ov.with(|o| o.as_ref().map(|o| agents_use(o).into_iter().filter(|u| u.agent == agent).collect::<Vec<_>>()).unwrap_or_default());
+    // Option C of the user's pick: one meter per agent (mark and its 5-hour %), the chosen account's.
     let meters = move || {
-        ov.with(|o| {
-            o.as_ref()
-                .map(|o| {
-                    agents_use(o)
-                        .into_iter()
-                        .take(6)
-                        .filter_map(|u| {
-                            let w = u.windows.iter().find(|w| w.window == "5h").or(u.windows.first())?;
-                            let who = if u.split { format!("{} · {}", u.agent.label(), u.who()) } else { u.agent.label().to_string() };
-                            Some((u.agent, u.key.clone(), who, window_name(&w.window), used(w)))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        })
+        let all = ov.with(|o| o.as_ref().map(agents_use).unwrap_or_default());
+        let mut agents: Vec<AgentKind> = vec![];
+        for u in &all {
+            if !agents.contains(&u.agent) {
+                agents.push(u.agent);
+            }
+        }
+        agents
+            .into_iter()
+            .filter_map(|a| {
+                let mine: Vec<&AgentUse> = all.iter().filter(|u| u.agent == a).collect();
+                let want = chosen.with(|c| c.get(a.id()).cloned());
+                let u = mine.iter().find(|u| Some(&u.key) == want.as_ref()).or(mine.first())?;
+                let w = u.windows.iter().find(|w| w.window == "5h").or(u.windows.first())?;
+                let who = if mine.len() > 1 { format!("{} · {}", a.label(), u.who()) } else { a.label().to_string() };
+                Some((a, u.key.clone(), mine.len(), who, window_name(&w.window), used(w)))
+            })
+            .collect::<Vec<_>>()
+    };
+    // The badge: the agent's next account.
+    let cycle = move |agent: AgentKind, cur: String| {
+        let keys: Vec<String> = accounts_of(agent).into_iter().map(|u| u.key).collect();
+        let next = keys.iter().position(|k| *k == cur).map(|i| keys[(i + 1) % keys.len()].clone()).or_else(|| keys.first().cloned());
+        if let Some(n) = next {
+            choose(agent, n);
+        }
     };
     // The card: which account, and where (left, bottom) above its meter.
     let shown = RwSignal::new(None::<(AgentKind, String, f64, f64)>);
@@ -350,13 +371,18 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
             <Show when=move || !collapsed.get()><span class="grow"/></Show>
             <Show when=move || !collapsed.get()>
                 <span class="dock-meters">
-                    {move || meters().into_iter().map(|(agent, key, who, win, pct)| {
-                        let (k1, k2, k3) = (key.clone(), key.clone(), key);
+                    {move || meters().into_iter().map(|(agent, key, n, who, win, pct)| {
+                        let (k1, k2, k3, k4) = (key.clone(), key.clone(), key.clone(), key);
+                        let more = if n > 1 { format!(" · {n} accounts: the badge switches") } else { String::new() };
                         view! {
-                            <button class=move || if is_shown(agent, &k1) { "dock-meter on" } else { "dock-meter" } title=format!("{who}: {win} {pct:.0}% used")
+                            <button class=move || if is_shown(agent, &k1) { "dock-meter on" } else { "dock-meter" } title=format!("{who}: {win} {pct:.0}% used{more}")
                                 aria-expanded=move || is_shown(agent, &k2).to_string() on:click=move |e| toggle(agent, k3.clone(), e)>
-                                {agent_logo(agent, 14)}
-                                <span class="dock-meter-bar"><i style=format!("width:{}%;background:{}", pct.min(100.0), tone(pct))/></span>
+                                <span class="dock-mark">
+                                    {agent_logo(agent, 14)}
+                                    {(n > 1).then(|| view! {
+                                        <span class="dock-acc" role="button" title=format!("{n} accounts: show the next") on:click=move |e| { e.stop_propagation(); cycle(agent, k4.clone()) }>{n}</span>
+                                    })}
+                                </span>
                                 <span style={ if pct >= 90.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</span>
                             </button>
                         }
@@ -367,6 +393,20 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
             {move || shown.get().map(|(agent, key, left, bottom)| view! {
                 <leptos::portal::Portal>
                     <div class="pick-pop ucard-pop" node_ref=card role="dialog" aria-label="Usage" style=format!("left:{left}px;bottom:{bottom}px")>
+                        // An agent with several accounts: which one (also what its meter shows).
+                        {let accs = accounts_of(agent);
+                        (accs.len() > 1).then(|| view! {
+                            <div class="ucard-accs" role="tablist">
+                                {accs.into_iter().map(|u| {
+                                    let on = u.key == key;
+                                    let k = u.key.clone();
+                                    view! {
+                                        <button type="button" role="tab" aria-selected=on.to_string() class=if on { "on" } else { "" }
+                                            on:click=move |_| { choose(agent, k.clone()); shown.update(|s| if let Some(s) = s { s.1 = k.clone() }) }>{u.who()}</button>
+                                    }
+                                }).collect_view()}
+                            </div>
+                        })}
                         <UsageCard agent=agent account=key.clone() on_close=Callback::new(move |_| shown.set(None))/>
                     </div>
                 </leptos::portal::Portal>
