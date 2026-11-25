@@ -1,0 +1,71 @@
+/* Generative UI (genui/GenUI.tsx): the journal's cards and Ask CERQ's ```ui blocks. */
+.gu-stack { display: grid; gap: 8px; min-width: 0; }
+.gu-row { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.gu-card { background: var(--widget); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
+.gu-card header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.gu-card header svg { color: var(--primary); align-self: center; }
+.gu-h { margin-top: 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--subdue); }
+.gu-text { margin: 0; color: var(--hi); line-height: 1.55; }
+.gu-text.tone-muted { color: var(--subdue); font-size: 12.5px; }
+.gu-text code, .gu-bul code { font-size: .92em; background: var(--hl); padding: 0 4px; border-radius: 4px; }
+.gu-bul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.gu-bul li { color: var(--hi); line-height: 1.45; }
+.gu-bul li::marker { color: var(--primary); }
+.gu-bul.sub { margin-top: 4px; gap: 4px; }
+.gu-bul.sub li { color: var(--text); }
+.gu-bul.sub li::marker { content: '– '; color: var(--subdue); }
+.gu-bul li.grp > .tx { font-weight: 600; color: var(--hi); }
+.gu-bul a, .gu-text a, .gu-tl a { color: var(--primary); cursor: pointer; }
+.gu-bul .su-refs { margin-top: 3px; }
+.gu-callout { display: grid; gap: 2px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); border-left: 3px solid var(--primary); background: color-mix(in srgb, var(--primary) 7%, transparent); color: var(--hi); line-height: 1.45; }
+.gu-callout.tone-good { border-left-color: var(--positive); background: color-mix(in srgb, var(--positive) 8%, transparent); }
+.gu-callout.tone-warn { border-left-color: var(--money); background: color-mix(in srgb, var(--money) 8%, transparent); }
+.gu-callout.tone-bad { border-left-color: var(--negative); background: color-mix(in srgb, var(--negative) 8%, transparent); }
+.gu-metric { display: grid; gap: 1px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; min-width: 0; }
+.gu-metric small { color: var(--subdue); font-size: 11px; }
+.gu-metric b { font-weight: 500; font-size: 20px; color: var(--hi); font-variant-numeric: tabular-nums; }
+.gu-metric.tone-good b { color: var(--positive); } .gu-metric.tone-bad b { color: var(--negative); } .gu-metric.tone-warn b { color: var(--money); }
+.gu-badge { display: inline-block; justify-self: start; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border); font-size: 11px; color: var(--base); }
+.gu-badge.tone-good { color: var(--positive); border-color: color-mix(in srgb, var(--positive) 40%, transparent); }
+.gu-badge.tone-bad { color: var(--negative); border-color: color-mix(in srgb, var(--negative) 40%, transparent); }
+.gu-badge.tone-warn { color: var(--money); border-color: color-mix(in srgb, var(--money) 40%, transparent); }
+.gu-hr { border: 0; border-top: 1px solid var(--border); margin: 2px 0; width: 100%; }
+.gu-kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.gu-kv dt { color: var(--subdue); } .gu-kv dd { margin: 0; color: var(--hi); }
+.gu-table { overflow-x: auto; } .gu-table table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.gu-table th { text-align: left; color: var(--subdue); font-weight: 400; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.gu-table td { padding: 5px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); color: var(--hi); }
+.gu-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; text-align: center; }
+.gu-bars .bar { height: 64px; display: flex; align-items: flex-end; justify-content: center; }
+.gu-bars .bar i { width: 62%; min-height: 2px; border-radius: 4px 4px 0 0; background: color-mix(in srgb, var(--primary) 72%, transparent); }
+.gu-bars b { display: block; font-weight: 400; font-size: 11.5px; color: var(--hi); }
+.gu-bars small { display: block; color: var(--subdue); font-size: 11px; }
+.gu-spark { width: 100%; height: 26px; color: var(--primary); }
+.gu-prog { display: grid; gap: 3px; } .gu-prog small { color: var(--subdue); }
+.gu-prog > div { height: 6px; border-radius: 99px; background: var(--hl); overflow: hidden; } .gu-prog i { display: block; height: 100%; background: var(--primary); border-radius: 99px; }
+.gu-tl { display: grid; }
+.gu-tl-i { display: grid; grid-template-columns: 46px 12px minmax(0, 1fr); gap: 8px; align-items: start; padding: 4px 0; position: relative; }
+.gu-tl-i .t { color: var(--subdue); font-size: 11.5px; padding-top: 1px; font-variant-numeric: tabular-nums; }
+.gu-tl-i > i { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-top: 5px; box-shadow: 0 0 0 3px var(--widget); z-index: 1; }
+.gu-tl-i:not(:last-child)::after { content: ''; position: absolute; left: 61px; top: 14px; bottom: -6px; width: 1px; background: var(--border); }
+.gu-tl-i .ti { color: var(--hi); line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
+.gu-tl-i .ti small { display: block; color: var(--subdue); font-size: 11.5px; }
+.gu-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.gu-steps li { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+.gu-steps .dot { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; border: 1px solid var(--border); color: var(--base); }
+.gu-steps .st-done .dot { background: color-mix(in srgb, var(--positive) 20%, transparent); color: var(--positive); border-color: transparent; }
+.gu-steps .st-current .dot { border-color: var(--primary); color: var(--primary); }
+.gu-steps .st-blocked .dot { color: var(--negative); border-color: var(--negative); }
+.gu-steps .ti { color: var(--hi); } .gu-steps .ti small { display: block; color: var(--subdue); }
+.gu-people { display: flex; flex-wrap: wrap; gap: 6px; }
+.gu-person { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 2px; border-radius: 99px; border: 1px solid var(--border); font-size: 12px; color: var(--text); }
+.gu-person i { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 10.5px; background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--hi); }
+.gu-details .gu-sum { border: 0; background: transparent; padding: 2px 0; color: var(--base); display: inline-flex; align-items: center; gap: 4px; }
+.gu-details .gu-sum:hover { color: var(--hi); }
+.gu-details > :not(.gu-sum) { margin-top: 6px; }
+.md .gu-stack, .md .gu-card { margin: 8px 0; }
+[data-theme="studio"] .gu-h { text-transform: none; letter-spacing: 0; font-weight: 600; }
+/* source chips (also the journal's) */
+.su-refs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.su-ref { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--border); background: transparent; color: var(--base); font-size: 11px; }
+.su-ref:not(:disabled):hover { color: var(--hi); border-color: var(--border-strong); }

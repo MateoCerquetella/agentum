@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"989850b5-afe9-49e0-9c22-6bb68102d1a1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"copy-request-id","description":"Copy the last request ID to clipboard"}]}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"989850b5-afe9-49e0-9c22-6bb68102d1a1","update":{"sessionUpdate":"session_info_update","title":"Okay Reply"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"989850b5-afe9-49e0-9c22-6bb68102d1a1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ok"}}}}
+{"jsonrpc":"2.0","id":7,"result":{"stopReason":"end_turn"}}

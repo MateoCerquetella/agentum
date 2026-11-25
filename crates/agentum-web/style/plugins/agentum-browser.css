@@ -1,0 +1,30 @@
+/* Browser plugin: each project's browser (Surf), beside a thread and as a page. */
+.brw { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.brw-bar { gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
+.brw-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.brw-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--subdue); flex: none; }
+.brw-dot.live { background: var(--positive); }
+.brw-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
+.brw-err { display: flex; gap: 6px; align-items: center; padding: 6px 10px; color: var(--negative); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.brw-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 32px 20px; text-align: center; flex: 1; }
+.brw-empty p { max-width: 420px; margin: 0; line-height: 1.6; }
+.brw-paste { gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--hl); }
+.brw-paste input { min-width: 0; }
+
+/* /p/browser: the list, then the picked browser. */
+.brw-page { flex-direction: row; }
+.brw-list { width: 320px; flex: none; display: flex; flex-direction: column; gap: 2px; padding: 10px; border-right: 1px solid var(--border); overflow-y: auto; }
+.brw-head { gap: 8px; padding: 4px 4px 8px; }
+.brw-none { margin: 4px; line-height: 1.6; }
+.brw-item { gap: 8px; padding: 4px 6px; border-radius: var(--radius); }
+.brw-item.on { background: var(--hl); }
+.brw-name { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; text-align: left; background: none; border: 0; padding: 2px 0; color: var(--text); cursor: pointer; }
+.brw-name:disabled { cursor: default; }
+.brw-name b, .brw-name span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brw-new { gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.brw-new select { min-width: 0; }
+.brw-view { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+@media (max-width: 800px) {
+  .brw-page { flex-direction: column; }
+  .brw-list { width: auto; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--border); }
+}

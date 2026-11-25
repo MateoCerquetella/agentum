@@ -1,0 +1,176 @@
+/* The sidebar (Side.tsx): the switch, the bots' cards, Dockside's chats, BB's footer. */
+.side-bot { display: flex; align-items: center; gap: 4px; margin: 2px 0 8px; padding: 6px; border-radius: 14px; background: var(--hl); }
+.side-bot-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; border: 0; background: transparent; box-shadow: none; text-align: left; color: var(--text); }
+.side-bot-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.side-bot-text b { font-size: 14px; font-weight: 600; color: var(--hi); }
+.side-bot-text span { font-size: 12px; color: var(--subdue); }
+.side-bot-plus { flex: none; }
+.side-group + .side-group { margin-top: 4px; }
+.side-group-asks .count { background: color-mix(in srgb, var(--warm) 22%, transparent); color: var(--warm); }
+.side-group-working .count { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
+.side-chats .side-thread .creature { flex: none; margin-top: 1px; }
+.side-bb { margin-top: 8px; }
+.side-bb .usage-strip { position: static; }
+.side-switch button { position: relative; }
+.side-badge { position: absolute; top: 3px; right: 8px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--warm); color: #1b2029; font-size: 10px; font-style: normal; font-weight: 600; line-height: 16px; }
+html[data-theme="studio"] .side-bot { background: var(--background); box-shadow: var(--elevation-raised); border-radius: 16px; }
+html[data-theme="studio"] .side-bot-text b { color: var(--foreground); }
+html[data-theme="studio"] .side-bot-text span { color: var(--muted-foreground); }
+.side-chats-head .count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin: 0; padding: 0 6px; border-radius: 99px; background: color-mix(in srgb, var(--hi) 7%, transparent); color: var(--subdue); font-size: 11px; font-weight: 500; line-height: 1; }
+.side-group-asks .count { background: color-mix(in srgb, var(--warm) 20%, transparent); color: var(--warm); }
+.side-group-working .count { background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--primary); }
+.side-bot { padding: 10px 6px 6px 8px; }
+.side-bot .creature { margin-top: 2px; }
+.sidebar { --dock-cut: var(--sidebar); }
+html[data-theme="studio"] .sidebar { --dock-cut: var(--frame); }
+.dock-chats-head { display: flex; align-items: center; gap: 6px; padding: 6px 6px 4px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--subdue); }
+.dock-count { font-size: 11px; font-weight: 400; color: var(--subdue); opacity: .75; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.dock-btn { width: 24px !important; height: 24px !important; opacity: .7; }
+.dock-btn:hover { opacity: 1; }
+.dock-scroll { flex: 1 1 0; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; }
+.sidebar:has(.dock-scroll) > .grow { display: none; }
+.dock-section { margin-top: 6px; }
+.dock-section:first-child { margin-top: 0; }
+.dock-head { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 6px; border-radius: 8px; }
+.dock-head:hover { background: var(--hl); }
+.dock-badge { display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 6px; border: 1px solid rgb(0 0 0 / .15); color: #fff; font-size: 11px; font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+.dock-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--hi); }
+.dock-rows { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
+.dock-row { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 6px 8px 6px 34px; border: 0; border-radius: 10px; background: transparent; text-align: left; box-shadow: none; color: var(--text); }
+.dock-row:hover { background: color-mix(in srgb, var(--hi) 5%, transparent); }
+.dock-row.on { background: var(--widget); box-shadow: 0 0 0 1px var(--border); }
+.dock-row-1, .dock-row-2 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dock-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--hi); }
+.dock-time { flex: none; font-size: 11px; color: var(--subdue); opacity: .8; font-variant-numeric: tabular-nums; }
+.dock-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--subdue); }
+.dock-logo { width: 12px; height: 12px; color: var(--subdue); }
+.dock-mark { flex: none; width: 14px; height: 14px; display: inline-grid; place-items: center; }
+.dock-mark-needs-you { color: var(--warm); }
+.dock-mark-failed { color: var(--negative); }
+.dock-mark-unread { color: var(--primary); }
+.dock-mark-inactive, .dock-mark-stale { color: var(--subdue); opacity: .7; }
+.fac-busy { flex: none; width: 15px; height: 15px; }
+.fac-busy-track { stroke: oklch(0.82 0.16 85 / .25); }
+.fac-busy-arc { stroke: oklch(0.82 0.16 85); }
+@keyframes dock-spin { to { transform: rotate(360deg); } }
+@keyframes dock-attention { 0%, 100% { opacity: 1; } 50% { opacity: .6; } }
+@keyframes dock-arrive { from { transform: scale(.75); opacity: .4; } 65% { transform: scale(1.12); opacity: 1; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: no-preference) {
+  .fac-busy { animation: dock-spin 900ms linear infinite; }
+  .dock-mark-needs-you, .dock-mark-failed { animation: dock-attention 2.4s ease-in-out infinite; }
+  .dock-mark-unread { transform-origin: center; animation: dock-arrive 350ms ease-out; }
+}
+.dock-shelf { margin-top: 8px; }
+.dock-shelf-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; border: 0; background: transparent; box-shadow: none; color: var(--subdue); font-size: 11.5px; }
+.dock-rule { flex: 1; height: 1px; background: var(--border); }
+.dock-foot { display: flex; align-items: center; gap: 6px; padding: 8px 2px 0; border-top: 1px solid var(--border); }
+.dock-foot .mode-switch { margin: 0 !important; }
+.dock-meter { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--subdue); font-variant-numeric: tabular-nums; }
+.dock-meter-bar { display: block; width: 22px; height: 4px; border-radius: 99px; background: var(--hl); overflow: hidden; }
+.dock-meter-bar i { display: block; height: 100%; }
+/* More accounts than fit on one line: the meters wrap (BB's look, one per account). */
+.dock-meters { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 4px; min-width: 0; }
+html[data-theme="studio"] :is(.dock-chats-head, .dock-count, .dock-time, .dock-meta, .dock-shelf-head, .dock-meter, .dock-logo) { color: var(--muted-foreground); }
+html[data-theme="studio"] :is(.dock-name, .dock-title) { color: var(--foreground); }
+html[data-theme="studio"] .dock-head:hover, html[data-theme="studio"] .dock-row:hover { background: color-mix(in oklch, var(--foreground) 5%, transparent); }
+html[data-theme="studio"] .dock-row.on { background: var(--background); box-shadow: var(--elevation-raised); }
+html[data-theme="studio"] :is(.dock-rule, .dock-foot) { border-color: var(--hairline); background-color: transparent; }
+html[data-theme="studio"] .dock-rule { background: var(--hairline); }
+html[data-theme="studio"] .dock-meter-bar { background: var(--muted); }
+
+/* A row is a link-sized hit area under its text, so its own buttons (archive, delete) stay clickable. */
+.dock-row { position: relative; cursor: pointer; }
+.dock-row-hit { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; padding: 0; border: 0; border-radius: inherit; background: transparent; box-shadow: none; cursor: pointer; }
+.dock-row > :not(.dock-row-hit) { position: relative; z-index: 1; pointer-events: none; }
+.dock-row .dock-act { pointer-events: auto; display: none; width: 20px !important; height: 20px !important; margin: -2px -4px -2px 0; opacity: .7; }
+.dock-row:hover .dock-act, .dock-row:focus-within .dock-act { display: inline-grid; }
+.dock-row:hover .dock-time { display: none; }
+@media (hover: none) { .dock-row .dock-act { display: none; } .dock-row:hover .dock-time { display: inline; } }
+.dock-btn.on { opacity: 1; color: var(--hi); background: var(--hl); }
+.dock-find { margin: 0 4px 6px; height: 30px; font-size: 13px !important; border-radius: 10px !important; }
+.dock-found { padding: 4px 8px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--subdue); }
+.dock-empty { margin: 0; padding: 6px 10px; font-size: 12.5px; color: var(--subdue); }
+.dock-meta { display: inline-flex; align-items: center; gap: 4px; }
+.dock-meter { border: 0; background: transparent; box-shadow: none; padding: 2px; cursor: pointer; }
+.dock-foot .icon-btn.on { color: var(--hi); background: var(--hl); }
+.dock-foot.collapsed { flex-direction: column; border-top: 0; }
+.sidebar .side-pages { margin-top: 10px; }
+html[data-theme="studio"] .dock-btn.on, html[data-theme="studio"] .dock-foot .icon-btn.on { color: var(--foreground); background: color-mix(in oklch, var(--foreground) 6%, transparent); }
+html[data-theme="studio"] :is(.dock-found, .dock-empty) { color: var(--muted-foreground); }
+html[data-theme="studio"] .dock-find { border: 0 !important; background: color-mix(in oklch, var(--foreground) 5%, transparent) !important; }
+/* The sidebar hidden entirely (the button at the top-left of the page, or ⌘/Ctrl+B). */
+.shell.side-hidden .sidebar:not(.open) { display: none; }
+@media (max-width: 760px) { .side-toggle { display: none; } }
+
+/* A long list never squeezes the rows or the pages under it: the list scrolls instead. */
+.dock-scroll > *, .dock-rows > * { flex-shrink: 0; }
+
+/* Unread, as BB: the title reads bold until you open it. */
+.dock-row.unread .dock-title { font-weight: 600; color: var(--hi); }
+html[data-theme="studio"] .dock-row.unread .dock-title { color: var(--foreground); }
+
+/* The bot on its card is alive: a soft ring while it works, a call while it needs you. */
+.side-bot { transition: box-shadow .3s; }
+.side-bot.working { box-shadow: 0 0 0 1px color-mix(in oklch, oklch(0.82 0.16 85) 55%, transparent), var(--elevation-raised, none); }
+.side-bot.asking { box-shadow: 0 0 0 1px color-mix(in oklch, var(--warm) 60%, transparent), var(--elevation-raised, none); }
+.side-bot.asking .side-bot-text > span { animation: dock-attention 2.4s ease-in-out infinite; }
+.side-bot .creature { overflow: visible; }
+
+/* Resize the sidebar by its right edge. */
+@media (min-width: 761px) {
+  .sidebar[style*="--side-w"]:not(.collapsed) { width: var(--side-w) !important; }
+}
+.side-resize { position: absolute; top: 0; bottom: 0; right: -3px; width: 7px; cursor: col-resize; z-index: 5; touch-action: none; }
+.side-resize:hover, body.resizing .side-resize { background: linear-gradient(90deg, transparent 3px, var(--primary, var(--accent)) 3px, var(--primary, var(--accent)) 4px, transparent 4px); }
+body.resizing { cursor: col-resize; user-select: none; }
+@media (max-width: 760px) { .side-resize { display: none; } }
+
+/* BB's usage card, from a footer meter. */
+.dock-meter.on { background: var(--hl); border-radius: 8px; }
+.ucard-card { padding: 4px 2px; font-size: 12px; }
+.ucard-head { display: flex; align-items: center; gap: 8px; padding: 4px 6px 10px; border-bottom: 1px solid var(--border); }
+.ucard-head b { font-size: 13px; }
+.ucard-msg { padding: 8px 8px 0; margin: 0; }
+.ucard-grid { display: grid; grid-template-columns: 1fr 1fr; }
+.ucard-win { display: flex; flex-direction: column; gap: 6px; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+.ucard-win:nth-child(odd):not(:last-child) { border-right: 1px solid var(--border); }
+.ucard-win:last-child:nth-child(odd) { grid-column: 1 / -1; border-bottom: 0; }
+/* The last row has no line under it (BB). */
+.ucard-win:last-child, .ucard-win:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
+.ucard-row { display: flex; justify-content: space-between; gap: 8px; }
+.ucard-row b { font-variant-numeric: tabular-nums; }
+.ucard-bar { display: block; height: 5px; border-radius: 99px; background: var(--hl); overflow: hidden; }
+.ucard-bar i { display: block; height: 100%; border-radius: inherit; }
+html[data-theme="studio"] :is(.ucard-head, .ucard-win) { border-color: var(--hairline); }
+html[data-theme="studio"] .ucard-bar { background: var(--muted); }
+/* BB's usage card and meters (Claude's mark in its orange). */
+.ucard-pop { width: 322px; max-width: calc(100vw - 16px); padding: 4px 4px 2px; }
+.um { display: inline-grid; place-items: center; flex: none; color: var(--base); }
+.um-claude-code { color: #d97757; }
+.ucard-head .um { color: var(--hi); }
+.ucard-head .um-claude-code { color: #d97757; }
+.ucard-head { padding: 6px 4px 10px 8px; }
+.ucard-head .icon-btn { width: 26px; height: 26px; }
+.ucard-row span { color: var(--hi); }
+.ucard-row b { color: var(--hi); font-weight: 600; }
+.ucard-win { gap: 7px; padding: 12px 10px; }
+.ucard-bar { height: 4px; }
+.dock-meter { gap: 5px; }
+.dock-meter-bar { width: 22px; }
+
+/* Mail's folders under Mail while it's open (pages/mail/side.rs): one sidebar, not two. */
+.side-mail { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 8px 17px; padding-left: 6px; border-left: 1px solid var(--border); }
+.side-mail .nav.side-mbox { gap: 8px; padding-top: 4px; padding-bottom: 4px; font-size: 13px; }
+.side-mail .nav.side-mbox.sub { padding-left: 24px; }
+.side-mail .nav.side-mbox svg.fill { fill: currentColor; }
+.side-mail-acct { display: flex; align-items: center; gap: 6px; width: 100%; margin-top: 6px; padding: 4px 10px 2px 8px; border: 0; border-radius: var(--radius); background: transparent; box-shadow: none; text-align: left; font: inherit; font-size: 12px; font-weight: 500; color: var(--subdue); cursor: pointer; }
+.side-mail-acct:hover, .side-mail-acct.here { color: var(--hi); }
+.side-mail-acct > svg { flex: none; transform: rotate(-90deg); transition: transform .15s; }
+.side-mail-acct > svg.open { transform: none; }
+.side-mail-acct .count { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; height: 20px; min-width: 20px; padding: 0 6px; border-radius: 99px; background: color-mix(in srgb, var(--hi) 7%, transparent); font-size: 11px; font-weight: 500; color: var(--subdue); }
+html[data-theme="studio"] .side-mail-acct { color: var(--muted-foreground); }
+html[data-theme="studio"] .side-mail-acct:hover, html[data-theme="studio"] .side-mail-acct.here { color: var(--foreground); }
+.dk-mail { margin: 4px 0 6px; }
+/* More than three accounts' meters: they get the footer's first row, the buttons the next. */
+.dock-foot:not(.collapsed):has(.dock-meter:nth-child(4)) { flex-wrap: wrap; row-gap: 4px; }
+.dock-foot:not(.collapsed):has(.dock-meter:nth-child(4)) .dock-meters { order: -1; flex: 1 0 100%; justify-content: flex-start; gap: 2px 10px; }

@@ -1,0 +1,76 @@
+[package]
+name = "agentum"
+description = "Agentum: a self-hosted personal and coding workspace. The hub: the web app, mail, calendar, notes, the Secretary, and every machine's coding threads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agentum-plugin-git = { path = "../../plugins/git", features = ["hub"] }
+agentum-plugin-pr = { path = "../../plugins/pr", features = ["hub"] }
+agentum-plugin-files = { path = "../../plugins/files", features = ["hub"] }
+agentum-plugin-editor = { path = "../../plugins/editor", features = ["hub"] }
+agentum-plugin-history = { path = "../../plugins/history", features = ["hub"] }
+agentum-plugin-terminal = { path = "../../plugins/terminal", features = ["hub"] }
+agentum-plugin-hover-cards = { path = "../../plugins/hover-cards", features = ["hub"] }
+agentum-plugin-timestamps = { path = "../../plugins/timestamps", features = ["hub"] }
+agentum-plugin-sticky-prompt = { path = "../../plugins/sticky-prompt", features = ["hub"] }
+agentum-plugin-nudger = { path = "../../plugins/nudger", features = ["hub"] }
+agentum-plugin-scheduled-send = { path = "../../plugins/scheduled-send", features = ["hub"] }
+agentum-plugin-side-chat = { path = "../../plugins/side-chat", features = ["hub"] }
+agentum-plugin-drafts = { path = "../../plugins/drafts", features = ["hub"] }
+agentum-plugin-usage = { path = "../../plugins/usage", features = ["hub"] }
+agentum-plugin-context = { path = "../../plugins/context", features = ["hub"] }
+agentum-plugin-concurrency = { path = "../../plugins/concurrency", features = ["hub"] }
+agentum-plugin-notify = { path = "../../plugins/notify", features = ["hub"] }
+agentum-plugin-aura = { path = "../../plugins/aura", features = ["hub"] }
+agentum-plugin-genui = { path = "../../plugins/genui", features = ["hub"] }
+agentum-plugin-browser = { path = "../../plugins/browser", features = ["hub"] }
+agentum-plugin-dockside = { path = "../../plugins/dockside", features = ["hub"] }
+agentum-plugin-themes = { path = "../../plugins/themes", features = ["hub"] }
+agentum-plugin-secrets = { path = "../../plugins/secrets", features = ["hub"] }
+agentum-proto.workspace = true
+agentum-plugin = { workspace = true, features = ["hub"] }
+async-trait.workspace = true
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "html", "regex-fancy", "parsing"] }
+anyhow = "1"
+axum = { version = "0.8", features = ["macros", "multipart", "ws"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json", "gzip", "stream", "form", "query", "multipart"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+rust-embed = "8"
+mime_guess = "2"
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-br"] }
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+mail-parser = "0.11"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "ring", "webpki-roots"] }
+futures = "0.3"
+quick-xml = "0.38"
+feed-rs = "2"
+rrule = "0.14"
+sha2 = "0.10"
+hex = "0.4"
+url = "2"
+regex = "1"
+html-escape = "0.2"
+tokio-stream = { version = "0.1", features = ["sync"] }
+bcrypt = "0.19.3"
+fernet = { version = "0.2.2", default-features = false, features = ["rustcrypto"] }
+p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8", "pem"] }
+ciborium = "0.2"
+aes-gcm = "0.10"
+hkdf = "0.12"
+fancy-regex = "0.20.2"

@@ -1,0 +1,10 @@
+[package]
+name = "agentum-proto"
+description = "Types shared by the Agentum hub, agentd and the web app: threads, events, the machine protocol and the web API."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

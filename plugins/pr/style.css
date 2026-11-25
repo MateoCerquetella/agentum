@@ -1,0 +1,28 @@
+/* Pull request: the tab and the sidebar badge. */
+.pr-row { display: inline-flex; align-items: center; gap: 3px; font: 10.5px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); color: var(--subdue); padding: 0 5px; border-radius: 99px; border: 1px solid var(--border); white-space: nowrap; }
+.pr-row.pr-merged { color: #a371f7; border-color: color-mix(in srgb, #a371f7 40%, var(--border)); }
+.pr-row.pr-closed { opacity: .6; }
+.pr-row.pr-c-pass .pr-mark, .prx-c-pass { color: var(--positive); }
+.pr-row.pr-c-fail .pr-mark, .prx-c-fail { color: var(--negative); }
+.pr-row.pr-c-pending .pr-mark, .prx-c-pending { color: var(--warm, #e0a85a); }
+.prx { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.prx-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; flex: none; }
+.prx-body { flex: 1; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.prx-err { white-space: pre-wrap; }
+.prx-head { display: flex; flex-direction: column; gap: 4px; }
+.prx-head a { color: inherit; }
+.prx-title { font-size: 14px; font-weight: 600; color: var(--hi) !important; text-decoration: none; }
+.prx-title:hover { text-decoration: underline; }
+.prx-num { font: 12px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); color: var(--subdue) !important; text-decoration: none; }
+.prx-state { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: #fff; background: var(--subdue); }
+.prx-state.prx-open { background: #238636; }
+.prx-state.prx-merged { background: #8957e5; }
+.prx-state.prx-closed { background: #da3633; }
+.prx-state.prx-draft { background: #6e7681; }
+.prx-checks { border: 1px solid var(--border); border-radius: var(--radius); background: var(--widget); overflow: hidden; }
+.prx-check { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; color: var(--text); text-decoration: none; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.prx-check:hover { background: var(--hl); }
+.prx-mark { width: 12px; text-align: center; font-weight: 700; flex: none; }
+.prx-merge { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.prx-pick { background: var(--widget); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 6px; color: var(--text); font-size: 12px; }
+.btn.prx-sm { height: 28px; padding: 0 12px; font-size: 12.5px; }
