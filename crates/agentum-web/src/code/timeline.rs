@@ -45,8 +45,16 @@ fn fold(events: &[EventView]) -> Vec<Item> {
                 users.insert(seq, out.len());
                 out.push(Item::User { seq, html: e.html.clone().unwrap_or_else(|| format!("<p>{}</p>", esc(text))), queued: *queued, ts: e.event.ts });
             }
-            EventKind::Dequeued { seq_of_user } => {
-                if let Some(Item::User { queued, .. }) = users.get(seq_of_user).and_then(|i| out.get_mut(*i)) {
+            EventKind::Dequeued { seq_of_user, dropped } => {
+                if *dropped {
+                    // A stop dropped it: it was never sent.
+                    if let Some(i) = users.get(seq_of_user).copied() {
+                        if let Some(Item::User { html, queued, .. }) = out.get_mut(i) {
+                            *queued = false;
+                            *html = format!("<s>{html}</s>");
+                        }
+                    }
+                } else if let Some(Item::User { queued, .. }) = users.get(seq_of_user).and_then(|i| out.get_mut(*i)) {
                     *queued = false;
                 }
             }
