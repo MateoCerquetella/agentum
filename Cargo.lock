@@ -241,6 +241,7 @@ dependencies = [
  "leptos",
  "serde",
  "serde_json",
+ "syntect",
  "tokio",
  "wasm-bindgen",
  "web-sys",
@@ -287,6 +288,7 @@ name = "agentum-plugin-git"
 version = "0.1.0-beta.1"
 dependencies = [
  "agentum-plugin",
+ "agentum-plugin-editor",
  "agentum-proto",
  "agentum-ui",
  "async-trait",

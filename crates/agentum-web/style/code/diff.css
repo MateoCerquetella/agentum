@@ -1,0 +1,39 @@
+/* Diffs (agentum-ui's DiffView): the Git and History tabs. */
+.dv-files { display: flex; flex-direction: column; gap: 8px; }
+.dv-file { border: 1px solid var(--border); border-radius: var(--radius); background: var(--widget); overflow: clip; }
+.dv-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer; font-size: 12px; user-select: none; position: sticky; top: 0; z-index: 1; background: var(--widget); }
+.dv-head:hover { background: var(--hl); }
+.dv-chev { display: inline-flex; color: var(--subdue); }
+.dv-chev svg { transition: transform .12s; }
+.dv-chev.folded svg { transform: rotate(-90deg); }
+.dv-k { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; font: 600 10px var(--mono); background: var(--hl); color: var(--base); }
+.dv-k-A { color: var(--positive); background: color-mix(in srgb, var(--positive) 16%, transparent); }
+.dv-k-D { color: var(--negative); background: color-mix(in srgb, var(--negative) 16%, transparent); }
+.dv-k-M { color: var(--warm, #e0a85a); background: color-mix(in srgb, var(--warm, #e0a85a) 16%, transparent); }
+.dv-k-R { color: var(--primary); background: color-mix(in srgb, var(--primary) 16%, transparent); }
+.dv-path { font-family: var(--mono); font-size: 11.5px; min-width: 0; color: var(--hi); }
+.dv-plus, .dv-minus { font: 11px var(--mono); }
+.dv-plus { color: var(--positive); }
+.dv-minus { color: var(--negative); }
+.dv-open { padding: 2px; opacity: .7; }
+.dv-open:hover { opacity: 1; }
+.dv-empty { padding: 8px 10px; border-top: 1px solid var(--border); }
+.dv-body { overflow-x: auto; border-top: 1px solid var(--border); background: var(--sidebar); }
+.dv { border-collapse: collapse; font: 11.5px/1.55 var(--mono); min-width: 100%; width: max-content; tab-size: 4; }
+.dv .dv-nc { width: 1px; }
+.dv td { padding: 0 8px 0 4px; white-space: pre; vertical-align: top; }
+.dv td.dv-n { color: var(--subdue); text-align: right; user-select: none; padding: 0 6px; min-width: 2.6em; font-size: 10.5px; opacity: .8; }
+.dv .dv-s { display: inline-block; width: 1.4ch; user-select: none; color: var(--subdue); }
+.dv tr.dv-add td, .dv td.dv-add { background: color-mix(in srgb, var(--positive) 13%, transparent); }
+.dv tr.dv-del td, .dv td.dv-del { background: color-mix(in srgb, var(--negative) 13%, transparent); }
+.dv tr.dv-add td.dv-n, .dv td.dv-n.dv-add { background: color-mix(in srgb, var(--positive) 22%, transparent); }
+.dv tr.dv-del td.dv-n, .dv td.dv-n.dv-del { background: color-mix(in srgb, var(--negative) 22%, transparent); }
+.dv tr.dv-add .dv-s { color: var(--positive); }
+.dv tr.dv-del .dv-s { color: var(--negative); }
+.dv tr.dv-hunk td { color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, transparent); padding: 2px 8px; font-size: 11px; }
+.dv tr.dv-nonl td { color: var(--subdue); font-style: italic; font-size: 10.5px; }
+.dv td.dv-none { background: color-mix(in srgb, var(--border) 30%, transparent); }
+/* Side by side: two halves that wrap (the panel is narrow). */
+.dv.dv-split { table-layout: fixed; width: 100%; }
+.dv.dv-split .dv-nc { width: 3.4em; }
+.dv.dv-split td.dv-c { white-space: pre-wrap; overflow-wrap: anywhere; }

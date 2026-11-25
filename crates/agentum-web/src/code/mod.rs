@@ -314,7 +314,7 @@ fn ThreadPage(id: String) -> impl IntoView {
         }
     };
 
-    let cx = ThreadCx { id: id.clone(), summary };
+    let cx = ThreadCx { id: id.clone(), summary, rail };
     let tabs = crate::plugins::rail_tabs();
     let has_tabs = !tabs.is_empty();
     view! {
