@@ -513,6 +513,10 @@ fn command(opts: &StartOpts) -> Command {
     if let Some(r) = &opts.resume {
         c.args(["--resume", r]);
     }
+    if let Some(i) = opts.instructions.as_deref().filter(|i| !i.trim().is_empty()) {
+        c.args(["--append-system-prompt", i]);
+    }
+    c.envs(opts.env.iter().map(|(k, v)| (k, v)));
     c.current_dir(&opts.cwd);
     if crate::util::is_root() {
         // Claude refuses bypassPermissions as root unless it is told it is in a sandbox.
@@ -580,7 +584,7 @@ impl Agent for ClaudeAgent {
     async fn models(&self, bin: PathBuf, cwd: PathBuf) -> anyhow::Result<Vec<ModelInfo>> {
         // The initialize response lists them; no API call is made.
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let opts = StartOpts { thread: String::new(), bin, cwd, model: None, effort: None, permission: Permission::Ask, resume: None };
+        let opts = StartOpts { thread: String::new(), bin, cwd, model: None, effort: None, permission: Permission::Ask, resume: None, instructions: None, env: vec![] };
         let (mut live, init) = spawn(&opts, tx).await?;
         live.close().await;
         Ok(models_from_init(&init))

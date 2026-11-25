@@ -121,6 +121,11 @@ pub mod hub {
         async fn before_turn(&self, _cx: &Ctx, _thread: &ThreadSummary, _text: &str) -> Result<(), String> {
             Ok(())
         }
+        /// Text added to the agent's system prompt when a thread's agent starts (after
+        /// `before_turn`): how to use what the plugin offers (the project's browser…).
+        fn instructions(&self, _cx: &Ctx, _thread: &ThreadSummary) -> Option<String> {
+            None
+        }
     }
 }
 

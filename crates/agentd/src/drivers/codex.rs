@@ -443,9 +443,9 @@ impl Rpc {
 
 static GEN: AtomicU32 = AtomicU32::new(0);
 
-async fn connect(bin: &PathBuf, cwd: &PathBuf, out: Tx, tr: Arc<Mutex<Translator>>) -> anyhow::Result<Rpc> {
+async fn connect(bin: &PathBuf, cwd: &PathBuf, env: &[(String, String)], out: Tx, tr: Arc<Mutex<Translator>>) -> anyhow::Result<Rpc> {
     let mut cmd = Command::new(bin);
-    cmd.arg("app-server").current_dir(cwd);
+    cmd.arg("app-server").current_dir(cwd).envs(env.iter().map(|(k, v)| (k, v)));
     let (proc, child, stdout) = Proc::spawn(cmd, "codex")?;
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let (p2, o2, writer) = (pending.clone(), out.clone(), proc.writer.clone());
@@ -553,7 +553,7 @@ impl Agent for CodexAgent {
     async fn start(&self, opts: StartOpts, out: Tx) -> anyhow::Result<Box<dyn Session>> {
         let generation = GEN.fetch_add(1, Ordering::Relaxed);
         let tr = Arc::new(Mutex::new(Translator::new(&opts.cwd.to_string_lossy(), generation)));
-        let rpc = connect(&opts.bin, &opts.cwd, out.clone(), tr.clone()).await?;
+        let rpc = connect(&opts.bin, &opts.cwd, &opts.env, out.clone(), tr.clone()).await?;
         let (approval, sandbox) = policy(opts.permission);
         let cwd = opts.cwd.to_string_lossy().to_string();
         let res = match &opts.resume {
@@ -562,12 +562,18 @@ impl Agent for CodexAgent {
                 if let Some(m) = &opts.model {
                     set_model(&mut p, m, true);
                 }
+                if let Some(i) = &opts.instructions {
+                    p["developerInstructions"] = json!(i);
+                }
                 rpc.call("thread/resume", p, Duration::from_secs(60)).await
             }
             None => {
                 let mut p = json!({"cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox});
                 if let Some(m) = &opts.model {
                     set_model(&mut p, m, true);
+                }
+                if let Some(i) = &opts.instructions {
+                    p["developerInstructions"] = json!(i);
                 }
                 rpc.call("thread/start", p, Duration::from_secs(60)).await
             }
@@ -598,7 +604,7 @@ impl Agent for CodexAgent {
     async fn models(&self, bin: PathBuf, cwd: PathBuf) -> anyhow::Result<Vec<ModelInfo>> {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         let tr = Arc::new(Mutex::new(Translator::new("", 0)));
-        let rpc = connect(&bin, &cwd, tx, tr).await?;
+        let rpc = connect(&bin, &cwd, &[], tx, tr).await?;
         let mut models = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..10 {

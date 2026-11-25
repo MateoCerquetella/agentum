@@ -46,6 +46,14 @@ mod tests {
         let e = Event { seq: 3, ts: 9, kind: EventKind::Delta { item: "m1".into(), text: "hi".into() } };
         assert_eq!(round(&e), json!({"seq": 3, "ts": 9, "k": "delta", "item": "m1", "text": "hi"}));
         assert_eq!(round(&AgentKind::ClaudeCode), json!("claude-code"));
+        let r = round(&ToAgentd::Req { id: 3, req: Req::Surf(SurfReq::Ensure { project: "/r".into(), idle_hours: None }) });
+        assert_eq!(r["req"], json!({"op": "surf", "surf": "ensure", "project": "/r", "idle_hours": null}));
+        let s = round(&FromAgentd::Sock(SockMsg { sock: "s1".into(), text: Some("{}".into()), data: None }));
+        assert_eq!(s, json!({"t": "sock", "sock": "s1", "text": "{}"}));
+        assert_eq!(round(&ToAgentd::SockClose { sock: "s1".into() }), json!({"t": "sock-close", "sock": "s1"}));
+        // An older hub's spec (no instructions) still reads.
+        let spec: ThreadSpec = serde_json::from_value(json!({"agent": "codex", "cwd": "/r"})).unwrap();
+        assert_eq!(spec.instructions, None);
         let w = round(&api::WsIn::Sub { ch: vec!["threads".into()] });
         assert_eq!(w, json!({"t": "sub", "ch": ["threads"]}));
     }
