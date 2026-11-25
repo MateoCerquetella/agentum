@@ -107,7 +107,9 @@ impl Terms {
             bail!("{cwd}: no such directory");
         }
         let pair = native_pty_system().openpty(size)?;
-        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into());
+        // $SHELL, else the account's login shell (a system service has no $SHELL, and `sh -l`
+        // would reset PATH from /etc/profile), else sh.
+        let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).or_else(login_shell).unwrap_or_else(|| "/bin/sh".into());
         let mut cb = CommandBuilder::new(&shell);
         match &cmd {
             Some(c) => {
@@ -246,4 +248,13 @@ mod tests {
         assert_eq!(exit, Some(Some(0)));
         assert!(terms.handle(TermReq::Replay { term: "t1".into() }).is_err(), "gone after exit");
     }
+}
+
+/// This account's shell in /etc/passwd.
+fn login_shell() -> Option<String> {
+    let uid = std::fs::read_to_string("/proc/self/status").ok()?.lines().find_map(|l| l.strip_prefix("Uid:"))?.split_whitespace().next()?.to_string();
+    std::fs::read_to_string("/etc/passwd").ok()?.lines().find_map(|l| {
+        let f: Vec<&str> = l.split(':').collect();
+        (f.len() >= 7 && f[2] == uid && Path::new(f[6]).exists()).then(|| f[6].to_string())
+    })
 }
