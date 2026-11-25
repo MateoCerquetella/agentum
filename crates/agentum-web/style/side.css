@@ -133,9 +133,25 @@ body.resizing { cursor: col-resize; user-select: none; }
 .ucard-win { display: flex; flex-direction: column; gap: 6px; padding: 10px 8px; border-bottom: 1px solid var(--border); }
 .ucard-win:nth-child(odd):not(:last-child) { border-right: 1px solid var(--border); }
 .ucard-win:last-child:nth-child(odd) { grid-column: 1 / -1; border-bottom: 0; }
+/* The last row has no line under it (BB). */
+.ucard-win:last-child, .ucard-win:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
 .ucard-row { display: flex; justify-content: space-between; gap: 8px; }
 .ucard-row b { font-variant-numeric: tabular-nums; }
 .ucard-bar { display: block; height: 5px; border-radius: 99px; background: var(--hl); overflow: hidden; }
 .ucard-bar i { display: block; height: 100%; border-radius: inherit; }
 html[data-theme="studio"] :is(.ucard-head, .ucard-win) { border-color: var(--hairline); }
 html[data-theme="studio"] .ucard-bar { background: var(--muted); }
+/* BB's usage card and meters (Claude's mark in its orange). */
+.ucard-pop { width: 322px; max-width: calc(100vw - 16px); padding: 4px 4px 2px; }
+.um { display: inline-grid; place-items: center; flex: none; color: var(--base); }
+.um-claude-code { color: #d97757; }
+.ucard-head .um { color: var(--hi); }
+.ucard-head .um-claude-code { color: #d97757; }
+.ucard-head { padding: 6px 4px 10px 8px; }
+.ucard-head .icon-btn { width: 26px; height: 26px; }
+.ucard-row span { color: var(--hi); }
+.ucard-row b { color: var(--hi); font-weight: 600; }
+.ucard-win { gap: 7px; padding: 12px 10px; }
+.ucard-bar { height: 4px; }
+.dock-meter { gap: 5px; }
+.dock-meter-bar { width: 22px; }

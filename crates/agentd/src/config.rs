@@ -40,6 +40,9 @@ pub struct Config {
     pub codex: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opencode: Option<String>,
+    /// The projects' browsers' Docker image (default: the Steel build BB Surf runs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surf_image: Option<String>,
 }
 
 fn default_idle() -> u64 {
@@ -49,7 +52,7 @@ fn is_default_idle(v: &u64) -> bool {
     *v == 10
 }
 
-pub const DEFAULT_ROOTS: [&str; 4] = ["~/Developer", "~/projects", "~/src", "~/code"];
+pub const DEFAULT_ROOTS: [&str; 5] = ["~/Developer", "~/developer", "~/projects", "~/src", "~/code"];
 
 impl Config {
     /// `$AGENTD_CONFIG`, else `~/.config/agentum/agentd.toml`.

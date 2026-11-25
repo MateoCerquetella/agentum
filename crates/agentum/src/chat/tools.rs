@@ -17,11 +17,11 @@ impl Access {
     }
 }
 
-pub fn defs(access: Access) -> Vec<Value> {
+pub fn defs(access: Access, finance: bool) -> Vec<Value> {
     if access == Access::Private { return vec![]; }
     let f = |name: &str, desc: &str, props: Value, req: &[&str]| json!({"type": "function", "function": {"name": name, "description": desc,
         "parameters": {"type": "object", "properties": props, "required": req}}});
-    [
+    let mut defs: Vec<Value> = [
       f("calendar_list", "List calendar events between two dates (inclusive). Use for any question about the schedule.",
         json!({"start": {"type": "string", "description": "YYYY-MM-DD"}, "end": {"type": "string", "description": "YYYY-MM-DD"}}), &["start", "end"]),
       f("calendar_create", "Create a calendar event or reminder. Times are local (no offset). The user must approve.",
@@ -54,7 +54,13 @@ pub fn defs(access: Access) -> Vec<Value> {
         json!({"project": {"type": "string", "description": "project name, e.g. agentum, website"}, "task": {"type": "string"}}), &["project", "task"]),
       f("web_search", "Search the public web for current facts or when the user asks for an online lookup. Use a short public query without private details. Returns titles, links and snippets.", json!({"query": {"type": "string"}}), &["query"]),
       f("web_fetch", "Read a web page as text.", json!({"url": {"type": "string"}}), &["url"]),
-    ].into_iter().filter(|tool| access.allows(tool["function"]["name"].as_str().unwrap_or_default())).collect()
+    ].into_iter().filter(|tool| access.allows(tool["function"]["name"].as_str().unwrap_or_default())).collect();
+    if finance && access.allows("finance") {
+        defs.push(f("finance", "Read the user's money data from their own self-hosted Sure app: cash and account balances, net worth, spending, income, budgets, transactions, holdings, recurring bills and subscriptions, merchants, categories, tags. Read-only. Call it instead of guessing or telling the user to check an app. For 'how much cash do I have' use action=cash. Pass action plus optional args (e.g. {\"start_date\":\"2026-11-01\",\"end_date\":\"2026-11-30\"} for transactions, {\"months\":3} where supported).",
+            json!({"action": {"type": "string", "description": "cash | overview | accounts | balance_sheet | income_statement | budget | transactions | holdings | recurring | merchants | categories | tags | uncategorized | rules | bills | insights"},
+                   "args": {"type": "object", "description": "optional filters for Sure, such as start_date, end_date, months, account_ids"}}), &["action"]));
+    }
+    defs
 }
 
 pub fn needs_approval(name: &str) -> bool { matches!(name, "calendar_create" | "calendar_update" | "calendar_delete" | "mail_send" | "code_task") }
@@ -212,12 +218,104 @@ pub async fn run(app: &App, name: &str, a: &Value) -> Result<String, String> {
             }
             "memory_forget" => super::memory::forget(app, &s(a, "id")).await,
             "file_read" => super::files::read(app, a).await,
+            "finance" => finance(app, a).await,
             "web_search" => web_search(app, &s(a, "query")).await,
             "web_fetch" => web_fetch(app, &s(a, "url")).await,
             _ => anyhow::bail!("unknown tool {name}"),
         }
     }.await;
     r.map_err(|e| format!("{e:#}"))
+}
+
+/// The finance tool only exists when this deployment points at a Sure MCP server.
+pub fn finance_configured() -> bool {
+    std::env::var("SURE_MCP_TOKEN").map(|t| !t.trim().is_empty()).unwrap_or(false)
+}
+
+fn sure_url() -> String {
+    std::env::var("SURE_MCP_URL").ok().map(|u| u.trim().to_string()).filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:12121/mcp".to_string())
+}
+
+/// MCP answers JSON, or SSE when the client accepts the stream: keep the last data: line.
+fn jsonrpc_value(body: &str) -> anyhow::Result<Value> {
+    let v = body.trim();
+    let data = v.lines().rev().find_map(|l| l.trim_start().strip_prefix("data:").map(|d| d.trim().to_string()));
+    Ok(serde_json::from_str(data.as_deref().unwrap_or(v))?)
+}
+
+/// One read-only call to Sure's MCP endpoint: initialize, then tools/call.
+async fn mcp_call(app: &App, tool: &str, args: &Value) -> anyhow::Result<String> {
+    let token = std::env::var("SURE_MCP_TOKEN").unwrap_or_default().trim().to_string();
+    if token.is_empty() { anyhow::bail!("finance is not configured"); }
+    let url = sure_url();
+    let auth = format!("Bearer {token}");
+    let r = app.http.post(&url).header("Authorization", &auth).header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}))
+        .timeout(Duration::from_secs(15)).send().await
+        .map_err(|e| anyhow::anyhow!("finance data source is unreachable: {e}"))?;
+    let status = r.status();
+    let session = r.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()).map(String::from);
+    let body = r.text().await.unwrap_or_default();
+    if !status.is_success() { anyhow::bail!("finance data source returned {status}"); }
+    jsonrpc_value(&body)?;
+
+    let mut req = app.http.post(&url).header("Authorization", &auth).header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream");
+    if let Some(s) = session { req = req.header("Mcp-Session-Id", s); }
+    let r = req.json(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}}))
+        .timeout(Duration::from_secs(30)).send().await
+        .map_err(|e| anyhow::anyhow!("finance data source is unreachable: {e}"))?;
+    let status = r.status();
+    let body = r.text().await.unwrap_or_default();
+    if !status.is_success() { anyhow::bail!("finance data source returned {status}"); }
+    let v = jsonrpc_value(&body)?;
+    if let Some(e) = v["error"]["message"].as_str() { anyhow::bail!("finance: {e}"); }
+    let text = v["result"]["content"].as_array().and_then(|c| c.iter().find_map(|p| p["text"].as_str())).unwrap_or("");
+    if text.trim().is_empty() { anyhow::bail!("finance returned no data"); }
+    Ok(text.chars().take(12_000).collect())
+}
+
+/// Read-only actions, each mapped to one Sure MCP tool.
+async fn finance(app: &App, a: &Value) -> anyhow::Result<String> {
+    let action = s(a, "action").trim().to_lowercase();
+    if action == "cash" {
+        let text = mcp_call(app, "get_accounts", &json!({})).await?;
+        let v: Value = serde_json::from_str(&text)?;
+        let rows = v.as_array().or_else(|| v["accounts"].as_array()).cloned().unwrap_or_default();
+        let mut totals: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+        let mut lines = vec![];
+        for acc in rows.iter().filter(|x| x["type"] == "Depository" && x["status"] == "active") {
+            let ccy = s(acc, "currency");
+            let bal: f64 = s(acc, "balance").parse().unwrap_or(0.0);
+            *totals.entry(ccy.clone()).or_default() += bal;
+            lines.push(format!("- {}: {} {}", s(acc, "name"), s(acc, "balance_formatted"), ccy));
+        }
+        if lines.is_empty() { return Ok("No cash accounts.".into()); }
+        let total = totals.iter().map(|(c, t)| format!("{t:.2} {c}")).collect::<Vec<_>>().join(" + ");
+        return Ok(format!("Cash (depository accounts, active):\n{}\nTotal: {}", lines.join("\n"), total));
+    }
+    let tool = match action.as_str() {
+        "overview" | "balance_sheet" => "get_balance_sheet",
+        "accounts" => "get_accounts",
+        "income_statement" => "get_income_statement",
+        "budget" => "get_budget",
+        "transactions" => "get_transactions",
+        "holdings" => "get_holdings",
+        "recurring" => "get_recurring_transactions",
+        "merchants" => "get_merchants",
+        "categories" => "get_categories",
+        "tags" => "get_tags",
+        "uncategorized" => "get_uncategorized_transactions",
+        "rules" => "get_rules",
+        "bills" => "get_bills",
+        "insights" => "get_insights",
+        other => anyhow::bail!("unknown finance action {other}; use one of: overview, accounts, balance_sheet, income_statement, budget, transactions, holdings, recurring, merchants, categories, tags, uncategorized"),
+    };
+    let args = if a["args"].is_object() { a["args"].clone() } else { json!({}) };
+    mcp_call(app, tool, &args).await
 }
 
 async fn web_search(app: &App, q: &str) -> anyhow::Result<String> {

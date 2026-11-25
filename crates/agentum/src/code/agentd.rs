@@ -24,7 +24,7 @@ pub struct Conn {
 }
 
 impl Conn {
-    fn send(&self, m: &ToAgentd) {
+    pub(crate) fn send(&self, m: &ToAgentd) {
         let _ = self.tx.send(serde_json::to_string(m).unwrap_or_default());
     }
     /// A request; its reply, or an error after `wait`.
@@ -182,6 +182,7 @@ async fn run(app: App, id: String, sock: WebSocket) {
             FromAgentd::TermData { term, data } => app.code.publish(&format!("term:{id}:{term}"), &WsOut::TermData { machine: id.clone(), term, data }),
             FromAgentd::TermExit { term, code } => app.code.publish(&format!("term:{id}:{term}"), &WsOut::TermExit { machine: id.clone(), term, code }),
             FromAgentd::Pong { .. } => {}
+            m @ (FromAgentd::Sock(_) | FromAgentd::SockClose { .. }) => super::surf::from_agentd(&app, &id, m),
         }
     }
     pinger.abort();
@@ -191,6 +192,7 @@ async fn run(app: App, id: String, sock: WebSocket) {
         let mut m = app.code.machines.write().unwrap();
         if m.get(&id).is_some_and(|c| Arc::ptr_eq(c, &conn)) {
             m.remove(&id);
+            super::surf::machine_gone(&app, &id);
         }
     }
     for (_, tx) in conn.pending.lock().unwrap().drain() {

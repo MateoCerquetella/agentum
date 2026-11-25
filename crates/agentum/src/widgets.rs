@@ -55,14 +55,15 @@ pub fn types() -> Value {
       "lobsters": {"label":"Lobsters","fields":[{"key":"sort-by","kind":"choice","label":"Sort by","options":[["hot","Hot"],["new","New"]]},{"key":"limit","kind":"number","label":"Items"},{"key":"collapse-after","kind":"number","label":"Show before 'more'"}]},
       "releases": {"label":"Releases","fields":[{"key":"repositories","kind":"strings","label":"Repositories","hint":"owner/repo"},{"key":"collapse-after","kind":"number","label":"Show before 'more'"}]},
       "repository": {"label":"GitHub repo","fields":[{"key":"repository","label":"Repository","hint":"owner/repo"},{"key":"pull-requests-limit","kind":"number","label":"Pull requests"},{"key":"issues-limit","kind":"number","label":"Issues"},{"key":"commits-limit","kind":"number","label":"Commits"}]},
-      "monitor": {"label":"Site monitor","fields":[{"key":"sites","kind":"items","label":"Sites","fields":[{"key":"title","label":"Name"},{"key":"url","label":"URL"},{"key":"check-url","label":"Check URL","hint":"Optional, when the address you open isn't the one to ping"}]}]},
+      "monitor": {"label":"Site monitor","fields":[{"key":"sites","kind":"items","label":"Sites","fields":[{"key":"title","label":"Name"},{"key":"url","label":"URL"},{"key":"check-url","label":"Check URL","hint":"Optional, when the address you open isn't the one to ping"},{"key":"icon","label":"Icon","hint":"si:<name> from simple-icons.org, e.g. si:docker"},{"key":"timeout","label":"Timeout","hint":"Default 3s"}]}]},
       "videos": {"label":"YouTube","fields":[{"key":"channels","kind":"strings","label":"Channel IDs","hint":"Starts with UC"},{"key":"limit","kind":"number","label":"Videos"}]},
-      "bookmarks": {"label":"Bookmarks","fields":[{"key":"groups","kind":"items","label":"Groups","fields":[{"key":"title","label":"Group"},{"key":"links","kind":"items","label":"Links","fields":[{"key":"title","label":"Title"},{"key":"url","label":"URL"}]}]}]},
+      "bookmarks": {"label":"Bookmarks","fields":[{"key":"groups","kind":"items","label":"Groups","fields":[{"key":"title","label":"Group"},{"key":"links","kind":"items","label":"Links","fields":[{"key":"title","label":"Title"},{"key":"url","label":"URL"},{"key":"icon","label":"Icon","hint":"si:<name> from simple-icons.org"}]}]}]},
       "search": {"label":"Search","fields":[{"key":"search-engine","kind":"choice","label":"Engine","options":[["duckduckgo","DuckDuckGo"],["google","Google"],["bing","Bing"],["kagi","Kagi"],["startpage","Startpage"]]}]},
       "todo": {"label":"To-do","fields":[]},
       "calendar": {"label":"Calendar","fields":[]},
       "mail": {"label":"Mail numbers","fields":[]},
-      "brief": {"label":"Morning brief","fields":[]}
+      "brief": {"label":"Morning brief","fields":[]},
+      "usage": {"label":"Agent usage","fields":[]}
     })
 }
 
@@ -188,20 +189,27 @@ async fn watchlist(app: &App, o: &Value) -> anyhow::Result<Value> {
     Ok(json!({"categories": cats, "layout": s(o, "layout"), "labels": o["labels"].as_bool().unwrap_or(true)}))
 }
 
-/// GET /api/chart?symbol=&range=1y|5y|max — daily closes for the chart modal.
+/// GET /api/chart?symbol=&range=1d|5d|1y|5y|max — prices for the chart modal: 5-minute (1d) or
+/// 15-minute (5d) bars, daily closes (1y, 5y) or weekly (max). Each point: `time` ("YYYY-MM-DD", or
+/// "YYYY-MM-DD HH:MM" intraday, in the exchange's time), `t` (unix seconds), value/open/high/low/close.
 #[derive(Deserialize)]
 pub struct ChartQ { symbol: String, range: Option<String> }
 pub async fn chart(State(app): State<App>, Query(q): Query<ChartQ>) -> R<Json<Value>> {
     let rng = q.range.unwrap_or_else(|| "1y".into());
-    let years: i64 = match rng.as_str() { "1y" => 1, "5y" => 5, "max" => 60, _ => return Err(bad("bad range")) };
-    let interval = if rng == "1y" { "1d" } else if rng == "5y" { "1d" } else { "1wk" };
+    let (years, interval): (i64, &str) = match rng.as_str() { "1d" => (0, "5m"), "5d" => (0, "15m"), "1y" => (1, "1d"), "5y" => (5, "1d"), "max" => (60, "1wk"), _ => return Err(bad("bad range")) };
+    let intraday = years == 0;
     let sym = q.symbol.clone();
     if sym.is_empty() || sym.len() > 20 { return Err(bad("bad symbol")); }
     let a = app.clone();
-    let v = app.cache.get_or(&format!("chart:{sym}:{rng}"), Duration::from_secs(600), || async move {
+    let ttl = Duration::from_secs(if intraday { 120 } else { 600 });
+    let v = app.cache.get_or(&format!("chart:{sym}:{rng}"), ttl, || async move {
         let now = now_ts();
-        let url = format!("https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval={}&includePrePost=false",
-            urlencode(&sym), (now - years * 366 * 86400).max(0), now, interval);
+        let url = if intraday {
+            format!("https://query1.finance.yahoo.com/v8/finance/chart/{}?range={rng}&interval={interval}&includePrePost=false", urlencode(&sym))
+        } else {
+            format!("https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval={}&includePrePost=false",
+                urlencode(&sym), (now - years * 366 * 86400).max(0), now, interval)
+        };
         let d = get_json(&a, &url).await?;
         let r = &d["chart"]["result"][0];
         if r.is_null() { anyhow::bail!("no data for {sym}"); }
@@ -209,17 +217,20 @@ pub async fn chart(State(app): State<App>, Query(q): Query<ChartQ>) -> R<Json<Va
         let off = meta["gmtoffset"].as_i64().unwrap_or(0);
         let ts = r["timestamp"].as_array().cloned().unwrap_or_default();
         let q0 = &r["indicators"]["quote"][0];
-        let mut by_day = std::collections::BTreeMap::new();
+        let mut by_time = std::collections::BTreeMap::new();
         for (i, t) in ts.iter().enumerate() {
             let (Some(t), Some(c)) = (t.as_i64(), q0["close"][i].as_f64()) else { continue };
-            let day = chrono::DateTime::from_timestamp(t + off, 0).unwrap().format("%Y-%m-%d").to_string();
-            by_day.insert(day, json!({"time": null, "value": c, "open": q0["open"][i], "high": q0["high"][i], "low": q0["low"][i], "close": c}));
+            let local = chrono::DateTime::from_timestamp(t + off, 0).unwrap();
+            let key = local.format(if intraday { "%Y-%m-%d %H:%M" } else { "%Y-%m-%d" }).to_string();
+            by_time.insert(key, json!({"time": null, "t": t, "value": c, "open": q0["open"][i], "high": q0["high"][i], "low": q0["low"][i], "close": c}));
         }
-        let points: Vec<Value> = by_day.into_iter().map(|(d, mut v)| { v["time"] = json!(d); v }).collect();
-        let prev = if points.len() > 1 { points[points.len() - 2]["value"].clone() } else { Value::Null };
+        let points: Vec<Value> = by_time.into_iter().map(|(d, mut v)| { v["time"] = json!(d); v }).collect();
+        // The close before this one: yesterday's for a day's bars, else the second-to-last point.
+        let prev = if intraday { meta.get("chartPreviousClose").or(meta.get("previousClose")).cloned().unwrap_or(Value::Null) }
+            else if points.len() > 1 { points[points.len() - 2]["value"].clone() } else { Value::Null };
         Ok(json!({"symbol": meta["symbol"], "name": meta.get("longName").or(meta.get("shortName")).cloned().unwrap_or(json!(sym)),
             "currency": meta["currency"], "exchange": meta.get("fullExchangeName").cloned().unwrap_or(meta["exchangeName"].clone()),
-            "price": meta["regularMarketPrice"], "previousClose": prev, "updated": meta["regularMarketTime"], "points": points}))
+            "price": meta["regularMarketPrice"], "previousClose": prev, "updated": meta["regularMarketTime"], "intraday": intraday, "points": points}))
     }).await?;
     Ok(Json(v))
 }
@@ -330,18 +341,116 @@ async fn repository(app: &App, o: &Value) -> anyhow::Result<Value> {
         "commits": pick(commits, num(o, "commits-limit", 3), &|c| json!({"title": s(&c["commit"], "message").lines().next().unwrap_or(""), "url": c["html_url"], "author": c["commit"]["author"]["name"]}))}))
 }
 
-async fn monitor(app: &App, o: &Value) -> anyhow::Result<Value> {
+/// A duration as Glance writes it ("3s", "500ms", "1m"), or a number of seconds.
+fn duration_of(v: &Value, default: Duration) -> Duration {
+    if let Some(n) = v.as_f64() { return Duration::from_secs_f64(n.clamp(0.1, 60.0)); }
+    let t = v.as_str().unwrap_or("").trim();
+    let (num, unit) = t.split_at(t.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(t.len()));
+    let Ok(n) = num.trim().parse::<f64>() else { return default };
+    let secs = match unit { "ms" => n / 1000.0, "m" => n * 60.0, _ => n };
+    Duration::from_secs_f64(secs.clamp(0.1, 60.0))
+}
+
+/// A status check asks "is it up?", not "is its certificate one the public roots know": a homelab's
+/// own CA (https://*.lan) answers too. Signatures are still checked; the chain isn't.
+#[derive(Debug)]
+struct AnyCert(std::sync::Arc<rustls::crypto::CryptoProvider>);
+impl rustls::client::danger::ServerCertVerifier for AnyCert {
+    fn verify_server_cert(&self, _: &rustls::pki_types::CertificateDer<'_>, _: &[rustls::pki_types::CertificateDer<'_>], _: &rustls::pki_types::ServerName<'_>, _: &[u8], _: rustls::pki_types::UnixTime) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(&self, m: &[u8], c: &rustls::pki_types::CertificateDer<'_>, d: &rustls::DigitallySignedStruct) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(m, c, d, &self.0.signature_verification_algorithms)
+    }
+    fn verify_tls13_signature(&self, m: &[u8], c: &rustls::pki_types::CertificateDer<'_>, d: &rustls::DigitallySignedStruct) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(m, c, d, &self.0.signature_verification_algorithms)
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+fn monitor_http() -> &'static reqwest::Client {
+    static C: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    C.get_or_init(|| {
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let tls = rustls::ClientConfig::builder_with_provider(provider.clone()).with_safe_default_protocol_versions().expect("tls versions")
+            .dangerous().with_custom_certificate_verifier(std::sync::Arc::new(AnyCert(provider))).with_no_client_auth();
+        reqwest::Client::builder().tls_backend_preconfigured(tls).pool_max_idle_per_host(1).pool_idle_timeout(Duration::from_secs(4)).build().expect("monitor client")
+    })
+}
+
+/// Each site's status, as Glance's monitor: the check URL (or the URL), up when it answers below 400
+/// (or with one of `alt-status-codes`), within `timeout` (3 s by default).
+async fn monitor(_app: &App, o: &Value) -> anyhow::Result<Value> {
     let sites = arr(o, "sites");
     let res = join_all(sites.iter().map(|site| async move {
         let check = if s(site, "check-url").is_empty() { s(site, "url") } else { s(site, "check-url") };
+        let timeout = duration_of(&site["timeout"], Duration::from_secs(3));
         let t = std::time::Instant::now();
-        let r = if check.starts_with("http") { app.http.get(&check).header("User-Agent", UA).timeout(Duration::from_secs(8)).send().await.ok() } else { None };
-        let code = r.as_ref().map(|r| r.status().as_u16());
+        let r = if check.starts_with("http") { Some(monitor_http().get(&check).header("User-Agent", UA).timeout(timeout).send().await) } else { None };
+        let ms = t.elapsed().as_millis() as u64;
+        let code = r.as_ref().and_then(|r| r.as_ref().ok()).map(|r| r.status().as_u16());
+        let error = match &r {
+            None => Some("bad url"),
+            Some(Err(e)) if e.is_timeout() => Some("timeout"),
+            Some(Err(_)) => Some("error"),
+            Some(Ok(_)) => None,
+        };
         let alt: Vec<u64> = arr(site, "alt-status-codes").iter().filter_map(|x| x.as_u64()).collect();
         let up = code.map(|c| c < 400 || alt.contains(&(c as u64))).unwrap_or(false);
-        json!({"title": s(site, "title"), "url": s(site, "url"), "icon": s(site, "icon"), "up": up, "status": code, "ms": t.elapsed().as_millis() as u64})
+        let ok = code.is_some_and(|c| (200..300).contains(&c) || alt.contains(&(c as u64)));
+        json!({"title": s(site, "title"), "url": s(site, "url"), "icon": s(site, "icon"), "up": up, "ok": ok, "status": code, "error": error, "ms": ms})
     })).await;
     Ok(json!({"sites": res}))
+}
+
+/// Simple-icons logos that turned out not to exist, so a page doesn't ask the CDN on every load.
+static ICON_MISSES: std::sync::Mutex<Option<std::collections::HashMap<String, std::time::Instant>>> = std::sync::Mutex::new(None);
+
+/// GET /api/icons/si/{name}: a simple-icons logo (Glance's `icon: si:<name>`), fetched once from the
+/// simple-icons CDN and kept in `<data>/icons/si/`. Black on transparent: the page tints it.
+pub async fn simple_icon(State(app): State<App>, Path(name): Path<String>) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+    let name = name.trim_end_matches(".svg").to_ascii_lowercase();
+    if name.is_empty() || name.len() > 64 || !name.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let dir = std::path::Path::new(&app.cfg.data_dir).join("icons").join("si");
+    let file = dir.join(format!("{name}.svg"));
+    let svg = match tokio::fs::read(&file).await {
+        Ok(b) => b,
+        Err(_) => {
+            let missed = ICON_MISSES.lock().unwrap().as_ref().and_then(|m| m.get(&name).copied()).is_some_and(|t| t.elapsed() < Duration::from_secs(3600));
+            let got = if missed { None } else { fetch_icon(&app, &name).await };
+            match got {
+                Some(b) => {
+                    let tmp = dir.join(format!(".{name}.tmp"));
+                    if tokio::fs::create_dir_all(&dir).await.is_ok() && tokio::fs::write(&tmp, &b).await.is_ok() {
+                        let _ = tokio::fs::rename(&tmp, &file).await;
+                    }
+                    b
+                }
+                None => {
+                    ICON_MISSES.lock().unwrap().get_or_insert_with(Default::default).insert(name, std::time::Instant::now());
+                    return (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, "private, max-age=3600")]).into_response();
+                }
+            }
+        }
+    };
+    ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "private, max-age=604800"),
+      (header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'; sandbox"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], svg).into_response()
+}
+async fn fetch_icon(app: &App, name: &str) -> Option<Vec<u8>> {
+    let url = format!("https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/{name}.svg");
+    let r = app.http.get(&url).header("User-Agent", UA).timeout(Duration::from_secs(10)).send().await.ok()?;
+    if !r.status().is_success() { return None; }
+    let b = r.bytes().await.ok()?;
+    let text = std::str::from_utf8(&b).ok()?.trim_start().to_ascii_lowercase();
+    // A logo, nothing that runs.
+    let handler = regex::Regex::new(r"\son[a-z]+\s*=").unwrap();
+    let safe = b.len() < 64 * 1024 && text.starts_with("<svg") && !["<script", "javascript:", "<foreignobject", "<iframe"].iter().any(|x| text.contains(x)) && !handler.is_match(&text);
+    safe.then(|| b.to_vec())
 }
 
 async fn videos(app: &App, o: &Value) -> anyhow::Result<Value> {

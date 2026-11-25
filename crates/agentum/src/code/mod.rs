@@ -7,11 +7,12 @@ pub mod agentd;
 pub mod browser;
 pub mod db;
 pub mod render;
+pub mod surf;
 
 use crate::state::App;
 use crate::util::{bad, not_found, AppError, R};
 use agentum_proto::api::*;
-use agentum_proto::machine::{FsReq, GitReq, ModelInfo, Req};
+use agentum_proto::machine::{FsReq, GitReq, ModelInfo, Req, SurfReq};
 use agentum_proto::{AgentKind, Event, EventKind, Input, Permission, SendMode, ThreadSpec, ThreadState};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -37,6 +38,10 @@ pub struct Hub {
     pub out: tokio::sync::broadcast::Sender<Out>,
     models: Mutex<HashMap<(String, AgentKind), (Instant, Vec<ModelInfo>)>>,
     html: Mutex<HashMap<(String, u64), Arc<str>>>,
+    /// What each thread's agent was last started with from the plugins (`ThreadSpec.instructions`).
+    pub instructions: Mutex<HashMap<String, Option<String>>>,
+    /// The Surf viewer's sockets relayed through agentd: sock → (machine, to the page).
+    pub socks: Mutex<HashMap<String, (String, tokio::sync::mpsc::Sender<agentum_proto::machine::SockMsg>)>>,
 }
 
 impl Default for Hub {
@@ -49,6 +54,8 @@ impl Default for Hub {
             out: tokio::sync::broadcast::channel(4096).0,
             models: Default::default(),
             html: Default::default(),
+            socks: Default::default(),
+            instructions: Default::default(),
         }
     }
 }
@@ -105,6 +112,13 @@ pub async fn start(app: &App) -> anyhow::Result<()> {
             m.insert(t.id.clone(), t);
         }
     }
+    // Each agent's last reported limits (the usage plugin keeps them), so the sidebar's meters are
+    // there after a restart, before any thread reports again.
+    if let Some(saved) = crate::plugins::kv_get(app, "usage", "limits").await.and_then(|v| v.as_object().cloned()) {
+        let mut l: Vec<AgentLimits> = saved.into_values().filter_map(|v| serde_json::from_value(v).ok()).collect();
+        l.sort_by(|a, b| b.at.cmp(&a.at));
+        *app.code.limits.write().unwrap() = l;
+    }
     let a = app.clone();
     tokio::spawn(async move {
         loop {
@@ -112,7 +126,67 @@ pub async fn start(app: &App) -> anyhow::Result<()> {
             scheduled(&a).await;
         }
     });
+    // Each agent's limits from its provider: once the machines are back, then every 5 minutes.
+    let a = app.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        loop {
+            usage_refresh(&a).await;
+            tokio::time::sleep(Duration::from_secs(300)).await;
+        }
+    });
     Ok(())
+}
+
+/// A report of an agent's limits (a thread's RateLimits, or its provider asked directly): the
+/// overview's, every page's, and the usage plugin's copy (so a restart keeps it).
+async fn remember_limits(app: &App, l: AgentLimits, persist: bool) {
+    {
+        let mut all = app.code.limits.write().unwrap();
+        all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
+        all.insert(0, l.clone());
+    }
+    app.code.publish("threads", &WsOut::Limits { limits: l.clone() });
+    if persist {
+        let mut saved = crate::plugins::kv_get(app, "usage", "limits").await.and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        saved.insert(format!("{}\t{}", l.agent.id(), l.machine), json!(l));
+        crate::plugins::kv_set(app, "usage", "limits", &Value::Object(saved)).await;
+    }
+}
+
+/// Each subscription agent's limits asked of its provider now (agentd's `Req::Usage`), from one
+/// machine per agent: the main machine first, then the next online one that has it.
+pub async fn usage_refresh(app: &App) -> Vec<AgentLimits> {
+    let machines = agentd::machines(app).await;
+    let mut got = vec![];
+    for agent in [AgentKind::ClaudeCode, AgentKind::Codex] {
+        for m in machines.iter().filter(|m| m.online && m.agents.iter().any(|a| a.agent == agent && a.installed)) {
+            let Some(c) = app.code.conn(&m.id) else { continue };
+            if !c.hello.read().unwrap().features.iter().any(|f| f == "usage") {
+                continue;
+            }
+            match c.call(Req::Usage { agent }, Duration::from_secs(45)).await {
+                Ok(v) => {
+                    let limits: Vec<agentum_proto::RateLimit> = serde_json::from_value(v["limits"].clone()).unwrap_or_default();
+                    if limits.is_empty() {
+                        continue;
+                    }
+                    let l = AgentLimits { agent, machine: m.id.clone(), limits, at: now(), plan: v["plan"].as_str().map(str::to_string) };
+                    remember_limits(app, l.clone(), true).await;
+                    got.push(l);
+                    break;
+                }
+                Err(e) => tracing::info!("{} usage on {}: {e}", agent.label(), m.id),
+            }
+        }
+    }
+    got
+}
+
+/// POST /api/code/usage/refresh: ask now; every known report back.
+async fn usage_refresh_h(State(app): State<App>) -> Json<Vec<AgentLimits>> {
+    usage_refresh(&app).await;
+    Json(app.code.limits.read().unwrap().clone())
 }
 
 /// Send what was scheduled for now.
@@ -240,14 +314,10 @@ pub async fn ingest(app: &App, conn: &Conn, thread: &str, events: Vec<Event>) {
                 app.code.partial.lock().unwrap().remove(thread);
             }
             EventKind::Usage { usage } => t.usage = Some(usage.clone()),
-            EventKind::RateLimits { limits } => {
-                let l = AgentLimits { agent: t.agent, machine: t.machine.clone(), limits: limits.clone(), at: ts };
-                {
-                    let mut all = app.code.limits.write().unwrap();
-                    all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
-                    all.insert(0, l.clone());
-                }
-                app.code.publish("threads", &WsOut::Limits { limits: l });
+            EventKind::RateLimits { limits, plan } => {
+                // The usage plugin keeps a thread's report itself.
+                let l = AgentLimits { agent: t.agent, machine: t.machine.clone(), limits: limits.clone(), at: ts, plan: plan.clone() };
+                remember_limits(app, l, false).await;
             }
             EventKind::Session { session_id, model } => {
                 session = Some(session_id.clone());
@@ -325,7 +395,11 @@ pub fn routes() -> Router<App> {
         .route("/api/code/machines/{id}/projects", post(add_project))
         .route("/api/code/machines/{id}/main", post(set_main))
         .route("/api/code/call", post(call))
+        .merge(surf::routes())
+        .route("/api/code/usage/refresh", post(usage_refresh_h))
         .route("/api/code/syntax.css", get(|| async { ([("content-type", "text/css"), ("cache-control", "public, max-age=86400")], render::syntax_css()) }))
+        // Messages carry their images (data: URLs, up to six of ≤2.5 MB).
+        .layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024))
 }
 
 fn offline(m: &str) -> AppError {
@@ -342,6 +416,8 @@ pub async fn machine_call(app: &App, machine: &str, req: Req) -> Result<Value, S
     let wait = match &req {
         Req::Git(GitReq::Push { .. }) | Req::Git(GitReq::PrMerge { .. }) | Req::Git(GitReq::WorktreeAdd { .. }) => Duration::from_secs(120),
         Req::Start { .. } | Req::Models { .. } => Duration::from_secs(60),
+        // The first start on a machine downloads the browser's image.
+        Req::Surf(SurfReq::Ensure { .. }) => Duration::from_secs(600),
         _ => Duration::from_secs(30),
     };
     c.call(req, wait).await
@@ -388,10 +464,18 @@ pub async fn create_thread(app: &App, b: NewThread) -> R<ThreadSummary> {
         return Err(bad("pick a project"));
     }
     let (mut cwd, mut branch) = (parent.as_ref().map(|p| p.cwd.clone()).unwrap_or(project.clone()), parent.as_ref().and_then(|p| p.branch.clone()));
+    let existing = b.cwd.as_ref().map(|c| c.trim().trim_end_matches('/')).filter(|c| !c.is_empty() && parent.is_none());
     if let Some(br) = b.worktree.as_ref().filter(|s| !s.trim().is_empty() && parent.is_none()) {
-        let r = machine_call(app, &machine, Req::Git(GitReq::WorktreeAdd { repo: project.clone(), branch: br.trim().to_string(), base: None })).await.map_err(bad)?;
+        let base = b.base.clone().filter(|s| !s.trim().is_empty());
+        let r = machine_call(app, &machine, Req::Git(GitReq::WorktreeAdd { repo: project.clone(), branch: br.trim().to_string(), base })).await.map_err(bad)?;
         cwd = r["path"].as_str().unwrap_or(&cwd).to_string();
         branch = r["branch"].as_str().map(str::to_string).or(Some(br.clone()));
+    } else if let Some(wt) = existing {
+        // One of this project's worktrees (agentd lists them; anything else is refused).
+        let sp = machine_call(app, &machine, Req::Git(GitReq::StartPoints { repo: project.clone() })).await.map_err(bad)?;
+        let w = sp["worktrees"].as_array().into_iter().flatten().find(|w| w["path"].as_str().map(|p| p.trim_end_matches('/')) == Some(wt)).ok_or_else(|| bad(format!("{wt} is not a worktree of {project}")))?;
+        cwd = wt.to_string();
+        branch = w["branch"].as_str().map(str::to_string);
     } else if branch.is_none() {
         branch = app.code.conn(&machine).and_then(|c| c.hello.read().unwrap().projects.iter().find(|p| p.path == project).and_then(|p| p.branch.clone()));
     }
@@ -475,10 +559,11 @@ async fn start_agent(app: &App, s: &ThreadSummary, mut input: Input, resume: Opt
         input.text = format!("You are a side chat about another coding thread in this same directory. Answer questions about it; don't change files unless asked. Its conversation so far:\n{tail}\n\n---\n\n{}", input.text);
     }
     let instructions = crate::plugins::instructions(app, s).await;
-    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone(), instructions };
+    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone(), instructions: instructions.clone() };
     let req = Req::Start { thread: s.id.clone(), spec, resume, input: Some(input), last_seq: s.last_seq };
     match machine_call(app, &s.machine, req).await {
         Ok(_) => {
+            app.code.instructions.lock().unwrap().insert(s.id.clone(), instructions);
             let id = s.id.clone();
             app.db.call(move |c| db::set_started(c, &id)).await?;
             Ok(())
@@ -616,6 +701,16 @@ pub async fn send(app: &App, id: &str, b: SendBody) -> R<()> {
     }
     if !t.state.busy() {
         crate::plugins::before_turn(app, &t, &input.text).await.map_err(|e| AppError(StatusCode::CONFLICT, e))?;
+        // The plugins have something new to tell the agent (its project's browser was started
+        // since): start it again with that (agentd restarts an idle agent, resuming its session).
+        let now = crate::plugins::instructions(app, &t).await;
+        let last = app.code.instructions.lock().unwrap().get(id).cloned();
+        if last.as_ref() != Some(&now) && (last.is_some() || now.is_some()) {
+            let id3 = id.to_string();
+            if let Some(session) = app.db.call(move |c| db::session_of(c, &id3)).await? {
+                return start_agent(app, &t, input, Some(session)).await;
+            }
+        }
     }
     match machine_call(app, &t.machine, Req::Send { thread: id.to_string(), input: input.clone(), mode: b.mode }).await {
         Ok(_) => Ok(()),

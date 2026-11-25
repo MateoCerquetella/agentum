@@ -199,3 +199,20 @@
 a.dk-hit { display: block; }
 .chats-fold { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; }
 .chats-fold:hover { color: var(--hi); }
+
+/* Images in a composer and in the timeline */
+.cbox-icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--subdue); cursor: pointer; }
+.cbox-icon:hover { background: var(--hl); color: var(--text); }
+.cbox-thumbs { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px 0; }
+.cbox-thumb { position: relative; width: 64px; height: 64px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: var(--widget); }
+.cbox-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cbox-thumb-x { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: rgb(0 0 0 / .6); color: #fff; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.cbox-thumb:hover .cbox-thumb-x, .cbox-thumb-x:focus-visible { opacity: 1; }
+@media (hover: none) { .cbox-thumb-x { opacity: 1; } }
+.msg-imgs { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
+.msg-imgs img { max-width: 220px; max-height: 160px; border-radius: 10px; border: 1px solid var(--border); cursor: zoom-in; object-fit: cover; }
+.msg-imgs img.big { max-width: 100%; max-height: 80vh; cursor: zoom-out; object-fit: contain; }
+
+/* New thread: the checkout's branch (not a menu) and the worktree chip's "Branch from: main". */
+.pk-static, .pk-static:hover { cursor: default; background: transparent; color: var(--subdue); }
+.pk-chip > b { font-weight: 600; color: var(--hi); overflow: hidden; text-overflow: ellipsis; }

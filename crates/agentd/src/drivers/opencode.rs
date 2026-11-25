@@ -443,6 +443,12 @@ impl OpencodeAgent {
 
 async fn start_server(bin: &PathBuf) -> anyhow::Result<Arc<Server>> {
     use std::process::Stdio;
+    // 1.x has another API (wrapped prompts, `session.next.*` events): a thread would never move.
+    let out = crate::util::run(Command::new(bin).arg("--version"), Duration::from_secs(15)).await?;
+    let version = crate::util::parse_version(&out.stdout).unwrap_or_default();
+    if version.split('.').next().and_then(|m| m.parse::<u32>().ok()).is_some_and(|m| m < 2) {
+        anyhow::bail!("OpenCode {version} ({}) is too old: Agentum needs 2.x. Update it with `curl -fsSL https://opencode.ai/install | bash`", bin.display());
+    }
     let port = {
         let l = std::net::TcpListener::bind("127.0.0.1:0")?;
         l.local_addr()?.port()

@@ -17,13 +17,13 @@ use serde::Serialize;
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Group {
-    /// git, PRs, files, the editor, history, terminals.
+    /// git, PRs, files, the editor, history, terminals, the browser.
     Code,
     /// What happens around a thread: hover cards, timestamps, drafts, nudges, side chats.
     Thread,
     /// Usage, context, limits, notifications.
     Usage,
-    /// Themes, aura, generative UI, the browser.
+    /// Themes, aura, generative UI.
     Looks,
 }
 

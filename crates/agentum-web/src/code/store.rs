@@ -24,6 +24,13 @@ fn load() {
     });
 }
 
+/// Fetch the overview again now (the usage card's refresh).
+pub async fn refresh() {
+    if let Ok(o) = api_get::<Overview>("/code/overview").await {
+        OV.with(|s| s.set(Some(o)));
+    }
+}
+
 /// Fetch once and follow the hub (refetches after a reconnect, in case something was missed).
 pub fn start() {
     if STARTED.with(|s| s.replace(true)) {

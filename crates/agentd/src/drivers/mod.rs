@@ -36,8 +36,10 @@ pub struct StartOpts {
     pub permission: Permission,
     /// The agent's own session id to resume.
     pub resume: Option<String>,
-    /// Added to the agent's system prompt (from the hub's plugins).
+    /// Added to the agent's system prompt (the plugins' instructions).
     pub instructions: Option<String>,
+    /// Extra environment for the agent's process (the project's browser: AGENTUM_SURF_CDP).
+    pub env: Vec<(String, String)>,
 }
 
 /// One live agent session (a process, or a session on a shared server).

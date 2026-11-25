@@ -272,7 +272,8 @@ pub enum EventKind {
     },
     /// The context window right now (sent when it changes).
     Usage { usage: Usage },
-    RateLimits { limits: Vec<RateLimit> },
+    /// `plan`: the subscription, when the agent says ("max", "plus"…).
+    RateLimits { limits: Vec<RateLimit>, #[serde(default, skip_serializing_if = "Option::is_none")] plan: Option<String> },
     /// The agent's own session id (for resume) and the model it is really on.
     Session { session_id: String, #[serde(default, skip_serializing_if = "Option::is_none")] model: Option<String> },
     State { state: ThreadState },

@@ -1,5 +1,6 @@
 //! The Code page: a new thread (machine, project, agent, model) or one thread's timeline with
 //! its composer, questions and side panel (plugins' tabs: files, git, history, terminal…).
+mod attach;
 pub mod marks;
 pub mod store;
 mod timeline;
@@ -234,8 +235,15 @@ fn NewThreadPage() -> impl IntoView {
     // Full access by default, as BB's; a pick is remembered.
     let permission = RwSignal::new(agentum_ui::store::get("agentum.permission").and_then(|p| PERMS.into_iter().find(|x| perm_id(*x) == p)).unwrap_or(Permission::Full));
     let worktree = RwSignal::new(agentum_ui::store::flag("agentum.worktree"));
+    // The worktree chip (as BB's): a new worktree from `base` (None: the default branch), or an
+    // existing worktree of the project (`reuse`, at `existing`).
+    let base = RwSignal::new(None::<String>);
+    let reuse = RwSignal::new(false);
+    let existing = RwSignal::new(None::<String>);
+    let starts = RwSignal::new(None::<(String, Value)>);
     let text = RwSignal::new(agentum_ui::store::get("agentum.draft.new").unwrap_or_default());
     let busy = RwSignal::new(false);
+    let images = RwSignal::new(Vec::<String>::new());
     let adding = RwSignal::new(String::new());
     let area = NodeRef::<leptos::html::Textarea>::new();
     if let Some(p) = pane() {
@@ -279,48 +287,154 @@ fn NewThreadPage() -> impl IntoView {
             project.set(last.filter(|l| projects.iter().any(|p| &p.path == l)).or_else(|| projects.first().map(|p| p.path.clone())).unwrap_or_default());
         }
     });
+    // Projects as BB lists them: once each by name, whichever machines have them.
+    let has = move |m: &str, name: &str| projects_of(m).into_iter().find(|p| p.name == name).map(|p| p.path);
+    let project_label = move || {
+        let p = project.get();
+        if p.is_empty() { String::new() } else { projects_of(&machine.get()).into_iter().find(|x| x.path == p).map(|x| x.name).unwrap_or_else(|| p.trim_end_matches('/').rsplit('/').next().unwrap_or(&p).to_string()) }
+    };
     let project_items = Signal::derive(move || {
-        let cur = project.get();
-        let mut v: Vec<PickItem> = projects_of(&machine.get()).into_iter().map(|p| PickItem { on: p.path == cur, id: p.path.clone(), label: p.name, sub: p.branch.unwrap_or_default(), icon: "folder", ..Default::default() }).collect();
-        v.sort_by(|a, b| b.on.cmp(&a.on).then(a.label.to_lowercase().cmp(&b.label.to_lowercase())));
+        let cur = project_label();
+        let mut names: Vec<String> = ov.with(|o| o.as_ref().map(|o| o.machines.iter().flat_map(|m| m.projects.iter().map(|p| p.name.clone())).collect()).unwrap_or_default());
+        names.sort_by_key(|n| n.to_lowercase());
+        names.dedup();
+        names.into_iter().map(|n| PickItem { on: n == cur, id: n.clone(), label: n, icon: "folder", group: "Project".into(), ..Default::default() }).collect::<Vec<_>>()
+    });
+    let pick_project = move |name: String| {
+        let machines = ov.with_untracked(|o| o.as_ref().map(|o| o.machines.clone()).unwrap_or_default());
+        let here_ = machine.get_untracked();
+        let remembered = agentum_ui::store::get(&format!("agentum.machine.{name}"));
+        let m = [Some(here_), remembered].into_iter().flatten().find(|m| machines.iter().any(|x| &x.id == m && x.online) && has(m, &name).is_some())
+            .or_else(|| machines.iter().find(|x| x.main && x.online && has(&x.id, &name).is_some()).map(|x| x.id.clone()))
+            .or_else(|| machines.iter().find(|x| x.online && has(&x.id, &name).is_some()).map(|x| x.id.clone()))
+            .or_else(|| machines.iter().find(|x| has(&x.id, &name).is_some()).map(|x| x.id.clone()));
+        if let Some(m) = m {
+            if let Some(path) = has(&m, &name) {
+                machine.set(m);
+                project.set(path);
+            }
+        }
+    };
+    // The environment: a machine (that has the project) × the project's checkout or a worktree.
+    let env_items = Signal::derive(move || {
+        let (cur_m, wt, name) = (machine.get(), worktree.get(), project_label());
+        let mut ms = ov.with(|o| o.as_ref().map(|o| o.machines.clone()).unwrap_or_default());
+        ms.sort_by_key(|m| (!m.online, !m.main, m.name.to_lowercase()));
+        let mut v = vec![];
+        for m in ms {
+            let group = if m.online { m.name.clone() } else { format!("{} · offline", m.name) };
+            if name.is_empty() || has(&m.id, &name).is_some() {
+                for (kind, label, icon) in [("local", "Project checkout", "folder"), ("wt", "Worktree", "branch")] {
+                    v.push(PickItem { id: format!("{kind}:{}", m.id), label: label.into(), icon, group: group.clone(), disabled: !m.online, on: m.id == cur_m && wt == (kind == "wt"), ..Default::default() });
+                }
+            } else {
+                v.push(PickItem { id: format!("none:{}", m.id), label: "Not set up for this project".into(), icon: "folder", group, disabled: true, ..Default::default() });
+            }
+        }
         v
     });
-    let machine_items = Signal::derive(move || {
-        let cur = machine.get();
-        let mut v: Vec<PickItem> = ov.with(|o| o.as_ref().map(|o| o.machines.clone()).unwrap_or_default()).into_iter().map(|m| PickItem {
-            on: m.id == cur,
-            id: format!("m:{}", m.id),
-            label: m.name.clone(),
-            sub: if m.online { format!("{} projects", m.projects.len()) } else { "offline".into() },
-            icon: "server",
-            group: "Machine".into(),
-            disabled: !m.online,
-        }).collect();
+    let env_label = move || {
+        let m = machine.get();
+        let online = ov.with(|o| o.as_ref().and_then(|o| o.machines.iter().find(|x| x.id == m).map(|x| x.online)));
+        match online {
+            None if m.is_empty() => ("server", "No host connected".to_string()),
+            Some(false) => ("alert", "Host is offline".to_string()),
+            _ => (if worktree.get() { "branch" } else { "folder" }, format!("{m} · {}", if worktree.get() { "Worktree" } else { "Project checkout" })),
+        }
+    };
+    // What a worktree can start from, for this machine's project.
+    Effect::new(move |_| {
+        let (m, p, wt) = (machine.get(), project.get(), worktree.get());
+        let key = format!("{m}\u{1f}{p}");
+        if !wt || m.is_empty() || p.is_empty() || starts.with_untracked(|s| s.as_ref().is_some_and(|(k, _)| *k == key)) {
+            return;
+        }
+        base.set(None);
+        existing.set(None);
+        starts.set(None);
+        spawn_local(async move {
+            let req = agentum_proto::machine::Req::Git(agentum_proto::machine::GitReq::StartPoints { repo: p });
+            let v = api_post::<Value>("/code/call", &json!({"machine": m, "req": req})).await.unwrap_or(Value::Null);
+            let _ = starts.try_set(Some((key, v)));
+        });
+    });
+    let sp = move || starts.with(|s| s.as_ref().map(|(_, v)| v.clone()));
+    let default_base = move || sp().and_then(|v| v["default"].as_str().map(str::to_string));
+    let wt_items = Signal::derive(move || {
+        let r = reuse.get();
+        let mut v = vec![
+            PickItem { id: "mode:new".into(), label: "New worktree".into(), icon: "plus", group: "Work in:".into(), on: !r, keep_open: true, ..Default::default() },
+            PickItem { id: "mode:reuse".into(), label: "Existing worktree".into(), icon: "folder", group: "Work in:".into(), on: r, keep_open: true, ..Default::default() },
+        ];
+        let Some(sp) = sp() else {
+            v.push(PickItem { id: "-".into(), label: if r { "Loading worktrees…" } else { "Loading branches…" }.into(), disabled: true, group: if r { "Existing worktree:" } else { "Branch from:" }.into(), ..Default::default() });
+            return v;
+        };
+        if sp.is_null() {
+            v.push(PickItem { id: "-".into(), label: "Couldn't read this project's git.".into(), disabled: true, group: "Branch from:".into(), ..Default::default() });
+        } else if r {
+            let cur = existing.get();
+            let ws = sp["worktrees"].as_array().cloned().unwrap_or_default();
+            if ws.is_empty() {
+                v.push(PickItem { id: "-".into(), label: "No existing worktrees found.".into(), disabled: true, group: "Existing worktree:".into(), ..Default::default() });
+            }
+            for w in ws {
+                let path = w["path"].as_str().unwrap_or("").to_string();
+                let short = path.trim_end_matches('/').rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/");
+                let mut sub = w["branch"].as_str().unwrap_or("Detached HEAD").to_string();
+                if w["locked"].as_bool() == Some(true) { sub.push_str(" · locked"); }
+                if w["prunable"].as_bool() == Some(true) { sub.push_str(" · prunable"); }
+                v.push(PickItem { on: cur.as_deref() == Some(path.as_str()), id: format!("wt:{path}"), label: short, sub, icon: "branch", group: "Existing worktree:".into(), disabled: w["prunable"].as_bool() == Some(true), ..Default::default() });
+            }
+        } else {
+            let cur = base.get();
+            v.push(PickItem { id: "base:".into(), label: "Default branch".into(), sub: sp["default"].as_str().unwrap_or("").into(), icon: "branch", group: "Branch from:".into(), on: cur.is_none(), ..Default::default() });
+            for b in sp["branches"].as_array().into_iter().flatten().chain(sp["remote"].as_array().into_iter().flatten()).filter_map(|b| b.as_str()) {
+                v.push(PickItem { on: cur.as_deref() == Some(b), id: format!("base:{b}"), label: b.into(), icon: "branch", group: "Branch from:".into(), ..Default::default() });
+            }
+        }
         v
     });
+    let pick_wt = move |id: String| match id.split_once(':') {
+        Some(("mode", m)) => reuse.set(m == "reuse"),
+        Some(("base", b)) => base.set(Some(b.to_string()).filter(|b| !b.is_empty())),
+        Some(("wt", p)) => existing.set(Some(p.to_string())),
+        _ => {}
+    };
+    let checkout_label = move || {
+        let p = project.get();
+        projects_of(&machine.get()).into_iter().find(|x| x.path == p).and_then(|x| x.branch).map(|b| format!("Current ({b})")).unwrap_or_else(|| "Current branch".into())
+    };
     let perm_items = Signal::derive(move || PERMS.into_iter().map(|p| PickItem { id: perm_id(p), label: perm_label(p).into(), sub: perm_sub(p).into(), icon: "shield", on: permission.get() == p, ..Default::default() }).collect::<Vec<_>>());
     let start = move || {
         let t = text.get_untracked();
-        if t.trim().is_empty() || project.get_untracked().is_empty() || busy.get_untracked() {
+        if (t.trim().is_empty() && images.with_untracked(|v| v.is_empty())) || project.get_untracked().is_empty() || busy.get_untracked() {
             if project.get_untracked().is_empty() {
                 toast_bad("Pick a project first.");
             }
             return;
         }
+        let reusing = worktree.get_untracked() && reuse.get_untracked();
+        if reusing && existing.get_untracked().is_none() {
+            toast_bad("Pick a worktree first.");
+            return;
+        }
         busy.set(true);
         // A worktree's branch, from the first words of the task.
-        let branch = worktree.get_untracked().then(|| {
+        let branch = (worktree.get_untracked() && !reusing).then(|| {
             let slug: String = t.split_whitespace().take(5).collect::<Vec<_>>().join("-").to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
             format!("agentum/{}-{}", slug.trim_matches('-'), (js_sys::Math::random() * 1296.0) as u32)
         });
-        let body = NewThread { machine: machine.get_untracked(), project: project.get_untracked(), agent: Some(agent.get_untracked()), model: model.get_untracked(), effort: effort.get_untracked(), permission: permission.get_untracked(), worktree: branch, text: t, images: vec![], parent: None };
+        let body = NewThread { machine: machine.get_untracked(), project: project.get_untracked(), agent: Some(agent.get_untracked()), model: model.get_untracked(), effort: effort.get_untracked(), permission: permission.get_untracked(), worktree: branch.clone(), base: branch.as_ref().and_then(|_| base.get_untracked()), cwd: if reusing { existing.get_untracked() } else { None }, text: t, images: images.get_untracked(), parent: None };
         agentum_ui::store::set(&format!("agentum.project.{}", body.machine), &body.project);
+        agentum_ui::store::set(&format!("agentum.machine.{}", project_label()), &body.machine);
         agentum_ui::store::set("agentum.machine", &body.machine);
         spawn_local(async move {
             match api_post::<ThreadSummary>("/code/threads", &body).await {
                 Ok(t) => {
                     agentum_ui::store::remove("agentum.draft.new");
                     text.set(String::new());
+                    images.set(vec![]);
                     navigate("code", at, &[("thread", &t.id)]);
                 }
                 Err(e) => toast_bad(e.message),
@@ -358,45 +472,60 @@ fn NewThreadPage() -> impl IntoView {
         })
         .unwrap_or_default()
     };
-    let project_name = move || {
-        let p = project.get();
-        if p.is_empty() { "Pick a project".to_string() } else { p.trim_end_matches('/').rsplit('/').next().unwrap_or(&p).to_string() }
-    };
     view! {
         <div class="compose-home">
             <div class="compose-col">
-                <div class="cbox">
+                <div class="cbox" on:dragover=attach::on_dragover on:drop=move |e| attach::on_drop(e, images)>
+                    <attach::Thumbs images=images/>
                     <textarea node_ref=area class="cbox-text" rows="3" placeholder="Ask anything. ⏎ to start, ⇧⏎ for a new line" prop:value=text
+                        on:paste=move |e| attach::on_paste(e, images)
                         on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set("agentum.draft.new", &v); text.set(v) }
                         on:keydown=move |e| if e.key() == "Enter" && !e.shift_key() && !e.is_composing() { e.prevent_default(); start() }/>
                     <div class="cbox-bar">
+                        <attach::AttachButton images=images/>
                         <span class="grow"/>
                         <ModelChip machine=machine.into() agent=agent model=model effort=effort/>
-                        <button class="send-btn" title="Start (⏎)" disabled=move || busy.get() || text.get().trim().is_empty() || project.get().is_empty() on:click=move |_| start()>
+                        <button class="send-btn" title="Start (⏎)" disabled=move || busy.get() || (text.get().trim().is_empty() && images.with(|v| v.is_empty())) || project.get().is_empty() on:click=move |_| start()>
                             <Icon name="arrow-up" size=16/>
                         </button>
                     </div>
                 </div>
                 <div class="cbox-foot">
-                    <Picker items=project_items on_pick=Callback::new(move |p: String| project.set(p)) search=true class="pk-quiet" title="Project" placeholder="Search projects"
+                    <Picker items=project_items on_pick=Callback::new(pick_project) search=true class="pk-quiet" title="Project" placeholder="Search projects"
                         footer=ViewFn::from(move || view! {
-                            <input class="pk-search" placeholder="Add a project: its full path, ⏎" prop:value=adding on:input=move |e| adding.set(event_target_value(&e))
+                            <input class="pk-search" placeholder="New project: its full path on this machine, ⏎" prop:value=adding on:input=move |e| adding.set(event_target_value(&e))
                                 on:keydown=move |e| if e.key() == "Enter" { e.prevent_default(); e.stop_propagation(); add_project() }/>
                         })>
-                        <Icon name="folder" size=13/><span>{project_name}</span>
+                        <Icon name="folder" size=13/><span>{move || { let n = project_label(); if n.is_empty() { "Pick a project".to_string() } else { n } }}</span>
                     </Picker>
-                    <Picker items=machine_items class="pk-quiet" title="The machine it runs on"
-                        on_pick=Callback::new(move |id: String| if let Some(m) = id.strip_prefix("m:") { machine.set(m.to_string()) })>
-                        <Icon name="server" size=13/><span>{move || machine.get()}</span>
+                    <Picker items=env_items class="pk-quiet" title="Where it works: the machine, and the project's checkout or a worktree"
+                        on_pick=Callback::new(move |id: String| if let Some((kind, m)) = id.split_once(':') {
+                            if kind == "none" { return; }
+                            let name = project_label();
+                            if let Some(path) = has(m, &name) { project.set(path); }
+                            machine.set(m.to_string());
+                            worktree.set(kind == "wt");
+                        })>
+                        {move || { let (icon, label) = env_label(); view! { <Icon name=icon size=13/><span>{label}</span> } }}
                     </Picker>
-                    <div class="env-seg" role="radiogroup" aria-label="Where it works">
-                        <button type="button" role="radio" aria-checked=move || (!worktree.get()).to_string() class=move || if !worktree.get() { "on" } else { "" }
-                            title="Work in the project's checkout, as it is" on:click=move |_| worktree.set(false)>
-                            <Icon name="folder" size=13/>"Local"</button>
-                        <button type="button" role="radio" aria-checked=move || worktree.get().to_string() class=move || if worktree.get() { "on" } else { "" }
-                            title="Work in a new git worktree on its own branch (agentum/…)" on:click=move |_| worktree.set(true)>
-                            <Icon name="branch" size=13/>"Worktree"</button>
-                    </div>
+                    {move || if worktree.get() {
+                        view! {
+                            <Picker items=wt_items on_pick=Callback::new(pick_wt) search=true class="pk-quiet" placeholder="Search branches and worktrees"
+                                title="A new worktree for this thread, from a branch; or one you already have">
+                                <Icon name="branch" size=13/>
+                                {move || if reuse.get() {
+                                    match existing.get() {
+                                        Some(p) => view! { <span class="pk-dim">"Reuse:"</span><b>{p.trim_end_matches('/').rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/")}</b> }.into_any(),
+                                        None => view! { <span>"Pick a worktree"</span> }.into_any(),
+                                    }
+                                } else {
+                                    view! { <span class="pk-dim">"Branch from:"</span><b>{base.get().or_else(default_base).unwrap_or_else(|| "default".into())}</b> }.into_any()
+                                }}
+                            </Picker>
+                        }.into_any()
+                    } else {
+                        view! { <span class="pk-chip pk-quiet pk-static" title="Works in the project's checkout, on its current branch"><Icon name="branch" size=13/><span>{checkout_label}</span></span> }.into_any()
+                    }}
                     <span class="grow"/>
                     <Picker items=perm_items class="pk-quiet" title="What the agent may do without asking"
                         on_pick=Callback::new(move |id: String| if let Some(p) = PERMS.into_iter().find(|p| perm_id(*p) == id) { permission.set(p) })>
@@ -707,6 +836,7 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
     let key = format!("agentum.draft.{id}");
     let text = RwSignal::new(agentum_ui::store::get(&key).unwrap_or_default());
     let busy = move || summary.with(|s| s.as_ref().is_some_and(|s| s.state.busy()));
+    let images = RwSignal::new(Vec::<String>::new());
     let send = {
         let id = id.clone();
         let key = key.clone();
@@ -714,10 +844,14 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
             if b.text.trim().is_empty() {
                 b.text = text.get_untracked();
             }
-            if b.text.trim().is_empty() {
+            if b.images.is_empty() {
+                b.images = images.get_untracked();
+            }
+            if b.text.trim().is_empty() && b.images.is_empty() {
                 return;
             }
             text.set(String::new());
+            images.set(vec![]);
             agentum_ui::store::remove(&key);
             let id = id.clone();
             spawn_local(async move {
@@ -762,8 +896,9 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
     let s1 = send;
     view! {
         <div class="code-composer">
-            <div class="cbox">
-                <textarea class="cbox-text" rows="2" placeholder=move || if busy() { "Queue a message (⏎) · steer the turn (⌥⏎) · stop and send (⌘⇧⏎)" } else { "Reply… ⏎ to send, ⇧⏎ for a new line" }
+            <div class="cbox" on:dragover=attach::on_dragover on:drop=move |e| attach::on_drop(e, images)>
+                <attach::Thumbs images=images/>
+                <textarea class="cbox-text" rows="2" on:paste=move |e| attach::on_paste(e, images) placeholder=move || if busy() { "Queue a message (⏎) · steer the turn (⌥⏎) · stop and send (⌘⇧⏎)" } else { "Reply… ⏎ to send, ⇧⏎ for a new line" }
                     prop:value=text
                     on:input=move |e| { let v = event_target_value(&e); agentum_ui::store::set(&key, &v); text.set(v) }
                     on:keydown=move |e| {
@@ -774,10 +909,11 @@ fn Composer(id: String, summary: Signal<Option<ThreadSummary>>) -> impl IntoView
                         s1.run(SendBody { text: String::new(), images: vec![], mode, send_at: None });
                     }/>
                 <div class="cbox-bar">
+                    <attach::AttachButton images=images/>
                     {crate::plugins::composer_actions(cx.clone())}
                     <span class="grow pk-dim">{move || summary.get().map(|s| if s.queued > 0 { format!("{} queued", s.queued) } else { String::new() })}</span>
                     <ModelChip machine=machine agent=agent model=model effort=effort lock_agent=true up=true/>
-                    <button class="send-btn" title=move || if busy() { "Queue (⏎)" } else { "Send (⏎)" } disabled=move || text.get().trim().is_empty() on:click=move |_| send.run(SendBody::default())>
+                    <button class="send-btn" title=move || if busy() { "Queue (⏎)" } else { "Send (⏎)" } disabled=move || text.get().trim().is_empty() && images.with(|v| v.is_empty()) on:click=move |_| send.run(SendBody::default())>
                         <Icon name="arrow-up" size=16/>
                     </button>
                 </div>

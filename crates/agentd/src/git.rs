@@ -303,6 +303,31 @@ pub async fn handle(req: GitReq, worktrees: &Path) -> anyhow::Result<Value> {
             }
             Ok(json!({"path": p, "branch": branch}))
         }
+        GitReq::StartPoints { repo } => {
+            let repo = PathBuf::from(repo);
+            let refs = |pat: &'static str| {
+                let repo = repo.clone();
+                async move { git_ok(&repo, &["for-each-ref", "--sort=-committerdate", "--count=200", "--format=%(refname:short)%1f%(symref)", pat], 30).await.unwrap_or_default() }
+            };
+            let (local, remote, wt, head, status, origin) = tokio::join!(
+                refs("refs/heads"),
+                refs("refs/remotes"),
+                git_ok(&repo, &["worktree", "list", "--porcelain"], 30),
+                git(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"], 10),
+                git(&repo, &["status", "--porcelain", "--untracked-files=no"], 30),
+                git(&repo, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], 10),
+            );
+            let names = |out: &str| out.lines().filter_map(|l| l.split_once('\x1f')).filter(|(_, sym)| sym.is_empty()).map(|(n, _)| n.to_string()).collect::<Vec<_>>();
+            let (local, remote) = (names(&local), names(&remote));
+            let current = head.ok().filter(|o| o.ok).map(|o| o.stdout.trim().to_string()).filter(|b| !b.is_empty());
+            let dirty = status.map(|o| o.ok && !o.stdout.trim().is_empty()).unwrap_or(false);
+            let origin = origin.ok().filter(|o| o.ok).and_then(|o| o.stdout.trim().strip_prefix("origin/").map(str::to_string));
+            let default = origin.filter(|b| local.contains(b) || remote.contains(&format!("origin/{b}")))
+                .or_else(|| ["main", "master"].into_iter().find(|b| local.iter().any(|l| l == b)).map(str::to_string))
+                .or_else(|| local.first().cloned());
+            let worktrees = parse_worktrees(&wt.unwrap_or_default(), &repo);
+            Ok(json!({"default": default, "current": current, "dirty": dirty, "branches": local.into_iter().take(100).collect::<Vec<_>>(), "remote": remote.into_iter().take(100).collect::<Vec<_>>(), "worktrees": worktrees}))
+        }
         GitReq::WorktreeRemove { path } => {
             let path = PathBuf::from(path);
             // Run it from the main repo (a worktree can't remove itself).
@@ -313,6 +338,33 @@ pub async fn handle(req: GitReq, worktrees: &Path) -> anyhow::Result<Value> {
             Ok(json!({"removed": path}))
         }
     }
+}
+
+/// `git worktree list --porcelain`, without the repo's own checkout and bare entries.
+fn parse_worktrees(out: &str, repo: &std::path::Path) -> Vec<Value> {
+    let own = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    out.split("\n\n")
+        .filter_map(|block| {
+            let mut path = None;
+            let (mut branch, mut locked, mut prunable, mut bare) = (None, false, false, false);
+            for l in block.lines() {
+                if let Some(p) = l.strip_prefix("worktree ") {
+                    path = Some(p.to_string());
+                } else if let Some(b) = l.strip_prefix("branch ") {
+                    branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+                } else if l == "bare" {
+                    bare = true;
+                } else if l.starts_with("locked") {
+                    locked = true;
+                } else if l.starts_with("prunable") {
+                    prunable = true;
+                }
+            }
+            let path = path?;
+            let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+            (!bare && canon != own).then(|| json!({"path": path, "branch": branch, "locked": locked, "prunable": prunable}))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -336,5 +388,29 @@ mod tests {
         let l = parse_log("abc\x1fFix it\x1fMe\x1f1700000000\x1e\ndef\x1fMore\x1fYou\x1f1700000001\x1e\n");
         assert_eq!(l.len(), 2);
         assert_eq!(l[1]["ts"], 1700000001000i64);
+    }
+
+    #[tokio::test]
+    async fn start_points() {
+        let d = std::env::temp_dir().join(format!("agentd-sp-{}", std::process::id()));
+        let repo = d.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let sh = |args: &[&str], cwd: &Path| assert!(std::process::Command::new("git").args(args).current_dir(cwd).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").output().unwrap().status.success(), "{args:?}");
+        sh(&["init", "-q", "-b", "main"], &repo);
+        std::fs::write(repo.join("a"), "1").unwrap();
+        sh(&["add", "a"], &repo);
+        sh(&["commit", "-qm", "one"], &repo);
+        sh(&["branch", "feat/x"], &repo);
+        sh(&["worktree", "add", "-q", "-b", "agentum/t-1", d.join("wt").to_str().unwrap()], &repo);
+        std::fs::write(repo.join("a"), "2").unwrap();
+        let v = handle(GitReq::StartPoints { repo: repo.to_string_lossy().into() }, &d).await.unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(v["default"], "main");
+        assert_eq!(v["current"], "main");
+        assert_eq!(v["dirty"], true);
+        let b: Vec<&str> = v["branches"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+        assert!(b.contains(&"feat/x") && b.contains(&"main"), "{b:?}");
+        assert_eq!(v["worktrees"].as_array().unwrap().len(), 1, "{v}");
+        assert_eq!(v["worktrees"][0]["branch"], "agentum/t-1");
     }
 }

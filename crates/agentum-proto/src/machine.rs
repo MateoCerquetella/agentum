@@ -26,6 +26,21 @@ pub enum FromAgentd {
     /// The machine changed: agents installed or signed in, projects added.
     Update(Hello),
     Pong { ts: Ms },
+    /// A message from a WebSocket agentd opened for the hub ([`SurfReq::Open`]).
+    Sock(SockMsg),
+    /// That WebSocket closed.
+    SockClose { sock: String },
+}
+
+/// One WebSocket message relayed between the hub and agentd (the Surf viewer's screencast).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SockMsg {
+    pub sock: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// A binary message, base64.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -100,6 +115,10 @@ pub enum ToAgentd {
     /// Everything of `thread` up to `seq` is stored; agentd may forget it.
     Ack { thread: ThreadId, seq: u64 },
     Ping { ts: Ms },
+    /// To a WebSocket agentd opened for the hub ([`SurfReq::Open`]).
+    Sock(SockMsg),
+    /// Close it.
+    SockClose { sock: String },
 }
 
 /// A model the agent offers, for the model picker.
@@ -133,8 +152,13 @@ pub enum Req {
     Fs(FsReq),
     Git(GitReq),
     Term(TermReq),
+    /// The projects' browsers (Surf).
+    Surf(SurfReq),
     /// Only to an agentd whose [`Hello::features`] has "secrets" (an older one would log the frame).
     Secrets(SecretsReq),
+    /// The agent's subscription limits now, asked of its provider: `{limits: [RateLimit], plan}`.
+    /// Only to an agentd whose [`Hello::features`] has "usage".
+    Usage { agent: AgentKind },
 }
 
 /// A directory's `.env`. Values go in, never out: agentd answers with key names only. Its Debug
@@ -199,6 +223,9 @@ pub enum GitReq {
     /// A new worktree for a thread: returns {path, branch}.
     WorktreeAdd { repo: String, branch: String, #[serde(default)] base: Option<String> },
     WorktreeRemove { path: String },
+    /// What a new thread can start from: `{default, current, dirty, branches: [..], remote: [..],
+    /// worktrees: [{path, branch, locked, prunable}]}` (the repo's own checkout left out).
+    StartPoints { repo: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -214,4 +241,47 @@ pub enum TermReq {
     Replay { term: String },
     /// Terminals open on this machine: [{term, cwd, cmd}].
     List,
+}
+
+/// Surf: a project's own browser (Steel in a Docker container on the project's machine). Its
+/// DevTools (CDP) and viewer listen on the machine's loopback only; the hub shows the viewer
+/// through agentd ([`SurfReq::Get`], [`SurfReq::Open`]).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(tag = "surf", rename_all = "kebab-case")]
+pub enum SurfReq {
+    /// Start the project's browser (or wake it, or reuse it): its [`SurfInfo`] once it answers.
+    /// `idle_hours`: stop browsers unused for this long (0: never); agentd keeps the last value.
+    Ensure { project: String, #[serde(default)] idle_hours: Option<f64> },
+    /// The browsers on this machine: [SurfInfo].
+    List,
+    /// Stop the project's browser and remove its container (its profile, with sign-ins, is kept).
+    Stop { project: String },
+    /// GET a page of the viewer (`path`: `/v1/sessions/debug?…`): {status, body, origin}; `origin`
+    /// is the address Steel writes into it (`127.0.0.1:<port>`).
+    Get { id: String, path: String },
+    /// Open a WebSocket to the viewer (`path`: `/v1/sessions/cast?…`) as `sock`: its messages
+    /// arrive as [`FromAgentd::Sock`], the hub's go as [`ToAgentd::Sock`].
+    Open { id: String, sock: String, path: String },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct SurfInfo {
+    /// Short and stable per project (the container is `agentum-surf-<id>`).
+    pub id: String,
+    /// The repo root.
+    pub project: String,
+    /// "running", "stopped" (idle: the next thread wakes it), "starting".
+    pub state: String,
+    /// Docker's words ("Up 2 hours").
+    #[serde(default)]
+    pub status: String,
+    /// The viewer and Steel's API, on the machine's 127.0.0.1.
+    pub api_port: u16,
+    /// Chrome's DevTools, on the machine's 127.0.0.1.
+    pub cdp_port: u16,
+    /// What agents connect to: `ws://127.0.0.1:<api_port>/` (Playwright's `connectOverCDP`).
+    #[serde(default)]
+    pub cdp_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used: Option<Ms>,
 }

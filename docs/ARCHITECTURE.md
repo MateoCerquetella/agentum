@@ -110,3 +110,25 @@ scripts/dev-hub.sh 7101                                      # build both, run a
 and prints a session token. Browser checks: `TOKEN=… BASE=http://127.0.0.1:7101 node /tmp/agentum-test/shot.mjs /mail out.png`
 (headless Chromium; prints first paint and console errors) and `node /tmp/agentum-test/eval.mjs /path '<js expr>'`.
 WebKit (Safari's engine) is in `~/.cache/ms-playwright/webkit-*` for Safari checks.
+
+## Surf: each project's browser
+
+`plugins/browser` + `crates/agentd/src/surf.rs` + `crates/agentum/src/code/surf.rs`. A project's
+browser is Steel (Chromium with a live viewer) in a Docker container on the project's machine,
+`agentum-surf-<12 hex of sha256(project path)>`, with a profile volume of its own (sign-ins
+survive). Both ports (Steel's API/viewer → 3000, Chromium's DevTools → 9223) are published on
+the machine's **127.0.0.1 only**; nothing is opened to the network.
+
+- Agents: agentd gives an agent starting in that project `AGENTUM_SURF_CDP=ws://127.0.0.1:<api>/`
+  (Playwright's `connectOverCDP`; Steel's own CDP proxy, stable across restarts) and
+  `AGENTUM_SURF_DEVTOOLS=http://127.0.0.1:<cdp>`; the plugin's `instructions` say how to use it
+  and that the person types passwords in the viewer, never in the chat.
+- The person: the hub serves the viewer at `/api/p/browser/view/<machine>/<id>/v1/sessions/debug`
+  (an /api route: the session cookie is checked). agentd fetches the page (`SurfReq::Get`; only that
+  path) and the hub rewrites Steel's `ws://127.0.0.1:<port>` to itself; the screencast socket
+  (`…/v1/sessions/cast`, `SurfReq::Open`) is relayed message by message as `Sock` frames over
+  agentd's own connection. Behind nginx, `/api/p/browser/view/` needs a WebSocket location
+  (`deploy/nginx-locations.conf`).
+- Life: a container that exists is the project's browser being on. Unused for `idle_hours`
+  (no live agent in the project, no open viewer) it is `docker stop`ped; the project's next agent
+  starts it again. The person's Stop removes the container (the profile volume stays).

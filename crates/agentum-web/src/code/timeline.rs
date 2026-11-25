@@ -91,7 +91,7 @@ fn fold(events: &[EventView]) -> Vec<Item> {
                 let tokens = usage.as_ref().map(|u| u.input + u.output + u.cache_read + u.cache_write).unwrap_or(0);
                 out.push(Item::Turn { seq, stop: *stop, ms: *duration_ms, cost: *cost_usd, tokens })
             }
-            EventKind::RateLimits { limits: l } => limits = l.clone(),
+            EventKind::RateLimits { limits: l, .. } => limits = l.clone(),
             EventKind::Error { message, .. } => {
                 let m = message.to_lowercase();
                 let refused = m.contains("429") || m.contains("usage limit") || m.contains("rate limit") || m.contains("too many requests") || m.contains("quota");
@@ -311,6 +311,14 @@ pub fn Timeline(
                     match item.clone() {
                         Item::User { seq, html, queued, ev } => view! {
                             <div class=if queued { "msg user queued" } else { "msg user" } id=format!("ev-{seq}")>
+                                {match &ev.event.kind {
+                                    EventKind::User { images, .. } if !images.is_empty() => Some(view! {
+                                        <div class="msg-imgs">{images.iter().filter(|i| i.starts_with("data:image/") || i.starts_with("https://")).map(|src| view! {
+                                            { let big = RwSignal::new(false); view! { <img src=src.clone() alt="Attached image" loading="lazy" title="Click to enlarge" class:big=move || big.get() on:click=move |_| big.update(|b| *b = !*b)/> } }
+                                        }).collect_view()}</div>
+                                    }),
+                                    _ => None,
+                                }}
                                 <div class="md" inner_html=html/>
                                 <div class="msg-meta">{if queued { "Queued".into_any() } else { crate::plugins::message_meta(&ev).into_any() }}</div>
                             </div>

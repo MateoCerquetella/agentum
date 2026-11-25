@@ -55,6 +55,8 @@ pub async fn run(app: Arc<App>) {
         if app.is_connected() {
             app.set_connected(false);
         }
+        // The viewers it relayed are gone with it.
+        app.surf.close_all_socks();
         if t0.elapsed() > Duration::from_secs(30) {
             backoff = MIN_BACKOFF;
         }
@@ -171,6 +173,8 @@ fn incoming(app: &Arc<App>, text: &str) {
         ToAgentd::Ping { ts } => {
             let _ = app.out.try_send(FromAgentd::Pong { ts });
         }
+        ToAgentd::Sock(m) => app.surf.sock_send(m),
+        ToAgentd::SockClose { sock } => app.surf.sock_close(&sock),
         ToAgentd::Req { id, req } => {
             let fut = app.dispatch(req);
             let out = app.out.clone();
