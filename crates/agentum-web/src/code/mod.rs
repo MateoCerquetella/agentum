@@ -424,8 +424,8 @@ fn ThreadPage(id: String) -> impl IntoView {
     if let Some(p) = pane() {
         Effect::new(move |_| {
             let s = summary.get();
-            p.title.set(Some(s.as_ref().map(|s| if s.title.is_empty() { "New thread".to_string() } else { s.title.clone() }).unwrap_or_default()));
-            p.sub.set(s.map(|s| format!("{} · {}{}", s.machine, s.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or(""), s.branch.map(|b| format!(" · {b}")).unwrap_or_default())));
+            let _ = p.title.try_set(Some(s.as_ref().map(|s| if s.title.is_empty() { "New thread".to_string() } else { s.title.clone() }).unwrap_or_default()));
+            let _ = p.sub.try_set(s.map(|s| format!("{} · {}{}", s.machine, s.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or(""), s.branch.map(|b| format!(" · {b}")).unwrap_or_default())));
         });
         let (id_s, id_p, id_a, id_t, id_r) = (id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
         let busy = Signal::derive(move || summary.with(|s| s.as_ref().is_some_and(|s| s.state.busy())));
@@ -444,13 +444,13 @@ fn ThreadPage(id: String) -> impl IntoView {
                     rail.set(next);
                 }).toggled(panel_on));
             }
-            p.actions.set(a);
+            let _ = p.actions.try_set(a);
         });
         let pinned = Signal::derive(move || summary.with(|s| s.as_ref().is_some_and(|s| s.pinned)));
         Effect::new(move |_| {
             let pin = pinned.get();
             let (i1, i2, i3, i4, i5) = (id_p.clone(), id_a.clone(), id_t.clone(), id_r.clone(), id_p.clone());
-            p.menu.set(vec![
+            let _ = p.menu.try_set(vec![
                 PaneAction::new("terminal", "Terminal beside", move || navigate("panel", if p.right { Where::Left } else { Where::Right }, &[("tab", "terminal"), ("thread", &i1)])),
                 PaneAction::new("edit", "Rename", move || {
                     let cur = summary.get_untracked().map(|s| s.title).unwrap_or_default();
@@ -487,7 +487,7 @@ fn ThreadPage(id: String) -> impl IntoView {
                                     <button class=move || if rail.get().as_deref() == Some(tid) { "rail-tab on" } else { "rail-tab" } title=format!("{} · drag it to open beside", t.title) draggable="true"
                                         on:dragstart=move |e| agentum_ui::dnd::start(&e, "panel", &[("tab", tid), ("thread", &th)])
                                         on:click=move |_| { agentum_ui::store::set("agentum.rail", tid); agentum_ui::store::set("agentum.rail.last", tid); rail.set(Some(tid.to_string())) }>
-                                        <Icon name=t.icon size=14/><span>{t.title}</span>
+                                        <Icon name=t.icon size=14/>{let title = t.title; move || (rail.get().as_deref() == Some(tid)).then_some(view! { <span>{title}</span> })}
                                     </button>
                                 }
                             }).collect_view()}
@@ -524,8 +524,8 @@ pub fn panel_page(_pane: Pane) -> AnyView {
             if let Some(p) = p {
                 let title = t.title;
                 Effect::new(move |_| {
-                    p.title.set(Some(title.to_string()));
-                    p.sub.set(summary.get().map(|s| format!("{} · {} · {}", s.title, s.machine, s.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or(""))));
+                    let _ = p.title.try_set(Some(title.to_string()));
+                    let _ = p.sub.try_set(summary.get().map(|s| format!("{} · {} · {}", s.title, s.machine, s.cwd.trim_end_matches('/').rsplit('/').next().unwrap_or(""))));
                 });
             }
             let rail = RwSignal::new(Some(tab.clone()));

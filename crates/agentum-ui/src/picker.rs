@@ -51,7 +51,7 @@ pub fn Picker(
         let ql = q.get().to_lowercase();
         items.get().into_iter().filter(|i| ql.is_empty() || i.label.to_lowercase().contains(&ql) || i.sub.to_lowercase().contains(&ql) || i.group.to_lowercase().contains(&ql)).collect::<Vec<_>>()
     });
-    let _outside = window_event_listener(leptos::ev::mousedown, move |e| {
+    crate::on_window(leptos::ev::mousedown, move |e| {
         if open.get_untracked() && !contains(&root, e.target()) {
             open.set(false);
         }
@@ -136,7 +136,7 @@ pub fn Picker(
 pub fn Menu(#[prop(into)] items: Signal<Vec<PaneAction>>, #[prop(optional, into)] icon: Option<String>, #[prop(optional, into)] title: String) -> impl IntoView {
     let open = RwSignal::new(false);
     let root = NodeRef::<leptos::html::Div>::new();
-    let _outside = window_event_listener(leptos::ev::mousedown, move |e| {
+    crate::on_window(leptos::ev::mousedown, move |e| {
         if open.get_untracked() && !contains(&root, e.target()) {
             open.set(false);
         }
@@ -175,13 +175,13 @@ pub fn context_menu(e: &web_sys::MouseEvent, items: Vec<PaneAction>) {
 #[component]
 pub fn ContextMenuLayer() -> impl IntoView {
     let c = CTX.with(|c| *c);
-    let _close = window_event_listener(leptos::ev::mousedown, move |e| {
+    crate::on_window(leptos::ev::mousedown, move |e| {
         let inside = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()).is_some_and(|el| el.closest(".ctx-menu").ok().flatten().is_some());
         if !inside {
             c.set(None);
         }
     });
-    let _esc = window_event_listener(leptos::ev::keydown, move |e| {
+    crate::on_window(leptos::ev::keydown, move |e| {
         if e.key() == "Escape" {
             c.set(None)
         }

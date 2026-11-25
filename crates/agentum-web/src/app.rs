@@ -115,7 +115,7 @@ fn Shell() -> impl IntoView {
         }
     });
 
-    let _pop = window_event_listener(leptos::ev::popstate, move |_| {
+    agentum_ui::on_window(leptos::ev::popstate, move |_| {
         let (l, r) = read_url();
         left.set(l);
         right.set(r);
@@ -170,7 +170,7 @@ fn Shell() -> impl IntoView {
     });
 
     // ⌘K the palette, ⌘B the sidebar, "/" the Secretary beside what's open.
-    let _keys = window_event_listener(leptos::ev::keydown, move |e| {
+    agentum_ui::on_window(leptos::ev::keydown, move |e| {
         let k = e.key().to_lowercase();
         let m = e.meta_key() || e.ctrl_key();
         if m && k == "k" {
@@ -212,7 +212,7 @@ fn Shell() -> impl IntoView {
         }
     };
     let drop_over = RwSignal::new(None::<Pane>);
-    let _dragend = window_event_listener(leptos::ev::dragend, move |_| {
+    agentum_ui::on_window(leptos::ev::dragend, move |_| {
         agentum_ui::dnd::end();
         drop_over.set(None);
     });
@@ -221,8 +221,8 @@ fn Shell() -> impl IntoView {
         let right = e.target().and_then(|t| wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(t).ok()).and_then(|el| el.closest(".pane").ok().flatten()).and_then(|p| p.get_attribute("data-side")).is_some_and(|s| s == "right");
         nav::set_active_pane(right);
     };
-    let _t1 = window_event_listener(leptos::ev::pointerdown, move |e| touch(&e));
-    let _t2 = window_event_listener(leptos::ev::focusin, move |e| touch(&e));
+    agentum_ui::on_window(leptos::ev::pointerdown, move |e| touch(&e));
+    agentum_ui::on_window(leptos::ev::focusin, move |e| touch(&e));
 
     let pane = move |p: Pane| {
         let id = Memo::new(move |_| if p == Pane::Left { left.get() } else { right.get().unwrap_or_default() });
@@ -236,14 +236,9 @@ fn Shell() -> impl IntoView {
             }
             now
         });
-        let body = move || {
-            id.track();
-            let d = def();
-            Owner::new().with(|| {
-                provide_context(ctx);
-                d.map(|d| d.render(p)).unwrap_or_else(|| pages::todo("This page"))
-            })
-        };
+        // Pages find their pane (and its header) in context.
+        provide_context(ctx);
+        let body = move || def().map(|d| d.render(p)).unwrap_or_else(|| pages::todo("This page"));
         view! {
             <section class="pane" data-side=if p == Pane::Left { "left" } else { "right" }
                 style=move || if right.get().is_some() && maxed.get().is_none() { format!("flex:{}", if p == Pane::Left { ratio.get() } else { 1.0 - ratio.get() }) } else { String::new() }>

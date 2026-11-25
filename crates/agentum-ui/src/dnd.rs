@@ -29,7 +29,8 @@ pub fn start(e: &web_sys::DragEvent, page: &str, params: &[(&str, &str)]) {
         let _ = dt.set_data(MIME, &serde_json::to_string(&o).unwrap_or_default());
         dt.set_effect_allowed("copyMove");
     }
-    dragging().set(true);
+    // Not during dragstart itself: Chrome cancels a drag whose source gets covered right away.
+    gloo_timers::callback::Timeout::new(0, || dragging().set(true)).forget();
 }
 
 /// Read a drop.

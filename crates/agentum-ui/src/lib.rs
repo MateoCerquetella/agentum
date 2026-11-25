@@ -31,6 +31,18 @@ pub fn global<T: Send + Sync + 'static>(value: T) -> leptos::prelude::RwSignal<T
     ROOT.with(|o| o.with(|| RwSignal::new(value)))
 }
 
+/// A window event listener that goes away with the calling component. (Leptos'
+/// `window_event_listener` never removes itself: a component that is gone would keep handling
+/// events with its disposed state.)
+pub fn on_window<E>(event: E, cb: impl Fn(E::EventType) + 'static)
+where
+    E: leptos::ev::EventDescriptor + 'static,
+    E::EventType: wasm_bindgen::JsCast,
+{
+    let h = leptos::prelude::window_event_listener(event, cb);
+    leptos::prelude::on_cleanup(move || h.remove());
+}
+
 /// The common imports of a page or plugin.
 pub mod prelude {
     pub use crate::api::{api, api_delete, api_get, api_post, api_put, rpc, ApiError};
@@ -40,7 +52,7 @@ pub mod prelude {
     pub use crate::picker::{context_menu, Menu, PickItem, Picker};
     pub use crate::ui::{confirm, toast, toast_bad, Modal};
     pub use crate::ws::{on_ws, subscribe};
-    pub use crate::global;
+    pub use crate::{global, on_window};
     pub use leptos::prelude::*;
     pub use leptos::task::spawn_local;
     pub use serde_json::{json, Value};

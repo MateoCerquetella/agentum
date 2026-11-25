@@ -57,11 +57,12 @@ impl PaneCtx {
     pub fn new(right: bool) -> Self {
         PaneCtx { right, title: RwSignal::new(None), sub: RwSignal::new(None), actions: RwSignal::new(vec![]), menu: RwSignal::new(vec![]) }
     }
+    /// Safe after the pane is gone (a page's cleanup can run after its pane's).
     pub fn clear(&self) {
-        self.title.set(None);
-        self.sub.set(None);
-        self.actions.set(vec![]);
-        self.menu.set(vec![]);
+        let _ = self.title.try_set(None);
+        let _ = self.sub.try_set(None);
+        let _ = self.actions.try_set(vec![]);
+        let _ = self.menu.try_set(vec![]);
     }
 }
 

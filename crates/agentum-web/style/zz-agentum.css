@@ -150,3 +150,16 @@
 .dk-shelf-h.static { margin-top: 12px; }
 .dk-rule { flex: 1; height: 1px; background: var(--border); }
 .dk .hover-card { position: fixed; left: calc(var(--side-w, 260px) + 8px); z-index: 120; width: 320px; background: var(--widget); border: 1px solid var(--border-strong); border-radius: 10px; padding: 10px 12px; box-shadow: 0 12px 32px rgb(0 0 0 / .35); pointer-events: none; }
+
+/* Dockside's two-line cards need room: the sidebar is 280px in every look (drag its edge to change). */
+.sidebar:not(.collapsed) { width: 280px; }
+@media (max-width: 760px) { .sidebar:not(.collapsed) { width: 86vw; } }
+.dk-right { width: auto; min-width: 34px; max-width: 76px; }
+.dk-l2 > span:not(.dk-branch):not(.dk-kidsn) { flex: none; }
+.pane-head .title { flex: 0 1 auto; max-width: 70%; }
+.pane-sub { flex: 1 1 0; }
+.pane-head .grow { flex: 0 0 0; }
+/* Dockside's hover card: out to the right of the sidebar, above the panes. */
+.sidebar:has(.dk-card > .hover-card) { z-index: 90; }
+.dk .dk-card > .hover-card { position: fixed; left: calc(var(--side-w, 280px) - 4px); margin: 0; margin-top: -6px; }
+.sidebar:not([style*="--side-w"]) .dk .dk-card > .hover-card { left: 276px; }

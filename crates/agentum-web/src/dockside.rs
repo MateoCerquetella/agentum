@@ -167,8 +167,8 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                 draggable="true"
                 on:dragstart=move |e| agentum_ui::dnd::start(&e, "code", &[("thread", &id_drag)])
                 on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))
-                on:mouseenter=move |_| timer.set_value(Some(gloo_timers::callback::Timeout::new(500, move || hover.set(true))))
-                on:mouseleave=move |_| { timer.set_value(None); hover.set(false) }>
+                on:mouseenter=move |_| timer.set_value(Some(gloo_timers::callback::Timeout::new(500, move || { let _ = hover.try_set(true); })))
+                on:mouseleave=move |_| { let _ = timer.try_set_value(None); let _ = hover.try_set(false); }>
                 <button class="dk-hit" aria-label=title.clone() on:click=move |e| open_thread(&e, &id_click)/>
                 <Glyph t=t.clone()/>
                 <div class="dk-body">
@@ -318,7 +318,7 @@ pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
     });
     // ⌘1–9 open the visible threads in order; ⌘⇧[ / ] the previous and next.
     let visible = Memo::new(move |_| ov.with(|o| o.as_ref().map(|o| order(&o.threads, now.get())).unwrap_or_default()));
-    let _keys = window_event_listener(leptos::ev::keydown, move |e| {
+    agentum_ui::on_window(leptos::ev::keydown, move |e| {
         if !(e.meta_key() || e.ctrl_key()) {
             return;
         }
