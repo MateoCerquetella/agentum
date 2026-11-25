@@ -78,18 +78,21 @@ fn Home() -> impl IntoView {
     });
     let frame = NodeRef::<leptos::html::Iframe>::new();
     let origin = Memo::new(move |_| url.get().and_then(|u| web_sys::Url::new(&u).ok()).map(|u| u.origin()));
+    let loaded = RwSignal::new(false);
     let tell = move || {
+        if !loaded.get_untracked() {
+            return;
+        }
         if let (Some(f), Some(o)) = (frame.get_untracked(), origin.get_untracked()) {
             if let Some(w) = f.content_window() {
                 let _ = w.post_message(&look(), &o);
             }
         }
     };
-    // Every change of look, and once it has loaded.
+    // Once it has loaded, and on every change of look.
     let look_sig = crate::pages::theme::look_signal();
     Effect::new(move |_| {
         look_sig.track();
-        origin.track();
         tell();
     });
     let asked = window_event_listener(leptos::ev::message, move |e| {
@@ -104,7 +107,7 @@ fn Home() -> impl IntoView {
         None => ().into_any(),
         Some(u) if u.is_empty() => view! { <div class="empty">"Add your Home Assistant address in Settings → App."</div> }.into_any(),
         Some(u) => view! {
-            <iframe node_ref=frame src=u title="Home Assistant" style="width:100%;height:100%;border:0;display:block" allow="fullscreen" on:load=move |_| tell()/>
+            <iframe node_ref=frame src=u title="Home Assistant" style="width:100%;height:100%;border:0;display:block" allow="fullscreen" on:load=move |_| { loaded.set(true); tell() }/>
         }
         .into_any(),
     }

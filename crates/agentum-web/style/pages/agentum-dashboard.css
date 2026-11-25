@@ -84,8 +84,7 @@ html[data-theme="studio"] .dw-head h2 { text-transform: none; letter-spacing: 0;
 .dw-todos li { display: flex; align-items: center; gap: 8px; color: var(--hi); }
 .dw-todos li.done span { text-decoration: line-through; opacity: .6; }
 /* The brief without its ASCII sky: a quiet strip. */
-.dw-hero.td-hero { height: 118px; min-height: 0; cursor: pointer; background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 16%, var(--widget)), var(--widget)); }
-.dw .bw-main { padding-top: 12px; }
+.dw-hero.td-hero { background: linear-gradient(160deg, color-mix(in srgb, var(--primary) 16%, var(--widget)), var(--widget)); }
 
 /* The "+ Add widget" panel */
 .dash-drawer { position: fixed; right: 16px; top: 96px; bottom: 16px; z-index: 40; width: 300px; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--widget); border: 1px solid var(--border-strong); border-radius: calc(var(--radius) * 1.4); box-shadow: 0 12px 32px -8px rgb(0 0 0 / .35); }
@@ -98,3 +97,49 @@ html[data-theme="studio"] .dw-head h2 { text-transform: none; letter-spacing: 0;
 .dash-items { gap: 8px; }
 .dash-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .dash-item .btn { align-self: flex-start; }
+
+/* The brief card (CERQ's today/brief.css) */
+.bw { font-size: 13px; min-height: 0; }
+.bw .td-hero { height: 132px; min-height: 0; cursor: pointer; }
+.bw .td-fade { height: 52px; background: linear-gradient(transparent, var(--widget)); }
+.bw .td-head { left: 17px; top: 14px; }
+.bw .td-kicker { font-size: 10px; }
+.bw .td-head h1 { font-size: 22px; margin-top: 4px; }
+.bw .td-temp { margin-top: 4px; font-size: 15px; }
+.bw .td-temp small { font-size: 11px; }
+.bw .td-tools { right: 10px; top: 10px; opacity: .7; transition: opacity .15s; }
+.bw .td-hero:hover .td-tools, .bw .td-tools:focus-within { opacity: 1; }
+.bw .td-tools button { width: 26px; height: 26px; border-radius: 7px; }
+.bw-main { position: relative; z-index: 2; margin-top: 0; padding-top: 12px !important; padding: 0 17px 15px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; background: var(--widget); }
+.bw .td-say { font-size: 13.5px; margin: 0; }
+.bw .td-mts li { padding: 4px 0; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; border: 0; }
+.bw .td-mts .ic { width: 20px; height: 20px; font-size: 11px; border-radius: 5px; }
+.bw .td-mts .tx { font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+.bw .td-mts .tx > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bw .td-mts .tx small { display: inline; margin: 0; flex: none; }
+
+/* The day as a ribbon */
+.bw-next { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; color: var(--base); min-width: 0; }
+.bw-next .lbl { color: var(--positive); text-transform: uppercase; letter-spacing: .12em; font-size: 10px; flex: none; }
+.bw-next b { font-weight: 400; color: var(--hi); flex: none; }
+.bw-next .ttl { color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bw-next .in { color: var(--positive); flex: none; margin-left: auto; }
+.bw-rib { position: relative; height: 20px; border-radius: 4px; background: color-mix(in srgb, var(--border) 70%, var(--widget)); margin-top: 8px; }
+.bw-rib .ev { position: absolute; top: 3px; bottom: 3px; min-width: 4px; border-radius: 3px; background: color-mix(in srgb, var(--kc, var(--primary)) 55%, var(--widget)); transform-origin: left; animation: bw-grow .7s cubic-bezier(.2,.7,.2,1) both; animation-delay: var(--d, 0s); }
+.bw-rib .ev.past { background: color-mix(in srgb, var(--subdue) 60%, var(--widget)); }
+.bw-rib .ev.live { background: var(--positive); }
+.bw-rib .ev.nxt { background: color-mix(in srgb, var(--positive) 40%, var(--widget)); box-shadow: inset 0 0 0 1px var(--positive); }
+.bw-rib .now { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--positive); border-radius: 2px; transition: left 1.4s cubic-bezier(.2,.7,.2,1); animation: bw-slide 1.4s cubic-bezier(.2,.7,.2,1) .4s backwards; }
+.bw-rib .now::before { content: ''; position: absolute; top: -4px; left: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--positive); }
+.bw-ticks { position: relative; height: 14px; margin-top: 4px; font-size: 9.5px; color: var(--subdue); }
+.bw-ticks span { position: absolute; transform: translateX(-50%); }
+@keyframes bw-grow { from { transform: scaleX(0); opacity: 0; } }
+@keyframes bw-slide { from { left: 0; } }
+
+.bw-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--subdue); }
+.bw-foot b { font-weight: 400; color: var(--positive); }
+.bw-foot.off b { color: var(--warm); }
+.bw-foot a { color: var(--primary); text-decoration: none; }
+.bw-foot a:hover { color: var(--hi); }
+@media (prefers-reduced-motion: reduce) { .bw-rib .ev, .bw-rib .now { animation: none; transition: none; } }
+.dw .td-mts .tx small { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
