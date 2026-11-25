@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, PartialEq)]
 enum Item {
-    User { seq: u64, html: String, queued: bool, ts: i64 },
+    User { seq: u64, html: String, queued: bool, ev: EventView },
     Message { seq: u64, html: String, ts: i64, ev: EventView },
     Thinking { seq: u64, text: String },
     Tool { seq: u64, item: String, name: String, kind: ToolKind, title: String, input: Value, done: Option<(bool, Option<String>, Vec<FileDiff>)> },
@@ -43,7 +43,7 @@ fn fold(events: &[EventView]) -> Vec<Item> {
         match &e.event.kind {
             EventKind::User { text, queued, .. } => {
                 users.insert(seq, out.len());
-                out.push(Item::User { seq, html: e.html.clone().unwrap_or_else(|| format!("<p>{}</p>", esc(text))), queued: *queued, ts: e.event.ts });
+                out.push(Item::User { seq, html: e.html.clone().unwrap_or_else(|| format!("<p>{}</p>", esc(text))), queued: *queued, ev: e.clone() });
             }
             EventKind::Dequeued { seq_of_user, dropped } => {
                 if *dropped {
@@ -301,10 +301,10 @@ pub fn Timeline(
                 {
                     let th = thread();
                     match item.clone() {
-                        Item::User { seq, html, queued, ts } => view! {
+                        Item::User { seq, html, queued, ev } => view! {
                             <div class=if queued { "msg user queued" } else { "msg user" } id=format!("ev-{seq}")>
                                 <div class="md" inner_html=html/>
-                                <div class="msg-meta">{if queued { "Queued".to_string() } else { clock(ts) }}</div>
+                                <div class="msg-meta">{if queued { "Queued".into_any() } else { crate::plugins::message_meta(&ev).into_any() }}</div>
                             </div>
                         }.into_any(),
                         Item::Message { seq, html, ev, .. } => view! {
