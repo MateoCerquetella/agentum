@@ -5,7 +5,7 @@ pub static MANIFEST: Manifest = Manifest {
     id: "genui",
     name: "Generative UI",
     description: "Draws ```ui blocks agents write as live cards, charts and tables.",
-    icon: "dashboard",
+    icon: "layout",
     group: Group::Looks,
     default_on: true,
     settings: &[],
