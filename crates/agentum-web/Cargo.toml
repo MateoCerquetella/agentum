@@ -44,3 +44,6 @@ console_error_panic_hook = "0.1"
 # Markdown for the Secretary's answers and the notes preview; inflate for attached Office files.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+# Mail and Today: the quick-add parser, subjects and email colours (small, no Unicode tables).
+regex-lite = "0.1"
+send_wrapper = "0.6"

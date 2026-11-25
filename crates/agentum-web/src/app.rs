@@ -162,6 +162,8 @@ fn Shell() -> impl IntoView {
         });
     };
     load_counts();
+    // New mail anywhere in the app: a toast you can click (pages/mail/watch.rs).
+    crate::pages::mail::watch::start();
     subscribe(&["app"]);
     on_ws(move |m| {
         if let agentum_proto::api::WsOut::App { payload } = m {
