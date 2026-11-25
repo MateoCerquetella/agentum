@@ -13,8 +13,12 @@
 //! What ACP doesn't give (Cursor 2026.11): a turn's tokens (print mode's `result` has them; the
 //! context comes as `usage_update` when Cursor sends it), steering (messages queue), reasoning
 //! effort (a model id carries its own: `claude-opus-5-5[effort=medium,…]`, and only the listed
-//! ids are accepted) and a system prompt: the plugins' instructions go in front of the first
-//! message of each process (a resumed session hears them again, so changed ones arrive too).
+//! ids are accepted) and a system prompt: the plugins' instructions follow the first message of
+//! each process (a resumed session hears them again, so changed ones arrive too).
+//!
+//! Cursor remembers the last model picked (over ACP or `--model`) as the machine's default for
+//! new sessions, its CLI included: a thread's model is set only when it differs from the
+//! session's. (`cursor-agent --model X acp` doesn't apply X to ACP sessions; it only saves it.)
 use super::{Agent, DriverOut, Proc, Session, StartOpts, Tx, permission_options, tool_kind, tool_title};
 use agentum_proto::machine::{AgentAccount, ModelInfo, UsageReply};
 use agentum_proto::{AgentKind, AskKind, AskOption, EventKind, FileDiff, Input, Permission, PlanEntry, RateLimit, StopReason, ToolKind, Usage};
@@ -173,13 +177,10 @@ impl Translator {
                     out.push(Act::Ev(EventKind::Usage { usage: Usage { context_used: Some(used), context_window: Some(size), ..Default::default() } }));
                 }
             }
-            "session_info_update" => {
-                if let Some(t) = u.get("title").and_then(|t| t.as_str()).map(str::trim).filter(|t| !t.is_empty()) {
-                    out.push(Act::Ev(EventKind::Title { title: t.to_string() }));
-                }
-            }
-            // Our own words echoed back, Cursor's slash commands and settings.
-            "user_message_chunk" | "available_commands_update" | "current_mode_update" | "config_option_update" => {}
+            // Our own words echoed back, Cursor's slash commands and settings. And its title: it
+            // names the whole first prompt, the plugins' instructions included (it came out as
+            // "Agentum Instructions"); the hub titles the thread from its first message.
+            "user_message_chunk" | "available_commands_update" | "current_mode_update" | "config_option_update" | "session_info_update" => {}
             other => self.warn_once(format!("update {other}")),
         }
     }
@@ -485,12 +486,9 @@ fn error_text(e: &Value) -> String {
     }
 }
 
-/// The prompt: the instructions (the first time), the images, the text.
+/// The prompt: the images, the text, then (the first time) the plugins' instructions.
 pub fn prompt_blocks(input: &Input, instructions: Option<&str>, images: bool) -> Value {
     let mut blocks = Vec::new();
-    if let Some(i) = instructions.filter(|i| !i.trim().is_empty()) {
-        blocks.push(json!({"type": "text", "text": format!("Instructions from Agentum, the app this session runs in (for the whole session):\n\n{i}")}));
-    }
     if images {
         for img in &input.images {
             if let Some((media, data)) = super::image_base64(img) {
@@ -499,6 +497,9 @@ pub fn prompt_blocks(input: &Input, instructions: Option<&str>, images: bool) ->
         }
     }
     blocks.push(json!({"type": "text", "text": input.text}));
+    if let Some(i) = instructions.filter(|i| !i.trim().is_empty()) {
+        blocks.push(json!({"type": "text", "text": format!("(Instructions from Agentum, the app this session runs in, for the whole session:)\n\n{i}")}));
+    }
     Value::Array(blocks)
 }
 
@@ -678,19 +679,12 @@ async fn connect(bin: &PathBuf, cwd: &PathBuf, env: &[(String, String)], out: Tx
     }
 }
 
-/// `session/new`, signing in with Cursor's own login once if it asks for that.
+/// `session/new`. Signed in (`cursor-agent login`), Cursor needs no `authenticate`; signed out,
+/// `authenticate` only hangs (it would start a sign-in on that machine): say so instead.
 async fn new_session(rpc: &Rpc, cwd: &str) -> anyhow::Result<Value> {
-    let p = json!({"cwd": cwd, "mcpServers": []});
-    match rpc.call("session/new", p.clone(), Duration::from_secs(60)).await {
-        Ok(r) => Ok(r),
-        Err(e) if e.to_string().to_lowercase().contains("auth") => {
-            rpc.call("authenticate", json!({"methodId": "cursor_login"}), Duration::from_secs(30))
-                .await
-                .map_err(|_| anyhow::anyhow!("Cursor isn't signed in on this machine: run `cursor-agent login` there ({e})"))?;
-            rpc.call("session/new", p, Duration::from_secs(60)).await
-        }
-        Err(e) => Err(e),
-    }
+    rpc.call("session/new", json!({"cwd": cwd, "mcpServers": []}), Duration::from_secs(60)).await.map_err(|e| {
+        if e.to_string().contains("Authentication required") { anyhow::anyhow!("Cursor isn't signed in on this machine: run `cursor-agent login` there") } else { e }
+    })
 }
 
 pub struct CursorAgent;
@@ -962,10 +956,9 @@ mod tests {
         t.turn_started();
         let (evs, writes) = run(&mut t, include_str!("../../tests/fixtures/cursor_ok.jsonl"));
         assert!(writes.is_empty());
-        assert_eq!(names(&evs), ["title", "delta", "message", "turn-done"]);
-        assert_eq!(evs[0], EventKind::Title { title: "Okay Reply".into() });
-        assert_eq!(evs[2], EventKind::Message { item: "x.1m".into(), text: "ok".into() });
-        assert!(matches!(evs[3], EventKind::TurnDone { stop: StopReason::End, .. }));
+        assert_eq!(names(&evs), ["delta", "message", "turn-done"]);
+        assert_eq!(evs[1], EventKind::Message { item: "x.1m".into(), text: "ok".into() });
+        assert!(matches!(evs[2], EventKind::TurnDone { stop: StopReason::End, .. }));
     }
 
     #[test]
@@ -1091,8 +1084,9 @@ mod tests {
     fn prompts() {
         let p = prompt_blocks(&Input { text: "hi".into(), images: vec!["data:image/png;base64,AAAA".into()] }, Some("Use ```ui."), true);
         assert_eq!(p.as_array().unwrap().len(), 3);
-        assert_eq!(p[1], json!({"type": "image", "mimeType": "image/png", "data": "AAAA"}));
-        assert_eq!(p[2], json!({"type": "text", "text": "hi"}));
+        assert_eq!(p[0], json!({"type": "image", "mimeType": "image/png", "data": "AAAA"}));
+        assert_eq!(p[1], json!({"type": "text", "text": "hi"}));
+        assert!(p[2]["text"].as_str().unwrap().ends_with("Use ```ui."));
         assert_eq!(prompt_blocks(&Input::text("hi"), None, false), json!([{"type": "text", "text": "hi"}]));
     }
 
@@ -1112,4 +1106,45 @@ mod tests {
         assert_eq!(w[1].used_percent, 25.0);
         assert!(dashboard_limits(&json!({"spendLimitUsage": {"overallLimit": 0}})).is_empty());
     }
+}
+
+/// `cargo test -p agentd --lib live_cursor -- --ignored --nocapture`: two "Reply with ok" turns
+/// with this machine's Cursor (the second resumes the first's session), then its models.
+/// `CURSOR_MODEL` picks the model.
+#[cfg(test)]
+#[tokio::test]
+#[ignore]
+async fn live_cursor() {
+    let bin = crate::machine::agent_bin(&crate::config::Config::default(), AgentKind::Cursor).expect("cursor-agent is not installed");
+    let dir = std::env::temp_dir().join(format!("agentd-cursor-{}", crate::util::random_hex(3)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let model = std::env::var("CURSOR_MODEL").ok();
+    let mut session = None;
+    for round in 0..2 {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let opts = StartOpts { thread: "t".into(), bin: bin.clone(), cwd: dir.clone(), model: model.clone(), effort: None, permission: Permission::Ask, resume: session.clone(), instructions: Some("Answer in lowercase.".into()), env: vec![] };
+        let mut s = CursorAgent.start(opts, tx).await.expect("start");
+        s.send(&Input::text("Reply with ok")).await.unwrap();
+        let mut seen = vec![];
+        loop {
+            match tokio::time::timeout(Duration::from_secs(120), rx.recv()).await {
+                Ok(Some(DriverOut::Event(e))) => {
+                    if let EventKind::Session { session_id, .. } = &e {
+                        session = Some(session_id.clone());
+                    }
+                    let done = matches!(e, EventKind::TurnDone { .. });
+                    seen.push(format!("{e:?}").chars().take(140).collect::<String>());
+                    if done {
+                        break;
+                    }
+                }
+                other => panic!("round {round}: {other:?} after {seen:#?}"),
+            }
+        }
+        println!("round {round}: {seen:#?}");
+        s.close().await;
+    }
+    let m = CursorAgent.models(bin, dir.clone()).await.unwrap();
+    println!("{} models, the default {:?}", m.len(), m.iter().find(|m| m.default).map(|m| &m.id));
+    let _ = std::fs::remove_dir_all(dir);
 }
