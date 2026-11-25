@@ -1,5 +1,5 @@
 //! Message times: The time (and cost) under every message.
-use agentum_plugin::{Group, Manifest};
+use agentum_plugin::{Group, Manifest, SettingDef, SettingKind};
 
 pub static MANIFEST: Manifest = Manifest {
     id: "timestamps",
@@ -8,8 +8,16 @@ pub static MANIFEST: Manifest = Manifest {
     icon: "clock",
     group: Group::Thread,
     default_on: true,
-    settings: &[],
+    settings: &[SettingDef {
+        key: "clock",
+        label: "Clock",
+        help: "24-hour (14:05) or 12-hour (2:05 PM).",
+        kind: SettingKind::Choice { options: &["24h", "12h"] },
+        default: "\"24h\"",
+    }],
 };
+
+pub mod logic;
 
 #[cfg(feature = "hub")]
 mod hub;
