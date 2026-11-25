@@ -40,6 +40,8 @@ static ALL: &[&dyn HubPlugin] = &[
         &agentum_plugin_genui::HUB,
         &agentum_plugin_browser::HUB,
         &agentum_plugin_themes::HUB,
+    &agentum_plugin_dockside::HUB,
+    &agentum_plugin_secrets::HUB,
 ];
 
 pub fn all() -> &'static [&'static dyn HubPlugin] {
@@ -169,13 +171,13 @@ pub async fn before_turn(app: &App, t: &ThreadSummary, text: &str) -> Result<(),
     Ok(())
 }
 
-/// What the plugins that are on add to a starting agent's system prompt.
+/// What the plugins that are on tell every agent of this thread (None: nothing).
 pub async fn instructions(app: &App, t: &ThreadSummary) -> Option<String> {
     let mut parts = vec![];
     for p in all() {
         if enabled(app, p.manifest()).await {
-            if let Some(s) = p.instructions(&ctx(app, p.manifest()), t).filter(|s| !s.trim().is_empty()) {
-                parts.push(s);
+            if let Some(s) = p.instructions(&ctx(app, p.manifest()), t).await.filter(|s| !s.trim().is_empty()) {
+                parts.push(s.trim().to_string());
             }
         }
     }

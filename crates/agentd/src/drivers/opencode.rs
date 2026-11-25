@@ -443,6 +443,12 @@ impl OpencodeAgent {
 
 async fn start_server(bin: &PathBuf) -> anyhow::Result<Arc<Server>> {
     use std::process::Stdio;
+    // 1.x has another API (wrapped prompts, `session.next.*` events): a thread would never move.
+    let out = crate::util::run(Command::new(bin).arg("--version"), Duration::from_secs(15)).await?;
+    let version = crate::util::parse_version(&out.stdout).unwrap_or_default();
+    if version.split('.').next().and_then(|m| m.parse::<u32>().ok()).is_some_and(|m| m < 2) {
+        anyhow::bail!("OpenCode {version} ({}) is too old: Agentum needs 2.x. Update it with `curl -fsSL https://opencode.ai/install | bash`", bin.display());
+    }
     let port = {
         let l = std::net::TcpListener::bind("127.0.0.1:0")?;
         l.local_addr()?.port()
@@ -588,6 +594,13 @@ impl Agent for OpencodeAgent {
                 r.get("data").map(|d| s(d, "id")).filter(|i| !i.is_empty()).ok_or_else(|| anyhow::anyhow!("opencode gave no session id"))?
             }
         };
+        // Plugins' instructions: an API-managed instruction entry (replaced on every start).
+        if let Some(i) = &opts.instructions {
+            let path = format!("/api/experimental/session/{sid}/instructions/entries/agentum");
+            if let Err(e) = server.call("PUT", &path, Some(&json!({"value": i}))).await {
+                tracing::info!("opencode: no instruction entries? ({e})");
+            }
+        }
         let info = server.call("GET", &format!("/api/session/{sid}"), None).await.unwrap_or(Value::Null);
         let model = info.get("data").and_then(|d| d.get("model")).map(|m| format!("{}/{}", s(m, "providerID"), s(m, "id"))).filter(|m| m != "/");
         let tr = Arc::new(Mutex::new(Translator::new(&sid, &cwd)));

@@ -163,7 +163,8 @@ fn incoming(app: &Arc<App>, text: &str) {
     let msg: ToAgentd = match serde_json::from_str(text) {
         Ok(m) => m,
         Err(e) => {
-            tracing::warn!("hub sent something odd ({e}): {}", crate::util::truncate(text, 200));
+            // Not the frame itself: it may carry a secret meant for a newer agentd.
+            tracing::warn!("hub sent something odd ({e}), {} bytes", text.len());
             return;
         }
     };

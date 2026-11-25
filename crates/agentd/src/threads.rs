@@ -496,7 +496,7 @@ impl Actor {
             effort: self.row.spec.effort.clone(),
             permission: self.row.spec.permission,
             resume: self.row.session_id.clone(),
-            instructions: self.row.spec.instructions.clone(),
+            instructions: self.row.spec.instructions.clone().filter(|s| !s.trim().is_empty()),
             env,
         };
         let resuming = opts.resume.is_some();

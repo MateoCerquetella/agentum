@@ -334,6 +334,8 @@ pub fn routes() -> Router<App> {
         .route("/api/code/call", post(call))
         .merge(surf::routes())
         .route("/api/code/syntax.css", get(|| async { ([("content-type", "text/css"), ("cache-control", "public, max-age=86400")], render::syntax_css()) }))
+        // Messages carry their images (data: URLs, up to six of ≤2.5 MB).
+        .layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024))
 }
 
 fn offline(m: &str) -> AppError {
@@ -343,6 +345,10 @@ fn offline(m: &str) -> AppError {
 /// Call agentd on a machine (for the hub, plugins and the generic /api/code/call).
 pub async fn machine_call(app: &App, machine: &str, req: Req) -> Result<Value, String> {
     let c = app.code.conn(machine).ok_or_else(|| format!("{machine} is offline"))?;
+    // An agentd that doesn't know a request can't answer it, and would log the frame: a secret's value.
+    if matches!(req, Req::Secrets(_)) && !c.hello.read().unwrap().features.iter().any(|f| f == "secrets") {
+        return Err(format!("agentd on {machine} is too old for secrets: update it"));
+    }
     let wait = match &req {
         Req::Git(GitReq::Push { .. }) | Req::Git(GitReq::PrMerge { .. }) | Req::Git(GitReq::WorktreeAdd { .. }) => Duration::from_secs(120),
         Req::Start { .. } | Req::Models { .. } => Duration::from_secs(60),

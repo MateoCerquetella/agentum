@@ -116,7 +116,7 @@ impl HubPlugin for Plugin {
         Ok(())
     }
 
-    fn instructions(&self, _cx: &Ctx, t: &ThreadSummary) -> Option<String> {
+    async fn instructions(&self, _cx: &Ctx, t: &ThreadSummary) -> Option<String> {
         let url = known(&t.machine, &t.project)?;
         Some(INSTRUCTIONS.replace("{url}", &url))
     }

@@ -26,7 +26,9 @@ agentum-plugin-notify = { path = "../../plugins/notify", features = ["hub"] }
 agentum-plugin-aura = { path = "../../plugins/aura", features = ["hub"] }
 agentum-plugin-genui = { path = "../../plugins/genui", features = ["hub"] }
 agentum-plugin-browser = { path = "../../plugins/browser", features = ["hub"] }
+agentum-plugin-dockside = { path = "../../plugins/dockside", features = ["hub"] }
 agentum-plugin-themes = { path = "../../plugins/themes", features = ["hub"] }
+agentum-plugin-secrets = { path = "../../plugins/secrets", features = ["hub"] }
 agentum-proto.workspace = true
 agentum-plugin = { workspace = true, features = ["hub"] }
 async-trait.workspace = true
