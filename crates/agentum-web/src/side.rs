@@ -101,29 +101,42 @@ pub fn Personal(left: RwSignal<String>, right: RwSignal<Option<String>>, collaps
     }
 }
 
-/// One agent's subscription limits: the newest report among its machines.
+/// One agent's subscription limits: the newest report among its machines, with the windows only
+/// an older one had (a thread's report has no model windows; the provider's has).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentUse {
     pub agent: AgentKind,
     pub machine: String,
     pub at: i64,
     pub windows: Vec<RateLimit>,
-    /// "Max", "Plus"… when the agent said.
+    /// "Max (5x)", "Plus"… when the agent said.
     pub plan: Option<String>,
 }
-/// Every agent that reported limits, the one used last first.
+/// Every agent that reported limits.
 pub fn agents_use(o: &Overview) -> Vec<AgentUse> {
+    let mut reports: Vec<&agentum_proto::api::AgentLimits> = o.limits.iter().filter(|l| !l.limits.is_empty()).collect();
+    reports.sort_by(|a, b| b.at.cmp(&a.at));
     let mut by: Vec<AgentUse> = vec![];
-    for l in o.limits.iter().filter(|l| !l.limits.is_empty()) {
+    for l in reports {
         let plan = l.plan.as_deref().filter(|p| !p.is_empty()).map(|p| p[..1].to_uppercase() + &p[1..]);
-        let u = AgentUse { agent: l.agent, machine: l.machine.clone(), at: l.at, windows: l.limits.clone(), plan: plan.clone() };
         match by.iter_mut().find(|x| x.agent == l.agent) {
-            Some(x) if l.at > x.at => *x = AgentUse { plan: u.plan.or(x.plan.take()), ..u },
-            Some(x) => x.plan = x.plan.take().or(plan),
-            None => by.push(u),
+            None => by.push(AgentUse { agent: l.agent, machine: l.machine.clone(), at: l.at, windows: l.limits.clone(), plan }),
+            Some(x) => {
+                x.plan = x.plan.take().or(plan);
+                for w in &l.limits {
+                    if !x.windows.iter().any(|y| y.window == w.window) && w.resets_at.is_none_or(|r| r > now_ms()) {
+                        x.windows.push(w.clone());
+                    }
+                }
+            }
         }
     }
-    by.sort_by(|a, b| b.at.cmp(&a.at));
+    // Always in the same order, as BB's footer: Claude Code, Codex, OpenCode.
+    by.sort_by_key(|u| AgentKind::ALL.iter().position(|a| *a == u.agent));
+    for u in &mut by {
+        let rank = |w: &str| match w { "5h" => 0, "weekly" => 1, _ => 2 };
+        u.windows.sort_by(|a, b| rank(&a.window).cmp(&rank(&b.window)).then(a.window.cmp(&b.window)));
+    }
     by
 }
 /// Percent used now: a window whose reset has passed starts again from zero.
@@ -132,65 +145,79 @@ fn used(w: &RateLimit) -> f64 {
 }
 fn window_name(w: &str) -> String {
     match w {
-        "5h" => "5-hour".into(),
-        "weekly" => "Weekly".into(),
-        "opus-weekly" => "Weekly · Opus".into(),
-        "sonnet-weekly" => "Weekly · Sonnet".into(),
+        "5h" => "5-hour limit".into(),
+        "weekly" => "Weekly limit".into(),
+        "opus-weekly" => "Opus".into(),
+        "sonnet-weekly" => "Sonnet".into(),
         x => x.replace('-', " "),
     }
 }
-/// "Resets Wed 15:00" (or "Reset …" once it has).
+/// "Resets Wed 4:20 PM" (or "Reset …" once it has).
 fn resets(at: Option<i64>) -> String {
     let Some(at) = at else { return String::new() };
     let o = js_sys::Object::new();
-    for (k, v) in [("weekday", "short"), ("hour", "2-digit"), ("minute", "2-digit")] {
+    for (k, v) in [("weekday", "short"), ("hour", "numeric"), ("minute", "2-digit")] {
         let _ = js_sys::Reflect::set(&o, &k.into(), &v.into());
     }
-    let when = String::from(js_sys::Date::new(&(at as f64).into()).to_locale_string("en-GB", &o));
+    let when = String::from(js_sys::Date::new(&(at as f64).into()).to_locale_string("en-US", &o)).replace(',', "");
     format!("{} {when}", if at <= now_ms() { "Reset" } else { "Resets" })
 }
+/// A bar's colour: quiet until a limit is close.
 fn tone(pct: f64) -> &'static str {
-    if pct >= 90.0 { "var(--negative)" } else if pct >= 70.0 { "var(--warm)" } else { "var(--subdue)" }
+    if pct >= 100.0 { "var(--negative)" } else if pct >= 90.0 { "var(--warm)" } else { "var(--base)" }
 }
-/// The agent's logo (simple-icons, tinted by the theme).
+/// The agent's brand mark (Claude's in its orange).
 pub fn agent_logo(a: AgentKind, size: u32) -> impl IntoView {
-    let name = match a {
-        AgentKind::ClaudeCode => "claude",
-        AgentKind::Codex => "openai",
-        AgentKind::Opencode => "opencode",
-    };
-    view! { <span class="pick-logo si" style=format!("width:{size}px;height:{size}px;-webkit-mask-image:url(/api/icons/si/{name});mask-image:url(/api/icons/si/{name})") aria-hidden="true"/> }
+    view! { <span class=format!("um um-{}", a.id())><crate::code::marks::AgentMark agent=a size=size/></span> }
+}
+
+thread_local! {
+    static ASKING: RwSignal<bool> = agentum_ui::global(false);
+}
+/// Ask every agent's provider now (the hub fans it out to the machines), then show the answer.
+fn refresh_usage() {
+    let asking = ASKING.with(|a| *a);
+    if asking.get_untracked() {
+        return;
+    }
+    asking.set(true);
+    spawn_local(async move {
+        let _ = api_post::<Value>("/code/usage/refresh", &json!({})).await;
+        crate::code::store::refresh().await;
+        asking.set(false);
+    });
+}
+#[component]
+fn RefreshUsage(#[prop(optional)] size: Option<u32>) -> impl IntoView {
+    let asking = ASKING.with(|a| *a);
+    view! {
+        <button class="icon-btn" title="Refresh usage" aria-label="Refresh usage" disabled=move || asking.get() on:click=move |_| refresh_usage()>
+            <Icon name="refresh" size=size.unwrap_or(14) class=Signal::derive(move || if asking.get() { "spin".to_string() } else { String::new() })/>
+        </button>
+    }
 }
 
 /// BB's usage card: one agent's limits, each window with its bar and when it resets.
 #[component]
 pub fn UsageCard(agent: AgentKind, #[prop(optional)] on_close: Option<Callback<()>>) -> impl IntoView {
     let ov = overview();
-    let busy = RwSignal::new(false);
     let u = Memo::new(move |_| ov.with(|o| o.as_ref().and_then(|o| agents_use(o).into_iter().find(|x| x.agent == agent))));
-    let refresh = move |_| {
-        busy.set(true);
-        spawn_local(async move {
-            crate::code::store::refresh().await;
-            busy.try_set(false);
-        })
-    };
+    let from = move || u.with(|u| u.as_ref().map(|u| format!("Reported by {}, {}", u.machine, match ago_ms(u.at).as_str() { "now" => "just now".to_string(), a if a.ends_with(['m', 'h', 'd']) => format!("{a} ago"), a => a.to_string() })).unwrap_or_default());
     view! {
         <div class="ucard-card">
-            <div class="ucard-head">
-                {agent_logo(agent, 16)}
-                <div class="grow"><b>{agent.label()}</b><div class="subdue">{move || match u.with(|u| u.as_ref().and_then(|u| u.plan.clone())) { Some(p) => format!("{p} · subscription usage"), None => "Subscription usage".into() }}</div></div>
-                <button class="icon-btn" title="Refresh" aria-label="Refresh" disabled=move || busy.get() on:click=refresh><Icon name="refresh" size=14 class=Signal::derive(move || if busy.get() { "spin".to_string() } else { String::new() })/></button>
+            <div class="ucard-head" title=from>
+                {agent_logo(agent, 18)}
+                <div class="grow" style="min-width:0"><b>{agent.label()}</b><div class="subdue truncate">{move || match u.with(|u| u.as_ref().and_then(|u| u.plan.clone())) { Some(p) => format!("{p} · subscription usage"), None => "Subscription usage".into() }}</div></div>
+                <RefreshUsage/>
                 {on_close.map(|c| view! { <button class="icon-btn" title="Close" aria-label="Close" on:click=move |_| c.run(())><Icon name="x" size=14/></button> })}
             </div>
             {move || u.get().map(|u| view! {
-                <p class="subdue ucard-msg">{format!("From a thread on {}, {}", u.machine, match ago_ms(u.at).as_str() { "now" => "just now".to_string(), a if a.ends_with(['m', 'h', 'd']) => format!("{a} ago"), a => a.to_string() })}</p>
                 <div class="ucard-grid">
                     {u.windows.iter().map(|w| {
                         let pct = used(w).round();
                         view! {
                             <div class="ucard-win">
-                                <div class="ucard-row"><span>{window_name(&w.window)}</span><b style={ if pct >= 70.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</b></div>
+                                <div class="ucard-row"><span>{window_name(&w.window)}</span><b style={ if pct >= 90.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</b></div>
                                 <span class="ucard-bar"><i style=format!("width:{}%;background:{}", pct.min(100.0), tone(pct))/></span>
                                 <span class="subdue">{resets(w.resets_at)}</span>
                             </div>
@@ -209,24 +236,24 @@ pub fn UsageW() -> impl IntoView {
     let agents = Memo::new(move |_| ov.with(|o| o.as_ref().map(|o| agents_use(o).into_iter().map(|u| u.agent).collect::<Vec<_>>())));
     move || match agents.get() {
         None => view! { <div class="dw-empty">"Loading…"</div> }.into_any(),
-        Some(a) if a.is_empty() => view! { <div class="dw-empty">"No agent has reported its limits yet: they come with a thread's first turn."</div> }.into_any(),
+        Some(a) if a.is_empty() => view! { <div class="dw-empty">"No agent has reported its limits yet. "<button class="btn" on:click=move |_| refresh_usage()>"Ask now"</button></div> }.into_any(),
         Some(a) => view! { <div class="dw-usage">{a.into_iter().map(|agent| view! { <UsageCard agent=agent/> }).collect_view()}</div> }.into_any(),
     }
 }
 
-/// Settings, the look, each agent's limits (a meter opens its card), sign out.
+/// Settings, the look, each agent's limits (a meter opens its card) and their refresh, sign out.
 #[component]
 pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl IntoView {
     let ov = overview();
-    // As BB's footer: the agent used last first, then the next one; each meter its fullest window.
+    // As BB's footer: one meter per agent, its 5-hour window.
     let meters = move || {
         ov.with(|o| {
             o.as_ref()
                 .map(|o| {
                     agents_use(o)
                         .into_iter()
-                        .take(2)
-                        .filter_map(|u| u.windows.iter().map(|w| (window_name(&w.window), used(w))).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(w, p)| (u.agent, w, p)))
+                        .take(3)
+                        .filter_map(|u| u.windows.iter().find(|w| w.window == "5h").or(u.windows.first()).map(|w| (u.agent, window_name(&w.window), used(w))))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
@@ -259,7 +286,7 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
         let r = el.get_bounding_client_rect();
         let w = web_sys::window().unwrap();
         let (vw, vh) = (w.inner_width().ok().and_then(|x| x.as_f64()).unwrap_or(1200.0), w.inner_height().ok().and_then(|x| x.as_f64()).unwrap_or(800.0));
-        shown.set(Some((agent, r.left().min(vw - 348.0).max(8.0), vh - r.top() + 6.0)));
+        shown.set(Some((agent, r.left().min(vw - 330.0).max(8.0), vh - r.top() + 8.0)));
     };
     view! {
         <div class=move || if collapsed.get() { "dock-foot collapsed" } else { "dock-foot" }>
@@ -270,15 +297,16 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
                 {move || meters().into_iter().map(|(agent, win, pct)| view! {
                     <button class=move || if shown.get().is_some_and(|s| s.0 == agent) { "dock-meter on" } else { "dock-meter" } title=format!("{}: {win} {pct:.0}% used", agent.label())
                         aria-expanded=move || shown.get().is_some_and(|s| s.0 == agent).to_string() on:click=move |e| toggle(agent, e)>
-                        {agent_logo(agent, 12)}
+                        {agent_logo(agent, 14)}
                         <span class="dock-meter-bar"><i style=format!("width:{}%;background:{}", pct.min(100.0), tone(pct))/></span>
-                        <span style={ if pct >= 70.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</span>
+                        <span style={ if pct >= 90.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</span>
                     </button>
                 }).collect_view()}
+                <RefreshUsage size=14/>
             </Show>
             {move || shown.get().map(|(agent, left, bottom)| view! {
                 <leptos::portal::Portal>
-                    <div class="pick-pop ucard-pop" node_ref=card role="dialog" aria-label="Usage" style=format!("left:{left}px;bottom:{bottom}px;width:340px")>
+                    <div class="pick-pop ucard-pop" node_ref=card role="dialog" aria-label="Usage" style=format!("left:{left}px;bottom:{bottom}px")>
                         <UsageCard agent=agent on_close=Callback::new(move |_| shown.set(None))/>
                     </div>
                 </leptos::portal::Portal>
