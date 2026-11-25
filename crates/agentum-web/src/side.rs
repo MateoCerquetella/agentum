@@ -33,7 +33,7 @@ pub fn SideSwitch(side: RwSignal<Side>, collapsed: RwSignal<bool>, on_set: Callb
 
 /// Personal: the Secretary, then your pages (drag one onto another to reorder).
 #[component]
-pub fn Personal(left: RwSignal<String>, right: RwSignal<Option<String>>, collapsed: RwSignal<bool>, counts: RwSignal<BTreeMap<String, u64>>, prefs: RwSignal<Value>) -> impl IntoView {
+pub fn Personal(left: RwSignal<String>, right: RwSignal<Option<String>>, collapsed: RwSignal<bool>, hidden: RwSignal<bool>, counts: RwSignal<BTreeMap<String, u64>>, prefs: RwSignal<Value>) -> impl IntoView {
     let order = Memo::new(move |_| {
         let has_ha = prefs.with(|p| p["ha_url"].as_str().is_some_and(|u| !u.is_empty()));
         let mut on: Vec<&'static str> = pages::NAV.to_vec();
@@ -96,6 +96,13 @@ pub fn Personal(left: RwSignal<String>, right: RwSignal<Option<String>>, collaps
                         <span class="count">{move || counts.with(|c| c.get(id).copied().unwrap_or(0))}</span>
                     </Show>
                 </button>
+                // Mail's folders, under it while it's open (Mail has no sidebar of its own; with the
+                // sidebar folded or hidden, Mail shows its pickers instead).
+                {(id == "mail").then(|| view! {
+                    <Show when=move || !collapsed.get() && !hidden.get() && (left.get() == "mail" || right.get().as_deref() == Some("mail"))>
+                        <crate::pages::mail::side::Folders/>
+                    </Show>
+                })}
             })}
         </For>
     }

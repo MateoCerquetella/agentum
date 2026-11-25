@@ -159,6 +159,8 @@
 .pane-head .title { flex: 0 1 auto; max-width: 70%; }
 .pane-sub { flex: 1 1 0; }
 .pane-head .grow { flex: 0 0 0; }
+/* No muted line beside the title: the tools still go to the right edge. */
+.pane-head:not(:has(.pane-sub)) .grow { flex: 1 1 0; }
 /* Dockside's hover card: out to the right of the sidebar, above the panes. */
 .sidebar:has(.dk-card > .hover-card) { z-index: 90; }
 .dk .dk-card > .hover-card { position: fixed; left: calc(var(--side-w, 280px) - 4px); margin: 0; margin-top: -6px; }
@@ -216,3 +218,10 @@ a.dk-hit { display: block; }
 /* New thread: the checkout's branch (not a menu) and the worktree chip's "Branch from: main". */
 .pk-static, .pk-static:hover { cursor: default; background: transparent; color: var(--subdue); }
 .pk-chip > b { font-weight: 600; color: var(--hi); overflow: hidden; text-overflow: ellipsis; }
+
+/* The pane header's + launcher (the user's BB Action Topbar): tools and pages, drag one to a side. */
+.launcher .launcher-pop { left: auto; right: 0; width: 300px; }
+.launcher .launcher-pop.away { opacity: 0; pointer-events: none; }
+.launcher .pk-item[draggable="true"] { cursor: grab; }
+.launcher .pk-item .pk-sub { margin-left: auto; font-size: 11px; opacity: 0; }
+.launcher .pk-item.sel .pk-sub, .launcher .pk-item:hover .pk-sub { opacity: 1; }

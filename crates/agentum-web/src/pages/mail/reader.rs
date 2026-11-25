@@ -165,7 +165,7 @@ pub fn Reader(r: Reading, on_close: Callback<()>) -> impl IntoView {
                 let f2 = full.clone();
                 view! {
                     <div class="ml-meta">
-                        <div><b class="hi">{full.from_name.clone()}</b>" <"{full.from_address.clone()}"> "<span class="subdue">{full.date.clone()}</span></div>
+                        <div><b class="hi">{full.from_name.clone()}</b>" <"{full.from_address.clone()}"> "<span class="subdue" title=full.date.clone()>{long_when(&full.date)}</span></div>
                         <div class="subdue">
                             {acct.map(|a| view! { <span class="ml-acct" style=format!("--acct:{color}")>{a.name}</span> })}
                             {format!(" To: {}{}", full.to, if full.cc.is_empty() { String::new() } else { format!(" · Cc: {}", full.cc) })}

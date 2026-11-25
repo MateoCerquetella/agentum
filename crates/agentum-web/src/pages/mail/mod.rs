@@ -1,10 +1,12 @@
-//! Mail: the mail client and the Inbox Zero assistant in one pane. Wide: mail sidebar | list |
-//! reading pane; mid: list | reading pane; narrow (phones, a thin split): one column with Back.
+//! Mail: the mail client and the Inbox Zero assistant in one pane. Its folders are in the app's
+//! sidebar (side.rs); wide and mid: list | reading pane; narrow (phones, a thin split): one column
+//! with Back, and the folders as pickers above the list.
 pub mod lib;
 mod composer;
 mod inbox;
 pub mod push;
 mod reader;
+pub mod side;
 mod rules;
 mod tabs;
 pub mod watch;
@@ -76,6 +78,27 @@ pub struct MailCx {
     pub rows: StoredValue<Vec<(Thread, List)>>,
     panes: StoredValue<Vec<PaneReg>>,
     pub side: Pane,
+}
+
+/// What Mail shares with the app's sidebar, which shows its folders.
+#[derive(Clone, Copy)]
+pub struct Shared {
+    pub filter: RwSignal<Filter>,
+    pub meta: RwSignal<Option<Meta>>,
+    pub counts: RwSignal<Counts>,
+    /// The sidebar shows the folders now (Mail leaves out its own pickers).
+    pub in_side: RwSignal<bool>,
+}
+thread_local! {
+    static SHARED: Shared = Shared {
+        filter: agentum_ui::global(Filter { folder: "inbox".into(), ..Default::default() }),
+        meta: agentum_ui::global(None),
+        counts: agentum_ui::global(Counts::default()),
+        in_side: agentum_ui::global(false),
+    };
+}
+pub fn shared() -> Shared {
+    SHARED.with(|s| *s)
 }
 
 pub fn use_mail() -> MailCx {
@@ -333,15 +356,16 @@ fn Mail(side: Pane) -> impl IntoView {
     let msgs: List = RwSignal::new(None);
     let loading = RwSignal::new(false);
     let list_err = RwSignal::new(String::new());
-    let filter = RwSignal::new(Filter { folder: "inbox".into(), ..Default::default() });
+    let sh = shared();
+    let filter = sh.filter;
     let keys = RwSignal::new(false);
     let syncing = RwSignal::new(false);
     let push_on = RwSignal::new(false);
     let notify = RwSignal::new(push::notify_on());
     let tick = RwSignal::new(0u32);
     let cx = MailCx {
-        meta: RwSignal::new(None),
-        counts: RwSignal::new(Counts::default()),
+        meta: sh.meta,
+        counts: sh.counts,
         reply_ids: RwSignal::new(HashSet::new()),
         sel: RwSignal::new(BTreeSet::new()),
         focus: RwSignal::new(None),
@@ -465,11 +489,15 @@ fn Mail(side: Pane) -> impl IntoView {
         keys.set(false);
         set_param("tab", if t == "inbox" { None } else { Some(t) });
     };
-    let change_filter = Callback::new(move |f: Filter| {
-        filter.set(f);
-        cx.sel.set(BTreeSet::new());
-        if tab.get_untracked() != "inbox" {
-            set_tab("inbox");
+    let change_filter = Callback::new(move |f: Filter| filter.set(f));
+    // From here or the sidebar: a new filter clears the selection and shows the Inbox tab.
+    Effect::new(move |prev: Option<()>| {
+        filter.track();
+        if prev.is_some() {
+            cx.sel.set(BTreeSet::new());
+            if tab.get_untracked() != "inbox" {
+                set_tab("inbox");
+            }
         }
     });
 
@@ -765,8 +793,7 @@ fn Mail(side: Pane) -> impl IntoView {
                     }
                     match tab.get().as_str() {
                         "inbox" => view! {
-                            <Show when=move || layout.get() == "wide"><inbox::Nav f=filter set_f=change_filter/></Show>
-                            <div class="ml-list"><inbox::Inbox msgs=msgs f=filter set_f=change_filter with_nav=Signal::derive(move || layout.get() == "wide") loading=loading error=list_err/></div>
+                            <div class="ml-list"><inbox::Inbox msgs=msgs f=filter set_f=change_filter with_nav=Signal::derive(move || sh.in_side.get() && layout.get() != "narrow") loading=loading error=list_err/></div>
                             <Show when=move || layout.get() != "narrow" && !pane_open()>
                                 <div class="ml-pane ml-empty"><Icon name="mail" size=34/><div>"No email open"</div><div class="subdue">"Pick one from the list, or press c to write one."</div></div>
                             </Show>

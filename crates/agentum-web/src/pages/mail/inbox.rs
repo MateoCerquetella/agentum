@@ -1,4 +1,4 @@
-//! Mail › Inbox: the mail sidebar (accounts, folders, views), the filter bar, the select bar and the
+//! Mail › Inbox: the filter bar (the folders are in the app's sidebar, side.rs), the select bar and the
 //! list grouped into Pinned / Important / Updates / Newsletters when nothing narrows it. Also the
 //! row (one conversation) and the two-click confirm button the tabs share.
 use super::lib::*;
@@ -46,54 +46,6 @@ pub fn AccountSelect(value: Signal<String>, on_change: Callback<String>, #[prop(
                 }).collect_view()}
             </select>
         </span>
-    }
-}
-
-#[component]
-pub fn Nav(f: RwSignal<Filter>, set_f: Callback<Filter>) -> impl IntoView {
-    let c = use_mail();
-    let item = move |label: String, on: Signal<bool>, click: Callback<()>, count: Signal<u64>, dot: Option<String>| {
-        let style = dot.clone().map(|d| format!("--acct:{d}")).unwrap_or_default();
-        view! {
-            <button type="button" aria-pressed=move || on.get().to_string() class=move || if on.get() { "on" } else { "" } style=style on:click=move |_| click.run(())>
-                {dot.map(|_| view! { <i class="ml-dot"/> })}
-                <span>{label}</span>
-                {move || { let n = count.get(); (n > 0).then(|| view! { <b>{n}</b> }) }}
-            </button>
-        }
-    };
-    let with = move |g: fn(&mut Filter, &str), v: String| Callback::new(move |_| {
-        let mut x = f.get_untracked();
-        g(&mut x, &v);
-        set_f.run(x)
-    });
-    let zero = Signal::derive(|| 0u64);
-    view! {
-        <nav class="ml-nav" aria-label="Mail folders">
-            <div class="ml-sec">"Accounts"</div>
-            {move || {
-                let mut out = vec![item("All accounts".into(), Signal::derive(move || f.with(|x| x.account.is_empty())), with(|x, _| x.account.clear(), String::new()), Signal::derive(move || c.counts.with(|x| x.total)), None)];
-                for a in c.accounts() {
-                    let id = a.id.clone();
-                    let id2 = a.id.clone();
-                    let id3 = a.id.clone();
-                    out.push(item(a.name.clone(), Signal::derive(move || f.with(|x| x.account == id)), with(|x, v| x.account = v.to_string(), id2), Signal::derive(move || c.counts.with(|x| x.unread.get(&id3).copied().unwrap_or(0))), Some(color_of_name(&a.name))));
-                }
-                out.collect_view()
-            }}
-            <div class="ml-sec">"Folders"</div>
-            {FOLDERS.iter().map(|(k, l)| {
-                let k = *k;
-                item(l.to_string(), Signal::derive(move || f.with(|x| x.folder == k)), with(|x, v| x.folder = v.to_string(), k.to_string()), zero, None)
-            }).collect_view()}
-            <div class="ml-sec">"Views"</div>
-            {item("Unread".into(), Signal::derive(move || f.with(|x| x.unread)), with(|x, _| x.unread = !x.unread, String::new()), Signal::derive(move || { let a = f.with(|x| x.account.clone()); c.counts.with(|x| x.of_account(&a)) }), None)}
-            {item("Everything".into(), Signal::derive(move || f.with(|x| x.cat.is_empty())), with(|x, _| x.cat.clear(), String::new()), zero, None)}
-            {CAT.iter().map(|(k, l)| {
-                let k = *k;
-                item(l.to_string(), Signal::derive(move || f.with(|x| x.cat == k)), with(|x, v| x.cat = v.to_string(), k.to_string()), zero, None)
-            }).collect_view()}
-        </nav>
     }
 }
 

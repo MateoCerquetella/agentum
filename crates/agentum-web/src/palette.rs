@@ -14,6 +14,15 @@ struct Hit {
     go: Callback<()>,
 }
 
+thread_local! {
+    static SHOWN: RwSignal<bool> = agentum_ui::global(false);
+}
+
+/// ⌘K, open or not (the sidebar's search button opens it too).
+pub fn shown() -> RwSignal<bool> {
+    SHOWN.with(|s| *s)
+}
+
 #[component]
 pub fn Palette(on_close: Callback<()>) -> impl IntoView {
     let q = RwSignal::new(String::new());

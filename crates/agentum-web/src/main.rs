@@ -2,6 +2,7 @@
 mod app;
 mod code;
 mod dockside;
+mod launcher;
 mod pages;
 mod palette;
 mod plugins;
@@ -10,6 +11,7 @@ mod side;
 fn main() {
     console_error_panic_hook::set_once();
     pages::theme::apply_saved();
+    pages::theme::follow_system();
     let root = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("root")).map(wasm_bindgen::JsCast::unchecked_into::<web_sys::HtmlElement>);
     match root {
         Some(r) => leptos::mount::mount_to(r, app::App).forget(),
