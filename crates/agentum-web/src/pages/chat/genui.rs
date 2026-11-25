@@ -164,7 +164,7 @@ fn title_of(it: &Value) -> String {
 fn bullets(items: &[Value], depth: usize) -> AnyView {
     let xs = if depth == 0 { first_refs(items, &mut vec![]) } else { items.to_vec() };
     view! {
-        <ul class=if depth > 0 { "gu-bul sub" } else { "gu-bul" }>
+        <ul class={ if depth > 0 { "gu-bul sub" } else { "gu-bul" } }>
             {xs.into_iter().map(|it| {
                 let cls = format!("{}{}", if it["kind"] == "group" { "grp " } else { "" }, it["tone"].as_str().map(|t| format!("tone-{t}")).unwrap_or_default());
                 let url = it["url"].as_str().unwrap_or("").to_string();
