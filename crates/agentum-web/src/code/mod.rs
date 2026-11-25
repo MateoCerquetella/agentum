@@ -1,6 +1,7 @@
 //! The Code page: a new thread (machine, project, agent, model) or one thread's timeline with
 //! its composer, questions and side panel (plugins' tabs: files, git, history, terminal…).
 mod attach;
+pub mod rich;
 pub mod marks;
 pub mod store;
 mod timeline;

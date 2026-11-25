@@ -65,7 +65,7 @@
 .thread-strip > * { margin: 0 !important; border: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; background: transparent !important; flex: none; max-width: 100%; }
 .thread-strip > :first-child:only-child { flex: 1; }
 .code-composer { padding: 6px 16px 14px; max-width: 900px; width: 100%; margin: 0 auto; }
-.timeline .msg, .timeline .thinking, .timeline .plan, .timeline .tool, .timeline .ask-card, .timeline .turn-foot, .timeline .notice, .timeline .err, .timeline .working-line { max-width: 868px; }
+.timeline .msg, .timeline .thinking, .timeline .plan, .timeline .tool, .timeline .rich-cards, .timeline .ask-card, .timeline .turn-foot, .timeline .notice, .timeline .err, .timeline .working-line { max-width: 868px; }
 .code-rail { width: min(46%, 620px); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
 .rail-tabs { display: flex; align-items: center; gap: 2px; padding: 6px 6px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
 .rail-tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--base); font-size: 12.5px; white-space: nowrap; cursor: grab; }

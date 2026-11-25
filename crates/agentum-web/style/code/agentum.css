@@ -56,3 +56,31 @@ pre.diff .diff-file { color: var(--hi); font-weight: 600; }
 .code-composer .row, .code-new .row, .tool-head { display: flex; align-items: center; }
 .code-new .pickers { flex-wrap: wrap; }
 .code-new .pickers .pick { min-width: 0; flex: 0 1 auto; }
+/* Cards a command's output turns into (code/rich.rs): tests, changed files, commits, errors. */
+.timeline .rich-cards { max-width: 860px; width: 100%; margin: -4px auto 0; display: grid; gap: 6px; }
+.rich { background: var(--widget); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: grid; gap: 6px; font-size: 12.5px; min-width: 0; animation: rich-in .25s ease-out; }
+.rich.bad { border-color: color-mix(in srgb, var(--negative) 45%, var(--border)); }
+.rich-head { display: flex; align-items: center; gap: 6px; color: var(--hi); }
+.rich-head svg { color: var(--primary); }
+.rich-head svg.pos { color: var(--positive); } .rich-head svg.neg { color: var(--negative); }
+.rich-meta { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--subdue); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rich-bar { display: flex; height: 6px; border-radius: 999px; overflow: hidden; background: var(--hl); }
+.rich-bar.small { width: 56px; height: 5px; }
+.rich-bar .ok { background: var(--positive); } .rich-bar .bad { background: var(--negative); } .rich-bar .skip { background: var(--subdue); opacity: .5; }
+.rich-counts { display: flex; gap: 12px; color: var(--subdue); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.rich-list { margin: 0; padding: 6px 0 0; list-style: none; border-top: 1px solid var(--border); display: grid; gap: 2px; font-size: 11.5px; }
+.rich-list.mono { color: var(--subdue); }
+.rich-files { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.rich-files li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 6px; font-size: 11.5px; }
+.rich-files .st { font-size: 9px; font-weight: 700; text-align: center; border-radius: 3px; line-height: 14px; background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.rich-files .st-A { background: color-mix(in srgb, var(--positive) 20%, transparent); color: var(--positive); }
+.rich-files .st-D { background: color-mix(in srgb, var(--negative) 20%, transparent); color: var(--negative); }
+.rich-commits { margin: 0 0 0 4px; padding: 0 0 0 12px; list-style: none; border-left: 1px solid var(--border); display: grid; gap: 4px; font-size: 12px; }
+.rich-commits li { position: relative; }
+.rich-commits li::before { content: ""; position: absolute; left: -16.5px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 2px var(--widget); }
+/* A commit or a file path the agent mentioned, as a chip. */
+code.chip-sha, code.chip-file { display: inline-block; border: 1px solid var(--border); background: var(--hl); border-radius: 5px; padding: 0 4px; font-size: .86em; line-height: 1.45; vertical-align: baseline; }
+code.chip-sha { color: var(--primary); }
+code.chip-file::before { content: "◇ "; color: var(--primary); }
+@keyframes rich-in { from { opacity: 0; transform: scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .rich { animation: none; } }

@@ -4,17 +4,19 @@
 use agentum_proto::api::{EventView, Partial, ThreadSummary};
 use agentum_proto::{AskKind, AskOption, EventKind, FileDiff, PlanEntry, StopReason, ToolKind};
 use agentum_ui::prelude::*;
-use std::collections::BTreeMap;
+use crate::code::rich::{rich_of, Rich};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, PartialEq)]
 enum Item {
     User { seq: u64, html: String, queued: bool, ev: EventView },
     Message { seq: u64, html: String, ts: i64, ev: EventView },
     Thinking { seq: u64, text: String },
-    Tool { seq: u64, item: String, name: String, kind: ToolKind, title: String, input: Value, done: Option<(bool, Option<String>, Vec<FileDiff>)> },
+    Tool { seq: u64, item: String, name: String, kind: ToolKind, title: String, input: Value, done: Option<(bool, Option<String>, Vec<FileDiff>)>, cards: Vec<Rich> },
     Plan { seq: u64, entries: Vec<PlanEntry> },
     Ask { seq: u64, id: String, kind: AskKind, title: String, detail: Option<String>, options: Vec<AskOption>, answer: Option<(String, Option<String>)> },
-    Turn { seq: u64, stop: StopReason, ms: u64, cost: Option<f64>, tokens: u64 },
+    /// `steps`: the tool calls in the turn, `failed` of them failing.
+    Turn { seq: u64, stop: StopReason, ms: u64, cost: Option<f64>, tokens: u64, steps: usize, failed: usize },
     /// `full`: a limit window used up (its name and when it resets), when the error is a refused turn.
     Error { seq: u64, text: String, full: Option<(String, Option<i64>)> },
     Notice { seq: u64, text: String },
@@ -41,6 +43,9 @@ fn fold(events: &[EventView], known: &[agentum_proto::RateLimit]) -> Vec<Item> {
     let mut tools: BTreeMap<String, usize> = BTreeMap::new();
     let mut asks: BTreeMap<String, usize> = BTreeMap::new();
     let mut users: BTreeMap<u64, usize> = BTreeMap::new();
+    // A card already shown (the same test run or file list) isn't repeated further down.
+    let mut shown: BTreeSet<String> = BTreeSet::new();
+    let mut turn_start = 0;
     for e in events {
         let seq = e.event.seq;
         match &e.event.kind {
@@ -65,11 +70,15 @@ fn fold(events: &[EventView], known: &[agentum_proto::RateLimit]) -> Vec<Item> {
             EventKind::Thinking { text, .. } => out.push(Item::Thinking { seq, text: text.clone() }),
             EventKind::Tool { item, name, kind, title, input } => {
                 tools.insert(item.clone(), out.len());
-                out.push(Item::Tool { seq, item: item.clone(), name: name.clone(), kind: *kind, title: title.clone(), input: input.clone(), done: None });
+                out.push(Item::Tool { seq, item: item.clone(), name: name.clone(), kind: *kind, title: title.clone(), input: input.clone(), done: None, cards: vec![] });
             }
             EventKind::ToolDone { item, ok, output, diffs } => {
-                if let Some(Item::Tool { done, .. }) = tools.get(item).and_then(|i| out.get_mut(*i)) {
+                if let Some(Item::Tool { done, kind, cards, .. }) = tools.get(item).and_then(|i| out.get_mut(*i)) {
                     *done = Some((*ok, output.clone(), diffs.clone()));
+                    // Only commands: a file that was read can look like a test run or a git log.
+                    if *kind == ToolKind::Exec {
+                        *cards = rich_of(output.as_deref().unwrap_or_default()).into_iter().filter(|r| shown.insert(format!("{r:?}"))).collect();
+                    }
                 }
             }
             EventKind::Plan { entries } => {
@@ -90,7 +99,10 @@ fn fold(events: &[EventView], known: &[agentum_proto::RateLimit]) -> Vec<Item> {
             }
             EventKind::TurnDone { stop, usage, cost_usd, duration_ms, .. } => {
                 let tokens = usage.as_ref().map(|u| u.input + u.output + u.cache_read + u.cache_write).unwrap_or(0);
-                out.push(Item::Turn { seq, stop: *stop, ms: *duration_ms, cost: *cost_usd, tokens })
+                let ran = || out.get(turn_start..).unwrap_or_default().iter().filter_map(|x| if let Item::Tool { done, .. } = x { Some(done) } else { None });
+                let (steps, failed) = (ran().count(), ran().filter(|d| matches!(d, Some((false, ..)))).count());
+                out.push(Item::Turn { seq, stop: *stop, ms: *duration_ms, cost: *cost_usd, tokens, steps, failed });
+                turn_start = out.len();
             }
             EventKind::RateLimits { limits: l, .. } => limits = l.clone(),
             EventKind::Error { message, .. } => {
@@ -145,6 +157,8 @@ fn diff_text(d: &FileDiff) -> String {
 
 /// Message HTML, with plugin-drawn fences (```ui) cut out and drawn by their plugin.
 fn message_body(html: &str) -> AnyView {
+    let chipped = crate::code::rich::chips(html);
+    let html = chipped.as_str();
     const OPEN: &str = "<agentum-fence data-lang=\"";
     if !html.contains(OPEN) {
         return view! { <div class="md" inner_html=html.to_string()/> }.into_any();
@@ -184,7 +198,7 @@ fn input_summary(name: &str, input: &Value) -> String {
 
 #[component]
 fn ToolRow(item: Item, thread: String, live: Signal<Option<String>>) -> impl IntoView {
-    let Item::Tool { name, kind, title, input, done, .. } = item else { return ().into_any() };
+    let Item::Tool { name, kind, title, input, done, cards, .. } = item else { return ().into_any() };
     let open = RwSignal::new(false);
     let status = match &done {
         None => "tool-run",
@@ -216,7 +230,84 @@ fn ToolRow(item: Item, thread: String, live: Signal<Option<String>>) -> impl Int
                 <pre class="tool-out live">{move || live.get().unwrap_or_default()}</pre>
             </Show>
         </div>
+        // Shown even when the row is folded.
+        {(!cards.is_empty()).then(|| view! { <div class="rich-cards">{cards.into_iter().map(|r| view! { <RichCard r=r/> }).collect_view()}</div> })}
     }.into_any()
+}
+
+/// What a command's output came to: a test run, changed files, commits, errors.
+#[component]
+fn RichCard(r: Rich) -> impl IntoView {
+    let pct = |n: u32, of: u32| format!("width:{}%", n as f64 * 100.0 / of.max(1) as f64);
+    match r {
+        Rich::Tests { pass, fail, skip, files, secs, failures } => {
+            let total = pass + fail + skip;
+            let bad = fail > 0;
+            let meta = format!("{total} tests{}{}", files.map(|f| format!(" · {f} files")).unwrap_or_default(), secs.filter(|s| *s > 0.0).map(|s| if s < 10.0 { format!(" · {s:.1}s") } else { format!(" · {}s", s.round()) }).unwrap_or_default());
+            view! {
+                <div class="rich" class:bad=bad>
+                    <div class="rich-head">
+                        <Icon name=if bad { "alert" } else { "check-circle" } size=15 class=if bad { "neg" } else { "pos" }/>
+                        <b>{if bad { format!("{fail} test{} failed", if fail == 1 { "" } else { "s" }) } else { "Tests passed".into() }}</b>
+                        <span class="rich-meta">{meta}</span>
+                    </div>
+                    <div class="rich-bar" role="img" aria-label=format!("{pass} passed, {fail} failed, {skip} skipped")>
+                        <span class="ok" style=pct(pass, total)/>
+                        {bad.then(|| view! { <span class="bad" style=format!("{};min-width:2%", pct(fail, total))/> })}
+                        {(skip > 0).then(|| view! { <span class="skip" style=pct(skip, total)/> })}
+                    </div>
+                    <div class="rich-counts">
+                        <span>{format!("{pass} passed")}</span>
+                        {bad.then(|| view! { <span class="neg">{format!("{fail} failed")}</span> })}
+                        {(skip > 0).then(|| view! { <span>{format!("{skip} skipped")}</span> })}
+                    </div>
+                    {(!failures.is_empty()).then(|| view! {
+                        <ul class="rich-list neg">{failures.into_iter().map(|f| view! { <li class="mono">{f}</li> }).collect_view()}</ul>
+                    })}
+                </div>
+            }.into_any()
+        }
+        Rich::Changes { files, plus, minus } => {
+            let max = files.iter().map(|f| f.plus.unwrap_or(0) + f.minus.unwrap_or(0)).max().unwrap_or(0).max(1);
+            let more = files.len().saturating_sub(12);
+            view! {
+                <div class="rich">
+                    <div class="rich-head">
+                        <Icon name="file" size=15/>
+                        <b>{format!("{} file{} changed", files.len(), if files.len() == 1 { "" } else { "s" })}</b>
+                        {plus.map(|p| view! { <span class="rich-meta"><span class="pos">{format!("+{p}")}</span>" "<span class="neg">{format!("−{}", minus.unwrap_or(0))}</span></span> })}
+                    </div>
+                    <ul class="rich-files">{files.into_iter().take(12).map(|f| {
+                        let n = f.plus.unwrap_or(0) + f.minus.unwrap_or(0);
+                        view! {
+                            <li>
+                                <span class=format!("st st-{}", f.status)>{f.status.to_string()}</span>
+                                <span class="mono truncate">{f.path}</span>
+                                {f.plus.map(|p| view! {
+                                    <span class="rich-meta"><span class="rich-bar small"><span class="ok" style=pct(p, max)/><span class="bad" style=pct(f.minus.unwrap_or(0), max)/></span>{n}</span>
+                                })}
+                            </li>
+                        }
+                    }).collect_view()}</ul>
+                    {(more > 0).then(|| view! { <div class="rich-meta">{format!("and {more} more")}</div> })}
+                </div>
+            }.into_any()
+        }
+        Rich::Commits(commits) => view! {
+            <div class="rich">
+                <div class="rich-head"><Icon name="git" size=15/><b>{format!("{} commit{}", commits.len(), if commits.len() == 1 { "" } else { "s" })}</b></div>
+                <ol class="rich-commits">{commits.into_iter().map(|(sha, subject)| view! {
+                    <li><code class="chip-sha" title=sha.clone()>{sha.chars().take(7).collect::<String>()}</code>" "{subject}</li>
+                }).collect_view()}</ol>
+            </div>
+        }.into_any(),
+        Rich::Errors(errors) => view! {
+            <div class="rich bad">
+                <div class="rich-head"><Icon name="alert" size=15 class="neg"/><b>{format!("{} error{}", errors.len(), if errors.len() == 1 { "" } else { "s" })}</b></div>
+                <ul class="rich-list mono">{errors.into_iter().map(|e| { let t = e.clone(); view! { <li class="truncate" title=t>{e}</li> } }).collect_view()}</ul>
+            </div>
+        }.into_any(),
+    }
 }
 
 #[component]
@@ -350,9 +441,11 @@ pub fn Timeline(
                             }).collect_view()}</div>
                         }.into_any(),
                         it @ Item::Ask { .. } => view! { <AskCard item=it thread=th/> }.into_any(),
-                        Item::Turn { stop, ms, cost, tokens, .. } => view! {
+                        Item::Turn { stop, ms, cost, tokens, steps, failed, .. } => view! {
                             <div class="turn-foot small subdue">
                                 {match stop { StopReason::End => "Done", StopReason::Interrupted => "Stopped", StopReason::Error => "Failed", StopReason::MaxTurns => "Hit the turn limit" }}
+                                {(steps > 0).then(|| format!(" · {steps} step{}", if steps == 1 { "" } else { "s" }))}
+                                {(failed > 0).then(|| view! { " · " <span class="neg">{format!("{failed} failed")}</span> })}
                                 {(ms > 0).then(|| format!(" · {:.1}s", ms as f64 / 1000.0))}
                                 {(tokens > 0).then(|| format!(" · {} tokens", agentum_ui::fmt::tokens(tokens)))}
                                 {cost.filter(|c| *c > 0.0).map(|c| format!(" · ${c:.3}"))}
