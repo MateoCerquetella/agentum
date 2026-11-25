@@ -234,7 +234,9 @@ fn UsagePage() -> impl IntoView {
                 <h3 class="usage-head">"Limits"</h3>
                 {move || {
                     tick.track();
-                    let l = limits.get();
+                    // By agent, then account.
+                    let mut l = limits.get();
+                    l.sort_by_key(|a| (AgentKind::ALL.iter().position(|x| *x == a.agent), a.account_label.clone().unwrap_or_default().to_lowercase()));
                     if l.is_empty() {
                         return view! { <p class="small subdue">"No limits reported yet. Claude Code, Codex and Cursor report theirs (per account) as their turns run or when asked."</p> }.into_any();
                     }

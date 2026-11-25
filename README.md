@@ -4,7 +4,7 @@ A self-hosted workspace for one person, all in Rust:
 
 - **Personal**: mail, calendar, notes, a dashboard and a Secretary that runs on *your own* model,
   so your private life never reaches a cloud provider.
-- **Coding**: Claude Code, Codex and OpenCode running on your machines, in threads you watch live
+- **Coding**: Claude Code, Codex, OpenCode and Cursor running on your machines, in threads you watch live
   and steer: questions and permissions, queued or steered messages, diffs, git, pull requests,
   files, an editor and terminals, side chats, search over everything that was said.
 - **Plugins**, in the style of BB's: each one a manifest, a hub part and a web part mounted in slots.

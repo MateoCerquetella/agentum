@@ -154,8 +154,8 @@ pub fn agents_use(o: &Overview) -> Vec<AgentUse> {
         by[i].split = by.iter().filter(|u| u.agent == by[i].agent).count() > 1;
     }
     // Always in the same order, as BB's footer: Claude Code, Codex, OpenCode, Cursor (an agent's
-    // accounts by name).
-    by.sort_by_key(|u| (AgentKind::ALL.iter().position(|a| *a == u.agent), u.who().to_lowercase()));
+    // accounts: the one on most machines first, then by name).
+    by.sort_by_key(|u| (AgentKind::ALL.iter().position(|a| *a == u.agent), std::cmp::Reverse(u.machines.len()), u.who().to_lowercase()));
     for u in &mut by {
         let rank = |w: &str| match w { "5h" | "plan" => 0, "weekly" => 1, _ => 2 };
         u.windows.sort_by(|a, b| rank(&a.window).cmp(&rank(&b.window)).then(a.window.cmp(&b.window)));
