@@ -28,6 +28,7 @@ agentum-plugin-aura = { path = "../../plugins/aura", features = ["web"] }
 agentum-plugin-genui = { path = "../../plugins/genui", features = ["web"] }
 agentum-plugin-browser = { path = "../../plugins/browser", features = ["web"] }
 agentum-plugin-themes = { path = "../../plugins/themes", features = ["web"] }
+agentum-plugin-secrets = { path = "../../plugins/secrets", features = ["web"] }
 agentum-proto.workspace = true
 agentum-plugin = { workspace = true, features = ["web"] }
 agentum-ui.workspace = true

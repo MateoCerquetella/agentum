@@ -40,6 +40,7 @@ static ALL: &[&dyn HubPlugin] = &[
         &agentum_plugin_genui::HUB,
         &agentum_plugin_browser::HUB,
         &agentum_plugin_themes::HUB,
+        &agentum_plugin_secrets::HUB,
 ];
 
 pub fn all() -> &'static [&'static dyn HubPlugin] {
