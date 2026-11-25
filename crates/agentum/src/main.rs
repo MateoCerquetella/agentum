@@ -80,7 +80,7 @@ async fn run(env_file: std::path::PathBuf, env: std::io::Result<Vec<String>>) ->
     code::start(&app).await?;
     plugins::start(&app);
 
-    // The background jobs start one after another, not all at once: Mercury (a Raspberry Pi) has reset
+    // The background jobs start one after another, not all at once: a small hub (a Raspberry Pi) has reset
     // within a minute of CERQ starting, when mail, calendar, the brief and the journal all began together.
     {
         let a = app.clone();

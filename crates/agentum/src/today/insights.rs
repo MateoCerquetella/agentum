@@ -1,5 +1,5 @@
 //! Today's extra cards from what CERQ already has, no model (insights.py):
-//! this month's money from mail, parcels on their way, Mercury's health.
+//! this month's money from mail, parcels on their way, the hub's health.
 use super::{i18n::{self as L, Lang}, now, s};
 use crate::state::App;
 use chrono::{Datelike, TimeZone};

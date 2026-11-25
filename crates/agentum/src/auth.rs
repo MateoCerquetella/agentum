@@ -20,7 +20,7 @@ pub async fn user_of(app: &App, h: &HeaderMap) -> Option<String> {
     app.db.call(move |c| c.query_row("SELECT user FROM auth_sessions WHERE token=?1 AND expiry>?2", rusqlite::params![t, now_ts()], |r| r.get::<_, String>(0)).optional()).await.ok().flatten()
 }
 
-/// The dashboard (Glance, a container on Mercury) reads two widgets with a
+/// The dashboard (Glance, a container next to the hub) reads two widgets with a
 /// key instead of a session: X-CERQ-Key = CERQ_WIDGET_KEY from /etc/cerq.env
 /// (16+ characters), GET only, nothing else. The PC that runs BB pushes its
 /// threads the same way: CERQ_INGEST_KEY, POST /api/journal/ingest only.
