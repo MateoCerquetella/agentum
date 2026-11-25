@@ -146,7 +146,8 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
         let id = id.clone();
         Signal::derive(move || on.get().as_deref() == Some(id.as_str()) || on_r.get().as_deref() == Some(id.as_str()))
     };
-    let can_park = !working(&t) && !needs_you(&t);
+    // Anything not running or asking can be parked (a failed thread too).
+    let can_park = !working(&t) && t.asking.is_none() && t.state != ThreadState::Waiting;
     let title = if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() };
     let mut meta = vec![];
     if let Some(b) = &t.branch {
@@ -169,7 +170,8 @@ fn Card(t: ThreadSummary, kids: Vec<ThreadSummary>, on: Signal<Option<String>>, 
                 on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))
                 on:mouseenter=move |_| timer.set_value(Some(gloo_timers::callback::Timeout::new(500, move || { let _ = hover.try_set(true); })))
                 on:mouseleave=move |_| { let _ = timer.try_set_value(None); let _ = hover.try_set(false); }>
-                <button class="dk-hit" aria-label=title.clone() on:click=move |e| open_thread(&e, &id_click)/>
+                <a class="dk-hit" href=format!("/code?thread={}", id_click) aria-label=title.clone() draggable="false"
+                    on:click=move |e: leptos::ev::MouseEvent| { if e.button() == 0 { e.prevent_default(); open_thread(&e, &id_click) } }/>
                 <Glyph t=t.clone()/>
                 <div class="dk-body">
                     <div class="dk-l1">
@@ -219,7 +221,8 @@ fn Slim(t: ThreadSummary, on: Signal<Option<String>>, on_r: Signal<Option<String
         <li class=move || if is_on.get() { "dk-slim on" } else { "dk-slim" } draggable="true"
             on:dragstart=move |e| agentum_ui::dnd::start(&e, "code", &[("thread", &id_d)])
             on:contextmenu=move |e| context_menu(&e, menu_for(&t_menu))>
-            <button class="dk-hit" on:click=move |e| open_thread(&e, &id_c)/>
+            <a class="dk-hit" href=format!("/code?thread={}", id_c) draggable="false"
+                on:click=move |e: leptos::ev::MouseEvent| { if e.button() == 0 { e.prevent_default(); open_thread(&e, &id_c) } }/>
             <Glyph t=t.clone()/>
             <span class="dk-title">{if t.title.is_empty() { "New thread".to_string() } else { t.title.clone() }}</span>
             <span class="dk-status">{when}</span>
@@ -345,11 +348,23 @@ pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
     });
     let on = Signal::derive(move || l_thread.get());
     let on_r = Signal::derive(move || r_thread.get());
+    let dock_on = move || crate::plugins::is_on("dockside");
     let list = move || {
         let q = find.get().unwrap_or_default();
         let searching = !q.trim().is_empty();
         ov.with(|o| {
             let Some(o) = o else { return view! { <p class="dk-empty">"Connecting to your machines…"</p> }.into_any() };
+            if !dock_on() {
+                // The plain list: pinned, then everything open by latest activity.
+                let ql = q.to_lowercase();
+                let mut v: Vec<ThreadSummary> = o.threads.iter().filter(|t| !t.archived && (ql.is_empty() || t.title.to_lowercase().contains(&ql) || t.project.to_lowercase().contains(&ql))).cloned().collect();
+                v.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
+                let empty = v.is_empty();
+                return view! {
+                    <ul class="dk-list">{v.into_iter().map(|t| view! { <Card t=t kids=vec![] on=on on_r=on_r/> }).collect_view()}</ul>
+                    {empty.then(|| view! { <p class="dk-empty">"No threads yet."</p> })}
+                }.into_any();
+            }
             let g = group(&o.threads, now.get(), &q);
             let total = g.projects.len() + g.snoozed.len() + g.settled.len();
             view! {
@@ -378,7 +393,20 @@ pub fn Dockside(collapsed: RwSignal<bool>) -> impl IntoView {
                     <input class="dock-find" autofocus placeholder="Find a thread or what was said" prop:value=move || find.get().unwrap_or_default()
                         on:input=move |e| find.set(Some(event_target_value(&e))) on:keydown=move |e| if e.key() == "Escape" { find.set(None) }/>
                 </Show>
-                <div class="dk-head"><Icon name="folder" size=13/><span>"Projects"</span>
+                // Dockside's top list: the plugins' pages (Usage, Browser…), as BB shows them.
+                <div class="dk-nav">
+                    {move || crate::plugins::pages().into_iter().map(|d| {
+                        let id = d.id;
+                        view! {
+                            <button class="dk-navrow" draggable="true" title=format!("{} · drag it to a side to open it there", d.title)
+                                on:dragstart=move |e| agentum_ui::dnd::start(&e, id, &[])
+                                on:click=move |e| navigate(id, if e.meta_key() || e.ctrl_key() { Where::Right } else { Where::Replace }, &[])>
+                                <Icon name=d.icon size=15/><span>{d.title}</span>
+                            </button>
+                        }
+                    }).collect_view()}
+                </div>
+                <div class="dk-head"><Icon name="folder" size=13/><span>{move || if dock_on() { "Projects" } else { "Threads" }}</span>
                     <span class="dk-count">{move || ov.with(|o| o.as_ref().map(|o| group(&o.threads, now.get(), "").projects.len()).unwrap_or(0))}</span>
                 </div>
                 <div class="dk-scroll">

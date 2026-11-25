@@ -96,6 +96,10 @@ pub struct ThreadSpec {
     pub permission: Permission,
     /// The directory the agent works in (a project root or a worktree).
     pub cwd: String,
+    /// Added to the agent's system prompt (what plugins tell every agent: the ```ui language,
+    /// how to ask for a secret…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// What a person sends: text plus optional image attachments (data: URLs or paths on the machine).

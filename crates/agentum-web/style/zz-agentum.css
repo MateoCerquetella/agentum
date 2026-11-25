@@ -164,3 +164,38 @@
 .dk .dk-card > .hover-card { position: fixed; left: calc(var(--side-w, 280px) - 4px); margin: 0; margin-top: -6px; }
 .sidebar:not([style*="--side-w"]) .dk .dk-card > .hover-card { left: 276px; }
 .timeline .limit-card { max-width: 868px; width: 100%; margin: 0 auto; padding: 10px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--warm) 55%, var(--border)); background: color-mix(in srgb, var(--warm) 9%, var(--widget)); color: var(--text); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+
+/* ── BB's model picker ── */
+.agent-mark { flex: none; }
+.mp-pop { width: 320px; max-width: 92vw; padding: 0; overflow: hidden; }
+.mp-pop.up.right { left: auto; right: 0; }
+.mp-tabs { display: flex; align-items: center; gap: 2px; padding: 4px 8px 0; border-bottom: 1px solid var(--border); }
+.mp-tab { position: relative; display: grid; place-items: center; width: 34px; height: 32px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--subdue); }
+.mp-tab:hover:not(:disabled) { color: var(--hi); }
+.mp-tab.on { color: var(--hi); border-bottom-color: var(--hi); }
+.mp-tab:disabled { opacity: .35; }
+.mp-full { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 9px; background: var(--negative); }
+.mp-tabname { margin-left: auto; font-size: 11.5px; color: var(--subdue); padding-right: 2px; }
+.mp-search { display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--border); color: var(--subdue); }
+.mp-search input { flex: 1; border: 0 !important; background: transparent !important; padding: 7px 0 !important; font-size: 12.5px; box-shadow: none !important; }
+.mp-list { max-height: 270px; overflow-y: auto; padding: 4px; display: flex; flex-direction: column; }
+.mp-label { padding: 6px 8px 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--subdue); }
+.mp-empty { padding: 8px; color: var(--subdue); font-size: 12.5px; }
+.mp-more { color: var(--base); }
+.mp-reason { border-top: 1px solid var(--border); padding: 4px 10px 10px; }
+.mp-seg, .env-seg { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--hl); }
+.mp-seg button, .env-seg button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--base); font-size: 12px; text-transform: capitalize; white-space: nowrap; }
+.mp-seg button:hover, .env-seg button:hover { color: var(--hi); }
+.mp-seg button.on, .env-seg button.on { background: var(--widget); color: var(--hi); box-shadow: 0 1px 2px rgb(0 0 0 / .15); font-weight: 600; }
+.env-seg { flex: none; margin-left: 2px; }
+.env-seg button { flex: none; height: 24px; }
+
+/* Dockside's top list (plugin pages) and the park buttons on the selected card */
+.dk-nav { display: flex; flex-direction: column; gap: 1px; padding: 0 4px 6px; }
+.dk-navrow { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--base); font-size: 13px; text-align: left; }
+.dk-navrow:hover { background: var(--hl); color: var(--hi); }
+.dk-card.on .dk-status.can-park { display: none; }
+.dk-card.on .dk-park { display: inline-flex; }
+a.dk-hit { display: block; }
+.chats-fold { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; }
+.chats-fold:hover { color: var(--hi); }

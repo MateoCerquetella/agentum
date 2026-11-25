@@ -28,6 +28,8 @@ static ALL: &[&dyn WebPlugin] = &[
         &agentum_plugin_genui::WEB,
         &agentum_plugin_browser::WEB,
         &agentum_plugin_themes::WEB,
+    &agentum_plugin_dockside::WEB,
+    &agentum_plugin_secrets::WEB,
 ];
 
 pub fn all() -> &'static [&'static dyn WebPlugin] {
@@ -51,6 +53,10 @@ pub fn off() -> RwSignal<Vec<String>> {
         });
     }
     s
+}
+/// Is this plugin turned on (live)?
+pub fn is_on(id: &'static str) -> bool {
+    off().with(|o| !o.iter().any(|x| x == id))
 }
 fn on() -> Vec<&'static dyn WebPlugin> {
     let off = off();

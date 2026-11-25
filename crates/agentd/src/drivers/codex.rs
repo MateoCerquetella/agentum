@@ -568,12 +568,18 @@ impl Agent for CodexAgent {
                 if let Some(m) = &opts.model {
                     set_model(&mut p, m, true);
                 }
+                if let Some(i) = &opts.instructions {
+                    p["developerInstructions"] = json!(i);
+                }
                 rpc.call("thread/resume", p, Duration::from_secs(60)).await
             }
             None => {
                 let mut p = json!({"cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox});
                 if let Some(m) = &opts.model {
                     set_model(&mut p, m, true);
+                }
+                if let Some(i) = &opts.instructions {
+                    p["developerInstructions"] = json!(i);
                 }
                 rpc.call("thread/start", p, Duration::from_secs(60)).await
             }

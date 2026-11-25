@@ -355,6 +355,7 @@ fn Shell() -> impl IntoView {
                 {move || match side.get() {
                     Side::Life => view! { <crate::side::Personal left=left right=right collapsed=collapsed counts=counts prefs=ui_prefs/> }.into_any(),
                     Side::Work => view! { <crate::dockside::Dockside collapsed=collapsed/> }.into_any(),
+                    // (Dockside off: the same component draws a plain list.)
                 }}
                 <div class="grow"/>
                 <crate::side::SideFoot collapsed=collapsed settings_on=Signal::derive(move || left.get() == "settings" || right.get().as_deref() == Some("settings"))/>
@@ -362,7 +363,11 @@ fn Shell() -> impl IntoView {
             <Show when=move || palette.get()>
                 <crate::palette::Palette on_close=Callback::new(move |_| palette.set(false))/>
             </Show>
-            <main class="main" node_ref=main_ref>
+            <main class="main" node_ref=main_ref
+                on:dragenter=move |e| {
+                    let ours = e.data_transfer().map(|dt| { let t = dt.types(); (0..t.length()).any(|i| t.get(i).as_string().as_deref() == Some(agentum_ui::dnd::MIME)) }).unwrap_or(false);
+                    if ours { agentum_ui::dnd::dragging().set(true) }
+                }>
                 <Show when=move || maxed.get().is_none_or(|m| m == Pane::Left)>{pane(Pane::Left)}</Show>
                 <Show when=move || right.get().is_some() && maxed.get().is_none()>
                     <div class="splitter" on:pointerdown=start_resize on:dblclick=move |_| { ratio.set(0.5); store::remove("cerq.split") }/>

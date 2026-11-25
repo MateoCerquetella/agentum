@@ -125,15 +125,43 @@ pub fn PersonalChats() -> impl IntoView {
     follow_changes();
     let on = use_param("chat");
     let find = RwSignal::new(None::<String>);
+    // Folded unless you open it (remembered on this device).
+    let open = RwSignal::new(agentum_ui::store::flag("agentum.chats.open"));
+    let delete_all = move || spawn_local(async move {
+        let n = all.with_untracked(|v| v.as_ref().map(|v| v.len()).unwrap_or(0));
+        if n == 0 || !confirm(format!("Delete all {n} chats?"), "Every chat with the Secretary and its messages. This can't be undone.", "Delete all", true).await {
+            return;
+        }
+        match api_delete::<Value>("/chat/sessions").await {
+            Ok(_) => {
+                all.set(Some(vec![]));
+                if use_param("chat").get_untracked().is_some_and(|c| !c.is_empty()) {
+                    navigate("chat", Where::Replace, &[("chat", "")]);
+                }
+                toast("All chats deleted.");
+            }
+            Err(e) => toast_bad(e.message),
+        }
+    });
     let shown = move || {
         let q = find.get().unwrap_or_default().trim().to_lowercase();
         all.get().unwrap_or_default().into_iter().filter(|s| !s.archived && (q.is_empty() || s.title().to_lowercase().contains(&q))).take(40).collect::<Vec<_>>()
     };
     view! {
-        <div class="dock-chats-head"><span>"Chats"</span><span class="dock-count">{move || all.with(|v| v.as_ref().map(|v| v.iter().filter(|s| !s.archived).count()).unwrap_or(0))}</span><span class="grow"/>
-            <button class=move || if find.get().is_some() { "icon-btn dock-btn on" } else { "icon-btn dock-btn" } title="Find a chat" aria-pressed=move || find.get().is_some().to_string()
-                on:click=move |_| find.update(|f| *f = if f.is_some() { None } else { Some(String::new()) })><Icon name="search" size=13/></button>
+        <div class="dock-chats-head">
+            <button class="chats-fold" aria-expanded=move || open.get().to_string() title=move || if open.get() { "Hide the chats" } else { "Show the chats" }
+                on:click=move |_| { open.update(|o| *o = !*o); agentum_ui::store::set("agentum.chats.open", if open.get_untracked() { "1" } else { "" }) }>
+                <span>"Chats"</span><span class="dock-count">{move || all.with(|v| v.as_ref().map(|v| v.iter().filter(|s| !s.archived).count()).unwrap_or(0))}</span>
+                <Icon name="chevron" size=12 class=Signal::derive(move || if open.get() { "dk-chev open".to_string() } else { "dk-chev".to_string() })/>
+            </button>
+            <span class="grow"/>
+            <Show when=move || open.get()>
+                <button class=move || if find.get().is_some() { "icon-btn dock-btn on" } else { "icon-btn dock-btn" } title="Find a chat" aria-pressed=move || find.get().is_some().to_string()
+                    on:click=move |_| find.update(|f| *f = if f.is_some() { None } else { Some(String::new()) })><Icon name="search" size=13/></button>
+                <agentum_ui::picker::Menu items=Signal::derive(move || vec![PaneAction::new("trash", "Delete all chats", move || delete_all()).danger()]) title="More"/>
+            </Show>
         </div>
+        <Show when=move || open.get()>
         <Show when=move || find.get().is_some()>
             <input class="dock-find" autofocus placeholder="Find a chat" aria-label="Find a chat" prop:value=move || find.get().unwrap_or_default()
                 on:input=move |e| find.set(Some(event_target_value(&e))) on:keydown=move |e| if e.key() == "Escape" { find.set(None) }/>
@@ -166,5 +194,6 @@ pub fn PersonalChats() -> impl IntoView {
                 }).collect_view().into_any()
             }}
         </div>
+        </Show>
     }
 }

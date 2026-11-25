@@ -27,7 +27,11 @@ fn now() -> Ms {
 }
 
 async fn load(cx: &Ctx, id: &str) -> ThreadNudge {
-    cx.kv_get(&format!("t:{id}")).await.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    match cx.kv_get(&format!("t:{id}")).await.and_then(|v| serde_json::from_value(v).ok()) {
+        Some(st) => st,
+        // A thread never touched: on when "On for every thread" is.
+        None => ThreadNudge { on: cx.setting("auto").await.as_bool().unwrap_or(true), ..Default::default() },
+    }
 }
 async fn save(cx: &Ctx, id: &str, st: &ThreadNudge) {
     cx.kv_set(&format!("t:{id}"), serde_json::to_value(st).unwrap_or(Value::Null)).await;

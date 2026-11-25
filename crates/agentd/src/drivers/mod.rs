@@ -36,6 +36,8 @@ pub struct StartOpts {
     pub permission: Permission,
     /// The agent's own session id to resume.
     pub resume: Option<String>,
+    /// Added to the agent's system prompt (from the hub's plugins).
+    pub instructions: Option<String>,
 }
 
 /// One live agent session (a process, or a session on a shared server).
