@@ -215,7 +215,9 @@ fn Section(id: String, name: String, count: usize, #[prop(optional)] badge: Opti
 pub fn Coding(collapsed: RwSignal<bool>) -> impl IntoView {
     store::start();
     let ov = overview();
-    let current = use_param("thread");
+    // The thread open in either pane.
+    let (l_thread, r_thread) = (use_param("thread"), use_param("r_thread"));
+    let current = Signal::derive(move || l_thread.get().filter(|t| !t.is_empty()).or_else(|| r_thread.get()));
     let find = RwSignal::new(None::<String>);
     let archived = RwSignal::new(false);
     let found = RwSignal::new(None::<Vec<ThreadSummary>>);
@@ -271,7 +273,7 @@ pub fn Coding(collapsed: RwSignal<bool>) -> impl IntoView {
         }
     });
 
-    let is_on = move |id: String| Signal::derive(move || current.get().as_deref() == Some(id.as_str()));
+    let is_on = move |id: String| Signal::derive(move || l_thread.get().as_deref() == Some(id.as_str()) || r_thread.get().as_deref() == Some(id.as_str()));
     let groups = move || {
         ov.with(|o| {
             let Some(o) = o else { return view! { <p class="dock-empty">"Connecting to your machines…"</p> }.into_any() };

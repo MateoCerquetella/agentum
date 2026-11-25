@@ -13,8 +13,8 @@ mkdir -p "$DIR/data" && chmod 700 "$HOME/.cache/agentum-dev"
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/agentum-target} CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 [ "${2:-}" = "--no-web" ] || scripts/build-web.sh > "$DIR/web-build.log" 2>&1 || { tail -30 "$DIR/web-build.log"; exit 1; }
 cargo build -p agentum 2>&1 | grep -E "^error" -A8 && exit 1
-cp "$CARGO_TARGET_DIR/debug/agentum" "$DIR/agentum"
 [ -f "$DIR/pid" ] && kill "$(cat "$DIR/pid")" 2>/dev/null && sleep 0.5 || true
+cp "$CARGO_TARGET_DIR/debug/agentum" "$DIR/agentum"
 ( cd "$DIR" && AGENTUM_DATA=$DIR/data AGENTUM_BIND=127.0.0.1:$PORT CERQ_NO_PUSH=1 CERQ_CALENDAR_READONLY=1 CERQ_SKIP_OUTLOOK=1 RUST_LOG=info exec setsid ./agentum >> hub.log 2>&1 ) < /dev/null > /dev/null 2>&1 &
 echo $! > "$DIR/pid"
 sleep 1.5

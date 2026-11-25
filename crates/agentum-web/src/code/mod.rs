@@ -11,8 +11,26 @@ use agentum_ui::nav::Where;
 use agentum_ui::prelude::*;
 use std::collections::BTreeMap;
 
-pub fn page(_pane: Pane) -> AnyView {
-    let thread = use_param("thread");
+/// Which pane this Code page is in: the right one reads and writes "r_"-prefixed params.
+#[derive(Clone, Copy)]
+pub(crate) struct Here(pub bool);
+pub(crate) fn key(k: &'static str) -> &'static str {
+    let right = use_context::<Here>().is_some_and(|h| h.0);
+    if !right {
+        return k;
+    }
+    match k {
+        "thread" => "r_thread",
+        "machine" => "r_machine",
+        "project" => "r_project",
+        "at" => "r_at",
+        _ => k,
+    }
+}
+/// Open something in this Code pane.
+pub fn page(pane: Pane) -> AnyView {
+    provide_context(Here(pane == Pane::Right));
+    let thread = use_param(key("thread"));
     view! {
         {move || match thread.get().filter(|t| !t.is_empty()) {
             Some(id) => view! { <ThreadPage id=id/> }.into_any(),
@@ -96,8 +114,8 @@ fn Pickers(machine: RwSignal<String>, agent: RwSignal<AgentKind>, model: RwSigna
 #[component]
 fn NewThreadPage() -> impl IntoView {
     let ov = store::overview();
-    let p_machine = use_param("machine");
-    let p_project = use_param("project");
+    let p_machine = use_param(key("machine"));
+    let p_project = use_param(key("project"));
     let machine = RwSignal::new(String::new());
     let project = RwSignal::new(String::new());
     let agent = RwSignal::new(AgentKind::ClaudeCode);
@@ -109,6 +127,7 @@ fn NewThreadPage() -> impl IntoView {
     let text = RwSignal::new(agentum_ui::store::get("agentum.draft.new").unwrap_or_default());
     let busy = RwSignal::new(false);
     let filter = RwSignal::new(String::new());
+    let here = use_context::<Here>().is_some_and(|h| h.0);
     // Defaults: the URL's machine, else the main one, else the first online; its first project.
     Effect::new(move |_| {
         ov.with(|o| {
@@ -166,7 +185,7 @@ fn NewThreadPage() -> impl IntoView {
                 Ok(t) => {
                     agentum_ui::store::remove("agentum.draft.new");
                     text.set(String::new());
-                    navigate("code", Where::Replace, &[("thread", &t.id)]);
+                    navigate("code", if here { Where::Right } else { Where::Left }, &[("thread", &t.id)]);
                 }
                 Err(e) => toast_bad(e.message),
             }
@@ -236,7 +255,7 @@ fn ThreadPage(id: String) -> impl IntoView {
     let more_before = RwSignal::new(false);
     let loaded = RwSignal::new(false);
     let rail = RwSignal::new(agentum_ui::store::get("agentum.rail").filter(|r| !r.is_empty()));
-    let at = use_param("at");
+    let at = use_param(key("at"));
 
     let load = {
         let id = id.clone();
@@ -377,6 +396,7 @@ fn apply(events: RwSignal<Vec<EventView>>, partial: RwSignal<BTreeMap<String, Pa
 
 #[component]
 fn Header(id: String, summary: Signal<Option<ThreadSummary>>, rail: RwSignal<Option<String>>, has_tabs: bool) -> impl IntoView {
+    let here = use_context::<Here>().is_some_and(|h| h.0);
     let editing = RwSignal::new(false);
     let title = RwSignal::new(String::new());
     let patch = {
@@ -397,19 +417,6 @@ fn Header(id: String, summary: Signal<Option<ThreadSummary>>, rail: RwSignal<Opt
             spawn_local(async move {
                 if let Err(e) = api_post::<Value>(&format!("/code/threads/{id}/stop"), &json!({})).await {
                     toast_bad(e.message);
-                }
-            });
-        }
-    };
-    let side_chat = {
-        let id = id.clone();
-        move |_| {
-            let Some(s) = summary.get_untracked() else { return };
-            let body = NewThread { machine: s.machine, project: s.project, agent: Some(s.agent), model: s.model, effort: s.effort, permission: s.permission, worktree: None, text: String::new(), images: vec![], parent: Some(id.clone()) };
-            spawn_local(async move {
-                match api_post::<ThreadSummary>("/code/threads", &body).await {
-                    Ok(t) => navigate("code", Where::Right, &[("thread", &t.id)]),
-                    Err(e) => toast_bad(e.message),
                 }
             });
         }
@@ -454,10 +461,9 @@ fn Header(id: String, summary: Signal<Option<ThreadSummary>>, rail: RwSignal<Opt
                 </button>
             }).collect_view()}
             {(!has_tabs).then_some(())}
-            <button class="icon-btn" title="Side chat (a fork you can ask about this thread)" on:click=side_chat><Icon name="chat"/></button>
             <button class="icon-btn" title=move || if summary.get().is_some_and(|s| s.pinned) { "Unpin" } else { "Pin" }
                 on:click=move |_| { let pinned = summary.get_untracked().is_some_and(|s| s.pinned); p3(PatchThread { pinned: Some(!pinned), ..Default::default() }) }><Icon name="pin"/></button>
-            <button class="icon-btn" title="Archive" on:click=move |_| { p4(PatchThread { archived: Some(true), ..Default::default() }); navigate("code", Where::Replace, &[("thread", "")]) }><Icon name="archive"/></button>
+            <button class="icon-btn" title="Archive" on:click=move |_| { p4(PatchThread { archived: Some(true), ..Default::default() }); navigate("code", if here { Where::Right } else { Where::Left }, &[("thread", "")]) }><Icon name="archive"/></button>
         </div>
     }
 }
