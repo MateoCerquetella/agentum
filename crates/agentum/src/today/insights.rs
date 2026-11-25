@@ -7,7 +7,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::sync::LazyLock;
 
-// ---- Mercury (ops/mercury/cerq-health writes the file once a minute)
+// ---- The hub's machine (an ops script writes the health file once a minute)
 fn iso_ts(v: &Value) -> i64 {
     let t = v.as_str().unwrap_or("");
     chrono::DateTime::parse_from_rfc3339(t).map(|d| d.timestamp()).ok()
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(status_of("Gracias por tu compra"), Some("ordered"));
         assert_eq!(status_of("Newsletter de ofertas"), None);
         let now = 2_000_000;
-        let r = |ts: i64, subj: &str| (ts, "Tienda".to_string(), "envios@mail.tienda.com.ar".to_string(), subj.to_string(), "{}".to_string());
+        let r = |ts: i64, subj: &str| (ts, "Tienda".to_string(), "envios@mail.shop.example".to_string(), subj.to_string(), "{}".to_string());
         let rows = vec![r(now - 3 * 86400, "Confirmamos tu compra #1234567"), r(now - 86400, "Tu compra #1234567 está en camino"),
                         r(now - 3 * 86400, "Llegó tu pedido #7654321"), r(now - 3600, "Tu factura #1234567 en camino")];
         let v = deliveries_of(rows, Lang::En, BA, now);

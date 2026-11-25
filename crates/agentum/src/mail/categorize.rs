@@ -72,6 +72,6 @@ mod tests {
                      "events@ontidwit.com", "service@meliopayments.com", "smiles@ventas.smiles.com.ar"] {
             assert_ne!(cat(&m(from, "Novedades de tu cuenta")), "personal", "{from}");
         }
-        assert_eq!(cat(&m("nathaly.delcarpio@insightglobal.com", "RE: Resume Update")), "personal");
+        assert_eq!(cat(&m("jane.doe@recruiting.example", "RE: Resume Update")), "personal");
     }
 }

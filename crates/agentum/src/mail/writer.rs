@@ -149,9 +149,9 @@ mod tests {
 
     #[test]
     fn prompts() {
-        let (m, budget) = messages(&json!({"mode": "write", "text": "decile a Ana que llego tarde"}), "Mateo", "Spanish (Argentina)").unwrap();
+        let (m, budget) = messages(&json!({"mode": "write", "text": "decile a Ana que llego tarde"}), "Alex", "Spanish (Argentina)").unwrap();
         let sys = m[0]["content"].as_str().unwrap();
-        assert!(sys.contains("short sign-off, signed Mateo."));
+        assert!(sys.contains("short sign-off, signed Alex."));
         assert!(sys.contains("The text is in Spanish"));
         assert!(sys.contains("The first line is \"Subject: \""));
         assert_eq!(m[1]["content"], "Notes:\ndecile a Ana que llego tarde");
