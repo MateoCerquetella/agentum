@@ -6,9 +6,11 @@
 //!   WebSocket that agentd opens to the hub).
 //! - [`api`]: what the hub serves the web app for the Code section (REST bodies and the
 //!   messages on the browser's WebSocket).
+//! - [`dotenv`]: reading and editing `.env` files (the binaries' own, and projects' secrets).
 //!
 //! Everything here is plain serde: it compiles for the hub, agentd and wasm32 alike.
 pub mod api;
+pub mod dotenv;
 pub mod machine;
 pub mod thread;
 
