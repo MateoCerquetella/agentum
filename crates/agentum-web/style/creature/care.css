@@ -25,7 +25,7 @@
 .care-gift .row { margin-top: 6px; }
 .care-rarity { border-radius: 99px; padding: 1px 9px; font-size: 11px; font-weight: 600; }
 
-/* The gift window (Care.tsx): Empirical Factory's box stage on CERQ's dialog. */
+/* The gift window (Care.tsx): a box stage on the app's dialog. */
 .dialog.gift-dialog { position: relative; width: min(384px, 94vw); padding: 0; gap: 0; border-radius: 18px; overflow-x: hidden; overflow-y: auto; animation: gift-in .18s ease-out; }
 .gift-bg { padding: 12px; }
 .gift-close { position: absolute; top: 8px; right: 8px; z-index: 2; }

@@ -79,7 +79,7 @@ pub fn Machines() -> impl IntoView {
                 }
             })}
             <form class="row" on:submit=add>
-                <input class="grow" placeholder="A name for the new machine (laptop, mars…)" maxlength="40" prop:value=name on:input=move |e| name.set(event_target_value(&e))/>
+                <input class="grow" placeholder="A name for the new machine (laptop, desktop…)" maxlength="40" prop:value=name on:input=move |e| name.set(event_target_value(&e))/>
                 <button class="btn primary" disabled=move || adding.get() || name.get().trim().is_empty()><Icon name="plus" size=13/>"Add machine"</button>
             </form>
             {move || match list.get() {

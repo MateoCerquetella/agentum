@@ -134,15 +134,15 @@ mod tests {
 
     #[test]
     fn query_and_answer() {
-        let q = build_query(0x1234, "dash.cerq.lan");
-        assert_eq!(&q[12..], b"\x04dash\x04cerq\x03lan\x00\x00\x01\x00\x01");
+        let q = build_query(0x1234, "hub.example.lan");
+        assert_eq!(&q[12..], b"\x03hub\x07example\x03lan\x00\x00\x01\x00\x01");
         // The answer: our header with QR, the question, one A record by name pointer.
         let mut a = q.clone();
         a[2] = 0x81;
         a[3] = 0x80;
         a[7] = 1;
-        a.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 10, 0, 4, 192, 168, 88, 250]);
-        assert_eq!(parse_answer(0x1234, &a).unwrap(), vec![Ipv4Addr::new(192, 168, 88, 250)]);
+        a.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 10, 0, 4, 10, 0, 0, 7]);
+        assert_eq!(parse_answer(0x1234, &a).unwrap(), vec![Ipv4Addr::new(10, 0, 0, 7)]);
         assert!(parse_answer(0x9999, &a).is_err());
         a[3] = 0x83; // NXDOMAIN
         assert!(parse_answer(0x1234, &a).is_err());

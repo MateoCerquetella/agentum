@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Config {
-    /// The hub's agentd endpoint, e.g. `wss://dash.cerq.lan/agentd`.
+    /// The hub's agentd endpoint, e.g. `wss://hub.example.lan/agentd`.
     pub hub: String,
     /// This machine's token (sent as `Authorization: Bearer <token>`).
     pub token: String,
