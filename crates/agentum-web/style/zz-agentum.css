@@ -225,3 +225,6 @@ a.dk-hit { display: block; }
 .launcher .pk-item[draggable="true"] { cursor: grab; }
 .launcher .pk-item .pk-sub { margin-left: auto; font-size: 11px; opacity: 0; }
 .launcher .pk-item.sel .pk-sub, .launcher .pk-item:hover .pk-sub { opacity: 1; }
+
+/* The model picker: a model's provider, muted, right after its name (as BB). */
+.mp .mp-prov { margin-left: 6px; color: var(--subdue); font-size: 12px; }

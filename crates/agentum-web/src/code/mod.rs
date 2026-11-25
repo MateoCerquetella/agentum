@@ -66,6 +66,11 @@ fn models_of(machine: Signal<String>, agent: Signal<AgentKind>) -> LocalResource
     })
 }
 
+/// A model's provider, when its id says it (`deepseek/deepseek-v4-pro` → `deepseek`).
+fn provider_of(id: &str) -> Option<&str> {
+    id.split_once('/').map(|(p, _)| p).filter(|p| !p.is_empty())
+}
+
 /// BB's model picker: the agents as tabs (their marks), the agent's models (the first few, then
 /// "More models"), searchable, and a Reasoning row. One chip: mark · model · effort.
 #[component]
@@ -124,7 +129,7 @@ fn ModelChip(machine: Signal<String>, agent: RwSignal<AgentKind>, model: RwSigna
     };
     view! {
         <div class="pk mp" node_ref=root>
-            <button type="button" class="pk-chip pk-model" title="Agent, model and reasoning" aria-expanded=move || open.get().to_string() on:click=move |_| open.update(|o| *o = !*o)>
+            <button type="button" class="pk-chip pk-model" title=move || model.get().map(|m| format!("{m} · agent, model and reasoning")).unwrap_or_else(|| "Agent, model and reasoning".into()) aria-expanded=move || open.get().to_string() on:click=move |_| open.update(|o| *o = !*o)>
                 {move || view! { <crate::code::marks::AgentMark agent=agent.get() size=14/> }}
                 <span>{move || model_label()}</span>
                 {move || effort.get().map(|e| view! { <span class="pk-dim">{e}</span> })}
@@ -177,9 +182,9 @@ fn ModelChip(machine: Signal<String>, agent: RwSignal<AgentKind>, model: RwSigna
                                     let on = cur.as_deref() == Some(m.id.as_str());
                                     let id = m.id.clone();
                                     view! {
-                                        <button type="button" class="pk-item" on:click=move |_| pick(Some(id.clone()))>
-                                            <span class="pk-label">{m.label.clone()}</span>
-                                            {m.context_window.map(|c| view! { <span class="pk-sub">{format!("{}k", c / 1000)}</span> })}
+                                        <button type="button" class="pk-item" title=format!("{}{}", m.id, m.context_window.map(|c| format!(" · {}k context", c / 1000)).unwrap_or_default()) on:click=move |_| pick(Some(id.clone()))>
+                                            // As BB: the provider after the name (two "DeepSeek V4 Pro" differ by it).
+                                            <span class="pk-label">{m.label.clone()}{provider_of(&m.id).map(|p| view! { <span class="mp-prov">{p.to_string()}</span> })}</span>
                                             {on.then(|| view! { <Icon name="check" size=13 class="pk-check"/> })}
                                         </button>
                                     }

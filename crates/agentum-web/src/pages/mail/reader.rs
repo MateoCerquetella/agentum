@@ -39,12 +39,6 @@ pub fn Reader(r: Reading, on_close: Callback<()>) -> impl IntoView {
             match api_get::<Value>(&url).await {
                 Ok(v) => {
                     let full = Full::of(&v, &item);
-                    // Frame look: theme colours from the pane itself (computed rgb).
-                    let el: Option<web_sys::Element> = pane.get_untracked().map(Into::into).or_else(|| web_sys::window()?.document()?.body().map(Into::into));
-                    let cs = el.and_then(|e| web_sys::window()?.get_computed_style(&e).ok().flatten());
-                    let bg = cs.as_ref().and_then(|s| s.get_property_value("background-color").ok()).filter(|b| !b.is_empty() && b != "rgba(0, 0, 0, 0)").unwrap_or_else(|| token_rgb("bg"));
-                    let fg = cs.as_ref().and_then(|s| s.get_property_value("color").ok()).unwrap_or_else(|| token_rgb("text"));
-                    let _ = theme.try_set(Some((bg, fg, token_rgb("primary"))));
                     let _ = m.try_set(Some(full.clone()));
                     c.refresh_counts();
                     if let Some(t) = then {
@@ -114,7 +108,22 @@ pub fn Reader(r: Reading, on_close: Callback<()>) -> impl IntoView {
         })),
     );
 
-    let is_dark_now = move || dark.get().unwrap_or_else(|| theme.with(|t| t.as_ref().map(|t| is_dark(&t.0)).unwrap_or(true)));
+    // Frame look: the pane's own colours as plain rgb (Studio writes them in oklch, which the
+    // email's styles can't use), read again whenever the look or light/dark changes.
+    let look_sig = crate::pages::theme::look_signal();
+    Effect::new(move |_| {
+        look_sig.track();
+        if m.with(Option::is_none) {
+            return;
+        }
+        let el: Option<web_sys::Element> = pane.get_untracked().map(Into::into).or_else(|| web_sys::window()?.document()?.body().map(Into::into));
+        let cs = el.and_then(|e| web_sys::window()?.get_computed_style(&e).ok().flatten());
+        let bg = cs.as_ref().and_then(|s| s.get_property_value("background-color").ok()).filter(|b| !b.is_empty() && b != "rgba(0, 0, 0, 0)").map(|b| rgb_of(&b)).unwrap_or_else(|| token_rgb("bg"));
+        let fg = cs.as_ref().and_then(|s| s.get_property_value("color").ok()).filter(|c| !c.is_empty()).map(|c| rgb_of(&c)).unwrap_or_else(|| token_rgb("text"));
+        theme.set(Some((bg, fg, token_rgb("primary"))));
+    });
+    // Light or dark as the app is, unless the sun/moon button said otherwise for this email.
+    let is_dark_now = move || dark.get().unwrap_or_else(|| { look_sig.track(); crate::pages::theme::scheme() == "dark" });
     let look = move || {
         let (m, t) = (m.get()?, theme.get()?);
         let l = mail_look(&m, is_dark_now(), &Theme { bg: t.0, fg: t.1, link: t.2 });
