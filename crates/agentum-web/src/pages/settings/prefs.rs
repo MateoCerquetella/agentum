@@ -163,6 +163,15 @@ pub fn Security() -> impl IntoView {
                 </div>
             </div>
             <Passkeys/>
+            <div class="set-row">
+                <div class="set-label">"This device"</div>
+                <div class="set-ctl">
+                    <button class="btn" on:click=move |_| spawn_local(async {
+                        let _ = api_post::<Value>("/auth/logout", &json!({})).await;
+                        let _ = web_sys::window().unwrap().location().reload();
+                    })>"Sign out"</button>
+                </div>
+            </div>
         </div>
     }
 }

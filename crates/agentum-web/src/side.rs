@@ -411,10 +411,7 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
                     </div>
                 </leptos::portal::Portal>
             })}
-            <button class="icon-btn" title="Sign out" on:click=move |_| spawn_local(async {
-                let _ = api_post::<Value>("/auth/logout", &json!({})).await;
-                let _ = web_sys::window().unwrap().location().reload();
-            })><Icon name="logout" size=15/></button>
+            // (Sign out: Settings → Security, so the footer fits on one line.)
         </div>
     }
 }
