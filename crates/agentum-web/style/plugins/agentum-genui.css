@@ -1,0 +1,94 @@
+/* Generative UI plugin: what genui.css (CERQ's) doesn't already draw. */
+.gu-root { display: grid; gap: 8px; margin: 8px 0; min-width: 0; --gc0: var(--chart-1, var(--primary)); --gc1: var(--chart-2, var(--positive)); --gc2: var(--chart-3, #b39dff); --gc3: var(--chart-4, var(--warm)); --gc4: var(--chart-5, var(--negative)); --gc5: var(--chart-6, #5fc7d6); }
+.gu-root .gu-card { margin: 0; }
+.gu-title { color: var(--hi); font-weight: 600; font-size: 13.5px; }
+.gu-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.gu-text p { margin: 0 0 6px; } .gu-text p:last-child { margin-bottom: 0; }
+.gu-text.tone-good { color: var(--positive); } .gu-text.tone-bad { color: var(--negative); } .gu-text.tone-warn { color: var(--money); }
+.gu-callout.tone-info { border-left-color: var(--primary); }
+.gu-callout p { margin: 0; }
+.gu-note { color: var(--subdue); font-size: 11.5px; }
+.gu-badge.tone-info { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 40%, transparent); }
+.gu-icon { display: inline-flex; color: var(--base); } .gu-icon.tone-good { color: var(--positive); } .gu-icon.tone-bad { color: var(--negative); } .gu-icon.tone-warn { color: var(--money); } .gu-icon.tone-info { color: var(--primary); }
+.gu-prog.tone-good i { background: var(--positive); } .gu-prog.tone-warn i { background: var(--money); } .gu-prog.tone-bad i { background: var(--negative); }
+.gu-tl-i.tone-good > i { background: var(--positive); } .gu-tl-i.tone-warn > i { background: var(--money); } .gu-tl-i.tone-bad > i { background: var(--negative); }
+.gu-spark.tone-good { color: var(--positive); } .gu-spark.tone-bad { color: var(--negative); } .gu-spark.tone-warn { color: var(--money); }
+.gu-steps li small, .gu-tl-i .ti small { font-size: 11.5px; }
+.gu-code { margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--hl); color: var(--hi); font: 12px/1.5 var(--mono, var(--font)); white-space: pre-wrap; overflow-x: auto; max-height: 360px; }
+.gu-img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
+/* Inputs */
+.gu-field { display: grid; gap: 4px; min-width: 0; }
+.gu-flabel { display: flex; align-items: baseline; gap: 8px; color: var(--base); font-size: 12px; }
+.gu-flabel span { flex: 1; } .gu-flabel b { font-weight: 500; color: var(--hi); font-variant-numeric: tabular-nums; }
+.gu-slider input[type="range"] { width: 100%; padding: 0; border: 0; background: transparent; accent-color: var(--primary); }
+.gu-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: var(--radius); background: var(--hl); justify-self: start; }
+.gu-seg button { border: 0; background: transparent; color: var(--base); padding: 3px 10px; border-radius: calc(var(--radius) - 1px); font-size: 12.5px; }
+.gu-seg button:hover { color: var(--hi); }
+.gu-seg button[aria-checked="true"] { background: var(--widget); color: var(--hi); box-shadow: 0 1px 2px rgb(0 0 0 / .14); }
+.gu-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text); justify-self: start; }
+.gu-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.gu-switch { position: relative; width: 30px; height: 18px; border-radius: 99px; background: var(--border-strong); transition: background .15s; flex: none; }
+.gu-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgb(0 0 0 / .25); }
+.gu-toggle input:checked + .gu-switch { background: var(--primary); }
+.gu-toggle input:checked + .gu-switch::after { transform: translateX(12px); }
+.gu-toggle input:focus-visible + .gu-switch { outline: 2px solid var(--primary); outline-offset: 2px; }
+.gu-check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.gu-check input { accent-color: var(--primary); padding: 0; }
+.gu-stepper { display: inline-flex; align-items: center; gap: 10px; justify-self: start; }
+.gu-stepper .btn { width: 28px; justify-content: center; padding: 2px 0; }
+.gu-stepper b { min-width: 2.5em; text-align: center; font-weight: 500; color: var(--hi); font-variant-numeric: tabular-nums; }
+.gu-form { padding-top: 2px; }
+/* Lists */
+.gu-list { display: grid; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.gu-li { display: flex; align-items: center; gap: 10px; padding: 7px 12px; min-width: 0; }
+.gu-li + .gu-li { border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.gu-li.click { cursor: pointer; } .gu-li.click:hover { background: var(--hl); }
+.gu-li-icon { color: var(--primary); flex: none; }
+.gu-li-main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.gu-li-title { color: var(--hi); overflow-wrap: anywhere; }
+.gu-li-main small { color: var(--subdue); font-size: 11.5px; }
+.gu-li-value { color: var(--hi); font-variant-numeric: tabular-nums; }
+.gu-li.tone-good .gu-li-icon { color: var(--positive); } .gu-li.tone-bad .gu-li-icon { color: var(--negative); } .gu-li.tone-warn .gu-li-icon { color: var(--money); }
+/* Tabs */
+.gu-tabs { display: grid; gap: 8px; }
+.gu-tabbar { display: flex; gap: 2px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.gu-tabbar button { border: 0; background: transparent; color: var(--base); padding: 5px 10px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 12.5px; }
+.gu-tabbar button[aria-selected="true"] { color: var(--hi); border-bottom-color: var(--primary); }
+.gu-details > summary { list-style: none; cursor: pointer; color: var(--base); display: inline-flex; align-items: center; gap: 4px; }
+.gu-details > summary::-webkit-details-marker { display: none; }
+.gu-details > summary svg { transition: transform .15s; }
+.gu-details[open] > summary svg { transform: rotate(90deg); }
+/* Charts */
+.gu-chart { margin: 0; display: grid; gap: 6px; }
+.gu-chart svg { width: 100%; max-width: 620px; height: auto; overflow: visible; }
+.gu-chart svg.gu-pie { max-width: 180px; justify-self: center; }
+.gu-axis line { stroke: var(--border); stroke-width: 1; }
+.gu-axis text, .gu-pie-total { fill: var(--subdue); font-size: 9.5px; font-family: var(--font); }
+.gu-pie-total { font-size: 15px; fill: var(--hi); }
+.gu-chart rect.c0, .gu-chart circle.c0:not(.gu-slice), .gu-area.c0 { fill: var(--gc0); } .gu-chart .gu-line.c0, .gu-slice.c0 { stroke: var(--gc0); }
+.gu-chart rect.c1, .gu-chart circle.c1:not(.gu-slice), .gu-area.c1 { fill: var(--gc1); } .gu-chart .gu-line.c1, .gu-slice.c1 { stroke: var(--gc1); }
+.gu-chart rect.c2, .gu-chart circle.c2:not(.gu-slice), .gu-area.c2 { fill: var(--gc2); } .gu-chart .gu-line.c2, .gu-slice.c2 { stroke: var(--gc2); }
+.gu-chart rect.c3, .gu-chart circle.c3:not(.gu-slice), .gu-area.c3 { fill: var(--gc3); } .gu-chart .gu-line.c3, .gu-slice.c3 { stroke: var(--gc3); }
+.gu-chart rect.c4, .gu-chart circle.c4:not(.gu-slice), .gu-area.c4 { fill: var(--gc4); } .gu-chart .gu-line.c4, .gu-slice.c4 { stroke: var(--gc4); }
+.gu-chart rect.c5, .gu-chart circle.c5:not(.gu-slice), .gu-area.c5 { fill: var(--gc5); } .gu-chart .gu-line.c5, .gu-slice.c5 { stroke: var(--gc5); }
+.gu-chart rect:hover, .gu-chart circle:hover { opacity: .8; }
+.gu-line { stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.gu-area { opacity: .16; }
+.gu-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--base); }
+.gu-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.gu-legend i { width: 9px; height: 9px; border-radius: 3px; }
+.gu-legend i.c0 { background: var(--gc0); } .gu-legend i.c1 { background: var(--gc1); } .gu-legend i.c2 { background: var(--gc2); }
+.gu-legend i.c3 { background: var(--gc3); } .gu-legend i.c4 { background: var(--gc4); } .gu-legend i.c5 { background: var(--gc5); }
+/* Follow-ups, errors, unknown components, the source */
+.gu-follow { display: flex; flex-wrap: wrap; gap: 6px; }
+.gu-fu { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border: 1px solid var(--border); border-radius: 99px; background: transparent; color: var(--text); font-size: 12.5px; text-align: left; }
+.gu-fu svg { color: var(--primary); flex: none; }
+.gu-fu:hover { border-color: var(--primary); color: var(--hi); }
+.gu-error { display: flex; align-items: flex-start; gap: 6px; padding: 6px 10px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--negative) 35%, transparent); background: color-mix(in srgb, var(--negative) 7%, transparent); color: var(--negative); font-size: 12px; overflow-wrap: anywhere; }
+.gu-error svg { flex: none; margin-top: 2px; }
+.gu-unknown { display: grid; gap: 6px; padding: 8px 10px; border: 1px dashed var(--border-strong); border-radius: 8px; color: var(--subdue); }
+.gu-unknown-name { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; }
+.gu-src-bar { display: flex; justify-content: flex-end; margin-top: -4px; }
+.gu-src-btn { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0 2px; color: var(--subdue); font-size: 11px; opacity: .6; }
+.gu-root:hover .gu-src-btn, .gu-src-btn:focus-visible { opacity: 1; }
+.gu-src-btn:hover { color: var(--hi); }
