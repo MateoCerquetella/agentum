@@ -41,3 +41,5 @@ serde.workspace = true
 serde_json.workspace = true
 web-sys.workspace = true
 console_error_panic_hook = "0.1"
+# Mail and Today: the quick-add parser, subjects and email colours (small, no Unicode tables).
+regex-lite = "0.1"
