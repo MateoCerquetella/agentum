@@ -49,6 +49,7 @@ pub struct Translator {
     base: (Usage, f64),
     ctx: Option<u64>,
     running: bool,
+    started_at: Option<u64>,
 }
 
 impl Translator {
@@ -71,6 +72,7 @@ impl Translator {
             "session.execution.started" => {
                 self.running = true;
                 self.base = (self.usage.clone(), self.cost);
+                self.started_at = Some(n(ev, "created"));
             }
             "session.text.delta" => {
                 let text = s(d, "delta");
@@ -221,7 +223,8 @@ impl Translator {
                 };
                 let cost = (self.cost - bc).max(0.0);
                 self.running = false;
-                out.push(EventKind::TurnDone { turn: 0, stop, usage: Some(usage), cost_usd: Some(cost), duration_ms: 0 });
+                let duration_ms = self.started_at.take().map(|t| n(ev, "created").saturating_sub(t)).unwrap_or(0);
+                out.push(EventKind::TurnDone { turn: 0, stop, usage: Some(usage), cost_usd: Some(cost), duration_ms });
             }
             _ => {}
         }
@@ -361,6 +364,20 @@ impl Server {
             anyhow::bail!("opencode {method} {path}: HTTP {} {}", r.status, crate::util::truncate(&r.text(), 400));
         }
         r.json()
+    }
+
+    /// The model list; empty right after start while OpenCode loads its catalog, so wait a little.
+    pub async fn model_list(&self, cwd: &str) -> anyhow::Result<Value> {
+        let path = format!("/api/model?{}={}", enc("location[directory]"), enc(cwd));
+        let t0 = Instant::now();
+        loop {
+            let list = self.call("GET", &path, None).await?;
+            let empty = list.get("data").and_then(|d| d.as_array()).is_none_or(|d| d.is_empty());
+            if !empty || t0.elapsed() > Duration::from_secs(20) {
+                return Ok(list);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     }
 
     fn alive(&self) -> bool {
@@ -573,14 +590,16 @@ impl Agent for OpencodeAgent {
         };
         let info = server.call("GET", &format!("/api/session/{sid}"), None).await.unwrap_or(Value::Null);
         let model = info.get("data").and_then(|d| d.get("model")).map(|m| format!("{}/{}", s(m, "providerID"), s(m, "id"))).filter(|m| m != "/");
-        let mut tr = Translator::new(&sid, &cwd);
-        // The context window of its model, for Usage.
-        if let Some(m) = &model
-            && let Ok(list) = server.call("GET", &format!("/api/model?{}={}", enc("location[directory]"), enc(&cwd)), None).await
-        {
-            tr.context_window = models_from_list(&list, None).into_iter().find(|x| &x.id == m).and_then(|x| x.context_window);
+        let tr = Arc::new(Mutex::new(Translator::new(&sid, &cwd)));
+        // The context window of its model, for Usage (the catalog may still be loading).
+        if let Some(m) = model.clone() {
+            let (server, tr, cwd) = (server.clone(), tr.clone(), cwd.clone());
+            tokio::spawn(async move {
+                if let Ok(list) = server.model_list(&cwd).await {
+                    tr.lock().unwrap().context_window = models_from_list(&list, None).into_iter().find(|x| x.id == m).and_then(|x| x.context_window);
+                }
+            });
         }
-        let tr = Arc::new(Mutex::new(tr));
         server.routes.lock().unwrap().insert(sid.clone(), (tr.clone(), out.clone()));
         let _ = out.send(DriverOut::Event(EventKind::Session { session_id: sid.clone(), model }));
         Ok(Box::new(Live { server, sid, tr, out }))
@@ -589,7 +608,7 @@ impl Agent for OpencodeAgent {
     async fn models(&self, bin: PathBuf, cwd: PathBuf) -> anyhow::Result<Vec<ModelInfo>> {
         let server = self.server(&bin).await?;
         let loc = format!("{}={}", enc("location[directory]"), enc(&cwd.to_string_lossy()));
-        let list = server.call("GET", &format!("/api/model?{loc}"), None).await?;
+        let list = server.model_list(&cwd.to_string_lossy()).await?;
         let def = server.call("GET", &format!("/api/model/default?{loc}"), None).await.ok();
         let def = def.as_ref().and_then(|d| d.get("data")).filter(|d| !d.is_null()).map(|m| format!("{}/{}", s(m, "providerID"), m.get("modelID").and_then(|x| x.as_str()).unwrap_or("")));
         Ok(models_from_list(&list, def.as_deref()))
@@ -699,9 +718,10 @@ mod tests {
         assert!(ls_out.unwrap().contains("notes.txt"));
         assert!(evs.iter().any(|e| matches!(e, EventKind::Message { text, .. } if text == "done")));
         assert!(evs.iter().any(|e| matches!(e, EventKind::Thinking { .. })));
-        let EventKind::TurnDone { stop, usage, cost_usd, .. } = evs.last().unwrap() else { panic!("{:?}", evs.last()) };
+        let EventKind::TurnDone { stop, usage, cost_usd, duration_ms, .. } = evs.last().unwrap() else { panic!("{:?}", evs.last()) };
         assert_eq!(*stop, StopReason::End);
         assert_eq!(*cost_usd, Some(0.0));
+        assert!(*duration_ms > 1000, "{duration_ms}");
         let u = usage.as_ref().unwrap();
         assert_eq!(u.input, 10909);
         assert_eq!(u.context_used, Some(817 + 3 + 10752));
