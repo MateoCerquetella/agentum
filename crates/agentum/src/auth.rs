@@ -97,14 +97,13 @@ pub async fn new_session(app: &App, user: &str, headers: &HeaderMap) -> R<Respon
 
 pub async fn logout(State(app): State<App>, headers: HeaderMap) -> R<Response> {
     if let Some(t) = token_from(&headers) { app.db.call(move |c| c.execute("DELETE FROM auth_sessions WHERE token=?1", [t])).await?; }
-    // Signing out of CERQ also closes BB's screen (code.cerq.lan), which CERQ's login guards.
     app.db.kv_set("bb_sessions", &json!({})).await?;
     Ok(([(header::SET_COOKIE, format!("{COOKIE}=; Path=/; Max-Age=0"))], Json(json!({"ok": true}))).into_response())
 }
 
 pub async fn me(State(app): State<App>, headers: HeaderMap) -> R<Json<Value>> {
     match user_of(&app, &headers).await {
-        Some(u) => Ok(Json(json!({"user": u, "brand": app.db.kv_get("brand").await?.unwrap_or(json!("CERQ"))}))),
+        Some(u) => Ok(Json(json!({"user": u, "brand": app.db.kv_get("brand").await?.unwrap_or(json!("Agentum"))}))),
         None => Err(AppError(StatusCode::UNAUTHORIZED, "unauthorized".into())),
     }
 }

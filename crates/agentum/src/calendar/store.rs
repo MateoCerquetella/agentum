@@ -223,10 +223,10 @@ mod tests {
         assert_eq!(kind("Cumple de Juan", "Calendar · iCloud", &none), "birthday");
         assert_eq!(kind("Pagar tarjeta", "Calendar · iCloud", &none), "money");
         assert_eq!(kind("Pagaré", "Calendar · iCloud", &none), "personal");
-        assert_eq!(kind("Daily Sync", "mcerquetella@goempirical.com · GoEmpirical", &none), "work");
+        assert_eq!(kind("Daily Sync", "someone@acme.example · Acme", &none), "work");
         assert_eq!(kind("Dentist", "Personal", &none), "personal");
-        let work = vec!["freebee".to_string()];
-        assert_eq!(kind("Standup", "mateo@ridefreebee.com · Freebee", &work), "work");
-        assert_eq!(kind("Standup", "x · GoEmpirical", &work), "personal");
+        let work = vec!["widgets".to_string()];
+        assert_eq!(kind("Standup", "me@widgets.example · Widgets", &work), "work");
+        assert_eq!(kind("Standup", "x · Acme", &work), "personal");
     }
 }

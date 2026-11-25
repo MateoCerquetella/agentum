@@ -23,7 +23,7 @@ pub fn client() -> &'static reqwest::Client {
 }
 
 fn req(method: &str, url: &str, auth: &Auth) -> reqwest::RequestBuilder {
-    let r = client().request(Method::from_bytes(method.as_bytes()).unwrap(), url).header("User-Agent", "CERQ/1.0");
+    let r = client().request(Method::from_bytes(method.as_bytes()).unwrap(), url).header("User-Agent", "Agentum/1.0");
     match auth { Auth::Basic(u, p) => r.basic_auth(u, Some(p)), Auth::Bearer(t) => r.bearer_auth(t) }
 }
 
