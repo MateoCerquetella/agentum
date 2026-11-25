@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 pub mod opencode;
 
 /// What a running agent tells its thread.
@@ -68,22 +69,24 @@ pub trait Agent: Send + Sync {
     async fn models(&self, bin: PathBuf, cwd: PathBuf) -> anyhow::Result<Vec<ModelInfo>>;
 }
 
-/// The three drivers.
+/// The four drivers.
 pub struct Agents {
     pub claude: claude::ClaudeAgent,
     pub codex: codex::CodexAgent,
     pub opencode: opencode::OpencodeAgent,
+    pub cursor: cursor::CursorAgent,
 }
 
 impl Agents {
     pub fn new(idle_minutes: u64) -> Agents {
-        Agents { claude: claude::ClaudeAgent, codex: codex::CodexAgent, opencode: opencode::OpencodeAgent::new(idle_minutes) }
+        Agents { claude: claude::ClaudeAgent, codex: codex::CodexAgent, opencode: opencode::OpencodeAgent::new(idle_minutes), cursor: cursor::CursorAgent }
     }
     pub fn get(&self, kind: AgentKind) -> &dyn Agent {
         match kind {
             AgentKind::ClaudeCode => &self.claude,
             AgentKind::Codex => &self.codex,
             AgentKind::Opencode => &self.opencode,
+            AgentKind::Cursor => &self.cursor,
         }
     }
 }
@@ -240,7 +243,7 @@ pub fn permission_options() -> Vec<agentum_proto::AskOption> {
     ]
 }
 
-/// A tool's kind from its name (the names the three agents use).
+/// A tool's kind from its name (the names the agents use).
 pub fn tool_kind(name: &str) -> ToolKind {
     let n = name.to_ascii_lowercase();
     match n.as_str() {

@@ -16,12 +16,14 @@ pub fn binary_name(a: AgentKind) -> &'static str {
         AgentKind::ClaudeCode => "claude",
         AgentKind::Codex => "codex",
         AgentKind::Opencode => "opencode",
+        AgentKind::Cursor => "cursor-agent",
     }
 }
 
 /// The agent's CLI: the configured one, else (OpenCode) its own installer's copy, else the first on
-/// PATH. OpenCode's installer keeps it current in `~/.opencode/bin`; an npm global earlier on PATH is
-/// often an old 1.x, whose API agentd doesn't speak.
+/// PATH (Cursor's: also where its installer puts it, `~/.local/bin`). OpenCode's installer keeps it
+/// current in `~/.opencode/bin`; an npm global earlier on PATH is often an old 1.x, whose API agentd
+/// doesn't speak.
 pub fn agent_bin(cfg: &Config, a: AgentKind) -> Option<PathBuf> {
     match cfg.agent_bin(a) {
         Some(p) => {
@@ -29,6 +31,7 @@ pub fn agent_bin(cfg: &Config, a: AgentKind) -> Option<PathBuf> {
             p.is_file().then_some(p)
         }
         None if a == AgentKind::Opencode => Some(home().join(".opencode/bin/opencode")).filter(|p| p.is_file()).or_else(|| which("opencode")),
+        None if a == AgentKind::Cursor => which("cursor-agent").or_else(|| Some(home().join(".local/bin/cursor-agent")).filter(|p| p.is_file())),
         None => which(binary_name(a)),
     }
 }
