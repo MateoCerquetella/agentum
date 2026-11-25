@@ -1,5 +1,5 @@
 //! Browser: The agents' browser (Steel), beside your threads.
-use agentum_plugin::{Group, Manifest};
+use agentum_plugin::{Group, Manifest, SettingDef, SettingKind};
 
 pub static MANIFEST: Manifest = Manifest {
     id: "browser",
@@ -8,7 +8,10 @@ pub static MANIFEST: Manifest = Manifest {
     icon: "globe",
     group: Group::Looks,
     default_on: true,
-    settings: &[],
+    settings: &[
+        SettingDef { key: "api_url", label: "Steel API", help: "Where Steel's API answers, like http://jupiter:3000 (its /v1/sessions lists the browsers).", kind: SettingKind::Text, default: "\"\"" },
+        SettingDef { key: "viewer_url", label: "Viewer", help: "The page that shows the browser, like http://jupiter:5173 (Steel's UI). Empty: a session's own viewer.", kind: SettingKind::Text, default: "\"\"" },
+    ],
 };
 
 #[cfg(feature = "hub")]

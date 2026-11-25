@@ -11,6 +11,8 @@ pub static MANIFEST: Manifest = Manifest {
     settings: &[],
 };
 
+pub mod lang;
+
 #[cfg(feature = "hub")]
 mod hub;
 #[cfg(feature = "hub")]
