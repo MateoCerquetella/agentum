@@ -381,7 +381,19 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
         ov.with(|o| {
             o.as_ref()
                 .map(|o| {
-                    o.limits.iter().filter_map(|l| l.limits.first().map(|w| (l.agent.label(), w.window.clone(), w.used_percent))).take(2).collect::<Vec<_>>()
+                    // One meter per agent: its fullest window on any machine.
+                    let mut by: Vec<(&'static str, String, f64)> = vec![];
+                    for l in &o.limits {
+                        for w in &l.limits {
+                            match by.iter_mut().find(|x| x.0 == l.agent.label()) {
+                                Some(x) if w.used_percent > x.2 => *x = (l.agent.label(), w.window.clone(), w.used_percent),
+                                Some(_) => {}
+                                None => by.push((l.agent.label(), w.window.clone(), w.used_percent)),
+                            }
+                        }
+                    }
+                    by.truncate(2);
+                    by
                 })
                 .unwrap_or_default()
         })
