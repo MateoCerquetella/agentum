@@ -49,3 +49,6 @@ pre.diff .diff-file { color: var(--hi); font-weight: 600; }
 .dock-meta mark { background: color-mix(in srgb, var(--primary) 30%, transparent); color: var(--hi); border-radius: 2px; }
 .dock-row { position: relative; }
 .hover-card { position: fixed; z-index: 50; margin-left: calc(var(--side-w, 260px) - 12px); margin-top: -8px; width: 320px; background: var(--widget); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 10px 12px; box-shadow: 0 8px 24px rgb(0 0 0 / .3); pointer-events: none; font-size: 12px; }
+.code-head { display: flex; align-items: center; flex-wrap: nowrap; min-height: 44px; }
+.code-head > b { min-width: 0; }
+.code-composer .row, .code-new .row, .tool-head { display: flex; align-items: center; }

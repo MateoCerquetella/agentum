@@ -182,8 +182,9 @@ fn ToolRow(item: Item, thread: String, live: Signal<Option<String>>) -> impl Int
         Some((true, ..)) => "tool-ok",
         Some((false, ..)) => "tool-bad",
     };
-    let summary = input_summary(&name, &input);
     let head = if title.is_empty() { name.clone() } else { title.clone() };
+    // The argument only when the title doesn't already say it.
+    let summary = Some(input_summary(&name, &input)).filter(|s| *s != head && !head.contains(s.as_str())).unwrap_or_default();
     let (output, diffs) = done.clone().map(|(_, o, d)| (o, d)).unwrap_or((None, vec![]));
     let has_diff = !diffs.is_empty();
     let _ = thread;
