@@ -204,19 +204,44 @@ fn merge_limits(all: &mut Vec<AgentLimits>, mut l: AgentLimits, provider: bool, 
     put
 }
 
-/// Each subscription agent's limits asked of its provider now (agentd's `Req::Usage`), on every
-/// online machine that has it: machines signed in to different accounts (a work organization
-/// here, a personal one there) each get theirs; the same account's reports are one.
+/// Which machines to ask for an agent's limits: every one whose account isn't known yet, and one
+/// of each known account's (the next in turn, so each machine is asked again in time and a
+/// machine signed in elsewhere since is noticed). Providers throttle their usage endpoints:
+/// asking every machine of one account each time would only get it refused.
+fn usage_askees(all: &[AgentLimits], agent: AgentKind, mut online: Vec<String>) -> Vec<String> {
+    online.sort();
+    let mut ask = vec![];
+    for l in all.iter().filter(|l| l.agent == agent && l.account.is_some()) {
+        let mut on: Vec<&String> = online.iter().filter(|m| l.machines.contains(m)).collect();
+        on.sort();
+        if let Some(i) = (!on.is_empty()).then(|| on.iter().position(|m| **m == l.machine).map(|i| (i + 1) % on.len()).unwrap_or(0)) {
+            ask.push(on[i].clone());
+        }
+    }
+    for m in &online {
+        if !all.iter().any(|l| l.agent == agent && l.account.is_some() && l.machines.contains(m)) && !ask.contains(m) {
+            ask.push(m.clone());
+        }
+    }
+    ask
+}
+
+/// Each subscription agent's limits asked of its provider now (agentd's `Req::Usage`), on the
+/// online machines that have it ([`usage_askees`]): machines signed in to different accounts (a
+/// work organization here, a personal one there) each get theirs; one account's reports are one.
 pub async fn usage_refresh(app: &App) -> Vec<AgentLimits> {
     let machines = agentd::machines(app).await;
+    let known = app.code.limits.read().unwrap().clone();
     let mut asks = vec![];
     for agent in [AgentKind::ClaudeCode, AgentKind::Codex, AgentKind::Cursor] {
-        for m in machines.iter().filter(|m| m.online && m.agents.iter().any(|a| a.agent == agent && a.installed)) {
-            let Some(c) = app.code.conn(&m.id) else { continue };
-            if !c.hello.read().unwrap().features.iter().any(|f| f == "usage") {
-                continue;
-            }
-            let id = m.id.clone();
+        let online = machines
+            .iter()
+            .filter(|m| m.online && m.agents.iter().any(|a| a.agent == agent && a.installed))
+            .filter(|m| app.code.conn(&m.id).is_some_and(|c| c.hello.read().unwrap().features.iter().any(|f| f == "usage")))
+            .map(|m| m.id.clone())
+            .collect();
+        for id in usage_askees(&known, agent, online) {
+            let Some(c) = app.code.conn(&id) else { continue };
             asks.push(async move { (agent, id, c.call(Req::Usage { agent }, Duration::from_secs(45)).await) });
         }
     }
@@ -969,5 +994,13 @@ mod tests {
         merge_limits(&mut all, report("saturn", None, &[("5h", 3.0)], 14), false, 0);
         assert_eq!(all.len(), 3);
         assert_eq!(limits_for(&all, AgentKind::ClaudeCode, "workbox").map(|x| x.limits[0].used_percent), Some(70.0));
+        // Who is asked next: one machine per account (jupiter reported last: mars is next), and
+        // saturn, whose account isn't known; Codex, never reported: every machine.
+        let online = || vec!["jupiter".to_string(), "mars".into(), "saturn".into(), "workbox".into()];
+        let mut ask = usage_askees(&all, AgentKind::ClaudeCode, online());
+        ask.sort();
+        assert_eq!(ask, ["mars", "saturn", "workbox"]);
+        assert_eq!(usage_askees(&all, AgentKind::Codex, online()).len(), 4);
+        assert_eq!(usage_askees(&all, AgentKind::ClaudeCode, vec!["jupiter".into()]), ["jupiter"]);
     }
 }
