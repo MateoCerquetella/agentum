@@ -479,7 +479,7 @@ fn Editor(doc: Doc, cwd: Memo<String>) -> impl IntoView {
                     <div class="ed-code">
                         <div class="ed-hl md" aria-hidden="true" inner_html=html></div>
                         <textarea class="ed-ta" node_ref=ta spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"
-                            on:input=on_input on:keydown=on_key></textarea>
+                            on:input=on_input on:keydown:undelegated=on_key></textarea>
                     </div>
                 </div>
             </div>

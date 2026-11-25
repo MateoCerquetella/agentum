@@ -83,7 +83,9 @@ fn TerminalTab(cx: ThreadCx) -> impl IntoView {
                 let live: Vec<String> = match term_call(&m, TermReq::List).await {
                     Ok(v) => v.as_array().into_iter().flatten().filter_map(|t| t["term"].as_str().map(str::to_string)).filter(|t| t.starts_with(&format!("{id}."))).collect(),
                     Err(e) => {
-                        err.set(Some(e.message));
+                        if !err.is_disposed() {
+                            err.set(Some(e.message));
+                        }
                         return;
                     }
                 };
@@ -292,7 +294,11 @@ fn Term(machine: String, cwd: String, id: String) -> impl IntoView {
             failed.set(None);
             let (m, c, t, st) = (m.clone(), c.clone(), t.clone(), st.clone());
             spawn_local(async move {
-                match term_call(&m, TermReq::Open { term: t.clone(), cwd: c, cols, rows, cmd: None }).await {
+                let r = term_call(&m, TermReq::Open { term: t.clone(), cwd: c, cols, rows, cmd: None }).await;
+                if failed.is_disposed() {
+                    return;
+                }
+                match r {
                     Ok(v) => {
                         if v["existing"].as_bool().unwrap_or(false) {
                             if let Ok(r) = term_call(&m, TermReq::Replay { term: t }).await {
@@ -301,7 +307,7 @@ fn Term(machine: String, cwd: String, id: String) -> impl IntoView {
                         }
                         st.borrow_mut().ready = true;
                         paint(&st, &el);
-                        if let Some(i) = input.get_untracked() {
+                        if let Some(i) = input.try_get_untracked().flatten() {
                             let _ = i.focus();
                         }
                     }
@@ -459,7 +465,7 @@ fn Term(machine: String, cwd: String, id: String) -> impl IntoView {
             <span class="tx-probe" node_ref=probe aria-hidden="true">"MMMMMMMMMM"</span>
             <div class="tx-screen" node_ref=screen></div>
             <textarea class="tx-input" node_ref=input autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="Terminal input"
-                on:keydown=on_key on:paste=on_paste on:compositionend=on_compose
+                on:keydown:undelegated=on_key on:paste=on_paste on:compositionend=on_compose
                 on:input=move |e| { if let Some(i) = input.get_untracked() { if !e.dyn_ref::<web_sys::InputEvent>().is_some_and(|x| x.is_composing()) { i.set_value("") } } }
                 on:focus=move |_| set_focus(true) on:blur=move |_| sf(false)></textarea>
             {move || failed.get().map(|e| view! { <div class="tx-note err">{e}</div> })}

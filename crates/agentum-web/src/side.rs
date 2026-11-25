@@ -244,7 +244,7 @@ pub fn Coding(collapsed: RwSignal<bool>) -> impl IntoView {
 
     // The visible order, for ⌘1–9 and ⌘⇧[ / ].
     let visible = Memo::new(move |_| ov.with(|o| o.as_ref().map(|o| store::sidebar_order(&o.threads)).unwrap_or_default()));
-    let _keys = window_event_listener(leptos::ev::keydown, move |e| {
+    let keys = window_event_listener(leptos::ev::keydown, move |e| {
         if !(e.meta_key() || e.ctrl_key()) {
             return;
         }
@@ -269,6 +269,8 @@ pub fn Coding(collapsed: RwSignal<bool>) -> impl IntoView {
             }
         }
     });
+    // The sidebar is drawn again now and then: the old listener must go with it.
+    on_cleanup(move || keys.remove());
 
     let is_on = move |id: String| Signal::derive(move || current.get().as_deref() == Some(id.as_str()));
     let groups = move || {

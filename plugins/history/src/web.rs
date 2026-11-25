@@ -61,6 +61,9 @@ fn HistoryTab(cx: ThreadCx) -> impl IntoView {
         spawn_local(async move {
             let log = git(&m, GitReq::Log { cwd: cwd.clone(), limit: Some(150), path: None }).await;
             let st = git(&m, GitReq::Status { cwd }).await;
+            if loaded.is_disposed() {
+                return;
+            }
             loaded.set(true);
             ahead.set(st.ok().and_then(|s| s["ahead"].as_u64()).unwrap_or(0) as usize);
             match log {
@@ -156,7 +159,11 @@ fn CommitView(cx: ThreadCx, sha: String, place: Memo<Option<(String, String)>>, 
             let Some((m, cwd)) = place.get() else { return };
             let sha = sha.clone();
             spawn_local(async move {
-                match git(&m, GitReq::Show { cwd, sha }).await {
+                let r = git(&m, GitReq::Show { cwd, sha }).await;
+                if info.is_disposed() {
+                    return;
+                }
+                match r {
                     Ok(v) => {
                         files.set(parse(v["diff"].as_str().unwrap_or("")));
                         info.set(Some(v));

@@ -155,7 +155,7 @@ fn GitTab(cx: ThreadCx) -> impl IntoView {
             spawn_local(async move {
                 let st = git(&m, GitReq::Status { cwd: cwd.clone() }).await;
                 let d = git(&m, GitReq::Diff { cwd, target: Some(t.clone()), path: None }).await;
-                if generation.get_value() != g {
+                if generation.try_get_value() != Some(g) {
                     return;
                 }
                 loading.set(false);
@@ -233,7 +233,11 @@ fn GitTab(cx: ThreadCx) -> impl IntoView {
             busy.set(Some("commit"));
             let msg_key = msg_key.clone();
             spawn_local(async move {
-                match git(&m, GitReq::Commit { cwd, message: text, all }).await {
+                let r = git(&m, GitReq::Commit { cwd, message: text, all }).await;
+                if busy.is_disposed() {
+                    return;
+                }
+                match r {
                     Ok(v) => {
                         toast(format!("Committed {}.", v["sha"].as_str().map(|s| &s[..s.len().min(7)]).unwrap_or("")));
                         msg.set(String::new());
@@ -251,9 +255,13 @@ fn GitTab(cx: ThreadCx) -> impl IntoView {
         let Some((m, cwd)) = place.get_untracked() else { return };
         busy.set(Some("push"));
         spawn_local(async move {
-            match git(&m, GitReq::Push { cwd }).await {
+            let r = git(&m, GitReq::Push { cwd }).await;
+            match &r {
                 Ok(_) => toast("Pushed."),
-                Err(e) => toast_bad(e.message),
+                Err(e) => toast_bad(e.message.clone()),
+            }
+            if busy.is_disposed() {
+                return;
             }
             busy.set(None);
             load.run(());

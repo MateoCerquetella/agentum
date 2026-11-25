@@ -111,7 +111,7 @@ fn FilesTab(cx: ThreadCx) -> impl IntoView {
         timer.set_value(Some(gloo_timers::callback::Timeout::new(120, move || {
             spawn_local(async move {
                 let r = fs(&m, FsReq::Find { root: c, query: q, limit: Some(50) }).await;
-                if generation.get_value() != g {
+                if generation.try_get_value() != Some(g) {
                     return;
                 }
                 finding.set(false);

@@ -121,7 +121,11 @@ fn PrTab(cx: ThreadCx) -> impl IntoView {
             let id = id.clone();
             loading.set(true);
             spawn_local(async move {
-                match rpc::<Value>("pr", "get", &json!({"thread": id, "refresh": refresh})).await {
+                let r = rpc::<Value>("pr", "get", &json!({"thread": id, "refresh": refresh})).await;
+                if err.is_disposed() {
+                    return;
+                }
+                match r {
                     Ok(v) => {
                         err.set(None);
                         prs().update(|p| {
@@ -151,6 +155,9 @@ fn PrTab(cx: ThreadCx) -> impl IntoView {
                 if !confirm(&format!("Merge #{}?", p["number"]), &format!("“{}” goes into its base branch by {how}.", p["title"].as_str().unwrap_or("")), "Merge", false).await {
                     return;
                 }
+                if merging.is_disposed() {
+                    return;
+                }
                 merging.set(true);
                 match rpc::<Value>("pr", "merge", &json!({"thread": id, "method": m})).await {
                     Ok(v) => {
@@ -163,7 +170,9 @@ fn PrTab(cx: ThreadCx) -> impl IntoView {
                     }
                     Err(e) => toast_bad(e.message),
                 }
-                merging.set(false);
+                if !merging.is_disposed() {
+                    merging.set(false);
+                }
             });
         }
     };
