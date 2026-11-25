@@ -1,0 +1,8 @@
+/* The loading screen (warp.ts): over its host, the word under the stars. */
+.cerq-warp { position: absolute; inset: 0; z-index: 50; overflow: hidden; transition: opacity .3s ease; }
+.cerq-warp.window { position: fixed; z-index: 100000; }
+.cerq-warp.out { opacity: 0; pointer-events: none; }
+.cerq-warp canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.cerq-warp .word { position: absolute; left: 0; right: 0; bottom: 12%; text-align: center; color: var(--hi); font: 15px 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: .45em; padding-left: .45em; opacity: .92; text-shadow: 0 0 18px var(--bg), 0 0 6px var(--bg); transition: opacity .25s ease; }
+.cerq-warp.bursting .word { opacity: 0; }

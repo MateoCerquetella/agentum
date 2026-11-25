@@ -1,0 +1,5 @@
+/target
+/crates/agentum-web/dist/
+*.sync-conflict-*
+.DS_Store
+/dist/

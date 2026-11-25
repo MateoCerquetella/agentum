@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#232638" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="preload" href="/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/assets/{{CSS}}" />
+    <link rel="stylesheet" href="/api/code/syntax.css" />
+    <link rel="modulepreload" href="/assets/{{JS}}" />
+    <link rel="preload" href="/assets/{{WASM}}" as="fetch" type="application/wasm" crossorigin />
+    <title>Agentum</title>
+    <script>
+      // The look before the app loads, so the first paint has the right colours.
+      try { var t = localStorage.getItem('cerq.theme') || 'studio', m = localStorage.getItem('cerq.mode') || 'system';
+        var d = m === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : m;
+        document.documentElement.dataset.theme = t === 'factory' ? 'studio' : t; document.documentElement.dataset.scheme = d; } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">import init from '/assets/{{JS}}'; init({ module_or_path: '/assets/{{WASM}}' });</script>
+  </body>
+</html>

@@ -1,0 +1,3 @@
+/* Agentum's Today (pages/today): what the React port didn't need. */
+/* Parts redraw on their own after the first load: they appear in place instead of rising again. */
+.td.settled .rise { animation: none; opacity: 1; transform: none; }

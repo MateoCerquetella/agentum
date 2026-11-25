@@ -1,0 +1,13 @@
+/* Browser plugin: Steel's viewer, as a page and beside a thread. */
+.brw { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.brw-bar { gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); min-width: 0; }
+.brw-sessions { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.brw-sessions .chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono, var(--font)); font-size: 11px; }
+.brw-sessions .chip.on { border-color: var(--primary); color: var(--hi); }
+.brw-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--subdue); }
+.brw-dot.live { background: var(--positive); } .brw-dot.failed { background: var(--negative); }
+.brw-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
+.brw-err { display: flex; gap: 6px; align-items: center; padding: 6px 10px; color: var(--negative); border-bottom: 1px solid var(--border); }
+.brw-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 32px 20px; text-align: center; flex: 1; }
+.brw-empty p { max-width: 520px; margin: 0; line-height: 1.6; }
+.brw-empty code { font-size: 11px; background: var(--hl); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }

@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "plugins/*"]
+# `cargo build` alone builds the two binaries; the web app is built for wasm32 by scripts/build-web.sh.
+default-members = ["crates/agentum", "crates/agentd"]
+
+[workspace.package]
+version = "0.1.0-beta.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/MateoCerquetella/agentum"
+
+[workspace.dependencies]
+agentum-proto = { path = "crates/agentum-proto" }
+agentum-plugin = { path = "crates/agentum-plugin" }
+agentum-ui = { path = "crates/agentum-ui" }
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+# Web (wasm32) side.
+leptos = { version = "0.8" }
+gloo-net = { version = "0.6", default-features = false, features = ["http", "json", "websocket"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# The web app: smallest wasm (scripts/build-web.sh builds with --profile wasm).
+[profile.wasm]
+inherits = "release"
+opt-level = "z"

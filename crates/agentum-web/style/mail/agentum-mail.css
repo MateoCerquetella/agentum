@@ -1,0 +1,4 @@
+/* Agentum's Mail (pages/mail): what the React port didn't need. */
+/* The page's buttons in the pane header arrive in a portal's wrapper: lay them out as if it weren't there. */
+#pane-tools-left > div, #pane-tools-right > div { display: contents; }
+.ml-tools { display: inline-flex; align-items: center; }

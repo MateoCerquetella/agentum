@@ -1,0 +1,44 @@
+/* The Bots page (Floor.tsx): each bot at work. */
+.floor { flex: 1; min-height: 0; overflow-y: auto; padding: 8px max(16px, calc((100% - 1100px) / 2)) 40px; display: flex; flex-direction: column; gap: 18px; }
+.floor-head h1 { margin: 8px 0 2px; font-size: 22px; font-weight: 600; color: var(--hi); }
+.floor-head p { margin: 0; font-size: 13px; }
+.floor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.floor-card { display: flex; flex-direction: column; overflow: hidden; animation: floor-in .45s ease-out both; transition: box-shadow .5s; }
+@keyframes floor-in { from { opacity: 0; transform: translateY(10px); } }
+.floor-card.working { box-shadow: 0 0 0 1px oklch(0.82 0.16 85 / .35), 0 0 40px -12px oklch(0.82 0.16 85 / .45); }
+.floor-top { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 20px 14px; }
+.floor-stage { position: relative; display: flex; justify-content: center; }
+.floor-name { display: flex; align-items: center; gap: 8px; }
+.floor-name h2 { margin: 0; font-size: 18px; font-weight: 600; color: var(--hi); }
+.floor-job { margin: 0; text-align: center; max-width: 420px; }
+.floor-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 500; background: var(--hl); color: var(--base); }
+.floor-badge .code-dot { margin: 0; width: 6px; height: 6px; }
+.floor-badge.busy { background: oklch(0.82 0.16 85 / .16); color: oklch(0.62 0.14 75); }
+html[data-scheme="dark"] .floor-badge.busy { color: oklch(0.86 0.14 85); }
+.floor-badge.ask { background: color-mix(in srgb, var(--hi) 12%, transparent); color: var(--hi); }
+.floor-badge.sleep { background: oklch(0.62 0.15 300 / .15); color: oklch(0.6 0.13 300); }
+.floor-body { flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 14px 20px 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.floor-body h3 { margin: 0 0 6px; display: flex; align-items: baseline; gap: 8px; font-size: 11px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--subdue); }
+.floor-body h3 .muted { margin-left: auto; font-size: 11px; letter-spacing: 0; text-transform: none; }
+.floor-now { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.floor-now button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); text-align: left; font-size: 13px; box-shadow: none; }
+.floor-now button:hover { background: var(--hl); }
+.floor-now .code-dot { margin: 0; }
+.floor-now b { font-weight: 500; color: var(--hi); }
+.floor-strip-wrap { margin-top: auto; }
+.floor-strip-box { position: relative; }
+.floor-strip { position: relative; height: 24px; overflow: hidden; border-radius: 8px; background: var(--hl); }
+.floor-strip span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px; }
+.floor-strip span.open { animation: code-pulse 1.4s ease-in-out infinite; }
+.floor-ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: 10px; color: var(--subdue); }
+.floor-tip { position: absolute; top: -34px; left: 0; z-index: 2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 8px; border-radius: var(--radius); background: var(--widget); border: 1px solid var(--border-strong); font-size: 12px; pointer-events: none; }
+.floor-tip b { font-weight: 500; color: var(--hi); }
+.floor-links { display: flex; gap: 4px; margin: 0 -8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.floor-links .btn { height: 28px; font-size: 12px; }
+html[data-theme="studio"] .floor-card { border-radius: 1.5rem; }
+html[data-theme="studio"] .floor-body, html[data-theme="studio"] .floor-links { border-color: var(--hairline); }
+html[data-theme="studio"] .floor-body h3 { color: var(--muted-foreground); }
+html[data-theme="studio"] .floor-tip { border: 0; background: var(--popover); box-shadow: var(--elevation-float); }
+html[data-theme="studio"] .floor-strip { background: var(--muted); }
+html[data-theme="studio"] .floor-now button:hover { background: color-mix(in oklch, var(--foreground) 6%, transparent); }
+@media (prefers-reduced-motion: reduce) { .floor-card, .floor-strip span.open { animation: none; } }
