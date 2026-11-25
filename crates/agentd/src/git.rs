@@ -185,11 +185,11 @@ pub async fn handle(req: GitReq, worktrees: &Path) -> anyhow::Result<Value> {
             if message.trim().is_empty() {
                 bail!("empty commit message");
             }
-            let mut args = vec!["commit", "-m", &message];
+            // "All" means everything, new files too (as people expect), not only `-a`'s tracked ones.
             if all {
-                args.insert(1, "-a");
+                git_ok(&cwd, &["add", "-A"], 60).await?;
             }
-            git_ok(&cwd, &args, 120).await?;
+            git_ok(&cwd, &["commit", "-m", &message], 120).await?;
             let sha = git_ok(&cwd, &["rev-parse", "HEAD"], 10).await?;
             Ok(json!({"sha": sha.trim()}))
         }
