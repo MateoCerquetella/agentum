@@ -187,6 +187,19 @@ impl Threads {
         Ok(json!(m))
     }
 
+    /// The agent's subscription limits, asked of its provider now (the sidebar's meters).
+    pub async fn usage(&self, agent: AgentKind) -> anyhow::Result<Value> {
+        let (limits, plan) = match agent {
+            AgentKind::Codex => {
+                let bin = agent_bin(&self.cfg, agent).with_context(|| format!("{} is not installed on this machine", agent.label()))?;
+                crate::drivers::codex::usage_now(bin).await?
+            }
+            AgentKind::ClaudeCode => crate::drivers::claude::usage_now().await?,
+            AgentKind::Opencode => anyhow::bail!("OpenCode has no subscription limits"),
+        };
+        Ok(json!({ "limits": limits, "plan": plan }))
+    }
+
     /// Threads with a live process or unacked events (for Hello).
     pub fn live(&self) -> Vec<LiveThread> {
         let mut out = Vec::new();

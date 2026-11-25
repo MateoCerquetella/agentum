@@ -635,6 +635,18 @@ impl Agent for CodexAgent {
     }
 }
 
+/// The account's limits now, from a short-lived app-server (`account/rateLimits/read`).
+pub async fn usage_now(bin: PathBuf) -> anyhow::Result<(Vec<RateLimit>, Option<String>)> {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let tr = Arc::new(Mutex::new(Translator::new("", 0)));
+    let rpc = connect(&bin, &crate::util::home(), tx, tr).await?;
+    let r = rpc.call("account/rateLimits/read", Value::Null, Duration::from_secs(20)).await;
+    rpc.proc.kill();
+    let r = r?;
+    let r = r.get("rateLimits").unwrap_or(&Value::Null);
+    Ok((rate_limits(r), plan_type(r)))
+}
+
 pub fn models_from_list(r: &Value) -> Vec<ModelInfo> {
     r.get("data")
         .and_then(|d| d.as_array())
