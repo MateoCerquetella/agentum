@@ -5,7 +5,7 @@ pub static MANIFEST: Manifest = Manifest {
     id: "concurrency",
     name: "Concurrency limit",
     description: "At most N threads running per machine.",
-    icon: "layers",
+    icon: "shield",
     group: Group::Usage,
     default_on: false,
     settings: &[],

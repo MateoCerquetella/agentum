@@ -5,11 +5,13 @@ pub static MANIFEST: Manifest = Manifest {
     id: "genui",
     name: "Generative UI",
     description: "Draws ```ui blocks agents write as live cards, charts and tables.",
-    icon: "layout",
+    icon: "dashboard",
     group: Group::Looks,
     default_on: true,
     settings: &[],
 };
+
+pub mod lang;
 
 #[cfg(feature = "hub")]
 mod hub;

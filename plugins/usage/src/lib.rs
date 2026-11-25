@@ -5,7 +5,7 @@ pub static MANIFEST: Manifest = Manifest {
     id: "usage",
     name: "Usage",
     description: "Each agent's limits, tokens and cost by day and project.",
-    icon: "bar-chart",
+    icon: "chart",
     group: Group::Usage,
     default_on: true,
     settings: &[],

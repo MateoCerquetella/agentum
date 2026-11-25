@@ -5,7 +5,7 @@ pub static MANIFEST: Manifest = Manifest {
     id: "themes",
     name: "Themes",
     description: "More looks: Monokai, Lavender, Glass.",
-    icon: "palette",
+    icon: "shirt",
     group: Group::Looks,
     default_on: true,
     settings: &[],

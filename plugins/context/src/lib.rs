@@ -5,7 +5,7 @@ pub static MANIFEST: Manifest = Manifest {
     id: "context",
     name: "Context",
     description: "How full the thread's context is, and compacting it.",
-    icon: "gauge",
+    icon: "broom",
     group: Group::Usage,
     default_on: true,
     settings: &[],
