@@ -65,8 +65,8 @@ pub fn start() {
                 }),
                 WsOut::Limits { limits } => ov.update(|o| {
                     if let Some(o) = o {
-                        o.limits.retain(|l| !(l.agent == limits.agent && l.machine == limits.machine));
-                        o.limits.insert(0, limits.clone());
+                        // One report per account, as the hub keeps them.
+                        agentum_proto::api::put_limits(&mut o.limits, limits.clone());
                     }
                 }),
                 _ => {}

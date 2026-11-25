@@ -1,10 +1,10 @@
-//! Usage's web part: the page at /p/usage. Each agent's rate-limit windows per machine (from the
+//! Usage's web part: the page at /p/usage. Each agent's rate-limit windows per account (from the
 //! hub's overview, live), then tokens and cost per day for the last 14 days (in this browser's
 //! time zone) and per project, from the hub part's sums.
 use super::Stat;
 use agentum_plugin::web::{NavEntry, WebPlugin};
 use agentum_plugin::Manifest;
-use agentum_proto::api::{AgentLimits, Overview, WsOut};
+use agentum_proto::api::{put_limits, AgentLimits, Overview, WsOut};
 use agentum_proto::{AgentKind, RateLimit};
 use agentum_ui::fmt::tokens;
 use agentum_ui::prelude::*;
@@ -72,6 +72,8 @@ fn window_label(w: &str) -> String {
         "weekly" | "7d" => "Weekly".into(),
         "opus-weekly" => "Opus weekly".into(),
         "sonnet-weekly" => "Sonnet weekly".into(),
+        "plan" => "Plan (month)".into(),
+        "on-demand" => "On-demand spend".into(),
         w => {
             let w = w.replace(['-', '_'], " ");
             let mut c = w.chars();
@@ -136,7 +138,7 @@ fn UsagePage() -> impl IntoView {
                     let kept: Vec<AgentLimits> = serde_json::from_value(v["limits"].clone()).unwrap_or_default();
                     limits.update(|all| {
                         for k in kept {
-                            if !all.iter().any(|x| x.agent == k.agent && x.machine == k.machine) {
+                            if !all.iter().any(|x| x.agent == k.agent && x.key() == k.key()) {
                                 all.push(k);
                             }
                         }
@@ -152,8 +154,7 @@ fn UsagePage() -> impl IntoView {
             names.set(o.machines.iter().map(|m| (m.id.clone(), m.name.clone())).collect());
             limits.update(|all| {
                 for l in o.limits.into_iter().rev() {
-                    all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
-                    all.insert(0, l);
+                    put_limits(all, l);
                 }
             });
         }
@@ -163,10 +164,7 @@ fn UsagePage() -> impl IntoView {
     // Many turns can end together: one reload a second at most.
     let pending = StoredValue::new_local(None::<gloo_timers::callback::Timeout>);
     on_ws(move |m| match m {
-        WsOut::Limits { limits: l } => limits.update(|all| {
-            all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
-            all.insert(0, l.clone());
-        }),
+        WsOut::Limits { limits: l } => limits.update(|all| put_limits(all, l.clone())),
         WsOut::Plugin { plugin, payload } if plugin == "usage" && payload["changed"] == true => {
             if pending.with_value(|p| p.is_none()) {
                 pending.set_value(Some(gloo_timers::callback::Timeout::new(1000, move || {
@@ -238,7 +236,7 @@ fn UsagePage() -> impl IntoView {
                     tick.track();
                     let l = limits.get();
                     if l.is_empty() {
-                        return view! { <p class="small subdue">"No limits reported yet. Claude Code and Codex report their windows as their turns run."</p> }.into_any();
+                        return view! { <p class="small subdue">"No limits reported yet. Claude Code, Codex and Cursor report theirs (per account) as their turns run or when asked."</p> }.into_any();
                     }
                     view! {
                         <div class="usage-limits">
@@ -247,7 +245,11 @@ fn UsagePage() -> impl IntoView {
                                     <div class="row usage-limit-head">
                                         <Icon name="bot" size=14/>
                                         <b>{a.agent.label()}</b>
-                                        <span class="small subdue grow">{format!("on {} · {}", machine_name(&a.machine), ago_ms(a.at))}</span>
+                                        <span class="small subdue grow">{match &a.account_label {
+                                            // An account: its name, and the machines signed in to it.
+                                            Some(who) => format!("{who} · {} · {}", if a.machines.is_empty() { machine_name(&a.machine) } else { a.machines.iter().map(|m| machine_name(m)).collect::<Vec<_>>().join(", ") }, ago_ms(a.at)),
+                                            None => format!("on {} · {}", machine_name(&a.machine), ago_ms(a.at)),
+                                        }}</span>
                                     </div>
                                     {a.limits.iter().map(window).collect_view()}
                                 </div>

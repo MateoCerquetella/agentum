@@ -29,6 +29,7 @@ pub(crate) fn agent_icon(a: AgentKind) -> &'static str {
         AgentKind::ClaudeCode => "sparkle",
         AgentKind::Codex => "terminal",
         AgentKind::Opencode => "code",
+        AgentKind::Cursor => "cube",
     }
 }
 
@@ -96,7 +97,12 @@ fn ModelChip(machine: Signal<String>, agent: RwSignal<AgentKind>, model: RwSigna
         }
     });
     let installed = move |a: AgentKind| ov.with(|o| o.as_ref().and_then(|o| o.machines.iter().find(|m| m.id == machine.get())).is_none_or(|m| m.agents.iter().any(|x| x.agent == a && x.installed)));
-    let full = move |a: AgentKind| ov.with(|o| o.as_ref().and_then(|o| o.limits.iter().find(|l| l.agent == a && l.machine == machine.get()).and_then(|l| l.limits.iter().filter(|w| w.used_percent >= 99.5).map(|w| w.window.clone()).next())));
+    // A window used up on the account this machine is signed in to (the agent's on another
+    // machine may be another account's).
+    let full = move |a: AgentKind| {
+        let m = machine.get();
+        ov.with(|o| o.as_ref().and_then(|o| agentum_proto::api::limits_for(&o.limits, a, &m)).and_then(|l| l.limits.iter().filter(|w| w.used_percent >= 99.5 && w.resets_at.is_none_or(|r| r > now_ms())).map(|w| w.window.clone()).next()))
+    };
     let model_label = move || match model.get() {
         None => "Default".to_string(),
         Some(id) => current_models.get().and_then(|v| v.iter().find(|x| x.id == id).map(|x| x.label.clone())).unwrap_or(id),

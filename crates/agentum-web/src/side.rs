@@ -101,26 +101,42 @@ pub fn Personal(left: RwSignal<String>, right: RwSignal<Option<String>>, collaps
     }
 }
 
-/// One agent's subscription limits: the newest report among its machines, with the windows only
-/// an older one had (a thread's report has no model windows; the provider's has).
+/// One account's subscription limits (machines signed in to the same account share it): the
+/// newest report, with the windows only an older one had (a thread's report has no model windows;
+/// the provider's has).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentUse {
     pub agent: AgentKind,
+    /// The account's id; "" for reports that don't say (an older agentd's): those are one.
+    pub key: String,
+    /// The account's name ("Acme", an email…).
+    pub label: Option<String>,
     pub machine: String,
+    /// The machines signed in to it.
+    pub machines: Vec<String>,
     pub at: i64,
     pub windows: Vec<RateLimit>,
     /// "Max (5x)", "Plus"… when the agent said.
     pub plan: Option<String>,
+    /// The agent has more than one account here: say which this is.
+    pub split: bool,
 }
-/// Every agent that reported limits.
+impl AgentUse {
+    /// Which account, for people.
+    pub fn who(&self) -> String {
+        self.label.clone().unwrap_or_else(|| format!("on {}", self.machine))
+    }
+}
+/// Every account that reported limits, one per agent unless its machines are on different ones.
 pub fn agents_use(o: &Overview) -> Vec<AgentUse> {
     let mut reports: Vec<&agentum_proto::api::AgentLimits> = o.limits.iter().filter(|l| !l.limits.is_empty()).collect();
     reports.sort_by(|a, b| b.at.cmp(&a.at));
     let mut by: Vec<AgentUse> = vec![];
     for l in reports {
         let plan = l.plan.as_deref().filter(|p| !p.is_empty()).map(|p| p[..1].to_uppercase() + &p[1..]);
-        match by.iter_mut().find(|x| x.agent == l.agent) {
-            None => by.push(AgentUse { agent: l.agent, machine: l.machine.clone(), at: l.at, windows: l.limits.clone(), plan }),
+        let key = l.account.clone().unwrap_or_default();
+        match by.iter_mut().find(|x| x.agent == l.agent && x.key == key) {
+            None => by.push(AgentUse { agent: l.agent, key, label: l.account_label.clone(), machine: l.machine.clone(), machines: l.machines.clone(), at: l.at, windows: l.limits.clone(), plan, split: false }),
             Some(x) => {
                 x.plan = x.plan.take().or(plan);
                 for w in &l.limits {
@@ -131,10 +147,17 @@ pub fn agents_use(o: &Overview) -> Vec<AgentUse> {
             }
         }
     }
-    // Always in the same order, as BB's footer: Claude Code, Codex, OpenCode.
-    by.sort_by_key(|u| AgentKind::ALL.iter().position(|a| *a == u.agent));
+    // Next to an agent's accounts, a day-old report that doesn't say whose is stale.
+    let accounts: Vec<AgentKind> = by.iter().filter(|u| !u.key.is_empty()).map(|u| u.agent).collect();
+    by.retain(|u| !u.key.is_empty() || !accounts.contains(&u.agent) || now_ms() - u.at < 86_400_000);
+    for i in 0..by.len() {
+        by[i].split = by.iter().filter(|u| u.agent == by[i].agent).count() > 1;
+    }
+    // Always in the same order, as BB's footer: Claude Code, Codex, OpenCode, Cursor (an agent's
+    // accounts by name).
+    by.sort_by_key(|u| (AgentKind::ALL.iter().position(|a| *a == u.agent), u.who().to_lowercase()));
     for u in &mut by {
-        let rank = |w: &str| match w { "5h" => 0, "weekly" => 1, _ => 2 };
+        let rank = |w: &str| match w { "5h" | "plan" => 0, "weekly" => 1, _ => 2 };
         u.windows.sort_by(|a, b| rank(&a.window).cmp(&rank(&b.window)).then(a.window.cmp(&b.window)));
     }
     by
@@ -149,6 +172,8 @@ fn window_name(w: &str) -> String {
         "weekly" => "Weekly limit".into(),
         "opus-weekly" => "Opus".into(),
         "sonnet-weekly" => "Sonnet".into(),
+        "plan" => "Plan usage".into(),
+        "on-demand" => "On-demand spend".into(),
         x => x.replace('-', " "),
     }
 }
@@ -197,17 +222,34 @@ fn RefreshUsage(#[prop(optional)] size: Option<u32>) -> impl IntoView {
     }
 }
 
-/// BB's usage card: one agent's limits, each window with its bar and when it resets.
+/// BB's usage card: one account's limits, each window with its bar and when it resets. `account`:
+/// [`AgentUse::key`] (the agent's only account when not given).
 #[component]
-pub fn UsageCard(agent: AgentKind, #[prop(optional)] on_close: Option<Callback<()>>) -> impl IntoView {
+pub fn UsageCard(agent: AgentKind, #[prop(optional, into)] account: Option<String>, #[prop(optional)] on_close: Option<Callback<()>>) -> impl IntoView {
     let ov = overview();
-    let u = Memo::new(move |_| ov.with(|o| o.as_ref().and_then(|o| agents_use(o).into_iter().find(|x| x.agent == agent))));
-    let from = move || u.with(|u| u.as_ref().map(|u| format!("{}Reported by {}, {}", u.plan.as_ref().map(|p| format!("Plan: {p}. ")).unwrap_or_default(), u.machine, match ago_ms(u.at).as_str() { "now" => "just now".to_string(), a if a.ends_with(['m', 'h', 'd']) => format!("{a} ago"), a => a.to_string() })).unwrap_or_default());
+    let u = Memo::new(move |_| ov.with(|o| o.as_ref().and_then(|o| agents_use(o).into_iter().find(|x| x.agent == agent && account.as_ref().is_none_or(|k| *k == x.key)))));
+    let from = move || {
+        u.with(|u| {
+            u.as_ref()
+                .map(|u| {
+                    let ago = match ago_ms(u.at).as_str() {
+                        "now" => "just now".to_string(),
+                        a if a.ends_with(['m', 'h', 'd']) => format!("{a} ago"),
+                        a => a.to_string(),
+                    };
+                    let on: Vec<&String> = u.machines.iter().filter(|m| **m != u.machine).collect();
+                    let also = if on.is_empty() { String::new() } else { format!(" Also on {}.", on.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")) };
+                    format!("{}{}Reported by {}, {ago}.{also}", u.plan.as_ref().map(|p| format!("Plan: {p}. ")).unwrap_or_default(), u.label.as_ref().map(|l| format!("Account: {l}. ")).unwrap_or_default(), u.machine)
+                })
+                .unwrap_or_default()
+        })
+    };
+    let sub = move || u.with(|u| u.as_ref().filter(|u| u.split).map(|u| u.who())).unwrap_or_else(|| "Subscription usage".into());
     view! {
         <div class="ucard-card">
             <div class="ucard-head" title=from>
                 {agent_logo(agent, 18)}
-                <div class="grow" style="min-width:0"><b>{agent.label()}</b><div class="subdue truncate">"Subscription usage"</div></div>
+                <div class="grow" style="min-width:0"><b>{agent.label()}</b><div class="subdue truncate">{sub}</div></div>
                 <RefreshUsage/>
                 {on_close.map(|c| view! { <button class="icon-btn" title="Close" aria-label="Close" on:click=move |_| c.run(())><Icon name="x" size=14/></button> })}
             </div>
@@ -229,38 +271,43 @@ pub fn UsageCard(agent: AgentKind, #[prop(optional)] on_close: Option<Callback<(
     }
 }
 
-/// The Dashboard's "Agent usage" widget: every agent's card.
+/// The Dashboard's "Agent usage" widget: every account's card.
 #[component]
 pub fn UsageW() -> impl IntoView {
     let ov = overview();
-    let agents = Memo::new(move |_| ov.with(|o| o.as_ref().map(|o| agents_use(o).into_iter().map(|u| u.agent).collect::<Vec<_>>())));
-    move || match agents.get() {
+    let cards = Memo::new(move |_| ov.with(|o| o.as_ref().map(|o| agents_use(o).into_iter().map(|u| (u.agent, u.key)).collect::<Vec<_>>())));
+    move || match cards.get() {
         None => view! { <div class="dw-empty">"Loading…"</div> }.into_any(),
         Some(a) if a.is_empty() => view! { <div class="dw-empty">"No agent has reported its limits yet. "<button class="btn" on:click=move |_| refresh_usage()>"Ask now"</button></div> }.into_any(),
-        Some(a) => view! { <div class="dw-usage">{a.into_iter().map(|agent| view! { <UsageCard agent=agent/> }).collect_view()}</div> }.into_any(),
+        Some(a) => view! { <div class="dw-usage">{a.into_iter().map(|(agent, key)| view! { <UsageCard agent=agent account=key/> }).collect_view()}</div> }.into_any(),
     }
 }
 
-/// Settings, the look, each agent's limits (a meter opens its card) and their refresh, sign out.
+/// Settings, the look, each account's limits (a meter opens its card) and their refresh, sign out.
 #[component]
 pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl IntoView {
     let ov = overview();
-    // As BB's footer: one meter per agent, its 5-hour window.
+    // As BB's footer: one meter per agent (per account, when its machines are on different ones),
+    // its 5-hour window.
     let meters = move || {
         ov.with(|o| {
             o.as_ref()
                 .map(|o| {
                     agents_use(o)
                         .into_iter()
-                        .take(3)
-                        .filter_map(|u| u.windows.iter().find(|w| w.window == "5h").or(u.windows.first()).map(|w| (u.agent, window_name(&w.window), used(w))))
+                        .take(6)
+                        .filter_map(|u| {
+                            let w = u.windows.iter().find(|w| w.window == "5h").or(u.windows.first())?;
+                            let who = if u.split { format!("{} · {}", u.agent.label(), u.who()) } else { u.agent.label().to_string() };
+                            Some((u.agent, u.key.clone(), who, window_name(&w.window), used(w)))
+                        })
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         })
     };
-    // The card: which agent, and where (left, bottom) above its meter.
-    let shown = RwSignal::new(None::<(AgentKind, f64, f64)>);
+    // The card: which account, and where (left, bottom) above its meter.
+    let shown = RwSignal::new(None::<(AgentKind, String, f64, f64)>);
     let card = NodeRef::<leptos::html::Div>::new();
     on_window(leptos::ev::mousedown, move |e: web_sys::MouseEvent| {
         if shown.get_untracked().is_none() {
@@ -277,8 +324,9 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
             shown.set(None);
         }
     });
-    let toggle = move |agent: AgentKind, e: web_sys::MouseEvent| {
-        if shown.get_untracked().is_some_and(|s| s.0 == agent) {
+    let is_shown = move |agent: AgentKind, key: &str| shown.with(|s| s.as_ref().is_some_and(|s| s.0 == agent && s.1 == key));
+    let toggle = move |agent: AgentKind, key: String, e: web_sys::MouseEvent| {
+        if shown.with_untracked(|s| s.as_ref().is_some_and(|s| s.0 == agent && s.1 == key)) {
             shown.set(None);
             return;
         }
@@ -286,7 +334,7 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
         let r = el.get_bounding_client_rect();
         let w = web_sys::window().unwrap();
         let (vw, vh) = (w.inner_width().ok().and_then(|x| x.as_f64()).unwrap_or(1200.0), w.inner_height().ok().and_then(|x| x.as_f64()).unwrap_or(800.0));
-        shown.set(Some((agent, r.left().min(vw - 330.0).max(8.0), vh - r.top() + 8.0)));
+        shown.set(Some((agent, key, r.left().min(vw - 330.0).max(8.0), vh - r.top() + 8.0)));
     };
     view! {
         <div class=move || if collapsed.get() { "dock-foot collapsed" } else { "dock-foot" }>
@@ -294,20 +342,25 @@ pub fn SideFoot(collapsed: RwSignal<bool>, settings_on: Signal<bool>) -> impl In
             <ModeSwitch compact=true/>
             <Show when=move || !collapsed.get()><span class="grow"/></Show>
             <Show when=move || !collapsed.get()>
-                {move || meters().into_iter().map(|(agent, win, pct)| view! {
-                    <button class=move || if shown.get().is_some_and(|s| s.0 == agent) { "dock-meter on" } else { "dock-meter" } title=format!("{}: {win} {pct:.0}% used", agent.label())
-                        aria-expanded=move || shown.get().is_some_and(|s| s.0 == agent).to_string() on:click=move |e| toggle(agent, e)>
-                        {agent_logo(agent, 14)}
-                        <span class="dock-meter-bar"><i style=format!("width:{}%;background:{}", pct.min(100.0), tone(pct))/></span>
-                        <span style={ if pct >= 90.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</span>
-                    </button>
-                }).collect_view()}
+                <span class="dock-meters">
+                    {move || meters().into_iter().map(|(agent, key, who, win, pct)| {
+                        let (k1, k2, k3) = (key.clone(), key.clone(), key);
+                        view! {
+                            <button class=move || if is_shown(agent, &k1) { "dock-meter on" } else { "dock-meter" } title=format!("{who}: {win} {pct:.0}% used")
+                                aria-expanded=move || is_shown(agent, &k2).to_string() on:click=move |e| toggle(agent, k3.clone(), e)>
+                                {agent_logo(agent, 14)}
+                                <span class="dock-meter-bar"><i style=format!("width:{}%;background:{}", pct.min(100.0), tone(pct))/></span>
+                                <span style={ if pct >= 90.0 { format!("color:{}", tone(pct)) } else { String::new() } }>{format!("{pct:.0}%")}</span>
+                            </button>
+                        }
+                    }).collect_view()}
+                </span>
                 <RefreshUsage size=14/>
             </Show>
-            {move || shown.get().map(|(agent, left, bottom)| view! {
+            {move || shown.get().map(|(agent, key, left, bottom)| view! {
                 <leptos::portal::Portal>
                     <div class="pick-pop ucard-pop" node_ref=card role="dialog" aria-label="Usage" style=format!("left:{left}px;bottom:{bottom}px")>
-                        <UsageCard agent=agent on_close=Callback::new(move |_| shown.set(None))/>
+                        <UsageCard agent=agent account=key.clone() on_close=Callback::new(move |_| shown.set(None))/>
                     </div>
                 </leptos::portal::Portal>
             })}

@@ -34,8 +34,9 @@ fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-fn fold(events: &[EventView]) -> Vec<Item> {
-    let mut limits: Vec<agentum_proto::RateLimit> = vec![];
+/// `known`: the limits of the thread's account as last reported (until the thread reports its own).
+fn fold(events: &[EventView], known: &[agentum_proto::RateLimit]) -> Vec<Item> {
+    let mut limits: Vec<agentum_proto::RateLimit> = known.to_vec();
     let mut out: Vec<Item> = vec![];
     let mut tools: BTreeMap<String, usize> = BTreeMap::new();
     let mut asks: BTreeMap<String, usize> = BTreeMap::new();
@@ -265,7 +266,13 @@ pub fn Timeline(
     at: Signal<Option<String>>,
     on_older: Callback<()>,
 ) -> impl IntoView {
-    let items = Memo::new(move |_| events.with(|e| fold(e)));
+    // The account of the thread's machine: its limits say which window a refused turn hit.
+    let ov = crate::code::store::overview();
+    let known = Memo::new(move |_| {
+        let (agent, machine) = summary.with(|s| s.as_ref().map(|s| (s.agent, s.machine.clone())))?;
+        ov.with(|o| o.as_ref().and_then(|o| agentum_proto::api::limits_for(&o.limits, agent, &machine)).map(|l| l.limits.clone()))
+    });
+    let items = Memo::new(move |_| known.with(|k| events.with(|e| fold(e, k.as_deref().unwrap_or_default()))));
     let thread = move || summary.with(|s| s.as_ref().map(|s| s.id.clone()).unwrap_or_default());
     let scroller = NodeRef::<leptos::html::Div>::new();
     let stick = RwSignal::new(true);
