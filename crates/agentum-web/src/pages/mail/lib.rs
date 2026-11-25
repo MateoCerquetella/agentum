@@ -591,9 +591,6 @@ pub fn rgb(c: &str) -> [f64; 3] {
 pub fn lum(c: [f64; 3]) -> f64 {
     (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255.0
 }
-pub fn is_dark(bg: &str) -> bool {
-    lum(rgb(bg)) < 0.5
-}
 fn pre_invert(c: [f64; 3]) -> String {
     let h = [[-0.574, 1.43, 0.144], [0.426, 0.43, 0.144], [0.426, 1.43, -0.856]];
     let v: Vec<String> = h.iter().map(|r| (255.0 - (r[0] * c[0] + r[1] * c[1] + r[2] * c[2]).clamp(0.0, 255.0)).round().to_string()).collect();
