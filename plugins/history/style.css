@@ -7,7 +7,7 @@
 .hx-subject { color: var(--hi); }
 .hx-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; border: 2px solid var(--border-strong); }
 .hx-dot.unpushed { border-color: var(--warm, #e0a85a); background: var(--warm, #e0a85a); }
-.hx-sha { font: 11px var(--mono); color: var(--primary); }
+.hx-sha { font: 11px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); color: var(--primary); }
 .hx-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
 .hx-msg { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.hx-body-text { margin: 0; white-space: pre-wrap; font: 12px/1.5 var(--font); color: var(--base); }
+.hx-body-text { margin: 0; white-space: pre-wrap; font-size: 12px; line-height: 1.5; font-family: inherit; color: var(--base); }

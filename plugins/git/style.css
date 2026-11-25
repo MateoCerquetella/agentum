@@ -1,13 +1,13 @@
 /* Git: the tab and the header badge. */
 .git-strip { display: flex; padding: 3px 12px; border-bottom: 1px solid var(--border); }
-.git-badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 99px; background: transparent; color: var(--base); font: 11px var(--mono); cursor: pointer; }
+.git-badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 99px; background: transparent; color: var(--base); font: 11px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); cursor: pointer; }
 .git-badge:hover { border-color: var(--border-strong); color: var(--hi); }
 .git-plus { color: var(--positive); }
 .git-minus { color: var(--negative); }
 .git-tab { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .git-bar, .git-tools { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
 .git-tools { padding: 5px 10px; }
-.git-ab { font: 11px var(--mono); padding: 0 6px; border-radius: 99px; background: var(--hl); color: var(--hi); }
+.git-ab { font: 11px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); padding: 0 6px; border-radius: 99px; background: var(--hl); color: var(--hi); }
 .btn.git-sm { height: 26px; padding: 0 10px; font-size: 12px; }
 .git-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; flex: none; }
 .git-seg button { background: transparent; border: 0; padding: 3px 9px; font-size: 11.5px; color: var(--base); cursor: pointer; }
@@ -17,4 +17,4 @@
 .git-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; }
 .git-err { color: var(--negative); white-space: pre-wrap; padding: 6px 8px; margin-bottom: 8px; border: 1px solid color-mix(in srgb, var(--negative) 40%, var(--border)); border-radius: var(--radius); }
 .git-commit { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--bg); }
-.git-commit textarea { width: 100%; resize: vertical; min-height: 44px; font: 12.5px/1.45 var(--font); background: var(--widget); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
+.git-commit textarea { width: 100%; resize: vertical; min-height: 44px; font-size: 12.5px; line-height: 1.45; font-family: inherit; background: var(--widget); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }

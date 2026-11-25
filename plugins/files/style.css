@@ -13,4 +13,4 @@
 .fx-folder { color: var(--primary); flex: none; }
 .fx-name { min-width: 0; }
 .fx-size, .fx-dir { margin-left: auto; padding-left: 8px; font-size: 10.5px; color: var(--subdue); }
-.fx-hit .fx-dir { margin-left: 4px; font-family: var(--mono); }
+.fx-hit .fx-dir { margin-left: 4px; font-family: var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); }

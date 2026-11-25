@@ -1,5 +1,5 @@
 /* Pull request: the tab and the sidebar badge. */
-.pr-row { display: inline-flex; align-items: center; gap: 3px; font: 10.5px var(--mono); color: var(--subdue); padding: 0 5px; border-radius: 99px; border: 1px solid var(--border); white-space: nowrap; }
+.pr-row { display: inline-flex; align-items: center; gap: 3px; font: 10.5px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); color: var(--subdue); padding: 0 5px; border-radius: 99px; border: 1px solid var(--border); white-space: nowrap; }
 .pr-row.pr-merged { color: #a371f7; border-color: color-mix(in srgb, #a371f7 40%, var(--border)); }
 .pr-row.pr-closed { opacity: .6; }
 .pr-row.pr-c-pass .pr-mark, .prx-c-pass { color: var(--positive); }
@@ -13,7 +13,7 @@
 .prx-head a { color: inherit; }
 .prx-title { font-size: 14px; font-weight: 600; color: var(--hi) !important; text-decoration: none; }
 .prx-title:hover { text-decoration: underline; }
-.prx-num { font: 12px var(--mono); color: var(--subdue) !important; text-decoration: none; }
+.prx-num { font: 12px var(--mono, ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace); color: var(--subdue) !important; text-decoration: none; }
 .prx-state { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 99px; color: #fff; background: var(--subdue); }
 .prx-state.prx-open { background: #238636; }
 .prx-state.prx-merged { background: #8957e5; }
