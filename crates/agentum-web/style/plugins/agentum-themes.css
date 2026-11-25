@@ -1,0 +1,88 @@
+/* The Themes plugin's looks: Monokai, Lavender and Glass. Each sets the tokens Glance and Studio set
+   at the end of index.css (--bg … --radius, --font), for dark and light. Pages are drawn with
+   Glance's base rules, so these are colour, type and surface changes only. */
+
+/* ── Monokai: the editor palette on a warm charcoal; JetBrains Mono like Glance. ── */
+html[data-theme="monokai"] {
+  --bg: #272822; --sidebar: #1f201b; --widget: #2e2f28; --hl: #3e3d32; --border: #3a3b33; --border-strong: #4a4a3f;
+  --hi: #f8f8f2; --text: #e3e3d9; --base: #b4b3a5; --subdue: #7f7b67;
+  --primary: #66d9ef; --primary-hover: #8fe4f4; --positive: #a6e22e; --negative: #f92672; --money: #e6db74; --warm: #fd971f; --on-primary: #1f201b;
+  --chart-1: #66d9ef; --chart-2: #a6e22e; --chart-3: #ae81ff; --chart-4: #fd971f; --chart-5: #f92672; --chart-6: #e6db74;
+  --radius: 6px; --font: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  color-scheme: dark;
+}
+html[data-theme="monokai"][data-scheme="light"] {
+  --bg: #fafaf6; --sidebar: #f0efe7; --widget: #ffffff; --hl: #e9e7dc; --border: #dedbce; --border-strong: #c9c5b5;
+  --hi: #23241f; --text: #383830; --base: #5e5c50; --subdue: #8d8a7a;
+  --primary: #1a87a1; --primary-hover: #136d83; --positive: #5b8a00; --negative: #d01a5c; --money: #8f7400; --warm: #c06a00; --on-primary: #ffffff;
+  --chart-1: #1a87a1; --chart-2: #5b8a00; --chart-3: #7a4fd6; --chart-4: #c06a00; --chart-5: #d01a5c; --chart-6: #8f7400;
+  color-scheme: light;
+}
+
+/* ── Lavender: your BB Lavender palette (canvas, ink, card, accent, primary as they are). ── */
+html[data-theme="lavender"] {
+  --bg: #191823; --sidebar: #111117; --widget: #22202e; --hl: #292631; --border: #302d3e; --border-strong: #423e54;
+  --hi: #efedf8; --text: #d2d0e3; --base: #aaa6bf; --subdue: #7c7792;
+  --primary: #c4a4ed; --primary-hover: #d6bff4; --positive: #8ccb91; --negative: #eca0a8; --money: #e9c085; --warm: #e9c085; --on-primary: #251b36;
+  --chart-1: #c4a4ed; --chart-2: #8ccb91; --chart-3: #8fb6f0; --chart-4: #e9c085; --chart-5: #eca0a8; --chart-6: #a4e0d8;
+  --radius: 8px; --font: 'Geist Variable', ui-sans-serif, system-ui, sans-serif; --mono: 'Geist Mono Variable', ui-monospace, monospace;
+  color-scheme: dark;
+}
+html[data-theme="lavender"][data-scheme="light"] {
+  --bg: #f8f6fc; --sidebar: #eeebf4; --widget: #ffffff; --hl: #eae5f3; --border: #dcd5e7; --border-strong: #c6bdd6;
+  --hi: #1f1b2e; --text: #302c40; --base: #60576f; --subdue: #8a8299;
+  --primary: #76509e; --primary-hover: #5f3e84; --positive: #337047; --negative: #a64155; --money: #865b18; --warm: #865b18; --on-primary: #ffffff;
+  --chart-1: #76509e; --chart-2: #337047; --chart-3: #3d63a8; --chart-4: #865b18; --chart-5: #a64155; --chart-6: #2b7d74;
+  color-scheme: light;
+}
+
+/* ── Glass: translucent chrome over a soft wallpaper. Only the chrome (sidebar, panes, headers,
+   popovers, dialogs) is see-through; the wallpaper is still, so scrolling repaints nothing behind. ── */
+html[data-theme="glass"] {
+  --glass-base: #12141c;
+  --glass-wall:
+    radial-gradient(1200px 820px at 10% -12%, rgb(70 52 168 / 55%) 0%, rgb(70 52 168 / 0) 60%),
+    radial-gradient(980px 700px at 94% 0%, rgb(16 118 152 / 45%) 0%, rgb(16 118 152 / 0) 58%),
+    radial-gradient(1100px 900px at 76% 110%, rgb(146 40 96 / 45%) 0%, rgb(146 40 96 / 0) 62%),
+    radial-gradient(880px 700px at 16% 100%, rgb(28 66 124 / 45%) 0%, rgb(28 66 124 / 0) 60%),
+    linear-gradient(180deg, #101219 0%, #171a24 55%, #131620 100%);
+  --glass-solid: rgb(28 32 44 / 88%);
+  --glass-blur: blur(24px) saturate(160%);
+  --bg: rgb(20 23 32 / 55%); --sidebar: rgb(14 16 24 / 45%); --widget: rgb(255 255 255 / 6%); --hl: rgb(255 255 255 / 9%);
+  --border: rgb(255 255 255 / 10%); --border-strong: rgb(255 255 255 / 18%);
+  --hi: #f4f6fc; --text: #dde2ee; --base: #a8afc4; --subdue: #788099;
+  --primary: #6ea8ff; --primary-hover: #93bfff; --positive: #63d39a; --negative: #ff7d8c; --money: #f2c46b; --warm: #f2c46b; --on-primary: #0b1020;
+  --chart-1: #6ea8ff; --chart-2: #63d39a; --chart-3: #b39dff; --chart-4: #f2c46b; --chart-5: #ff7d8c; --chart-6: #5fd4e6;
+  --radius: 10px; --font: 'Geist Variable', ui-sans-serif, system-ui, sans-serif; --mono: 'Geist Mono Variable', ui-monospace, monospace;
+  color-scheme: dark;
+}
+html[data-theme="glass"][data-scheme="light"] {
+  --glass-base: #eef1f8;
+  --glass-wall:
+    radial-gradient(1200px 820px at 10% -12%, #b7c6ff 0%, rgb(183 198 255 / 0) 62%),
+    radial-gradient(980px 700px at 94% 2%, #a4e4ff 0%, rgb(164 228 255 / 0) 58%),
+    radial-gradient(1100px 900px at 74% 110%, #ffd2e3 0%, rgb(255 210 227 / 0) 62%),
+    radial-gradient(880px 700px at 18% 98%, #ffe4b5 0%, rgb(255 228 181 / 0) 60%);
+  --glass-solid: rgb(255 255 255 / 86%);
+  --glass-blur: blur(24px) saturate(180%);
+  --bg: rgb(255 255 255 / 55%); --sidebar: rgb(255 255 255 / 40%); --widget: rgb(255 255 255 / 72%); --hl: rgb(15 23 42 / 6%);
+  --border: rgb(15 23 42 / 10%); --border-strong: rgb(15 23 42 / 18%);
+  --hi: #0f131c; --text: #1f2430; --base: #4a5265; --subdue: #7a8295;
+  --primary: #0a6bff; --primary-hover: #0057d6; --positive: #13814b; --negative: #d2344b; --money: #996900; --warm: #996900; --on-primary: #ffffff;
+  --chart-1: #0a6bff; --chart-2: #13814b; --chart-3: #6b4fd8; --chart-4: #996900; --chart-5: #d2344b; --chart-6: #0b8aa3;
+  color-scheme: light;
+}
+html[data-theme="glass"] body { background: var(--glass-wall), var(--glass-base); }
+html[data-theme="glass"] .sidebar { backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border-right-color: var(--border); }
+html[data-theme="glass"] .main { gap: 8px; padding: 8px 8px 8px 0; }
+html[data-theme="glass"] .pane { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: 0 10px 30px -18px rgb(0 0 0 / .5); }
+html[data-theme="glass"] .splitter { margin: 0 -6px; }
+/* Floating things sit over other content: they get the solid glass, blurred. */
+html[data-theme="glass"] :is(.dialog, .toast, .pick-pop, .hover-card, .cal-menu, .sticky-prompt, .ml-undo) {
+  background: var(--glass-solid); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); }
+html[data-theme="glass"] :is(.ml-pane, .code-rail) { background: var(--glass-solid); }
+
+/* Geist looks: the type Studio uses. */
+html:is([data-theme="lavender"], [data-theme="glass"]) body { font: 14px/1.5 var(--font); letter-spacing: -0.006em; }
+html:is([data-theme="lavender"], [data-theme="glass"]) :is(code, pre, kbd, samp, .mono) { font-family: var(--mono); letter-spacing: 0; }
+html:is([data-theme="monokai"], [data-theme="lavender"], [data-theme="glass"]) .btn.primary { color: var(--on-primary); }

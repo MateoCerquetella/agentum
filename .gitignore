@@ -1,36 +1,5 @@
-# Rust
 /target
-**/*.rs.bk
-Cargo.lock.bak
-
-# Node
-.pnpm-store
-
-# Desktop UI (React/Vite) — build artifacts, not source.
-crates/agentum-desktop/ui/node_modules
-crates/agentum-desktop/ui/dist
-
-# Editors
+/crates/agentum-web/dist/
+*.sync-conflict-*
 .DS_Store
-.idea
-.vscode/settings.json
-*.swp
-*.swo
-
-# Local env
-.env
-.env.local
-*.log
-
-# Claude Code workspace metadata
-.claude/
-.syncthing.*
-.playwright-mcp/
-
-# Runtime upload sink — written by the dashboard's drag-drop / paste flow.
-# Local data, not source — should never enter the repo.
-.agentum-uploads/
-
-# empirical-sdd-ddd-starter scaffold (dropped in locally, not part of agentum).
-# .claude/ is already ignored above, which covers .claude/commands/sdd-*.md.
-/ai/
+/dist/

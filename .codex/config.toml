@@ -1,5 +1,0 @@
-# empirical-sdd:mcp:start
-[mcp_servers.empirical]
-command = "empirical"
-args = ["mcp"]
-# empirical-sdd:mcp:end

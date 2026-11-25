@@ -1,0 +1,19 @@
+/* The Secretary in Rust: markdown parts, tables, the chat list in the sidebar, its panel. */
+.md-part > :last-child { margin-bottom: 0; }
+.md-part + .md-part, .md .genui + .md-part, .md .md-part + .genui { margin-top: 8px; }
+.md table { border-collapse: collapse; margin: 0 0 8px; font-size: 13px; display: block; overflow-x: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md th { background: var(--sidebar); color: var(--hi); font-weight: 600; }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.md a { color: var(--primary); }
+.md-task { list-style: none; }
+.md-task > input { margin: 0 6px 0 -18px; vertical-align: middle; }
+.md-task:has(> input:checked) { color: var(--base); text-decoration: line-through; }
+.nf-preview .md-task > input { margin-left: 0; cursor: pointer; }
+.ag-side-chats { display: flex; flex-direction: column; gap: 1px; max-height: min(38vh, 340px); overflow-y: auto; flex-shrink: 0; padding-bottom: 4px; }
+.ag-side-chats .dock-row { padding-left: 10px; }
+.ag-chat-mark { color: var(--primary); }
+.ag-bot-panel .bot-panel-body { padding-top: 18px; }
+.chat-list .chat-item .x { width: 24px; height: 24px; flex: none; }
+.chat-list .chat-pick { min-width: 0; }
+.chat-list .chat-pick .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
