@@ -51,13 +51,15 @@ impl WebPlugin for Plugin {
         };
         // Opening: the hub's draft if it is newer; else ours goes up if the hub has none.
         spawn_local(async move {
-            let Ok(hub) = rpc::<Option<Draft>>(ID, "get", &json!({ "thread": tid.get_value() })).await else { return };
+            let Ok(hub) = rpc::<Option<Draft>>(ID, "get", &json!({ "thread": thread })).await else { return };
+            // Gone meanwhile (another thread opened)?
             let Some(local) = text.try_get_untracked() else { return };
-            let local_at = store::get(&at_key()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            let at_key = format!("agentum.draft.at.{thread}");
+            let local_at = store::get(&at_key).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
             if let Some(t) = take_hub(hub.as_ref(), &local, local_at) {
                 skip.set_value(true);
-                store::set(&format!("agentum.draft.{}", tid.get_value()), &t);
-                store::set(&at_key(), &hub.map(|h| h.at).unwrap_or(0).to_string());
+                store::set(&format!("agentum.draft.{thread}"), &t);
+                store::set(&at_key, &hub.map(|h| h.at).unwrap_or(0).to_string());
                 text.set(t);
                 show("Draft restored");
             } else if hub.is_none() && !local.trim().is_empty() {

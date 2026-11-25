@@ -117,7 +117,9 @@ impl WebPlugin for Plugin {
                         custom.set(String::new());
                         let w = when(s.at);
                         toast(if w.contains(' ') { format!("It will send {w}.") } else { format!("It will send at {w}.") });
-                        load();
+                        if items.try_get_untracked().is_some() {
+                            load();
+                        }
                     }
                     Err(e) => toast_bad(e.message),
                 }
@@ -129,7 +131,9 @@ impl WebPlugin for Plugin {
                     Ok(_) => toast("Cancelled."),
                     Err(e) => toast_bad(e.message),
                 }
-                load();
+                if items.try_get_untracked().is_some() {
+                    load();
+                }
             });
         };
         let empty = move || text.with(|t| t.trim().is_empty());

@@ -74,7 +74,9 @@ fn SettingsPop(on_close: Callback<()>) -> impl IntoView {
             match api_put::<Value>(&format!("/plugins/{ID}"), &json!({ "settings": { "text": t, "max": m.round(), "delay": d.round() } })).await {
                 Ok(_) => {
                     toast("Nudger's settings saved.");
-                    on_close.run(());
+                    if text.try_get_untracked().is_some() {
+                        on_close.run(());
+                    }
                 }
                 Err(e) => toast_bad(e.message),
             }
