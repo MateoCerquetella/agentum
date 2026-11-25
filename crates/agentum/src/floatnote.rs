@@ -1,5 +1,5 @@
-//! Notes as floatnote's files (github.com/MateoCerquetella/linux-tools,
-//! floatnote/): plain Markdown files in CERQ_NOTES_DIR (default
+//! Notes as floatnote's files (a small desktop notes app:
+//! plain Markdown files in CERQ_NOTES_DIR (default
 //! <data>/notes), kept in step with the desktop's ~/Documents/Notes by
 //! Syncthing. Same rules as floatnote: the id is the file name without .md,
 //! a new note is named after the local time, the title is the first line with

@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn trailing_blanks_like_odysseus() {
+    fn trailing_blanks_like_the_old_app() {
         assert_eq!(unfold("SUMMARY:Gym \r\nDTSTART:1\r\n"), ["SUMMARY:Gym", "DTSTART:1"]);
         assert_eq!(unfold("SUMMARY:x d\r\n ía \r\n \r\nEND:VEVENT"), ["SUMMARY:x día ", "END:VEVENT"]);
     }
@@ -409,10 +409,10 @@ mod tests {
     #[test]
     fn reads_who_is_in_it() {
         let ics = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:r1\r\nDTSTART:20261120T153000Z\r\nSUMMARY:Retrospective\r\n\
-ORGANIZER;CN=Jimena Castro:mailto:Jimena@RideFreebee.com\r\nATTENDEE;CN=\"Pavlo\";PARTSTAT=ACCEPTED:mailto:pavlo@ridefreebee.com\r\n\
-ATTENDEE;CN=jimena@ridefreebee.com:mailto:jimena@ridefreebee.com\r\nATTENDEE:mailto:sam@ridefreebee.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+ORGANIZER;CN=Ada Lovelace:mailto:Ada@Example.org\r\nATTENDEE;CN=\"Pavel\";PARTSTAT=ACCEPTED:mailto:pavel@example.org\r\n\
+ATTENDEE;CN=ada@example.org:mailto:ada@example.org\r\nATTENDEE:mailto:sam@example.org\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
         let e = &parse_events(ics, chrono_tz::UTC)[0];
-        assert_eq!(e.people, vec!["Jimena Castro <jimena@ridefreebee.com>", "Pavlo <pavlo@ridefreebee.com>", "sam@ridefreebee.com"]);
+        assert_eq!(e.people, vec!["Ada Lovelace <ada@example.org>", "Pavel <pavel@example.org>", "sam@example.org"]);
     }
     #[test]
     fn writes_back_what_it_reads() {

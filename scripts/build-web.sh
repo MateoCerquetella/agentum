@@ -26,4 +26,6 @@ CSS=agentum-$(hash "$CSSF").css
 mv "$CSSF" "$DIST/assets/$CSS" && chmod 644 "$DIST/assets/$CSS"
 sed -e "s/{{JS}}/$JS/g" -e "s/{{WASM}}/$WASM/g" -e "s/{{CSS}}/$CSS/g" "$WEB/index.html" > "$DIST/index.html"
 cp -r crates/agentum/public/. "$DIST/"
+# Precompressed copies: the hub sends them as they are (no compressing on every request).
+for f in "$DIST"/assets/*; do brotli -q 11 -f -k -o "$f.br" "$f"; done
 ls -la "$DIST/assets"
