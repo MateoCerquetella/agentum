@@ -1,5 +1,5 @@
 //! Today (owner: today backend): morning brief, plan for today, wrap-up,
-//! week ahead, leave-by, money, deliveries, Mercury health, workspace
+//! week ahead, leave-by, money, deliveries, the hub's health, workspace
 //! search/ask. Port of brief.py, assist.py, insights.py, workspace.py.
 mod assist;
 mod brief;

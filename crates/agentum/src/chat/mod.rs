@@ -299,7 +299,7 @@ async fn run_turn(app: &App, session: Option<String>, mut msgs: Vec<Value>, mut 
             None => {
                 let _ = tx.send(json!({"type": "round"})).await;
                 let _ = tx.send(json!({"type": "status", "label": "Waiting for your model…"})).await;
-                // No num_ctx: use the context the model is already loaded with (Mars: 32k).
+                // No num_ctx: use the context the model is already loaded with (often 32k).
                 // A different num_ctx makes Ollama reload the model (8-60 s) on every switch.
                 let body = json!({"messages": msgs, "tools": defs, "think": llm::thinking(app, options.think), "options": {"temperature": 0.3, "num_predict": 2048}});
                 let stream = tokio::select! {
