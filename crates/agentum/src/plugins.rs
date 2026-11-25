@@ -111,6 +111,10 @@ impl HubCtx for PluginCtx {
     }
 }
 
+pub(crate) async fn kv_set(app: &App, plugin: &str, key: &str, value: &Value) {
+    let (p, k, v) = (plugin.to_string(), key.to_string(), value.to_string());
+    let _ = app.db.call(move |c| c.execute("INSERT INTO plugin_kv(plugin,k,v) VALUES(?1,?2,?3) ON CONFLICT(plugin,k) DO UPDATE SET v=excluded.v", [p, k, v])).await;
+}
 pub(crate) async fn kv_get(app: &App, plugin: &str, key: &str) -> Option<Value> {
     let (p, k) = (plugin.to_string(), key.to_string());
     app.db

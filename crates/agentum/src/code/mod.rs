@@ -119,7 +119,67 @@ pub async fn start(app: &App) -> anyhow::Result<()> {
             scheduled(&a).await;
         }
     });
+    // Each agent's limits from its provider: once the machines are back, then every 5 minutes.
+    let a = app.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(40)).await;
+        loop {
+            usage_refresh(&a).await;
+            tokio::time::sleep(Duration::from_secs(300)).await;
+        }
+    });
     Ok(())
+}
+
+/// A report of an agent's limits (a thread's RateLimits, or its provider asked directly): the
+/// overview's, every page's, and the usage plugin's copy (so a restart keeps it).
+async fn remember_limits(app: &App, l: AgentLimits, persist: bool) {
+    {
+        let mut all = app.code.limits.write().unwrap();
+        all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
+        all.insert(0, l.clone());
+    }
+    app.code.publish("threads", &WsOut::Limits { limits: l.clone() });
+    if persist {
+        let mut saved = crate::plugins::kv_get(app, "usage", "limits").await.and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        saved.insert(format!("{}\t{}", l.agent.id(), l.machine), json!(l));
+        crate::plugins::kv_set(app, "usage", "limits", &Value::Object(saved)).await;
+    }
+}
+
+/// Each subscription agent's limits asked of its provider now (agentd's `Req::Usage`), from one
+/// machine per agent: the main machine first, then the next online one that has it.
+pub async fn usage_refresh(app: &App) -> Vec<AgentLimits> {
+    let machines = agentd::machines(app).await;
+    let mut got = vec![];
+    for agent in [AgentKind::ClaudeCode, AgentKind::Codex] {
+        for m in machines.iter().filter(|m| m.online && m.agents.iter().any(|a| a.agent == agent && a.installed)) {
+            let Some(c) = app.code.conn(&m.id) else { continue };
+            if !c.hello.read().unwrap().features.iter().any(|f| f == "usage") {
+                continue;
+            }
+            match c.call(Req::Usage { agent }, Duration::from_secs(45)).await {
+                Ok(v) => {
+                    let limits: Vec<agentum_proto::RateLimit> = serde_json::from_value(v["limits"].clone()).unwrap_or_default();
+                    if limits.is_empty() {
+                        continue;
+                    }
+                    let l = AgentLimits { agent, machine: m.id.clone(), limits, at: now(), plan: v["plan"].as_str().map(str::to_string) };
+                    remember_limits(app, l.clone(), true).await;
+                    got.push(l);
+                    break;
+                }
+                Err(e) => tracing::info!("{} usage on {}: {e}", agent.label(), m.id),
+            }
+        }
+    }
+    got
+}
+
+/// POST /api/code/usage/refresh: ask now; every known report back.
+async fn usage_refresh_h(State(app): State<App>) -> Json<Vec<AgentLimits>> {
+    usage_refresh(&app).await;
+    Json(app.code.limits.read().unwrap().clone())
 }
 
 /// Send what was scheduled for now.
@@ -248,13 +308,9 @@ pub async fn ingest(app: &App, conn: &Conn, thread: &str, events: Vec<Event>) {
             }
             EventKind::Usage { usage } => t.usage = Some(usage.clone()),
             EventKind::RateLimits { limits, plan } => {
+                // The usage plugin keeps a thread's report itself.
                 let l = AgentLimits { agent: t.agent, machine: t.machine.clone(), limits: limits.clone(), at: ts, plan: plan.clone() };
-                {
-                    let mut all = app.code.limits.write().unwrap();
-                    all.retain(|x| !(x.agent == l.agent && x.machine == l.machine));
-                    all.insert(0, l.clone());
-                }
-                app.code.publish("threads", &WsOut::Limits { limits: l });
+                remember_limits(app, l, false).await;
             }
             EventKind::Session { session_id, model } => {
                 session = Some(session_id.clone());
@@ -332,6 +388,7 @@ pub fn routes() -> Router<App> {
         .route("/api/code/machines/{id}/projects", post(add_project))
         .route("/api/code/machines/{id}/main", post(set_main))
         .route("/api/code/call", post(call))
+        .route("/api/code/usage/refresh", post(usage_refresh_h))
         .route("/api/code/syntax.css", get(|| async { ([("content-type", "text/css"), ("cache-control", "public, max-age=86400")], render::syntax_css()) }))
 }
 
