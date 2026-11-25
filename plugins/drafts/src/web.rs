@@ -52,7 +52,10 @@ impl WebPlugin for Plugin {
         // Opening: the hub's draft if it is newer; else ours goes up if the hub has none.
         spawn_local(async move {
             let Ok(hub) = rpc::<Option<Draft>>(ID, "get", &json!({ "thread": thread })).await else { return };
-            // Gone meanwhile (another thread opened)?
+            // Gone meanwhile (redrawn, another thread opened)? The composer's text outlives this view.
+            if note.try_get_untracked().is_none() {
+                return;
+            }
             let Some(local) = text.try_get_untracked() else { return };
             let at_key = format!("agentum.draft.at.{thread}");
             let local_at = store::get(&at_key).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
