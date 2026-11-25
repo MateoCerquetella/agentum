@@ -39,10 +39,18 @@ async fn view(
 ) -> Response {
     let path = format!("/{rest}{}", q.map(|q| format!("?{q}")).unwrap_or_default());
     match ws {
+        // Only from this app's own pages (the session cookie is SameSite=Lax too).
+        Ok(_) if !same_origin(&headers) => (StatusCode::FORBIDDEN, "cross-origin").into_response(),
         Ok(ws) if rest == "v1/sessions/cast" => open(app, machine, id, path, ws).await,
         Err(_) if rest == "v1/sessions/debug" => page(app, machine, id, path, &headers).await,
         _ => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
+
+fn same_origin(h: &HeaderMap) -> bool {
+    let Some(origin) = header(h, "origin") else { return true };
+    let host = header(h, "x-forwarded-host").or(header(h, "host")).unwrap_or("");
+    origin.split_once("://").map(|(_, o)| o) == Some(host)
 }
 
 /// The viewer's page, pointed at this hub.
@@ -155,7 +163,11 @@ pub fn from_agentd(app: &App, machine: &str, m: FromAgentd) {
                 // The page is too slow for the screencast: skip a frame rather than wait.
                 Err(mpsc::error::TrySendError::Full(_)) => {}
                 Err(mpsc::error::TrySendError::Closed(m)) => {
+                    // The page never came (or left): agentd may close Steel's side.
                     socks.remove(&m.sock);
+                    if let Some(c) = app.code.conn(machine) {
+                        c.send(&ToAgentd::SockClose { sock: m.sock });
+                    }
                 }
             }
         }

@@ -343,7 +343,8 @@ impl Actor {
     async fn command(&mut self, c: Cmd) {
         match c {
             Cmd::Start { spec, resume, input, reply } => {
-                let changed = spec.agent != self.row.spec.agent || spec.cwd != self.row.spec.cwd || spec.permission != self.row.spec.permission;
+                // (New instructions: the plugins have something new to say, like the project's browser.)
+                let changed = spec.agent != self.row.spec.agent || spec.cwd != self.row.spec.cwd || spec.permission != self.row.spec.permission || spec.instructions != self.row.spec.instructions;
                 if changed && self.session.is_some() && !self.row.state.busy() {
                     self.close().await;
                 }

@@ -38,6 +38,8 @@ pub struct Hub {
     pub out: tokio::sync::broadcast::Sender<Out>,
     models: Mutex<HashMap<(String, AgentKind), (Instant, Vec<ModelInfo>)>>,
     html: Mutex<HashMap<(String, u64), Arc<str>>>,
+    /// What each thread's agent was last started with from the plugins (`ThreadSpec.instructions`).
+    pub instructions: Mutex<HashMap<String, Option<String>>>,
     /// The Surf viewer's sockets relayed through agentd: sock → (machine, to the page).
     pub socks: Mutex<HashMap<String, (String, tokio::sync::mpsc::Sender<agentum_proto::machine::SockMsg>)>>,
 }
@@ -53,6 +55,7 @@ impl Default for Hub {
             models: Default::default(),
             html: Default::default(),
             socks: Default::default(),
+            instructions: Default::default(),
         }
     }
 }
@@ -478,10 +481,11 @@ async fn start_agent(app: &App, s: &ThreadSummary, mut input: Input, resume: Opt
         input.text = format!("You are a side chat about another coding thread in this same directory. Answer questions about it; don't change files unless asked. Its conversation so far:\n{tail}\n\n---\n\n{}", input.text);
     }
     let instructions = crate::plugins::instructions(app, s).await;
-    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone(), instructions };
+    let spec = ThreadSpec { agent: Some(s.agent), model: s.model.clone(), effort: s.effort.clone(), permission: s.permission, cwd: s.cwd.clone(), instructions: instructions.clone() };
     let req = Req::Start { thread: s.id.clone(), spec, resume, input: Some(input), last_seq: s.last_seq };
     match machine_call(app, &s.machine, req).await {
         Ok(_) => {
+            app.code.instructions.lock().unwrap().insert(s.id.clone(), instructions);
             let id = s.id.clone();
             app.db.call(move |c| db::set_started(c, &id)).await?;
             Ok(())
@@ -619,6 +623,16 @@ pub async fn send(app: &App, id: &str, b: SendBody) -> R<()> {
     }
     if !t.state.busy() {
         crate::plugins::before_turn(app, &t, &input.text).await.map_err(|e| AppError(StatusCode::CONFLICT, e))?;
+        // The plugins have something new to tell the agent (its project's browser was started
+        // since): start it again with that (agentd restarts an idle agent, resuming its session).
+        let now = crate::plugins::instructions(app, &t).await;
+        let last = app.code.instructions.lock().unwrap().get(id).cloned();
+        if last.as_ref() != Some(&now) && (last.is_some() || now.is_some()) {
+            let id3 = id.to_string();
+            if let Some(session) = app.db.call(move |c| db::session_of(c, &id3)).await? {
+                return start_agent(app, &t, input, Some(session)).await;
+            }
+        }
     }
     match machine_call(app, &t.machine, Req::Send { thread: id.to_string(), input: input.clone(), mode: b.mode }).await {
         Ok(_) => Ok(()),

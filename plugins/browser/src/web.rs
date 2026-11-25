@@ -74,6 +74,10 @@ fn ProjectBrowser(machine: String, project: String) -> impl IntoView {
     };
     refresh();
     on_change(Some(machine.clone()), refresh);
+    // A browser stopped for being unused (agentd's doing) shows up within a minute.
+    if let Ok(h) = set_interval_with_handle(move || if busy.get_untracked().is_none() { refresh() }, std::time::Duration::from_secs(60)) {
+        on_cleanup(move || h.clear());
+    }
     let start = move || {
         busy.set(Some("Starting the browser…"));
         error.set(None);

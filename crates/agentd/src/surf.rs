@@ -148,19 +148,21 @@ impl Surfs {
         anyhow::ensure!(p.is_dir(), "{project}: not a directory");
         let p = p.canonicalize()?;
         let id = id_of(&p);
-        let _g = self.lock.lock().await;
-        let info = match self.find(&id).await? {
-            Some(s) if s.state == "running" => s,
-            Some(s) => match docker(&["start", &format!("{PREFIX}{id}")], Duration::from_secs(60)).await {
-                Ok(_) => s,
-                Err(e) => {
-                    // Its ports may have been taken meanwhile: a new container, same profile.
-                    tracing::info!("surf {id}: start failed ({e:#}); recreating it");
-                    self.remove(&id).await?;
-                    self.create(&id, &p).await?
-                }
-            },
-            None => self.create(&id, &p).await?,
+        let info = {
+            let _g = self.lock.lock().await;
+            match self.find(&id).await? {
+                Some(s) if s.state == "running" => s,
+                Some(s) => match docker(&["start", &format!("{PREFIX}{id}")], Duration::from_secs(60)).await {
+                    Ok(_) => s,
+                    Err(e) => {
+                        // Its ports may have been taken meanwhile: a new container, same profile.
+                        tracing::info!("surf {id}: start failed ({e:#}); recreating it");
+                        self.remove(&id).await?;
+                        self.create(&id, &p).await?
+                    }
+                },
+                None => self.create(&id, &p).await?,
+            }
         };
         self.touch(&id);
         if let Err(e) = ready(info.api_port, info.cdp_port, Duration::from_secs(60)).await {
@@ -372,11 +374,15 @@ impl Surfs {
             _ => return vec![],
         };
         if s.state != "running" {
-            let _g = self.lock.lock().await;
-            if let Err(e) = docker(&["start", &format!("{PREFIX}{id}")], Duration::from_secs(60)).await {
+            let woke = {
+                let _g = self.lock.lock().await;
+                docker(&["start", &format!("{PREFIX}{id}")], Duration::from_secs(60)).await
+            };
+            if let Err(e) = woke {
                 tracing::info!("surf {id}: couldn't wake it for an agent: {e:#}");
                 return vec![];
             }
+            tracing::info!("surf {id}: woken for an agent in {}", project.display());
             if let Err(e) = ready(s.api_port, s.cdp_port, Duration::from_secs(25)).await {
                 tracing::info!("surf {id}: woke, but not ready: {e:#}");
             }
