@@ -2,7 +2,7 @@
 //! creation order (pinned first), and status lives inside each row, so nothing moves under the
 //! cursor when an agent finishes. Clear the list with two verbs: **snooze** (until tomorrow 09:00;
 //! it wakes early if it works or asks) and **settle** (archive; shown for a day). Side chats sit
-//! under their thread. Drag a card to a half to open it there; ⌘-click opens it on the right.
+//! under their thread. Drag a card (or New thread) to a half to open it there; ⌘-click opens it on the right.
 use crate::code::store::{self, overview};
 use crate::code::{agent_icon, patch_thread, tomorrow_9};
 use agentum_proto::api::{PatchThread, ThreadSummary};
@@ -262,7 +262,9 @@ fn Project(path: String, fam: Vec<(ThreadSummary, Vec<ThreadSummary>)>, on: Sign
                     </span>
                     <Icon name="chevron" size=12 class=Signal::derive(move || if open.get() || force { "dk-chev open".to_string() } else { "dk-chev".to_string() })/>
                 </button>
-                <button class="icon-btn dk-proj-new" title=format!("New thread in {name}") on:click=move |_| navigate("code", Where::Replace, &[("thread", ""), ("machine", &m2), ("project", &p2)])><Icon name="plus" size=13/></button>
+                <button class="icon-btn dk-proj-new" title=format!("New thread in {name} · drag to a side of the window") draggable="true"
+                    on:dragstart={ let (m, p) = (m2.clone(), p2.clone()); move |e| agentum_ui::dnd::start(&e, "code", &[("thread", ""), ("machine", &m), ("project", &p)]) }
+                    on:click=move |_| navigate("code", Where::Replace, &[("thread", ""), ("machine", &m2), ("project", &p2)])><Icon name="plus" size=13/></button>
             </div>
             <Show when=move || open.get() || force>
                 <ul class="dk-list">{fam.clone().into_iter().map(|(r, kids)| view! { <Card t=r kids=kids on=on on_r=on_r/> }).collect_view()}</ul>
@@ -358,11 +360,11 @@ pub fn Dockside(collapsed: RwSignal<bool>, #[prop(into)] mail_open: Signal<bool>
     };
     view! {
         <Show when=move || !collapsed.get() fallback=move || view! {
-            <button class="nav" title="New thread" on:click=move |_| navigate("code", Where::Replace, &[("thread", "")])><Icon name="plus"/></button>
+            <button class="nav" title="New thread · drag to a side of the window" draggable="true" on:dragstart=move |e| agentum_ui::dnd::start(&e, "code", &[("thread", "")]) on:click=move |_| navigate("code", Where::Replace, &[("thread", "")])><Icon name="plus"/></button>
         }>
             <div class="dk">
                 <div class="dk-top">
-                    <button class="dk-new" title="New thread" on:click=move |_| navigate("code", Where::Replace, &[("thread", "")])>
+                    <button class="dk-new" title="New thread · drag to a side of the window" draggable="true" on:dragstart=move |e| agentum_ui::dnd::start(&e, "code", &[("thread", "")]) on:click=move |_| navigate("code", Where::Replace, &[("thread", "")])>
                         <Icon name="plus-circle" size=16/><span>"New thread"</span>
                     </button>
                     <span class="dk-machines" title="Machines online">{move || ov.with(|o| o.as_ref().map(|o| format!("{}/{}", o.machines.iter().filter(|m| m.online).count(), o.machines.len())).unwrap_or_default())}</span>
